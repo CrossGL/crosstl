@@ -151,8 +151,8 @@
       "area": "cuda_hip", "source": "code_review", "priority": "medium", "related": []
     },
     {
-      "title": "Support HIP/CUDA FP16 vec4 and advanced warp/cooperative primitives",
-      "body": "Both backends reject vec4<f16>/half4: CUDA_UNSUPPORTED_FP16_VECTOR_TYPES/HIP_UNSUPPORTED_FP16_VECTOR_TYPES (cuda_codegen.py:145-151, hip_codegen.py:190-197) with raise_unsupported_*_fp16_vector_type() at CUDA 10939-10944 / HIP 6071-6076. Frontends stub cooperative groups (CudaCrossGLCodeGen.py:5488-5507), partial HIP warp masks (HipCrossGLCodeGen.py:5477-5513), and CUDA async memcpy_async/pipeline (format_unsupported_cuda_async_* at 5530+). Acceptance: add half4 aliases (like cgl_half3); map masked warp ops and cooperative_groups to portable CrossGL wave/sync builtins where possible.",
+      "title": "Complete advanced CUDA/HIP cooperative primitives beyond portable wave mappings",
+      "body": "CUDA/HIP now cover half4 aliases plus full/active-mask warp votes, matches, reductions, and thread_block/thread_block_tile<32> cooperative-groups mappings where those operations have portable CrossGL wave or workgroup equivalents. Remaining gaps are intentionally diagnostic for nonportable custom masks, unsupported group scopes, dynamic/non-32 tiles, and CUDA async memcpy_async/pipeline operations (format_unsupported_cuda_async_* in CudaCrossGLCodeGen.py). Acceptance: implement additional portable cooperative-groups mappings where semantics are exact; keep deterministic diagnostics or validation errors for operations that require backend-specific async pipeline or nonuniform mask semantics.",
       "area": "cuda_hip", "source": "code_review", "priority": "low", "related": []
     },
     {

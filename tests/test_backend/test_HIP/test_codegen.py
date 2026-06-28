@@ -62,6 +62,8 @@ def compile_metal_if_available(source: str, tmp_path):
         check=False,
         text=True,
     )
+    if result.returncode != 0 and "missing Metal Toolchain" in result.stderr:
+        pytest.skip("macOS Metal toolchain component is not installed")
     assert result.returncode == 0, result.stderr
 
 
@@ -1550,12 +1552,13 @@ class TestHipCodeGen:
     def test_warp_vote_and_shuffle_intrinsics_do_not_leak_raw_hip_calls(self):
         code = """
         __global__ void warp(unsigned long long mask, int pred, int value, int lane, unsigned int* out) {
-            unsigned long long active = __activemask();
-            unsigned long long bits = __ballot_sync(0xffffffffffffffff, pred);
+            unsigned long long active = ::__activemask();
+            unsigned long long bits = __ballot_sync(active, pred);
+            unsigned long long matches = __match_any_sync(active, value);
             int all_set = __all_sync(0xffffffffffffffff, pred);
             int y = __shfl_sync(0xffffffffffffffff, value, lane);
             int unsupported = __shfl_xor_sync(mask, value, lane);
-            out[lane] = y + unsupported + all_set + active + bits;
+            out[lane] = y + unsupported + all_set + active + bits + matches;
         }
         """
         lexer = HipLexer(code)
@@ -1565,22 +1568,55 @@ class TestHipCodeGen:
 
         result = HipToCrossGLConverter().generate(ast)
 
+        assert "var active: u64 = WaveActiveBallot(true).x;" in result
+        assert "var bits: u64 = WaveActiveBallot((pred != 0)).x;" in result
+        assert "var matches: u64 = WaveMatch(value).x;" in result
         assert "(WaveActiveAllTrue((pred != 0)) ? 1 : 0)" in result
         assert "WaveReadLaneAt(value, lane)" in result
-        assert (
-            "/* hip warp intrinsic __activemask() not directly supported in "
-            "CrossGL */ 0"
-        ) in result
-        assert (
-            "/* hip warp intrinsic __ballot_sync(0xffffffffffffffff, pred) "
-            "not directly supported in CrossGL */ 0"
-        ) in result
         assert (
             "/* hip warp intrinsic __shfl_xor_sync(mask, value, lane) not "
             "directly supported in CrossGL */ 0"
         ) in result
         assert "__shfl_sync(0xffffffffffffffff, value, lane)" not in result
-        assert "__activemask();" not in result
+        assert "__activemask()" not in result
+        assert "__ballot_sync(active, pred)" not in result
+        assert "__match_any_sync(active, value)" not in result
+
+    def test_rocm_docs_full_warp_reduce_sync_variants_convert(self):
+        # Source: ROCm HIP C++ language extensions, warp reduce functions.
+        code = """
+        __device__ unsigned int reduce_variants(unsigned int value, unsigned int mask) {
+            unsigned int sum = __reduce_add_sync(0xffffffffu, value);
+            unsigned int minv = __reduce_min_sync(0xffffffffu, value);
+            unsigned int maxv = __reduce_max_sync(0xffffffffu, value);
+            unsigned int andv = __reduce_and_sync(0xffffffffu, value);
+            unsigned int orv = __reduce_or_sync(0xffffffffu, value);
+            unsigned int xorv = __reduce_xor_sync(0xffffffffu, value);
+            unsigned int unsupported = __reduce_max_sync(mask, value);
+            return sum + minv + maxv + andv + orv + xorv + unsupported;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "WaveActiveSum(value)" in result
+        assert "WaveActiveMin(value)" in result
+        assert "WaveActiveMax(value)" in result
+        assert "WaveActiveBitAnd(value)" in result
+        assert "WaveActiveBitOr(value)" in result
+        assert "WaveActiveBitXor(value)" in result
+        assert (
+            "/* hip warp intrinsic __reduce_max_sync(mask, value) not directly "
+            "supported in CrossGL */ 0"
+        ) in result
+        assert "__reduce_add_sync(0xffffffffu, value)" not in result
+        assert "__reduce_min_sync(0xffffffffu, value)" not in result
+        assert "__reduce_max_sync(0xffffffffu, value)" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_rocm_docs_legacy_warp_any_all_codegen_reparse(self):
         # Source: ROCm HIP C++ language extensions, HIP 7.2.53211 docs.
@@ -1747,6 +1783,41 @@ class TestHipCodeGen:
         assert "var width: u32 = 32;" in result
         assert "tiled_partition" not in result
         assert "thread_rank" not in result
+
+    def test_cooperative_groups_thread_block_tile_collectives_convert(self):
+        code = """
+        namespace cg = cooperative_groups;
+
+        __global__ void tile_collectives(unsigned int* out, int pred, unsigned int value, int lane) {
+            auto block = cg::this_thread_block();
+            auto tile = cg::tiled_partition<32>(block);
+            tile.sync();
+            bool any_set = tile.any(pred);
+            bool all_set = tile.all(pred);
+            unsigned int bits = tile.ballot(pred);
+            unsigned int shuffled = tile.shfl(value, lane);
+            unsigned int sum = cg::reduce(tile, value, cg::plus<unsigned int>());
+            out[lane] = bits + shuffled + sum + any_set + all_set;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "workgroupBarrier();" in result
+        assert "var any_set: bool = WaveActiveAnyTrue((pred != 0));" in result
+        assert "var all_set: bool = WaveActiveAllTrue((pred != 0));" in result
+        assert "var bits: u32 = WaveActiveBallot((pred != 0)).x;" in result
+        assert "var shuffled: u32 = WaveReadLaneAt(value, lane);" in result
+        assert "var sum: u32 = WaveActiveSum(value);" in result
+        assert "cooperative_groups thread_block_tile<32>.reduce" not in result
+        assert "tile.sync" not in result
+        assert "tile.any" not in result
+        assert "tile.ballot" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_unsupported_cooperative_groups_emit_diagnostics(self):
         code = """

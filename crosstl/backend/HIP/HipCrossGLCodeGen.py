@@ -365,6 +365,7 @@ class HipToCrossGLConverter:
         self.resource_object_hint_scopes = []
         self.cooperative_group_scopes = [{}]
         self.variable_type_scopes = [{}]
+        self.warp_mask_value_scopes = [{}]
         self.device_property_source_scopes = [{}]
         self.device_attribute_source_scopes = [{}]
         self.device_query_source_scopes = [{}]
@@ -394,6 +395,7 @@ class HipToCrossGLConverter:
         self.resource_object_hint_scopes = []
         self.cooperative_group_scopes = [{}]
         self.variable_type_scopes = [{}]
+        self.warp_mask_value_scopes = [{}]
         self.device_property_source_scopes = [{}]
         self.device_attribute_source_scopes = [{}]
         self.device_query_source_scopes = [{}]
@@ -1124,6 +1126,54 @@ class HipToCrossGLConverter:
     def pop_identifier_name_scope(self):
         if len(self.identifier_name_scopes) > 1:
             self.identifier_name_scopes.pop()
+
+    def push_warp_mask_value_scope(self):
+        self.warp_mask_value_scopes.append({})
+
+    def pop_warp_mask_value_scope(self):
+        if len(self.warp_mask_value_scopes) > 1:
+            self.warp_mask_value_scopes.pop()
+
+    def register_warp_mask_value(self, raw_name, output_name, value):
+        if not self.warp_mask_value_scopes:
+            self.warp_mask_value_scopes.append({})
+
+        names = {name for name in (raw_name, output_name) if name}
+        if not names:
+            return
+
+        if self.is_full_or_active_warp_mask(value):
+            resolved_value = self.resolve_warp_mask_expression(value)
+            for name in names:
+                self.warp_mask_value_scopes[-1][name] = resolved_value
+            return
+
+        for name in names:
+            self.warp_mask_value_scopes[-1].pop(name, None)
+
+    def register_warp_mask_assignment(self, raw_left, output_left, operator, value):
+        raw_name = raw_left if isinstance(raw_left, str) else None
+        if raw_name is None:
+            return
+        assigned_value = value if operator == "=" else None
+        self.register_warp_mask_value(raw_name, output_left, assigned_value)
+
+    def resolve_warp_mask_expression(self, mask):
+        text = str(mask).strip()
+        seen = set()
+
+        while text and text not in seen:
+            seen.add(text)
+            replacement = None
+            for scope in reversed(self.warp_mask_value_scopes):
+                if text in scope:
+                    replacement = scope[text]
+                    break
+            if replacement is None:
+                return text
+            text = str(replacement).strip()
+
+        return text
 
     def register_identifier_name(self, name):
         if not self.is_simple_identifier(name):
@@ -4703,6 +4753,7 @@ class HipToCrossGLConverter:
             self.push_type_alias_scope()
             self.push_unique_ptr_scope()
             self.push_cooperative_group_scope()
+            self.push_warp_mask_value_scope()
             if hasattr(node, "params") and node.params:
                 for param in node.params:
                     self.register_unique_ptr_parameter(param)
@@ -4715,12 +4766,14 @@ class HipToCrossGLConverter:
                     else:
                         self.emit_statement(node.body)
                 finally:
+                    self.pop_warp_mask_value_scope()
                     self.pop_cooperative_group_scope()
                     self.pop_unique_ptr_scope()
                     self.pop_type_alias_scope()
                     self.pop_packed_argument_scope()
                     self.indent_level -= 1
             else:
+                self.pop_warp_mask_value_scope()
                 self.pop_cooperative_group_scope()
                 self.pop_unique_ptr_scope()
                 self.pop_type_alias_scope()
@@ -4820,6 +4873,7 @@ class HipToCrossGLConverter:
                 self.push_type_alias_scope()
                 self.push_unique_ptr_scope()
                 self.push_cooperative_group_scope()
+                self.push_warp_mask_value_scope()
                 if hasattr(kernel, "params") and kernel.params:
                     for param in kernel.params:
                         self.register_unique_ptr_parameter(param)
@@ -4831,6 +4885,7 @@ class HipToCrossGLConverter:
                     else:
                         self.emit_statement(kernel.body)
                 finally:
+                    self.pop_warp_mask_value_scope()
                     self.pop_cooperative_group_scope()
                     self.pop_unique_ptr_scope()
                     self.pop_type_alias_scope()
@@ -4950,12 +5005,15 @@ class HipToCrossGLConverter:
                 comments, value = runtime_status
                 for comment in comments:
                     self.emit(comment)
+                self.register_warp_mask_value(raw_name, output_name, value)
                 self.emit(f"var {output_name}: {var_type} = {value};")
                 return
 
             value = self.format_variable_initializer_value(node.value)
+            self.register_warp_mask_value(raw_name, output_name, value)
             self.emit(f"var {output_name}: {var_type} = {value};")
         else:
+            self.register_warp_mask_value(raw_name, output_name, None)
             self.emit(f"var {output_name}: {var_type};")
 
     def format_variable_initializer_value(self, value):
@@ -5230,11 +5288,13 @@ class HipToCrossGLConverter:
             for comment in comments:
                 self.emit(comment)
             self.clear_lvalue_metadata_source(node.left)
+            self.register_warp_mask_assignment(node.left, left, operator, value)
             self.emit(f"{left} = {value};")
             return
 
         right = self.visit(node.right)
         self.clear_lvalue_metadata_source(node.left)
+        self.register_warp_mask_assignment(node.left, left, operator, right)
         return f"{left} {operator} {right}"
 
     def visit_BinaryOpNode(self, node):
@@ -5475,8 +5535,19 @@ class HipToCrossGLConverter:
         )
 
     def format_hip_warp_intrinsic_call(self, function_name, args):
-        if function_name in {"__activemask", "__ballot_sync"}:
+        if isinstance(function_name, str) and function_name.startswith("::"):
+            function_name = function_name[2:]
+
+        if function_name == "__activemask":
+            if not args:
+                return "WaveActiveBallot(true).x"
             return self.format_unsupported_hip_warp_intrinsic(function_name, args)
+
+        if function_name == "__ballot_sync":
+            if len(args) != 2 or not self.is_full_or_active_warp_mask(args[0]):
+                return self.format_unsupported_hip_warp_intrinsic(function_name, args)
+            predicate = self.format_wave_predicate(args[1])
+            return f"WaveActiveBallot({predicate}).x"
 
         if function_name in {"__any", "__all"}:
             if len(args) != 1:
@@ -5533,6 +5604,24 @@ class HipToCrossGLConverter:
                 return self.format_unsupported_hip_warp_intrinsic(function_name, args)
             return f"WaveReadLaneAt({args[1]}, " f"(WaveGetLaneIndex() ^ {args[2]}))"
 
+        if function_name == "__match_any_sync":
+            if len(args) == 2 and self.is_full_or_active_warp_mask(args[0]):
+                return f"WaveMatch({args[1]}).x"
+            return self.format_unsupported_hip_warp_intrinsic(function_name, args)
+
+        reduce_map = {
+            "__reduce_add_sync": "WaveActiveSum",
+            "__reduce_min_sync": "WaveActiveMin",
+            "__reduce_max_sync": "WaveActiveMax",
+            "__reduce_and_sync": "WaveActiveBitAnd",
+            "__reduce_or_sync": "WaveActiveBitOr",
+            "__reduce_xor_sync": "WaveActiveBitXor",
+        }
+        if function_name in reduce_map:
+            if len(args) == 2 and self.is_full_or_active_warp_mask(args[0]):
+                return f"{reduce_map[function_name]}({args[1]})"
+            return self.format_unsupported_hip_warp_intrinsic(function_name, args)
+
         if function_name in {
             "__ballot",
             "__shfl",
@@ -5560,7 +5649,9 @@ class HipToCrossGLConverter:
         return None
 
     def is_full_or_active_warp_mask(self, mask):
-        normalized = self.normalize_warp_mask_expression(mask)
+        normalized = self.normalize_warp_mask_expression(
+            self.resolve_warp_mask_expression(mask)
+        )
         return normalized in {
             "0xffffffff",
             "0xffffffffu",
@@ -5613,6 +5704,12 @@ class HipToCrossGLConverter:
                 return self.format_cooperative_group_member_call(
                     group_metadata, base_name, []
                 )
+        if base_name == "reduce" and node.args:
+            group_metadata = self.resolve_cooperative_group_metadata(node.args[0])
+            if group_metadata is not None:
+                return self.format_cooperative_group_reduce_call(
+                    group_metadata, node.args[1:]
+                )
         return None
 
     def format_cooperative_group_member_call(self, group_metadata, member, args):
@@ -5633,6 +5730,12 @@ class HipToCrossGLConverter:
 
         if group_kind == "thread_block_tile" and not args:
             tile_size = group_metadata.get("tile_size")
+            if (
+                member_name == "sync"
+                and tile_size
+                and group_metadata.get("parent_kind") == "thread_block"
+            ):
+                return "workgroupBarrier()"
             if member_name in {"size", "num_threads"} and tile_size:
                 return tile_size
             if (
@@ -5642,16 +5745,18 @@ class HipToCrossGLConverter:
             ):
                 return f"(gl_LocalInvocationIndex % {tile_size})"
 
-        if group_kind == "thread_block_tile" and member_name in {
-            "shfl",
-            "shfl_down",
-            "shfl_up",
-            "shfl_xor",
-        }:
-            return self.format_cooperative_group_tile_shuffle(
+        if group_kind == "thread_block_tile" and args:
+            tile_collective = self.format_thread_block_tile_collective_call(
                 group_metadata, member_name, args
             )
+            if tile_collective is not None:
+                return tile_collective
 
+        if member_name == "sync":
+            return (
+                f"// cooperative_groups {group_kind}.{member_name} "
+                "not directly supported in CrossGL"
+            )
         if member_name in {"thread_rank", "size", "num_threads"}:
             return self.format_unsupported_cooperative_group_expression(
                 group_kind, member_name
@@ -5660,14 +5765,33 @@ class HipToCrossGLConverter:
             return self.format_unsupported_cooperative_group_expression(
                 group_kind, member_name, "vec3<u32>(0, 0, 0)"
             )
-        return (
-            f"// cooperative_groups {group_kind}.{member_name} "
-            "not directly supported in CrossGL"
+        return self.format_unsupported_cooperative_group_expression(
+            group_kind, member_name, args=args
         )
 
-    def format_cooperative_group_tile_shuffle(
+    def format_thread_block_tile_collective_call(
         self, group_metadata, member_name, raw_args
     ):
+        if (
+            group_metadata.get("tile_size") == "32"
+            and group_metadata.get("parent_kind") == "thread_block"
+        ):
+            formatted_args = [self.visit(arg) for arg in raw_args]
+            if member_name == "any" and len(formatted_args) == 1:
+                predicate = self.format_wave_predicate(formatted_args[0])
+                return f"WaveActiveAnyTrue({predicate})"
+            if member_name == "all" and len(formatted_args) == 1:
+                predicate = self.format_wave_predicate(formatted_args[0])
+                return f"WaveActiveAllTrue({predicate})"
+            if member_name == "ballot" and len(formatted_args) == 1:
+                predicate = self.format_wave_predicate(formatted_args[0])
+                return f"WaveActiveBallot({predicate}).x"
+            if member_name == "shfl" and len(formatted_args) >= 2:
+                return f"WaveReadLaneAt({formatted_args[0]}, {formatted_args[1]})"
+
+        if member_name not in {"shfl", "shfl_down", "shfl_up", "shfl_xor"}:
+            return None
+
         args = [self.visit(arg) for arg in raw_args]
         if len(args) != 2:
             return self.format_unsupported_cooperative_group_expression(
@@ -5704,14 +5828,40 @@ class HipToCrossGLConverter:
             f"WaveReadLaneAt({value}, {source_lane}) : {value})"
         )
 
+    def format_cooperative_group_reduce_call(self, group_metadata, raw_args):
+        group_kind = group_metadata["kind"]
+        if (
+            group_kind == "thread_block_tile"
+            and group_metadata.get("tile_size") == "32"
+            and group_metadata.get("parent_kind") == "thread_block"
+            and len(raw_args) == 2
+            and self.cooperative_group_reduce_operator(raw_args[1]) == "plus"
+        ):
+            return f"WaveActiveSum({self.visit(raw_args[0])})"
+
+        return self.format_unsupported_cooperative_group_expression(
+            group_kind, "reduce", args=raw_args
+        )
+
+    def cooperative_group_reduce_operator(self, expression):
+        if not isinstance(expression, FunctionCallNode) or expression.args:
+            return None
+        if not isinstance(expression.name, str):
+            return None
+        base_call_name, _ = self.parse_cpp_template(expression.name)
+        return self.cooperative_group_base_name(base_call_name)
+
     def format_thread_block_size_expression(self):
         return "((gl_WorkGroupSize.x * gl_WorkGroupSize.y) * gl_WorkGroupSize.z)"
 
     def format_unsupported_cooperative_group_expression(
-        self, group_kind, member, fallback="0"
+        self, group_kind, member, fallback="0", args=None
     ):
+        args = args or []
+        formatted_args = ", ".join(self.visit(arg) for arg in args)
+        arg_suffix = f"({formatted_args})" if formatted_args else ""
         return (
-            f"(/* cooperative_groups {group_kind}.{member} "
+            f"(/* cooperative_groups {group_kind}.{member}{arg_suffix} "
             f"not directly supported in CrossGL */ {fallback})"
         )
 
