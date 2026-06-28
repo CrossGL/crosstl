@@ -780,8 +780,13 @@ Blocked plan steps remain blocked in the result, and missing files, stale
 descriptor hashes, or invalid paths are emitted as structured diagnostics.
 The result ``deviceExecution`` block reports whether each target has a ready
 runtime package and verified runtime adapter descriptor for an external runner.
-This command still does not rewrite host application code, dispatch device
-work, generate runtime framework code, or install target SDKs.
+Pass ``--runner-manifest`` with a
+``crosstl-runtime-device-runner-manifest`` JSON file to record target runner
+readiness alongside package and adapter readiness. Runner manifests list
+target-specific runner ids, statuses, optional capabilities, and optional
+commands; they are validated as readiness metadata only. This command still
+does not rewrite host application code, dispatch device work, generate runtime
+framework code, or install target SDKs.
 
 Diagnostics with ``originalLocation`` keep the generated or validation
 location as the primary SARIF location and attach the original source span as a
