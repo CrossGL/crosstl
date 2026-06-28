@@ -47,10 +47,13 @@ The reduced harness now emits runtime readiness artifacts so those gaps are
 visible in CI reports without claiming runtime parity. The current readiness
 manifests consume reflected runtime artifact metadata, including entry points,
 resource bindings, and dispatch geometry. Runtime-test plans now resolve
-source-level fixture names against common generated resource aliases and report
-remaining non-blocking platform or layout warnings. These plans are still
-metadata readiness artifacts; they do not execute the upstream MLX runtime on
-non-Metal backends.
+source-level fixture names against common generated resource aliases. The
+reduced arange fixtures select the translated artifact by source and target,
+then select `CSMain`, `main`, or `arangeuint8` independently for DirectX,
+OpenGL, or Vulkan dispatch. Plans report remaining non-blocking platform,
+layout, and entry-point ownership warnings. These plans are still metadata
+readiness artifacts; they do not execute the upstream MLX runtime on non-Metal
+backends.
 
 ## Running Locally
 
@@ -95,18 +98,17 @@ CrossGL/crosstl#1376 tracks bounded runtime for the scheduled full-corpus scout.
 CrossGL/crosstl#1312 tracks native toolchain validation coverage for project
 CI. CrossGL/crosstl#1388 tracks the artifact execution metadata required by
 runtime-test manifests and native adapters. CrossGL/crosstl#1392 tracks fixture
-resource binding through reflected backend aliases. CrossGL/crosstl#1394 tracks
-entry-point-scoped runtime adapter contracts for multi-entry artifacts.
-CrossGL/crosstl#1396 tracks generated GLSL helper uniforms that reflection
-currently reports as layout-incomplete runtime resources. Future scouts should
-add issue-backed blockers only when there are concrete repros. Host runtime
-integration gaps should be handled in repository integration code or downstream
-runtime adapters, not hidden as shader translation successes.
+resource binding through reflected backend aliases. CrossGL/crosstl#1396 tracks
+generated GLSL helper uniforms that reflection currently reports as
+layout-incomplete runtime resources. Future scouts should add issue-backed
+blockers only when there are concrete repros. Host runtime integration gaps
+should be handled in repository integration code or downstream runtime
+adapters, not hidden as shader translation successes.
 
 ## Resolved Frontier Issues
 
 The current reduced frontier no longer depends on the previously tracked issues:
-CrossGL/crosstl#1317, CrossGL/crosstl#939, CrossGL/crosstl#940,
+CrossGL/crosstl#1394, CrossGL/crosstl#1317, CrossGL/crosstl#939, CrossGL/crosstl#940,
 CrossGL/crosstl#941, CrossGL/crosstl#943, CrossGL/crosstl#944,
 CrossGL/crosstl#945, and CrossGL/crosstl#946. CrossGL/crosstl#979,
 CrossGL/crosstl#980,
