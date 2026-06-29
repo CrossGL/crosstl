@@ -911,8 +911,16 @@ def _load_project_test_runner_config(path):
     return dict(payload)
 
 
-def _load_project_runtime_executors(specs):
-    executors = {}
+def _load_project_runtime_executors(
+    specs,
+    *,
+    native_adapter_specs=(),
+    validate_native_runtime=True,
+):
+    executors = _load_project_native_runtime_adapters(
+        native_adapter_specs,
+        validate=validate_native_runtime,
+    )
     for spec in specs or ():
         key, separator, reference = spec.partition("=")
         key = key.strip()
@@ -921,6 +929,38 @@ def _load_project_runtime_executors(specs):
             raise ValueError("Runtime executor specs must use EXECUTOR=MODULE:OBJECT.")
         executor = _load_project_runtime_executor(reference)
         executors[key] = executor
+    return executors
+
+
+def _load_project_native_runtime_adapters(specs, *, validate):
+    if not specs:
+        return {}
+    from .project import native_runtime_parity_adapter
+
+    executors = {}
+    for spec in specs:
+        target, separator, runtime_reference = spec.partition("=")
+        target = target.strip()
+        runtime_reference = runtime_reference.strip()
+        if not target:
+            raise ValueError(
+                "Native runtime adapter specs must use TARGET or TARGET=MODULE:OBJECT."
+            )
+        if separator and not runtime_reference:
+            raise ValueError(
+                "Native runtime adapter specs must use TARGET or TARGET=MODULE:OBJECT."
+            )
+        normalized_target = normalize_backend_name(target) or target.lower()
+        runtime = (
+            _load_project_runtime_object(runtime_reference)
+            if runtime_reference
+            else None
+        )
+        executors[normalized_target] = native_runtime_parity_adapter(
+            normalized_target,
+            runtime=runtime,
+            validate=validate,
+        )
     return executors
 
 
@@ -969,6 +1009,24 @@ def _project_runtime_executor_instance(value):
     if _project_runtime_executor_like(value):
         return value
     if callable(value):
+        return value()
+    return value
+
+
+def _load_project_runtime_object(reference):
+    module_ref, separator, object_name = reference.rpartition(":")
+    module_ref = module_ref.strip()
+    object_name = object_name.strip()
+    if not separator or not module_ref or not object_name:
+        raise ValueError("Runtime object references must use MODULE:OBJECT.")
+    module = _load_project_runtime_executor_module(module_ref)
+    try:
+        value = getattr(module, object_name)
+    except AttributeError as exc:
+        raise ValueError(
+            f"Runtime object {object_name!r} was not found in {module_ref!r}."
+        ) from exc
+    if inspect.isclass(value):
         return value()
     return value
 
@@ -1175,7 +1233,11 @@ def _run_execute_project_test_runner(args):
         project_root=args.project_root,
         output_path=args.output if args.format == "json" else None,
         run_runtime_tests=not args.no_runtime_tests,
-        runtime_executors=_load_project_runtime_executors(args.runtime_executor),
+        runtime_executors=_load_project_runtime_executors(
+            args.runtime_executor,
+            native_adapter_specs=args.native_runtime_adapter,
+            validate_native_runtime=not args.no_native_runtime_validation,
+        ),
     )
     if args.format == "sarif":
         _write_json_payload(
@@ -6695,6 +6757,21 @@ def _build_parser():
             "Runtime executor implementation to load for fixture execution; "
             "repeatable. MODULE may be a dotted module name or a Python file path."
         ),
+    )
+    execute_test_runner_parser.add_argument(
+        "--native-runtime-adapter",
+        action="append",
+        default=[],
+        metavar="TARGET[=MODULE:OBJECT]",
+        help=(
+            "Use a built-in native runtime parity adapter for TARGET; repeatable. "
+            "MODULE:OBJECT may provide the backend runtime driver."
+        ),
+    )
+    execute_test_runner_parser.add_argument(
+        "--no-native-runtime-validation",
+        action="store_true",
+        help="Skip built-in native runtime adapter toolchain validation before dispatch",
     )
     execute_test_runner_parser.add_argument(
         "--format",

@@ -172,6 +172,15 @@ def test_runtime_readiness_uses_runtime_artifact_manifest_metadata(
     assert (mlx_root / execution["runtimeTestManifest"]).is_file()
     assert (mlx_root / execution["projectTestRunnerPlan"]).is_file()
     assert (mlx_root / execution["projectTestRunnerReport"]).is_file()
+    native_execution = result["nativeRuntimeExecution"]
+    assert result["nativeRuntimeExecutionIncluded"] is True
+    assert native_execution["status"] == "blocked-by-runtime-driver"
+    assert native_execution["summary"]["fixtureCount"] == 1
+    assert native_execution["summary"]["unavailableCount"] == 1
+    assert (mlx_root / native_execution["fixtureMetadata"]).is_file()
+    assert (mlx_root / native_execution["runtimeTestManifest"]).is_file()
+    assert (mlx_root / native_execution["projectTestRunnerPlan"]).is_file()
+    assert (mlx_root / native_execution["projectTestRunnerReport"]).is_file()
 
     manifest = json.loads((mlx_root / result["runtimeTestManifest"]).read_text())
     assert manifest["success"] is True
@@ -226,6 +235,33 @@ def test_runtime_fixture_execution_metadata_uses_toolchain_free_adapters():
         "mlx-arange-reference-directx",
         "mlx-arange-reference-opengl",
         "mlx-arange-reference-vulkan",
+    }
+
+
+def test_native_runtime_execution_metadata_uses_target_executors():
+    module = _load_harness()
+
+    metadata = module._native_runtime_execution_metadata(
+        ("directx", "opengl", "vulkan")
+    )
+
+    assert metadata["metadata"]["nativeRuntimeExecutionIncluded"] is True
+    assert {
+        (adapter["id"], adapter["executor"], adapter["adapterKind"])
+        for adapter in metadata["adapters"]
+    } == {
+        ("mlx-arange-native-directx", "directx", "directx-native-runtime"),
+        ("mlx-arange-native-opengl", "opengl", "opengl-native-runtime"),
+        ("mlx-arange-native-vulkan", "vulkan", "vulkan-native-runtime"),
+    }
+    assert all(
+        adapter["platformRequirements"]["requiredTools"] == []
+        for adapter in metadata["adapters"]
+    )
+    assert {fixture["adapter"] for fixture in metadata["fixtures"]} == {
+        "mlx-arange-native-directx",
+        "mlx-arange-native-opengl",
+        "mlx-arange-native-vulkan",
     }
 
 
@@ -300,6 +336,10 @@ def test_runtime_readiness_reports_tracked_plan_resource_blockers(
         in result["trackedRuntimeIssues"]
     )
     assert result["runtimeFixtureExecution"]["status"] == "blocked-by-tracked-issues"
+    assert result["nativeRuntimeExecution"]["status"] in {
+        "blocked-by-runtime-driver",
+        "blocked-by-tracked-issues",
+    }
 
 
 def test_reduced_runtime_readiness_aggregates_fixture_execution(monkeypatch):
@@ -325,6 +365,19 @@ def test_reduced_runtime_readiness_aggregates_fixture_execution(monkeypatch):
                     "failedCount": 0,
                 },
             },
+            "nativeRuntimeExecution": {
+                "status": "blocked-by-runtime-driver",
+                "summary": {
+                    "fixtureCount": 2,
+                    "passedCount": 0,
+                    "skippedCount": 0,
+                    "unavailableCount": 2,
+                    "translationFailedCount": 0,
+                    "runtimeFailedCount": 0,
+                    "comparisonFailedCount": 0,
+                    "failedCount": 0,
+                },
+            },
         },
         {
             "name": "opengl-runtime-readiness",
@@ -342,6 +395,19 @@ def test_reduced_runtime_readiness_aggregates_fixture_execution(monkeypatch):
                     "passedCount": 0,
                     "skippedCount": 1,
                     "unavailableCount": 0,
+                    "translationFailedCount": 0,
+                    "runtimeFailedCount": 0,
+                    "comparisonFailedCount": 0,
+                    "failedCount": 0,
+                },
+            },
+            "nativeRuntimeExecution": {
+                "status": "blocked-by-runtime-driver",
+                "summary": {
+                    "fixtureCount": 1,
+                    "passedCount": 0,
+                    "skippedCount": 0,
+                    "unavailableCount": 1,
                     "translationFailedCount": 0,
                     "runtimeFailedCount": 0,
                     "comparisonFailedCount": 0,
@@ -376,6 +442,20 @@ def test_reduced_runtime_readiness_aggregates_fixture_execution(monkeypatch):
         "skippedCount": 1,
         "translationFailedCount": 0,
         "unavailableCount": 0,
+    }
+    assert result["nativeRuntimeExecutionIncluded"] is True
+    assert result["nativeRuntimeExecutionByStatus"] == {
+        "blocked-by-runtime-driver": 2,
+    }
+    assert result["nativeRuntimeExecutionSummary"] == {
+        "comparisonFailedCount": 0,
+        "failedCount": 0,
+        "fixtureCount": 3,
+        "passedCount": 0,
+        "runtimeFailedCount": 0,
+        "skippedCount": 0,
+        "translationFailedCount": 0,
+        "unavailableCount": 3,
     }
 
 
@@ -768,3 +848,4 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
     ]
     assert result["scope"]["runtimeReadinessIncluded"] is True
     assert result["scope"]["runtimeFixtureExecutionIncluded"] is True
+    assert result["scope"]["nativeRuntimeExecutionIncluded"] is True

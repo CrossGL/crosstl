@@ -22,7 +22,10 @@ The current harness verifies:
   Vulkan;
 - reference runtime fixture execution reports for the reduced `arange`
   readiness probes, using supplied project test-runner adapters and
-  deterministic expected-output checks.
+  deterministic expected-output checks;
+- native runtime execution-readiness reports for the same reduced probes,
+  using the built-in DirectX, OpenGL, and Vulkan native adapter contracts with
+  missing runtime drivers reported as structured blockers.
 
 Pull requests run the reduced frontier above. Scheduled and manually triggered
 CI also run the full-corpus artifact scout with finite Metal template
@@ -58,6 +61,9 @@ layout, and entry-point ownership warnings. These plans are still metadata
 readiness artifacts. The reduced fixture execution report exercises the
 project runner and adapter contract with reference buffers; it does not execute
 the upstream MLX runtime or native Direct3D, OpenGL, or Vulkan device code.
+The native execution-readiness report attempts the built-in native adapter
+contract separately and records missing runtime drivers as blockers until
+backend runtime drivers are supplied by integration code.
 
 ## Running Locally
 

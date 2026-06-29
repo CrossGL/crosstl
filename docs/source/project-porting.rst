@@ -553,6 +553,13 @@ factory returning an object with ``run(request)`` or the parity-adapter methods
 ``prepare_buffers(state)``, ``dispatch(state, buffers)``, and
 ``collect_outputs(state, result)``.
 
+For the built-in DirectX, OpenGL, and Vulkan native parity adapters, callers can
+also pass ``--native-runtime-adapter TARGET`` or
+``--native-runtime-adapter TARGET=MODULE:OBJECT``. The optional object is the
+backend runtime driver consumed by the native adapter after artifact validation.
+Use ``--no-native-runtime-validation`` only when the caller has already handled
+toolchain validation or is running a controlled test fixture.
+
 The translator stops at this contract boundary. Full framework rewrites,
 non-kernel host API ports, application command scheduling, target SDK
 installation, build-system migration, memory lifetime policy, and production
