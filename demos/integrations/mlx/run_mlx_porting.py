@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from crosstl.project import (
+    VulkanComputeRuntime,
     build_project_test_runner_plan,
     build_runtime_artifact_manifest,
     execute_project_test_runner_plan,
@@ -58,7 +59,7 @@ RUNTIME_READINESS_TRACKED_ISSUES = (
 RUNTIME_READINESS_ENTRY_POINTS = {
     "directx": "CSMain",
     "opengl": "main",
-    "vulkan": "arangeuint8",
+    "vulkan": "arangeuint32",
 }
 RUNTIME_FIXTURE_EXECUTION_ADAPTER_KIND = "mlx-arange-reference-runtime"
 NATIVE_RUNTIME_EXECUTION_SCOPE = "native-runtime-execution-readiness"
@@ -890,6 +891,23 @@ def _runtime_report_diagnostics(report: Mapping[str, Any]) -> list[Mapping[str, 
     return diagnostics
 
 
+def _runtime_report_result_for_target(
+    runtime_report: Mapping[str, Any], target: str
+) -> Mapping[str, Any] | None:
+    for result in runtime_report.get("results", []):
+        if not isinstance(result, Mapping):
+            continue
+        artifact = result.get("artifact")
+        if isinstance(artifact, Mapping) and artifact.get("target") == target:
+            return result
+        fixture = result.get("fixture")
+        if isinstance(fixture, Mapping):
+            selector = fixture.get("selector")
+            if isinstance(selector, Mapping) and selector.get("target") == target:
+                return result
+    return None
+
+
 def _error_diagnostics(
     diagnostics: Sequence[Mapping[str, Any]],
 ) -> list[Mapping[str, Any]]:
@@ -976,6 +994,7 @@ def _execute_native_runtime_fixtures_for_report(
     name: str,
     runtime_artifact_manifest_path: Path,
     targets: Sequence[str],
+    require_vulkan_native_runtime: bool,
 ) -> dict[str, Any]:
     metadata_path = report_dir / f"{name}.native-runtime-execution-metadata.json"
     manifest_path = report_dir / f"{name}.native-runtime-execution-manifest.json"
@@ -999,7 +1018,9 @@ def _execute_native_runtime_fixtures_for_report(
     report = execute_project_test_runner_plan(
         plan,
         project_root=mlx_root,
-        runtime_executors=native_runtime_parity_adapters(validate=False),
+        runtime_executors=native_runtime_parity_adapters(
+            runtimes={"vulkan": VulkanComputeRuntime()}
+        ),
     )
     _write_json(report_path, report)
     project_runner_summary = report.get("summary", {})
@@ -1017,8 +1038,16 @@ def _execute_native_runtime_fixtures_for_report(
     diagnostics = _runtime_report_diagnostics(report)
     diagnostics_by_code = _diagnostics_by_code(diagnostics)
     failed_count = int(summary.get("failedCount", 0))
+    passed_count = int(summary.get("passedCount", 0))
     unavailable_count = int(summary.get("unavailableCount", 0))
     skipped_count = int(summary.get("skippedCount", 0))
+    if require_vulkan_native_runtime:
+        vulkan_result = _runtime_report_result_for_target(runtime_report, "vulkan")
+        _require(
+            isinstance(vulkan_result, Mapping)
+            and vulkan_result.get("status") == "passed",
+            "Vulkan native runtime execution was required for the MLX arange fixture",
+        )
     status = "passed"
     if failed_count:
         status = "blocked-by-tracked-issues"
@@ -1033,6 +1062,7 @@ def _execute_native_runtime_fixtures_for_report(
         "projectTestRunnerReport": _relpath(report_path, mlx_root),
         "targets": list(targets),
         "summary": summary,
+        "passedCount": passed_count,
         "projectRunnerSummary": project_runner_summary,
         "diagnosticsByCode": diagnostics_by_code,
         "nativeRuntimeExecutionIncluded": True,
@@ -1048,6 +1078,7 @@ def _plan_runtime_readiness_for_report(
     name: str,
     artifact_report: Path,
     targets: Sequence[str],
+    require_vulkan_native_runtime: bool,
 ) -> dict[str, Any]:
     _require(
         artifact_report.is_file(),
@@ -1088,6 +1119,7 @@ def _plan_runtime_readiness_for_report(
         name=name,
         runtime_artifact_manifest_path=runtime_artifact_manifest_path,
         targets=targets,
+        require_vulkan_native_runtime=require_vulkan_native_runtime,
     )
 
     runtime_artifact_diagnostics_by_code = _diagnostics_by_code(
@@ -1173,6 +1205,8 @@ def _plan_runtime_readiness_for_report(
 def _plan_reduced_runtime_readiness(
     mlx_root: Path,
     report_dir: Path,
+    *,
+    require_vulkan_native_runtime: bool,
 ) -> dict[str, Any]:
     reports = [
         _plan_runtime_readiness_for_report(
@@ -1181,6 +1215,7 @@ def _plan_reduced_runtime_readiness(
             name="directx-vulkan-runtime-readiness",
             artifact_report=report_dir / "directx-vulkan-frontier.json",
             targets=("directx", "vulkan"),
+            require_vulkan_native_runtime=require_vulkan_native_runtime,
         ),
         _plan_runtime_readiness_for_report(
             mlx_root=mlx_root,
@@ -1188,6 +1223,7 @@ def _plan_reduced_runtime_readiness(
             name="opengl-runtime-readiness",
             artifact_report=report_dir / "arange-opengl.json",
             targets=("opengl",),
+            require_vulkan_native_runtime=False,
         ),
     ]
     status = (
@@ -1507,6 +1543,7 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             _plan_reduced_runtime_readiness(
                 mlx_root,
                 report_dir,
+                require_vulkan_native_runtime=args.require_vulkan_native_runtime,
             )
         )
     elif args.mode == FULL_CORPUS_MODE:
@@ -1580,6 +1617,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--require-vulkan-toolchain",
         action="store_true",
         help="Fail unless the Vulkan SPIR-V smoke check runs successfully.",
+    )
+    parser.add_argument(
+        "--require-vulkan-native-runtime",
+        action="store_true",
+        help="Fail unless the MLX-generated Vulkan arange fixture executes natively.",
     )
     parser.add_argument(
         "--no-clean",

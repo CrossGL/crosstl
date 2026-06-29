@@ -33556,6 +33556,108 @@ def test_inspect_runtime_package_reflects_spirv_assembly_metadata(tmp_path):
     assert host_interface["diagnostics"] == []
 
 
+def test_reflect_spirv_assembly_preserves_flag_decorations(tmp_path):
+    artifact_path = tmp_path / "kernel.spvasm"
+    artifact_path.write_text(
+        textwrap.dedent("""
+            OpEntryPoint GLCompute %main "main" %out
+            OpExecutionMode %main LocalSize 1 1 1
+            OpName %out "out_"
+            OpName %OutBuffer "out_Buffer"
+            OpDecorate %runtimearr ArrayStride 4
+            OpDecorate %OutBuffer BufferBlock
+            OpMemberDecorate %OutBuffer 0 Offset 0
+            OpDecorate %out DescriptorSet 0
+            OpDecorate %out Binding 2
+            %uint = OpTypeInt 32 0
+            %runtimearr = OpTypeRuntimeArray %uint
+            %OutBuffer = OpTypeStruct %runtimearr
+            %ptr = OpTypePointer Uniform %OutBuffer
+            %out = OpVariable %ptr Uniform
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    host_interface = reflect_target_host_interface(artifact_path, target="vulkan")
+
+    assert host_interface is not None
+    assert host_interface["status"] == "ready"
+    assert host_interface["resources"] == [
+        {
+            "name": "out_",
+            "kind": "buffer",
+            "type": "out_Buffer",
+            "set": 0,
+            "binding": 2,
+            "access": "read",
+            "metadata": {
+                "id": "%out",
+                "storageClass": "Uniform",
+                "typeId": "%ptr",
+            },
+        }
+    ]
+
+
+def test_reflect_spirv_assembly_scopes_repeated_entry_point_layouts(tmp_path):
+    artifact_path = tmp_path / "kernel.spvasm"
+    artifact_path.write_text(
+        textwrap.dedent("""
+            OpEntryPoint GLCompute %ep_a "kernelA" %builtin
+            OpEntryPoint GLCompute %ep_b "kernelB" %builtin
+            OpName %a_start "start"
+            OpName %a_out "out_"
+            OpName %b_start "start"
+            OpName %b_out "out_"
+            OpName %kernelA_startUniformBlock "kernelA_startUniformBlock"
+            OpName %kernelB_startUniformBlock "kernelB_startUniformBlock"
+            OpName %OutBuffer "out_Buffer"
+            OpDecorate %kernelA_startUniformBlock Block
+            OpDecorate %a_start DescriptorSet 0
+            OpDecorate %a_start Binding 0
+            OpDecorate %OutBuffer BufferBlock
+            OpDecorate %a_out DescriptorSet 0
+            OpDecorate %a_out Binding 1
+            OpDecorate %kernelB_startUniformBlock Block
+            OpDecorate %b_start DescriptorSet 0
+            OpDecorate %b_start Binding 0
+            OpDecorate %b_out DescriptorSet 0
+            OpDecorate %b_out Binding 1
+            OpDecorate %builtin BuiltIn GlobalInvocationId
+            %uint = OpTypeInt 32 0
+            %runtimearr = OpTypeRuntimeArray %uint
+            %kernelA_startUniformBlock = OpTypeStruct %uint
+            %kernelB_startUniformBlock = OpTypeStruct %uint
+            %OutBuffer = OpTypeStruct %runtimearr
+            %ptr_a_start = OpTypePointer Uniform %kernelA_startUniformBlock
+            %ptr_b_start = OpTypePointer Uniform %kernelB_startUniformBlock
+            %ptr_out = OpTypePointer Uniform %OutBuffer
+            %ptr_builtin = OpTypePointer Input %uint
+            %a_start = OpVariable %ptr_a_start Uniform
+            %a_out = OpVariable %ptr_out Uniform
+            %b_start = OpVariable %ptr_b_start Uniform
+            %b_out = OpVariable %ptr_out Uniform
+            %builtin = OpVariable %ptr_builtin Input
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    host_interface = reflect_target_host_interface(artifact_path, target="vulkan")
+
+    assert host_interface is not None
+    assert host_interface["status"] == "ready"
+    assert host_interface["diagnostics"] == []
+    assert [
+        resource["metadata"]["entryPoint"] for resource in host_interface["resources"]
+    ] == ["kernelA", "kernelA", "kernelB", "kernelB"]
+    assert [resource["kind"] for resource in host_interface["resources"]] == [
+        "constant-buffer",
+        "buffer",
+        "constant-buffer",
+        "buffer",
+    ]
+
+
 def test_reflect_spirv_binary_reports_missing_disassembler(tmp_path):
     artifact_path = tmp_path / "kernel.spv"
     artifact_path.write_bytes(b"\x03\x02#\x07")

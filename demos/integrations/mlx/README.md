@@ -25,7 +25,10 @@ The current harness verifies:
   deterministic expected-output checks;
 - native runtime execution-readiness reports for the same reduced probes,
   using the built-in DirectX, OpenGL, and Vulkan native adapter contracts with
-  missing runtime drivers reported as structured blockers.
+  missing runtime drivers reported as structured blockers;
+- on Linux CI, native Vulkan execution for the generated MLX `arange.metal`
+  SPIR-V assembly through the optional Vulkan compute runtime and Mesa Vulkan
+  software driver.
 
 Pull requests run the reduced frontier above. Scheduled and manually triggered
 CI also run the full-corpus artifact scout with finite Metal template
@@ -55,15 +58,17 @@ manifests consume reflected runtime artifact metadata, including entry points,
 resource bindings, and dispatch geometry. Runtime-test plans now resolve
 source-level fixture names against common generated resource aliases. The
 reduced arange fixtures select the translated artifact by source and target,
-then select `CSMain`, `main`, or `arangeuint8` independently for DirectX,
+then select `CSMain`, `main`, or `arangeuint32` independently for DirectX,
 OpenGL, or Vulkan dispatch. Plans report remaining non-blocking platform,
-layout, and entry-point ownership warnings. These plans are still metadata
-readiness artifacts. The reduced fixture execution report exercises the
-project runner and adapter contract with reference buffers; it does not execute
-the upstream MLX runtime or native Direct3D, OpenGL, or Vulkan device code.
-The native execution-readiness report attempts the built-in native adapter
-contract separately and records missing runtime drivers as blockers until
-backend runtime drivers are supplied by integration code.
+layout, and entry-point ownership warnings. The reduced fixture execution
+report exercises the project runner and adapter contract with reference
+buffers. The native execution report attempts the built-in native adapter
+contract separately. On Linux CI it requires the generated Vulkan `arangeuint32`
+artifact to assemble, load, dispatch, and compare on the Vulkan compute runtime;
+other unavailable native backends remain structured blockers until backend
+runtime drivers are supplied by integration code. This still does not execute
+the upstream MLX host runtime or the upstream MLX Python/C++ unit test suite on
+non-Metal backends.
 
 ## Running Locally
 
@@ -89,14 +94,18 @@ python demos/integrations/mlx/run_mlx_porting.py \
   --summary /tmp/mlx/.crosstl-mlx-porting/full-corpus-summary.json
 ```
 
-On Linux, install SPIR-V tools and require the Vulkan smoke check:
+On Linux, install SPIR-V tools and the Vulkan runtime dependencies to require
+both Vulkan validation and native execution of the generated MLX `arange`
+artifact:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y spirv-tools
+sudo apt-get install -y libvulkan1 mesa-vulkan-drivers spirv-tools vulkan-tools
+python -m pip install vulkan==1.3.275.1
 python demos/integrations/mlx/run_mlx_porting.py \
   --mlx-root /tmp/mlx \
-  --require-vulkan-toolchain
+  --require-vulkan-toolchain \
+  --require-vulkan-native-runtime
 ```
 
 The harness writes reports, generated artifacts, and command logs under

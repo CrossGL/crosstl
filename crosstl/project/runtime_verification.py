@@ -1414,7 +1414,14 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
                 source=resource.source,
                 dtype=runtime_value.dtype if runtime_value is not None else None,
                 shape=runtime_value.shape if runtime_value is not None else (),
-                metadata=runtime_value.metadata if runtime_value is not None else {},
+                metadata=(
+                    {
+                        **dict(runtime_value.metadata),
+                        "runtimeValueName": runtime_value.name,
+                    }
+                    if runtime_value is not None
+                    else {}
+                ),
             )
         return bindings
 
