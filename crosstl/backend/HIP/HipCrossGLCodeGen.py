@@ -350,6 +350,20 @@ class HipToCrossGLConverter:
                 "size_t",
             )
         },
+        **{
+            f"hip::std::{name}": name
+            for name in (
+                "int8_t",
+                "uint8_t",
+                "int16_t",
+                "uint16_t",
+                "int32_t",
+                "uint32_t",
+                "int64_t",
+                "uint64_t",
+                "size_t",
+            )
+        },
     }
 
     def __init__(self):
@@ -375,6 +389,7 @@ class HipToCrossGLConverter:
         self.suppress_device_query_value_access = 0
         self.suppress_identifier_name_rewrite = 0
         self.generated_matrix_helper_types = set()
+        self.namespace_aliases = {}
         self.anonymous_enum_count = 0
 
     def generate(self, ast_node):
@@ -404,6 +419,7 @@ class HipToCrossGLConverter:
         self.suppress_device_attribute_value_access = 0
         self.suppress_device_query_value_access = 0
         self.suppress_identifier_name_rewrite = 0
+        self.namespace_aliases = getattr(ast_node, "namespace_aliases", {}) or {}
         self.anonymous_enum_count = 0
         self.visit(ast_node)
         return "\n".join(self.output)
@@ -5449,7 +5465,11 @@ class HipToCrossGLConverter:
             return None
 
         base_name, template_args, member_name = parsed
-        if base_name not in {"std::numeric_limits", "cuda::std::numeric_limits"}:
+        if base_name not in {
+            "std::numeric_limits",
+            "cuda::std::numeric_limits",
+            "hip::std::numeric_limits",
+        }:
             return None
         if len(template_args) != 1 or not re.fullmatch(
             r"[A-Za-z_][A-Za-z0-9_]*", member_name
@@ -5465,6 +5485,7 @@ class HipToCrossGLConverter:
             return None
 
         normalized = text[2:] if text.startswith("::") else text
+        normalized = self.resolve_namespace_alias_name(normalized)
         scope_index = self.find_last_scope_operator_outside_templates(normalized)
         if scope_index is None:
             return None
@@ -7577,6 +7598,7 @@ class HipToCrossGLConverter:
         hip_type = self.strip_type_qualifiers(hip_type)
         hip_type = self.strip_variadic_type_marker(hip_type)
         hip_type = self.strip_union_type_keyword(hip_type)
+        hip_type = self.resolve_namespace_alias_name(hip_type)
         hip_type = self.CPP_SCALAR_TYPE_ALIASES.get(hip_type, hip_type)
         matrix_type = self.convert_native_matrix_helper_name_to_crossgl(hip_type)
         if matrix_type is not None:
@@ -7807,11 +7829,39 @@ class HipToCrossGLConverter:
 
         start = text.find("<")
         if start == -1 or not text.endswith(">"):
-            return text, []
+            return self.resolve_namespace_alias_name(text), []
 
-        base_name = text[:start].strip()
+        base_name = self.resolve_namespace_alias_name(text[:start].strip())
         args = self.split_cpp_template_args(text[start + 1 : -1])
         return base_name, args
+
+    def resolve_namespace_alias_name(self, name):
+        if not isinstance(name, str) or not self.namespace_aliases:
+            return name
+
+        resolved = name
+        for _ in range(len(self.namespace_aliases)):
+            next_resolved = self.resolve_namespace_alias_name_once(resolved)
+            if next_resolved == resolved:
+                break
+            resolved = next_resolved
+        return resolved
+
+    def resolve_namespace_alias_name_once(self, name):
+        leading_scope = name.startswith("::")
+        lookup_name = name[2:] if leading_scope else name
+        alias, separator, suffix = lookup_name.partition("::")
+        if not separator:
+            return name
+
+        target = self.namespace_aliases.get(alias)
+        if target is None:
+            return name
+
+        resolved = f"{target}::{suffix}"
+        if leading_scope and not resolved.startswith("::"):
+            resolved = f"::{resolved}"
+        return resolved
 
     def split_cpp_template_args(self, args_text):
         args = []
@@ -8021,11 +8071,11 @@ class HipToCrossGLConverter:
         if not isinstance(func_name, str):
             return func_name
 
-        normalized_name = func_name
+        normalized_name = self.resolve_namespace_alias_name(func_name)
         if normalized_name.startswith("::"):
             normalized_name = normalized_name[2:]
 
-        for namespace in ("cuda::std::", "std::"):
+        for namespace in ("hip::std::", "cuda::std::", "std::"):
             if normalized_name.startswith(namespace):
                 return normalized_name[len(namespace) :]
 

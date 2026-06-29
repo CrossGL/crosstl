@@ -53,6 +53,22 @@ class TestHipParser:
         with pytest.raises(SyntaxError, match="Expected SEMICOLON"):
             self.parse_code(code)
 
+    def test_namespace_alias_metadata_is_preserved_for_codegen(self):
+        code = """
+        namespace hstd = std;
+
+        __device__ float kernel(float x, float y) {
+            return hstd::fminf(x, y);
+        }
+        """
+        ast = self.parse_code(code)
+
+        value = ast.statements[0].body[0].value
+
+        assert ast.namespace_aliases == {"hstd": "std"}
+        assert isinstance(value, FunctionCallNode)
+        assert value.name == "hstd::fminf"
+
     def test_missing_semicolon_between_assignments_errors(self):
         code = """
         void host() {
