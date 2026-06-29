@@ -167,24 +167,41 @@ def test_prepare_vulkan_buffers_packs_inputs_and_zeroes_outputs():
                 dtype="float32",
                 shape=(2,),
             ),
-            "out": NativeRuntimeBufferBinding(
-                name="out",
+            "scale": NativeRuntimeBufferBinding(
+                name="scaleUniform",
                 binding=RuntimeResourceBinding(
-                    name="out",
+                    name="scaleUniform",
+                    kind="constant-buffer",
+                    set=0,
+                    binding=2,
+                ),
+                value=3,
+                source="input",
+                dtype="uint32",
+                shape=(),
+            ),
+            "out": NativeRuntimeBufferBinding(
+                name="out_",
+                binding=RuntimeResourceBinding(
+                    name="out_",
                     kind="buffer",
                     set=0,
-                    binding=1,
+                    binding=3,
                 ),
                 source="expectedOutput",
                 dtype="float32",
                 shape=(2,),
+                metadata={"runtimeValueName": "out"},
             ),
         }
     )
 
-    assert [buffer.name for buffer in buffers] == ["lhs", "out"]
+    assert [buffer.name for buffer in buffers] == ["lhs", "scale", "out"]
     assert buffers[0].payload == b"\x00\x00\x80?\x00\x00\x00@"
-    assert buffers[1].payload == b"\x00" * 8
+    assert buffers[1].resource_kind == "constant-buffer"
+    assert buffers[1].payload == b"\x03\x00\x00\x00"
+    assert buffers[2].payload == b"\x00" * 8
+    assert buffers[2].output_name == "out"
 
 
 def test_vulkan_handle_array_unwraps_first_handle():

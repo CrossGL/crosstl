@@ -2120,6 +2120,10 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert 'cron: "31 4 * * 1"' in mlx_porting
     assert "github.event_name != 'schedule'" in mlx_porting
     assert "--mode reduced-frontier" in mlx_porting
+    assert "--require-vulkan-native-runtime" in mlx_porting
+    assert "mesa-vulkan-drivers" in mlx_porting
+    assert "python -m pip install vulkan==1.3.275.1" in mlx_porting
+    assert "vulkaninfo --summary" in mlx_porting
     assert "mlx-full-corpus-scout:" in mlx_porting
     assert "MLX full-corpus artifact scout" in mlx_porting
     assert (
@@ -2143,6 +2147,8 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "without tracked issue references" in harness
     assert "runtime-readiness" in harness
     assert "runtime-test-manifest" in harness
+    assert "VulkanComputeRuntime" in harness
+    assert "require_vulkan_native_runtime" in harness
     for tracked_issue_number in (
         1312,
         1376,

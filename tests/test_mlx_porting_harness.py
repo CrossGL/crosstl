@@ -143,6 +143,7 @@ def test_runtime_readiness_uses_runtime_artifact_manifest_metadata(
         name="directx-runtime-readiness",
         artifact_report=artifact_report,
         targets=("directx",),
+        require_vulkan_native_runtime=False,
     )
 
     assert build_calls == [artifact_report]
@@ -267,7 +268,7 @@ def test_native_runtime_execution_metadata_uses_target_executors():
 
 @pytest.mark.parametrize(
     ("target", "entry_point"),
-    (("directx", "CSMain"), ("opengl", "main"), ("vulkan", "arangeuint8")),
+    (("directx", "CSMain"), ("opengl", "main"), ("vulkan", "arangeuint32")),
 )
 def test_runtime_readiness_selects_entry_point_independently(target, entry_point):
     module = _load_harness()
@@ -317,6 +318,7 @@ def test_runtime_readiness_reports_tracked_plan_resource_blockers(
         name="opengl-runtime-readiness",
         artifact_report=artifact_report,
         targets=("opengl",),
+        require_vulkan_native_runtime=False,
     )
 
     assert result["status"] == "blocked-by-tracked-issues"
@@ -424,7 +426,9 @@ def test_reduced_runtime_readiness_aggregates_fixture_execution(monkeypatch):
     )
 
     result = module._plan_reduced_runtime_readiness(
-        Path("/tmp/mlx"), Path("/tmp/reports")
+        Path("/tmp/mlx"),
+        Path("/tmp/reports"),
+        require_vulkan_native_runtime=False,
     )
 
     assert result["status"] == "blocked-by-tracked-issues"
@@ -817,7 +821,7 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
     monkeypatch.setattr(
         module,
         "_plan_reduced_runtime_readiness",
-        lambda *args: {
+        lambda *args, **kwargs: {
             "name": "runtime-readiness",
             "status": "blocked-by-tracked-issues",
         },
@@ -835,6 +839,7 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
             no_clean=False,
             python="python",
             require_vulkan_toolchain=False,
+            require_vulkan_native_runtime=False,
             mode=module.REDUCED_FRONTIER_MODE,
         )
     )

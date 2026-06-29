@@ -17591,6 +17591,9 @@ def _runtime_manifest_resource_bindings(
             "status": _runtime_manifest_binding_status(resource),
             "source": "hostInterface.resources",
         }
+        metadata = resource.get("metadata")
+        if isinstance(metadata, Mapping) and metadata:
+            binding["metadata"] = dict(metadata)
         bindings.append(binding)
     return bindings
 

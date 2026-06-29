@@ -26,9 +26,11 @@ class _PreparedVulkanBuffer:
     name: str
     set_index: int
     binding_index: int
+    resource_kind: str | None
     dtype: str
     shape: tuple[int, ...]
     source: str | None
+    output_name: str | None
     payload: bytes
 
     @property
@@ -299,7 +301,7 @@ class _VulkanDispatchContext:
         create_info = vk.VkBufferCreateInfo(
             sType=vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
             size=max(prepared.size, 1),
-            usage=vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            usage=_vulkan_buffer_usage(vk, prepared.resource_kind),
             sharingMode=vk.VK_SHARING_MODE_EXCLUSIVE,
         )
         buffer_handle = vk.vkCreateBuffer(self.device, create_info, None)
@@ -359,7 +361,7 @@ class _VulkanDispatchContext:
         bindings = [
             vk.VkDescriptorSetLayoutBinding(
                 binding=buffer.binding_index,
-                descriptorType=vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                descriptorType=_vulkan_descriptor_type(vk, buffer.resource_kind),
                 descriptorCount=1,
                 stageFlags=vk.VK_SHADER_STAGE_COMPUTE_BIT,
             )
@@ -373,15 +375,21 @@ class _VulkanDispatchContext:
         self.descriptor_set_layout = vk.vkCreateDescriptorSetLayout(
             self.device, layout_info, None
         )
-        pool_size = vk.VkDescriptorPoolSize(
-            type=vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            descriptorCount=len(bindings),
-        )
+        descriptor_counts: dict[Any, int] = {}
+        for buffer in self.buffers:
+            descriptor_type = _vulkan_descriptor_type(vk, buffer.resource_kind)
+            descriptor_counts[descriptor_type] = (
+                descriptor_counts.get(descriptor_type, 0) + 1
+            )
+        pool_sizes = [
+            vk.VkDescriptorPoolSize(type=descriptor_type, descriptorCount=count)
+            for descriptor_type, count in descriptor_counts.items()
+        ]
         pool_info = vk.VkDescriptorPoolCreateInfo(
             sType=vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
             maxSets=1,
-            poolSizeCount=1,
-            pPoolSizes=[pool_size],
+            poolSizeCount=len(pool_sizes),
+            pPoolSizes=pool_sizes,
         )
         self.descriptor_pool = vk.vkCreateDescriptorPool(self.device, pool_info, None)
         allocate_info = vk.VkDescriptorSetAllocateInfo(
@@ -404,7 +412,9 @@ class _VulkanDispatchContext:
                     dstSet=self.descriptor_set,
                     dstBinding=resource.prepared.binding_index,
                     descriptorCount=1,
-                    descriptorType=vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                    descriptorType=_vulkan_descriptor_type(
+                        vk, resource.prepared.resource_kind
+                    ),
                     pBufferInfo=[buffer_info],
                 )
             )
@@ -490,7 +500,7 @@ class _VulkanDispatchContext:
             if prepared.source != "expectedOutput":
                 continue
             payload = self._read_memory(resource.memory, prepared.size)
-            outputs[prepared.name] = {
+            outputs[prepared.output_name or prepared.name] = {
                 "dtype": prepared.dtype,
                 "shape": list(prepared.shape),
                 "values": _unpack_values(payload, prepared.dtype),
@@ -581,6 +591,18 @@ def _read_mapped_memory(mapped: Any, size: int) -> bytes:
         view.release()
 
 
+def _vulkan_descriptor_type(vk: Any, resource_kind: str | None) -> Any:
+    if resource_kind in {"constant-buffer", "uniform"}:
+        return vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
+    return vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
+
+
+def _vulkan_buffer_usage(vk: Any, resource_kind: str | None) -> Any:
+    if resource_kind in {"constant-buffer", "uniform"}:
+        return vk.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT
+    return vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
+
+
 def _prepare_vulkan_buffers(
     bindings: Mapping[str, NativeRuntimeBufferBinding],
 ) -> tuple[_PreparedVulkanBuffer, ...]:
@@ -588,7 +610,13 @@ def _prepare_vulkan_buffers(
     seen_bindings: set[tuple[int, int]] = set()
     for name, binding in bindings.items():
         resource = binding.binding
-        if resource.kind not in (None, "buffer", "storage-buffer"):
+        if resource.kind not in (
+            None,
+            "buffer",
+            "storage-buffer",
+            "constant-buffer",
+            "uniform",
+        ):
             raise RuntimeExecutorUnavailable(
                 f"Vulkan compute runtime supports buffer resources only: {name}."
             )
@@ -618,15 +646,24 @@ def _prepare_vulkan_buffers(
                 name=name,
                 set_index=set_index,
                 binding_index=binding_index,
+                resource_kind=resource.kind,
                 dtype=dtype,
                 shape=shape,
                 source=binding.source,
+                output_name=_runtime_value_name(binding),
                 payload=payload,
             )
         )
     return tuple(
         sorted(prepared, key=lambda item: (item.set_index, item.binding_index))
     )
+
+
+def _runtime_value_name(binding: NativeRuntimeBufferBinding) -> str | None:
+    value_name = binding.metadata.get("runtimeValueName")
+    if isinstance(value_name, str) and value_name.strip():
+        return value_name.strip()
+    return None
 
 
 def _workgroup_count(request: NativeRuntimeDispatchRequest) -> tuple[int, int, int]:
