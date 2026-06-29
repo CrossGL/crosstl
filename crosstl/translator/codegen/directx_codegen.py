@@ -359,6 +359,10 @@ class HLSLCodeGen:
             "metal_stdlib.h",
         }
     )
+    METAL_ADDRESS_SPACE_METADATA_ATTRIBUTES = frozenset(
+        {"constant", "device", "thread", "threadgroup"}
+    )
+    METAL_TYPE_ALIAS_GLOBALS = frozenset({"bfloat16_t", "float16_t"})
     HLSL_INTERPOLATION_MODE_MODIFIERS = {
         "flat": "nointerpolation",
         "nointerpolation": "nointerpolation",
@@ -822,7 +826,11 @@ class HLSLCodeGen:
             "packed_half2": "half2",
             "packed_half3": "half3",
             "packed_half4": "half4",
+            "bfloat": "half",
+            "bfloat16": "half",
+            "bfloat16_t": "half",
             "float16": "half",
+            "float16_t": "half",
             "f16vec2": "half2",
             "f16vec3": "half3",
             "f16vec4": "half4",
@@ -871,6 +879,8 @@ class HLSLCodeGen:
             "ulong": "uint64_t",
             "unsigned long": "uint64_t",
             "size_t": "uint64_t",
+            "thread_scope": "uint",
+            "metal::thread_scope": "uint",
             "char2": "int2",
             "char3": "int3",
             "char4": "int4",
@@ -1762,6 +1772,9 @@ class HLSLCodeGen:
                 var_name = node.variable_name
             else:
                 var_name = f"var{i}"
+
+            if self.hlsl_should_omit_metal_global_declaration(var_name, vtype):
+                continue
 
             attribute_array_size = self.hlsl_resource_array_size_expression(node, vtype)
             if not array_suffix and attribute_array_size is not None:
@@ -3313,7 +3326,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return line
 
     def is_metal_only_preprocessor_directive(self, directive_name, content):
-        if directive_name.lower() != "include":
+        directive_key = directive_name.lower()
+        if directive_key == "pragma":
+            return str(content).strip().lower().startswith("metal")
+        if directive_key != "include":
             return False
         raw_content = str(content).strip()
         if not raw_content:
@@ -3335,6 +3351,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         directive_name = parts[0]
         content = parts[1] if len(parts) > 1 else ""
         return self.is_metal_only_preprocessor_directive(directive_name, content)
+
+    def hlsl_should_omit_metal_global_declaration(self, var_name, vtype):
+        if not var_name:
+            return False
+        type_name = self.type_name_string(vtype)
+        mapped_type = self.map_type(type_name)
+        if (
+            var_name in self.METAL_TYPE_ALIAS_GLOBALS
+            and mapped_type == self.type_mapping.get(var_name)
+        ):
+            return True
+        type_key = str(type_name or "").rsplit("::", 1)[-1]
+        return type_key == "thread_scope" and str(var_name).startswith("thread_scope")
 
     def generate_constants(self, ast, constants=None):
         code = ""
@@ -4631,10 +4660,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return "precise " if self.hlsl_has_precise_modifier(node) else ""
 
     def is_hlsl_declaration_metadata_attribute(self, attr):
-        return str(getattr(attr, "name", "")).lower() in {
+        metadata = {
             "hlsl_program_constant",
             "precise",
         }
+        metadata.update(self.METAL_ADDRESS_SPACE_METADATA_ATTRIBUTES)
+        return str(getattr(attr, "name", "")).lower() in metadata
 
     def hlsl_canonical_compile_time_type_text(self, type_text):
         type_text = str(type_text)
@@ -5941,6 +5972,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if func_name in self.HLSL_WAVE_INTRINSIC_ARITIES:
                 return self.generate_hlsl_wave_intrinsic_call(func_name, args)
 
+            metal_as_type_call = self.generate_hlsl_metal_as_type_call(func_name, args)
+            if metal_as_type_call is not None:
+                return metal_as_type_call
+
+            bitcast_call = self.generate_hlsl_bitcast_call(func_name, args)
+            if bitcast_call is not None:
+                return bitcast_call
+
             texture_call = self.generate_texture_call(func_name, args)
             if texture_call is not None:
                 return texture_call
@@ -6611,6 +6650,110 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 if suffix in {"2", "3", "4"}:
                     return f"{target_component}{suffix}"
         return target_component
+
+    def generate_hlsl_metal_as_type_call(self, func_name, args):
+        if not func_name or func_name in getattr(self, "function_return_types", {}):
+            return None
+        match = re.fullmatch(r"(?:metal::)?as_type<(.+)>", str(func_name).strip())
+        if match is None or len(args) != 1:
+            return None
+
+        target_type = self.map_type(match.group(1).strip())
+        argument = args[0]
+        argument_code = self.generate_expression_with_expected(argument, None)
+        return self.hlsl_bitcast_or_cast_expression(
+            target_type,
+            argument_code,
+            self.expression_result_type(argument),
+        )
+
+    def generate_hlsl_bitcast_call(self, func_name, args):
+        if (
+            not func_name
+            or func_name in getattr(self, "function_return_types", {})
+            or func_name not in self.HLSL_BITCAST_FUNCTION_TARGETS
+            or len(args) != 1
+        ):
+            return None
+
+        target_type = self.hlsl_bitcast_result_type(func_name, args)
+        if target_type is None:
+            return None
+        argument = args[0]
+        argument_code = self.generate_expression_with_expected(argument, None)
+        intrinsic = self.function_map.get(func_name, func_name)
+        return self.hlsl_bitcast_or_cast_expression(
+            target_type,
+            argument_code,
+            self.expression_result_type(argument),
+            intrinsic=intrinsic,
+        )
+
+    def hlsl_bitcast_or_cast_expression(
+        self,
+        target_type,
+        argument_code,
+        source_type=None,
+        *,
+        intrinsic=None,
+    ):
+        mapped_target = self.map_type(target_type)
+        mapped_source = self.map_type(source_type) if source_type else None
+        if mapped_source == mapped_target:
+            return argument_code
+
+        source_base = self.hlsl_scalar_or_vector_component_type(mapped_source)
+        target_base = self.hlsl_scalar_or_vector_component_type(mapped_target)
+        if source_base in {"half", "min16float", "min10float"}:
+            return f"{mapped_target}({argument_code})"
+        if source_base == target_base and source_base is not None:
+            return f"{mapped_target}({argument_code})"
+        if intrinsic in {"asuint", "asint"} and source_base in {
+            "int",
+            "uint",
+            "min16int",
+            "min16uint",
+            "min12int",
+            "uint64_t",
+            "int64_t",
+        }:
+            return f"{mapped_target}({argument_code})"
+        if intrinsic is None and target_base in {
+            "half",
+            "min16float",
+            "min10float",
+        }:
+            return f"{mapped_target}({argument_code})"
+        if intrinsic:
+            return f"{intrinsic}({argument_code})"
+        return f"{mapped_target}({argument_code})"
+
+    def hlsl_scalar_or_vector_component_type(self, type_name):
+        if not type_name:
+            return None
+        mapped = self.map_type(type_name)
+        for component in (
+            "min16float",
+            "min10float",
+            "min16uint",
+            "min16int",
+            "min12int",
+            "uint64_t",
+            "int64_t",
+            "float",
+            "half",
+            "double",
+            "uint",
+            "int",
+            "bool",
+        ):
+            if mapped == component:
+                return component
+            if mapped.startswith(component):
+                suffix = mapped[len(component) :]
+                if suffix in {"2", "3", "4"}:
+                    return component
+        return None
 
     def hlsl_countbits_result_type(self, func_name, args):
         if func_name not in {"bitCount", "countbits"} or func_name in getattr(

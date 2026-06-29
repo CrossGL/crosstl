@@ -14,18 +14,22 @@ from crosstl.translator.ast import (
     AttributeNode,
     BlockNode,
     ExecutionModel,
+    FunctionCallNode,
     FunctionNode,
     GenericParameterNode,
     IdentifierNode,
     LiteralNode,
     NamedType,
+    ParameterNode,
     PreprocessorNode,
     PrimitiveType,
+    ReturnNode,
     ShaderNode,
     ShaderStage,
     StructMemberNode,
     StructNode,
     UnaryOpNode,
+    VariableNode,
     create_legacy_shader_node,
 )
 from crosstl.translator.codegen.directx_codegen import (
@@ -90,6 +94,8 @@ def test_hlsl_codegen_drops_metal_system_includes_but_preserves_hlsl_includes():
         "IncludeFilters",
         ExecutionModel.COMPUTE_KERNEL,
         preprocessors=[
+            PreprocessorNode("pragma", "METAL internals : enable"),
+            PreprocessorNode("pragma", "pack_matrix(row_major)"),
             PreprocessorNode("include", "<metal_math>"),
             PreprocessorNode("include", "<metal_integer>"),
             PreprocessorNode("include", "<metal_atomic>"),
@@ -105,6 +111,86 @@ def test_hlsl_codegen_drops_metal_system_includes_but_preserves_hlsl_includes():
     assert "#include <metal_atomic>" not in generated
     assert "#include <shared.hlsl>" in generated
     assert '#include "metal_helpers.hlsl"' in generated
+    assert "#pragma METAL internals : enable" not in generated
+    assert "#pragma pack_matrix(row_major)" in generated
+
+
+def test_hlsl_codegen_ignores_metal_address_space_struct_metadata():
+    ast = ShaderNode(
+        "MetalMetadata",
+        ExecutionModel.COMPUTE_KERNEL,
+        structs=[
+            StructNode(
+                "Limits",
+                [
+                    StructMemberNode(
+                        "max",
+                        NamedType("bfloat16_t"),
+                        attributes=[AttributeNode("constant")],
+                    )
+                ],
+            )
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert "half max;" in generated
+    assert ": constant" not in generated
+
+
+def test_hlsl_codegen_lowers_mlx_half_aliases_and_metal_as_type():
+    ast = ShaderNode(
+        "MetalAliases",
+        ExecutionModel.COMPUTE_KERNEL,
+        global_variables=[
+            VariableNode("bfloat16_t", NamedType("half")),
+            VariableNode("float16_t", NamedType("half")),
+            VariableNode("thread_scope_system", NamedType("thread_scope")),
+        ],
+        functions=[
+            FunctionNode(
+                "from_bits",
+                NamedType("bfloat16_t"),
+                [ParameterNode("bits", NamedType("uint16_t"))],
+                BlockNode(
+                    [
+                        ReturnNode(
+                            FunctionCallNode(
+                                IdentifierNode("as_type<bfloat16_t>"),
+                                [IdentifierNode("bits")],
+                            )
+                        )
+                    ]
+                ),
+            ),
+            FunctionNode(
+                "to_bits",
+                NamedType("uint16_t"),
+                [ParameterNode("x", NamedType("bfloat16_t"))],
+                BlockNode(
+                    [
+                        ReturnNode(
+                            FunctionCallNode(
+                                IdentifierNode("asuint"),
+                                [IdentifierNode("x")],
+                            )
+                        )
+                    ]
+                ),
+            ),
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert "half bfloat16_t;" not in generated
+    assert "half float16_t;" not in generated
+    assert "thread_scope_system" not in generated
+    assert "half from_bits(min16uint bits)" in generated
+    assert "return half(bits);" in generated
+    assert "min16uint to_bits(half x)" in generated
+    assert "return uint(x);" in generated
 
 
 HLSL_SCALAR_VECTOR_ZERO_DIAGNOSTIC = re.compile(

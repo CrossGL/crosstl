@@ -66,7 +66,10 @@ layout, and entry-point ownership warnings. The reduced fixture execution
 report exercises the project runner and adapter contract with reference
 buffers. The native execution report attempts the built-in native adapter
 contract separately. On Windows CI the generated DirectX frontier HLSL must
-compile with DXC. On Linux CI the generated Vulkan `arangeuint32` artifact must
+compile with DXC. Current DirectX smoke artifacts lower MLX bfloat16 aliases to
+HLSL `half` for toolchain coverage; exact bfloat16 storage and conversion
+semantics remain tracked separately. On Linux CI the generated Vulkan
+`arangeuint32` artifact must
 assemble, load, dispatch, and compare on the Vulkan compute runtime; other
 unavailable native backends remain structured blockers until backend runtime
 drivers are supplied by integration code. This still does not execute
@@ -134,10 +137,12 @@ generated GLSL helper uniforms that reflection currently reports as
 layout-incomplete runtime resources. CrossGL/crosstl#1471 tracks entry-point
 ownership for reflected constants in runtime reports. CrossGL/crosstl#1472
 tracks the Direct3D compute runtime driver needed to move Windows DirectX
-coverage from DXC validation to native dispatch/readback. Future scouts should
-add issue-backed blockers only when there are concrete repros. Host runtime
-integration gaps should be handled in repository integration code or downstream
-runtime adapters, not hidden as shader translation successes.
+coverage from DXC validation to native dispatch/readback. CrossGL/crosstl#1474
+tracks exact DirectX bfloat16 lowering beyond the current compile-time smoke
+mapping. Future scouts should add issue-backed blockers only when there are
+concrete repros. Host runtime integration gaps should be handled in repository
+integration code or downstream runtime adapters, not hidden as shader
+translation successes.
 
 ## Resolved Frontier Issues
 
