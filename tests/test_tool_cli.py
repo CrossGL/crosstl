@@ -169,6 +169,7 @@ TOOLS = [
                 "usage:",
                 "--project-root",
                 "--no-runtime-tests",
+                "--runtime-executor",
                 "--format",
                 "--output",
             ),

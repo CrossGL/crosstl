@@ -536,6 +536,23 @@ map neutral fixture buffers and function constants to MLX runtime objects, but
 the fixture contract remains expressed in terms of entry points, bindings,
 constants, dispatch geometry, and validation hooks rather than MLX APIs.
 
+Saved project test-runner plans can execute deterministic runtime fixtures when
+callers supply adapter implementations explicitly:
+
+.. code-block:: bash
+
+   python -m crosstl execute-test-runner \
+     crosstl-out/project-test-runner-plan.json \
+     --runtime-executor native-vulkan=tools.runtime.vulkan:VulkanRuntimeAdapter \
+     --output crosstl-out/project-test-runner-report.json
+
+``--runtime-executor`` is repeatable and uses
+``EXECUTOR=MODULE:OBJECT``. ``MODULE`` may be a dotted Python module name or a
+``.py`` file path. ``OBJECT`` may be an adapter instance, adapter class, or
+factory returning an object with ``run(request)`` or the parity-adapter methods
+``prepare_buffers(state)``, ``dispatch(state, buffers)``, and
+``collect_outputs(state, result)``.
+
 The translator stops at this contract boundary. Full framework rewrites,
 non-kernel host API ports, application command scheduling, target SDK
 installation, build-system migration, memory lifetime policy, and production

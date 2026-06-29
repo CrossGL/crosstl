@@ -13,8 +13,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from crosstl.project import build_runtime_artifact_manifest
+from crosstl.project import (
+    build_project_test_runner_plan,
+    build_runtime_artifact_manifest,
+    execute_project_test_runner_plan,
+)
 from crosstl.project.runtime_verification import (
+    RuntimeParityAdapter,
     build_runtime_test_manifest,
     plan_runtime_test_manifest,
 )
@@ -54,6 +59,7 @@ RUNTIME_READINESS_ENTRY_POINTS = {
     "opengl": "main",
     "vulkan": "arangeuint8",
 }
+RUNTIME_FIXTURE_EXECUTION_ADAPTER_KIND = "mlx-arange-reference-runtime"
 RUNTIME_READINESS_DIAGNOSTIC_CODES = frozenset(
     (
         "project.runtime-test-manifest.entry-points-unavailable",
@@ -712,6 +718,103 @@ def _runtime_readiness_fixture_metadata(targets: Sequence[str]) -> dict[str, Any
     }
 
 
+def _runtime_fixture_execution_adapter_id(target: str) -> str:
+    return f"mlx-arange-reference-{target}"
+
+
+def _runtime_fixture_execution_metadata(targets: Sequence[str]) -> dict[str, Any]:
+    metadata = _runtime_readiness_fixture_metadata(targets)
+    metadata["metadata"] = {
+        **metadata["metadata"],
+        "scope": "reference-runtime-fixture-execution",
+        "runtimeFixtureExecutionIncluded": True,
+    }
+    metadata["adapters"] = [
+        {
+            "id": _runtime_fixture_execution_adapter_id(target),
+            "executor": _runtime_fixture_execution_adapter_id(target),
+            "adapterKind": RUNTIME_FIXTURE_EXECUTION_ADAPTER_KIND,
+            "platformRequirements": {"requiredTools": []},
+            "metadata": {
+                "target": target,
+                "scope": "reference-runtime-fixture-execution",
+            },
+        }
+        for target in targets
+    ]
+    metadata["fixtures"] = [
+        {
+            **fixture,
+            "adapter": _runtime_fixture_execution_adapter_id(
+                str(fixture["selector"]["target"])
+            ),
+        }
+        for fixture in metadata["fixtures"]
+        if isinstance(fixture.get("selector"), Mapping)
+    ]
+    return metadata
+
+
+class MlxArangeReferenceRuntime(RuntimeParityAdapter):
+    """Reference executor for MLX reduced arange runtime fixtures."""
+
+    name = RUNTIME_FIXTURE_EXECUTION_ADAPTER_KIND
+
+    def __init__(self, target: str):
+        self.target = target
+
+    def prepare_buffers(self, state):
+        return dict(state.resource_values)
+
+    def dispatch(self, state, prepared_buffers):
+        start = _runtime_fixture_scalar(prepared_buffers.get("start"), default=0)
+        step = _runtime_fixture_scalar(prepared_buffers.get("step"), default=1)
+        output = state.request.fixture.expected_outputs[0]
+        count = _runtime_fixture_output_count(state, output)
+        return {output.name: [start + index * step for index in range(count)]}
+
+    def collect_outputs(self, state, dispatch_result):
+        outputs = {}
+        for output in state.request.fixture.expected_outputs:
+            values = dispatch_result.get(output.name, [])
+            outputs[output.name] = {
+                "dtype": output.dtype,
+                "shape": list(output.shape),
+                "values": values,
+            }
+        return outputs
+
+
+def _runtime_fixture_scalar(value: Any, *, default: int) -> int:
+    if value is None:
+        return default
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        if not value:
+            return default
+        value = value[0]
+    return int(value)
+
+
+def _runtime_fixture_output_count(state: Any, output: Any) -> int:
+    if output.shape:
+        return int(output.shape[0])
+    if isinstance(output.values, Sequence) and not isinstance(
+        output.values, (str, bytes, bytearray)
+    ):
+        return len(output.values)
+    dispatch = state.plan.dispatch
+    if dispatch is not None and dispatch.global_size:
+        return int(dispatch.global_size[0])
+    return 1
+
+
+def _runtime_fixture_execution_executors(targets: Sequence[str]) -> dict[str, Any]:
+    return {
+        _runtime_fixture_execution_adapter_id(target): MlxArangeReferenceRuntime(target)
+        for target in targets
+    }
+
+
 def _diagnostics_by_code(diagnostics: Sequence[Any]) -> dict[str, int]:
     counts: Counter[str] = Counter()
     for diagnostic in diagnostics:
@@ -734,6 +837,20 @@ def _runtime_plan_diagnostics(plan: Mapping[str, Any]) -> list[Mapping[str, Any]
     return diagnostics
 
 
+def _runtime_report_diagnostics(report: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    diagnostics: list[Mapping[str, Any]] = []
+    for result in report.get("results", []):
+        if not isinstance(result, Mapping):
+            continue
+        for diagnostic in result.get("diagnostics", []):
+            if isinstance(diagnostic, Mapping):
+                diagnostics.append(diagnostic)
+    runtime_report = report.get("runtimeTestReport")
+    if isinstance(runtime_report, Mapping):
+        diagnostics.extend(_runtime_report_diagnostics(runtime_report))
+    return diagnostics
+
+
 def _error_diagnostics(
     diagnostics: Sequence[Mapping[str, Any]],
 ) -> list[Mapping[str, Any]]:
@@ -742,6 +859,75 @@ def _error_diagnostics(
         for diagnostic in diagnostics
         if diagnostic.get("severity") == "error"
     ]
+
+
+def _execute_runtime_fixtures_for_report(
+    *,
+    mlx_root: Path,
+    report_dir: Path,
+    name: str,
+    runtime_artifact_manifest_path: Path,
+    targets: Sequence[str],
+) -> dict[str, Any]:
+    metadata_path = report_dir / f"{name}.runtime-fixture-execution-metadata.json"
+    manifest_path = report_dir / f"{name}.runtime-fixture-execution-manifest.json"
+    plan_path = report_dir / f"{name}.runtime-fixture-execution-plan.json"
+    report_path = report_dir / f"{name}.runtime-fixture-execution-report.json"
+    metadata = _runtime_fixture_execution_metadata(targets)
+    _write_json(metadata_path, metadata)
+    manifest = build_runtime_test_manifest(
+        runtime_artifact_manifest_path,
+        metadata_path,
+        project_root=mlx_root,
+    )
+    _write_json(manifest_path, manifest)
+    plan = build_project_test_runner_plan(
+        runtime_artifact_manifest_path,
+        manifest,
+        selected_targets=targets,
+        project_root=mlx_root,
+    )
+    _write_json(plan_path, plan)
+    report = execute_project_test_runner_plan(
+        plan,
+        project_root=mlx_root,
+        runtime_executors=_runtime_fixture_execution_executors(targets),
+    )
+    _write_json(report_path, report)
+    project_runner_summary = report.get("summary", {})
+    _require(
+        isinstance(project_runner_summary, dict),
+        "runtime fixture execution project-runner summary missing",
+    )
+    runtime_report = report.get("runtimeTestReport", {})
+    _require(
+        isinstance(runtime_report, Mapping),
+        "runtime fixture execution runtime report missing",
+    )
+    summary = runtime_report.get("summary", {})
+    _require(isinstance(summary, dict), "runtime fixture execution summary missing")
+    diagnostics = _runtime_report_diagnostics(report)
+    diagnostics_by_code = _diagnostics_by_code(diagnostics)
+    failed_count = int(summary.get("failedCount", 0))
+    skipped_count = int(summary.get("skippedCount", 0))
+    status = "passed" if failed_count == 0 and skipped_count == 0 else "failed"
+    if status == "failed" and RUNTIME_READINESS_TRACKED_ISSUES:
+        status = "blocked-by-tracked-issues"
+    return {
+        "name": f"{name}-runtime-fixture-execution",
+        "status": status,
+        "fixtureMetadata": _relpath(metadata_path, mlx_root),
+        "runtimeTestManifest": _relpath(manifest_path, mlx_root),
+        "projectTestRunnerPlan": _relpath(plan_path, mlx_root),
+        "projectTestRunnerReport": _relpath(report_path, mlx_root),
+        "targets": list(targets),
+        "summary": summary,
+        "projectRunnerSummary": project_runner_summary,
+        "diagnosticsByCode": diagnostics_by_code,
+        "runtimeFixtureExecutionIncluded": True,
+        "runtimeIntegrationIncluded": False,
+        "trackedRuntimeIssues": list(RUNTIME_READINESS_TRACKED_ISSUES),
+    }
 
 
 def _plan_runtime_readiness_for_report(
@@ -778,6 +964,13 @@ def _plan_runtime_readiness_for_report(
         project_root=mlx_root,
     )
     _write_json(plan_path, plan)
+    runtime_fixture_execution = _execute_runtime_fixtures_for_report(
+        mlx_root=mlx_root,
+        report_dir=report_dir,
+        name=name,
+        runtime_artifact_manifest_path=runtime_artifact_manifest_path,
+        targets=targets,
+    )
 
     runtime_artifact_diagnostics_by_code = _diagnostics_by_code(
         runtime_artifact_manifest.get("runtimeDiagnostics", [])
@@ -851,6 +1044,8 @@ def _plan_runtime_readiness_for_report(
         "planBlockerCodes": plan_blocker_codes,
         "shaderArtifactsOnly": True,
         "runtimeIntegrationIncluded": False,
+        "runtimeFixtureExecutionIncluded": True,
+        "runtimeFixtureExecution": runtime_fixture_execution,
         "trackedRuntimeIssues": list(RUNTIME_READINESS_TRACKED_ISSUES),
     }
 
@@ -883,6 +1078,8 @@ def _plan_reduced_runtime_readiness(
     diagnostics_by_code: Counter[str] = Counter()
     runtime_artifact_diagnostics_by_code: Counter[str] = Counter()
     runtime_plan_diagnostics_by_code: Counter[str] = Counter()
+    runtime_fixture_execution_by_status: Counter[str] = Counter()
+    runtime_fixture_execution_summary: Counter[str] = Counter()
     for report in reports:
         diagnostics_by_code.update(report.get("diagnosticsByCode", {}))
         runtime_artifact_diagnostics_by_code.update(
@@ -891,6 +1088,28 @@ def _plan_reduced_runtime_readiness(
         runtime_plan_diagnostics_by_code.update(
             report.get("runtimePlanDiagnosticsByCode", {})
         )
+        runtime_fixture_execution = report.get("runtimeFixtureExecution", {})
+        if isinstance(runtime_fixture_execution, Mapping):
+            runtime_fixture_execution_by_status.update(
+                [str(runtime_fixture_execution.get("status", "unknown"))]
+            )
+            execution_summary = runtime_fixture_execution.get("summary", {})
+            if isinstance(execution_summary, Mapping):
+                for key in (
+                    "fixtureCount",
+                    "resultCount",
+                    "passedCount",
+                    "skippedCount",
+                    "unavailableCount",
+                    "translationFailedCount",
+                    "runtimeFailedCount",
+                    "comparisonFailedCount",
+                    "failedCount",
+                ):
+                    if key in execution_summary:
+                        runtime_fixture_execution_summary[key] += int(
+                            execution_summary.get(key, 0)
+                        )
     return {
         "name": "runtime-readiness",
         "status": status,
@@ -906,6 +1125,13 @@ def _plan_reduced_runtime_readiness(
         ),
         "shaderArtifactsOnly": True,
         "runtimeIntegrationIncluded": False,
+        "runtimeFixtureExecutionIncluded": True,
+        "runtimeFixtureExecutionByStatus": dict(
+            sorted(runtime_fixture_execution_by_status.items())
+        ),
+        "runtimeFixtureExecutionSummary": dict(
+            sorted(runtime_fixture_execution_summary.items())
+        ),
         "trackedRuntimeIssues": list(RUNTIME_READINESS_TRACKED_ISSUES),
     }
 
@@ -1163,6 +1389,7 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             "shaderArtifactsOnly": True,
             "runtimeIntegrationIncluded": False,
             "runtimeReadinessIncluded": args.mode == REDUCED_FRONTIER_MODE,
+            "runtimeFixtureExecutionIncluded": args.mode == REDUCED_FRONTIER_MODE,
         },
         "trackedIssues": list(FULL_CORPUS_TRACKED_ISSUES),
         "resolvedFrontierIssues": list(RESOLVED_FRONTIER_ISSUES),

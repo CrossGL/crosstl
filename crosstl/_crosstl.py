@@ -1,6 +1,9 @@
 """High-level translation API and command-line entry point for CrossGL Translator."""
 
 import argparse
+import importlib
+import importlib.util
+import inspect
 import json
 import os
 import sys
@@ -908,6 +911,77 @@ def _load_project_test_runner_config(path):
     return dict(payload)
 
 
+def _load_project_runtime_executors(specs):
+    executors = {}
+    for spec in specs or ():
+        key, separator, reference = spec.partition("=")
+        key = key.strip()
+        reference = reference.strip()
+        if not separator or not key or not reference:
+            raise ValueError("Runtime executor specs must use EXECUTOR=MODULE:OBJECT.")
+        executor = _load_project_runtime_executor(reference)
+        executors[key] = executor
+    return executors
+
+
+def _load_project_runtime_executor(reference):
+    module_ref, separator, object_name = reference.rpartition(":")
+    module_ref = module_ref.strip()
+    object_name = object_name.strip()
+    if not separator or not module_ref or not object_name:
+        raise ValueError("Runtime executor references must use MODULE:OBJECT.")
+    module = _load_project_runtime_executor_module(module_ref)
+    try:
+        value = getattr(module, object_name)
+    except AttributeError as exc:
+        raise ValueError(
+            f"Runtime executor object {object_name!r} was not found in {module_ref!r}."
+        ) from exc
+    executor = _project_runtime_executor_instance(value)
+    if not _project_runtime_executor_like(executor):
+        raise ValueError(
+            "Runtime executor objects must expose run(request) or "
+            "prepare_buffers(state), dispatch(state, buffers), and "
+            "collect_outputs(state, result)."
+        )
+    return executor
+
+
+def _load_project_runtime_executor_module(module_ref):
+    module_path = Path(module_ref)
+    if module_path.suffix == ".py" or module_path.exists():
+        module_path = module_path.resolve()
+        if not module_path.is_file():
+            raise ValueError(f"Runtime executor module is not a file: {module_path}")
+        module_name = f"crosstl_runtime_executor_{abs(hash(str(module_path)))}"
+        spec = importlib.util.spec_from_file_location(module_name, module_path)
+        if spec is None or spec.loader is None:
+            raise ValueError(f"Could not load runtime executor module: {module_path}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    return importlib.import_module(module_ref)
+
+
+def _project_runtime_executor_instance(value):
+    if inspect.isclass(value):
+        return value()
+    if _project_runtime_executor_like(value):
+        return value
+    if callable(value):
+        return value()
+    return value
+
+
+def _project_runtime_executor_like(value):
+    if callable(getattr(value, "run", None)):
+        return True
+    return all(
+        callable(getattr(value, method, None))
+        for method in ("prepare_buffers", "dispatch", "collect_outputs")
+    )
+
+
 def _format_project_test_runner_plan(payload):
     lines = [
         f"Project test-runner plan: {payload.get('sourceArtifacts', {}).get('path')}"
@@ -1101,6 +1175,7 @@ def _run_execute_project_test_runner(args):
         project_root=args.project_root,
         output_path=args.output if args.format == "json" else None,
         run_runtime_tests=not args.no_runtime_tests,
+        runtime_executors=_load_project_runtime_executors(args.runtime_executor),
     )
     if args.format == "sarif":
         _write_json_payload(
@@ -6610,6 +6685,16 @@ def _build_parser():
         "--no-runtime-tests",
         action="store_true",
         help="Run project commands only and skip runtime fixture execution",
+    )
+    execute_test_runner_parser.add_argument(
+        "--runtime-executor",
+        action="append",
+        default=[],
+        metavar="EXECUTOR=MODULE:OBJECT",
+        help=(
+            "Runtime executor implementation to load for fixture execution; "
+            "repeatable. MODULE may be a dotted module name or a Python file path."
+        ),
     )
     execute_test_runner_parser.add_argument(
         "--format",
