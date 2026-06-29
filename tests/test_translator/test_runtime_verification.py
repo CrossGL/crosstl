@@ -1885,6 +1885,38 @@ def test_runtime_parity_native_adapter_reports_unavailable_tooling(tmp_path):
     assert result["executor"]["details"]["missingTools"] == [missing_tool]
 
 
+def test_runtime_parity_native_adapter_skips_validation_tooling_when_disabled(
+    tmp_path,
+):
+    artifact_path = tmp_path / "out" / "opengl" / "debug" / "add.glsl"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text("#version 450\nvoid main() {}\n", encoding="utf-8")
+    adapter = OpenGLRuntimeParityAdapter(
+        runtime=FakeNativeRuntime(),
+        required_tools=("crosstl-runtime-tool-that-does-not-exist-1302",),
+        tool_resolver=lambda _tool: None,
+        validate=False,
+    )
+
+    report = verify_runtime_test_manifest(
+        _artifact_report(tmp_path, [_native_runtime_artifact()]),
+        _native_runtime_manifest(),
+        executors={"opengl": adapter},
+    )
+
+    result = report["results"][0]
+    assert report["success"] is True
+    assert result["status"] == PASSED
+    validation_steps = [
+        step
+        for step in result["executor"]["details"]["adapterSteps"]
+        if step["action"] == "validate-native-runtime-artifact"
+    ]
+    assert len(validation_steps) == 1
+    assert validation_steps[0]["status"] == SKIPPED
+    assert validation_steps[0]["details"]["reason"] == "validation-disabled"
+
+
 def test_runtime_parity_native_adapter_reports_unavailable_platform(tmp_path):
     adapter = OpenGLRuntimeParityAdapter(
         runtime=FakeNativeRuntime(),
