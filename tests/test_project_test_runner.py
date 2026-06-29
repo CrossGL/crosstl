@@ -430,6 +430,121 @@ class IncrementRuntime:
     )
 
 
+def test_project_cli_execute_test_runner_loads_native_runtime_driver(tmp_path):
+    artifact_path = tmp_path / "out" / "opengl" / "add.glsl"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text("#version 450\nvoid main() {}\n", encoding="utf-8")
+    artifact_report_path = tmp_path / "artifact-report.json"
+    artifact_report_path.write_text(
+        json.dumps(
+            _artifact_report(
+                tmp_path,
+                [
+                    _artifact(
+                        path="out/opengl/add.glsl",
+                        dispatch={
+                            "entryPoint": "main",
+                            "globalSize": [1, 1, 1],
+                            "workgroupSize": [1, 1, 1],
+                        },
+                    )
+                ],
+            )
+        ),
+        encoding="utf-8",
+    )
+    manifest = {
+        "kind": "crosstl-project-runtime-test-manifest",
+        "adapters": [
+            {
+                "id": "native-opengl",
+                "executor": "opengl",
+                "adapterKind": "opengl-native-runtime",
+                "platformRequirements": {"requiredTools": []},
+            }
+        ],
+        "tests": [
+            {
+                "id": "native-increment-fixture",
+                "selector": {
+                    "source": "kernels/add.cgl",
+                    "target": "opengl",
+                    "variant": "debug",
+                },
+                "adapter": "native-opengl",
+                "inputs": [
+                    {
+                        "name": "lhs",
+                        "dtype": "float32",
+                        "shape": [1],
+                        "values": [1.0],
+                    }
+                ],
+                "expectedOutputs": [
+                    {
+                        "name": "out",
+                        "dtype": "float32",
+                        "shape": [1],
+                        "values": [2.0],
+                    }
+                ],
+            }
+        ],
+    }
+    plan = build_project_test_runner_plan(
+        artifact_report_path,
+        manifest,
+        project_root=tmp_path,
+    )
+    plan_path = tmp_path / "test-runner-plan.json"
+    report_path = tmp_path / "test-runner-report.json"
+    runtime_path = tmp_path / "native_runtime.py"
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    runtime_path.write_text(
+        """
+class OpenGLFixtureRuntime:
+    name = "fixture-opengl-driver"
+
+    def dispatch(self, adapter, state, request):
+        assert adapter.target == "opengl"
+        assert request.entry_point == "main"
+        assert request.buffers["out"].source == "expectedOutput"
+        return {"out": [value + 1.0 for value in request.buffers["lhs"].value]}
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "execute-test-runner",
+            str(plan_path),
+            "--project-root",
+            str(tmp_path),
+            "--native-runtime-adapter",
+            f"opengl={runtime_path}:OpenGLFixtureRuntime",
+            "--no-native-runtime-validation",
+            "--output",
+            str(report_path),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    runtime_result = report["runtimeTestReport"]["results"][0]
+    details = runtime_result["executor"]["details"]
+    assert report["success"] is True
+    assert runtime_result["status"] == "passed"
+    assert details["runtimeParityAdapter"]["runtimeAdapter"] == "opengl-native-runtime"
+    assert details["nativeRuntimeDispatch"]["target"] == "opengl"
+
+
 def test_project_test_runner_inspection_summarizes_unavailable_adapters(tmp_path):
     plan = build_project_test_runner_plan(
         _artifact_report(tmp_path, [_artifact()]),

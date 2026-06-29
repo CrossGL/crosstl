@@ -170,6 +170,8 @@ TOOLS = [
                 "--project-root",
                 "--no-runtime-tests",
                 "--runtime-executor",
+                "--native-runtime-adapter",
+                "--no-native-runtime-validation",
                 "--format",
                 "--output",
             ),

@@ -1048,7 +1048,9 @@ class NativeRuntimeParityAdapter(RuntimeParityAdapter):
                 details=platform_details,
             )
         missing_tools = [
-            tool for tool in self.required_tools if self._resolve_tool(tool) is None
+            tool
+            for tool in self.required_tools
+            if self.validate and self._resolve_tool(tool) is None
         ]
         if missing_tools:
             return RuntimeExecutorAvailability(

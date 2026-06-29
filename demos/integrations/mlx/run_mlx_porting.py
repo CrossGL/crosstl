@@ -17,6 +17,7 @@ from crosstl.project import (
     build_project_test_runner_plan,
     build_runtime_artifact_manifest,
     execute_project_test_runner_plan,
+    native_runtime_parity_adapters,
 )
 from crosstl.project.runtime_verification import (
     RuntimeParityAdapter,
@@ -60,6 +61,7 @@ RUNTIME_READINESS_ENTRY_POINTS = {
     "vulkan": "arangeuint8",
 }
 RUNTIME_FIXTURE_EXECUTION_ADAPTER_KIND = "mlx-arange-reference-runtime"
+NATIVE_RUNTIME_EXECUTION_SCOPE = "native-runtime-execution-readiness"
 RUNTIME_READINESS_DIAGNOSTIC_CODES = frozenset(
     (
         "project.runtime-test-manifest.entry-points-unavailable",
@@ -755,6 +757,43 @@ def _runtime_fixture_execution_metadata(targets: Sequence[str]) -> dict[str, Any
     return metadata
 
 
+def _native_runtime_execution_adapter_id(target: str) -> str:
+    return f"mlx-arange-native-{target}"
+
+
+def _native_runtime_execution_metadata(targets: Sequence[str]) -> dict[str, Any]:
+    metadata = _runtime_readiness_fixture_metadata(targets)
+    metadata["metadata"] = {
+        **metadata["metadata"],
+        "scope": NATIVE_RUNTIME_EXECUTION_SCOPE,
+        "nativeRuntimeExecutionIncluded": True,
+    }
+    metadata["adapters"] = [
+        {
+            "id": _native_runtime_execution_adapter_id(target),
+            "executor": target,
+            "adapterKind": f"{target}-native-runtime",
+            "platformRequirements": {"requiredTools": []},
+            "metadata": {
+                "target": target,
+                "scope": NATIVE_RUNTIME_EXECUTION_SCOPE,
+            },
+        }
+        for target in targets
+    ]
+    metadata["fixtures"] = [
+        {
+            **fixture,
+            "adapter": _native_runtime_execution_adapter_id(
+                str(fixture["selector"]["target"])
+            ),
+        }
+        for fixture in metadata["fixtures"]
+        if isinstance(fixture.get("selector"), Mapping)
+    ]
+    return metadata
+
+
 class MlxArangeReferenceRuntime(RuntimeParityAdapter):
     """Reference executor for MLX reduced arange runtime fixtures."""
 
@@ -930,6 +969,78 @@ def _execute_runtime_fixtures_for_report(
     }
 
 
+def _execute_native_runtime_fixtures_for_report(
+    *,
+    mlx_root: Path,
+    report_dir: Path,
+    name: str,
+    runtime_artifact_manifest_path: Path,
+    targets: Sequence[str],
+) -> dict[str, Any]:
+    metadata_path = report_dir / f"{name}.native-runtime-execution-metadata.json"
+    manifest_path = report_dir / f"{name}.native-runtime-execution-manifest.json"
+    plan_path = report_dir / f"{name}.native-runtime-execution-plan.json"
+    report_path = report_dir / f"{name}.native-runtime-execution-report.json"
+    metadata = _native_runtime_execution_metadata(targets)
+    _write_json(metadata_path, metadata)
+    manifest = build_runtime_test_manifest(
+        runtime_artifact_manifest_path,
+        metadata_path,
+        project_root=mlx_root,
+    )
+    _write_json(manifest_path, manifest)
+    plan = build_project_test_runner_plan(
+        runtime_artifact_manifest_path,
+        manifest,
+        selected_targets=targets,
+        project_root=mlx_root,
+    )
+    _write_json(plan_path, plan)
+    report = execute_project_test_runner_plan(
+        plan,
+        project_root=mlx_root,
+        runtime_executors=native_runtime_parity_adapters(validate=False),
+    )
+    _write_json(report_path, report)
+    project_runner_summary = report.get("summary", {})
+    _require(
+        isinstance(project_runner_summary, dict),
+        "native runtime execution project-runner summary missing",
+    )
+    runtime_report = report.get("runtimeTestReport", {})
+    _require(
+        isinstance(runtime_report, Mapping),
+        "native runtime execution runtime report missing",
+    )
+    summary = runtime_report.get("summary", {})
+    _require(isinstance(summary, dict), "native runtime execution summary missing")
+    diagnostics = _runtime_report_diagnostics(report)
+    diagnostics_by_code = _diagnostics_by_code(diagnostics)
+    failed_count = int(summary.get("failedCount", 0))
+    unavailable_count = int(summary.get("unavailableCount", 0))
+    skipped_count = int(summary.get("skippedCount", 0))
+    status = "passed"
+    if failed_count:
+        status = "blocked-by-tracked-issues"
+    elif unavailable_count or skipped_count:
+        status = "blocked-by-runtime-driver"
+    return {
+        "name": f"{name}-native-runtime-execution",
+        "status": status,
+        "fixtureMetadata": _relpath(metadata_path, mlx_root),
+        "runtimeTestManifest": _relpath(manifest_path, mlx_root),
+        "projectTestRunnerPlan": _relpath(plan_path, mlx_root),
+        "projectTestRunnerReport": _relpath(report_path, mlx_root),
+        "targets": list(targets),
+        "summary": summary,
+        "projectRunnerSummary": project_runner_summary,
+        "diagnosticsByCode": diagnostics_by_code,
+        "nativeRuntimeExecutionIncluded": True,
+        "runtimeIntegrationIncluded": False,
+        "trackedRuntimeIssues": list(RUNTIME_READINESS_TRACKED_ISSUES),
+    }
+
+
 def _plan_runtime_readiness_for_report(
     *,
     mlx_root: Path,
@@ -965,6 +1076,13 @@ def _plan_runtime_readiness_for_report(
     )
     _write_json(plan_path, plan)
     runtime_fixture_execution = _execute_runtime_fixtures_for_report(
+        mlx_root=mlx_root,
+        report_dir=report_dir,
+        name=name,
+        runtime_artifact_manifest_path=runtime_artifact_manifest_path,
+        targets=targets,
+    )
+    native_runtime_execution = _execute_native_runtime_fixtures_for_report(
         mlx_root=mlx_root,
         report_dir=report_dir,
         name=name,
@@ -1046,6 +1164,8 @@ def _plan_runtime_readiness_for_report(
         "runtimeIntegrationIncluded": False,
         "runtimeFixtureExecutionIncluded": True,
         "runtimeFixtureExecution": runtime_fixture_execution,
+        "nativeRuntimeExecutionIncluded": True,
+        "nativeRuntimeExecution": native_runtime_execution,
         "trackedRuntimeIssues": list(RUNTIME_READINESS_TRACKED_ISSUES),
     }
 
@@ -1080,6 +1200,8 @@ def _plan_reduced_runtime_readiness(
     runtime_plan_diagnostics_by_code: Counter[str] = Counter()
     runtime_fixture_execution_by_status: Counter[str] = Counter()
     runtime_fixture_execution_summary: Counter[str] = Counter()
+    native_runtime_execution_by_status: Counter[str] = Counter()
+    native_runtime_execution_summary: Counter[str] = Counter()
     for report in reports:
         diagnostics_by_code.update(report.get("diagnosticsByCode", {}))
         runtime_artifact_diagnostics_by_code.update(
@@ -1110,6 +1232,27 @@ def _plan_reduced_runtime_readiness(
                         runtime_fixture_execution_summary[key] += int(
                             execution_summary.get(key, 0)
                         )
+        native_runtime_execution = report.get("nativeRuntimeExecution", {})
+        if isinstance(native_runtime_execution, Mapping):
+            native_runtime_execution_by_status.update(
+                [str(native_runtime_execution.get("status", "unknown"))]
+            )
+            execution_summary = native_runtime_execution.get("summary", {})
+            if isinstance(execution_summary, Mapping):
+                for key in (
+                    "fixtureCount",
+                    "passedCount",
+                    "skippedCount",
+                    "unavailableCount",
+                    "translationFailedCount",
+                    "runtimeFailedCount",
+                    "comparisonFailedCount",
+                    "failedCount",
+                ):
+                    if key in execution_summary:
+                        native_runtime_execution_summary[key] += int(
+                            execution_summary.get(key, 0)
+                        )
     return {
         "name": "runtime-readiness",
         "status": status,
@@ -1131,6 +1274,13 @@ def _plan_reduced_runtime_readiness(
         ),
         "runtimeFixtureExecutionSummary": dict(
             sorted(runtime_fixture_execution_summary.items())
+        ),
+        "nativeRuntimeExecutionIncluded": True,
+        "nativeRuntimeExecutionByStatus": dict(
+            sorted(native_runtime_execution_by_status.items())
+        ),
+        "nativeRuntimeExecutionSummary": dict(
+            sorted(native_runtime_execution_summary.items())
         ),
         "trackedRuntimeIssues": list(RUNTIME_READINESS_TRACKED_ISSUES),
     }
@@ -1390,6 +1540,7 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             "runtimeIntegrationIncluded": False,
             "runtimeReadinessIncluded": args.mode == REDUCED_FRONTIER_MODE,
             "runtimeFixtureExecutionIncluded": args.mode == REDUCED_FRONTIER_MODE,
+            "nativeRuntimeExecutionIncluded": args.mode == REDUCED_FRONTIER_MODE,
         },
         "trackedIssues": list(FULL_CORPUS_TRACKED_ISSUES),
         "resolvedFrontierIssues": list(RESOLVED_FRONTIER_ISSUES),
