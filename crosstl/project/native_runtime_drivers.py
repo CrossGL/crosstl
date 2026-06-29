@@ -338,14 +338,14 @@ class _VulkanDispatchContext:
             return
         pointer = self.vk.vkMapMemory(self.device, memory, 0, len(payload), 0)
         try:
-            ctypes.memmove(pointer, payload, len(payload))
+            _write_mapped_memory(pointer, payload)
         finally:
             self.vk.vkUnmapMemory(self.device, memory)
 
     def _read_memory(self, memory: Any, size: int) -> bytes:
         pointer = self.vk.vkMapMemory(self.device, memory, 0, size, 0)
         try:
-            return ctypes.string_at(pointer, size)
+            return _read_mapped_memory(pointer, size)
         finally:
             self.vk.vkUnmapMemory(self.device, memory)
 
@@ -436,7 +436,7 @@ class _VulkanDispatchContext:
             [pipeline_info],
             None,
         )
-        self.pipeline = pipelines[0] if isinstance(pipelines, Sequence) else pipelines
+        self.pipeline = _first_vulkan_handle(pipelines)
 
     def _record_and_submit(self) -> None:
         vk = self.vk
@@ -543,6 +543,42 @@ def _vk_destroy(vk: Any, name: str, owner: Any, handle: Any) -> None:
         destroy(handle, None)
     else:
         destroy(owner, handle, None)
+
+
+def _first_vulkan_handle(handles: Any) -> Any:
+    if isinstance(handles, (str, bytes, bytearray)):
+        return handles
+    try:
+        return handles[0]
+    except (IndexError, TypeError, KeyError):
+        return handles
+
+
+def _write_mapped_memory(mapped: Any, payload: bytes) -> None:
+    try:
+        view = memoryview(mapped)
+    except TypeError:
+        ctypes.memmove(mapped, payload, len(payload))
+        return
+
+    try:
+        byte_view = view.cast("B") if view.format != "B" else view
+        byte_view[: len(payload)] = payload
+    finally:
+        view.release()
+
+
+def _read_mapped_memory(mapped: Any, size: int) -> bytes:
+    try:
+        view = memoryview(mapped)
+    except TypeError:
+        return ctypes.string_at(mapped, size)
+
+    try:
+        byte_view = view.cast("B") if view.format != "B" else view
+        return byte_view[:size].tobytes()
+    finally:
+        view.release()
 
 
 def _prepare_vulkan_buffers(
