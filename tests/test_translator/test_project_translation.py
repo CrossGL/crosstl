@@ -547,6 +547,7 @@ def test_project_package_exposes_public_api_surface():
         "RuntimeValue",
         "RuntimeValidationHook",
         "RuntimeVerificationError",
+        "VulkanComputeRuntime",
         "VulkanRuntimeParityAdapter",
         "build_runtime_artifact_manifest",
         "build_runtime_binding_manifest",

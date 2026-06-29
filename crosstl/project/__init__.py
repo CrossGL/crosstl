@@ -10,6 +10,7 @@ from .host_reflection import (
     ReflectionDiagnostic,
     reflect_target_host_interface,
 )
+from .native_runtime_drivers import VulkanComputeRuntime
 from .pipeline import (
     RUNTIME_DEVICE_RUNNER_MANIFEST_KIND,
     ProjectConfig,
@@ -166,6 +167,7 @@ __all__ = [
     "RuntimeValidationHook",
     "RuntimeVerificationError",
     "VulkanRuntimeParityAdapter",
+    "VulkanComputeRuntime",
     "PROJECT_TEST_RUNNER_INSPECTION_KIND",
     "PROJECT_TEST_RUNNER_PLAN_KIND",
     "PROJECT_TEST_RUNNER_REPORT_KIND",

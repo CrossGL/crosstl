@@ -560,6 +560,14 @@ backend runtime driver consumed by the native adapter after artifact validation.
 Use ``--no-native-runtime-validation`` only when the caller has already handled
 toolchain validation or is running a controlled test fixture.
 
+CrossTL includes ``crosstl.project.native_runtime_drivers:VulkanComputeRuntime``
+as an optional reference driver for simple Vulkan compute fixtures. The driver
+imports the Python ``vulkan`` binding lazily, reports structured unavailability
+when the binding, loader, or a compute-capable device is unavailable, and
+currently supports storage-buffer fixtures with 32-bit scalar element types and
+a single descriptor set. DirectX and OpenGL native dispatch drivers remain
+downstream or follow-up integration work.
+
 The translator stops at this contract boundary. Full framework rewrites,
 non-kernel host API ports, application command scheduling, target SDK
 installation, build-system migration, memory lifetime policy, and production
