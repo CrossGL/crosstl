@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import subprocess
@@ -8,7 +9,10 @@ import pytest
 import crosstl.project as project_api
 from crosstl.project.native_runtime_drivers import (
     VulkanComputeRuntime,
+    _first_vulkan_handle,
     _prepare_vulkan_buffers,
+    _read_mapped_memory,
+    _write_mapped_memory,
 )
 from crosstl.project.runtime_verification import (
     UNAVAILABLE,
@@ -183,6 +187,26 @@ def test_prepare_vulkan_buffers_packs_inputs_and_zeroes_outputs():
     assert buffers[1].payload == b"\x00" * 8
 
 
+def test_vulkan_handle_array_unwraps_first_handle():
+    class HandleArray:
+        def __getitem__(self, index):
+            if index == 0:
+                return "pipeline-handle"
+            raise IndexError(index)
+
+    assert _first_vulkan_handle(HandleArray()) == "pipeline-handle"
+    assert _first_vulkan_handle("plain-handle") == "plain-handle"
+
+
+def test_mapped_memory_helpers_use_buffer_protocol():
+    mapped = bytearray(8)
+
+    _write_mapped_memory(mapped, b"abcd")
+
+    assert mapped == bytearray(b"abcd\x00\x00\x00\x00")
+    assert _read_mapped_memory(mapped, 6) == b"abcd\x00\x00"
+
+
 def test_runtime_parity_vulkan_compute_runtime_executes_vector_add_on_device(
     tmp_path,
 ):
@@ -292,6 +316,7 @@ void main() {
     )
 
     result = report["results"][0]
-    assert report["success"] is True
+    failure_context = json.dumps(report, indent=2, sort_keys=True)
+    assert report["success"] is True, failure_context
     assert result["status"] == "passed"
-    assert result["comparisons"][0]["status"] == "passed"
+    assert result["comparisons"][0]["status"] == "passed", failure_context
