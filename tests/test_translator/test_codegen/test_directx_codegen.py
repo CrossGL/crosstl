@@ -19,6 +19,7 @@ from crosstl.translator.ast import (
     IdentifierNode,
     LiteralNode,
     NamedType,
+    PreprocessorNode,
     PrimitiveType,
     ShaderNode,
     ShaderStage,
@@ -82,6 +83,28 @@ def test_hlsl_type_node_renders_expression_generic_arguments():
         HLSLCodeGen().convert_type_node_to_string(type_node)
         == "LoopedElemToLoc<DIM, -1, OffsetT, General>"
     )
+
+
+def test_hlsl_codegen_drops_metal_system_includes_but_preserves_hlsl_includes():
+    ast = ShaderNode(
+        "IncludeFilters",
+        ExecutionModel.COMPUTE_KERNEL,
+        preprocessors=[
+            PreprocessorNode("include", "<metal_math>"),
+            PreprocessorNode("include", "<metal_integer>"),
+            PreprocessorNode("include", "<metal_atomic>"),
+            PreprocessorNode("include", "<shared.hlsl>"),
+            PreprocessorNode("include", '"metal_helpers.hlsl"'),
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert "#include <metal_math>" not in generated
+    assert "#include <metal_integer>" not in generated
+    assert "#include <metal_atomic>" not in generated
+    assert "#include <shared.hlsl>" in generated
+    assert '#include "metal_helpers.hlsl"' in generated
 
 
 HLSL_SCALAR_VECTOR_ZERO_DIAGNOSTIC = re.compile(

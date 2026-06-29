@@ -347,6 +347,18 @@ class HLSLCodeGen:
     """Emit HLSL source from the shared CrossGL translator AST."""
 
     HLSL_PATCH_CONTROL_POINT_LIMIT = 32
+    METAL_ONLY_SYSTEM_INCLUDES = frozenset(
+        {
+            "metal_atomic",
+            "metal_atomic.h",
+            "metal_integer",
+            "metal_integer.h",
+            "metal_math",
+            "metal_math.h",
+            "metal_stdlib",
+            "metal_stdlib.h",
+        }
+    )
     HLSL_INTERPOLATION_MODE_MODIFIERS = {
         "flat": "nointerpolation",
         "nointerpolation": "nointerpolation",
@@ -3303,8 +3315,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def is_metal_only_preprocessor_directive(self, directive_name, content):
         if directive_name.lower() != "include":
             return False
-        normalized = str(content).strip().strip("<>\"'").lower()
-        return normalized in {"metal_stdlib", "metal_stdlib.h"}
+        raw_content = str(content).strip()
+        if not raw_content:
+            return False
+        is_system_include = raw_content.startswith("<") and raw_content.endswith(">")
+        normalized = raw_content.strip("<>\"'").replace("\\", "/").lower()
+        return is_system_include and (
+            normalized in self.METAL_ONLY_SYSTEM_INCLUDES
+            or normalized.startswith("metal_")
+        )
 
     def is_metal_only_preprocessor_line(self, line):
         stripped = str(line).strip()
