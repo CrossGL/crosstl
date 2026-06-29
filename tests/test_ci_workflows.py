@@ -251,6 +251,11 @@ def test_full_suite_runs_runtime_parity_only_for_available_adapters():
     assert "steps.probe_runtime_parity.outputs.available == 'true'" in full_suite
     assert "Record unavailable runtime parity adapter" in full_suite
     assert "tests/test_translator/test_runtime_verification.py" in full_suite
+    assert "tests/test_translator/test_native_runtime_drivers.py" in full_suite
+    assert "mesa-vulkan-drivers" in full_suite
+    assert "python -m pip install vulkan==1.3.275.1" in full_suite
+    assert "CROSTL_RUN_VULKAN_DEVICE_TEST=1" in full_suite
+    assert "vulkaninfo --summary" in full_suite
     assert '-k "runtime_parity"' in full_suite
 
 
