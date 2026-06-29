@@ -3974,12 +3974,15 @@ def _parse_runtime_value(
     if aliases:
         existing_aliases = _runtime_metadata_aliases(metadata)
         metadata["aliases"] = _dedupe_strings((*existing_aliases, *aliases))
+    values = value.get("values")
+    if "values" not in value and "value" in value:
+        values = value.get("value")
     return RuntimeValue(
         name=name,
         kind=kind,
         dtype=dtype,
         shape=shape,
-        values=value.get("values"),
+        values=values,
         tolerance=tolerance,
         metadata=metadata,
     )

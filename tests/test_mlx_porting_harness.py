@@ -161,6 +161,17 @@ def test_runtime_readiness_uses_runtime_artifact_manifest_metadata(
     assert (mlx_root / result["runtimeArtifactManifest"]).is_file()
     assert (mlx_root / result["runtimeTestManifest"]).is_file()
     assert (mlx_root / result["runtimeTestPlan"]).is_file()
+    assert result["runtimeFixtureExecutionIncluded"] is True
+    execution = result["runtimeFixtureExecution"]
+    assert execution["status"] == "passed"
+    assert execution["summary"]["fixtureCount"] == 1
+    assert execution["summary"]["passedCount"] == 1
+    assert execution["summary"]["failedCount"] == 0
+    assert execution["projectRunnerSummary"]["skippedCount"] == 1
+    assert (mlx_root / execution["fixtureMetadata"]).is_file()
+    assert (mlx_root / execution["runtimeTestManifest"]).is_file()
+    assert (mlx_root / execution["projectTestRunnerPlan"]).is_file()
+    assert (mlx_root / execution["projectTestRunnerReport"]).is_file()
 
     manifest = json.loads((mlx_root / result["runtimeTestManifest"]).read_text())
     assert manifest["success"] is True
@@ -180,6 +191,42 @@ def test_runtime_readiness_uses_runtime_artifact_manifest_metadata(
     assert plan["testCases"][0]["runtimeExecution"]["dispatch"]["entryPoint"] == (
         "CSMain"
     )
+
+    runner_report = json.loads(
+        (mlx_root / execution["projectTestRunnerReport"]).read_text()
+    )
+    runtime_result = runner_report["runtimeTestReport"]["results"][0]
+    assert runner_report["success"] is True
+    assert runtime_result["status"] == "passed"
+    assert (
+        runtime_result["executor"]["details"]["runtimeParityAdapter"]["runtimeAdapter"]
+        == "mlx-arange-reference-runtime"
+    )
+
+
+def test_runtime_fixture_execution_metadata_uses_toolchain_free_adapters():
+    module = _load_harness()
+
+    metadata = module._runtime_fixture_execution_metadata(
+        ("directx", "opengl", "vulkan")
+    )
+
+    assert metadata["metadata"]["runtimeFixtureExecutionIncluded"] is True
+    assert {adapter["id"] for adapter in metadata["adapters"]} == {
+        "mlx-arange-reference-directx",
+        "mlx-arange-reference-opengl",
+        "mlx-arange-reference-vulkan",
+    }
+    assert all(
+        adapter["platformRequirements"]["requiredTools"] == []
+        for adapter in metadata["adapters"]
+    )
+    assert all("target" not in adapter for adapter in metadata["adapters"])
+    assert {fixture["adapter"] for fixture in metadata["fixtures"]} == {
+        "mlx-arange-reference-directx",
+        "mlx-arange-reference-opengl",
+        "mlx-arange-reference-vulkan",
+    }
 
 
 @pytest.mark.parametrize(
@@ -252,6 +299,84 @@ def test_runtime_readiness_reports_tracked_plan_resource_blockers(
         "https://github.com/CrossGL/crosstl/issues/1392"
         in result["trackedRuntimeIssues"]
     )
+    assert result["runtimeFixtureExecution"]["status"] == "blocked-by-tracked-issues"
+
+
+def test_reduced_runtime_readiness_aggregates_fixture_execution(monkeypatch):
+    module = _load_harness()
+    reports = [
+        {
+            "name": "directx-vulkan-runtime-readiness",
+            "status": "planned",
+            "testCount": 2,
+            "diagnosticsByCode": {},
+            "runtimeArtifactDiagnosticsByCode": {},
+            "runtimePlanDiagnosticsByCode": {},
+            "runtimeFixtureExecution": {
+                "status": "passed",
+                "summary": {
+                    "fixtureCount": 2,
+                    "passedCount": 2,
+                    "skippedCount": 0,
+                    "unavailableCount": 0,
+                    "translationFailedCount": 0,
+                    "runtimeFailedCount": 0,
+                    "comparisonFailedCount": 0,
+                    "failedCount": 0,
+                },
+            },
+        },
+        {
+            "name": "opengl-runtime-readiness",
+            "status": "blocked-by-tracked-issues",
+            "testCount": 1,
+            "diagnosticsByCode": {},
+            "runtimeArtifactDiagnosticsByCode": {},
+            "runtimePlanDiagnosticsByCode": {
+                "project.runtime-verification.resource-unbound": 1
+            },
+            "runtimeFixtureExecution": {
+                "status": "blocked-by-tracked-issues",
+                "summary": {
+                    "fixtureCount": 1,
+                    "passedCount": 0,
+                    "skippedCount": 1,
+                    "unavailableCount": 0,
+                    "translationFailedCount": 0,
+                    "runtimeFailedCount": 0,
+                    "comparisonFailedCount": 0,
+                    "failedCount": 0,
+                },
+            },
+        },
+    ]
+
+    monkeypatch.setattr(
+        module,
+        "_plan_runtime_readiness_for_report",
+        lambda **kwargs: reports.pop(0),
+    )
+
+    result = module._plan_reduced_runtime_readiness(
+        Path("/tmp/mlx"), Path("/tmp/reports")
+    )
+
+    assert result["status"] == "blocked-by-tracked-issues"
+    assert result["runtimeFixtureExecutionIncluded"] is True
+    assert result["runtimeFixtureExecutionByStatus"] == {
+        "blocked-by-tracked-issues": 1,
+        "passed": 1,
+    }
+    assert result["runtimeFixtureExecutionSummary"] == {
+        "comparisonFailedCount": 0,
+        "failedCount": 0,
+        "fixtureCount": 3,
+        "passedCount": 2,
+        "runtimeFailedCount": 0,
+        "skippedCount": 1,
+        "translationFailedCount": 0,
+        "unavailableCount": 0,
+    }
 
 
 def test_full_corpus_mode_writes_bounded_config_and_checks_counts(
@@ -642,3 +767,4 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
         "runtime-readiness",
     ]
     assert result["scope"]["runtimeReadinessIncluded"] is True
+    assert result["scope"]["runtimeFixtureExecutionIncluded"] is True

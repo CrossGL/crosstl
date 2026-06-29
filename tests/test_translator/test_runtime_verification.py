@@ -350,6 +350,29 @@ def test_runtime_fixture_round_trips_independent_entry_point():
     assert parsed.to_json()["entryPoint"] == "reduce_sum"
 
 
+def test_runtime_fixture_accepts_scalar_value_alias():
+    parsed = parse_runtime_verification_fixtures(
+        {
+            "fixtures": [
+                _runtime_fixture(
+                    id="scalar-input-fixture",
+                    inputs=[
+                        {
+                            "name": "start",
+                            "kind": "scalar",
+                            "dtype": "uint32",
+                            "value": 3,
+                        }
+                    ],
+                )
+            ]
+        }
+    )[0]
+
+    assert parsed.inputs[0].values == 3
+    assert parsed.to_json()["inputs"][0]["values"] == 3
+
+
 def test_parse_runtime_verification_fixtures_rejects_missing_selector():
     with pytest.raises(RuntimeVerificationError, match="selector must identify"):
         parse_runtime_verification_fixtures({"fixtures": [{"id": "missing"}]})

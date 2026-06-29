@@ -19,7 +19,10 @@ The current harness verifies:
 - OpenGL artifact generation for `arange.metal`;
 - runtime artifact manifest, runtime-test manifest, and runtime-test plan
   generation for reduced `arange` readiness probes across DirectX, OpenGL, and
-  Vulkan.
+  Vulkan;
+- reference runtime fixture execution reports for the reduced `arange`
+  readiness probes, using supplied project test-runner adapters and
+  deterministic expected-output checks.
 
 Pull requests run the reduced frontier above. Scheduled and manually triggered
 CI also run the full-corpus artifact scout with finite Metal template
@@ -52,8 +55,9 @@ reduced arange fixtures select the translated artifact by source and target,
 then select `CSMain`, `main`, or `arangeuint8` independently for DirectX,
 OpenGL, or Vulkan dispatch. Plans report remaining non-blocking platform,
 layout, and entry-point ownership warnings. These plans are still metadata
-readiness artifacts; they do not execute the upstream MLX runtime on non-Metal
-backends.
+readiness artifacts. The reduced fixture execution report exercises the
+project runner and adapter contract with reference buffers; it does not execute
+the upstream MLX runtime or native Direct3D, OpenGL, or Vulkan device code.
 
 ## Running Locally
 
