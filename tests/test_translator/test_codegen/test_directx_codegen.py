@@ -193,6 +193,89 @@ def test_hlsl_codegen_lowers_mlx_half_aliases_and_metal_as_type():
     assert "return uint(x);" in generated
 
 
+def test_hlsl_codegen_lowers_metal_simd_shuffle_helpers_to_wave_reads():
+    ast = ShaderNode(
+        "MetalSimdHelpers",
+        ExecutionModel.COMPUTE_KERNEL,
+        functions=[
+            FunctionNode(
+                "shuffle_bits",
+                NamedType("uint64_t"),
+                [
+                    ParameterNode("data", NamedType("uint64_t")),
+                    ParameterNode("filling", NamedType("uint64_t")),
+                    ParameterNode("delta", NamedType("uint16_t")),
+                ],
+                BlockNode(
+                    [
+                        ReturnNode(
+                            FunctionCallNode(
+                                IdentifierNode("asuint"),
+                                [
+                                    FunctionCallNode(
+                                        IdentifierNode(
+                                            "metal::simd_shuffle_and_fill_up"
+                                        ),
+                                        [
+                                            FunctionCallNode(
+                                                IdentifierNode("uint"),
+                                                [IdentifierNode("data")],
+                                            ),
+                                            FunctionCallNode(
+                                                IdentifierNode("uint"),
+                                                [IdentifierNode("filling")],
+                                            ),
+                                            IdentifierNode("delta"),
+                                        ],
+                                    )
+                                ],
+                            )
+                        )
+                    ]
+                ),
+            ),
+            FunctionNode(
+                "shuffle_bool",
+                NamedType("bool"),
+                [
+                    ParameterNode("data", NamedType("bool")),
+                    ParameterNode("filling", NamedType("bool")),
+                    ParameterNode("delta", NamedType("uint16_t")),
+                ],
+                BlockNode(
+                    [
+                        ReturnNode(
+                            FunctionCallNode(
+                                IdentifierNode("simd_shuffle_and_fill_up"),
+                                [
+                                    FunctionCallNode(
+                                        IdentifierNode("uint"),
+                                        [IdentifierNode("data")],
+                                    ),
+                                    FunctionCallNode(
+                                        IdentifierNode("uint"),
+                                        [IdentifierNode("filling")],
+                                    ),
+                                    IdentifierNode("delta"),
+                                ],
+                            )
+                        )
+                    ]
+                ),
+            ),
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert "metal_u3a_u3asimd_shuffle_and_fill_up" not in generated
+    assert "return ((WaveGetLaneIndex() >= uint(delta))" in generated
+    assert "WaveReadLaneAt(uint(data), (WaveGetLaneIndex() - uint(delta)))" in generated
+    assert "return ((((WaveGetLaneIndex() >= uint(delta))" in generated
+    assert " != 0);" in generated
+    assert "return simd_shuffle_and_fill_up(uint(data)" not in generated
+
+
 HLSL_SCALAR_VECTOR_ZERO_DIAGNOSTIC = re.compile(
     r"(?:(?:\b(?:float|double|half|min16float|min10float|int|uint|"
     r"min16int|min16uint|bool)[234]\((?:0(?:\.0)?|0u|false|true)\)"
@@ -2598,6 +2681,60 @@ def test_hlsl_metal_matmul_pointer_params_lower_to_resources(tmp_path):
     assert "B.Load(((k * params.col_dim_x) + col))" in generated_code
     assert "X[((row * params.col_dim_x) + col)] = sum;" in generated_code
     assert "X.Store(" not in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
+def test_hlsl_metal_scalar_constant_kernel_params_promote_to_cbuffers(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    [[kernel]] void input_coherent(
+        device uint* input [[buffer(0)]],
+        const constant uint& size [[buffer(1)]],
+        uint index [[thread_position_in_grid]]) {
+      if (index < size) {
+        input[index] = input[index];
+      }
+    }
+
+    [[kernel]] void fence_update(
+        device uint* timestamp [[buffer(0)]],
+        constant uint& value [[buffer(1)]]) {
+      timestamp[0] = value;
+    }
+
+    [[kernel]] void fence_wait(
+        device uint* timestamp [[buffer(0)]],
+        constant uint& value [[buffer(1)]]) {
+      while (1) {
+        if (timestamp[0] >= value) {
+          break;
+        }
+      }
+    }
+    """
+    shader_path = tmp_path / "fence.metal"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "cbuffer input_coherent_size_Constants" in generated_code
+    assert "uint input_coherent_size;" in generated_code
+    assert "cbuffer fence_update_value_Constants" in generated_code
+    assert "uint fence_update_value;" in generated_code
+    assert "cbuffer fence_wait_value_Constants" in generated_code
+    assert "uint fence_wait_value;" in generated_code
+    assert "uint size" not in generated_code
+    assert "uint value" not in generated_code
+    assert "index < input_coherent_size" in generated_code
+    assert "timestamp[0] = fence_update_value;" in generated_code
+    assert "timestamp.Load(0) >= fence_wait_value" in generated_code
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
 
 

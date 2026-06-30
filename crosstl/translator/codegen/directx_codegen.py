@@ -27,6 +27,7 @@ from ..ast import (
     MatchNode,
     MemberAccessNode,
     MeshOpNode,
+    NamedType,
     PointerAccessNode,
     PointerType,
     PreprocessorNode,
@@ -741,6 +742,7 @@ class HLSLCodeGen:
         self.global_variable_types = {}
         self.hlsl_struct_buffer_resource_types = {}
         self.hlsl_promoted_entry_resource_parameter_names = {}
+        self.hlsl_promoted_entry_scalar_constant_members = {}
         self.struct_member_types = {}
         self.structs_by_name = {}
         self.hlsl_lowered_struct_resource_members = {}
@@ -1296,6 +1298,7 @@ class HLSLCodeGen:
         self.global_variable_types = {}
         self.hlsl_struct_buffer_resource_types = {}
         self.hlsl_promoted_entry_resource_parameter_names = {}
+        self.hlsl_promoted_entry_scalar_constant_members = {}
         self.current_global_resource_declaration_nodes = None
         self.current_hlsl_available_functions = {}
         self.current_hlsl_hull_output_control_points = None
@@ -1404,6 +1407,9 @@ class HLSLCodeGen:
         }
         cbuffers = self.hlsl_cbuffer_nodes(ast, target_stage)
         global_vars = self.global_resource_declaration_nodes(ast, target_stage)
+        cbuffers = cbuffers + self.hlsl_stage_entry_scalar_constant_cbuffers(
+            ast, target_stage, cbuffers, global_vars
+        )
         self.current_global_resource_declaration_nodes = global_vars
         self.hlsl_struct_buffer_resource_types = (
             self.collect_hlsl_struct_buffer_resource_types(global_vars)
@@ -3747,6 +3753,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 if self.hlsl_entry_resource_parameter_global_type(parameter, func)
                 is not None
             }
+            promoted_entry_resource_parameter_ids.update(
+                id(parameter)
+                for parameter in param_list
+                if id(parameter) in self.hlsl_promoted_entry_scalar_constant_members
+            )
             self.apply_hlsl_promoted_entry_resource_parameter_aliases(
                 param_list,
                 promoted_entry_resource_parameter_ids,
@@ -5078,6 +5089,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return option_call_type
             if func_name in self.HLSL_WAVE_INTRINSIC_ARITIES:
                 return self.hlsl_wave_intrinsic_return_type(func_name, args)
+            metal_simd_result_type = self.hlsl_metal_simd_shuffle_result_type(
+                func_name, args
+            )
+            if metal_simd_result_type is not None:
+                return metal_simd_result_type
             if func_name in self.HLSL_NONUNIFORM_RESOURCE_INDEX_NAMES:
                 return self.hlsl_nonuniform_resource_index_return_type(args)
             numeric_result_type = numeric_trait_method_result_type(self, expr)
@@ -5972,6 +5988,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if func_name in self.HLSL_WAVE_INTRINSIC_ARITIES:
                 return self.generate_hlsl_wave_intrinsic_call(func_name, args)
 
+            metal_simd_call = self.generate_hlsl_metal_simd_shuffle_call(
+                func_name, args
+            )
+            if metal_simd_call is not None:
+                return metal_simd_call
+
             metal_as_type_call = self.generate_hlsl_metal_as_type_call(func_name, args)
             if metal_as_type_call is not None:
                 return metal_as_type_call
@@ -6629,6 +6651,74 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.local_variable_types[name] = "uint"
         return name
 
+    def hlsl_metal_simd_shuffle_name(self, func_name):
+        if not func_name:
+            return None
+        normalized = str(func_name).strip().replace("_u3a_u3a", "::")
+        if normalized.startswith("metal::"):
+            normalized = normalized.split("::", 1)[1]
+        if normalized in {
+            "simd_broadcast",
+            "simd_shuffle",
+            "simd_shuffle_down",
+            "simd_shuffle_up",
+            "simd_shuffle_and_fill_up",
+        }:
+            return normalized
+        return None
+
+    def hlsl_metal_simd_shuffle_result_type(self, func_name, args):
+        simd_name = self.hlsl_metal_simd_shuffle_name(func_name)
+        if simd_name is None or not args:
+            return None
+        return self.expression_result_type(args[0])
+
+    def generate_hlsl_metal_simd_shuffle_call(self, func_name, args):
+        simd_name = self.hlsl_metal_simd_shuffle_name(func_name)
+        if simd_name is None:
+            return None
+
+        if simd_name in {"simd_broadcast", "simd_shuffle"} and len(args) == 2:
+            data = self.generate_expression_with_expected(args[0], None)
+            lane = self.generate_expression_with_expected(args[1], "uint")
+            return self.hlsl_cast_metal_simd_shuffle_result(
+                f"WaveReadLaneAt({data}, {lane})"
+            )
+
+        if simd_name == "simd_shuffle_down" and len(args) == 2:
+            data = self.generate_expression_with_expected(args[0], None)
+            delta = self.generate_expression_with_expected(args[1], "uint")
+            return self.hlsl_cast_metal_simd_shuffle_result(
+                f"WaveReadLaneAt({data}, (WaveGetLaneIndex() + uint({delta})))"
+            )
+
+        if simd_name == "simd_shuffle_up" and len(args) == 2:
+            data = self.generate_expression_with_expected(args[0], None)
+            delta = self.generate_expression_with_expected(args[1], "uint")
+            return self.hlsl_cast_metal_simd_shuffle_result(
+                f"WaveReadLaneAt({data}, (WaveGetLaneIndex() - uint({delta})))"
+            )
+
+        if simd_name == "simd_shuffle_and_fill_up" and len(args) == 3:
+            data = self.generate_expression_with_expected(args[0], None)
+            filling = self.generate_expression_with_expected(args[1], None)
+            delta = self.generate_expression_with_expected(args[2], "uint")
+            return self.hlsl_cast_metal_simd_shuffle_result(
+                "((WaveGetLaneIndex() >= uint({delta})) ? "
+                "WaveReadLaneAt({data}, (WaveGetLaneIndex() - uint({delta}))) : "
+                "{filling})".format(data=data, filling=filling, delta=delta)
+            )
+
+        return None
+
+    def hlsl_cast_metal_simd_shuffle_result(self, expression):
+        expected_type = self.map_type(
+            self.type_name_string(self.current_expression_expected_type)
+        )
+        if expected_type == "bool":
+            return f"(({expression}) != 0)"
+        return expression
+
     def hlsl_bitcast_result_type(self, func_name, args):
         if (
             not func_name
@@ -6718,6 +6808,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "int64_t",
         }:
             return f"{mapped_target}({argument_code})"
+        if intrinsic in {"asuint", "asint"} and (
+            source_base is None
+            and self.hlsl_integer_wave_read_expression(argument_code)
+        ):
+            return f"{mapped_target}({argument_code})"
         if intrinsic is None and target_base in {
             "half",
             "min16float",
@@ -6754,6 +6849,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 if suffix in {"2", "3", "4"}:
                     return component
         return None
+
+    def hlsl_integer_wave_read_expression(self, expression):
+        if not isinstance(expression, str):
+            return False
+        return any(
+            token in expression
+            for token in (
+                "WaveReadLaneAt(uint(",
+                "WaveReadLaneAt(int(",
+                "WaveReadLaneAt(min16uint(",
+                "WaveReadLaneAt(min16int(",
+            )
+        )
 
     def hlsl_countbits_result_type(self, func_name, args):
         if func_name not in {"bitCount", "countbits"} or func_name in getattr(
@@ -8112,6 +8220,135 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     globals_.append(proxy)
         return globals_
 
+    def hlsl_stage_entry_scalar_constant_cbuffers(
+        self, root, target_stage=None, cbuffers=None, global_vars=None
+    ):
+        cbuffers_ = []
+        used_names = set(self.collect_hlsl_program_identifier_names(root))
+        used_names.update(
+            getattr(cbuffer, "name", None)
+            for cbuffer in cbuffers or []
+            if getattr(cbuffer, "name", None)
+        )
+        used_names.update(
+            getattr(node, "name", getattr(node, "variable_name", None))
+            for node in global_vars or []
+            if getattr(node, "name", getattr(node, "variable_name", None))
+        )
+
+        entries = collect_stage_entry_records(
+            root, target_stage, self.stage_entry_types()
+        )
+        for _, _stage_name, func in entries:
+            function_name = sanitize_type_name(getattr(func, "name", None) or "entry")
+            for parameter in getattr(func, "parameters", getattr(func, "params", [])):
+                member_type = self.hlsl_scalar_constant_parameter_member_type(parameter)
+                if member_type is None:
+                    continue
+
+                parameter_name = getattr(parameter, "name", None) or "constant"
+                parameter_name = sanitize_type_name(parameter_name)
+                base_name = "_".join(
+                    part for part in (function_name, parameter_name) if part
+                )
+                if not base_name:
+                    base_name = "entry_constant"
+                if base_name[0].isdigit():
+                    base_name = f"entry_{base_name}"
+
+                buffer_name = self.hlsl_unique_local_identifier(
+                    f"{base_name}_Constants", used_names
+                )
+                used_names.add(buffer_name)
+                member_name = self.hlsl_unique_local_identifier(base_name, used_names)
+                used_names.add(member_name)
+
+                cbuffer = StructNode(
+                    name=buffer_name,
+                    members=[
+                        StructMemberNode(
+                            member_name,
+                            NamedType(member_type),
+                        )
+                    ],
+                    attributes=deepcopy(
+                        list(getattr(parameter, "attributes", []) or [])
+                    ),
+                )
+                cbuffer.is_cbuffer = True
+                cbuffer.add_annotation("directx.relocatable_binding", True)
+                cbuffer.add_annotation(
+                    "directx.binding_provenance",
+                    self.directx_stage_entry_parameter_binding_provenance(
+                        parameter, func
+                    ),
+                )
+                self.hlsl_promoted_entry_scalar_constant_members[id(parameter)] = (
+                    member_name
+                )
+                cbuffers_.append(cbuffer)
+        return cbuffers_
+
+    def hlsl_scalar_constant_parameter_member_type(self, parameter):
+        raw_type = self.hlsl_parameter_raw_type(parameter)
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(parameter, "qualifiers", []) or []
+        }
+        if "constant" not in qualifiers:
+            return None
+
+        element_type = self.hlsl_constant_reference_element_type(raw_type)
+        if element_type is None:
+            return None
+
+        mapped_type = self.map_type(element_type)
+        if mapped_type in {
+            "bool",
+            "double",
+            "float",
+            "half",
+            "int",
+            "int64_t",
+            "min10float",
+            "min12int",
+            "min16float",
+            "min16int",
+            "min16uint",
+            "uint",
+            "uint64_t",
+        }:
+            return mapped_type
+        return None
+
+    def hlsl_constant_reference_element_type(self, vtype):
+        if isinstance(vtype, ReferenceType):
+            return self.type_name_string(vtype.referenced_type)
+
+        type_name = self.type_name_string(vtype)
+        if not type_name:
+            return None
+        type_name = str(type_name).strip()
+        if not type_name.endswith("&"):
+            return None
+
+        type_name = type_name[:-1].strip()
+        if type_name.startswith("metal::"):
+            type_name = type_name.split("metal::", 1)[1].strip()
+        metal_qualifiers = {
+            "const",
+            "constant",
+            "device",
+            "thread",
+            "threadgroup",
+            "volatile",
+            "restrict",
+        }
+        parts = type_name.split()
+        while parts and parts[0].lower() in metal_qualifiers:
+            parts.pop(0)
+        return " ".join(parts) if parts else None
+
     def hlsl_scoped_entry_resource_name(self, func, parameter_name, used_names):
         func_name = sanitize_type_name(getattr(func, "name", None) or "entry")
         parameter_name = sanitize_type_name(parameter_name or "resource")
@@ -8139,6 +8376,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 continue
             parameter_name = getattr(parameter, "name", None)
             if not parameter_name:
+                continue
+            scalar_member_name = self.hlsl_promoted_entry_scalar_constant_members.get(
+                id(parameter)
+            )
+            if scalar_member_name is not None:
+                self.local_variable_types[parameter_name] = self.type_name_string(
+                    self.hlsl_parameter_raw_type(parameter)
+                )
+                self.current_identifier_aliases[parameter_name] = scalar_member_name
                 continue
             emitted_name = self.hlsl_promoted_entry_resource_parameter_names.get(
                 id(parameter),
@@ -20646,9 +20892,6 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return " ".join(parts) if parts else None
 
     def hlsl_constant_reference_parameter_type(self, vtype, node=None):
-        if not isinstance(vtype, ReferenceType):
-            return None
-
         qualifiers = {
             str(qualifier).lower()
             for qualifier in getattr(node, "qualifiers", []) or []
@@ -20656,7 +20899,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if "constant" not in qualifiers:
             return None
 
-        referenced_type = self.map_type(vtype.referenced_type)
+        element_type = self.hlsl_constant_reference_element_type(vtype)
+        if element_type is None:
+            return None
+
+        referenced_type = self.map_type(element_type)
         if referenced_type in {"float", "double", "int", "uint", "bool"}:
             return referenced_type
         return f"ConstantBuffer<{referenced_type}>"
