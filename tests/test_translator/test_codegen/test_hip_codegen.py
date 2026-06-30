@@ -13,6 +13,7 @@ from crosstl.translator.ast import (
     FunctionCallNode,
     FunctionNode,
     IdentifierNode,
+    LambdaNode,
     LiteralNode,
     MatchArmNode,
     MatchNode,
@@ -158,6 +159,38 @@ class TestHipCodeGen:
         assert "T fallback_zero(T value" not in hip_code
         assert "return fallback_zero(value, false);" not in hip_code
         assert "T::zero" not in hip_code
+
+    def test_unhandled_ast_node_emits_hip_diagnostic(self):
+        ast = ShaderNode(
+            name="UnhandledHipAstNode",
+            execution_model=ExecutionModel.COMPUTE_KERNEL,
+            functions=[
+                FunctionNode(
+                    "uses_unhandled_expression",
+                    PrimitiveType("void"),
+                    [],
+                    BlockNode(
+                        [
+                            VariableNode(
+                                "value",
+                                PrimitiveType("float"),
+                                LambdaNode(
+                                    [],
+                                    LiteralNode(1.0, PrimitiveType("float")),
+                                    expression_type=PrimitiveType("float"),
+                                ),
+                            )
+                        ]
+                    ),
+                )
+            ],
+        )
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "float value = /* unsupported HIP AST node: LambdaNode" in hip_code
+        assert "expression_type=PrimitiveType" in hip_code
+        assert "*/ 0.0f;" in hip_code
 
     def test_simple_function_generation(self):
         source_code = """
@@ -1727,36 +1760,58 @@ class TestHipCodeGen:
         )
         assert "f16vec3" not in hip_code
 
-    @pytest.mark.parametrize("vector_type", ["vec4<f16>"])
-    def test_fp16_vec4_aliases_raise_hip_diagnostic(self, vector_type):
+    @pytest.mark.parametrize("vector_type", ["vec4<f16>", "f16vec4", "half4"])
+    def test_fp16_vec4_aliases_lower_to_hip_half4_helper(self, vector_type):
         source_code = f"""
         shader TestShader {{
             compute {{
-                {vector_type} unsupported() {{
-                    return {vector_type}(1.0, 2.0, 3.0, 4.0);
+                {vector_type} tint({vector_type} input) {{
+                    f16 scalar = f16(0.5);
+                    {vector_type} from_scalars = {vector_type}(
+                        1.0, scalar, input.z, input.w);
+                    {vector_type} from_vector = {vector_type}(input);
+                    {vector_type} from_swizzle = {vector_type}(input.wzyx);
+                    f16 component = from_scalars.w;
+                    return {vector_type}(
+                        from_vector.x, from_swizzle.y, component, input.x);
                 }}
             }}
         }}
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
+        hip_code = HipCodeGen().generate(ast)
 
-        with pytest.raises(
-            ValueError,
-            match=f"HIP does not support FP16 vector type {vector_type}",
-        ):
-            HipCodeGen().generate(ast)
+        assert "#include <hip/hip_fp16.h>" in hip_code
+        assert "struct cgl_half4" in hip_code
+        assert "__device__ cgl_half4 tint(cgl_half4 input)" in hip_code
+        assert "half scalar = __float2half(0.5);" in hip_code
+        assert (
+            "cgl_half4 from_scalars = cgl_make_half4(1.0, scalar, input.z, input.w);"
+            in hip_code
+        )
+        assert (
+            "cgl_half4 from_vector = "
+            "cgl_make_half4(input.x, input.y, input.z, input.w);" in hip_code
+        )
+        assert (
+            "cgl_half4 from_swizzle = "
+            "cgl_make_half4(input.w, input.z, input.y, input.x);" in hip_code
+        )
+        assert "half component = from_scalars.w;" in hip_code
+        assert (
+            "return cgl_make_half4(from_vector.x, from_swizzle.y, component, input.x);"
+            in hip_code
+        )
+        if vector_type != "half4":
+            assert vector_type not in hip_code
 
     @pytest.mark.parametrize(
         "vector_type",
         ["f16vec4", "float16vec4", "half4"],
     )
-    def test_fp16_wide_vector_alias_maps_raise_hip_diagnostic(self, vector_type):
-        with pytest.raises(
-            ValueError,
-            match=f"HIP does not support FP16 vector type {vector_type}",
-        ):
-            HipCodeGen().map_type(vector_type)
+    def test_fp16_wide_vector_alias_maps_emit_hip_half4(self, vector_type):
+        assert HipCodeGen().map_type(vector_type) == "cgl_half4"
 
     def test_composite_vector_constructors_flatten_hip_lanes(self):
         source_code = """

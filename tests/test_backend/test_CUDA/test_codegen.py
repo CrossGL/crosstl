@@ -1037,11 +1037,14 @@ class TestCudaCodeGen:
         __global__ void warp(unsigned int mask, int pred, int value, int lane, unsigned int* out) {
             unsigned int active = __activemask();
             unsigned int bits = __ballot_sync(0xffffffff, pred);
+            int same = 0;
+            unsigned int all_matches = ::__match_all_sync(active, value, &same);
             int any_set = __any_sync(0xffffffff, pred);
             int y = __shfl_sync(0xffffffff, value, lane);
             unsigned int custom = __ballot_sync(mask, pred);
+            unsigned int unsupported_match = __match_all_sync(mask, value, &same);
             int unsupported = __shfl_down_sync(0xffffffff, value, 1);
-            out[lane] = active + bits + any_set + y + custom + unsupported;
+            out[lane] = active + bits + same + all_matches + any_set + y + custom + unsupported_match + unsupported;
         }
         """
         lexer = CudaLexer(code)
@@ -1053,18 +1056,22 @@ class TestCudaCodeGen:
 
         assert "WaveActiveBallot(true).x" in result
         assert "WaveActiveBallot((pred != 0)).x" in result
+        assert "same = (WaveActiveAllEqual(value) ? 1 : 0);" in result
+        assert "var all_matches: u32 = WaveMatch(value).x;" in result
         assert "(WaveActiveAnyTrue((pred != 0)) ? 1 : 0)" in result
         assert "WaveReadLaneAt(value, lane)" in result
         assert (
             "/* cuda warp intrinsic __ballot_sync(mask, pred) not directly "
             "supported in CrossGL */ 0"
         ) in result
+        assert "cuda warp intrinsic __match_all_sync(mask, value" in result
         assert (
             "(((WaveGetLaneIndex() + (1)) < 32) ? "
             "WaveReadLaneAt(value, (WaveGetLaneIndex() + (1))) : value)"
         ) in result
         assert "__activemask()" not in result
         assert "__ballot_sync(0xffffffff, pred)" not in result
+        assert "__match_all_sync(active, value" not in result
         assert "__shfl_sync(0xffffffff, value, lane)" not in result
         assert "__shfl_down_sync(0xffffffff, value, 1)" not in result
 

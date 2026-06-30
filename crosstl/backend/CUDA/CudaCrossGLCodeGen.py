@@ -4322,6 +4322,15 @@ class CudaToCrossGLConverter:
         self.register_packed_argument_list(node)
         self.register_unique_ptr_name(node.name, node.vtype)
         if node.value:
+            match_all_sync = self.format_cuda_match_all_sync_assignment(node.value)
+            if match_all_sync is not None:
+                statements, value = match_all_sync
+                for statement in statements:
+                    self.emit(statement)
+                self.register_warp_mask_value(node.name, output_name, value)
+                self.emit(f"var {output_name}: {var_type} = {value};")
+                return
+
             runtime_expression = self.format_cuda_runtime_expression(node.value)
             if runtime_expression is not None:
                 comments, value = runtime_expression
@@ -4645,6 +4654,19 @@ class CudaToCrossGLConverter:
     def visit_AssignmentNode(self, node):
         left = self.visit(node.left)
         operator = getattr(node, "operator", "=")
+        match_all_sync = (
+            self.format_cuda_match_all_sync_assignment(node.right)
+            if operator == "="
+            else None
+        )
+        if match_all_sync is not None:
+            statements, value = match_all_sync
+            for statement in statements:
+                self.emit(statement)
+            self.register_warp_mask_assignment(node.left, left, operator, value)
+            self.emit(f"{left} = {value};")
+            return None
+
         runtime_expression = (
             self.format_cuda_runtime_expression(node.right) if operator == "=" else None
         )
@@ -4947,6 +4969,7 @@ class CudaToCrossGLConverter:
             "__shfl_up",
             "__shfl_down",
             "__shfl_xor",
+            "__match_all_sync",
         }:
             return self.format_unsupported_cuda_warp_intrinsic(function_name, args)
 
@@ -4999,6 +5022,34 @@ class CudaToCrossGLConverter:
             f"(/* cuda warp intrinsic {function_name}({args_text}) "
             "not directly supported in CrossGL */ 0)"
         )
+
+    def format_cuda_match_all_sync_assignment(self, value):
+        if not isinstance(value, FunctionCallNode):
+            return None
+
+        function_name = (
+            value.name if isinstance(value.name, str) else self.visit(value.name)
+        )
+        if isinstance(function_name, str) and function_name.startswith("::"):
+            function_name = function_name[2:]
+        if function_name != "__match_all_sync":
+            return None
+
+        raw_args = getattr(value, "args", []) or []
+        args = [self.visit(arg) for arg in raw_args]
+        diagnostic = self.format_cuda_warp_intrinsic_call
+        if len(raw_args) != 3 or not self.is_full_or_active_warp_mask(args[0]):
+            return [], diagnostic(function_name, args)
+
+        predicate_target = self.format_cuda_output_pointer_target(raw_args[2])
+        if predicate_target is None:
+            return [], diagnostic(function_name, args)
+
+        match_value = args[1]
+        statements = [
+            f"{predicate_target} = (WaveActiveAllEqual({match_value}) ? 1 : 0);"
+        ]
+        return statements, f"WaveMatch({match_value}).x"
 
     def format_cuda_block_sync_vote_call(self, function_name, args):
         if isinstance(function_name, str) and function_name.startswith("::"):

@@ -4201,13 +4201,16 @@
         },
         "hip": {
           "status": "supported",
-          "notes": "barrier/workgroupBarrier lower to __syncthreads, memoryBarrier variants lower to HIP threadfence or sync helpers, argument misuse emits deterministic diagnostics, user-defined functions with synchronization names are preserved, and optional hipcc smoke coverage validates a barrier/atomic kernel when available.",
+          "notes": "barrier/workgroupBarrier lower to __syncthreads, memoryBarrier variants lower to HIP threadfence or sync helpers, HIP cooperative-groups thread_block and thread_block_tile<32> sync/collective forms lower to CrossGL workgroup and wave operations, unsupported cooperative scopes emit deterministic diagnostics, user-defined functions with synchronization names are preserved, and optional hipcc smoke coverage validates a barrier/atomic kernel when available.",
           "evidence": [
             "tests/test_translator/test_codegen/test_hip_codegen.py::def test_synchronization_functions",
             "tests/test_translator/test_codegen/test_hip_codegen.py::def test_barrier_emits_syncthreads",
             "tests/test_translator/test_codegen/test_hip_codegen.py::def test_hip_memory_barrier_variants_emit_sync_intrinsics",
             "tests/test_translator/test_codegen/test_hip_codegen.py::def test_hip_user_defined_synchronization_names_are_not_lowered",
             "tests/test_translator/test_codegen/test_hip_codegen.py::def test_hip_synchronization_builtins_reject_arguments",
+            "tests/test_backend/test_HIP/test_codegen.py::def test_cooperative_groups_thread_block_sync_rank_and_size_convert",
+            "tests/test_backend/test_HIP/test_codegen.py::def test_cooperative_groups_thread_block_tile_collectives_convert",
+            "tests/test_backend/test_HIP/test_codegen.py::def test_unsupported_cooperative_groups_emit_diagnostics",
             "tests/test_translator/test_codegen/test_hip_codegen.py::def test_generated_atomic_barrier_kernel_smoke_compiles_with_hipcc"
           ]
         },
