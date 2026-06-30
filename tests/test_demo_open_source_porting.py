@@ -324,7 +324,7 @@ def test_open_source_demo_artifact_comparison_normalizes_platform_text(tmp_path)
         json.dumps(
             {
                 "generatedFile": r"crosstl-out\cgl\shader.cgl",
-                "mappings": [{"generated": {"line": 1, "offset": 3}}],
+                "mappings": [{"generated": {"line": 1, "offset": 0}}],
             }
         )
         + "\r\n",
@@ -480,3 +480,255 @@ def test_demo_ci_metadata_cli_check_and_emitters():
     assert selector.stdout.strip() == " or ".join(
         case["selector"] for case in metadata["pytest"]["cases"]
     )
+
+
+def test_open_source_demo_artifact_comparison_detects_source_map_offset_drift(
+    tmp_path,
+):
+    runner = _load_demo_runner()
+    baseline = tmp_path / "baseline.source-remap.json"
+    drifted = tmp_path / "drifted.source-remap.json"
+    baseline.write_text(
+        json.dumps(
+            {
+                "generatedFile": "crosstl-out/cgl/shader.cgl",
+                "mappings": [
+                    {
+                        "generated": {
+                            "line": 1,
+                            "offset": 0,
+                            "endOffset": 24,
+                            "length": 24,
+                        }
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    drifted.write_text(
+        json.dumps(
+            {
+                "generatedFile": "crosstl-out/cgl/shader.cgl",
+                "mappings": [
+                    {
+                        "generated": {
+                            "line": 1,
+                            "offset": 5,
+                            "endOffset": 29,
+                            "length": 24,
+                        }
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert runner._comparison_bytes(baseline) != runner._comparison_bytes(drifted)
+
+
+def test_open_source_demo_compare_artifacts_fails_on_source_map_offset_drift(
+    tmp_path,
+):
+    runner = _load_demo_runner()
+    case_dir = tmp_path / "case"
+    work_dir = tmp_path / "work"
+    for root, offset in ((case_dir, 0), (work_dir, 7)):
+        target_dir = root / runner.OUTPUT_DIR_NAME / "cgl"
+        target_dir.mkdir(parents=True)
+        (target_dir / "shader.source-remap.json").write_text(
+            json.dumps(
+                {
+                    "generatedFile": "crosstl-out/cgl/shader.cgl",
+                    "mappings": [
+                        {
+                            "generated": {
+                                "line": 1,
+                                "offset": offset,
+                                "endOffset": offset + 10,
+                                "length": 10,
+                            }
+                        }
+                    ],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    try:
+        runner._compare_artifacts(case_dir, work_dir, ["cgl"])
+    except SystemExit as exc:
+        assert "shader.source-remap.json" in str(exc)
+    else:
+        raise AssertionError("Expected source-map offset drift to fail verification")
+
+
+def test_open_source_demo_corpus_entries_classify_translation_units():
+    runner = _load_demo_runner()
+    support_files = set()
+    for case_dir in sorted(
+        path for path in CASE_ROOT.iterdir() if (path / "crosstl.toml").is_file()
+    ):
+        assert runner._corpus_manifest_problems(case_dir) == [], case_dir.name
+        translation_units = runner._translation_unit_paths(case_dir)
+        manifest = json.loads((case_dir / "corpus.json").read_text(encoding="utf-8"))
+        for entry in manifest["entries"]:
+            role = entry.get("role", "translation_unit")
+            assert role in {"translation_unit", "support_file"}, case_dir.name
+            translated = entry["path"].replace("\\", "/") in translation_units
+            if role == "translation_unit":
+                assert translated, f"{case_dir.name}:{entry['path']}"
+            else:
+                assert not translated, f"{case_dir.name}:{entry['path']}"
+                support_files.add(f"{case_dir.name}:{entry['path']}")
+
+    assert support_files == {
+        "metal-performance-testing-matmul:ShaderParams.h",
+        "monogame-sprite-effect:Macros.fxh",
+    }
+
+
+def test_open_source_demo_corpus_manifest_validation_flags_role_mismatch(tmp_path):
+    runner = _load_demo_runner()
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    (case_dir / "crosstl.toml").write_text(
+        '[project]\ninclude = ["shader.glsl"]\n'
+        'targets = ["cgl"]\noutput_dir = "crosstl-out"\n',
+        encoding="utf-8",
+    )
+    (case_dir / "corpus.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "entries": [
+                    {"id": "a", "path": "missing.glsl"},
+                    {"id": "b", "role": "support_file", "path": "shader.glsl"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    problems = runner._corpus_manifest_problems(case_dir)
+    assert any("missing.glsl" in p and "translation_unit" in p for p in problems)
+    assert any("shader.glsl" in p and "support_file" in p for p in problems)
+    try:
+        runner._validate_corpus_manifest(case_dir)
+    except SystemExit as exc:
+        assert "invalid corpus.json" in str(exc)
+    else:
+        raise AssertionError("Expected invalid corpus manifest to fail")
+
+
+def test_open_source_demo_corpus_records_source_adjustments():
+    runner = _load_demo_runner()
+    adjusted = {}
+    for case_dir in sorted(
+        path for path in CASE_ROOT.iterdir() if (path / "crosstl.toml").is_file()
+    ):
+        manifest = json.loads((case_dir / "corpus.json").read_text(encoding="utf-8"))
+        if "adjustments" not in manifest and "outOfScope" not in manifest:
+            continue
+        assert runner._corpus_manifest_problems(case_dir) == [], case_dir.name
+        adjustments = manifest.get("adjustments", [])
+        assert adjustments, case_dir.name
+        for adjustment in adjustments:
+            assert adjustment["kind"].strip()
+            assert adjustment["summary"].strip()
+        adjusted[case_dir.name] = {a["kind"] for a in adjustments}
+
+    assert "godot-betsy-alpha-stitch" in adjusted
+    assert "rocm-examples-add-kernel" in adjusted
+    assert "rocm-examples-bit-extract" in adjusted
+    assert "define-selection" in adjusted["rocm-examples-bit-extract"]
+
+
+def test_open_source_demo_corpus_manifest_validation_flags_bad_adjustments(tmp_path):
+    runner = _load_demo_runner()
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    (case_dir / "crosstl.toml").write_text(
+        '[project]\ninclude = ["shader.glsl"]\n'
+        'targets = ["cgl"]\noutput_dir = "crosstl-out"\n',
+        encoding="utf-8",
+    )
+    (case_dir / "corpus.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "adjustments": [{"kind": "", "summary": "  "}],
+                "outOfScope": [""],
+                "entries": [{"id": "a", "path": "shader.glsl"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    problems = runner._corpus_manifest_problems(case_dir)
+    assert any("adjustments[0] kind" in p for p in problems)
+    assert any("adjustments[0] summary" in p for p in problems)
+    assert any("outOfScope" in p for p in problems)
+
+
+def test_open_source_demo_runner_requires_toolchain_runs_per_artifact(tmp_path):
+    runner = _load_demo_runner()
+    original_run = runner.subprocess.run
+
+    class Completed:
+        returncode = 0
+        stdout = json.dumps(
+            {
+                "success": True,
+                "diagnosticCounts": {},
+                "toolchainRunStatusCounts": {"ok": 1, "failed": 0},
+                "toolchainRunStatusByTarget": {
+                    "opengl": {"runCount": 2, "okCount": 1, "failedCount": 0}
+                },
+                "validation": {
+                    "toolchainRuns": [
+                        {
+                            "target": "opengl",
+                            "path": "crosstl-out/opengl/a.glsl",
+                            "checkKind": "artifact",
+                            "status": "ok",
+                        },
+                        {
+                            "target": "opengl",
+                            "path": "crosstl-out/opengl/b.glsl",
+                            "checkKind": "artifact",
+                            "status": "skipped",
+                        },
+                    ]
+                },
+            }
+        )
+        stderr = ""
+
+    def fake_run(*args, **kwargs):
+        return Completed()
+
+    runner.subprocess.run = fake_run
+    try:
+        try:
+            runner._validate_report(
+                tmp_path / "report.json",
+                run_toolchains=True,
+                require_toolchain_runs=True,
+                selected_targets=["opengl"],
+                reports_dir=None,
+                case_name="example",
+            )
+        except SystemExit as exc:
+            assert "crosstl-out/opengl/b.glsl" in str(exc)
+            assert "crosstl-out/opengl/a.glsl" not in str(exc)
+        else:
+            raise AssertionError(
+                "Expected an unvalidated translated artifact to fail the gate"
+            )
+    finally:
+        runner.subprocess.run = original_run
