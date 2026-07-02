@@ -677,9 +677,12 @@ def test_metal_scalar_vector_constructor_lowers_to_directx_splat(tmp_path):
     )
 
     _assert_generated_output_is_usable(generated)
-    assert "Output literalValue = Output(half3(0, 0, 0));" in generated
-    assert "Output scalarValue = Output(half3(scalar, scalar, scalar));" in generated
-    assert "Output nestedValue = Output(half3(half(0), half(0), half(0)));" in generated
+    assert "Output literalValue;" in generated
+    assert "literalValue.viewDir = half3(0, 0, 0);" in generated
+    assert "Output scalarValue;" in generated
+    assert "scalarValue.viewDir = half3(scalar, scalar, scalar);" in generated
+    assert "Output nestedValue;" in generated
+    assert "nestedValue.viewDir = half3(half(0), half(0), half(0));" in generated
     assert "half3(0))" not in generated
     assert "half3(scalar))" not in generated
     assert "half3(half(0)))" not in generated

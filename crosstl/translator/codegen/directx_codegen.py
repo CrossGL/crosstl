@@ -743,6 +743,7 @@ class HLSLCodeGen:
         self.hlsl_struct_buffer_resource_types = {}
         self.hlsl_promoted_entry_resource_parameter_names = {}
         self.hlsl_promoted_entry_scalar_constant_members = {}
+        self.current_hlsl_resource_pointer_offsets = {}
         self.struct_member_types = {}
         self.structs_by_name = {}
         self.hlsl_lowered_struct_resource_members = {}
@@ -1299,6 +1300,7 @@ class HLSLCodeGen:
         self.hlsl_struct_buffer_resource_types = {}
         self.hlsl_promoted_entry_resource_parameter_names = {}
         self.hlsl_promoted_entry_scalar_constant_members = {}
+        self.current_hlsl_resource_pointer_offsets = {}
         self.current_global_resource_declaration_nodes = None
         self.current_hlsl_available_functions = {}
         self.current_hlsl_hull_output_control_points = None
@@ -3693,6 +3695,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         previous_identifier_reserved_names = self.current_identifier_reserved_names
         previous_stage_output_lowering = self.current_hlsl_stage_output_lowering
         previous_function_name = self.current_function_name
+        previous_resource_pointer_offsets = self.current_hlsl_resource_pointer_offsets
         previous_generic_function_substitutions = (
             self.current_generic_function_substitutions
         )
@@ -3726,6 +3729,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.current_function_name = getattr(func, "name", None) or entry_name
         self.local_variable_types = {}
         self.current_identifier_aliases = {}
+        self.current_hlsl_resource_pointer_offsets = {}
         # Name of the SV_GroupIndex parameter an explicit @gl_SubgroupID compute
         # parameter needs injected, populated lazily while emitting parameters and
         # consumed by the post-loop compute-builtin parameter pass.
@@ -3783,8 +3787,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 raw_param_type = "float"
             self.local_variable_types[p.name] = self.type_name_string(raw_param_type)
 
+            param_decl_type = self.type_name_string(raw_param_type)
             param_type = self.map_resource_parameter_type_with_hint(
-                raw_param_type, p, getattr(func, "name", None)
+                param_decl_type, p, getattr(func, "name", None)
             )
             param_type = self.directx_resource_declaration_type(param_type)
             if self.is_texture_type(raw_param_type) or self.is_image_type(
@@ -4094,6 +4099,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self.current_identifier_aliases = previous_identifier_aliases
             self.current_identifier_reserved_names = previous_identifier_reserved_names
             self.current_hlsl_stage_output_lowering = previous_stage_output_lowering
+            self.current_hlsl_resource_pointer_offsets = (
+                previous_resource_pointer_offsets
+            )
             self.current_generic_function_substitutions = (
                 previous_generic_function_substitutions
             )
@@ -4139,6 +4147,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self.current_identifier_aliases = previous_identifier_aliases
             self.current_identifier_reserved_names = previous_identifier_reserved_names
             self.current_hlsl_stage_output_lowering = previous_stage_output_lowering
+            self.current_hlsl_resource_pointer_offsets = (
+                previous_resource_pointer_offsets
+            )
             self.current_generic_function_substitutions = (
                 previous_generic_function_substitutions
             )
@@ -4285,9 +4296,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 and stage_output_lowering.get("local_name") is not None
             ):
                 fallback = stage_output_lowering["local_name"]
+                code += f"{'    ' * (indent + 1)}return {fallback};\n"
             else:
-                fallback = self.hlsl_default_value_expression(raw_return_type)
-            code += f"{'    ' * (indent + 1)}return {fallback};\n"
+                struct_fallback = self.render_hlsl_default_struct_return(
+                    raw_return_type, indent + 1
+                )
+                if struct_fallback is not None:
+                    code += struct_fallback
+                else:
+                    fallback = self.hlsl_default_value_expression(raw_return_type)
+                    code += f"{'    ' * (indent + 1)}return {fallback};\n"
         self.current_sampler_parameters = previous_sampler_parameters
         self.current_texture_parameters = previous_texture_parameters
         self.current_image_access_parameters = previous_image_access_parameters
@@ -4305,6 +4323,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.current_identifier_aliases = previous_identifier_aliases
         self.current_identifier_reserved_names = previous_identifier_reserved_names
         self.current_hlsl_stage_output_lowering = previous_stage_output_lowering
+        self.current_hlsl_resource_pointer_offsets = previous_resource_pointer_offsets
         self.current_generic_function_substitutions = (
             previous_generic_function_substitutions
         )
@@ -4405,6 +4424,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         "\n".join(lift_statements), indent
                     )
                     code += f"{indent_str}{declaration} = {init_expr};\n"
+                    return self.hlsl_record_generated_statement_int_constants(
+                        stmt, code
+                    )
+                struct_init = self.render_hlsl_struct_value_initialization(
+                    stmt_name, vtype, initial_value, indent
+                )
+                if struct_init is not None:
+                    code = f"{indent_str}{declaration};\n{struct_init}"
                     return self.hlsl_record_generated_statement_int_constants(
                         stmt, code
                     )
@@ -4526,6 +4553,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         )
                         code += f"{indent_str}return {return_expr};\n"
                         return code
+                    struct_return = self.render_hlsl_struct_return(stmt.value, indent)
+                    if struct_return is not None:
+                        return struct_return
                     return (
                         f"{indent_str}return "
                         f"{self.generate_expression_with_expected(stmt.value, self.current_function_return_type)};\n"
@@ -4641,6 +4671,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if inferred_type is not None:
                 return inferred_type
+            return "float"
         if vtype is None:
             vtype = self.expression_result_type(getattr(stmt, "initial_value", None))
         return vtype or "float"
@@ -4741,7 +4772,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def type_name_string(self, vtype):
         if vtype is None:
             return None
-        if isinstance(vtype, ReferenceType):
+        if isinstance(vtype, ReferenceType) or hasattr(vtype, "referenced_type"):
+            return self.convert_type_node_to_string(vtype)
+        if isinstance(vtype, PointerType) or hasattr(vtype, "pointee_type"):
             return self.convert_type_node_to_string(vtype)
         if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
             return self.convert_type_node_to_string(vtype)
@@ -5426,6 +5459,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if atomic_assignment is not None and op == "=":
             return atomic_assignment
 
+        resource_offset = self.generate_hlsl_resource_pointer_offset_assignment(
+            target, value, op
+        )
+        if resource_offset is not None:
+            return resource_offset
+
         lifted_value = self.hlsl_typed_buffer_atomic_lifted_expression(value)
         if lifted_value is not None:
             lift_statements, rhs = lifted_value
@@ -5437,6 +5476,55 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             value, self.expression_result_type(target)
         )
         return f"{lhs} {op} {rhs}"
+
+    def generate_hlsl_resource_pointer_offset_assignment(self, target, value, op):
+        if op != "+=":
+            return None
+        if not (
+            hasattr(target, "__class__")
+            and (
+                "Identifier" in str(target.__class__)
+                or target.__class__.__name__ == "VariableNode"
+            )
+        ):
+            return None
+
+        original_name = getattr(target, "name", None)
+        if original_name is None:
+            return None
+        rendered_name = self.generate_expression(target)
+        if not self.hlsl_writable_resource_pointer_name(rendered_name, original_name):
+            return None
+
+        rhs = self.generate_expression(value)
+        previous_offset = self.current_hlsl_resource_pointer_offsets.get(rendered_name)
+        if previous_offset:
+            self.current_hlsl_resource_pointer_offsets[rendered_name] = (
+                f"({previous_offset} + {rhs})"
+            )
+        else:
+            self.current_hlsl_resource_pointer_offsets[rendered_name] = rhs
+        return ""
+
+    def hlsl_writable_resource_pointer_name(self, name, original_name=None):
+        candidate_names = [name]
+        if original_name is not None and original_name not in candidate_names:
+            candidate_names.append(original_name)
+        aliased_name = self.current_identifier_aliases.get(original_name)
+        if aliased_name is not None and aliased_name not in candidate_names:
+            candidate_names.append(aliased_name)
+
+        for candidate in candidate_names:
+            resource_type = (
+                self.hlsl_struct_buffer_resource_types.get(candidate)
+                or self.global_variable_types.get(candidate)
+                or self.local_variable_types.get(candidate)
+            )
+            if isinstance(resource_type, str) and resource_type.startswith(
+                ("RWStructuredBuffer<", "RWByteAddressBuffer")
+            ):
+                return True
+        return False
 
     def generate_if(self, node, indent):
         indent_str = "    " * indent
@@ -5907,6 +5995,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             index_expr = getattr(expr, "index_expr", getattr(expr, "index", ""))
             array = self.generate_expression(array_expr)
             index = self.generate_expression(index_expr)
+            index = self.hlsl_resource_pointer_offset_index(array, index)
             return f"{array}[{index}]"
         elif isinstance(expr, ConstructorNode):
             enum_constructor = generate_enum_constructor_expression(self, expr)
@@ -7267,6 +7356,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "buffer_store4",
         }
 
+    def hlsl_resource_pointer_offset_index(self, resource_name, index):
+        pointer_offset = self.current_hlsl_resource_pointer_offsets.get(resource_name)
+        if pointer_offset:
+            return f"({pointer_offset} + {index})"
+        return index
+
     def hlsl_value_shape_label(self, vtype):
         type_name = self.type_name_string(vtype)
         if not type_name:
@@ -7472,6 +7567,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if func_name in vector_load_methods and len(args) >= 2:
             buffer = self.generate_expression(args[0])
             index = self.generate_expression(args[1])
+            index = self.hlsl_resource_pointer_offset_index(buffer, index)
             return f"{buffer}.{vector_load_methods[func_name]}({index})"
 
         vector_store_methods = {
@@ -7482,16 +7578,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if func_name in vector_store_methods and len(args) >= 3:
             buffer = self.generate_expression(args[0])
             index = self.generate_expression(args[1])
+            index = self.hlsl_resource_pointer_offset_index(buffer, index)
             value = self.generate_expression(args[2])
             return f"{buffer}.{vector_store_methods[func_name]}({index}, {value})"
 
         if func_name == "buffer_load" and len(args) >= 2:
             buffer = self.generate_expression(args[0])
             index = self.generate_expression(args[1])
+            index = self.hlsl_resource_pointer_offset_index(buffer, index)
             return f"{buffer}.Load({index})"
         if func_name == "buffer_store" and len(args) >= 3:
             buffer = self.generate_expression(args[0])
             index = self.generate_expression(args[1])
+            index = self.hlsl_resource_pointer_offset_index(buffer, index)
             value = self.generate_expression(args[2])
             resource_type = self.hlsl_buffer_helper_resource_type(args[0])
             resource_name = self.hlsl_resource_type_name(resource_type)
@@ -19514,6 +19613,170 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return None
         return list(member_types.items())
 
+    def hlsl_struct_initializer_rendered_args(self, type_name, args, named_args=None):
+        fields = self.hlsl_struct_constructor_fields(type_name)
+        if fields is None:
+            return None
+
+        positional_args = list(args or [])
+        named_args = dict(named_args or {})
+        field_names = [field_name for field_name, _field_type in fields]
+        if len(positional_args) > len(fields):
+            return None
+        if set(named_args) - set(field_names):
+            return None
+
+        rendered_args = []
+        field_exprs = []
+        for index, (field_name, field_type) in enumerate(fields):
+            if index < len(positional_args):
+                field_expr = positional_args[index]
+            elif field_name in named_args:
+                field_expr = named_args[field_name]
+            else:
+                field_exprs.append(None)
+                rendered_args.append(default_value_expression(self, field_type))
+                continue
+            field_exprs.append(field_expr)
+            rendered_args.append(
+                self.generate_expression_with_expected(field_expr, field_type)
+            )
+        return self.map_type(type_name), fields, rendered_args, field_exprs
+
+    def hlsl_struct_initializer_components(self, expected_type, expr):
+        expected_type = self.type_name_string(expected_type)
+        if isinstance(expr, ArrayLiteralNode):
+            return self.hlsl_struct_initializer_rendered_args(
+                expected_type, getattr(expr, "elements", []) or []
+            )
+
+        if isinstance(expr, ConstructorNode):
+            constructor_type = (
+                infer_struct_constructor_type(self, expr)
+                or self.type_name_string(getattr(expr, "constructor_type", None))
+                or expected_type
+            )
+            return self.hlsl_struct_initializer_rendered_args(
+                constructor_type,
+                getattr(expr, "arguments", []) or [],
+                getattr(expr, "named_arguments", {}) or {},
+            )
+
+        if isinstance(expr, FunctionCallNode) or (
+            hasattr(expr, "__class__") and "FunctionCall" in str(expr.__class__)
+        ):
+            func_name = self.function_call_name(expr)
+            if func_name in getattr(self, "function_return_types", {}):
+                return None
+            return self.hlsl_struct_initializer_rendered_args(
+                func_name,
+                getattr(expr, "arguments", getattr(expr, "args", [])) or [],
+                getattr(expr, "named_arguments", {}) or {},
+            )
+
+        return None
+
+    def render_hlsl_struct_value_initialization(
+        self, target_name, expected_type, expr, indent=0
+    ):
+        initializer = self.hlsl_struct_initializer_components(expected_type, expr)
+        if initializer is None:
+            return None
+        _type_name, fields, rendered_args, field_exprs = initializer
+        return self.render_hlsl_struct_field_assignments(
+            target_name, fields, rendered_args, field_exprs, indent
+        )
+
+    def render_hlsl_struct_return(self, expr, indent=0):
+        return_type = self.type_name_string(self.current_function_return_type)
+        initializer = self.hlsl_struct_initializer_components(return_type, expr)
+        if initializer is None:
+            return None
+        type_name, fields, rendered_args, field_exprs = initializer
+        temp_name = self.next_hlsl_temp_variable("struct_return")
+        self.local_variable_types[temp_name] = type_name
+        indent_str = "    " * indent
+        code = f"{indent_str}{type_name} {temp_name};\n"
+        code += self.render_hlsl_struct_field_assignments(
+            temp_name, fields, rendered_args, field_exprs, indent
+        )
+        code += f"{indent_str}return {temp_name};\n"
+        return code
+
+    def render_hlsl_struct_field_assignments(
+        self, target_name, fields, rendered_args, field_exprs, indent=0
+    ):
+        indent_str = "    " * indent
+        code = ""
+        for (field_name, field_type), rendered_arg, field_expr in zip(
+            fields, rendered_args, field_exprs
+        ):
+            field_target = f"{target_name}.{field_name}"
+            field_type_name = self.type_name_string(field_type)
+            if (
+                field_expr is not None
+                and self.hlsl_struct_constructor_fields(field_type_name) is not None
+            ):
+                nested_init = self.render_hlsl_struct_value_initialization(
+                    field_target, field_type_name, field_expr, indent
+                )
+                if nested_init is not None:
+                    code += nested_init
+                    continue
+            code += f"{indent_str}{field_target} = {rendered_arg};\n"
+        return code
+
+    def render_hlsl_default_struct_field_assignments(
+        self, target_name, type_name, indent=0, seen_structs=None
+    ):
+        fields = self.hlsl_struct_constructor_fields(type_name)
+        if fields is None:
+            return None
+
+        type_name = self.type_name_string(type_name)
+        seen_structs = set(seen_structs or set())
+        if type_name in seen_structs:
+            return None
+
+        indent_str = "    " * indent
+        code = ""
+        for field_name, field_type in fields:
+            field_target = f"{target_name}.{field_name}"
+            field_type_name = self.type_name_string(field_type)
+            nested_fields = self.hlsl_struct_constructor_fields(field_type_name)
+            if nested_fields is not None:
+                nested_code = self.render_hlsl_default_struct_field_assignments(
+                    field_target,
+                    field_type_name,
+                    indent,
+                    seen_structs | {type_name},
+                )
+                if nested_code is not None:
+                    code += nested_code
+                    continue
+            code += (
+                f"{indent_str}{field_target} = "
+                f"{self.hlsl_default_value_expression(field_type)};\n"
+            )
+        return code
+
+    def render_hlsl_default_struct_return(self, return_type, indent=0):
+        type_name = self.type_name_string(return_type)
+        fields = self.hlsl_struct_constructor_fields(type_name)
+        if fields is None:
+            return None
+
+        mapped_type = self.map_type(type_name)
+        temp_name = self.next_hlsl_temp_variable("struct_return")
+        self.local_variable_types[temp_name] = mapped_type
+        indent_str = "    " * indent
+        code = f"{indent_str}{mapped_type} {temp_name};\n"
+        code += self.render_hlsl_default_struct_field_assignments(
+            temp_name, type_name, indent
+        )
+        code += f"{indent_str}return {temp_name};\n"
+        return code
+
     def generate_hlsl_struct_constructor_call(self, type_name, args, named_args=None):
         if type_name in getattr(self, "function_return_types", {}):
             return None
@@ -22792,10 +23055,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
-        if isinstance(type_node, PointerType):
+        if isinstance(type_node, PointerType) or hasattr(type_node, "pointee_type"):
             pointee_type = self.convert_type_node_to_string(type_node.pointee_type)
             return f"{pointee_type}*"
-        if isinstance(type_node, ReferenceType):
+        if isinstance(type_node, ReferenceType) or hasattr(
+            type_node, "referenced_type"
+        ):
             return self.convert_type_node_to_string(type_node.referenced_type)
         if hasattr(type_node, "value"):
             value = type_node.value
@@ -22871,10 +23136,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if vtype is None:
             return "float"
 
-        if isinstance(vtype, PointerType):
+        if isinstance(vtype, PointerType) or hasattr(vtype, "pointee_type"):
             return f"{self.map_type(vtype.pointee_type)}*"
 
-        if isinstance(vtype, ReferenceType):
+        if isinstance(vtype, ReferenceType) or hasattr(vtype, "referenced_type"):
             return self.map_type(vtype.referenced_type)
 
         if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
