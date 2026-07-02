@@ -29046,6 +29046,43 @@ def test_translate_project_drops_mlx_metal_system_includes_for_opengl(tmp_path):
     assert "#include" not in generated
 
 
+def test_translate_project_drops_mlx_metal_system_includes_for_directx(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "arange.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_atomic>
+            #include <metal_integer>
+            #include <metal_math>
+            #include <metal_stdlib>
+            using namespace metal;
+
+            kernel void arange(
+                device float* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {
+                out[gid] = float(gid);
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(repo, targets=["directx"], output_dir="out")
+    payload = report.to_json()
+
+    assert payload["summary"]["artifactCount"] == 1
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnosticCounts"]["error"] == 0
+
+    artifact = payload["artifacts"][0]
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert artifact["status"] == "translated"
+    assert "#include <metal_atomic>" not in generated
+    assert "#include <metal_integer>" not in generated
+    assert "#include <metal_math>" not in generated
+    assert "#include <metal_stdlib>" not in generated
+
+
 def test_project_cli_translate_project_writes_report(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -45080,7 +45117,7 @@ def test_legacy_single_file_cli_still_works(tmp_path):
     assert output.exists()
 
 
-METAL_SIMD_SHUFFLE_DOWN_LEAK_KERNEL = textwrap.dedent("""
+METAL_SIMD_SHUFFLE_DOWN_KERNEL = textwrap.dedent("""
     #include <metal_stdlib>
     using namespace metal;
 
@@ -45122,48 +45159,39 @@ def _write_metal_directx_project(repo: Path, kernel_name: str, source: str) -> P
     return repo
 
 
-def test_metal_simd_shuffle_down_leak_to_directx_is_flagged_unresolved(tmp_path):
-    # Sanity-check the leak: simd_shuffle_down is not in the Metal wave-intrinsic
-    # map, so it survives un-lowered into the HLSL artifact.
-    leak_dir = tmp_path / "leak-check"
-    leak_dir.mkdir()
-    leak_path = leak_dir / "reduce_kernel.metal"
-    leak_path.write_text(METAL_SIMD_SHUFFLE_DOWN_LEAK_KERNEL, encoding="utf-8")
-    leaked_hlsl = project_pipeline.translate(
-        str(leak_path), backend="directx", source_backend="metal"
+def test_metal_simd_shuffle_down_to_directx_lowers_to_wave_read(tmp_path):
+    shader_dir = tmp_path / "shader-check"
+    shader_dir.mkdir()
+    shader_path = shader_dir / "reduce_kernel.metal"
+    shader_path.write_text(METAL_SIMD_SHUFFLE_DOWN_KERNEL, encoding="utf-8")
+    generated_hlsl = project_pipeline.translate(
+        str(shader_path), backend="directx", source_backend="metal"
     )
-    assert "simd_shuffle_down" in leaked_hlsl
+    assert "simd_shuffle_down" not in generated_hlsl
+    assert "WaveReadLaneAt(v, (WaveGetLaneIndex() + uint(1)))" in generated_hlsl
 
     repo = _write_metal_directx_project(
-        tmp_path / "repo", "reduce_kernel", METAL_SIMD_SHUFFLE_DOWN_LEAK_KERNEL
+        tmp_path / "repo", "reduce_kernel", METAL_SIMD_SHUFFLE_DOWN_KERNEL
     )
 
     payload = translate_project(
         load_project_config(repo), format_output=False
     ).to_json()
 
-    assert payload["summary"]["translatedCount"] == 0
-    assert payload["summary"]["failedCount"] == 1
-    assert payload["summary"]["diagnosticsByCode"] == {
-        "project.translate.metal-unresolved-construct": 1
-    }
-    assert payload["summary"]["missingCapabilityCounts"] == {
-        "metal.construct-lowering": 1
-    }
-
-    diagnostic = payload["diagnostics"][0]
-    assert diagnostic["code"] == "project.translate.metal-unresolved-construct"
-    assert diagnostic["target"] == "directx"
-    assert diagnostic["sourceBackend"] == "metal"
-    assert diagnostic["missingCapabilities"] == ["metal.construct-lowering"]
-    assert "Metal simd_* intrinsic" in diagnostic["message"]
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert (
+        "project.translate.metal-unresolved-construct"
+        not in payload["summary"]["diagnosticsByCode"]
+    )
+    assert (
+        "metal.construct-lowering" not in payload["summary"]["missingCapabilityCounts"]
+    )
 
     artifact = payload["artifacts"][0]
-    assert artifact["status"] == "failed"
+    assert artifact["status"] == "translated"
     assert artifact["target"] == "directx"
-    assert "unresolved Metal source constructs" in artifact["error"]
-    assert "Metal simd_* intrinsic" in artifact["error"]
-    assert not (repo / artifact["path"]).exists()
+    assert (repo / artifact["path"]).exists()
 
 
 def test_metal_elementwise_copy_to_directx_is_not_flagged(tmp_path):

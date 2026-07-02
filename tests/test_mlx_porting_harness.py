@@ -152,6 +152,7 @@ def test_runtime_readiness_uses_runtime_artifact_manifest_metadata(
         "https://github.com/CrossGL/crosstl/issues/1388",
         "https://github.com/CrossGL/crosstl/issues/1392",
         "https://github.com/CrossGL/crosstl/issues/1396",
+        "https://github.com/CrossGL/crosstl/issues/1471",
     ]
     assert result["testCount"] == 1
     assert result["diagnosticCounts"] == {"error": 0, "note": 0, "warning": 0}
@@ -190,6 +191,7 @@ def test_runtime_readiness_uses_runtime_artifact_manifest_metadata(
         "https://github.com/CrossGL/crosstl/issues/1388",
         "https://github.com/CrossGL/crosstl/issues/1392",
         "https://github.com/CrossGL/crosstl/issues/1396",
+        "https://github.com/CrossGL/crosstl/issues/1471",
     ]
     assert manifest["tests"][0]["selector"] == {
         "source": module.MLX_ARANGE_SOURCE,
@@ -654,8 +656,12 @@ def test_reduced_frontier_accepts_multiple_vulkan_toolchain_runs_per_artifact(
         directory.mkdir(parents=True)
 
     frontier_count = len(module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES)
-    vulkan_paths = [
+    base_vulkan_paths = [
         f".crosstl/out/vulkan/{Path(source).with_suffix('.spvasm')}"
+        for source in module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
+    ]
+    toolchain_vulkan_paths = [
+        f".crosstl/toolchain/vulkan/{Path(source).with_suffix('.spvasm')}"
         for source in module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
     ]
     commands = []
@@ -682,7 +688,11 @@ def test_reduced_frontier_accepts_multiple_vulkan_toolchain_runs_per_artifact(
             },
             "artifacts": [
                 {"target": "vulkan", "path": path, "status": "translated"}
-                for path in vulkan_paths
+                for path in (
+                    base_vulkan_paths
+                    if name == "translate-directx-vulkan-frontier"
+                    else toolchain_vulkan_paths
+                )
             ],
             "validation": {
                 "summary": {"failedCount": 0},
@@ -695,7 +705,7 @@ def test_reduced_frontier_accepts_multiple_vulkan_toolchain_runs_per_artifact(
                             "path": path,
                             "status": "ok",
                         }
-                        for path in vulkan_paths
+                        for path in toolchain_vulkan_paths
                         for _ in range(2)
                     ]
                 ),
@@ -722,6 +732,7 @@ def test_reduced_frontier_accepts_multiple_vulkan_toolchain_runs_per_artifact(
         report_dir,
         log_dir,
         "python",
+        require_directx_toolchain=False,
         require_vulkan_toolchain=True,
     )
 
@@ -736,6 +747,102 @@ def test_reduced_frontier_accepts_multiple_vulkan_toolchain_runs_per_artifact(
         encoding="utf-8"
     )
     assert 'targets = ["vulkan"]' in toolchain_config
+
+
+def test_reduced_frontier_requires_directx_toolchain_runs_per_artifact(
+    tmp_path, monkeypatch
+):
+    module = _load_harness()
+    monkeypatch.setattr(module, "FRONTIER_VALIDATION_TRACKED_ISSUES", ())
+    mlx_root = tmp_path / "mlx"
+    work_dir = mlx_root / ".crosstl-mlx-porting"
+    config_dir = work_dir / "configs"
+    report_dir = work_dir / "reports"
+    log_dir = work_dir / "logs"
+    for directory in (config_dir, report_dir, log_dir):
+        directory.mkdir(parents=True)
+
+    frontier_count = len(module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES)
+    directx_paths = [
+        f".crosstl/out/directx/{Path(source).with_suffix('.hlsl')}"
+        for source in module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
+    ]
+    commands = []
+
+    def fake_run_command(name, command, *, log_dir, check=True, timeout_seconds=None):
+        commands.append((name, list(command)))
+        report = {
+            "summary": {
+                "unitCount": frontier_count,
+                "artifactCount": frontier_count * 2,
+                "translatedCount": frontier_count * 2,
+                "failedCount": 0,
+                "diagnosticCounts": {"error": 0},
+                "artifactsByTarget": {
+                    "directx": {
+                        "translatedCount": frontier_count,
+                        "failedCount": 0,
+                    },
+                    "vulkan": {
+                        "translatedCount": frontier_count,
+                        "failedCount": 0,
+                    },
+                },
+            },
+            "artifacts": [
+                {"target": "directx", "path": path, "status": "translated"}
+                for path in directx_paths
+            ],
+            "validation": {
+                "summary": {"failedCount": 0},
+                "toolchainRuns": (
+                    []
+                    if name == "translate-directx-vulkan-frontier"
+                    else [
+                        {
+                            "target": "directx",
+                            "path": path,
+                            "status": "ok",
+                        }
+                        for path in directx_paths
+                    ]
+                ),
+            },
+        }
+        report_name = (
+            "directx-vulkan-frontier.json"
+            if name == "translate-directx-vulkan-frontier"
+            else "directx-frontier-toolchain.json"
+        )
+        (report_dir / report_name).write_text(json.dumps(report), encoding="utf-8")
+        stdout_path = log_dir / f"{name}.stdout"
+        stderr_path = log_dir / f"{name}.stderr"
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text("", encoding="utf-8")
+        return module.CommandResult(name, list(command), 0, stdout_path, stderr_path)
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+
+    result = module._translate_directx_vulkan_frontier(
+        mlx_root,
+        work_dir,
+        config_dir,
+        report_dir,
+        log_dir,
+        "python",
+        require_directx_toolchain=True,
+        require_vulkan_toolchain=False,
+    )
+
+    assert result["toolchainRuns"] == frontier_count
+    assert result["directxToolchainRequired"] is True
+    assert result["directxValidationStatus"] == "validated"
+    assert commands[1][0] == "validate-directx-frontier-toolchain"
+    assert "--run-toolchains" in commands[1][1]
+    toolchain_config = (config_dir / "directx-frontier-toolchain.toml").read_text(
+        encoding="utf-8"
+    )
+    assert 'targets = ["directx"]' in toolchain_config
 
 
 def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatch):
@@ -775,6 +882,7 @@ def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatc
             work_dir=None,
             no_clean=False,
             python="python",
+            require_directx_toolchain=False,
             require_vulkan_toolchain=False,
             mode=module.FULL_CORPUS_MODE,
         )
@@ -838,6 +946,7 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
             work_dir=None,
             no_clean=False,
             python="python",
+            require_directx_toolchain=False,
             require_vulkan_toolchain=False,
             require_vulkan_native_runtime=False,
             mode=module.REDUCED_FRONTIER_MODE,

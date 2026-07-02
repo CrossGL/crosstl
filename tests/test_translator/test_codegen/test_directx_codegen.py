@@ -10,21 +10,33 @@ import crosstl.translator
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
 from crosstl.translator.ast import (
+    ArrayAccessNode,
+    ArrayLiteralNode,
     ArrayNode,
+    AssignmentNode,
     AttributeNode,
+    BinaryOpNode,
     BlockNode,
     ExecutionModel,
+    FunctionCallNode,
     FunctionNode,
     GenericParameterNode,
     IdentifierNode,
     LiteralNode,
+    MemberAccessNode,
     NamedType,
+    ParameterNode,
+    PreprocessorNode,
     PrimitiveType,
+    ReferenceType,
+    ReturnNode,
     ShaderNode,
     ShaderStage,
     StructMemberNode,
     StructNode,
     UnaryOpNode,
+    VariableNode,
+    VectorType,
     create_legacy_shader_node,
 )
 from crosstl.translator.codegen.directx_codegen import (
@@ -82,6 +94,513 @@ def test_hlsl_type_node_renders_expression_generic_arguments():
         HLSLCodeGen().convert_type_node_to_string(type_node)
         == "LoopedElemToLoc<DIM, -1, OffsetT, General>"
     )
+
+
+def test_hlsl_codegen_drops_metal_system_includes_but_preserves_hlsl_includes():
+    ast = ShaderNode(
+        "IncludeFilters",
+        ExecutionModel.COMPUTE_KERNEL,
+        preprocessors=[
+            PreprocessorNode("pragma", "METAL internals : enable"),
+            PreprocessorNode("pragma", "pack_matrix(row_major)"),
+            PreprocessorNode("include", "<metal_math>"),
+            PreprocessorNode("include", "<metal_integer>"),
+            PreprocessorNode("include", "<metal_atomic>"),
+            PreprocessorNode("include", "<shared.hlsl>"),
+            PreprocessorNode("include", '"metal_helpers.hlsl"'),
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert "#include <metal_math>" not in generated
+    assert "#include <metal_integer>" not in generated
+    assert "#include <metal_atomic>" not in generated
+    assert "#include <shared.hlsl>" in generated
+    assert '#include "metal_helpers.hlsl"' in generated
+    assert "#pragma METAL internals : enable" not in generated
+    assert "#pragma pack_matrix(row_major)" in generated
+
+
+def test_hlsl_codegen_ignores_metal_address_space_struct_metadata():
+    ast = ShaderNode(
+        "MetalMetadata",
+        ExecutionModel.COMPUTE_KERNEL,
+        structs=[
+            StructNode(
+                "Limits",
+                [
+                    StructMemberNode(
+                        "max",
+                        NamedType("bfloat16_t"),
+                        attributes=[AttributeNode("constant")],
+                    )
+                ],
+            )
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert "half max;" in generated
+    assert ": constant" not in generated
+
+
+def test_hlsl_codegen_lowers_mlx_half_aliases_and_metal_as_type():
+    ast = ShaderNode(
+        "MetalAliases",
+        ExecutionModel.COMPUTE_KERNEL,
+        global_variables=[
+            VariableNode("bfloat16_t", NamedType("half")),
+            VariableNode("float16_t", NamedType("half")),
+            VariableNode("thread_scope_system", NamedType("thread_scope")),
+        ],
+        functions=[
+            FunctionNode(
+                "from_bits",
+                NamedType("bfloat16_t"),
+                [ParameterNode("bits", NamedType("uint16_t"))],
+                BlockNode(
+                    [
+                        ReturnNode(
+                            FunctionCallNode(
+                                IdentifierNode("as_type<bfloat16_t>"),
+                                [IdentifierNode("bits")],
+                            )
+                        )
+                    ]
+                ),
+            ),
+            FunctionNode(
+                "to_bits",
+                NamedType("uint16_t"),
+                [ParameterNode("x", NamedType("bfloat16_t"))],
+                BlockNode(
+                    [
+                        ReturnNode(
+                            FunctionCallNode(
+                                IdentifierNode("asuint"),
+                                [IdentifierNode("x")],
+                            )
+                        )
+                    ]
+                ),
+            ),
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert "half bfloat16_t;" not in generated
+    assert "half float16_t;" not in generated
+    assert "thread_scope_system" not in generated
+    assert "half from_bits(min16uint bits)" in generated
+    assert "return half(bits);" in generated
+    assert "min16uint to_bits(half x)" in generated
+    assert "return min16uint(uint(x));" in generated
+
+
+def test_hlsl_codegen_lowers_mlx_limit_constants_and_alias_constructors():
+    ast = ShaderNode(
+        "MetalLimits",
+        ExecutionModel.COMPUTE_KERNEL,
+        functions=[
+            FunctionNode(
+                "max_float",
+                NamedType("float"),
+                [],
+                BlockNode(
+                    [ReturnNode(IdentifierNode("Limits_u3cfloat_u3e_u3a_u3amax"))]
+                ),
+            ),
+            FunctionNode(
+                "max_bfloat",
+                NamedType("bfloat16_t"),
+                [],
+                BlockNode(
+                    [ReturnNode(IdentifierNode("Limits_u3cbfloat16_t_u3e_u3a_u3amax"))]
+                ),
+            ),
+            FunctionNode(
+                "cast_bfloat",
+                NamedType("bfloat16_t"),
+                [ParameterNode("x", NamedType("float"))],
+                BlockNode(
+                    [
+                        ReturnNode(
+                            FunctionCallNode(
+                                IdentifierNode("bfloat16_t"),
+                                [IdentifierNode("x")],
+                            )
+                        )
+                    ]
+                ),
+            ),
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert "Limits_u3c" not in generated
+    assert "bfloat16_t(" not in generated
+    assert "return 3.402823466e+38;" in generated
+    assert "return half(65504.0);" in generated
+    assert "return half(x);" in generated
+
+
+def test_hlsl_codegen_lowers_generic_int64_vector_type_names():
+    ast = ShaderNode(
+        "MetalGenericVector",
+        ExecutionModel.COMPUTE_KERNEL,
+        functions=[
+            FunctionNode(
+                "make_loc",
+                NamedType("vec<int64, 2>"),
+                [
+                    ParameterNode("x", NamedType("int64_t")),
+                    ParameterNode("y", NamedType("int64_t")),
+                ],
+                BlockNode(
+                    [
+                        ReturnNode(
+                            FunctionCallNode(
+                                IdentifierNode("vec<int64, 2>"),
+                                [IdentifierNode("x"), IdentifierNode("y")],
+                            )
+                        )
+                    ]
+                ),
+            )
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert "vec<int64" not in generated
+    assert "int64_t2 make_loc(int64_t x, int64_t y)" in generated
+    assert "return int64_t2(x, y);" in generated
+
+
+def test_hlsl_codegen_casts_64_bit_resource_indices_for_dxc():
+    ast = ShaderNode(
+        "ResourceIndices",
+        ExecutionModel.COMPUTE_KERNEL,
+        functions=[
+            FunctionNode(
+                "write_key",
+                NamedType("void"),
+                [
+                    ParameterNode("out", NamedType("RWStructuredBuffer<uint>")),
+                    ParameterNode("keys", NamedType("ByteAddressBuffer")),
+                    ParameterNode("idx", NamedType("uint64_t")),
+                    ParameterNode("key_index", NamedType("int64_t")),
+                ],
+                BlockNode(
+                    [
+                        AssignmentNode(
+                            ArrayAccessNode(
+                                IdentifierNode("out"),
+                                IdentifierNode("idx"),
+                            ),
+                            FunctionCallNode(
+                                MemberAccessNode(IdentifierNode("keys"), "Load"),
+                                [IdentifierNode("key_index")],
+                            ),
+                        )
+                    ]
+                ),
+            )
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert "out[uint(idx)] = keys.Load(int(key_index));" in generated
+
+
+def test_hlsl_codegen_narrows_64_bit_initializer_to_declared_int():
+    ast = ShaderNode(
+        "NarrowInitializer",
+        ExecutionModel.COMPUTE_KERNEL,
+        functions=[
+            FunctionNode(
+                "edge",
+                NamedType("void"),
+                [ParameterNode("bytes_per_key", NamedType("uint64_t"))],
+                BlockNode(
+                    [
+                        VariableNode(
+                            "edge_bytes",
+                            NamedType("int"),
+                            BinaryOpNode(
+                                IdentifierNode("bytes_per_key"),
+                                "%",
+                                LiteralNode(4, PrimitiveType("uint")),
+                            ),
+                        )
+                    ]
+                ),
+            )
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert "int edge_bytes = int((bytes_per_key % 4u));" in generated
+
+
+def test_hlsl_codegen_lowers_metal_simd_shuffle_helpers_to_wave_reads():
+    ast = ShaderNode(
+        "MetalSimdHelpers",
+        ExecutionModel.COMPUTE_KERNEL,
+        functions=[
+            FunctionNode(
+                "shuffle_bits",
+                NamedType("uint64_t"),
+                [
+                    ParameterNode("data", NamedType("uint64_t")),
+                    ParameterNode("filling", NamedType("uint64_t")),
+                    ParameterNode("delta", NamedType("uint16_t")),
+                ],
+                BlockNode(
+                    [
+                        ReturnNode(
+                            FunctionCallNode(
+                                IdentifierNode("asuint"),
+                                [
+                                    FunctionCallNode(
+                                        IdentifierNode(
+                                            "metal::simd_shuffle_and_fill_up"
+                                        ),
+                                        [
+                                            FunctionCallNode(
+                                                IdentifierNode("uint"),
+                                                [IdentifierNode("data")],
+                                            ),
+                                            FunctionCallNode(
+                                                IdentifierNode("uint"),
+                                                [IdentifierNode("filling")],
+                                            ),
+                                            IdentifierNode("delta"),
+                                        ],
+                                    )
+                                ],
+                            )
+                        )
+                    ]
+                ),
+            ),
+            FunctionNode(
+                "shuffle_bool",
+                NamedType("bool"),
+                [
+                    ParameterNode("data", NamedType("bool")),
+                    ParameterNode("filling", NamedType("bool")),
+                    ParameterNode("delta", NamedType("uint16_t")),
+                ],
+                BlockNode(
+                    [
+                        ReturnNode(
+                            FunctionCallNode(
+                                IdentifierNode("simd_shuffle_and_fill_up"),
+                                [
+                                    FunctionCallNode(
+                                        IdentifierNode("uint"),
+                                        [IdentifierNode("data")],
+                                    ),
+                                    FunctionCallNode(
+                                        IdentifierNode("uint"),
+                                        [IdentifierNode("filling")],
+                                    ),
+                                    IdentifierNode("delta"),
+                                ],
+                            )
+                        )
+                    ]
+                ),
+            ),
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert "metal_u3a_u3asimd_shuffle_and_fill_up" not in generated
+    assert "return ((WaveGetLaneIndex() >= uint(delta))" in generated
+    assert "WaveReadLaneAt(uint(data), (WaveGetLaneIndex() - uint(delta)))" in generated
+    assert "return ((((WaveGetLaneIndex() >= uint(delta))" in generated
+    assert " != 0);" in generated
+    assert "return simd_shuffle_and_fill_up(uint(data)" not in generated
+
+
+def test_hlsl_codegen_materializes_struct_return_initializers():
+    ast = ShaderNode(
+        "StructInitializers",
+        ExecutionModel.COMPUTE_KERNEL,
+        structs=[
+            StructNode(
+                "Pair",
+                [
+                    StructMemberNode("real", NamedType("float")),
+                    StructMemberNode("imag", NamedType("float")),
+                ],
+            )
+        ],
+        functions=[
+            FunctionNode(
+                "make_pair",
+                NamedType("Pair"),
+                [],
+                BlockNode(
+                    [
+                        ReturnNode(
+                            ArrayLiteralNode(
+                                [
+                                    LiteralNode(1.0, PrimitiveType("float")),
+                                    LiteralNode(2.0, PrimitiveType("float")),
+                                ]
+                            )
+                        )
+                    ]
+                ),
+            ),
+            FunctionNode(
+                "make_pair_constructor",
+                NamedType("Pair"),
+                [],
+                BlockNode(
+                    [
+                        ReturnNode(
+                            FunctionCallNode(
+                                IdentifierNode("Pair"),
+                                [
+                                    LiteralNode(3.0, PrimitiveType("float")),
+                                    LiteralNode(4.0, PrimitiveType("float")),
+                                ],
+                            )
+                        )
+                    ]
+                ),
+            ),
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert "return {" not in generated
+    assert "return Pair(" not in generated
+    assert "Pair __crossgl_struct_return_0;" in generated
+    assert "__crossgl_struct_return_0.real = 1.0;" in generated
+    assert "__crossgl_struct_return_0.imag = 2.0;" in generated
+    assert "return __crossgl_struct_return_0;" in generated
+    assert "Pair __crossgl_struct_return_1;" in generated
+    assert "__crossgl_struct_return_1.real = 3.0;" in generated
+    assert "__crossgl_struct_return_1.imag = 4.0;" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+
+
+def test_hlsl_codegen_materializes_struct_local_constructor_initializers():
+    ast = ShaderNode(
+        "StructLocalInitializers",
+        ExecutionModel.COMPUTE_KERNEL,
+        structs=[
+            StructNode(
+                "Pair",
+                [
+                    StructMemberNode("real", NamedType("float")),
+                    StructMemberNode("imag", NamedType("float")),
+                ],
+            )
+        ],
+        functions=[
+            FunctionNode(
+                "local_pair",
+                NamedType("Pair"),
+                [],
+                BlockNode(
+                    [
+                        VariableNode(
+                            "p",
+                            NamedType("Pair"),
+                            FunctionCallNode(
+                                IdentifierNode("Pair"),
+                                [
+                                    LiteralNode(1.0, PrimitiveType("float")),
+                                    LiteralNode(2.0, PrimitiveType("float")),
+                                ],
+                            ),
+                        ),
+                        ReturnNode(IdentifierNode("p")),
+                    ]
+                ),
+            )
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert "Pair p;" in generated
+    assert "p.real = 1.0;" in generated
+    assert "p.imag = 2.0;" in generated
+    assert "Pair p = Pair(" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+
+
+def test_hlsl_codegen_materializes_struct_fallthrough_returns():
+    ast = ShaderNode(
+        "StructFallthroughReturn",
+        ExecutionModel.COMPUTE_KERNEL,
+        structs=[
+            StructNode(
+                "Pair",
+                [
+                    StructMemberNode("real", NamedType("float")),
+                    StructMemberNode("imag", NamedType("float")),
+                ],
+            )
+        ],
+        functions=[
+            FunctionNode(
+                "fallthrough_pair",
+                NamedType("Pair"),
+                [],
+                BlockNode([]),
+            )
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert "return Pair(" not in generated
+    assert "Pair __crossgl_struct_return_0;" in generated
+    assert "__crossgl_struct_return_0.real = float(0);" in generated
+    assert "__crossgl_struct_return_0.imag = float(0);" in generated
+    assert "return __crossgl_struct_return_0;" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+
+
+def test_hlsl_codegen_maps_structural_reference_parameters_to_values():
+    uint2_type = VectorType(PrimitiveType("uint"), 2)
+    ast = ShaderNode(
+        "ReferenceParameters",
+        ExecutionModel.COMPUTE_KERNEL,
+        functions=[
+            FunctionNode(
+                "threefry2x32_hash",
+                uint2_type,
+                [
+                    ParameterNode("key", ReferenceType(uint2_type)),
+                    ParameterNode("count", uint2_type),
+                ],
+                BlockNode([ReturnNode(IdentifierNode("key"))]),
+            )
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert "uint2 threefry2x32_hash(uint2 key, uint2 count)" in generated
+    assert "ReferenceType(" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
 
 
 HLSL_SCALAR_VECTOR_ZERO_DIAGNOSTIC = re.compile(
@@ -2492,6 +3011,89 @@ def test_hlsl_metal_matmul_pointer_params_lower_to_resources(tmp_path):
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
 
 
+def test_hlsl_metal_scalar_constant_kernel_params_promote_to_cbuffers(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    [[kernel]] void input_coherent(
+        device uint* input [[buffer(0)]],
+        const constant uint& size [[buffer(1)]],
+        uint index [[thread_position_in_grid]]) {
+      if (index < size) {
+        input[index] = input[index];
+      }
+    }
+
+    [[kernel]] void fence_update(
+        device uint* timestamp [[buffer(0)]],
+        constant uint& value [[buffer(1)]]) {
+      timestamp[0] = value;
+    }
+
+    [[kernel]] void fence_wait(
+        device uint* timestamp [[buffer(0)]],
+        constant uint& value [[buffer(1)]]) {
+      while (1) {
+        if (timestamp[0] >= value) {
+          break;
+        }
+      }
+    }
+    """
+    shader_path = tmp_path / "fence.metal"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "cbuffer input_coherent_size_Constants" in generated_code
+    assert "uint input_coherent_size;" in generated_code
+    assert "cbuffer fence_update_value_Constants" in generated_code
+    assert "uint fence_update_value;" in generated_code
+    assert "cbuffer fence_wait_value_Constants" in generated_code
+    assert "uint fence_wait_value;" in generated_code
+    assert "uint size" not in generated_code
+    assert "uint value" not in generated_code
+    assert "index < input_coherent_size" in generated_code
+    assert "timestamp[0] = fence_update_value;" in generated_code
+    assert "timestamp.Load(0) >= fence_wait_value" in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
+def test_hlsl_metal_resource_pointer_offsets_apply_to_buffer_helpers(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void write_offset(
+        device uint* out [[buffer(0)]],
+        uint index [[thread_position_in_grid]]) {
+      out += size_t(index) * 4;
+      out[1] = 7u;
+    }
+    """
+    shader_path = tmp_path / "pointer_offset.metal"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "RWStructuredBuffer<uint> out_ : register(u0);" in generated_code
+    assert "out_ +=" not in generated_code
+    assert "buffer_store" not in generated_code
+    assert "out_[uint(((uint64_t(index) * 4) + 1))] = 7u;" in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
 def test_hlsl_default_integer_storage_image_vector_load_store_from_compiler_fixture():
     # Reduced from CrossGL-Compiler
     # tests/frontend/fixtures/StorageImageHIRShader.cgl.
@@ -3164,10 +3766,14 @@ def test_directx_glsl_buffer_block_atomics_are_expression_safe_in_value_contexts
         in generated_code
     )
     assert "__crossgl_byteaddress_atomic_or_uint(atomicBlock, 12, 2u)" in generated_code
+    assert "Pair pair;" in generated_code
     assert (
-        "Pair pair = Pair(__crossgl_byteaddress_atomic_xor_uint("
-        "atomicBlock, 16, selected), consumeSigned("
-        "__crossgl_byteaddress_atomic_max_int(atomicBlock, 20, -2)));"
+        "pair.oldCounter = __crossgl_byteaddress_atomic_xor_uint("
+        "atomicBlock, 16, selected);"
+    ) in generated_code
+    assert (
+        "pair.oldSigned = consumeSigned(__crossgl_byteaddress_atomic_max_int("
+        "atomicBlock, 20, -2));"
     ) in generated_code
     assert (
         "uint values[2] = {__crossgl_byteaddress_atomic_and_uint("
@@ -3175,9 +3781,14 @@ def test_directx_glsl_buffer_block_atomics_are_expression_safe_in_value_contexts
         "atomicBlock, 8, 4u)};"
     ) in generated_code
     assert (
-        "return Pair(__crossgl_byteaddress_atomic_add_uint(atomicBlock, 0, value), "
-        "__crossgl_byteaddress_atomic_min_int(atomicBlock, 20, -1));"
+        "__crossgl_struct_return_0.oldCounter = "
+        "__crossgl_byteaddress_atomic_add_uint(atomicBlock, 0, value);"
     ) in generated_code
+    assert (
+        "__crossgl_struct_return_0.oldSigned = "
+        "__crossgl_byteaddress_atomic_min_int(atomicBlock, 20, -1);"
+    ) in generated_code
+    assert "return __crossgl_struct_return_0;" in generated_code
     assert "unsupported HLSL GLSL buffer block atomic" not in generated_code
     assert "atomicAdd(atomicBlock" not in generated_code
     assert "atomicCompareExchange(atomicBlock" not in generated_code
@@ -7174,16 +7785,16 @@ def test_generic_enum_function_call_match_infers_result_type_once():
     generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "Result_int_MathError make_result(bool ok)" in generated_code
-    assert (
-        "Result_int_MathError __crossgl_match_subject_0 = make_result(ok);"
-        in generated_code
+    subject_match = re.search(
+        r"Result_int_MathError (__crossgl_match_subject_\d+) = make_result\(ok\);",
+        generated_code,
     )
+    assert subject_match is not None
+    subject = subject_match.group(1)
     assert generated_code.count("make_result(ok)") == 1
-    assert "if ((__crossgl_match_subject_0.variant == Result_Ok))" in generated_code
-    assert (
-        "else if ((__crossgl_match_subject_0.variant == Result_Err))" in generated_code
-    )
-    assert "int value = __crossgl_match_subject_0.Ok_0;" in generated_code
+    assert f"if (({subject}.variant == Result_Ok))" in generated_code
+    assert f"else if (({subject}.variant == Result_Err))" in generated_code
+    assert f"int value = {subject}.Ok_0;" in generated_code
     assert "Result::" not in generated_code
     assert "MatchNode(" not in generated_code
 
@@ -7263,15 +7874,16 @@ def test_generic_enum_match_expression_initializes_vector_local():
     assert "Result_float3_MathError make_result(bool ok)" in generated_code
     assert "float3 read(bool ok, float3 fallback)" in generated_code
     assert "float3 value;" in generated_code
-    assert (
-        "Result_float3_MathError __crossgl_match_subject_0 = make_result(ok);"
-        in generated_code
+    subject_match = re.search(
+        r"Result_float3_MathError (__crossgl_match_subject_\d+) = "
+        r"make_result\(ok\);",
+        generated_code,
     )
-    assert "if ((__crossgl_match_subject_0.variant == Result_Ok))" in generated_code
-    assert (
-        "else if ((__crossgl_match_subject_0.variant == Result_Err))" in generated_code
-    )
-    assert "float3 actual = __crossgl_match_subject_0.Ok_0;" in generated_code
+    assert subject_match is not None
+    subject = subject_match.group(1)
+    assert f"if (({subject}.variant == Result_Ok))" in generated_code
+    assert f"else if (({subject}.variant == Result_Err))" in generated_code
+    assert f"float3 actual = {subject}.Ok_0;" in generated_code
     assert "value = actual;" in generated_code
     assert "value = fallback;" in generated_code
     assert "float value = MatchNode" not in generated_code
@@ -7458,11 +8070,16 @@ def test_generic_struct_concrete_constructor_and_member_access():
     assert "struct Box {" not in generated_code
     assert "struct PairBox {" not in generated_code
     assert "Box_int make(int value)" in generated_code
-    assert "return Box_int(value);" in generated_code
+    assert "Box_int __crossgl_struct_return_0;" in generated_code
+    assert "__crossgl_struct_return_0.value = value;" in generated_code
+    assert "return __crossgl_struct_return_0;" in generated_code
     assert "int read(Box_int item)" in generated_code
     assert "return item.value;" in generated_code
     assert "PairBox_int make_pair(int value)" in generated_code
-    assert "return PairBox_int(Box_int(value), value);" in generated_code
+    assert "PairBox_int __crossgl_struct_return_1;" in generated_code
+    assert "__crossgl_struct_return_1.first.value = value;" in generated_code
+    assert "__crossgl_struct_return_1.second = value;" in generated_code
+    assert "return __crossgl_struct_return_1;" in generated_code
     assert "int read_pair(PairBox_int item)" in generated_code
     assert "item.first.value + item.second" in generated_code
     assert "Box<" not in generated_code
@@ -8373,10 +8990,14 @@ def test_struct_constructor_and_inferred_generic_constructor_local():
     assert "struct Geometry {" in generated_code
     assert "struct Box_float {" in generated_code
     assert "Geometry make_geometry(float3 center, float3 normal)" in generated_code
-    assert "return Geometry(center, normal);" in generated_code
+    assert "Geometry __crossgl_struct_return_0;" in generated_code
+    assert "__crossgl_struct_return_0.center = center;" in generated_code
+    assert "__crossgl_struct_return_0.normal = normal;" in generated_code
+    assert "return __crossgl_struct_return_0;" in generated_code
     assert "Box_float make_box(float3 value)" in generated_code
     assert "float3 normalized = normalize(value);" in generated_code
-    assert "Box_float wrapped = Box_float(normalized.x);" in generated_code
+    assert "Box_float wrapped;" in generated_code
+    assert "wrapped.value = normalized.x;" in generated_code
     assert "return wrapped;" in generated_code
     assert "Option_Self normalized" not in generated_code
     assert "Box<" not in generated_code

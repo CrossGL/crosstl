@@ -2120,7 +2120,11 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert 'cron: "31 4 * * 1"' in mlx_porting
     assert "github.event_name != 'schedule'" in mlx_porting
     assert "--mode reduced-frontier" in mlx_porting
+    assert "--require-directx-toolchain" in mlx_porting
     assert "--require-vulkan-native-runtime" in mlx_porting
+    assert "Install Windows DirectX Shader Compiler" in mlx_porting
+    assert "DirectXShaderCompiler/releases/download/v1.9.2602.24" in mlx_porting
+    assert "dxc --version" in mlx_porting
     assert "mesa-vulkan-drivers" in mlx_porting
     assert "python -m pip install vulkan==1.3.275.1" in mlx_porting
     assert "vulkaninfo --summary" in mlx_porting
@@ -2136,7 +2140,8 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "name: mlx-full-corpus-scout" in mlx_porting
     assert "include-hidden-files: true" in mlx_porting
     assert "retention-days: 30" in mlx_porting
-    assert "validate-vulkan-frontier-toolchain" in harness
+    assert 'f"validate-{toolchain_name}-frontier-toolchain"' in harness
+    assert "require_directx_toolchain" in harness
     assert '"--run-toolchains"' in harness
     assert '"--validate"' in harness
     assert "FULL_CORPUS_EXPECTED_ARTIFACT_COUNT" in harness
@@ -2156,6 +2161,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         1392,
         1394,
         1396,
+        1471,
     ):
         assert f"https://github.com/CrossGL/crosstl/issues/{tracked_issue_number}" in (
             harness
