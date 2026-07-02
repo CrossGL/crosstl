@@ -10,9 +10,12 @@ import crosstl.translator
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
 from crosstl.translator.ast import (
+    ArrayAccessNode,
     ArrayLiteralNode,
     ArrayNode,
+    AssignmentNode,
     AttributeNode,
+    BinaryOpNode,
     BlockNode,
     ExecutionModel,
     FunctionCallNode,
@@ -20,6 +23,7 @@ from crosstl.translator.ast import (
     GenericParameterNode,
     IdentifierNode,
     LiteralNode,
+    MemberAccessNode,
     NamedType,
     ParameterNode,
     PreprocessorNode,
@@ -193,7 +197,156 @@ def test_hlsl_codegen_lowers_mlx_half_aliases_and_metal_as_type():
     assert "half from_bits(min16uint bits)" in generated
     assert "return half(bits);" in generated
     assert "min16uint to_bits(half x)" in generated
-    assert "return uint(x);" in generated
+    assert "return min16uint(uint(x));" in generated
+
+
+def test_hlsl_codegen_lowers_mlx_limit_constants_and_alias_constructors():
+    ast = ShaderNode(
+        "MetalLimits",
+        ExecutionModel.COMPUTE_KERNEL,
+        functions=[
+            FunctionNode(
+                "max_float",
+                NamedType("float"),
+                [],
+                BlockNode(
+                    [ReturnNode(IdentifierNode("Limits_u3cfloat_u3e_u3a_u3amax"))]
+                ),
+            ),
+            FunctionNode(
+                "max_bfloat",
+                NamedType("bfloat16_t"),
+                [],
+                BlockNode(
+                    [ReturnNode(IdentifierNode("Limits_u3cbfloat16_t_u3e_u3a_u3amax"))]
+                ),
+            ),
+            FunctionNode(
+                "cast_bfloat",
+                NamedType("bfloat16_t"),
+                [ParameterNode("x", NamedType("float"))],
+                BlockNode(
+                    [
+                        ReturnNode(
+                            FunctionCallNode(
+                                IdentifierNode("bfloat16_t"),
+                                [IdentifierNode("x")],
+                            )
+                        )
+                    ]
+                ),
+            ),
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert "Limits_u3c" not in generated
+    assert "bfloat16_t(" not in generated
+    assert "return 3.402823466e+38;" in generated
+    assert "return half(65504.0);" in generated
+    assert "return half(x);" in generated
+
+
+def test_hlsl_codegen_lowers_generic_int64_vector_type_names():
+    ast = ShaderNode(
+        "MetalGenericVector",
+        ExecutionModel.COMPUTE_KERNEL,
+        functions=[
+            FunctionNode(
+                "make_loc",
+                NamedType("vec<int64, 2>"),
+                [
+                    ParameterNode("x", NamedType("int64_t")),
+                    ParameterNode("y", NamedType("int64_t")),
+                ],
+                BlockNode(
+                    [
+                        ReturnNode(
+                            FunctionCallNode(
+                                IdentifierNode("vec<int64, 2>"),
+                                [IdentifierNode("x"), IdentifierNode("y")],
+                            )
+                        )
+                    ]
+                ),
+            )
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert "vec<int64" not in generated
+    assert "int64_t2 make_loc(int64_t x, int64_t y)" in generated
+    assert "return int64_t2(x, y);" in generated
+
+
+def test_hlsl_codegen_casts_64_bit_resource_indices_for_dxc():
+    ast = ShaderNode(
+        "ResourceIndices",
+        ExecutionModel.COMPUTE_KERNEL,
+        functions=[
+            FunctionNode(
+                "write_key",
+                NamedType("void"),
+                [
+                    ParameterNode("out", NamedType("RWStructuredBuffer<uint>")),
+                    ParameterNode("keys", NamedType("ByteAddressBuffer")),
+                    ParameterNode("idx", NamedType("uint64_t")),
+                    ParameterNode("key_index", NamedType("int64_t")),
+                ],
+                BlockNode(
+                    [
+                        AssignmentNode(
+                            ArrayAccessNode(
+                                IdentifierNode("out"),
+                                IdentifierNode("idx"),
+                            ),
+                            FunctionCallNode(
+                                MemberAccessNode(IdentifierNode("keys"), "Load"),
+                                [IdentifierNode("key_index")],
+                            ),
+                        )
+                    ]
+                ),
+            )
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert "out[uint(idx)] = keys.Load(int(key_index));" in generated
+
+
+def test_hlsl_codegen_narrows_64_bit_initializer_to_declared_int():
+    ast = ShaderNode(
+        "NarrowInitializer",
+        ExecutionModel.COMPUTE_KERNEL,
+        functions=[
+            FunctionNode(
+                "edge",
+                NamedType("void"),
+                [ParameterNode("bytes_per_key", NamedType("uint64_t"))],
+                BlockNode(
+                    [
+                        VariableNode(
+                            "edge_bytes",
+                            NamedType("int"),
+                            BinaryOpNode(
+                                IdentifierNode("bytes_per_key"),
+                                "%",
+                                LiteralNode(4, PrimitiveType("uint")),
+                            ),
+                        )
+                    ]
+                ),
+            )
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert "int edge_bytes = int((bytes_per_key % 4u));" in generated
 
 
 def test_hlsl_codegen_lowers_metal_simd_shuffle_helpers_to_wave_reads():
@@ -2937,7 +3090,7 @@ def test_hlsl_metal_resource_pointer_offsets_apply_to_buffer_helpers(tmp_path):
     assert "RWStructuredBuffer<uint> out_ : register(u0);" in generated_code
     assert "out_ +=" not in generated_code
     assert "buffer_store" not in generated_code
-    assert "out_[((uint64_t(index) * 4) + 1)] = 7u;" in generated_code
+    assert "out_[uint(((uint64_t(index) * 4) + 1))] = 7u;" in generated_code
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
 
 

@@ -364,6 +364,12 @@ class HLSLCodeGen:
         {"constant", "device", "thread", "threadgroup"}
     )
     METAL_TYPE_ALIAS_GLOBALS = frozenset({"bfloat16_t", "float16_t"})
+    HLSL_STATIC_LIMIT_MEMBER_CONSTANTS = {
+        "Limits_u3cfloat_u3e_u3a_u3amax": "3.402823466e+38",
+        # bfloat16_t currently lowers to half in the translator's DirectX backend.
+        # Exact bfloat16 semantics remain tracked separately from HLSL validity.
+        "Limits_u3cbfloat16_t_u3e_u3a_u3amax": "half(65504.0)",
+    }
     HLSL_INTERPOLATION_MODE_MODIFIERS = {
         "flat": "nointerpolation",
         "nointerpolation": "nointerpolation",
@@ -4784,9 +4790,40 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         previous_expected_type = self.current_expression_expected_type
         self.current_expression_expected_type = self.type_name_string(expected_type)
         try:
-            return self.generate_expression(expr)
+            rendered = self.generate_expression(expr)
+            return self.hlsl_narrowing_cast_expression(
+                rendered,
+                expected_type,
+                self.expression_result_type(expr),
+            )
         finally:
             self.current_expression_expected_type = previous_expected_type
+
+    def hlsl_narrowing_cast_expression(self, rendered, expected_type, source_type):
+        expected_name = self.type_name_string(expected_type)
+        source_name = self.type_name_string(source_type)
+        if not rendered or not expected_name or not source_name:
+            return rendered
+
+        expected = self.map_type(expected_name)
+        source = self.map_type(source_name)
+        if not expected or not source or expected == source:
+            return rendered
+        signed_narrowing = {
+            ("int", "int64_t"),
+            ("int", "uint64_t"),
+            ("min16int", "int"),
+            ("min16int", "int64_t"),
+            ("min16int", "uint64_t"),
+        }
+        unsigned_narrowing = {
+            ("uint", "uint64_t"),
+            ("min16uint", "uint"),
+            ("min16uint", "uint64_t"),
+        }
+        if (expected, source) in signed_narrowing | unsigned_narrowing:
+            return f"{expected}({rendered})"
+        return rendered
 
     def is_scalar_value_type(self, vtype):
         vtype = self.type_name_string(vtype)
@@ -5165,6 +5202,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return firstbit_result_type
             if func_name in {"normalize", "reflect"} and args:
                 return self.expression_result_type(args[0])
+            constructor_type = self.hlsl_type_constructor_name(func_name)
+            if constructor_type is not None:
+                return constructor_type
             if func_name == "dot" and args:
                 return (
                     self.vector_component_type(self.expression_result_type(args[0]))
@@ -5996,6 +6036,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             array = self.generate_expression(array_expr)
             index = self.generate_expression(index_expr)
             index = self.hlsl_resource_pointer_offset_index(array, index)
+            index = self.hlsl_resource_index_expression(
+                array_expr,
+                index_expr,
+                index,
+                rendered_resource=array,
+            )
             return f"{array}[{index}]"
         elif isinstance(expr, ConstructorNode):
             enum_constructor = generate_enum_constructor_expression(self, expr)
@@ -6039,6 +6085,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if byteaddress_interlocked_call is not None:
                 return byteaddress_interlocked_call
+
+            byteaddress_member_call = self.generate_hlsl_byteaddress_member_call(
+                func_expr,
+                args,
+            )
+            if byteaddress_member_call is not None:
+                return byteaddress_member_call
 
             static_generic_call = generate_static_generic_numeric_call(self, func_name)
             if static_generic_call is not None:
@@ -6120,6 +6173,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if specialized_func_name is not None:
                 callee = specialized_func_name
                 func_name = specialized_func_name
+
+            constructor_type = self.hlsl_type_constructor_name(func_name)
+            if constructor_type is not None:
+                return self.hlsl_constructor_expression(constructor_type, args)
 
             if func_name in [
                 "float",
@@ -6449,7 +6506,35 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return f"(({left}) - (({right}) * floor(({left}) / ({right}))))"
 
     def hlsl_identifier_name(self, name):
-        return self.current_identifier_aliases.get(name, name)
+        if name in self.current_identifier_aliases:
+            return self.current_identifier_aliases[name]
+        if name in self.local_variable_types or name in self.global_variable_types:
+            return name
+        return self.HLSL_STATIC_LIMIT_MEMBER_CONSTANTS.get(name, name)
+
+    def hlsl_type_constructor_name(self, name):
+        if not isinstance(name, str):
+            return None
+        if name in getattr(self, "function_return_types", {}):
+            return None
+        if name in self.METAL_TYPE_ALIAS_GLOBALS:
+            return self.map_type(name)
+        generic_vector = self.hlsl_generic_vector_type_name(name)
+        if generic_vector is not None:
+            return generic_vector
+        return None
+
+    def hlsl_generic_vector_type_name(self, type_name):
+        if not isinstance(type_name, str):
+            return None
+        match = re.fullmatch(
+            r"(?:metal::)?vec\s*<\s*([^,>]+)\s*,\s*([234])\s*>",
+            type_name.strip(),
+        )
+        if match is None:
+            return None
+        element_type = self.map_type(match.group(1).strip())
+        return f"{element_type}{match.group(2)}"
 
     def hlsl_graphics_builtin_result_type(self, name):
         if name == "gl_FragCoord" and name in self.current_identifier_aliases:
@@ -7362,6 +7447,48 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return f"({pointer_offset} + {index})"
         return index
 
+    def hlsl_resource_index_expression(
+        self,
+        resource_expr,
+        index_expr,
+        rendered_index,
+        *,
+        rendered_resource=None,
+        resource_type=None,
+    ):
+        resource_type = resource_type or self.hlsl_buffer_helper_resource_type(
+            resource_expr
+        )
+        resource_name = self.hlsl_resource_type_name(resource_type)
+        if resource_name is None:
+            return rendered_index
+
+        source_type = self.map_type(self.expression_result_type(index_expr))
+        has_pointer_offset = (
+            rendered_resource is not None
+            and rendered_resource in self.current_hlsl_resource_pointer_offsets
+        )
+        needs_cast = has_pointer_offset or source_type in {"int64_t", "uint64_t"}
+        if not needs_cast:
+            return rendered_index
+
+        if resource_name in {
+            "ByteAddressBuffer",
+            "RWByteAddressBuffer",
+            "RasterizerOrderedByteAddressBuffer",
+        }:
+            return f"int({rendered_index})"
+        if resource_name in {
+            "Buffer",
+            "StructuredBuffer",
+            "RWBuffer",
+            "RWStructuredBuffer",
+            "RasterizerOrderedBuffer",
+            "RasterizerOrderedStructuredBuffer",
+        }:
+            return f"uint({rendered_index})"
+        return rendered_index
+
     def hlsl_value_shape_label(self, vtype):
         type_name = self.type_name_string(vtype)
         if not type_name:
@@ -7568,6 +7695,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             buffer = self.generate_expression(args[0])
             index = self.generate_expression(args[1])
             index = self.hlsl_resource_pointer_offset_index(buffer, index)
+            resource_type = self.hlsl_buffer_helper_resource_type(args[0])
+            index = self.hlsl_resource_index_expression(
+                args[0],
+                args[1],
+                index,
+                rendered_resource=buffer,
+                resource_type=resource_type,
+            )
             return f"{buffer}.{vector_load_methods[func_name]}({index})"
 
         vector_store_methods = {
@@ -7579,6 +7714,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             buffer = self.generate_expression(args[0])
             index = self.generate_expression(args[1])
             index = self.hlsl_resource_pointer_offset_index(buffer, index)
+            resource_type = self.hlsl_buffer_helper_resource_type(args[0])
+            index = self.hlsl_resource_index_expression(
+                args[0],
+                args[1],
+                index,
+                rendered_resource=buffer,
+                resource_type=resource_type,
+            )
             value = self.generate_expression(args[2])
             return f"{buffer}.{vector_store_methods[func_name]}({index}, {value})"
 
@@ -7586,6 +7729,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             buffer = self.generate_expression(args[0])
             index = self.generate_expression(args[1])
             index = self.hlsl_resource_pointer_offset_index(buffer, index)
+            resource_type = self.hlsl_buffer_helper_resource_type(args[0])
+            index = self.hlsl_resource_index_expression(
+                args[0],
+                args[1],
+                index,
+                rendered_resource=buffer,
+                resource_type=resource_type,
+            )
             return f"{buffer}.Load({index})"
         if func_name == "buffer_store" and len(args) >= 3:
             buffer = self.generate_expression(args[0])
@@ -7593,6 +7744,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             index = self.hlsl_resource_pointer_offset_index(buffer, index)
             value = self.generate_expression(args[2])
             resource_type = self.hlsl_buffer_helper_resource_type(args[0])
+            index = self.hlsl_resource_index_expression(
+                args[0],
+                args[1],
+                index,
+                rendered_resource=buffer,
+                resource_type=resource_type,
+            )
             resource_name = self.hlsl_resource_type_name(resource_type)
             if resource_name in {
                 "RWBuffer",
@@ -7641,6 +7799,50 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 None,
             ),
         }
+
+    def generate_hlsl_byteaddress_member_call(self, func_expr, args):
+        if not isinstance(func_expr, MemberAccessNode):
+            return None
+
+        method_name = str(getattr(func_expr, "member", ""))
+        if method_name not in {
+            "Load",
+            "Load2",
+            "Load3",
+            "Load4",
+            "Store",
+            "Store2",
+            "Store3",
+            "Store4",
+        }:
+            return None
+
+        object_expr = getattr(
+            func_expr, "object", getattr(func_expr, "object_expr", None)
+        )
+        resource_type = self.hlsl_buffer_helper_resource_type(object_expr)
+        resource_name = self.hlsl_resource_type_name(resource_type)
+        if resource_name not in {
+            "ByteAddressBuffer",
+            "RWByteAddressBuffer",
+            "RasterizerOrderedByteAddressBuffer",
+        }:
+            return None
+        if method_name.startswith("Store") and resource_name == "ByteAddressBuffer":
+            return None
+        if not args:
+            return None
+
+        buffer = self.generate_expression(object_expr)
+        rendered_args = [self.generate_expression(arg) for arg in args]
+        rendered_args[0] = self.hlsl_resource_index_expression(
+            object_expr,
+            args[0],
+            rendered_args[0],
+            rendered_resource=buffer,
+            resource_type=resource_type,
+        )
+        return f"{buffer}.{method_name}({', '.join(rendered_args)})"
 
     def hlsl_byteaddress_interlocked_member_call_parts(self, expr):
         if not (
@@ -23167,6 +23369,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return vtype_str
 
         if "<" in vtype_str and vtype_str.endswith(">"):
+            generic_vector = self.hlsl_generic_vector_type_name(vtype_str)
+            if generic_vector is not None:
+                return generic_vector
+
             base_type, generic_args = vtype_str.split("<", 1)
             generic_args = generic_args[:-1].strip()
             feedback_texture_types = {
