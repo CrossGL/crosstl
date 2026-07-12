@@ -347,12 +347,22 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert pointer_reinterpretation["status"] == "partial"
     assert pointer_reinterpretation["targets"] == list(module.FULL_CORPUS_TARGETS)
     assert pointer_reinterpretation["next_kernel_blocked_by"] == [
-        "https://github.com/CrossGL/crosstl/issues/1554",
+        "https://github.com/CrossGL/crosstl/issues/1555",
         "https://github.com/CrossGL/crosstl/issues/1544",
     ]
     assert set(pointer_reinterpretation["remaining_pointer_cases_blocked_by"]) == {
         "https://github.com/CrossGL/crosstl/issues/1546"
     }
+
+    callback = expected_gaps["captured_callback_status"]
+    assert callback["status"] == "partial"
+    assert callback["targets"] == list(module.FULL_CORPUS_TARGETS)
+    assert callback["remaining_callback_helpers_blocked_by"] == [
+        "https://github.com/CrossGL/crosstl/issues/1554"
+    ]
+    assert callback["next_kernel_blocked_by"] == [
+        "https://github.com/CrossGL/crosstl/issues/1555"
+    ]
 
     gemv = expected_gaps["vulkan_gemv_toolchain_status"]
     assert gemv["status"] == "passing"

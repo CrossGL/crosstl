@@ -45845,6 +45845,139 @@ def test_metal_project_materialization_concretizes_dispatch_bool_functor_helper(
     assert "dispatch_bool<" not in materialized.text
 
 
+def test_translate_project_lowers_captured_dispatch_bool_callbacks(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "dispatch_bool.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            [[kernel]] void write_flag(
+                device uint* result_data [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {
+                dispatch_bool((gid & 1u) == 0u, [&](auto flag) {
+                    if constexpr (flag.value) {
+                        result_data[gid] = 1u;
+                    } else {
+                        result_data[gid] = 0u;
+                    }
+                });
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx", "opengl", "vulkan"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 3
+    outputs = {
+        artifact["target"]: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for artifact in payload["artifacts"]
+    }
+    assert all("dispatch_bool" not in output for output in outputs.values())
+    assert_directx_compute_validates_if_available(outputs["directx"], tmp_path)
+    assert_compute_glsl_validates_if_available(outputs["opengl"], tmp_path)
+    assert_spirv_asm_validates_if_available(outputs["vulkan"], tmp_path)
+
+
+def test_translate_project_reports_unsupported_captured_callback_shape(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "dispatch_bool.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            [[kernel]] void invalid_callback(
+                device uint* output [[buffer(0)]]) {
+                dispatch_bool(true, [&]() {
+                    output[0] = 1u;
+                });
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["vulkan"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["failedCount"] == 1
+    diagnostic = next(
+        item
+        for item in payload["diagnostics"]
+        if item["code"] == "project.translate.metal-callable-unsupported"
+    )
+    assert diagnostic["missingCapabilities"] == ["metal.captured-callback-lowering"]
+    assert diagnostic["details"]["capturedCallback"] == {
+        "capture": "&",
+        "enclosingFunction": "invalid_callback",
+        "helper": "dispatch_bool",
+        "reason": "callback must declare exactly one integral-constant parameter",
+        "suggestedAction": (
+            "add a helper-specific lowering that preserves callback invocation "
+            "count, compile-time arguments, and capture mutation semantics"
+        ),
+    }
+    assert diagnostic["details"]["sourcePath"] == "dispatch_bool.metal"
+
+
+def test_translate_project_reports_callback_helper_without_semantic_lowering(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "callback.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            [[kernel]] void unknown_callback(
+                device uint* result_data [[buffer(0)]]) {
+                apply_callback([&](auto value) {
+                    result_data[0] = value.value ? 1u : 0u;
+                });
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["vulkan"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["failedCount"] == 1
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+    diagnostic = next(
+        item
+        for item in payload["diagnostics"]
+        if item["code"] == "project.translate.metal-callable-unsupported"
+    )
+    assert diagnostic["location"]["line"] == 6
+    assert diagnostic["missingCapabilities"] == ["metal.captured-callback-lowering"]
+    callback = diagnostic["details"]["capturedCallback"]
+    assert callback["helper"] == "apply_callback"
+    assert callback["capture"] == "&"
+    assert callback["enclosingFunction"] == "unknown_callback"
+    assert callback["reason"] == (
+        "the callback helper has no semantics-preserving CrossGL lowering"
+    )
+    assert "invocation count" in callback["suggestedAction"]
+
+
 def test_translate_project_metal_multi_entry_instantiations_scope_vulkan_bindings(
     tmp_path,
 ):

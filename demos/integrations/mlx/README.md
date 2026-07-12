@@ -221,11 +221,15 @@ resource can be viewed through aligned 8-, 16-, or 32-bit scalar elements;
 source pointer offsets are converted to bytes before target indexing, and the
 generated OpenGL and Vulkan artifacts pass native validators. Writable views,
 64-bit backing layouts, and incompatible address-space or alignment cases remain
-explicit diagnostics under CrossGL/crosstl#1546. With the concrete `uint32` to
-`uint8` view preserved, pinned `quantized_nax.metal` now reaches the captured
-callback representation gap tracked in CrossGL/crosstl#1554. Pointer-bearing
-aggregate propagation after that callback boundary remains tracked in
-CrossGL/crosstl#1544.
+explicit diagnostics under CrossGL/crosstl#1546. Metal `dispatch_bool` callbacks
+with one integral-constant parameter now lower to a runtime branch whose two
+callback bodies retain distinct compile-time `true` and `false` values. Nested
+dispatches expand the full Cartesian specialization and reduced DirectX,
+OpenGL, and Vulkan project fixtures pass their native validators. Other callback
+helpers, including compile-time `const_for_loop` unrolling, remain tracked in
+CrossGL/crosstl#1554. Pinned `quantized_nax.metal` now reaches contextually typed
+empty braced arguments under CrossGL/crosstl#1555; pointer-bearing aggregate
+propagation beyond that boundary remains tracked in CrossGL/crosstl#1544.
 
 ## Resolved Frontier Issues
 

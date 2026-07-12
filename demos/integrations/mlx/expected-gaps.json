@@ -57,8 +57,29 @@
       "https://github.com/CrossGL/crosstl/issues/1546"
     ],
     "next_kernel_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1554",
+      "https://github.com/CrossGL/crosstl/issues/1555",
       "https://github.com/CrossGL/crosstl/issues/1544"
+    ]
+  },
+  "captured_callback_status": {
+    "status": "partial",
+    "source": "mlx/backend/metal/kernels/quantized_nax.metal",
+    "targets": [
+      "directx",
+      "opengl",
+      "vulkan"
+    ],
+    "supported_contract": "dispatch_bool callbacks with one integral-constant parameter are expanded into runtime branches with branch-local compile-time values",
+    "native_validation": {
+      "directx": "required-on-windows-ci",
+      "opengl": "validated-reduced-fixture",
+      "vulkan": "validated-reduced-fixture"
+    },
+    "remaining_callback_helpers_blocked_by": [
+      "https://github.com/CrossGL/crosstl/issues/1554"
+    ],
+    "next_kernel_blocked_by": [
+      "https://github.com/CrossGL/crosstl/issues/1555"
     ]
   },
   "directx_toolchain_status": {
@@ -178,7 +199,8 @@
       "https://github.com/CrossGL/crosstl/issues/1376",
       "https://github.com/CrossGL/crosstl/issues/1544",
       "https://github.com/CrossGL/crosstl/issues/1546",
-      "https://github.com/CrossGL/crosstl/issues/1554"
+      "https://github.com/CrossGL/crosstl/issues/1554",
+      "https://github.com/CrossGL/crosstl/issues/1555"
     ],
     "semantic_blocked_by": [
       "https://github.com/CrossGL/crosstl/issues/1491"
@@ -224,7 +246,8 @@
     "https://github.com/CrossGL/crosstl/issues/1542",
     "https://github.com/CrossGL/crosstl/issues/1544",
     "https://github.com/CrossGL/crosstl/issues/1546",
-    "https://github.com/CrossGL/crosstl/issues/1554"
+    "https://github.com/CrossGL/crosstl/issues/1554",
+    "https://github.com/CrossGL/crosstl/issues/1555"
   ],
   "resolved_issues": [
     "https://github.com/CrossGL/crosstl/issues/1551",
