@@ -4608,6 +4608,48 @@ def test_codegen_switch_typedef_scope_spans_cases():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_parses_materialized_owner_alias_pointer_casts():
+    source = """
+        template <typename T>
+        struct Tile {
+            using elem_type = T;
+            elem_type values[4];
+
+            thread elem_type* elems() {
+                return (thread elem_type*)values;
+            }
+
+            const thread elem_type* const_elems() const {
+                return reinterpret_cast<const thread elem_type*>(values);
+            }
+        };
+
+        Tile<float> float_tile;
+        Tile<int> int_tile;
+        """
+
+    crossgl = convert(MetalPreprocessor().preprocess(source))
+    float_helper = crossgl.split("Tile_float__elems", 1)[1].split("}", 1)[0]
+    float_const_helper = crossgl.split("Tile_float__const_elems", 1)[1].split("}", 1)[0]
+    int_helper = crossgl.split("Tile_int__elems", 1)[1].split("}", 1)[0]
+    int_const_helper = crossgl.split("Tile_int__const_elems", 1)[1].split("}", 1)[0]
+
+    assert "return (float*)self.values;" in float_helper
+    assert "return (float*)self.values;" in float_const_helper
+    assert "return (int*)self.values;" in int_helper
+    assert "return (int*)self.values;" in int_const_helper
+    assert "elem_type" not in float_helper
+    assert "elem_type" not in float_const_helper
+    assert "elem_type" not in int_helper
+    assert "elem_type" not in int_const_helper
+    assert "thread float*" not in crossgl
+    assert "thread int*" not in crossgl
+    strict_ast = CrossGLParser(
+        CrossGLLexer(crossgl).get_tokens(), strict_function_bodies=True
+    ).parse()
+    assert strict_ast is not None
+
+
 def test_codegen_sizeof_dependent_typename_from_tinygrad_tile_copy():
     code = """
     template<typename ST>

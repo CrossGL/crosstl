@@ -347,7 +347,7 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert pointer_reinterpretation["status"] == "partial"
     assert pointer_reinterpretation["targets"] == list(module.FULL_CORPUS_TARGETS)
     assert pointer_reinterpretation["next_kernel_blocked_by"] == [
-        "https://github.com/CrossGL/crosstl/issues/1566",
+        "https://github.com/CrossGL/crosstl/issues/1569",
         "https://github.com/CrossGL/crosstl/issues/1544",
     ]
     assert set(pointer_reinterpretation["remaining_pointer_cases_blocked_by"]) == {
@@ -361,7 +361,7 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         "https://github.com/CrossGL/crosstl/issues/1554"
     ]
     assert callback["next_kernel_blocked_by"] == [
-        "https://github.com/CrossGL/crosstl/issues/1566",
+        "https://github.com/CrossGL/crosstl/issues/1569",
     ]
 
     compile_time_loop = expected_gaps["compile_time_loop_status"]
@@ -374,7 +374,7 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         "vulkan": "validated-reduced-fixture",
     }
     assert compile_time_loop["next_kernel_blocked_by"] == [
-        "https://github.com/CrossGL/crosstl/issues/1566",
+        "https://github.com/CrossGL/crosstl/issues/1569",
     ]
 
     template_alias = expected_gaps["template_alias_status"]
@@ -406,13 +406,42 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     ]
     assert template_alias["post_materialization_translation"] == {
         "status": "blocked-by-tracked-issue",
-        "diagnostic_code": "project.translate.crossgl-function-body-parse-failed",
-        "function": "NAXTile_float_2_2__elems",
-        "issue": "https://github.com/CrossGL/crosstl/issues/1566",
+        "diagnostic_code": "project.translate.metal-unresolved-construct",
+        "rule_label": "Metal namespace qualifier (metal::)",
+        "first_unresolved_type": "BaseNAXFrag::metal::vec<float,kElemsPerFrag>",
+        "issue": "https://github.com/CrossGL/crosstl/issues/1569",
         "artifact_status": "failed",
     }
     assert template_alias["next_kernel_blocked_by"] == [
+        "https://github.com/CrossGL/crosstl/issues/1569",
+    ]
+
+    struct_scoped_cast_alias = expected_gaps["struct_scoped_cast_alias_status"]
+    assert struct_scoped_cast_alias["status"] == "partial"
+    assert struct_scoped_cast_alias["targets"] == list(module.FULL_CORPUS_TARGETS)
+    assert struct_scoped_cast_alias["concrete_specializations"] == ["float", "int"]
+    assert struct_scoped_cast_alias["qualifier_transport"] == "retained-in-metal-ast"
+    assert struct_scoped_cast_alias["strict_crossgl_function_body_parse"] == (
+        "passing-reduced-fixture"
+    )
+    assert struct_scoped_cast_alias["native_validation"] == {
+        "directx": "required-on-windows-ci",
+        "opengl": "validated-reduced-fixture",
+        "vulkan": "validated-reduced-fixture",
+    }
+    assert struct_scoped_cast_alias["high_budget_report"] == {
+        "specialization_count": 722,
+        "unsupported_specialization_count": 0,
+        "resolved_function": "NAXTile_float_2_2__elems",
+        "prior_diagnostic_code": "project.translate.crossgl-function-body-parse-failed",
+        "next_diagnostic_code": "project.translate.metal-unresolved-construct",
+        "artifact_status": "failed",
+    }
+    assert struct_scoped_cast_alias["remaining_contract_blocked_by"] == [
         "https://github.com/CrossGL/crosstl/issues/1566",
+    ]
+    assert struct_scoped_cast_alias["next_kernel_blocked_by"] == [
+        "https://github.com/CrossGL/crosstl/issues/1569",
     ]
 
     function_local_alias = expected_gaps["function_local_alias_status"]

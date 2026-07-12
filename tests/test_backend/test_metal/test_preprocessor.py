@@ -2607,6 +2607,35 @@ def test_pointer_member_promotion_threads_pointers_through_methods():
     assert "crosstl_ptr_out[i] = crosstl_ptr_buf[i];" in output
 
 
+def test_pointer_member_promotion_resolves_owner_alias_casts():
+    code = """
+    struct Writer {
+      using elem_type = float;
+      device elem_type* output;
+
+      Writer(device elem_type* output_) : output(output_) {}
+
+      device elem_type* data() const {
+        return (device elem_type*)output;
+      }
+    };
+
+    [[kernel]] void k(device float* result [[buffer(0)]]) {
+      Writer writer(result);
+      writer.data()[0] = 1.0f;
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert (
+        "device float* Writer__data(Writer self, "
+        "device float* crosstl_ptr_output)" in output
+    )
+    assert "return (device float*)crosstl_ptr_output;" in output
+    assert "Writer__data(writer, result)" in output
+
+
 def test_pointer_member_promotion_rewrites_construction_and_calls():
     # The construction drops the pointer arguments (the scalar `8` remains) and
     # each method call forwards the construction's pointer expressions in
@@ -3112,6 +3141,93 @@ def test_preprocessor_resolves_struct_scoped_alias_in_lowered_method():
     assert "void Helper__apply__float(float value)" in output
     assert "HelperAlias::apply" not in output
     assert "Wrapper__apply" not in output
+
+
+@pytest.mark.parametrize(
+    "alias_declaration",
+    ["using elem_type = T;", "typedef T elem_type;"],
+)
+def test_preprocessor_resolves_struct_scoped_aliases_in_explicit_pointer_casts(
+    alias_declaration,
+):
+    code = """
+    template <typename T>
+    struct Tile {
+      ALIAS_DECLARATION
+      elem_type values[4];
+
+      thread elem_type* elems() {
+        return (thread elem_type*)values;
+      }
+
+      const thread elem_type* const_elems() const {
+        return reinterpret_cast<const thread elem_type*>(values);
+      }
+    };
+
+    Tile<float> float_tile;
+    Tile<int> int_tile;
+    """.replace("ALIAS_DECLARATION", alias_declaration)
+
+    output = MetalPreprocessor().preprocess(code)
+    float_helper = output.split("Tile_float__elems", 1)[1].split("}", 1)[0]
+    int_helper = output.split("Tile_int__elems", 1)[1].split("}", 1)[0]
+
+    assert "return (thread float*)self.values;" in output
+    assert "reinterpret_cast<const thread float*>(self.values)" in output
+    assert "return (thread int*)self.values;" in output
+    assert "reinterpret_cast<const thread int*>(self.values)" in output
+    assert output.count("thread elem_type*") == 4
+    assert "elem_type" not in float_helper
+    assert "thread int*" not in float_helper
+    assert "elem_type" not in int_helper
+    assert "thread float*" not in int_helper
+
+
+def test_preprocessor_preserves_local_alias_shadow_in_explicit_cast():
+    code = """
+    struct Wrapper {
+      using value_type = float;
+
+      int cast(int value) {
+        using value_type = int;
+        float owner_value = static_cast<Wrapper::value_type>(value);
+        return static_cast<value_type>(value) + int(owner_value);
+      }
+    };
+
+    Wrapper wrapper;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "using value_type = int;" in output
+    assert "static_cast<float>(value)" in output
+    assert "static_cast<value_type>(value)" in output
+
+
+def test_preprocessor_resolves_qualified_owner_alias_with_pointer_target():
+    code = """
+    template <typename T>
+    struct Tile {
+      typedef const thread T* elem_ptr;
+      T values[4];
+
+      elem_ptr elems() const {
+        return (Tile<T>::elem_ptr)values;
+      }
+    };
+
+    Tile<float> float_tile;
+    Tile<int> int_tile;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "return (const thread float*)self.values;" in output
+    assert "return (const thread int*)self.values;" in output
+    assert "Tile_float::elem_ptr" not in output
+    assert "Tile_int::elem_ptr" not in output
 
 
 def test_preprocessor_records_struct_aliases_and_method_const_qualification():

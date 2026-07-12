@@ -277,15 +277,27 @@ escapes and fold bare integral-constant parameters only when the source defines
 the verified implicit value conversion. Materialization completes with 722
 specializations and no unsupported records.
 
-Vulkan translation then reaches the shared parser and fails in
-`NAXTile_float_2_2__elems` because the explicit cast type still contains the
-struct-scoped alias `elem_type`. No Vulkan artifact is emitted. Cast alias
-canonicalization is tracked in CrossGL/crosstl#1566. Generic member calls with
-explicit type or value arguments in the shared parser remain
-tracked in CrossGL/crosstl#1555, pointer-bearing aggregate propagation remains
-tracked in CrossGL/crosstl#1544, and lowered receiver/reference semantics must
-satisfy CrossGL/crosstl#1557 before the kernel can be considered semantically
-ready.
+Concrete struct-owned `using` and `typedef` aliases are now resolved inside
+C-style and named cast targets after owner materialization. The rewrite respects
+qualified owners, lexical shadowing, concrete float and integer specializations,
+and aliases whose targets already contain pointer qualifiers. Metal cast nodes
+retain source qualifiers while exposing a canonical target type to the strict
+CrossGL function-body parser. Reduced DirectX, OpenGL, and Vulkan project
+fixtures pass their native validators.
+
+The isolated high-budget `quantized_nax.metal` run still completes 722
+specializations with no unsupported records and now advances beyond
+`NAXTile_float_2_2__elems`. Vulkan artifact inspection stops fail-closed at
+owner-qualified `metal::vec<scalar, width>` types, beginning with
+`BaseNAXFrag::metal::vec<float, kElemsPerFrag>`. No Vulkan artifact or validator
+result is claimed. Concrete generic vector canonicalization is tracked in
+CrossGL/crosstl#1569. Complete address-space, const, pointer-provenance, and
+unresolved-alias diagnostic transport remains tracked in CrossGL/crosstl#1566.
+Generic member calls with explicit type or value arguments in the shared parser
+remain tracked in CrossGL/crosstl#1555, pointer-bearing aggregate propagation
+remains tracked in CrossGL/crosstl#1544, and lowered receiver/reference semantics
+must satisfy CrossGL/crosstl#1557 before the kernel can be considered
+semantically ready.
 Lazy logical and conditional evaluation in SPIR-V remains tracked in
 CrossGL/crosstl#1560 for full-corpus semantic coverage.
 Nested returns and side-effectful compatibility arguments in pointer-preserving

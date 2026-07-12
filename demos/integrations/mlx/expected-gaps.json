@@ -57,7 +57,7 @@
       "https://github.com/CrossGL/crosstl/issues/1546"
     ],
     "next_kernel_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1566",
+      "https://github.com/CrossGL/crosstl/issues/1569",
       "https://github.com/CrossGL/crosstl/issues/1544"
     ]
   },
@@ -79,7 +79,7 @@
       "https://github.com/CrossGL/crosstl/issues/1554"
     ],
     "next_kernel_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1566"
+      "https://github.com/CrossGL/crosstl/issues/1569"
     ]
   },
   "compile_time_loop_status": {
@@ -103,7 +103,7 @@
       ]
     },
     "next_kernel_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1566"
+      "https://github.com/CrossGL/crosstl/issues/1569"
     ],
     "semantic_readiness_blocked_by": [
       "https://github.com/CrossGL/crosstl/issues/1557"
@@ -134,13 +134,49 @@
     ],
     "post_materialization_translation": {
       "status": "blocked-by-tracked-issue",
-      "diagnostic_code": "project.translate.crossgl-function-body-parse-failed",
-      "function": "NAXTile_float_2_2__elems",
-      "issue": "https://github.com/CrossGL/crosstl/issues/1566",
+      "diagnostic_code": "project.translate.metal-unresolved-construct",
+      "rule_label": "Metal namespace qualifier (metal::)",
+      "first_unresolved_type": "BaseNAXFrag::metal::vec<float,kElemsPerFrag>",
+      "issue": "https://github.com/CrossGL/crosstl/issues/1569",
       "artifact_status": "failed"
     },
     "next_kernel_blocked_by": [
+      "https://github.com/CrossGL/crosstl/issues/1569"
+    ]
+  },
+  "struct_scoped_cast_alias_status": {
+    "status": "partial",
+    "source": "mlx/backend/metal/kernels/quantized_nax.metal",
+    "targets": [
+      "directx",
+      "opengl",
+      "vulkan"
+    ],
+    "supported_contract": "concrete struct-owned using and typedef aliases in C-style and named cast targets, including qualified owner references, lexical shadowing, and alias targets that contain pointer qualifiers",
+    "concrete_specializations": [
+      "float",
+      "int"
+    ],
+    "qualifier_transport": "retained-in-metal-ast",
+    "strict_crossgl_function_body_parse": "passing-reduced-fixture",
+    "native_validation": {
+      "directx": "required-on-windows-ci",
+      "opengl": "validated-reduced-fixture",
+      "vulkan": "validated-reduced-fixture"
+    },
+    "high_budget_report": {
+      "specialization_count": 722,
+      "unsupported_specialization_count": 0,
+      "resolved_function": "NAXTile_float_2_2__elems",
+      "prior_diagnostic_code": "project.translate.crossgl-function-body-parse-failed",
+      "next_diagnostic_code": "project.translate.metal-unresolved-construct",
+      "artifact_status": "failed"
+    },
+    "remaining_contract_blocked_by": [
       "https://github.com/CrossGL/crosstl/issues/1566"
+    ],
+    "next_kernel_blocked_by": [
+      "https://github.com/CrossGL/crosstl/issues/1569"
     ]
   },
   "function_local_alias_status": {

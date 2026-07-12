@@ -32,6 +32,23 @@ QUALIFIER_TOKENS = {
     "READ_WRITE",
 }
 
+CAST_TYPE_QUALIFIER_NAMES = {
+    "constant",
+    "device",
+    "threadgroup",
+    "threadgroup_imageblock",
+    "thread",
+    "const",
+    "constexpr",
+    "static",
+    "inline",
+    "volatile",
+    "restrict",
+    "read",
+    "write",
+    "read_write",
+}
+
 TYPE_TOKENS = {
     "VOID",
     "FLOAT",
@@ -3877,10 +3894,10 @@ class MetalParser:
             require_cast_operand=True
         ):
             self.eat("LPAREN")
-            type_name, _quals = self.parse_type_specifier()
+            type_name, qualifiers = self.parse_type_specifier()
             self.eat("RPAREN")
             operand = self.parse_unary()
-            return CastNode(type_name, operand)
+            return CastNode(type_name, operand, qualifiers=qualifiers)
         if self.current_token[0] in [
             "PLUS",
             "MINUS",
@@ -4031,11 +4048,13 @@ class MetalParser:
         while True:
             if self.is_static_cast_template_call(node):
                 template_args = self.parse_template_argument_suffix()
-                target_type = self.format_generic_type_tokens(template_args)
+                target_type, qualifiers = self.split_cast_target_qualifiers(
+                    self.format_generic_type_tokens(template_args)
+                )
                 self.eat("LPAREN")
                 expression = self.parse_expression()
                 self.eat("RPAREN")
-                node = CastNode(target_type, expression)
+                node = CastNode(target_type, expression, qualifiers=qualifiers)
                 continue
             if self.is_as_type_template_call(node):
                 template_args = self.parse_template_argument_suffix()
@@ -4125,10 +4144,22 @@ class MetalParser:
 
     def parse_conversion_operator_call(self, node):
         self.eat("IDENTIFIER")
-        target_type, _qualifiers = self.parse_type_specifier()
+        target_type, qualifiers = self.parse_type_specifier()
         self.eat("LPAREN")
         self.eat("RPAREN")
-        return CastNode(target_type, node)
+        return CastNode(target_type, node, qualifiers=qualifiers)
+
+    @staticmethod
+    def split_cast_target_qualifiers(target_type):
+        remaining = str(target_type).strip()
+        qualifiers = []
+        while remaining:
+            match = re.match(r"([A-Za-z_]\w*)\b\s*", remaining)
+            if match is None or match.group(1) not in CAST_TYPE_QUALIFIER_NAMES:
+                break
+            qualifiers.append(match.group(1))
+            remaining = remaining[match.end() :]
+        return remaining, qualifiers
 
     def skip_template_disambiguator(self):
         if (

@@ -483,9 +483,10 @@ class TernaryOpNode(ASTNode):
 class CastNode(ASTNode):
     """Node representing a type cast"""
 
-    def __init__(self, target_type, expression):
+    def __init__(self, target_type, expression, qualifiers=None):
         self.target_type = target_type
         self.expression = expression
+        self.qualifiers = list(qualifiers or [])
 
     def __repr__(self):
         return f"CastNode(target_type={self.target_type}, expression={self.expression})"

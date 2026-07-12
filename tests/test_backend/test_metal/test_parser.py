@@ -345,9 +345,33 @@ def test_parse_indexed_reinterpret_cast_assignment_from_pytorch_mps_quantized():
     """
     ast = parse_ok(code)
     assignment = ast.functions[0].body[0]
+    casts = [node for node in iter_ast_nodes(assignment) if isinstance(node, CastNode)]
 
     assert isinstance(assignment, AssignmentNode)
     assert isinstance(assignment.left, ArrayAccessNode)
+    assert len(casts) == 1
+    assert casts[0].target_type == "vecT*"
+    assert casts[0].qualifiers == ["device"]
+
+
+def test_parse_reinterpret_cast_retains_pointer_qualifiers():
+    code = """
+    void aliases(thread float* values) {
+        thread float* mutable_values =
+            reinterpret_cast<thread float*>(values);
+        const thread float* const_values =
+            reinterpret_cast<const thread float*>(values);
+    }
+    """
+
+    ast = parse_ok(code)
+    casts = [node for node in iter_ast_nodes(ast) if isinstance(node, CastNode)]
+
+    assert [cast.target_type for cast in casts] == ["float*", "float*"]
+    assert [cast.qualifiers for cast in casts] == [
+        ["thread"],
+        ["const", "thread"],
+    ]
 
 
 def test_parse_global_scoped_metal_array_declaration_from_pytorch_mps_scatter():
@@ -2789,6 +2813,7 @@ def test_parse_qualified_casts_and_range_designator_from_llama_cpp():
 
     assert isinstance(cast_assignment.right, CastNode)
     assert cast_assignment.right.target_type == "block_q1_0*"
+    assert cast_assignment.right.qualifiers == ["device", "const"]
     assert designator.designators[0][0] == "range"
     assert designator.designators[0][1] == "0"
     assert designator.designators[0][2] == "r1ptg-1"
