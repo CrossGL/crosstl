@@ -29,6 +29,7 @@ from crosstl.translator.ast import (
     MeshOpNode,
     NamedType,
     PointerAccessNode,
+    PointerReinterpretNode,
     PointerType,
     PreprocessorNode,
     PrimitiveType,
@@ -67,7 +68,7 @@ def parse_code(tokens: List):
     return parser.parse()
 
 
-def test_explicit_compute_stage_entry_malformed_body_raises_parse_error():
+def test_explicit_compute_stage_entry_preserves_pointer_reinterpretation():
     code = """
     shader main {
         @compute
@@ -78,14 +79,16 @@ def test_explicit_compute_stage_entry_malformed_body_raises_parse_error():
     }
     """
 
-    with pytest.raises(CrossGLFunctionBodyParseError) as exc_info:
-        Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    function = next(func for func in ast.functions if func.name == "unpack_words")
+    declaration = function.body.statements[0]
 
-    error = exc_info.value
-    assert error.function_name == "unpack_words"
-    assert error.token_type == "IDENTIFIER"
-    assert error.token_value == "words"
-    assert error.reason == "Expected RPAREN, got IDENTIFIER 'words'"
+    assert isinstance(declaration, VariableNode)
+    assert isinstance(declaration.initial_value, PointerReinterpretNode)
+    assert declaration.initial_value.expression.name == "words"
+    target_type = declaration.initial_value.target_type
+    assert isinstance(target_type, PointerType)
+    assert target_type.pointee_type.name == "uint8"
 
 
 def test_non_entry_helper_malformed_body_raises_parse_error():

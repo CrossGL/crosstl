@@ -21,6 +21,9 @@ from .translator.codegen import (
     get_codegen,
     normalize_backend_name,
 )
+from .translator.codegen.pointer_reinterpret import (
+    validate_pointer_reinterpretation_target,
+)
 from .translator.default_arguments import lower_default_arguments
 from .translator.plugin_loader import discover_backend_plugins
 from .translator.source_registry import (
@@ -167,6 +170,7 @@ def translate(
         else:
             codegen = get_codegen(requested_backend)
             lower_default_arguments(ast)
+            validate_pointer_reinterpretation_target(ast, normalized_backend)
             generated_code = codegen.generate(ast)
     else:
         if normalized_backend in ["cgl", "crossgl"]:
@@ -214,6 +218,7 @@ def translate(
                 cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
             codegen = get_codegen(requested_backend)
             lower_default_arguments(cgl_ast)
+            validate_pointer_reinterpretation_target(cgl_ast, normalized_backend)
             generated_code = codegen.generate(cgl_ast)
 
     if (

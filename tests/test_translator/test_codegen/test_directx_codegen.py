@@ -3988,6 +3988,40 @@ def test_hlsl_resource_pointer_alias_rejects_readonly_write():
         generate_code(parse_code(tokenize_code(shader)))
 
 
+def test_hlsl_storage_pointer_reinterpret_reads_byte_lanes():
+    shader = """
+    shader StoragePointerReinterpret {
+        compute {
+            @stage_entry
+            void unpack(
+                StructuredBuffer<uint> words @binding(0),
+                RWStructuredBuffer<uint> outBytes @binding(1),
+                RWStructuredBuffer<uint> outHalves @binding(2),
+                RWStructuredBuffer<float> outFloats @binding(3),
+                uint gid @gl_GlobalInvocationID
+            ) {
+                const device uint8* bytes = (uint8*)words;
+                const device uint16* halves = (uint16*)words;
+                const device float* floats = (float*)words;
+                buffer_store(outBytes, gid, bytes[gid]);
+                buffer_store(outHalves, gid, halves[gid]);
+                buffer_store(outFloats, gid, floats[gid]);
+            }
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "words[uint(" in generated
+    assert "% 4) * 8" in generated
+    assert "& 255u" in generated
+    assert "& 65535u" in generated
+    assert "asfloat(" in generated
+    assert "PointerReinterpretNode" not in generated
+    assert "uint8*" not in generated
+
+
 def test_hlsl_default_integer_storage_image_vector_load_store_from_compiler_fixture():
     # Reduced from CrossGL-Compiler
     # tests/frontend/fixtures/StorageImageHIRShader.cgl.

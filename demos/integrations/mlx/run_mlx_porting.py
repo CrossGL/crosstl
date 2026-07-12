@@ -93,6 +93,9 @@ FULL_CORPUS_MODE = "full-corpus"
 FRONTIER_VALIDATION_TRACKED_ISSUES: tuple[str, ...] = ()
 FULL_CORPUS_TRANSLATION_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1376",
+    "https://github.com/CrossGL/crosstl/issues/1544",
+    "https://github.com/CrossGL/crosstl/issues/1546",
+    "https://github.com/CrossGL/crosstl/issues/1554",
 )
 RUNTIME_READINESS_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1388",

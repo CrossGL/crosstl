@@ -353,6 +353,42 @@ def assert_spirv_module_validates(spv_code, tmp_path, target_env=None):
     assert validate.returncode == 0, validate.stderr
 
 
+def test_spirv_storage_pointer_reinterpret_reads_byte_lanes(tmp_path):
+    source = """
+    shader StoragePointerReinterpret {
+        compute {
+            @stage_entry
+            void unpack(
+                StructuredBuffer<uint> words @binding(0),
+                RWStructuredBuffer<uint> outBytes @binding(1),
+                RWStructuredBuffer<uint> outHalves @binding(2),
+                RWStructuredBuffer<float> outFloats @binding(3),
+                uint gid @gl_GlobalInvocationID
+            ) {
+                const device uint8* bytes = (uint8*)words;
+                const device uint16* halves = (uint16*)words;
+                const device float* floats = (float*)words;
+                buffer_store(outBytes, gid, bytes[gid]);
+                buffer_store(outHalves, gid, halves[gid]);
+                buffer_store(outFloats, gid, floats[gid]);
+            }
+        }
+    }
+    """
+
+    generated = VulkanSPIRVCodeGen().generate(crosstl.translator.parse(source))
+
+    assert "OpUDiv" in generated
+    assert "OpUMod" in generated
+    assert "OpShiftRightLogical" in generated
+    assert "OpBitwiseAnd" in generated
+    assert " 65535" in generated
+    assert "OpBitcast" in generated
+    assert "PointerReinterpretNode" not in generated
+    assert "WARNING" not in generated
+    assert_spirv_module_validates(generated, tmp_path, target_env="vulkan1.1")
+
+
 class TestSpirvType:
     def test_initialization(self):
         type1 = SpirvType("float")

@@ -215,6 +215,18 @@ CrossGL/crosstl#1490 also remain absent. The gate rejects every generated
 warning, validates generated artifacts only, and makes no numerical runtime
 execution claim.
 
+Read-only scalar storage-pointer reinterpretation now has a shared AST contract
+and target lowering for DirectX, OpenGL, and Vulkan. A 32-bit scalar storage
+resource can be viewed through aligned 8-, 16-, or 32-bit scalar elements;
+source pointer offsets are converted to bytes before target indexing, and the
+generated OpenGL and Vulkan artifacts pass native validators. Writable views,
+64-bit backing layouts, and incompatible address-space or alignment cases remain
+explicit diagnostics under CrossGL/crosstl#1546. With the concrete `uint32` to
+`uint8` view preserved, pinned `quantized_nax.metal` now reaches the captured
+callback representation gap tracked in CrossGL/crosstl#1554. Pointer-bearing
+aggregate propagation after that callback boundary remains tracked in
+CrossGL/crosstl#1544.
+
 ## Resolved Frontier Issues
 
 The current reduced frontier no longer depends on the previously tracked issues:

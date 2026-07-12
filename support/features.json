@@ -3979,6 +3979,97 @@
       }
     },
     {
+      "id": "language.pointer_reinterpretation",
+      "category": "language",
+      "name": "Storage-backed pointer reinterpretation",
+      "description": "Preserve read-only 32-bit scalar storage resources through aligned 8-, 16-, and 32-bit scalar pointer views with byte-composed offsets.",
+      "support": {
+        "directx": {
+          "status": "supported",
+          "notes": "The repo-owned contract lowers read-only scalar views through typed StructuredBuffer loads, bit extraction, and bit reinterpretation. Writes, 64-bit backing layouts, and incompatible views are structured diagnostics.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_storage_pointer_reinterpret_reads_byte_lanes",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_lowers_materialized_pointer_reinterpretation",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_reinterpreted_pointer_writes"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "The repo-owned contract lowers read-only scalar views through SSBO loads, floatBitsToUint/uintBitsToFloat where required, and bitfieldExtract. Writes, 64-bit backing layouts, and incompatible views are structured diagnostics.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_storage_pointer_reinterpret_reads_byte_lanes",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_lowers_materialized_pointer_reinterpretation",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_reinterpreted_pointer_writes"
+          ]
+        },
+        "vulkan": {
+          "status": "supported",
+          "notes": "The repo-owned contract lowers read-only scalar views to byte-index composition, typed storage-buffer loads, and SPIR-V shift/mask or bitcast operations with spirv-val coverage. Writes, 64-bit backing layouts, and incompatible views are structured diagnostics.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_spirv_storage_pointer_reinterpret_reads_byte_lanes",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_lowers_materialized_pointer_reinterpretation",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_reinterpreted_pointer_writes"
+          ]
+        },
+        "cuda": {
+          "status": "diagnostic",
+          "notes": "The shared pipeline rejects pointer reinterpretation before CUDA code generation until resource-preserving target lowering is implemented.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_pointer_reinterpretation_without_target_lowering"
+          ]
+        },
+        "hip": {
+          "status": "diagnostic",
+          "notes": "The shared pipeline rejects pointer reinterpretation before HIP code generation until resource-preserving target lowering is implemented.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_pointer_reinterpretation_without_target_lowering"
+          ]
+        },
+        "metal": {
+          "status": "diagnostic",
+          "notes": "The shared pipeline rejects pointer reinterpretation before Metal target generation until the target code generator consumes the shared pointer-view node.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_pointer_reinterpretation_without_target_lowering"
+          ]
+        },
+        "mojo": {
+          "status": "diagnostic",
+          "notes": "The shared pipeline rejects pointer reinterpretation before Mojo code generation until resource-preserving target lowering is implemented.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_pointer_reinterpretation_without_target_lowering"
+          ]
+        },
+        "rust": {
+          "status": "diagnostic",
+          "notes": "The shared pipeline rejects pointer reinterpretation before Rust code generation until resource-preserving target lowering is implemented.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_pointer_reinterpretation_without_target_lowering"
+          ]
+        },
+        "slang": {
+          "status": "diagnostic",
+          "notes": "The shared pipeline rejects pointer reinterpretation before Slang code generation until resource-preserving target lowering is implemented.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_pointer_reinterpretation_without_target_lowering"
+          ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "The shared pipeline rejects storage pointer reinterpretation because WebGL has no corresponding storage-buffer contract.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_pointer_reinterpretation_without_target_lowering"
+          ]
+        },
+        "wgsl": {
+          "status": "diagnostic",
+          "notes": "The shared pipeline rejects pointer reinterpretation before WGSL code generation until resource-preserving target lowering is implemented.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_pointer_reinterpretation_without_target_lowering"
+          ]
+        }
+      }
+    },
+    {
       "id": "language.functions",
       "category": "language",
       "name": "Function declarations and calls",

@@ -44,6 +44,7 @@ from .ast import (
     NamedType,
     ParameterNode,
     PointerAccessNode,
+    PointerReinterpretNode,
     PointerType,
     PreprocessorNode,
     PrimitiveType,
@@ -3093,6 +3094,8 @@ class Parser:
             )
         if isinstance(type_node, MemberAccessNode):
             return f"{self.format_expression_path(type_node.object_expr)}.{type_node.member}"
+        if isinstance(type_node, PointerType):
+            return f"{self.format_type_argument(type_node.pointee_type)}*"
         if isinstance(type_node, FunctionType):
             params = ", ".join(
                 self.format_type_argument(param_type)
@@ -3911,7 +3914,7 @@ class Parser:
             # keeps ``(a < b)`` and ``(a).x`` out of the type parser (which would
             # otherwise try to read a generic argument list and never return).
             identifier_type = self.current_token[0] == "IDENTIFIER"
-            if identifier_type and self.peek()[0] != "RPAREN":
+            if identifier_type and self.peek()[0] not in {"RPAREN", "MULTIPLY"}:
                 restore()
                 return None
             target_type = self.parse_type()
@@ -3938,6 +3941,9 @@ class Parser:
         except Exception:
             restore()
             return None
+
+        if isinstance(target_type, PointerType):
+            return PointerReinterpretNode(operand, target_type)
 
         type_name = self.format_type_argument(target_type)
         return FunctionCallNode(IdentifierNode(type_name), [operand])

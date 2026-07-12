@@ -30,6 +30,7 @@ from ..ast import (
     MatchNode,
     MemberAccessNode,
     MeshOpNode,
+    PointerReinterpretNode,
     RangeNode,
     RayQueryOpNode,
     RayTracingOpNode,
@@ -77,6 +78,10 @@ from .image_access_contracts import (
     image_access_diagnostic_name,
     image_access_requirement_label,
     image_access_satisfies_requirement,
+)
+from .pointer_reinterpret import (
+    PointerReinterpretationError,
+    scalar_storage_layout,
 )
 
 
@@ -229,6 +234,7 @@ class VulkanSPIRVCodeGen:
         self.structured_buffer_metadata = {}
         self.storage_buffer_access_metadata = {}
         self.storage_buffer_pointer_offset_aliases = {}
+        self.storage_pointer_reinterpretations = {}
         self.pointer_offset_reset_marker_count = 0
         self.source_variable_type_names = {}
         self.uniform_block_wrapped_variables = {}
@@ -16489,6 +16495,10 @@ class VulkanSPIRVCodeGen:
             self.storage_buffer_pointer_offset_aliases
         )
         self.storage_buffer_pointer_offset_aliases = {}
+        previous_storage_pointer_reinterpretations = (
+            self.storage_pointer_reinterpretations
+        )
+        self.storage_pointer_reinterpretations = {}
         previous_generic_function_substitutions = (
             self.current_generic_function_substitutions
         )
@@ -16847,6 +16857,9 @@ class VulkanSPIRVCodeGen:
         self.resource_alias_variables.clear()
         self.storage_buffer_pointer_offset_aliases = (
             previous_storage_buffer_pointer_offset_aliases
+        )
+        self.storage_pointer_reinterpretations = (
+            previous_storage_pointer_reinterpretations
         )
         return function_id
 
@@ -17453,11 +17466,103 @@ class VulkanSPIRVCodeGen:
             source_pointer,
             node.name,
         )
+        if isinstance(initial_value, PointerReinterpretNode):
+            reinterpretation = self.storage_pointer_reinterpretation_metadata(
+                initial_value,
+                source_pointer,
+                source_storage_buffer_metadata or source_metadata,
+            )
+            self.storage_pointer_reinterpretations[alias_pointer] = reinterpretation
+            self.storage_buffer_pointer_offset_aliases[
+                self.storage_buffer_pointer_alias_key(alias_pointer)
+            ] = PointerOffsetState(
+                reinterpretation["root_pointer"],
+                None,
+                "storage_buffer",
+            )
         self.local_variables[node.name] = alias_pointer
         if alias_type_name is not None:
             self.local_variable_types[node.name] = alias_type_name
         self.resource_alias_variables.add(node.name)
         return True
+
+    def storage_pointer_reinterpretation_metadata(
+        self, expression, source_pointer, source_metadata
+    ):
+        existing = self.storage_pointer_reinterpretations.get(source_pointer)
+        source_type_name = (
+            existing["source_type"]
+            if existing is not None
+            else source_metadata.get("element_type_name")
+            or source_metadata.get("element_type").type.base_type
+        )
+        view_type_name = (
+            existing["target_type"] if existing is not None else source_type_name
+        )
+        target_type = getattr(expression.target_type, "pointee_type", None)
+        target_type_name = self.type_name_from_value(target_type)
+        source_layout = scalar_storage_layout(source_type_name)
+        view_layout = scalar_storage_layout(view_type_name)
+        target_layout = scalar_storage_layout(target_type_name)
+        if (
+            source_layout is None
+            or view_layout is None
+            or target_layout is None
+            or source_layout.bit_width != 32
+            or target_layout.bit_width not in {8, 16, 32}
+            or target_layout.kind == "floating"
+            and target_layout.bit_width != 32
+        ):
+            raise PointerReinterpretationError(
+                "SPIR-V storage pointer reinterpretation requires a 32-bit "
+                "scalar backing element and an 8-, 16-, or 32-bit scalar view",
+                source_type=source_type_name,
+                target_type=target_type_name,
+                address_space="storage",
+                alignment=target_layout.byte_width if target_layout else None,
+                access="read" if source_metadata.get("readonly") else "read_write",
+                reason="unsupported-scalar-layout",
+                source_location=getattr(expression, "source_location", None),
+            )
+
+        uint_type = self.register_primitive_type("uint")
+        offset_state = self.storage_buffer_pointer_offset_aliases.get(
+            self.storage_buffer_pointer_alias_key(source_pointer)
+        )
+        root_pointer = (
+            offset_state.root_pointer if offset_state is not None else source_pointer
+        )
+        element_offset = self.register_constant(0, uint_type)
+        if offset_state is not None and offset_state.offset_variable is not None:
+            offset_type = self.variable_value_types[offset_state.offset_variable.id]
+            element_offset = self.load_from_variable(
+                offset_state.offset_variable, offset_type
+            )
+            element_offset = self.convert_value_to_type(element_offset, uint_type)
+        if view_layout.byte_width != 1:
+            view_bytes = self.register_constant(view_layout.byte_width, uint_type)
+            element_offset = self.binary_operation(
+                "*", uint_type, element_offset, view_bytes
+            )
+        existing_byte_offset = (
+            existing.get("byte_offset") if existing is not None else None
+        )
+        if existing_byte_offset is not None:
+            element_offset = self.binary_operation(
+                "+", uint_type, existing_byte_offset, element_offset
+            )
+
+        return {
+            "source_type": source_type_name,
+            "target_type": target_type_name,
+            "source_layout": source_layout,
+            "view_layout": view_layout,
+            "target_layout": target_layout,
+            "target_type_id": self.map_crossgl_type(target_type_name),
+            "access": "read" if source_metadata.get("readonly") else "read_write",
+            "byte_offset": element_offset,
+            "root_pointer": root_pointer,
+        }
 
     def process_local_array_pointer_alias_declaration(
         self, node: VariableNode, var_type_source, var_type_name: str
@@ -17519,6 +17624,13 @@ class VulkanSPIRVCodeGen:
                 domain,
                 reset_marker,
             )
+            reinterpretation = self.storage_pointer_reinterpretations.get(
+                source_pointer
+            )
+            if reinterpretation is not None:
+                self.storage_pointer_reinterpretations[alias_pointer] = dict(
+                    reinterpretation
+                )
             return alias_pointer
 
         root_pointer = source_alias.root_pointer
@@ -17539,6 +17651,11 @@ class VulkanSPIRVCodeGen:
             alias_offset_variable,
             source_alias.domain,
         )
+        reinterpretation = self.storage_pointer_reinterpretations.get(source_pointer)
+        if reinterpretation is not None:
+            self.storage_pointer_reinterpretations[alias_pointer] = dict(
+                reinterpretation
+            )
         return alias_pointer
 
     def storage_buffer_pointer_alias_domain(self, pointer: SpirvId) -> str:
@@ -21798,6 +21915,11 @@ class VulkanSPIRVCodeGen:
         self.storage_buffer_pointer_offset_aliases[
             self.storage_buffer_pointer_alias_key(alias_pointer)
         ] = PointerOffsetState(root_pointer, offset_variable, domain)
+        reinterpretation = self.storage_pointer_reinterpretations.get(source_pointer)
+        if reinterpretation is not None:
+            self.storage_pointer_reinterpretations[alias_pointer] = dict(
+                reinterpretation
+            )
 
     def storage_buffer_pointer_alias_access(
         self, pointer: SpirvId, index: SpirvId
@@ -23147,6 +23269,8 @@ class VulkanSPIRVCodeGen:
         return references(getattr(function_node, "body", []))
 
     def variable_pointer_from_expression(self, expr) -> Optional[SpirvId]:
+        if isinstance(expr, PointerReinterpretNode):
+            return self.variable_pointer_from_expression(expr.expression)
         if isinstance(expr, IdentifierNode):
             name = expr.name
         elif isinstance(expr, VariableNode):
@@ -23702,6 +23826,21 @@ class VulkanSPIRVCodeGen:
             array_variable = self.assignable_pointer_from_expression(expr.array)
             if array_variable is None:
                 return None
+            reinterpretation = self.storage_pointer_reinterpretations.get(
+                array_variable
+            )
+            if reinterpretation is not None:
+                raise PointerReinterpretationError(
+                    "SPIR-V cannot preserve writes through a reinterpreted typed "
+                    "storage-buffer view",
+                    source_type=reinterpretation["source_type"],
+                    target_type=reinterpretation["target_type"],
+                    address_space="storage",
+                    alignment=reinterpretation["target_layout"].byte_width,
+                    access="write",
+                    reason="write-requires-byte-address-storage",
+                    source_location=getattr(expr, "source_location", None),
+                )
             if not self.validate_tessellation_patch_parameter_index(
                 array_variable, index, expr.index
             ):
@@ -25533,6 +25672,98 @@ class VulkanSPIRVCodeGen:
         self.mark_non_uniform_result(copied)
         return copied
 
+    def process_storage_pointer_reinterpret_load(self, array_expr, index):
+        if isinstance(array_expr, str):
+            name = array_expr
+        elif isinstance(array_expr, (IdentifierNode, VariableNode)):
+            name = array_expr.name
+        else:
+            return None
+        pointer = self.local_variables.get(name)
+        if pointer is None:
+            return None
+        reinterpretation = self.storage_pointer_reinterpretations.get(pointer)
+        if reinterpretation is None:
+            return None
+
+        uint_type = self.register_primitive_type("uint")
+        index = self.convert_value_to_type(index, uint_type)
+        root_pointer, element_index, _ = self.storage_buffer_pointer_alias_access(
+            pointer, index
+        )
+        element_index = self.convert_value_to_type(element_index, uint_type)
+        target_layout = reinterpretation["target_layout"]
+        source_layout = reinterpretation["source_layout"]
+
+        byte_index = element_index
+        if target_layout.byte_width != 1:
+            target_bytes = self.register_constant(target_layout.byte_width, uint_type)
+            byte_index = self.binary_operation(
+                "*", uint_type, element_index, target_bytes
+            )
+        byte_offset = reinterpretation.get("byte_offset")
+        if byte_offset is not None:
+            byte_index = self.binary_operation("+", uint_type, byte_offset, byte_index)
+
+        source_bytes = self.register_constant(source_layout.byte_width, uint_type)
+        source_index = self.binary_operation("/", uint_type, byte_index, source_bytes)
+        source_pointer = self.structured_buffer_element_pointer(
+            root_pointer, source_index, apply_pointer_offset=False
+        )
+        if source_pointer is None:
+            raise PointerReinterpretationError(
+                "SPIR-V pointer reinterpretation lost its storage-buffer backing "
+                "object before the read",
+                source_type=reinterpretation["source_type"],
+                target_type=reinterpretation["target_type"],
+                address_space="storage",
+                alignment=target_layout.byte_width,
+                access="read",
+                reason="backing-provenance-unavailable",
+            )
+
+        source_type = self.variable_value_types[source_pointer.id]
+        source_value = self.load_from_variable(source_pointer, source_type)
+        source_component = self.normalize_primitive_name(source_type.type.base_type)
+        source_bits = (
+            source_value
+            if source_component == "uint"
+            else self.bitcast_wave_value(source_value, uint_type)
+        )
+
+        target_type = reinterpretation["target_type_id"]
+        if target_layout.bit_width == 32:
+            target_component = self.normalize_primitive_name(target_type.type.base_type)
+            if target_component == "uint":
+                return source_bits
+            return self.bitcast_wave_value(source_bits, target_type)
+
+        remainder = self.binary_operation("%", uint_type, byte_index, source_bytes)
+        eight = self.register_constant(8, uint_type)
+        bit_offset = self.binary_operation("*", uint_type, remainder, eight)
+        shifted = self.binary_operation(">>", uint_type, source_bits, bit_offset)
+        mask = self.register_constant((1 << target_layout.bit_width) - 1, uint_type)
+        extracted = self.binary_operation("&", uint_type, shifted, mask)
+        if not target_layout.signed:
+            return self.convert_value_to_type(extracted, target_type)
+
+        left_shift_count = self.register_constant(
+            32 - target_layout.bit_width, uint_type
+        )
+        sign_positioned = self.binary_operation(
+            "<<", uint_type, extracted, left_shift_count
+        )
+        int_type = self.register_primitive_type("int")
+        signed_value = self.bitcast_wave_value(sign_positioned, int_type)
+        result_id = self.get_id()
+        self.emit(
+            f"%{result_id} = OpShiftRightArithmetic %{int_type.id} "
+            f"%{signed_value.id} %{left_shift_count.id}"
+        )
+        result = SpirvId(result_id, int_type.type)
+        self.value_types[result_id] = int_type
+        return self.convert_value_to_type(result, target_type)
+
     def process_expression(self, expr) -> Optional[SpirvId]:
         """Process a CrossGL expression."""
         if expr is None:
@@ -25702,6 +25933,12 @@ class VulkanSPIRVCodeGen:
                 self.emit(f"; WARNING: Failed to evaluate array access")
                 float_type = self.register_primitive_type("float")
                 return self.register_constant(0.0, float_type)
+
+            reinterpret_load = self.process_storage_pointer_reinterpret_load(
+                expr.array, index
+            )
+            if reinterpret_load is not None:
+                return reinterpret_load
 
             access, element_type = self.create_array_element_access(
                 expr.array, index, expr.index

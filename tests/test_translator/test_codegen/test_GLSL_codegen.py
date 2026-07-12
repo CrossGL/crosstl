@@ -3262,6 +3262,43 @@ def test_glsl_private_pointer_helper_rejects_conflicting_local_array_extents():
         GLSLCodeGen().generate(crosstl.translator.parse(code))
 
 
+def test_glsl_storage_pointer_reinterpret_reads_byte_lanes(tmp_path):
+    code = """
+    shader StoragePointerReinterpret {
+        compute {
+            @stage_entry
+            void unpack(
+                StructuredBuffer<uint> words @binding(0),
+                RWStructuredBuffer<uint> outBytes @binding(1),
+                RWStructuredBuffer<uint> outHalves @binding(2),
+                RWStructuredBuffer<float> outFloats @binding(3),
+                uint gid @gl_GlobalInvocationID
+            ) {
+                const device uint8* bytes = (uint8*)words;
+                const device uint16* halves = (uint16*)words;
+                const device float* floats = (float*)words;
+                buffer_store(outBytes, gid, bytes[gid]);
+                buffer_store(outHalves, gid, halves[gid]);
+                buffer_store(outFloats, gid, floats[gid]);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "bitfieldExtract(words[" in generated
+    assert "% 4) * 8" in generated
+    assert ", 8)" in generated
+    assert ", 16)" in generated
+    assert "uintBitsToFloat" in generated
+    assert "PointerReinterpretNode" not in generated
+    assert "uint8*" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "storage_pointer_reinterpret"
+    )
+
+
 def test_glsl_boolean_ternary_preserves_boolean_branch_types():
     code = """
     shader BooleanTernary {

@@ -343,6 +343,17 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         module.MLX_REDUCED_FRONTIER_SOURCES
     ) - set(module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES)
 
+    pointer_reinterpretation = expected_gaps["pointer_reinterpretation_status"]
+    assert pointer_reinterpretation["status"] == "partial"
+    assert pointer_reinterpretation["targets"] == list(module.FULL_CORPUS_TARGETS)
+    assert pointer_reinterpretation["next_kernel_blocked_by"] == [
+        "https://github.com/CrossGL/crosstl/issues/1554",
+        "https://github.com/CrossGL/crosstl/issues/1544",
+    ]
+    assert set(pointer_reinterpretation["remaining_pointer_cases_blocked_by"]) == {
+        "https://github.com/CrossGL/crosstl/issues/1546"
+    }
+
     gemv = expected_gaps["vulkan_gemv_toolchain_status"]
     assert gemv["status"] == "passing"
     assert gemv["semantic_readiness_status"] == "no-known-codegen-fallbacks"
