@@ -347,7 +347,7 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert pointer_reinterpretation["status"] == "partial"
     assert pointer_reinterpretation["targets"] == list(module.FULL_CORPUS_TARGETS)
     assert pointer_reinterpretation["next_kernel_blocked_by"] == [
-        "https://github.com/CrossGL/crosstl/issues/1555",
+        "https://github.com/CrossGL/crosstl/issues/1558",
         "https://github.com/CrossGL/crosstl/issues/1544",
     ]
     assert set(pointer_reinterpretation["remaining_pointer_cases_blocked_by"]) == {
@@ -361,7 +361,20 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         "https://github.com/CrossGL/crosstl/issues/1554"
     ]
     assert callback["next_kernel_blocked_by"] == [
-        "https://github.com/CrossGL/crosstl/issues/1555"
+        "https://github.com/CrossGL/crosstl/issues/1558"
+    ]
+
+    compile_time_loop = expected_gaps["compile_time_loop_status"]
+    assert compile_time_loop["status"] == "partial"
+    assert compile_time_loop["targets"] == list(module.FULL_CORPUS_TARGETS)
+    assert "verified integral_constant" in compile_time_loop["supported_contract"]
+    assert compile_time_loop["native_validation"] == {
+        "directx": "generated-reduced-fixture-dxc-not-run",
+        "opengl": "blocked-by-tracked-issue",
+        "vulkan": "validated-reduced-fixture",
+    }
+    assert compile_time_loop["next_kernel_blocked_by"] == [
+        "https://github.com/CrossGL/crosstl/issues/1558"
     ]
 
     gemv = expected_gaps["vulkan_gemv_toolchain_status"]

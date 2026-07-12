@@ -11,6 +11,7 @@ from ..ast import (
     ArrayNode,
     AssignmentNode,
     BinaryOpNode,
+    BlockNode,
     BreakNode,
     ConstantNode,
     ConstructorNode,
@@ -14291,70 +14292,6 @@ class VulkanSPIRVCodeGen:
             function_node
         ) or self.function_has_aliasing_array_parameters(function_node)
 
-    def functions_for_local_constant_collection(self, ast):
-        """Return every function whose body may declare local int constants."""
-        functions = []
-        seen = set()
-
-        def add(func):
-            if func is None or id(func) in seen:
-                return
-            seen.add(id(func))
-            functions.append(func)
-
-        for func in getattr(ast, "functions", []) or []:
-            add(func)
-        for stage in (getattr(ast, "stages", None) or {}).values():
-            for func in getattr(stage, "local_functions", []) or []:
-                add(func)
-            add(getattr(stage, "entry_point", None))
-        return functions
-
-    def collect_local_int_constants(self, ast) -> dict:
-        """Resolve function-local compile-time integer constants by name.
-
-        Threadgroup reduction arrays in kernels such as softmax/rms_norm are
-        sized by a function-local ``constexpr int`` (e.g.
-        ``constexpr int SIMD_SIZE = 32;``). Unlike module-scope constants these
-        never reach ``ast.constants``, so their names must be resolved here for
-        an array-dimension expression like ``float[SIMD_SIZE]`` to lower to a
-        fixed-size array instead of collapsing to a runtime array (and, in turn,
-        to a scalar). Names that resolve to conflicting values across functions
-        are dropped so an ambiguous size is never substituted.
-        """
-        integer_type_names = {"int", "uint", "short", "ushort", "long", "ulong"}
-        resolved: dict = {}
-        conflicting: set = set()
-        for function_node in self.functions_for_local_constant_collection(ast):
-            for node in self.walk_ast_nodes(getattr(function_node, "body", [])):
-                if not isinstance(node, VariableNode):
-                    continue
-                name = getattr(node, "name", None)
-                if not name or name in conflicting:
-                    continue
-                qualifiers = {
-                    str(q).lower() for q in getattr(node, "qualifiers", []) or []
-                }
-                if not qualifiers & {"const", "constexpr", "constant"}:
-                    continue
-                declared = self.type_name_from_value(
-                    getattr(node, "var_type", getattr(node, "vtype", None))
-                )
-                if declared not in integer_type_names:
-                    continue
-                value = evaluate_literal_int_expression(
-                    getattr(node, "initial_value", None), resolved
-                )
-                if value is None:
-                    continue
-                existing = resolved.get(name)
-                if existing is not None and existing != value:
-                    resolved.pop(name, None)
-                    conflicting.add(name)
-                    continue
-                resolved[name] = value
-        return resolved
-
     def format_array_size(self, size, constants=None):
         if size is None:
             return None
@@ -14391,45 +14328,6 @@ class VulkanSPIRVCodeGen:
             if literal_value is not None:
                 resolved[name] = literal_value
         return resolved
-
-    def collect_function_local_int_constants(self, function_node) -> dict:
-        """Collect unambiguous integer constants within one function scope."""
-        integer_type_names = {"int", "uint", "short", "ushort", "long", "ulong"}
-        resolved = dict(self.literal_int_constants)
-        for name in self.current_function_literal_int_constant_shadows:
-            resolved.pop(name, None)
-        resolved.update(self.current_generic_literal_int_constants())
-        local_names = set()
-        conflicting = set()
-        for node in self.walk_ast_nodes(getattr(function_node, "body", [])):
-            if not isinstance(node, VariableNode):
-                continue
-            name = getattr(node, "name", None)
-            if not name or name in conflicting:
-                continue
-            qualifiers = {
-                str(qualifier).lower()
-                for qualifier in getattr(node, "qualifiers", []) or []
-            }
-            if not qualifiers & {"const", "constexpr", "constant"}:
-                continue
-            declared = self.type_name_from_value(
-                getattr(node, "var_type", getattr(node, "vtype", None))
-            )
-            if declared not in integer_type_names:
-                continue
-            value = evaluate_literal_int_expression(
-                getattr(node, "initial_value", None), resolved
-            )
-            if value is None:
-                continue
-            if name in local_names and resolved.get(name) != value:
-                resolved.pop(name, None)
-                conflicting.add(name)
-                continue
-            local_names.add(name)
-            resolved[name] = value
-        return {name: resolved[name] for name in local_names if name in resolved}
 
     def unresolved_fixed_array_extent(self, type_value) -> Optional[str]:
         """Return the first non-empty array extent that is not compile-time known."""
@@ -16516,9 +16414,7 @@ class VulkanSPIRVCodeGen:
         previous_function_literal_int_constants = (
             self.current_function_literal_int_constants
         )
-        self.current_function_literal_int_constants = (
-            self.collect_function_local_int_constants(function_node)
-        )
+        self.current_function_literal_int_constants = {}
         return_type = self.map_crossgl_type(function_node.return_type)
         self.function_nodes[function_node.name] = function_node
         previous_return_type = self.current_return_type
@@ -16865,6 +16761,9 @@ class VulkanSPIRVCodeGen:
 
     def process_statements(self, statements):
         """Process a list of CrossGL statements."""
+        if isinstance(statements, BlockNode):
+            self.process_block_statement(statements)
+            return
         if hasattr(statements, "statements"):
             stmt_list = statements.statements
         elif isinstance(statements, list):
@@ -16905,6 +16804,8 @@ class VulkanSPIRVCodeGen:
             self.process_break(stmt)
         elif isinstance(stmt, ContinueNode):
             self.process_continue(stmt)
+        elif isinstance(stmt, BlockNode):
+            self.process_block_statement(stmt)
         elif isinstance(stmt, FunctionCallNode):
             if self.process_fragment_discard_statement(stmt):
                 return
@@ -16931,6 +16832,67 @@ class VulkanSPIRVCodeGen:
                     self.create_return()
             else:
                 self.process_expression(expression)
+
+    def local_declaration_scope_state(self) -> dict:
+        """Capture name and pointer-alias state owned by a lexical scope."""
+        return {
+            "local_variables": self.local_variables.copy(),
+            "local_variable_types": self.local_variable_types.copy(),
+            "named_constants": self.named_constants.copy(),
+            "precise_local_variables": set(self.precise_local_variables),
+            "resource_alias_variables": set(self.resource_alias_variables),
+            "literal_int_constants": self.current_function_literal_int_constants.copy(),
+            "literal_int_constant_shadows": set(
+                self.current_function_literal_int_constant_shadows
+            ),
+            "pointer_offset_aliases": self.storage_buffer_pointer_offset_aliases.copy(),
+            "pointer_reinterpretations": self.storage_pointer_reinterpretations.copy(),
+        }
+
+    def restore_local_declaration_scope_state(self, state: dict):
+        current_pointer_offset_aliases = self.storage_buffer_pointer_offset_aliases
+        current_pointer_reinterpretations = self.storage_pointer_reinterpretations
+        visible_pointers = {
+            *state["local_variables"].values(),
+            *self.global_variables.values(),
+            *self.stage_global_variables.values(),
+        }
+        self.local_variables = state["local_variables"]
+        self.local_variable_types = state["local_variable_types"]
+        self.named_constants = state["named_constants"]
+        self.precise_local_variables = state["precise_local_variables"]
+        self.resource_alias_variables = state["resource_alias_variables"]
+        self.current_function_literal_int_constants = state["literal_int_constants"]
+        self.current_function_literal_int_constant_shadows = state[
+            "literal_int_constant_shadows"
+        ]
+        self.storage_buffer_pointer_offset_aliases = dict(
+            state["pointer_offset_aliases"]
+        )
+        self.storage_buffer_pointer_offset_aliases.update(
+            {
+                pointer: offset
+                for pointer, offset in current_pointer_offset_aliases.items()
+                if pointer in visible_pointers
+            }
+        )
+        self.storage_pointer_reinterpretations = dict(
+            state["pointer_reinterpretations"]
+        )
+        self.storage_pointer_reinterpretations.update(
+            {
+                pointer: metadata
+                for pointer, metadata in current_pointer_reinterpretations.items()
+                if pointer in visible_pointers
+            }
+        )
+
+    def process_block_statement(self, block: BlockNode):
+        previous_state = self.local_declaration_scope_state()
+        try:
+            self.process_statements(block.statements)
+        finally:
+            self.restore_local_declaration_scope_state(previous_state)
 
     def process_fragment_discard_statement(self, expr) -> bool:
         """Lower CrossGL/GLSL/HLSL fragment discard statements to SPIR-V."""
@@ -17263,6 +17225,8 @@ class VulkanSPIRVCodeGen:
         var_type_source = getattr(node, "var_type", getattr(node, "vtype", "float"))
         storage_class = self.local_variable_storage_class(node)
         self.current_function_literal_int_constant_shadows.add(node.name)
+        self.current_function_literal_int_constants.pop(node.name, None)
+        self.register_function_local_int_constant(node, var_type_source)
         if self.type_name_from_value(var_type_source) == "auto":
             var_type_source = None
         var_type_name = self.type_name_from_value(var_type_source)
@@ -17376,6 +17340,28 @@ class VulkanSPIRVCodeGen:
                     )
                 if rhs_value is not None:
                     self.store_to_variable(var_id, rhs_value)
+
+    def register_function_local_int_constant(self, node, var_type_source):
+        """Register a visible local integer constant at its declaration point."""
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        if not qualifiers & {"const", "constexpr", "constant"}:
+            return
+
+        declared_type = self.normalize_primitive_name(
+            self.type_name_from_value(var_type_source)
+        )
+        if declared_type not in self.INTEGER_TYPE_NAMES:
+            return
+
+        value = evaluate_literal_int_expression(
+            getattr(node, "initial_value", None),
+            self.active_literal_int_constants(),
+        )
+        if value is not None:
+            self.current_function_literal_int_constants[node.name] = int(value)
 
     def local_variable_storage_class(self, node: VariableNode) -> str:
         metadata = self.declaration_metadata_names(node)
@@ -20784,10 +20770,122 @@ class VulkanSPIRVCodeGen:
             return None
         return self.default_value_for_type(return_type)
 
+    def nested_inline_return_node(self, function_node):
+        visited = set()
+
+        def find_nested_return(value):
+            if value is None or isinstance(value, (str, int, float, bool)):
+                return None
+            if isinstance(value, ReturnNode):
+                return value
+            if isinstance(value, dict):
+                for child in value.values():
+                    nested_return = find_nested_return(child)
+                    if nested_return is not None:
+                        return nested_return
+                return None
+            if isinstance(value, (list, tuple, set)):
+                for child in value:
+                    nested_return = find_nested_return(child)
+                    if nested_return is not None:
+                        return nested_return
+                return None
+
+            value_id = id(value)
+            if value_id in visited:
+                return None
+            visited.add(value_id)
+
+            if isinstance(value, IfNode):
+                condition_has_name = any(
+                    isinstance(node, (IdentifierNode, VariableNode))
+                    for node in self.walk_ast_nodes(value.if_condition)
+                )
+                literal_condition = (
+                    None
+                    if condition_has_name
+                    else evaluate_literal_int_expression(value.if_condition, {})
+                )
+                if literal_condition is not None:
+                    selected = (
+                        value.if_body if literal_condition != 0 else value.else_body
+                    )
+                    return find_nested_return(selected)
+                nested_return = find_nested_return(value.if_body)
+                if nested_return is not None:
+                    return nested_return
+                return find_nested_return(value.else_body)
+
+            if not hasattr(value, "__dict__"):
+                return None
+            for child in vars(value).values():
+                nested_return = find_nested_return(child)
+                if nested_return is not None:
+                    return nested_return
+            return None
+
+        body = getattr(function_node, "body", [])
+        statements = (
+            body.statements
+            if isinstance(body, BlockNode)
+            else body if isinstance(body, list) else [body]
+        )
+        for statement in statements:
+            if isinstance(statement, ReturnNode):
+                continue
+            nested_return = find_nested_return(statement)
+            if nested_return is not None:
+                return nested_return
+        return None
+
+    def validate_inline_function_returns(self, function_node, call_node=None):
+        nested_return = self.nested_inline_return_node(function_node)
+        if nested_return is None:
+            return
+
+        function_name = getattr(function_node, "name", "unknown")
+        source_location = getattr(nested_return, "source_location", None) or getattr(
+            call_node, "source_location", None
+        )
+        raise UnsupportedSPIRVFeatureError(
+            "nested-return-storage-buffer-function-inline",
+            "SPIR-V pointer-preserving function inlining requires returns to be "
+            f"top-level statements; helper '{function_name}' contains a nested "
+            "return",
+            missing_capabilities=("spirv.nested_return_storage_buffer_function",),
+            source_location=source_location,
+        )
+
+    def validate_skipped_storage_buffer_call_arguments(
+        self, function_node, call_args, match, call_node=None
+    ):
+        if match is None:
+            return
+
+        arguments = list(call_args or [])
+        function_name = getattr(function_node, "name", "unknown")
+        for argument_index in match["skipped_arg_indices"]:
+            argument = arguments[argument_index]
+            if self.side_effect_free_call_argument(argument):
+                continue
+            source_location = getattr(argument, "source_location", None) or getattr(
+                call_node, "source_location", None
+            )
+            raise UnsupportedSPIRVFeatureError(
+                "side-effectful-skipped-storage-buffer-call-argument",
+                "SPIR-V ordered argument alignment cannot omit side-effectful "
+                f"argument {argument_index + 1} from call to '{function_name}'",
+                missing_capabilities=(
+                    "spirv.storage_buffer_call_argument_alignment_side_effect",
+                ),
+                source_location=source_location,
+            )
+
     def inline_storage_buffer_function_call(
         self, function_node, call_args, call_node=None
     ):
         func_name = getattr(function_node, "name", "unknown")
+        self.validate_inline_function_returns(function_node, call_node)
         if not self.validate_function_storage_buffer_access_arguments(
             function_node, call_args
         ):
@@ -20795,6 +20893,9 @@ class VulkanSPIRVCodeGen:
 
         match, rejection_reason = self.storage_buffer_candidate_call_match(
             function_node, call_args
+        )
+        self.validate_skipped_storage_buffer_call_arguments(
+            function_node, call_args, match, call_node
         )
         if match is None:
             parameters, effective_call_args = (
@@ -20833,9 +20934,7 @@ class VulkanSPIRVCodeGen:
                 missing_capabilities=("spirv.recursive_storage_buffer_function",),
             )
 
-        previous_locals = self.local_variables.copy()
-        previous_precise_locals = set(self.precise_local_variables)
-        previous_resource_alias_variables = set(self.resource_alias_variables)
+        previous_declaration_state = self.local_declaration_scope_state()
         previous_return_type = self.current_return_type
         previous_generic_type_substitutions = self.current_generic_type_substitutions
         generic_type_substitutions = self.generic_storage_function_type_bindings(
@@ -20851,20 +20950,12 @@ class VulkanSPIRVCodeGen:
         self.current_generic_function_substitutions = (
             getattr(function_node, "_generic_substitutions", {}) or {}
         )
-        previous_function_literal_int_constant_shadows = (
-            self.current_function_literal_int_constant_shadows
-        )
         self.current_function_literal_int_constant_shadows = {
             param.name
             for param in self.function_parameters(function_node)
             if getattr(param, "name", None)
         }
-        previous_function_literal_int_constants = (
-            self.current_function_literal_int_constants
-        )
-        self.current_function_literal_int_constants = (
-            self.collect_function_local_int_constants(function_node)
-        )
+        self.current_function_literal_int_constants = {}
         self.inline_storage_buffer_call_stack.append((function_key, func_name))
 
         try:
@@ -20872,6 +20963,12 @@ class VulkanSPIRVCodeGen:
                 function_node, call_args
             ):
                 param_name = getattr(param, "name", f"param{index}")
+                if not self.function_parameter_has_reachable_use(
+                    function_node, param_name
+                ):
+                    if not self.side_effect_free_call_argument(arg):
+                        self.process_call_argument(func_name, arg, index)
+                    continue
                 storage_buffer_type_name = self.storage_buffer_parameter_type_name(
                     param
                 )
@@ -20973,21 +21070,13 @@ class VulkanSPIRVCodeGen:
             return self.default_value_for_function(function_node)
         finally:
             self.inline_storage_buffer_call_stack.pop()
-            self.local_variables = previous_locals
-            self.precise_local_variables = previous_precise_locals
-            self.resource_alias_variables = previous_resource_alias_variables
+            self.restore_local_declaration_scope_state(previous_declaration_state)
             self.current_return_type = previous_return_type
             self.current_generic_type_substitutions = (
                 previous_generic_type_substitutions
             )
             self.current_generic_function_substitutions = (
                 previous_generic_function_substitutions
-            )
-            self.current_function_literal_int_constants = (
-                previous_function_literal_int_constants
-            )
-            self.current_function_literal_int_constant_shadows = (
-                previous_function_literal_int_constant_shadows
             )
 
     def inline_function_body(self, function_node) -> Optional[SpirvId]:
@@ -23267,6 +23356,73 @@ class VulkanSPIRVCodeGen:
             return any(references(child) for child in vars(value).values())
 
         return references(getattr(function_node, "body", []))
+
+    def side_effect_free_call_argument(self, expression) -> bool:
+        if expression is None or isinstance(
+            expression, (bool, int, float, str, ConstantNode, LiteralNode)
+        ):
+            return True
+        if isinstance(expression, (IdentifierNode, VariableNode)):
+            return True
+        if isinstance(expression, MemberAccessNode):
+            return self.side_effect_free_call_argument(expression.object)
+        if isinstance(expression, ArrayAccessNode):
+            return self.side_effect_free_call_argument(
+                expression.array
+            ) and self.side_effect_free_call_argument(expression.index)
+        if isinstance(expression, BinaryOpNode):
+            return self.side_effect_free_call_argument(
+                expression.left
+            ) and self.side_effect_free_call_argument(expression.right)
+        if isinstance(expression, UnaryOpNode):
+            return expression.op not in {"++", "--"} and (
+                self.side_effect_free_call_argument(expression.operand)
+            )
+        if isinstance(expression, TernaryOpNode):
+            return all(
+                self.side_effect_free_call_argument(part)
+                for part in (
+                    expression.condition,
+                    expression.true_expr,
+                    expression.false_expr,
+                )
+            )
+        if isinstance(expression, ArrayLiteralNode):
+            return all(
+                self.side_effect_free_call_argument(element)
+                for element in expression.elements
+            )
+        if isinstance(expression, ConstructorNode):
+            return all(
+                self.side_effect_free_call_argument(argument)
+                for argument in list(expression.arguments) + list(
+                    expression.named_arguments.values()
+                )
+            )
+        if isinstance(expression, FunctionCallNode):
+            callee_name = self.function_call_name(expression)
+            if not isinstance(callee_name, str) or self.has_function_reference(
+                callee_name
+            ):
+                return False
+            normalized_name = self.normalize_primitive_name(callee_name)
+            scalar_constructor = normalized_name in {
+                "bool",
+                "float",
+                "double",
+                self.BFLOAT16_TYPE_NAME,
+                *self.INTEGER_TYPE_NAMES,
+            }
+            vector_constructor = (
+                self.vector_component_type_and_count(callee_name) is not None
+            )
+            if not scalar_constructor and not vector_constructor:
+                return False
+            return all(
+                self.side_effect_free_call_argument(argument)
+                for argument in list(getattr(expression, "args", []) or [])
+            )
+        return False
 
     def variable_pointer_from_expression(self, expr) -> Optional[SpirvId]:
         if isinstance(expr, PointerReinterpretNode):
@@ -27924,8 +28080,6 @@ class VulkanSPIRVCodeGen:
         self.literal_int_constants = collect_literal_int_constants(
             literal_integer_declarations
         )
-        for name, value in self.collect_local_int_constants(ast).items():
-            self.literal_int_constants.setdefault(name, value)
 
         float_type = self.primitive_types["float"]
         for i in range(2, 5):

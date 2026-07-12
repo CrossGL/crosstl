@@ -5797,3 +5797,86 @@ def test_codegen_rejects_ambiguous_namespaced_static_constant_owner():
         ),
     ):
         convert(code)
+
+
+def test_const_for_loop_nonzero_indices_reach_vulkan_stores(tmp_path):
+    source = tmp_path / "const_for_loop.metal"
+    source.write_text("""
+        template <typename T, T v>
+        struct integral_constant { static constexpr T value = v; };
+        template <int Value>
+        using Int = integral_constant<int, Value>;
+        template <int start, int stop, int step, typename F>
+        constexpr void const_for_loop(F f) {
+          if constexpr (start < stop) {
+            constexpr auto index = Int<start>{};
+            f(index);
+            const_for_loop<start + step, stop, step, F>(f);
+          }
+        }
+        template <typename T, T lhs, typename U, U rhs>
+        constexpr auto operator*(
+            integral_constant<T, lhs>, integral_constant<U, rhs>) {
+          return integral_constant<decltype(lhs * rhs), lhs * rhs>{};
+        }
+
+        struct Writer {
+          template <typename Row, typename Col>
+          static void store(device int* out, Row row, Col col) {
+            out[row.value + col.value] = row.value + col.value;
+          }
+        };
+        struct Tile {
+          template <typename U>
+          void run(device U* out) {
+            const_for_loop<0, 2, 1>([&](auto row) {
+              const_for_loop<0, 2, 1>([&](auto col) {
+                Writer::store(out, row * Int<4>{}, col * Int<1>{});
+              });
+            });
+          }
+        };
+        kernel void write_indices(device int* out [[buffer(0)]]) {
+          Tile tile;
+          tile.run(out);
+        }
+        """)
+
+    spirv = crosstl.translate(str(source), backend="vulkan", format_output=False)
+
+    assert spirv.count("OpStore") == 4
+    constant_ids = {
+        int(value): result_id
+        for result_id, value in re.findall(
+            r"^(%\d+) = OpConstant %\d+ (-?\d+)$", spirv, re.MULTILINE
+        )
+    }
+    assert {0, 1, 4} <= constant_ids.keys()
+    for left, right in ((0, 0), (0, 1), (4, 0), (4, 1)):
+        operation = re.compile(
+            rf"^%\d+ = OpIAdd %\d+ {re.escape(constant_ids[left])} "
+            rf"{re.escape(constant_ids[right])}$",
+            re.MULTILINE,
+        )
+        assert len(operation.findall(spirv)) == 2
+    assert "WARNING" not in spirv
+
+    spirv_as = shutil.which("spirv-as")
+    spirv_val = shutil.which("spirv-val")
+    if spirv_as is None or spirv_val is None:
+        return
+    assembly = tmp_path / "const_for_loop.spvasm"
+    binary = tmp_path / "const_for_loop.spv"
+    assembly.write_text(spirv)
+    subprocess.run(
+        [spirv_as, "--target-env", "vulkan1.1", str(assembly), "-o", str(binary)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [spirv_val, "--target-env", "vulkan1.1", str(binary)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )

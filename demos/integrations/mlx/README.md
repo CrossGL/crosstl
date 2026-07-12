@@ -226,10 +226,34 @@ with one integral-constant parameter now lower to a runtime branch whose two
 callback bodies retain distinct compile-time `true` and `false` values. Nested
 dispatches expand the full Cartesian specialization and reduced DirectX,
 OpenGL, and Vulkan project fixtures pass their native validators. Other callback
-helpers, including compile-time `const_for_loop` unrolling, remain tracked in
-CrossGL/crosstl#1554. Pinned `quantized_nax.metal` now reaches contextually typed
-empty braced arguments under CrossGL/crosstl#1555; pointer-bearing aggregate
-propagation beyond that boundary remains tracked in CrossGL/crosstl#1544.
+helpers remain tracked in CrossGL/crosstl#1554. Concrete `const_for_loop`
+callbacks now expand in source order when all three bounds are integral, the
+callback has reference capture and one `auto` parameter, and its body has no
+callback-local control transfer. Expansion is enabled only when the source
+defines the recognized `integral_constant`, `Int`, recursive loop, and arithmetic
+operator contracts; unrelated helpers with the same names remain opaque. Nested
+loops preserve exact
+`integral_constant<int, N>` argument types; unresolved or unsafe callbacks remain
+opaque and fail through the existing structured materialization path. A reduced
+Vulkan fixture preserves four stores at indices `0`, `1`, `4`, and `5`, then
+passes `spirv-as` and `spirv-val`. OpenGL expected-type propagation for the same
+aggregate call arguments remains tracked in CrossGL/crosstl#1559.
+
+An isolated high-budget `quantized_nax.metal` Vulkan project run now expands the
+concrete NAX tile callbacks, infers vector-component bounds such as
+`src_tile_dims.y`, and accepts pointer offsets containing promoted small-integer
+arithmetic. The first remaining translation blocker is function-local constant
+resolution before nested struct materialization: `NAXTile<T, BR, BC>` is still
+discovered as the symbolic `NAXTile_float_BR_BC` specialization, tracked in
+CrossGL/crosstl#1558. Generic member calls with explicit type or value arguments
+in the shared parser remain tracked in CrossGL/crosstl#1555, pointer-bearing
+aggregate propagation remains tracked in CrossGL/crosstl#1544, and lowered
+receiver/reference semantics must satisfy CrossGL/crosstl#1557 before the kernel
+can be considered semantically ready. Lazy logical and conditional evaluation in
+SPIR-V remains tracked in CrossGL/crosstl#1560 for full-corpus semantic coverage.
+Nested returns and side-effectful compatibility arguments in pointer-preserving
+SPIR-V inlining now fail explicitly; complete lowering remains tracked in
+CrossGL/crosstl#1561 and CrossGL/crosstl#1562.
 
 ## Resolved Frontier Issues
 
