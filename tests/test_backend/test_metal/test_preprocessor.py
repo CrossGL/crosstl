@@ -3352,6 +3352,499 @@ def test_preprocessor_materializes_static_template_helper_from_concrete_method()
     assert output.count("load(src, values)") == 1
 
 
+_INTEGRAL_CONSTANT_TEST_CONTRACT = """
+    template <typename T, T v>
+    struct integral_constant {
+      static constexpr T value = v;
+    };
+
+    template <int Value>
+    using Int = integral_constant<int, Value>;
+
+    template <int start, int stop, int step, typename F>
+    constexpr void const_for_loop(F f) {
+      if constexpr (start < stop) {
+        constexpr auto index = Int<start>{};
+        f(index);
+        const_for_loop<start + step, stop, step, F>(f);
+      }
+    }
+"""
+
+_INTEGRAL_CONSTANT_MULTIPLY_CONTRACT = """
+    template <typename T, T lhs, typename U, U rhs>
+    constexpr auto operator*(
+        integral_constant<T, lhs>, integral_constant<U, rhs>) {
+      return integral_constant<decltype(lhs * rhs), lhs * rhs>{};
+    }
+"""
+
+
+def _const_for_loop_preprocessor(*, with_multiply=True, **kwargs):
+    preprocessor = MetalPreprocessor(**kwargs)
+    contract = _INTEGRAL_CONSTANT_TEST_CONTRACT
+    if with_multiply:
+        contract += _INTEGRAL_CONSTANT_MULTIPLY_CONTRACT
+    preprocessor._configure_integral_constant_contracts(contract)
+    return preprocessor
+
+
+def test_const_for_loop_requires_verified_helper_contract():
+    source = "const_for_loop<0, 2, 1>([&](auto index) { use(index.value); });"
+
+    assert (
+        MetalPreprocessor()._lower_concrete_const_for_loop_callbacks(source) == source
+    )
+
+    different_helper = _INTEGRAL_CONSTANT_TEST_CONTRACT.replace(
+        "if constexpr (start < stop)", "if constexpr (start <= stop)"
+    )
+    preprocessor = MetalPreprocessor()
+    preprocessor._configure_integral_constant_contracts(different_helper)
+
+    assert not preprocessor._const_for_loop_contract_verified
+    assert preprocessor._lower_concrete_const_for_loop_callbacks(source) == source
+
+
+def test_const_for_loop_preserves_qualified_helper_calls():
+    source = """other::const_for_loop<0, 2, 1>([&](auto row) {
+      const_for_loop<0, 2, 1>([&](auto col) { use(row.value, col.value); });
+    });"""
+
+    output = _const_for_loop_preprocessor()._lower_concrete_const_for_loop_callbacks(
+        source
+    )
+
+    assert output == source
+
+
+def test_const_for_loop_requires_verified_int_alias_contract():
+    source = "const_for_loop<0, 2, 1>([&](auto index) { use(index.value); });"
+    unrelated_int = _INTEGRAL_CONSTANT_TEST_CONTRACT.replace(
+        "using Int = integral_constant<int, Value>;",
+        "struct Int { static constexpr int value = Value + 1; };",
+    )
+    preprocessor = MetalPreprocessor()
+    preprocessor._configure_integral_constant_contracts(unrelated_int)
+
+    assert not preprocessor._int_alias_contract_verified
+    assert not preprocessor._const_for_loop_contract_verified
+    assert preprocessor._lower_concrete_const_for_loop_callbacks(source) == source
+
+    verified = _const_for_loop_preprocessor()
+    assert verified._integral_constant_type_parts("other::Int<4>") is None
+    assert (
+        verified._integral_constant_type_parts("other::integral_constant<int, 4>")
+        is None
+    )
+
+
+def test_const_for_loop_requires_verified_integral_constant_value_contract():
+    source = "const_for_loop<0, 2, 1>([&](auto index) { use(index.value); });"
+    unrelated_constant = _INTEGRAL_CONSTANT_TEST_CONTRACT.replace(
+        "static constexpr T value = v;", "static constexpr T value = v + 1;"
+    )
+    preprocessor = MetalPreprocessor()
+    preprocessor._configure_integral_constant_contracts(unrelated_constant)
+
+    assert not preprocessor._integral_constant_contract_verified
+    assert not preprocessor._const_for_loop_contract_verified
+    assert preprocessor._lower_concrete_const_for_loop_callbacks(source) == source
+
+
+def test_const_for_loop_requires_exact_integral_constant_operator_contract():
+    source = "const_for_loop<0, 2, 1>([&](auto index) { use(index * Int<4>{}); });"
+    unrelated_operator = """
+    template <typename T, T lhs, typename U, U rhs>
+    constexpr auto operator*(
+        integral_constant<T, lhs>, integral_constant<U, rhs>) {
+      return integral_constant<int, 7>{};
+    }
+    """
+    preprocessor = MetalPreprocessor()
+    preprocessor._configure_integral_constant_contracts(
+        _INTEGRAL_CONSTANT_TEST_CONTRACT
+        + _INTEGRAL_CONSTANT_MULTIPLY_CONTRACT
+        + unrelated_operator
+    )
+
+    assert "*" not in preprocessor._integral_constant_binary_operators
+    assert preprocessor._lower_concrete_const_for_loop_callbacks(source) == source
+
+
+def test_preprocessor_expands_nested_const_for_loop_in_template_member_ordered():
+    code = _INTEGRAL_CONSTANT_TEST_CONTRACT + _INTEGRAL_CONSTANT_MULTIPLY_CONTRACT + """
+
+    struct FragmentShape {
+      static constexpr int RowStride = 4;
+      static constexpr int ColStride = 1;
+    };
+
+    struct Fragment {
+      template <typename U, typename Row, typename Col>
+      METAL_FUNC static void load(const device U* src, Row row, Col col) {
+        U value = src[row.value + col.value];
+      }
+    };
+
+    struct ConcreteTile {
+      static constexpr int Rows = 2;
+      static constexpr int Cols = 2;
+      static constexpr int RowStride = FragmentShape::RowStride;
+      static constexpr int ColStride = FragmentShape::ColStride;
+
+      template <typename U>
+      METAL_FUNC void load(const device U* src) {
+        const_for_loop<0, Rows, 1>([&](auto idx_row) {
+          const_for_loop<0, Cols, 1>([&](auto idx_col) {
+            Fragment::load(
+                src,
+                idx_row * Int<RowStride>{},
+                idx_col * Int<ColStride>{});
+          });
+        });
+      }
+    };
+
+    kernel void k(const device float* src [[buffer(0)]]) {
+      ConcreteTile tile;
+      tile.load(src);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+    expected = [
+        (
+            "Fragment__load__float_integral_constant_int_0_integral_constant_int_0",
+            "integral_constant<int,0>",
+            "integral_constant<int,0>",
+        ),
+        (
+            "Fragment__load__float_integral_constant_int_0_integral_constant_int_1",
+            "integral_constant<int,0>",
+            "integral_constant<int,1>",
+        ),
+        (
+            "Fragment__load__float_integral_constant_int_4_integral_constant_int_0",
+            "integral_constant<int,4>",
+            "integral_constant<int,0>",
+        ),
+        (
+            "Fragment__load__float_integral_constant_int_4_integral_constant_int_1",
+            "integral_constant<int,4>",
+            "integral_constant<int,1>",
+        ),
+    ]
+
+    calls = re.findall(r"(?m)^\s+(Fragment__load__[A-Za-z0-9_]+)\(src,$", output)
+    definitions = re.findall(
+        r"void (Fragment__load__[A-Za-z0-9_]+)\("
+        r"const device float\* src, (integral_constant<int,\d+>) row, "
+        r"(integral_constant<int,\d+>) col\)",
+        output,
+    )
+
+    assert calls == [name for name, _, _ in expected]
+    assert definitions == expected
+    assert "integral_constant<int, 1>{} * Int<(4)>{}" in output
+    assert "integral_constant<int, 1>{} * Int<(1)>{}" in output
+    assert "src[0 + 0]" in output
+    assert "src[0 + 1]" in output
+    assert "src[4 + 0]" in output
+    assert "src[4 + 1]" in output
+    assert "row.value" not in output
+    assert "col.value" not in output
+    assert output.count("const_for_loop<") == 1
+    assert "[&](auto" not in output
+    assert "idx_row" not in output
+    assert "idx_col" not in output
+    assert "METAL_FUNC Fragment__load" not in output
+
+
+def test_preprocessor_expands_const_for_loop_in_concrete_struct_specialization():
+    code = _INTEGRAL_CONSTANT_TEST_CONTRACT + _INTEGRAL_CONSTANT_MULTIPLY_CONTRACT + """
+    struct Fragment {
+      template <typename U, typename Row, typename Col>
+      static void load(const device U* src, Row row, Col col) {
+        U value = src[row.value + col.value];
+      }
+    };
+
+    template <typename T, int Rows_, int Cols_>
+    struct Tile {
+      static constexpr int Rows = Rows_;
+      static constexpr int Cols = Cols_;
+
+      template <typename U>
+      void load(const device U* src) {
+        const_for_loop<0, Rows, 1>([&](auto row) {
+          const_for_loop<0, Cols, 1>([&](auto col) {
+            Fragment::load(src, row * Int<4>{}, col * Int<1>{});
+          });
+        });
+      }
+    };
+
+    kernel void k(const device float* src [[buffer(0)]]) {
+      Tile<float, 2, 2> tile;
+      tile.load(src);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+    calls = re.findall(
+        r"(?m)^\s+Fragment__load__(?P<types>[A-Za-z0-9_]+)\(src,", output
+    )
+
+    assert "void Tile_float_2_2__load__float(" in output
+    assert calls == [
+        "float_integral_constant_int_0_integral_constant_int_0",
+        "float_integral_constant_int_0_integral_constant_int_1",
+        "float_integral_constant_int_4_integral_constant_int_0",
+        "float_integral_constant_int_4_integral_constant_int_1",
+    ]
+
+
+def test_preprocessor_template_member_binding_drops_expression_reference():
+    preprocessor = MetalPreprocessor()
+    struct = preprocessor._find_concrete_struct_definitions("""
+        struct Consumer {
+          template <typename T>
+          static void consume(thread T& value) { value = T(0); }
+        };
+        """)[0]
+    method = struct.template_methods[0]
+
+    bindings = preprocessor._bind_template_method_parameters(
+        method,
+        ["float&"],
+        owner_struct=struct,
+        structs_by_name={struct.name: struct},
+    )
+
+    assert bindings == {"T": "float"}
+
+
+@pytest.mark.parametrize(
+    ("outer_stop", "after_inner"),
+    [
+        ("2", "if (idx_row.value == 1) { return; }"),
+        ("2", "{ int idx_row = 1; out[0] = idx_row; }"),
+        ("unresolved_stop", ""),
+    ],
+    ids=["callback-local-return", "shadowed-parameter", "unresolved-bounds"],
+)
+def test_preprocessor_preserves_whole_non_expandable_nested_const_for_loop(
+    outer_stop, after_inner
+):
+    code = _INTEGRAL_CONSTANT_TEST_CONTRACT + """
+    struct ConcreteTile {
+      template <typename U>
+      void load(device U* out) {
+        const_for_loop<0, OUTER_STOP, 1>([&](auto idx_row) {
+          const_for_loop<0, 2, 1>([&](auto idx_col) {
+            out[idx_row.value * 2 + idx_col.value] = U(1);
+          });
+          AFTER_INNER
+        });
+      }
+    };
+
+    kernel void k(device float* out [[buffer(0)]]) {
+      ConcreteTile tile;
+      tile.load(out);
+    }
+    """
+    code = code.replace("OUTER_STOP", outer_stop).replace("AFTER_INNER", after_inner)
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "void ConcreteTile__load__float(" in output
+    assert f"const_for_loop<0, {outer_stop}, 1>" in output
+    assert output.count("const_for_loop<") == 3
+    assert output.count("[&](auto") == 2
+    assert output.count("out[idx_row.value * 2 + idx_col.value]") == 1
+    assert "integral_constant<int, 0>{}" not in output
+
+
+@pytest.mark.parametrize(
+    "callback_body",
+    [
+        "auto nested = [idx](auto value) { return value; };",
+        "auto nested = [&](auto idx) { return idx.value; };",
+        "for (auto idx : values) { consume(idx); }",
+        "consume(&idx);",
+        "consume(&idx.value);",
+    ],
+    ids=[
+        "nested-capture",
+        "nested-shadow",
+        "range-shadow",
+        "address-taken",
+        "value-address-taken",
+    ],
+)
+def test_const_for_loop_preserves_unsafe_parameter_uses(callback_body):
+    source = "const_for_loop<0, 2, 1>([&](auto idx) { " f"{callback_body}" " });"
+
+    output = _const_for_loop_preprocessor()._lower_concrete_const_for_loop_callbacks(
+        source
+    )
+
+    assert output == source
+
+
+def test_const_for_loop_parenthesizes_negative_value_substitutions():
+    source = """const_for_loop<-1, 0, 1>([&](auto index) {
+      use(x-index.value, -index.value);
+    });"""
+
+    output = _const_for_loop_preprocessor()._lower_concrete_const_for_loop_callbacks(
+        source
+    )
+
+    assert "use(x-(-1), -(-1));" in output
+
+
+def test_integral_constant_parameter_substitution_preserves_nested_lambda_shadow():
+    body = """auto nested = [](auto index) { use(index.value); };
+    use(index.value);"""
+    preprocessor = _const_for_loop_preprocessor()
+
+    output = preprocessor._substitute_integral_constant_parameter_values(
+        "integral_constant<int, -1> index", body
+    )
+
+    assert output == body
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "return const_for_loop<0, 2, 1>([&](auto idx) { use(idx.value); });",
+        "(const_for_loop<0, 2, 1>([&](auto idx) { use(idx.value); }), 0);",
+        "const_for_loop<2, 0, -1>([&](auto idx) { use(idx.value); });",
+    ],
+    ids=["return-expression", "comma-expression", "descending-step"],
+)
+def test_const_for_loop_preserves_unsupported_call_context(source):
+    output = _const_for_loop_preprocessor()._lower_concrete_const_for_loop_callbacks(
+        source
+    )
+
+    assert output == source
+
+
+@pytest.mark.parametrize(
+    "outer_bound",
+    ["(N > 0 ? N : 0)", "(N >> 1)"],
+    ids=["comparison", "right-shift"],
+)
+def test_const_for_loop_preserves_nested_callbacks_in_symbolic_expression_bounds(
+    outer_bound,
+):
+    source = f"""const_for_loop<0, {outer_bound}, 1>(/* callback */ [&](auto row) {{
+      const_for_loop<0, 2, 1>([&](auto col) {{
+        use(row.value, col.value);
+      }});
+    }});"""
+
+    output = _const_for_loop_preprocessor()._lower_concrete_const_for_loop_callbacks(
+        source
+    )
+
+    assert output == source
+
+
+def test_const_for_loop_requires_proven_integral_constant_operator():
+    source = "const_for_loop<0, 2, 1>([&](auto idx) { " "use(idx * Int<4>{});" " });"
+
+    output = _const_for_loop_preprocessor(
+        with_multiply=False
+    )._lower_concrete_const_for_loop_callbacks(source)
+
+    assert output == source
+
+
+def test_const_for_loop_statement_context_skips_directives_and_comments():
+    source = """
+    #pragma clang loop unroll(full)
+    // The directive and comment do not change statement context.
+    const_for_loop<0, 2, 1>([&](auto idx) { use(idx.value); });
+    """
+
+    output = _const_for_loop_preprocessor()._lower_concrete_const_for_loop_callbacks(
+        source
+    )
+
+    assert "const_for_loop<" not in output
+    assert "use(0);" in output
+    assert "use(1);" in output
+
+
+def test_const_for_loop_expansion_budget_is_cumulative_for_nested_loops():
+    source = """
+    const_for_loop<0, 2, 1>([&](auto row) {
+      const_for_loop<0, 2, 1>([&](auto col) {
+        use(row.value, col.value);
+      });
+    });
+    """
+    exact = _const_for_loop_preprocessor(max_template_specializations=6)
+
+    output = exact._lower_concrete_const_for_loop_callbacks(source)
+
+    assert "const_for_loop<" not in output
+    with pytest.raises(MetalTemplateSpecializationError) as exc_info:
+        _const_for_loop_preprocessor(
+            max_template_specializations=5
+        )._lower_concrete_const_for_loop_callbacks(source)
+    assert exc_info.value.required_work_items == 6
+    assert "6 cumulative callback expansions requested" in str(exc_info.value)
+
+
+def test_const_for_loop_expansion_budget_limits_nesting_depth():
+    source = """
+    const_for_loop<0, 1, 1>([&](auto row) {
+      const_for_loop<0, 1, 1>([&](auto col) {
+        use(row.value, col.value);
+      });
+    });
+    """
+
+    with pytest.raises(MetalTemplateSpecializationError, match="nesting depth 2"):
+        _const_for_loop_preprocessor(
+            max_template_specializations=8,
+            max_expansion_depth=1,
+        )._lower_concrete_const_for_loop_callbacks(source)
+
+
+def test_const_for_loop_negative_values_have_distinct_specialization_names():
+    code = _INTEGRAL_CONSTANT_TEST_CONTRACT + _INTEGRAL_CONSTANT_MULTIPLY_CONTRACT + """
+    struct Sink {
+      template <typename Index>
+      static void take(Index index) { int value = index.value; }
+    };
+    struct Runner {
+      void run() {
+        const_for_loop<-1, 2, 1>([&](auto index) {
+          Sink::take(index * Int<1>{});
+        });
+      }
+    };
+    kernel void k() { Runner runner; runner.run(); }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Sink__take__integral_constant_int_negative_1" in output
+    assert "Sink__take__integral_constant_int_0" in output
+    assert "Sink__take__integral_constant_int_1" in output
+    assert "int value = (-1);" in output
+    assert "int value = 0;" in output
+    assert "int value = 1;" in output
+
+
 def test_preprocessor_template_helper_deduction_precedes_default():
     code = """
     template <typename T, int N>
@@ -3980,6 +4473,20 @@ def test_infer_argument_type_recognizes_pointer_arguments_and_offsets():
     assert pp._infer_argument_type("wide_offset + input", buffers, locals_) == "half"
     assert pp._infer_argument_type("input - offset", buffers, locals_) == "half"
     assert pp._infer_argument_type("input + offset + 1", buffers, locals_) == "half"
+    promoted_locals = {"lane": "short", "stride": "int", "index": "int"}
+    assert pp._infer_argument_type("lane * stride", {}, promoted_locals) == "int"
+    assert (
+        pp._infer_argument_type(
+            "input + lane * stride + index", buffers, promoted_locals
+        )
+        == "half"
+    )
+    assert (
+        pp._infer_argument_type(
+            "lane2 * stride", {}, {"lane2": "short2", "stride": "int"}
+        )
+        is None
+    )
     assert pp._infer_argument_type("input + other", buffers, locals_) is None
     assert pp._infer_argument_type("input - same_type_input", buffers, locals_) is None
     assert pp._infer_argument_type("2 - input", buffers, locals_) is None
@@ -4212,6 +4719,55 @@ def test_infer_argument_type_local_array_and_member_subscript():
     assert pp._infer_argument_type("missing[i]", buffers, locals_, fields) is None
     assert pp._infer_argument_type("init.unknown", buffers, locals_, fields) is None
     assert pp._infer_argument_type("foo()", buffers, locals_, fields) is None
+
+
+def test_infer_argument_type_builtin_vector_swizzle():
+    pp = MetalPreprocessor()
+    locals_ = {"dims": "short2", "color": "const float4"}
+
+    assert pp._infer_argument_type("dims.y", {}, locals_) == "short"
+    assert pp._infer_argument_type("color.rgb", {}, locals_) == "float3"
+    assert pp._infer_argument_type("dims.z", {}, locals_) is None
+    assert pp._infer_argument_type("dims.xr", {}, locals_) is None
+    assert pp._infer_argument_type("dims->y", {}, locals_) is None
+
+
+def test_preprocessor_instantiates_template_method_from_vector_component_parameter():
+    code = """
+    struct BaseFrag {
+      template <typename LimX, typename LimY>
+      static void load_safe(LimX lim_x, LimY lim_y) {}
+    };
+
+    struct Tile {
+      using Frag = BaseFrag;
+
+      template <typename U>
+      void load_safe(const device U* src, const short2 dims) {
+        Frag::load_safe(dims.y, dims.x);
+      }
+    };
+
+    kernel void k(
+        const device float* src [[buffer(0)]],
+        short2 dims [[thread_position_in_grid]]) {
+      Tile tile;
+      tile.load_safe(src, dims);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "void BaseFrag__load_safe__short_short(short lim_x, short lim_y)" in output
+    assert "BaseFrag__load_safe__short_short(dims.y, dims.x)" in output
+
+
+def test_const_for_loop_parameter_substitution_ignores_member_identifiers():
+    output = MetalPreprocessor()._substitute_const_for_loop_parameter(
+        "state.idx = idx.value; ptr->idx = Type::idx;", "idx", 3
+    )
+
+    assert output == "state.idx = 3; ptr->idx = Type::idx;"
 
 
 def test_infer_argument_type_arithmetic_construction_and_functor_call():
