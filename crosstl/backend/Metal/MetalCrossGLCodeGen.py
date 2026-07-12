@@ -849,7 +849,7 @@ class MetalToCrossGLConverter:
             return None
         struct_name, member_name = name.rsplit("::", 1)
         alias_target = self.local_struct_type_aliases.get(struct_name)
-        resolved_struct = alias_target or struct_name
+        resolved_struct = self.resolve_local_type_aliases(alias_target or struct_name)
         if resolved_struct not in self.struct_name_map and "::" in resolved_struct:
             unqualified_struct = resolved_struct.rsplit("::", 1)[-1]
             if unqualified_struct in self.struct_name_map:
@@ -1533,8 +1533,9 @@ class MetalToCrossGLConverter:
             for alias in typedefs
             if isinstance(alias, TypeAliasNode)
         }
-        # Body-local ``using`` aliases discovered while emitting function bodies;
-        # these are inlined at their use sites rather than emitted as typedefs.
+        # Body-local ``using`` and ``typedef`` aliases discovered while emitting
+        # function bodies; these are inlined at their use sites rather than
+        # emitted as typedefs.
         self.local_type_alias_names = set()
         self.local_struct_type_aliases = {}
         self.prepare_texture_usage(ast)
@@ -2553,9 +2554,9 @@ class MetalToCrossGLConverter:
         for stmt in body:
             code += "    " * indent
             if isinstance(stmt, TypeAliasNode):
-                # A local ``using X = Y;`` inside a function body. Register it so
-                # later declarations in the same body resolve ``X`` to its
-                # concrete type; the alias itself produces no CrossGL statement.
+                # Register a block-local ``using`` or ``typedef`` so later
+                # declarations and expressions resolve it in lexical order. The
+                # alias itself produces no CrossGL statement.
                 self.register_local_type_alias(stmt)
                 code = code[: len(code) - 4 * indent]
                 continue
@@ -2594,7 +2595,7 @@ class MetalToCrossGLConverter:
                 code += f"{self.generate_expression(stmt.expression, is_main)};\n"
             elif isinstance(stmt, BlockNode):
                 code += "{\n"
-                code += self.generate_function_body(
+                code += self.generate_scoped_function_body(
                     stmt.statements, indent + 1, is_main
                 )
                 code += "    " * indent + "}\n"
@@ -2650,6 +2651,18 @@ class MetalToCrossGLConverter:
                 else:
                     code += f"// Unhandled statement type: {type(stmt).__name__}\n"
         return code
+
+    def generate_scoped_function_body(self, body, indent=0, is_main=False):
+        """Render a nested lexical block without leaking local type aliases."""
+        previous_type_aliases = dict(self.type_aliases)
+        previous_local_type_alias_names = set(self.local_type_alias_names)
+        previous_local_struct_type_aliases = dict(self.local_struct_type_aliases)
+        try:
+            return self.generate_function_body(body, indent, is_main)
+        finally:
+            self.type_aliases = previous_type_aliases
+            self.local_type_alias_names = previous_local_type_alias_names
+            self.local_struct_type_aliases = previous_local_struct_type_aliases
 
     def generate_callback_statement(self, call, indent, is_main=False):
         helper = str(call.name).rsplit("::", 1)[-1]
@@ -2775,10 +2788,7 @@ class MetalToCrossGLConverter:
         return "true" if value else "false"
 
     def register_local_type_alias(self, alias):
-        """Register a function-body ``using`` alias so subsequent declarations in
-        the same body resolve it. Top-level aliases are collected in
-        ``generate`` from ``ast.typedefs``; body-local aliases are only visible
-        here, so they are merged into the same map as they are encountered."""
+        """Register a function-body alias for subsequent lexical uses."""
         name = getattr(alias, "name", None)
         alias_type = getattr(alias, "alias_type", None)
         if not name or not alias_type:
@@ -2793,10 +2803,38 @@ class MetalToCrossGLConverter:
         # ``using rw_t = ReadWriter<...>;``) keep their historical handling and
         # are neither recorded nor substituted, so their declarations and
         # constructor calls are emitted unchanged.
-        if self.map_type(alias_type) not in self.crossgl_typedef_source_types():
+        if (
+            getattr(alias, "qualifiers", None)
+            or getattr(alias, "array_sizes", None)
+            or getattr(alias, "declarator_type_suffix", "")
+            or self.map_type(alias_type) not in self.crossgl_typedef_source_types()
+        ):
             return
         self.type_aliases[name] = alias_type
         self.local_type_alias_names.add(name)
+
+    def resolve_local_type_aliases(self, metal_type):
+        """Resolve concrete body-local aliases inside a Metal type expression."""
+        if metal_type is None:
+            return metal_type
+
+        original = str(metal_type).strip()
+        base = original
+        suffix = ""
+        while base.endswith("*") or base.endswith("&"):
+            suffix = base[-1] + suffix
+            base = base[:-1].strip()
+
+        if base in self.local_type_alias_names:
+            return f"{self.resolve_type_alias(base)}{suffix}"
+
+        generic_base, generic_args = self.generic_type_parts(base)
+        if not generic_base or not generic_args:
+            return original
+        resolved_args = [self.resolve_local_type_aliases(arg) for arg in generic_args]
+        if resolved_args == generic_args:
+            return original
+        return f"{generic_base}<{', '.join(resolved_args)}>{suffix}"
 
     def generate_local_enum(self, enum, indent, is_main):
         enum_name = enum.name or "MetalAnonymousEnum"
@@ -2821,7 +2859,7 @@ class MetalToCrossGLConverter:
             update = self.generate_for_clause(node.update, is_main)
 
             code = f"for ({init}; {condition}; {update}) {{\n"
-            code += self.generate_function_body(node.body, indent + 1, is_main)
+            code += self.generate_scoped_function_body(node.body, indent + 1, is_main)
             code += "    " * indent + "}\n"
             return code
         finally:
@@ -2850,21 +2888,21 @@ class MetalToCrossGLConverter:
         iterable = self.generate_expression(node.iterable, is_main)
 
         code = f"for {node.name} in {iterable} {{\n"
-        code += self.generate_function_body(node.body, indent + 1, is_main)
+        code += self.generate_scoped_function_body(node.body, indent + 1, is_main)
         code += "    " * indent + "}\n"
         return code
 
     def generate_while_loop(self, node, indent, is_main):
         condition = self.generate_expression(node.condition, is_main)
         code = f"while ({condition}) {{\n"
-        code += self.generate_function_body(node.body, indent + 1, is_main)
+        code += self.generate_scoped_function_body(node.body, indent + 1, is_main)
         code += "    " * indent + "}\n"
         return code
 
     def generate_do_while_loop(self, node, indent, is_main):
         condition = self.generate_expression(node.condition, is_main)
         code = "do {\n"
-        code += self.generate_function_body(node.body, indent + 1, is_main)
+        code += self.generate_scoped_function_body(node.body, indent + 1, is_main)
         code += "    " * indent + f"}} while ({condition});\n"
         return code
 
@@ -2873,19 +2911,21 @@ class MetalToCrossGLConverter:
         if node.if_chain:
             for condition, body in node.if_chain:
                 code += f"if ({self.generate_expression(condition, is_main)}) {{\n"
-                code += self.generate_function_body(body, indent + 1, is_main)
+                code += self.generate_scoped_function_body(body, indent + 1, is_main)
                 code += "    " * indent + "}"
         if node.else_if_chain:
             for condition, body in node.else_if_chain:
                 code += (
                     f" else if ({self.generate_expression(condition, is_main)}) {{\n"
                 )
-                code += self.generate_function_body(body, indent + 1, is_main)
+                code += self.generate_scoped_function_body(body, indent + 1, is_main)
                 code += "    " * indent + "}"
 
         if node.else_body:
             code += " else {\n"
-            code += self.generate_function_body(node.else_body, indent + 1, is_main)
+            code += self.generate_scoped_function_body(
+                node.else_body, indent + 1, is_main
+            )
             code += "    " * indent + "}"
 
         code += "\n"
@@ -3661,9 +3701,14 @@ class MetalToCrossGLConverter:
 
     def map_metal_type_constructor_name(self, name):
         text = str(name)
-        if "::" not in text and text not in self.unscoped_metal_type_constructors:
+        is_local_alias = text in self.local_type_alias_names
+        if (
+            "::" not in text
+            and text not in self.unscoped_metal_type_constructors
+            and not is_local_alias
+        ):
             return None
-        normalized = self.normalized_metal_type(text)
+        normalized = self.normalized_metal_type(self.resolve_local_type_aliases(text))
         mapped = self.map_type(normalized)
         if normalized in self.type_map or mapped != normalized:
             return mapped
@@ -3728,6 +3773,10 @@ class MetalToCrossGLConverter:
         """Map a Metal type name to the closest CrossGL type name."""
         if not metal_type:
             return metal_type
+
+        resolved_local_type = self.resolve_local_type_aliases(metal_type)
+        if resolved_local_type != str(metal_type).strip():
+            return self.map_type(resolved_local_type)
 
         array_type = self.metal_array_type_parts(metal_type)
         if array_type:
@@ -4928,24 +4977,33 @@ class MetalToCrossGLConverter:
         return None
 
     def generate_switch_statement(self, node, indent, is_main):
+        previous_type_aliases = dict(self.type_aliases)
+        previous_local_type_alias_names = set(self.local_type_alias_names)
+        previous_local_struct_type_aliases = dict(self.local_struct_type_aliases)
         expression = self.generate_expression(node.expression, is_main)
         code = f"switch ({expression}) {{\n"
+        try:
+            for case in node.cases:
+                case_value = self.generate_expression(case.value, is_main)
+                code += "    " * (indent + 1) + f"case {case_value}:\n"
+                code += self.generate_function_body(
+                    case.statements, indent + 2, is_main
+                )
+                if not self.switch_case_has_explicit_terminator(case.statements):
+                    code += "    " * (indent + 2) + "break;\n"
 
-        for case in node.cases:
-            case_value = self.generate_expression(case.value, is_main)
-            code += "    " * (indent + 1) + f"case {case_value}:\n"
-            code += self.generate_function_body(case.statements, indent + 2, is_main)
-            if not self.switch_case_has_explicit_terminator(case.statements):
-                code += "    " * (indent + 2) + "break;\n"
+            if node.default:
+                code += "    " * (indent + 1) + "default:\n"
+                code += self.generate_function_body(node.default, indent + 2, is_main)
+                if not self.switch_case_has_explicit_terminator(node.default):
+                    code += "    " * (indent + 2) + "break;\n"
 
-        if node.default:
-            code += "    " * (indent + 1) + "default:\n"
-            code += self.generate_function_body(node.default, indent + 2, is_main)
-            if not self.switch_case_has_explicit_terminator(node.default):
-                code += "    " * (indent + 2) + "break;\n"
-
-        code += "    " * indent + "}\n"
-        return code
+            code += "    " * indent + "}\n"
+            return code
+        finally:
+            self.type_aliases = previous_type_aliases
+            self.local_type_alias_names = previous_local_type_alias_names
+            self.local_struct_type_aliases = previous_local_struct_type_aliases
 
     def switch_case_has_explicit_terminator(self, statements):
         if not statements:

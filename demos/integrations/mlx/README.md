@@ -185,7 +185,21 @@ lower through backend-neutral subgroup semantics and preserve their explicit
 fill value for lanes below the delta.
 The reduced DirectX/Vulkan frontier includes
 `scaled_dot_product_attention.metal`; its OpenGL path remains excluded under
-[#1491](https://github.com/CrossGL/crosstl/issues/1491).
+the function-constant contract in
+[#1538](https://github.com/CrossGL/crosstl/issues/1538). Function-local scalar
+and vector aliases now retain lexical scope and resolve across declarations,
+constructors, casts, and generic static-member owners. For the pinned attention
+source this resolves 444 concrete uses across all 36 entries, including the
+float accumulation type used by the half and bfloat input families. The full
+source translates to DirectX, OpenGL, and Vulkan; local OpenGL and Vulkan native
+validation passes. DirectX remains outside the DXC gate for the independent
+resource-cursor and fixed-array issues listed in `expected-gaps.json`.
+The project Vulkan artifact is warning-free because project preparation removes
+unreachable generic declarations. Direct single-file translation still emits
+five such warnings under
+[#1568](https://github.com/CrossGL/crosstl/issues/1568). Qualified pointer and
+array aliases remain tracked in
+[#1567](https://github.com/CrossGL/crosstl/issues/1567).
 `arg_reduce.metal` now belongs to all three clean artifact frontiers.
 Address-space pointer dereferences lower through retained resource provenance,
 private pointer helpers use fixed local-array extents, and `threads_per_grid`

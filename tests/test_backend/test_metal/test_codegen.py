@@ -4520,6 +4520,94 @@ def test_codegen_sizeof_local_type_alias_does_not_leak_between_functions():
     assert "return sizeof(Scalar);" in crossgl
 
 
+def test_codegen_resolves_function_local_typedef_uses():
+    crossgl = convert("""
+        template <typename T>
+        struct Limits {
+            static constexpr T finite_min = T(-1);
+        };
+
+        template <>
+        struct Limits<float> {
+            static constexpr float finite_min = -3.0f;
+        };
+
+        float compute(float scale) {
+            typedef float U;
+            U value = U(scale);
+            U minimum = Limits<U>::finite_min;
+            return value + minimum;
+        }
+        """)
+
+    assert "float value = float(scale);" in crossgl
+    assert "float minimum = ((-3.0f));" in crossgl
+    assert "typedef float U;" not in crossgl
+    assert "Limits_u3cU_u3e" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_scopes_nested_function_local_typedefs():
+    crossgl = convert("""
+        float convert_value(float value, bool use_integer) {
+            typedef float U;
+            if (use_integer) {
+                typedef int U;
+                U inner = U(value);
+            }
+            U outer = U(value);
+            return outer;
+        }
+        """)
+
+    assert "int inner = int(value);" in crossgl
+    assert "float outer = float(value);" in crossgl
+    assert "typedef" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_isolates_function_local_typedefs_between_siblings():
+    crossgl = convert("""
+        float first(float value) {
+            typedef float U;
+            U converted = U(value);
+            return converted;
+        }
+
+        int second(float value) {
+            typedef int U;
+            U converted = U(value);
+            return converted;
+        }
+        """)
+
+    assert "float converted = float(value);" in crossgl
+    assert "int converted = int(value);" in crossgl
+    assert "typedef" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_switch_typedef_scope_spans_cases():
+    crossgl = convert("""
+        int select_value(int mode) {
+            switch (mode) {
+                case 0:
+                    typedef int CaseValue;
+                    break;
+                case 1:
+                    CaseValue value = CaseValue(3);
+                    return value;
+                default:
+                    return 0;
+            }
+        }
+        """)
+
+    assert "int value = int(3);" in crossgl
+    assert "typedef" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_sizeof_dependent_typename_from_tinygrad_tile_copy():
     code = """
     template<typename ST>

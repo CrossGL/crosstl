@@ -46288,6 +46288,47 @@ def test_translate_project_expands_const_for_loop_callback_iteration_escape(tmp_
     assert_spirv_asm_validates_if_available(generated, tmp_path)
 
 
+def test_translate_project_resolves_function_local_typedefs_for_targets(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "local_typedef.metal").write_text(
+        textwrap.dedent("""
+            template <typename T>
+            [[kernel]] void scale_values(
+                device T* out [[buffer(0)]],
+                constant float& scale [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {
+                typedef float U;
+                U value = U(scale) + 1.0f;
+                out[gid] = T(value);
+            }
+
+            instantiate_kernel("scale_values_float", scale_values, float)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx", "opengl", "vulkan"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
+    assert set(artifacts) == {"directx", "opengl", "vulkan"}
+    outputs = {
+        target: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for target, artifact in artifacts.items()
+    }
+    assert all(" U " not in output for output in outputs.values())
+    assert all("WARNING" not in output for output in outputs.values())
+    assert_directx_compute_validates_if_available(outputs["directx"], tmp_path)
+    assert_compute_glsl_validates_if_available(outputs["opengl"], tmp_path)
+    assert_spirv_asm_validates_if_available(outputs["vulkan"], tmp_path)
+
+
 def test_metal_project_materialization_concretizes_dispatch_bool_functor_helper(
     tmp_path,
 ):

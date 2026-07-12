@@ -143,6 +143,38 @@
       "https://github.com/CrossGL/crosstl/issues/1566"
     ]
   },
+  "function_local_alias_status": {
+    "status": "partial",
+    "source": "mlx/backend/metal/kernels/scaled_dot_product_attention.metal",
+    "targets": [
+      "directx",
+      "opengl",
+      "vulkan"
+    ],
+    "supported_contract": "lexically scoped function-body using and typedef aliases that resolve to concrete scalar or vector types, including declarations, constructors, casts, array element types, and generic static-member owners",
+    "entry_count": 36,
+    "resolved_use_counts": {
+      "declaration_types": 336,
+      "casts": 72,
+      "static_members": 36
+    },
+    "native_validation": {
+      "directx": "translated-dxc-blocked-by-existing-issues",
+      "opengl": "validated",
+      "vulkan": "validated"
+    },
+    "vulkan_project_warning_count": 0,
+    "single_file_vulkan_unreachable_warning_count": 5,
+    "single_file_vulkan_warnings_blocked_by": [
+      "https://github.com/CrossGL/crosstl/issues/1568"
+    ],
+    "remaining_alias_shapes_blocked_by": [
+      "https://github.com/CrossGL/crosstl/issues/1567"
+    ],
+    "semantic_readiness_blocked_by": [
+      "https://github.com/CrossGL/crosstl/issues/1538"
+    ]
+  },
   "directx_toolchain_status": {
     "status": "passing",
     "note": "Windows CI compiles every discovered entry in the generated DirectX HLSL for the verified subset below. Other clean frontier kernels translate to DirectX but remain outside the compile gate for the listed structural or semantic defects.",
@@ -279,12 +311,15 @@
       "https://github.com/CrossGL/crosstl/issues/1559",
       "https://github.com/CrossGL/crosstl/issues/1561",
       "https://github.com/CrossGL/crosstl/issues/1562",
-      "https://github.com/CrossGL/crosstl/issues/1566"
+      "https://github.com/CrossGL/crosstl/issues/1566",
+      "https://github.com/CrossGL/crosstl/issues/1567"
     ],
     "semantic_blocked_by": [
       "https://github.com/CrossGL/crosstl/issues/1491",
       "https://github.com/CrossGL/crosstl/issues/1557",
-      "https://github.com/CrossGL/crosstl/issues/1560"
+      "https://github.com/CrossGL/crosstl/issues/1560",
+      "https://github.com/CrossGL/crosstl/issues/1568",
+      "https://github.com/CrossGL/crosstl/issues/1569"
     ],
     "last_completed": {
       "translated_artifacts": 24,
@@ -338,7 +373,10 @@
     "https://github.com/CrossGL/crosstl/issues/1560",
     "https://github.com/CrossGL/crosstl/issues/1561",
     "https://github.com/CrossGL/crosstl/issues/1562",
-    "https://github.com/CrossGL/crosstl/issues/1566"
+    "https://github.com/CrossGL/crosstl/issues/1566",
+    "https://github.com/CrossGL/crosstl/issues/1567",
+    "https://github.com/CrossGL/crosstl/issues/1568",
+    "https://github.com/CrossGL/crosstl/issues/1569"
   ],
   "resolved_issues": [
     "https://github.com/CrossGL/crosstl/issues/1551",
