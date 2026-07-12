@@ -245,15 +245,27 @@ concrete NAX tile callbacks, resolves conditional function-local dimensions, and
 materializes `NAXTile<T, BR, BC>` as concrete 2-by-2 specializations. Explicit
 member-template binding now preserves `float16_t` threadgroup arrays, and the
 template-hostile project path initializes the verified compile-time callback
-contracts before member lowering. The current project report reaches residual
-template auditing: concrete alias-template types such as `Int<1>` are classified
-as unresolved placeholders, while reachable `dispatch_bool`, `const_for_loop`,
-and `tile_matmad_nax` helpers still need contextual materialization. These gaps
-are tracked in CrossGL/crosstl#1490 and CrossGL/crosstl#1479. Generic member calls
-with explicit type or value arguments in the shared parser remain tracked in
-CrossGL/crosstl#1555, pointer-bearing aggregate propagation remains tracked in
-CrossGL/crosstl#1544, and lowered receiver/reference semantics must satisfy
-CrossGL/crosstl#1557 before the kernel can be considered semantically ready.
+contracts before member lowering. Bounded, non-variadic namespace-scope alias
+templates are now canonicalized after callback and member lowering, then their
+backing struct templates are materialized once more. The high-budget report no
+longer contains any `Int<...>` use or `using Int` declaration and has fallen from
+111 unsupported records to one. Proven function-local integral constants now
+feed inferred and explicit member-template arguments with lexical shadowing and
+concrete `sizeof` handling, so `BK_padded` and `BN_padded` no longer create
+symbolic helper specializations. Free helper deduction now retains unnamed
+parameters, recognizes empty braced type values, and applies the same proven
+lexical constants, which materializes `tile_matmad_nax` with concrete tile types
+and transpose values. A verified `dispatch_bool` helper whose remaining reachable
+calls are lambdas is handed to the existing callback lowering; named functors and
+altered helper contracts retain ordinary materialization. The remaining record is
+`const_for_loop`, whose callback-local return semantics remain tracked in
+CrossGL/crosstl#1479 and CrossGL/crosstl#1554. No Vulkan artifact is emitted at
+this boundary. Generic member calls with explicit type or value arguments in the
+shared parser remain
+tracked in CrossGL/crosstl#1555, pointer-bearing aggregate propagation remains
+tracked in CrossGL/crosstl#1544, and lowered receiver/reference semantics must
+satisfy CrossGL/crosstl#1557 before the kernel can be considered semantically
+ready.
 Lazy logical and conditional evaluation in SPIR-V remains tracked in
 CrossGL/crosstl#1560 for full-corpus semantic coverage.
 Nested returns and side-effectful compatibility arguments in pointer-preserving

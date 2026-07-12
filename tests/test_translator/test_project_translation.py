@@ -12235,6 +12235,31 @@ def test_metal_template_type_binding_uses_struct_specialization_provenance():
     assert bindings == {"T": "float", "M": "2", "N": "3", "Frag": "int"}
 
 
+def test_metal_template_diagnostic_preserves_underscore_value_provenance():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    preprocessor = MetalPreprocessor()
+    preprocessor._materialized_struct_specializations[
+        "integral_constant_int_BK_padded"
+    ] = ("integral_constant", ("int", "BK_padded"))
+    declaration = SimpleNamespace(
+        name="integral_constant",
+        parameters=("T", "Value"),
+        location=SimpleNamespace(file="kernel.metal", line=4, column=1),
+    )
+
+    record = project_pipeline._metal_concrete_template_type_record(
+        preprocessor=preprocessor,
+        type_text="integral_constant_int_BK_padded",
+        missing=["BK_padded"],
+        declarations_by_name={"integral_constant": declaration},
+        target="vulkan",
+    )
+
+    assert record is not None
+    assert record["requiredSignature"] == "integral_constant<int, BK_padded>"
+
+
 def test_metal_template_type_binding_verifies_omitted_struct_defaults():
     from crosstl.backend.Metal.preprocessor import MetalPreprocessor
 
@@ -12317,6 +12342,130 @@ def test_metal_expression_type_infers_vector_components():
         )
         is None
     )
+
+
+def test_metal_expression_type_infers_empty_braced_type_prvalue():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    preprocessor = MetalPreprocessor()
+
+    assert (
+        project_pipeline._metal_expression_type(
+            preprocessor,
+            "metal::bool_constant<false>{}",
+            {},
+            {},
+        )
+        == "metal::bool_constant<false>"
+    )
+    assert (
+        project_pipeline._metal_expression_type(
+            preprocessor,
+            "Marker{}",
+            {},
+            {},
+        )
+        == "Marker"
+    )
+    assert (
+        project_pipeline._metal_expression_type(
+            preprocessor,
+            "Marker{1}",
+            {},
+            {},
+        )
+        is None
+    )
+
+
+def test_plain_metal_helper_materialization_resolves_loop_local_braced_constants():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        template <bool Value>
+        struct bool_constant {
+            static constexpr bool value = Value;
+        };
+
+        template <typename Tile, bool Transpose>
+        void apply(thread Tile& tile, bool_constant<Transpose>) {
+            if constexpr (Transpose) {
+                tile = -tile;
+            }
+        }
+
+        [[kernel]] void run(device float* output [[buffer(0)]]) {
+            constexpr bool transpose = false;
+            _Pragma("clang loop unroll(disable)")
+            for (int index = 0; index < 1; ++index) {
+                float tile = output[index];
+                apply(tile, bool_constant<transpose>{});
+                output[index] = tile;
+            }
+        }
+        """)
+
+    materialized, records, completed_names, _materialized_names = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+        )
+    )
+
+    assert completed_names == {"apply"}
+    assert len(records) == 1
+    assert records[0]["parameters"] == {
+        "Tile": "float",
+        "Transpose": "false",
+    }
+    assert "apply_float_false(tile, bool_constant<transpose>{})" in materialized
+    assert "void apply_float_false(thread float& tile, bool_constant<false>)" in (
+        materialized
+    )
+
+
+def test_plain_metal_helper_materialization_rejects_shadowed_runtime_constant():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        template <bool Value>
+        struct bool_constant {
+            static constexpr bool value = Value;
+        };
+
+        template <typename Tile, bool Transpose>
+        void apply(thread Tile& tile, bool_constant<Transpose>) {
+            if constexpr (Transpose) {
+                tile = -tile;
+            }
+        }
+
+        [[kernel]] void run(
+            device float* output [[buffer(0)]],
+            constant bool& runtime_transpose [[buffer(1)]]) {
+            constexpr bool transpose = false;
+            float first = output[0];
+            apply(first, bool_constant<transpose>{});
+            {
+                const bool transpose = runtime_transpose;
+                float second = output[1];
+                apply(second, bool_constant<transpose>{});
+            }
+        }
+        """)
+
+    materialized, records, completed_names, _materialized_names = (
+        project_pipeline._materialize_plain_template_helper_calls(
+            MetalPreprocessor(),
+            source,
+        )
+    )
+
+    assert completed_names == set()
+    assert len(records) == 1
+    assert materialized.count("apply_float_false(") == 2
+    assert "apply(second, bool_constant<transpose>{})" in materialized
+    assert "apply_float_transpose" not in materialized
 
 
 def test_plain_metal_helper_materialization_retains_partially_resolved_template():
@@ -14137,6 +14286,83 @@ def test_metal_concrete_template_struct_resolves_visible_using_namespace():
 
     assert "using Concrete" not in output
     assert "float value = 0;" in output
+
+
+def test_metal_template_alias_canonicalization_preserves_lexical_lookup():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent(r"""
+        namespace mlx {
+        namespace steel {
+        template <typename T, T Value>
+        struct integral_constant {
+          static constexpr T value = Value;
+        };
+
+        template <int Value>
+        using Int = integral_constant<int, Value>;
+
+        template <int Value>
+        using Index = Int<Value>;
+
+        template <int Value, int Scale = 2>
+        using Scaled = Pair<Value, Scale>;
+
+        Index<4> local_index;
+        Scaled<6> scaled_index;
+
+        template <template <int> class Int>
+        struct Shadowed {
+          Int<1> value;
+        };
+        }
+        }
+
+        using namespace mlx::steel;
+        Index<3> imported_index;
+        mlx::steel::Int<5> qualified_index;
+        const char* literal = "Int<7>";
+        // Int<8> is documentation, not a type reference.
+        """)
+
+    output = project_pipeline._canonicalize_metal_template_aliases(
+        MetalPreprocessor(),
+        source,
+    )
+
+    assert "template <int Value>\nusing Int" not in output
+    assert "template <int Value>\nusing Index" not in output
+    assert "using Scaled" not in output
+    assert "integral_constant<int, 4> local_index;" in output
+    assert "Pair<6, 2> scaled_index;" in output
+    assert "integral_constant<int, 3> imported_index;" in output
+    assert "integral_constant<int, 5> qualified_index;" in output
+    assert "struct Shadowed {\n  Int<1> value;" in output
+    assert 'const char* literal = "Int<7>";' in output
+    assert "// Int<8> is documentation" in output
+
+
+def test_metal_template_alias_canonicalization_keeps_unresolved_cycles():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        template <typename T>
+        using First = Second<T>;
+
+        template <typename T>
+        using Second = First<T>;
+
+        First<int> value;
+        """)
+
+    output = project_pipeline._canonicalize_metal_template_aliases(
+        MetalPreprocessor(),
+        source,
+    )
+
+    assert "using First = Second<T>;" in output
+    assert "using Second = First<T>;" in output
+    assert "First<int> value;" in output or "Second<int> value;" in output
 
 
 def test_metal_concrete_struct_uses_recorded_materialized_owner():
@@ -45767,6 +45993,236 @@ def test_translate_project_metal_const_for_loop_partial_template_materializes_to
     assert validation["success"] is True
 
 
+def test_translate_project_canonicalizes_metal_template_aliases_for_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "alias_kernel.metal").write_text(
+        textwrap.dedent("""
+            template <typename T, T Value>
+            struct integral_constant {
+                static constexpr T value = Value;
+            };
+
+            template <int Value>
+            using Int = integral_constant<int, Value>;
+
+            template <typename T>
+            [[kernel]] void alias_kernel(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                out[gid] = T(Int<4>::value);
+            }
+
+            instantiate_kernel("alias_float", alias_kernel, float)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx", "opengl", "vulkan"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
+    assert set(artifacts) == {"directx", "opengl", "vulkan"}
+    for artifact in artifacts.values():
+        assert artifact["status"] == "translated"
+        generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+        assert "Int<" not in generated
+        assert "using Int" not in generated
+        assert "template <" not in generated
+
+    directx = (repo / artifacts["directx"]["path"]).read_text(encoding="utf-8")
+    assert_directx_compute_validates_if_available(directx, tmp_path)
+    opengl = (repo / artifacts["opengl"]["path"]).read_text(encoding="utf-8")
+    assert_compute_glsl_validates_if_available(opengl, tmp_path)
+    vulkan = (repo / artifacts["vulkan"]["path"]).read_text(encoding="utf-8")
+    assert_spirv_asm_validates_if_available(vulkan, tmp_path)
+
+
+def test_translate_project_resolves_local_constant_member_arguments_for_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "local_constant_member.metal").write_text(
+        textwrap.dedent("""
+            struct Writer {
+                template <int Offset>
+                static int value() {
+                    return Offset;
+                }
+            };
+
+            template <int Base>
+            [[kernel]] void local_constant_member(
+                device int* out [[buffer(0)]]) {
+                constexpr int Padding = Base + 4;
+                out[0] = Writer::value<Padding>();
+            }
+
+            instantiate_kernel(
+                "local_constant_member_4",
+                local_constant_member,
+                4
+            )
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx", "opengl", "vulkan"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
+    assert set(artifacts) == {"directx", "opengl", "vulkan"}
+    for artifact in artifacts.values():
+        generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+        assert artifact["status"] == "translated"
+        assert "value_Padding" not in generated
+        assert "template <" not in generated
+
+    directx = (repo / artifacts["directx"]["path"]).read_text(encoding="utf-8")
+    assert_directx_compute_validates_if_available(directx, tmp_path)
+    opengl = (repo / artifacts["opengl"]["path"]).read_text(encoding="utf-8")
+    assert_compute_glsl_validates_if_available(opengl, tmp_path)
+    vulkan = (repo / artifacts["vulkan"]["path"]).read_text(encoding="utf-8")
+    assert_spirv_asm_validates_if_available(vulkan, tmp_path)
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl", "vulkan"])
+def test_translate_project_rejects_runtime_member_template_value(
+    tmp_path,
+    target,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "runtime_member_value.metal").write_text(
+        textwrap.dedent("""
+            template <typename T, T Value>
+            struct integral_constant {
+                static constexpr T value = Value;
+            };
+
+            template <int Value>
+            using Int = integral_constant<int, Value>;
+
+            struct Loader {
+                template <typename Stride>
+                static int load(Stride stride) {
+                    return stride.value;
+                }
+            };
+
+            template <typename T>
+            [[kernel]] void runtime_member_value(
+                device int* out [[buffer(0)]],
+                constant int& runtime_padding [[buffer(1)]]) {
+                const int Padding = runtime_padding;
+                out[0] = Loader::load(Int<Padding>{});
+            }
+
+            instantiate_kernel(
+                "runtime_member_value_int",
+                runtime_member_value,
+                int
+            )
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=[target],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+    diagnostic = next(
+        item
+        for item in payload["diagnostics"]
+        if item["code"] == "project.translate.metal-template-specialization"
+    )
+    assert diagnostic["target"] == target
+    assert diagnostic["missingCapabilities"] == ["template.specialization"]
+    assert diagnostic["details"]["templateMaterialization"][
+        "functionLocalConstantArgument"
+    ] == {
+        "nestedStruct": "integral_constant",
+        "constants": ["Padding"],
+    }
+
+
+def test_translate_project_materializes_loop_local_plain_helper_for_targets(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "plain_helper.metal").write_text(
+        textwrap.dedent("""
+            template <bool Negate, typename T>
+            T apply(T value) {
+                if constexpr (Negate) {
+                    return -value;
+                }
+                return value;
+            }
+
+            template <typename T>
+            [[kernel]] void plain_helper(
+                device T* results [[buffer(0)]]) {
+                constexpr bool negate = false;
+                _Pragma("clang loop unroll(disable)")
+                for (int index = 0; index < 1; ++index) {
+                    T value = results[index];
+                    results[index] = apply<negate>(value);
+                }
+            }
+
+            instantiate_kernel("plain_helper_float", plain_helper, float)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx", "opengl", "vulkan"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
+    assert set(artifacts) == {"directx", "opengl", "vulkan"}
+    outputs = {
+        target: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for target, artifact in artifacts.items()
+    }
+    assert all("apply<" not in output for output in outputs.values())
+    assert_directx_compute_validates_if_available(outputs["directx"], tmp_path)
+    assert_compute_glsl_validates_if_available(outputs["opengl"], tmp_path)
+    assert_spirv_asm_validates_if_available(outputs["vulkan"], tmp_path)
+
+
 def test_translate_project_expands_verified_const_for_loop_callbacks(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -45930,6 +46386,15 @@ def test_translate_project_lowers_captured_dispatch_bool_callbacks(tmp_path):
             #include <metal_stdlib>
             using namespace metal;
 
+            template <typename F>
+            void dispatch_bool(bool flag, F callback) {
+                if (flag) {
+                    callback(true_type{});
+                } else {
+                    callback(false_type{});
+                }
+            }
+
             [[kernel]] void write_flag(
                 device uint* result_data [[buffer(0)]],
                 uint gid [[thread_position_in_grid]]) {
@@ -45972,6 +46437,15 @@ def test_translate_project_reports_unsupported_captured_callback_shape(tmp_path)
             #include <metal_stdlib>
             using namespace metal;
 
+            template <typename F>
+            void dispatch_bool(bool flag, F callback) {
+                if (flag) {
+                    callback(true_type{});
+                } else {
+                    callback(false_type{});
+                }
+            }
+
             [[kernel]] void invalid_callback(
                 device uint* output [[buffer(0)]]) {
                 dispatch_bool(true, [&]() {
@@ -46007,6 +46481,52 @@ def test_translate_project_reports_unsupported_captured_callback_shape(tmp_path)
         ),
     }
     assert diagnostic["details"]["sourcePath"] == "dispatch_bool.metal"
+
+
+def test_translate_project_preserves_unverified_dispatch_bool_helper(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "dispatch_bool.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename F>
+            void dispatch_bool(bool flag, F callback) {
+                if (flag) {
+                    callback(true_type{});
+                }
+            }
+
+            [[kernel]] void write_flag(
+                device uint* result_data [[buffer(0)]]) {
+                dispatch_bool(true, [&](auto flag) {
+                    result_data[0] = flag.value ? 1u : 0u;
+                });
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["vulkan"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+    diagnostic = next(
+        item
+        for item in payload["diagnostics"]
+        if item["code"] == "project.translate.template-materialization-unsupported"
+    )
+    assert diagnostic["missingCapabilities"] == ["template.specialization"]
+    assert diagnostic["details"]["sourceDeclarations"][0]["name"] == "dispatch_bool"
 
 
 def test_translate_project_reports_callback_helper_without_semantic_lowering(tmp_path):

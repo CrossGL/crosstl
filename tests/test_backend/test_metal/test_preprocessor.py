@@ -2898,6 +2898,123 @@ def test_preprocessor_binds_float16_threadgroup_array_to_explicit_member_templat
     assert "tile.template load" not in output
 
 
+def test_preprocessor_resolves_local_constants_in_template_member_arguments():
+    code = """
+    template <typename T, T Value>
+    struct integral_constant {
+      static constexpr T value = Value;
+    };
+
+    template <int Value>
+    using Int = integral_constant<int, Value>;
+
+    struct Loader {
+      template <typename Stride>
+      int load(Stride stride) { return stride.value; }
+
+      template <int Width>
+      int explicit_width() { return Width; }
+    };
+
+    kernel void first(device int* output [[buffer(0)]]) {
+      constexpr int Padding = 8;
+      Loader loader;
+      output[0] = loader.load(Int<Padding>{});
+      output[1] = loader.template explicit_width<Padding>();
+      {
+        constexpr int Padding = 4;
+        output[2] = loader.load(Int<Padding>{});
+      }
+      output[3] = loader.load(Int<Padding>{});
+    }
+
+    kernel void second(device int* output [[buffer(0)]]) {
+      using Scalar = half;
+      constexpr int Padding = 8 + 16 / sizeof(Scalar);
+      Loader loader;
+      output[0] = loader.load(Int<Padding>{});
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Loader__load__Int_8(loader, Int<Padding>{})" in output
+    assert "Loader__load__Int_4(loader, Int<Padding>{})" in output
+    assert "Loader__load__Int_16(loader, Int<Padding>{})" in output
+    assert "Loader__explicit_width__8(loader)" in output
+    assert "int Loader__load__Int_8(Loader self, Int<8> stride)" in output
+    assert "int Loader__load__Int_4(Loader self, Int<4> stride)" in output
+    assert "int Loader__load__Int_16(Loader self, Int<16> stride)" in output
+    assert "int Loader__explicit_width__8(Loader self)" in output
+
+
+def test_preprocessor_does_not_borrow_template_member_constant_from_sibling():
+    code = """
+    template <typename T, T Value>
+    struct integral_constant { static constexpr T value = Value; };
+
+    template <int Value>
+    using Int = integral_constant<int, Value>;
+
+    struct Loader {
+      template <typename Stride>
+      int load(Stride stride) { return stride.value; }
+    };
+
+    kernel void concrete(device int* output [[buffer(0)]]) {
+      constexpr int Padding = 8;
+      Loader loader;
+      output[0] = loader.load(Int<Padding>{});
+    }
+
+    kernel void unresolved(
+        device int* output [[buffer(0)]],
+        constant int& runtime_padding [[buffer(1)]]) {
+      const int Padding = runtime_padding;
+      Loader loader;
+      output[0] = loader.load(Int<Padding>{});
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert output.count("Loader__load__Int_8(loader, Int<Padding>{})") == 1
+    assert "Loader__load__Int_Padding(loader, Int<Padding>{})" in output
+
+
+def test_preprocessor_resolves_local_constant_in_instantiated_member_body():
+    code = """
+    template <typename T, T Value>
+    struct integral_constant { static constexpr T value = Value; };
+
+    template <int Value>
+    using Int = integral_constant<int, Value>;
+
+    struct Loader {
+      template <typename Stride>
+      int consume(Stride stride) { return stride.value; }
+
+      template <typename T>
+      int run(T value) {
+        constexpr int Padding = 4;
+        return value + consume(Int<Padding>{});
+      }
+    };
+
+    kernel void k(device int* output [[buffer(0)]]) {
+      Loader loader;
+      output[0] = loader.run(output[0]);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Loader__run__int(loader, output[0])" in output
+    assert "Loader__consume__Int_4(self, Int<Padding>{})" in output
+    assert "int Loader__consume__Int_4(Loader self, Int<4> stride)" in output
+    assert "Loader__consume__Int_Padding" not in output
+
+
 def test_preprocessor_selects_template_member_overload_by_arity():
     code = """
     struct Tile {

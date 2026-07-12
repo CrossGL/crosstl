@@ -134,6 +134,7 @@ class _MetalTemplateFunction:
     source: str
     variadic_template_parameters: Set[str] = field(default_factory=set)
     template_parameter_defaults: Dict[str, str] = field(default_factory=dict)
+    template_parameter_types: Dict[str, str] = field(default_factory=dict)
     template_type_traits: Dict[str, Dict[str, object]] = field(default_factory=dict)
     namespace: str = ""
     materializations: List[str] = field(default_factory=list)
@@ -3892,6 +3893,24 @@ class MetalPreprocessor(HLSLPreprocessor):
         template_declaration_spans = self._find_template_declaration_spans(code)
         if template_declaration_spans:
             scan_skip_spans = sorted(all_struct_spans + template_declaration_spans)
+        # Member specialization uses the same proven lexical constants as nested
+        # struct materialization; unresolved or runtime bindings remain absent.
+        local_constant_owner_spans = [
+            function.body_span
+            for function in self._find_non_template_function_definitions(
+                code,
+                scan_skip_spans,
+            )
+        ]
+        local_constant_type_aliases = self._collect_local_type_alias_bindings(
+            code,
+            local_constant_owner_spans,
+        )
+        local_integral_constants = self._collect_local_integral_constant_bindings(
+            code,
+            local_constant_owner_spans,
+            local_constant_type_aliases,
+        )
         struct_type_aliases = self._collect_struct_type_aliases(
             code,
             all_struct_names,
@@ -4000,6 +4019,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                     field_variable_types=field_variable_types,
                     field_structs_by_name=field_structs_by_name,
                     struct_type_aliases=struct_type_aliases,
+                    local_integral_constants=local_integral_constants,
                 )
                 if rewrite is not None:
                     end, replacement = rewrite
@@ -4029,6 +4049,9 @@ class MetalPreprocessor(HLSLPreprocessor):
         field_variable_types: Optional[Dict[str, List[Tuple[int, str]]]] = None,
         field_structs_by_name: Optional[Dict[str, _MetalStructDefinition]] = None,
         struct_type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]] = None,
+        local_integral_constants: Optional[
+            Dict[str, List[_MetalIntegralConstantBinding]]
+        ] = None,
     ) -> Optional[Tuple[int, str]]:
         # `field_variable_types` / `field_structs_by_name` cover EVERY struct/union
         # type (including method-less data carriers) and are used only to resolve
@@ -4095,6 +4118,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                     operator_call_structs=operator_call_structs,
                     rewrite_structs_by_name=structs_by_name,
                     explicit_template_arguments=explicit_template_arguments,
+                    local_integral_constants=local_integral_constants,
                 )
                 if rewrite is not None:
                     return rewrite
@@ -4150,6 +4174,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                         methods_by_struct=methods_by_struct,
                         operator_call_structs=operator_call_structs,
                         rewrite_structs_by_name=structs_by_name,
+                        local_integral_constants=local_integral_constants,
                     )
                 return None
 
@@ -4205,6 +4230,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                     operator_call_structs=operator_call_structs,
                     rewrite_structs_by_name=structs_by_name,
                     explicit_template_arguments=explicit_template_arguments,
+                    local_integral_constants=local_integral_constants,
                 )
             return None
 
@@ -4244,6 +4270,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                     methods_by_struct=methods_by_struct,
                     operator_call_structs=operator_call_structs,
                     rewrite_structs_by_name=structs_by_name,
+                    local_integral_constants=local_integral_constants,
                 )
             return None
 
@@ -4379,6 +4406,9 @@ class MetalPreprocessor(HLSLPreprocessor):
         methods_by_struct: Optional[Dict[str, Dict[str, _MetalStructMethod]]] = None,
         operator_call_structs: Optional[Set[str]] = None,
         rewrite_structs_by_name: Optional[Dict[str, _MetalStructDefinition]] = None,
+        local_integral_constants: Optional[
+            Dict[str, List[_MetalIntegralConstantBinding]]
+        ] = None,
     ) -> Optional[Tuple[int, str]]:
         arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
         if arg_close is None:
@@ -4412,10 +4442,18 @@ class MetalPreprocessor(HLSLPreprocessor):
             structs_by_name,
             arg_open,
         )
+        local_constant_values = self._local_integral_constants_at(
+            local_integral_constants or {},
+            arg_open,
+        )
         concrete_argument_types: List[str] = []
         for argument in call_arguments:
-            inferred = self._infer_argument_type(
+            inference_argument = self._substitute_template_argument_static_constants(
                 argument,
+                local_constant_values,
+            )
+            inferred = self._infer_argument_type(
+                inference_argument,
                 buffer_view,
                 local_view,
                 struct_field_types,
@@ -4535,6 +4573,9 @@ class MetalPreprocessor(HLSLPreprocessor):
         operator_call_structs: Optional[Set[str]] = None,
         rewrite_structs_by_name: Optional[Dict[str, _MetalStructDefinition]] = None,
         explicit_template_arguments: Optional[List[str]] = None,
+        local_integral_constants: Optional[
+            Dict[str, List[_MetalIntegralConstantBinding]]
+        ] = None,
     ) -> Optional[Tuple[int, str]]:
         # Instantiate a CALLED template member method from its call-site argument
         # types and rewrite the call to the concrete free function. `overloads`
@@ -4575,13 +4616,22 @@ class MetalPreprocessor(HLSLPreprocessor):
         struct_field_types = self._struct_field_types_at(
             variable_types, structs_by_name, arg_open
         )
+        local_constant_values = self._local_integral_constants_at(
+            local_integral_constants or {},
+            arg_open,
+        )
 
         # Infer the concrete type of every call argument; one un-inferable
-        # argument is a clean failure.
+        # argument is a clean failure. The source call stays unchanged; only the
+        # specialization identity and emitted helper signature use proven values.
         concrete_argument_types: List[str] = []
         for argument in call_arguments:
-            inferred = self._infer_argument_type(
+            inference_argument = self._substitute_template_argument_static_constants(
                 argument,
+                local_constant_values,
+            )
+            inferred = self._infer_argument_type(
+                inference_argument,
                 buffer_view,
                 local_view,
                 struct_field_types,
@@ -4605,6 +4655,18 @@ class MetalPreprocessor(HLSLPreprocessor):
                 )
             concrete_argument_types.append(inferred)
 
+        resolved_explicit_template_arguments = (
+            [
+                self._substitute_template_argument_static_constants(
+                    argument,
+                    local_constant_values,
+                )
+                for argument in explicit_template_arguments
+            ]
+            if explicit_template_arguments is not None
+            else None
+        )
+
         try:
             free_name = self._instantiate_template_member_overload(
                 struct,
@@ -4616,7 +4678,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 methods_by_struct=methods_by_struct,
                 operator_call_structs=operator_call_structs,
                 rewrite_structs_by_name=rewrite_structs_by_name,
-                explicit_template_arguments=explicit_template_arguments,
+                explicit_template_arguments=resolved_explicit_template_arguments,
             )
         except MetalStructMethodError as exc:
             if exc.source_location is None:
@@ -5837,6 +5899,16 @@ class MetalPreprocessor(HLSLPreprocessor):
         positioned_local_types = {
             name: [(0, value)] for name, value in local_view.items()
         }
+        local_constant_owner_spans = [(0, len(instantiated_body))]
+        local_constant_type_aliases = self._collect_local_type_alias_bindings(
+            instantiated_body,
+            local_constant_owner_spans,
+        )
+        local_integral_constants = self._collect_local_integral_constant_bindings(
+            instantiated_body,
+            local_constant_owner_spans,
+            local_constant_type_aliases,
+        )
         result: List[str] = []
         i = 0
         n = len(instantiated_body)
@@ -5877,6 +5949,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                     buffer_view,
                     instantiated_template_functions,
                     template_methods_by_struct,
+                    local_integral_constants,
                 )
                 if rewrite is not None:
                     end, replacement = rewrite
@@ -5900,6 +5973,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                     field_variable_types=positioned_local_types,
                     field_structs_by_name=rewrite_structs_by_name,
                     struct_type_aliases=struct_type_aliases,
+                    local_integral_constants=local_integral_constants,
                 )
                 if rewrite is not None:
                     end, replacement = rewrite
@@ -6124,6 +6198,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         buffer_view: Dict[str, str],
         instantiated_template_functions: Dict[str, str],
         template_methods_by_struct: Dict[str, Dict[str, List[_MetalStructMethod]]],
+        local_integral_constants: Dict[str, List[_MetalIntegralConstantBinding]],
     ) -> Optional[Tuple[int, str]]:
         # A receiver-less `name(args)` where `name` is a sibling member method
         # (template OR concrete) is lowered to its concrete free function with an
@@ -6161,6 +6236,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                     buffer_view,
                     instantiated_template_functions,
                     template_methods_by_struct,
+                    local_integral_constants,
                 )
             return None
 
@@ -6210,9 +6286,22 @@ class MetalPreprocessor(HLSLPreprocessor):
         ]
         representative = overloads[0]
         signature = f"{struct.name}::{method.name} -> {ident}({raw_args.strip()})"
+        local_constant_values = self._local_integral_constants_at(
+            local_integral_constants,
+            arg_open,
+        )
         concrete_argument_types: List[Optional[str]] = []
         for argument_index, argument in enumerate(call_arguments):
-            inferred = self._infer_argument_type(argument, buffer_view, local_view, {})
+            inference_argument = self._substitute_template_argument_static_constants(
+                argument,
+                local_constant_values,
+            )
+            inferred = self._infer_argument_type(
+                inference_argument,
+                buffer_view,
+                local_view,
+                {},
+            )
             if inferred is None:
                 if not self._template_member_argument_requires_inference(
                     representative,
@@ -6232,6 +6321,18 @@ class MetalPreprocessor(HLSLPreprocessor):
                 )
             concrete_argument_types.append(inferred)
 
+        resolved_explicit_template_arguments = (
+            [
+                self._substitute_template_argument_static_constants(
+                    argument,
+                    local_constant_values,
+                )
+                for argument in explicit_template_arguments
+            ]
+            if explicit_template_arguments is not None
+            else None
+        )
+
         free_name = self._instantiate_template_member_overload(
             struct,
             overloads,
@@ -6239,7 +6340,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             signature,
             instantiated_template_functions,
             template_methods_by_struct,
-            explicit_template_arguments=explicit_template_arguments,
+            explicit_template_arguments=resolved_explicit_template_arguments,
         )
         args = self._expanded_template_member_call_arguments(free_name, raw_args)
         if representative.is_static:
@@ -6320,6 +6421,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         buffer_view: Dict[str, str],
         instantiated_template_functions: Dict[str, str],
         template_methods_by_struct: Dict[str, Dict[str, List[_MetalStructMethod]]],
+        local_integral_constants: Dict[str, List[_MetalIntegralConstantBinding]],
     ) -> Optional[Tuple[int, str]]:
         # Lower an implicit-this `operator()(args)` call. `empty_paren_open` is the
         # `(` of the empty `()` after `operator`; the real argument list follows.
@@ -6356,9 +6458,22 @@ class MetalPreprocessor(HLSLPreprocessor):
             if argument.strip()
         ]
         signature = f"{struct.name}::{method.name} -> operator()({args})"
+        local_constant_values = self._local_integral_constants_at(
+            local_integral_constants,
+            arg_open,
+        )
         concrete_argument_types: List[str] = []
         for argument in call_arguments:
-            inferred = self._infer_argument_type(argument, buffer_view, local_view, {})
+            inference_argument = self._substitute_template_argument_static_constants(
+                argument,
+                local_constant_values,
+            )
+            inferred = self._infer_argument_type(
+                inference_argument,
+                buffer_view,
+                local_view,
+                {},
+            )
             if inferred is None:
                 raise MetalStructMethodError(
                     "Cannot lower template member method "
@@ -8561,6 +8676,15 @@ class MetalPreprocessor(HLSLPreprocessor):
                     template_parameter_defaults=(
                         self._template_parameter_defaults(parameter_text)
                     ),
+                    template_parameter_types={
+                        parameter.name: parameter.declared_type
+                        for parameter in self._parse_template_parameter_list(
+                            parameter_text
+                        )
+                        if parameter.name is not None
+                        and not parameter.is_type_parameter
+                        and parameter.declared_type is not None
+                    },
                     template_type_traits=template_type_traits,
                     namespace=self._namespace_at(namespace_spans, start),
                 )

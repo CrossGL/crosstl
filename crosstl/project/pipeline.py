@@ -9338,6 +9338,26 @@ class _MetalTemplateTypeDeclaration:
     is_functor: bool = False
 
 
+@dataclass(frozen=True)
+class _MetalTemplateAliasDeclaration:
+    name: str
+    qualified_name: str
+    parameters: tuple[str, ...]
+    parameter_defaults: Mapping[str, str]
+    target: str
+    span: tuple[int, int]
+    namespace: str
+
+
+@dataclass(frozen=True)
+class _MetalTemplateAliasReference:
+    start: int
+    end: int
+    declaration: _MetalTemplateAliasDeclaration
+    arguments: tuple[str, ...]
+    target_is_visible: bool
+
+
 def _materialize_inherited_source_template_helpers(
     *,
     preprocessor: Any,
@@ -10532,6 +10552,13 @@ def _metal_function_parameter_declarations(
         normalized = parameter.replace("...", " ")
         parsed = _metal_declared_type_and_name(normalized)
         if parsed is None:
+            declaration, _default = preprocessor._split_top_level_assignment(normalized)
+            unnamed_type = _strip_metal_attribute_blocks(declaration).strip()
+            if not unnamed_type:
+                continue
+            declarations.append(
+                (_normalize_metal_type_text(unnamed_type), "", variadic)
+            )
             continue
         type_text, name = parsed
         declarations.append((type_text, name, variadic))
@@ -10701,7 +10728,9 @@ def _metal_scoped_statement_spans(
             opens_statement_scope = (
                 not prefix
                 or re.match(
-                    r"^(?:if|else|for|while|switch|case|default|do|try|catch|"
+                    r"^(?:(?:_Pragma\s*\(\s*\"(?:\\.|[^\"\\])*\"\s*\)|"
+                    r"\[\[[^\]]*\]\])\s*)*"
+                    r"(?:if|else|for|while|switch|case|default|do|try|catch|"
                     r"struct|class|union|enum)\b",
                     prefix,
                 )
@@ -11891,6 +11920,22 @@ def _metal_expression_type(
     if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", text):
         return type_environment.get(text)
 
+    brace_start = text.find("{")
+    if brace_start > 0:
+        brace_end = preprocessor._find_matching_delimiter(text, brace_start, "{", "}")
+        rendered_type = text[:brace_start].strip()
+        type_match = re.match(r"[A-Za-z_][A-Za-z0-9_:]*", rendered_type)
+        type_end = type_match.end() if type_match is not None else 0
+        if type_end < len(rendered_type) and rendered_type[type_end] == "<":
+            angle_end = preprocessor._find_matching_angle(rendered_type, type_end)
+            type_end = angle_end + 1 if angle_end is not None else type_end
+        if (
+            brace_end == len(text) - 1
+            and not text[brace_start + 1 : brace_end].strip()
+            and type_end == len(rendered_type)
+        ):
+            return _normalize_metal_type_text(rendered_type)
+
     callee = _metal_expression_callee(preprocessor, text)
     if callee is not None:
         callee_name, rendered_callee, _paren_start = callee
@@ -12204,6 +12249,7 @@ def _infer_plain_template_helper_arguments(
     return_types: Mapping[str, str],
     explicit_template_arguments: Sequence[str] = (),
     template_structs_by_name: Mapping[str, Any] | None = None,
+    static_values: Mapping[str, str] | None = None,
 ) -> list[str] | None:
     header = _metal_template_header(template)
     parameter_declarations = _metal_function_parameter_declarations(
@@ -12222,12 +12268,27 @@ def _infer_plain_template_helper_arguments(
     variadic_parameters = set(
         getattr(template, "variadic_template_parameters", set()) or set()
     )
+    constant_values = dict(static_values or {})
+    inference_arguments = [
+        preprocessor._substitute_template_argument_static_constants(
+            argument,
+            constant_values,
+        )
+        for argument in call_arguments
+    ]
+    inference_template_arguments = [
+        preprocessor._substitute_template_argument_static_constants(
+            argument,
+            constant_values,
+        )
+        for argument in explicit_template_arguments
+    ]
     explicit_bindings, explicit_variadic_bindings = (
         preprocessor._template_argument_bindings(
             template,
-            list(explicit_template_arguments),
+            inference_template_arguments,
         )
-        if explicit_template_arguments
+        if inference_template_arguments
         else ({}, {})
     )
     bindings: dict[str, str] = {
@@ -12259,7 +12320,7 @@ def _infer_plain_template_helper_arguments(
                     type_environment,
                     return_types,
                 )
-                for argument in call_arguments[
+                for argument in inference_arguments[
                     argument_index : argument_index + variadic_count
                 ]
             ]
@@ -12276,7 +12337,7 @@ def _infer_plain_template_helper_arguments(
             continue
         actual_type = _metal_expression_type(
             preprocessor,
-            call_arguments[argument_index],
+            inference_arguments[argument_index],
             type_environment,
             return_types,
         )
@@ -12303,6 +12364,33 @@ def _infer_plain_template_helper_arguments(
     for parameter, values in variadic_bindings.items():
         bindings[parameter] = ", ".join(values)
 
+    for parameter_name, parameter_type in getattr(
+        template,
+        "template_parameter_types",
+        {},
+    ).items():
+        if parameter_name not in bindings:
+            continue
+        declared_type = preprocessor._replace_identifiers(
+            parameter_type,
+            bindings,
+        )
+        if declared_type not in preprocessor._METAL_INTEGRAL_SCALAR_TYPES:
+            continue
+        proven_value = preprocessor._proven_integral_constant_value(
+            declared_type,
+            bindings[parameter_name],
+        )
+        if proven_value is None:
+            return None
+        bindings[parameter_name] = proven_value
+
+    if any(
+        _template_argument_missing_parameters(value, template_parameters)
+        for value in bindings.values()
+    ):
+        return None
+
     missing = [
         parameter
         for parameter in getattr(template, "template_parameters", []) or []
@@ -12321,6 +12409,7 @@ def _infer_plain_template_helper_matches(
     return_types: Mapping[str, str],
     explicit_template_arguments: Sequence[str],
     template_structs_by_name: Mapping[str, Any],
+    static_values: Mapping[str, str] | None = None,
 ) -> list[tuple[Any, list[str], list[tuple[str, str, bool]]]]:
     matches: list[tuple[Any, list[str], list[tuple[str, str, bool]]]] = []
     for template in candidate_templates:
@@ -12332,6 +12421,7 @@ def _infer_plain_template_helper_matches(
             return_types,
             explicit_template_arguments,
             template_structs_by_name,
+            static_values,
         )
         if not arguments or not preprocessor._template_arguments_satisfy_parameters(
             template,
@@ -12467,6 +12557,18 @@ def _materialize_plain_template_helper_calls(
             working,
             template_spans,
         )
+        local_constant_owner_spans = [function.body_span for function in functions]
+        local_constant_type_aliases = preprocessor._collect_local_type_alias_bindings(
+            working,
+            local_constant_owner_spans,
+        )
+        local_integral_constants = (
+            preprocessor._collect_local_integral_constant_bindings(
+                working,
+                local_constant_owner_spans,
+                local_constant_type_aliases,
+            )
+        )
         concrete_function_names = {function.name for function in functions}
         reachable = set(reachable_function_spans)
         replacements: list[tuple[int, int, str]] = []
@@ -12572,6 +12674,22 @@ def _materialize_plain_template_helper_calls(
                         materialized_template_spans,
                     )
                 )
+                materialized_constant_owner_spans = [
+                    function.body_span for function in materialized_functions
+                ]
+                materialized_constant_type_aliases = (
+                    preprocessor._collect_local_type_alias_bindings(
+                        materialized,
+                        materialized_constant_owner_spans,
+                    )
+                )
+                materialized_integral_constants = (
+                    preprocessor._collect_local_integral_constant_bindings(
+                        materialized,
+                        materialized_constant_owner_spans,
+                        materialized_constant_type_aliases,
+                    )
+                )
                 materialized_return_types = {
                     function.name: return_type
                     for function in materialized_functions
@@ -12631,6 +12749,10 @@ def _materialize_plain_template_helper_calls(
                             materialized_return_types,
                             child_template_arguments,
                             template_structs_by_name,
+                            preprocessor._local_integral_constants_at(
+                                materialized_integral_constants,
+                                child_span[0],
+                            ),
                         )
                         if len(inferred_matches) != 1:
                             if (
@@ -12709,6 +12831,10 @@ def _materialize_plain_template_helper_calls(
                     return_types,
                     template_arguments,
                     template_structs_by_name,
+                    preprocessor._local_integral_constants_at(
+                        local_integral_constants,
+                        span[0],
+                    ),
                 )
                 if len(inferred_matches) != 1:
                     if inferred_matches or function_name not in concrete_function_names:
@@ -13533,6 +13659,311 @@ def _metal_visible_using_namespaces(
         if namespace not in visible:
             visible.append(namespace)
     return visible
+
+
+def _metal_template_alias_declarations(
+    preprocessor: Any,
+    source: str,
+) -> list[_MetalTemplateAliasDeclaration]:
+    masked = _masked_metal_non_code_text(source)
+    namespace_spans = preprocessor._find_namespace_spans(source)
+    declarations: list[_MetalTemplateAliasDeclaration] = []
+    position = 0
+    while True:
+        match = re.search(r"\btemplate\s*<", masked[position:])
+        if match is None:
+            break
+        start = position + match.start()
+        angle_start = masked.find("<", start)
+        angle_end = preprocessor._find_matching_angle(
+            source,
+            angle_start,
+        )
+        if angle_end is None:
+            position = start + len("template")
+            continue
+
+        declaration_start = angle_end + 1
+        declaration_match = re.match(
+            r"\s*using\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=",
+            masked[declaration_start:],
+            re.DOTALL,
+        )
+        if declaration_match is None:
+            position = declaration_start
+            continue
+        equals = declaration_start + declaration_match.end() - 1
+        semicolon = _metal_statement_semicolon(preprocessor, source, equals + 1)
+        if semicolon is None:
+            position = declaration_start
+            continue
+
+        parameter_text = source[angle_start + 1 : angle_end]
+        parameters = tuple(preprocessor._template_parameter_names(parameter_text))
+        variadic = preprocessor._variadic_template_parameter_names(parameter_text)
+        if not parameters or variadic:
+            position = semicolon + 1
+            continue
+        name = declaration_match.group("name")
+        namespace = preprocessor._namespace_at(namespace_spans, start)
+        declarations.append(
+            _MetalTemplateAliasDeclaration(
+                name=name,
+                qualified_name=f"{namespace}::{name}" if namespace else name,
+                parameters=parameters,
+                parameter_defaults=preprocessor._template_parameter_defaults(
+                    parameter_text
+                ),
+                target=source[equals + 1 : semicolon].strip(),
+                span=(start, semicolon + 1),
+                namespace=namespace,
+            )
+        )
+        position = semicolon + 1
+    return declarations
+
+
+def _metal_template_alias_shadow_spans(
+    preprocessor: Any,
+    source: str,
+    alias_names: set[str],
+) -> dict[str, list[tuple[int, int]]]:
+    shadow_spans: dict[str, list[tuple[int, int]]] = {name: [] for name in alias_names}
+    for start, end in preprocessor._find_template_declaration_spans(source):
+        angle_start = source.find("<", start, end)
+        if angle_start == -1:
+            continue
+        angle_end = preprocessor._find_matching_angle(
+            source,
+            angle_start,
+        )
+        if angle_end is None or angle_end >= end:
+            continue
+        parameters = set(
+            preprocessor._template_parameter_names(source[angle_start + 1 : angle_end])
+        )
+        for name in parameters & alias_names:
+            shadow_spans[name].append((start, end))
+    return shadow_spans
+
+
+def _metal_template_alias_bindings(
+    preprocessor: Any,
+    declaration: _MetalTemplateAliasDeclaration,
+    arguments: Sequence[str],
+) -> dict[str, str] | None:
+    if len(arguments) > len(declaration.parameters):
+        return None
+    bindings = {
+        parameter: arguments[index].strip()
+        for index, parameter in enumerate(declaration.parameters[: len(arguments)])
+    }
+    context = SimpleNamespace(template_type_traits={})
+    for parameter in declaration.parameters[len(arguments) :]:
+        default = declaration.parameter_defaults.get(parameter)
+        if default is None:
+            return None
+        bindings[parameter] = preprocessor._resolve_template_default_argument(
+            str(default),
+            bindings,
+            context,
+        )
+    return bindings
+
+
+def _metal_template_alias_reference_matches(
+    preprocessor: Any,
+    source: str,
+    declarations: Sequence[_MetalTemplateAliasDeclaration],
+) -> list[_MetalTemplateAliasReference]:
+    if not declarations:
+        return []
+    declarations_by_name: dict[str, list[_MetalTemplateAliasDeclaration]] = {}
+    for declaration in declarations:
+        declarations_by_name.setdefault(declaration.qualified_name, []).append(
+            declaration
+        )
+    unambiguous = {
+        name: candidates[0]
+        for name, candidates in declarations_by_name.items()
+        if len(candidates) == 1
+    }
+    if not unambiguous:
+        return []
+
+    masked = _masked_metal_non_code_text(source)
+    declaration_spans = [declaration.span for declaration in declarations]
+    namespace_spans = preprocessor._find_namespace_spans(source)
+    block_spans = _metal_block_spans(preprocessor, source)
+    using_namespace_directives = _metal_using_namespace_directives(
+        preprocessor,
+        source,
+        block_spans,
+        namespace_spans,
+        {
+            declaration.namespace
+            for declaration in declarations
+            if declaration.namespace
+        },
+    )
+    shadow_spans = _metal_template_alias_shadow_spans(
+        preprocessor,
+        source,
+        {declaration.name for declaration in declarations},
+    )
+    reference_pattern = re.compile(
+        r"(?<![A-Za-z0-9_])(?P<global>::\s*)?"
+        r"(?P<name>[A-Za-z_][A-Za-z0-9_]*"
+        r"(?:\s*::\s*[A-Za-z_][A-Za-z0-9_]*)*)\s*<"
+    )
+    references: list[_MetalTemplateAliasReference] = []
+    covered_until = -1
+    for match in reference_pattern.finditer(masked):
+        if match.start() < covered_until:
+            continue
+        if _source_offset_in_spans(match.start(), declaration_spans):
+            continue
+        raw_name = re.sub(r"\s*::\s*", "::", match.group("name"))
+        globally_qualified = match.group("global") is not None
+        namespace = preprocessor._namespace_at(namespace_spans, match.start())
+        candidates = preprocessor._namespace_lookup_names(
+            raw_name,
+            namespace,
+            globally_qualified,
+        )
+        visible_namespaces = _metal_visible_using_namespaces(
+            using_namespace_directives,
+            match.start(),
+        )
+        if "::" not in raw_name and not globally_qualified:
+            candidates.extend(
+                f"{visible}::{raw_name}" for visible in visible_namespaces
+            )
+        declaration = next(
+            (
+                unambiguous[candidate]
+                for candidate in candidates
+                if candidate in unambiguous
+            ),
+            None,
+        )
+        if declaration is None:
+            continue
+        if (
+            "::" not in raw_name
+            and not globally_qualified
+            and _source_offset_in_spans(
+                match.start(),
+                shadow_spans.get(declaration.name, []),
+            )
+        ):
+            continue
+        angle_start = masked.rfind("<", match.start(), match.end())
+        angle_end = preprocessor._find_matching_angle(source, angle_start)
+        if angle_end is None:
+            continue
+        covered_until = angle_end + 1
+        arguments = preprocessor._split_top_level_commas(
+            source[angle_start + 1 : angle_end]
+        )
+        target_is_visible = (
+            namespace == declaration.namespace
+            or declaration.namespace in visible_namespaces
+        )
+        references.append(
+            _MetalTemplateAliasReference(
+                start=match.start(),
+                end=angle_end + 1,
+                declaration=declaration,
+                arguments=tuple(arguments),
+                target_is_visible=target_is_visible,
+            )
+        )
+    return references
+
+
+def _canonicalize_metal_template_aliases(
+    preprocessor: Any,
+    source: str,
+) -> str:
+    declarations = _metal_template_alias_declarations(preprocessor, source)
+    if not declarations:
+        return source
+
+    working = source
+    seen_sources: set[str] = set()
+    for _ in range(len(declarations) + 1):
+        if working in seen_sources:
+            break
+        seen_sources.add(working)
+        current_declarations = _metal_template_alias_declarations(
+            preprocessor,
+            working,
+        )
+        replacements: list[tuple[int, int, str]] = []
+        for reference in _metal_template_alias_reference_matches(
+            preprocessor,
+            working,
+            current_declarations,
+        ):
+            if not reference.target_is_visible:
+                continue
+            bindings = _metal_template_alias_bindings(
+                preprocessor,
+                reference.declaration,
+                reference.arguments,
+            )
+            if bindings is None:
+                continue
+            replacement = preprocessor._replace_identifiers(
+                reference.declaration.target,
+                bindings,
+            ).strip()
+            if replacement and replacement != working[reference.start : reference.end]:
+                replacements.append((reference.start, reference.end, replacement))
+        if not replacements:
+            break
+        working = preprocessor._apply_text_replacements(working, replacements)
+
+    current_declarations = _metal_template_alias_declarations(preprocessor, working)
+    declaration_counts = Counter(
+        declaration.qualified_name for declaration in current_declarations
+    )
+    live_aliases = {name for name, count in declaration_counts.items() if count > 1}
+    live_aliases.update(
+        {
+            reference.declaration.qualified_name
+            for reference in _metal_template_alias_reference_matches(
+                preprocessor,
+                working,
+                current_declarations,
+            )
+        }
+    )
+    if live_aliases:
+        changed = True
+        while changed:
+            changed = False
+            for declaration in current_declarations:
+                if declaration.qualified_name not in live_aliases:
+                    continue
+                for dependency in current_declarations:
+                    if dependency.qualified_name in live_aliases:
+                        continue
+                    if re.search(
+                        rf"\b{re.escape(dependency.name)}\s*<",
+                        declaration.target,
+                    ):
+                        live_aliases.add(dependency.qualified_name)
+                        changed = True
+    removals = [
+        (declaration.span[0], declaration.span[1], "")
+        for declaration in current_declarations
+        if declaration.qualified_name not in live_aliases
+    ]
+    if removals:
+        working = preprocessor._apply_text_replacements(working, removals)
+    return working
 
 
 def _inline_metal_concrete_using_template_aliases(
@@ -14401,6 +14832,7 @@ def _metal_concrete_type_names(preprocessor: Any, source: str) -> set[str]:
 
 def _metal_concrete_template_type_record(
     *,
+    preprocessor: Any,
     type_text: str,
     missing: Sequence[str],
     declarations_by_name: Mapping[str, Any],
@@ -14415,7 +14847,15 @@ def _metal_concrete_template_type_record(
             prefix = f"{name}_"
             if not token.startswith(prefix):
                 continue
-            arguments = [part for part in token[len(prefix) :].split("_") if part]
+            materialized = getattr(
+                preprocessor,
+                "_materialized_struct_specializations",
+                {},
+            ).get(token)
+            if materialized is not None and str(materialized[0]) == name:
+                arguments = [str(argument) for argument in materialized[1]]
+            else:
+                arguments = [part for part in token[len(prefix) :].split("_") if part]
             if not arguments:
                 continue
             required_signature = f"{name}<{', '.join(arguments)}>"
@@ -14544,6 +14984,7 @@ def _unresolved_metal_standalone_template_type_records(
         ):
             return
         concrete_type_record = _metal_concrete_template_type_record(
+            preprocessor=preprocessor,
             type_text=type_text,
             missing=missing,
             declarations_by_name=declarations_by_name,
@@ -14767,6 +15208,91 @@ def _metal_template_is_struct_member(
     )
 
 
+def _metal_dispatch_bool_callback_contract(
+    preprocessor: Any,
+    template: Any,
+) -> bool:
+    if template.name != "dispatch_bool" or list(template.template_parameters) != ["F"]:
+        return False
+    parameters = _metal_function_parameter_declarations(
+        preprocessor,
+        _metal_template_header(template),
+    )
+    if len(parameters) != 2 or not parameters[0][1] or not parameters[1][1]:
+        return False
+    condition_type = _strip_metal_type_qualifiers(parameters[0][0]).rstrip("& ")
+    callback_type = _strip_metal_type_qualifiers(parameters[1][0]).rstrip("& ")
+    if condition_type != "bool" or callback_type != "F":
+        return False
+
+    body_start = template.source.find("{")
+    body_end = template.source.rfind("}")
+    if body_start == -1 or body_end <= body_start:
+        return False
+    condition_name = re.escape(parameters[0][1])
+    callback_name = re.escape(parameters[1][1])
+    true_type = r"(?:(?:metal\s*::\s*)?true_type)"
+    false_type = r"(?:(?:metal\s*::\s*)?false_type)"
+    body = _masked_metal_non_code_text(template.source[body_start + 1 : body_end])
+    contract = (
+        rf"\s*if\s*\(\s*{condition_name}\s*\)\s*\{{\s*"
+        rf"{callback_name}\s*\(\s*{true_type}\s*\{{\s*\}}\s*\)\s*;\s*"
+        rf"\}}\s*else\s*\{{\s*"
+        rf"{callback_name}\s*\(\s*{false_type}\s*\{{\s*\}}\s*\)\s*;\s*"
+        rf"\}}\s*"
+    )
+    return re.fullmatch(contract, body, re.DOTALL) is not None
+
+
+def _metal_is_lambda_expression(preprocessor: Any, expression: str) -> bool:
+    text = expression.strip()
+    if not text.startswith("["):
+        return False
+    capture_end = preprocessor._find_matching_delimiter(text, 0, "[", "]")
+    if capture_end is None:
+        return False
+    body_start = text.find("{", capture_end + 1)
+    if body_start == -1 or ";" in text[capture_end + 1 : body_start]:
+        return False
+    body_end = preprocessor._find_matching_delimiter(text, body_start, "{", "}")
+    return body_end == len(text) - 1
+
+
+def _metal_dispatch_bool_callbacks_defer_to_frontend(
+    preprocessor: Any,
+    source: str,
+    template: Any,
+    templates: Sequence[Any],
+    template_spans: Sequence[tuple[int, int]],
+    reachable_function_spans: Sequence[tuple[int, int]],
+) -> bool:
+    if not _metal_dispatch_bool_callback_contract(preprocessor, template):
+        return False
+    if sum(candidate.name == template.name for candidate in templates) != 1:
+        return False
+    if any(
+        function.name == template.name
+        for function in preprocessor._find_non_template_function_definitions(
+            source,
+            list(template_spans),
+        )
+    ):
+        return False
+    calls = _plain_template_helper_call_sites(
+        preprocessor,
+        source,
+        {template.name: [template]},
+        template_spans,
+        reachable_function_spans,
+    )
+    return bool(calls) and all(
+        not explicit_arguments
+        and len(arguments) == 2
+        and _metal_is_lambda_expression(preprocessor, arguments[1])
+        for _name, arguments, _span, explicit_arguments in calls
+    )
+
+
 def _project_template_materialization_for_artifact(
     *,
     unit: ProjectTranslationUnit,
@@ -14822,6 +15348,11 @@ def _project_template_materialization_for_artifact(
             discovery_preprocessor,
             source,
             file_path=str(unit.path),
+        )
+        discovery_preprocessor._configure_integral_constant_contracts(discovery_source)
+        discovery_source = _canonicalize_metal_template_aliases(
+            discovery_preprocessor,
+            discovery_source,
         )
     except Exception:  # noqa: BLE001
         return None
@@ -15342,6 +15873,16 @@ def _project_template_materialization_for_artifact(
         ):
             replacements.append((template.span[0], template.span[1], ""))
             continue
+        if _metal_dispatch_bool_callbacks_defer_to_frontend(
+            preprocessor,
+            materialized,
+            template,
+            remaining_templates,
+            current_template_spans,
+            current_reachable_function_spans,
+        ):
+            replacements.append((template.span[0], template.span[1], ""))
+            continue
         if template.name in source_instantiation_partial_templates:
             continue
         default_parameters = _metal_template_parameter_defaults(
@@ -15518,6 +16059,20 @@ def _project_template_materialization_for_artifact(
                 materialized, explicit_replacements
             )
     materialized = preprocessor._lower_struct_member_functions(materialized)
+    # Keep alias wrappers intact while compile-time callbacks infer their
+    # argument types; canonicalize only after member lowering has consumed them.
+    canonicalized_aliases = _canonicalize_metal_template_aliases(
+        preprocessor,
+        materialized,
+    )
+    if canonicalized_aliases != materialized:
+        materialized = (
+            preprocessor._materialize_explicit_template_struct_instantiations(
+                canonicalized_aliases,
+                work_budget=explicit_work_budget,
+            )
+        )
+        materialized = preprocessor._lower_struct_member_functions(materialized)
     materialized = _inline_metal_concrete_using_template_aliases(
         preprocessor,
         materialized,

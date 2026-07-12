@@ -58,7 +58,6 @@
     ],
     "next_kernel_blocked_by": [
       "https://github.com/CrossGL/crosstl/issues/1479",
-      "https://github.com/CrossGL/crosstl/issues/1490",
       "https://github.com/CrossGL/crosstl/issues/1544"
     ]
   },
@@ -80,8 +79,7 @@
       "https://github.com/CrossGL/crosstl/issues/1554"
     ],
     "next_kernel_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1479",
-      "https://github.com/CrossGL/crosstl/issues/1490"
+      "https://github.com/CrossGL/crosstl/issues/1479"
     ]
   },
   "compile_time_loop_status": {
@@ -105,11 +103,38 @@
       ]
     },
     "next_kernel_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1479",
-      "https://github.com/CrossGL/crosstl/issues/1490"
+      "https://github.com/CrossGL/crosstl/issues/1479"
     ],
     "semantic_readiness_blocked_by": [
       "https://github.com/CrossGL/crosstl/issues/1557"
+    ]
+  },
+  "template_alias_status": {
+    "status": "partial",
+    "source": "mlx/backend/metal/kernels/quantized_nax.metal",
+    "target": "vulkan",
+    "supported_contract": "bounded non-variadic namespace-scope alias templates with lexical namespace lookup, default argument substitution, chained expansion, and template-parameter shadowing",
+    "plain_helper_supported_contract": "call-site deduction through unnamed parameters, empty braced type values, and proven lexical integral constants",
+    "callback_handoff_supported_contract": "verified dispatch_bool helpers with only reachable lambda calls defer to structured frontend callback lowering",
+    "high_budget_report": {
+      "unsupported_before": 111,
+      "unsupported_after": 1,
+      "residual_int_alias_uses": 0,
+      "artifact_status": "blocked-before-artifact"
+    },
+    "remaining_helpers": [
+      "const_for_loop<start, stop, step, F>"
+    ],
+    "resolved_helpers": [
+      "dispatch_bool<F>",
+      "tile_matmad_nax<CTile, ATile, BTile, transpose_a, transpose_b>"
+    ],
+    "resolved_value_arguments": [
+      "BK_padded",
+      "BN_padded"
+    ],
+    "next_kernel_blocked_by": [
+      "https://github.com/CrossGL/crosstl/issues/1479"
     ]
   },
   "directx_toolchain_status": {
