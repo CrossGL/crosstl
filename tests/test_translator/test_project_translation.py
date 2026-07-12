@@ -46223,7 +46223,7 @@ def test_translate_project_materializes_loop_local_plain_helper_for_targets(tmp_
     assert_spirv_asm_validates_if_available(outputs["vulkan"], tmp_path)
 
 
-def test_translate_project_expands_verified_const_for_loop_callbacks(tmp_path):
+def test_translate_project_expands_const_for_loop_callback_iteration_escape(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "callback_loop.metal").write_text(
@@ -46253,32 +46253,20 @@ def test_translate_project_expands_verified_const_for_loop_callbacks(tmp_path):
                 return integral_constant<decltype(Lhs * Rhs), Lhs * Rhs>{};
             }
 
-            struct Writer {
-                template <typename Row, typename Column>
-                static void store(device int* out, Row row, Column column) {
-                    out[row.value + column.value] = row.value + column.value;
-                }
-            };
-
             template <int Rows, int Columns>
-            struct Tile {
-                void run(device int* out) {
-                    const_for_loop<0, Rows, 1>([&](auto row) {
-                        const_for_loop<0, Columns, 1>([&](auto column) {
-                            Writer::store(
-                                out,
-                                row * Int<4>{},
-                                column * Int<1>{}
-                            );
-                        });
+            [[kernel]] void write_indices(device int* out [[buffer(0)]]) {
+                const_for_loop<0, Rows, 1>([&](auto row) {
+                    if (row.value == 1 && out[0] < 0) {
+                        return;
+                    }
+                    const_for_loop<0, Columns, 1>([&](auto column) {
+                        out[row.value * 4 + column.value] =
+                            row.value * 4 + column.value;
                     });
-                }
-            };
-
-            kernel void write_indices(device int* out [[buffer(0)]]) {
-                Tile<2, 2> tile;
-                tile.run(out);
+                });
             }
+
+            instantiate_kernel("write_indices_2_2", write_indices, 2, 2)
             """).strip(),
         encoding="utf-8",
     )

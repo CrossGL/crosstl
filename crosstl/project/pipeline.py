@@ -15787,6 +15787,7 @@ def _project_template_materialization_for_artifact(
         },
     )
     specializations.extend(inferred_plain_specializations)
+    materialized = preprocessor._lower_concrete_const_for_loop_callbacks(materialized)
 
     existing_struct_specializations = set(
         preprocessor._materialized_struct_specializations
@@ -15823,6 +15824,10 @@ def _project_template_materialization_for_artifact(
             materialized,
             _metal_template_parameter_name_set(preprocessor, unit, materialized),
         )
+
+    # Source and member materialization can make callback loop bounds concrete
+    # after the frontend's initial struct-specialization pass.
+    materialized = preprocessor._lower_concrete_const_for_loop_callbacks(materialized)
 
     replacements: list[tuple[int, int, str]] = []
     unsupported: list[dict[str, Any]] = list(source_instantiation_unsupported)

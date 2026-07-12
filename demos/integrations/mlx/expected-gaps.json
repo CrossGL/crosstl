@@ -57,7 +57,7 @@
       "https://github.com/CrossGL/crosstl/issues/1546"
     ],
     "next_kernel_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1479",
+      "https://github.com/CrossGL/crosstl/issues/1566",
       "https://github.com/CrossGL/crosstl/issues/1544"
     ]
   },
@@ -79,7 +79,7 @@
       "https://github.com/CrossGL/crosstl/issues/1554"
     ],
     "next_kernel_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1479"
+      "https://github.com/CrossGL/crosstl/issues/1566"
     ]
   },
   "compile_time_loop_status": {
@@ -90,8 +90,8 @@
       "opengl",
       "vulkan"
     ],
-    "supported_contract": "concrete const_for_loop callbacks with verified integral_constant, Int alias, recursive helper, and arithmetic operator contracts; integral start, stop, and step values; reference capture; one auto integral-constant parameter; ordered nested expansion; and no callback-local control transfer",
-    "unresolved_callbacks": "preserved for structured materialization diagnostics",
+    "supported_contract": "concrete const_for_loop callbacks with verified integral_constant, Int alias, recursive helper, arithmetic operator, and implicit value-conversion contracts; integral start, stop, and step values; reference capture; one auto integral-constant parameter; ordered nested expansion; and callback-local bare returns lowered to per-iteration escapes outside ordinary loops and switches",
+    "unresolved_callbacks": "value returns and callback-owned loop, switch, break, continue, or goto control remain preserved",
     "native_validation": {
       "directx": "generated-reduced-fixture-dxc-not-run",
       "opengl": "blocked-by-tracked-issue",
@@ -103,14 +103,14 @@
       ]
     },
     "next_kernel_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1479"
+      "https://github.com/CrossGL/crosstl/issues/1566"
     ],
     "semantic_readiness_blocked_by": [
       "https://github.com/CrossGL/crosstl/issues/1557"
     ]
   },
   "template_alias_status": {
-    "status": "partial",
+    "status": "materialized",
     "source": "mlx/backend/metal/kernels/quantized_nax.metal",
     "target": "vulkan",
     "supported_contract": "bounded non-variadic namespace-scope alias templates with lexical namespace lookup, default argument substitution, chained expansion, and template-parameter shadowing",
@@ -118,23 +118,29 @@
     "callback_handoff_supported_contract": "verified dispatch_bool helpers with only reachable lambda calls defer to structured frontend callback lowering",
     "high_budget_report": {
       "unsupported_before": 111,
-      "unsupported_after": 1,
+      "unsupported_after": 0,
       "residual_int_alias_uses": 0,
-      "artifact_status": "blocked-before-artifact"
+      "artifact_status": "blocked-after-materialization"
     },
-    "remaining_helpers": [
-      "const_for_loop<start, stop, step, F>"
-    ],
+    "remaining_helpers": [],
     "resolved_helpers": [
       "dispatch_bool<F>",
+      "const_for_loop<start, stop, step, F>",
       "tile_matmad_nax<CTile, ATile, BTile, transpose_a, transpose_b>"
     ],
     "resolved_value_arguments": [
       "BK_padded",
       "BN_padded"
     ],
+    "post_materialization_translation": {
+      "status": "blocked-by-tracked-issue",
+      "diagnostic_code": "project.translate.crossgl-function-body-parse-failed",
+      "function": "NAXTile_float_2_2__elems",
+      "issue": "https://github.com/CrossGL/crosstl/issues/1566",
+      "artifact_status": "failed"
+    },
     "next_kernel_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1479"
+      "https://github.com/CrossGL/crosstl/issues/1566"
     ]
   },
   "directx_toolchain_status": {
@@ -272,7 +278,8 @@
       "https://github.com/CrossGL/crosstl/issues/1555",
       "https://github.com/CrossGL/crosstl/issues/1559",
       "https://github.com/CrossGL/crosstl/issues/1561",
-      "https://github.com/CrossGL/crosstl/issues/1562"
+      "https://github.com/CrossGL/crosstl/issues/1562",
+      "https://github.com/CrossGL/crosstl/issues/1566"
     ],
     "semantic_blocked_by": [
       "https://github.com/CrossGL/crosstl/issues/1491",
@@ -330,7 +337,8 @@
     "https://github.com/CrossGL/crosstl/issues/1559",
     "https://github.com/CrossGL/crosstl/issues/1560",
     "https://github.com/CrossGL/crosstl/issues/1561",
-    "https://github.com/CrossGL/crosstl/issues/1562"
+    "https://github.com/CrossGL/crosstl/issues/1562",
+    "https://github.com/CrossGL/crosstl/issues/1566"
   ],
   "resolved_issues": [
     "https://github.com/CrossGL/crosstl/issues/1551",

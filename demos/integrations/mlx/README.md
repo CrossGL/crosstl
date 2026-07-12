@@ -249,7 +249,7 @@ contracts before member lowering. Bounded, non-variadic namespace-scope alias
 templates are now canonicalized after callback and member lowering, then their
 backing struct templates are materialized once more. The high-budget report no
 longer contains any `Int<...>` use or `using Int` declaration and has fallen from
-111 unsupported records to one. Proven function-local integral constants now
+111 unsupported records to zero. Proven function-local integral constants now
 feed inferred and explicit member-template arguments with lexical shadowing and
 concrete `sizeof` handling, so `BK_padded` and `BN_padded` no longer create
 symbolic helper specializations. Free helper deduction now retains unnamed
@@ -257,11 +257,17 @@ parameters, recognizes empty braced type values, and applies the same proven
 lexical constants, which materializes `tile_matmad_nax` with concrete tile types
 and transpose values. A verified `dispatch_bool` helper whose remaining reachable
 calls are lambdas is handed to the existing callback lowering; named functors and
-altered helper contracts retain ordinary materialization. The remaining record is
-`const_for_loop`, whose callback-local return semantics remain tracked in
-CrossGL/crosstl#1479 and CrossGL/crosstl#1554. No Vulkan artifact is emitted at
-this boundary. Generic member calls with explicit type or value arguments in the
-shared parser remain
+altered helper contracts retain ordinary materialization. Verified
+`const_for_loop` callbacks now lower bare callback returns to per-iteration
+escapes and fold bare integral-constant parameters only when the source defines
+the verified implicit value conversion. Materialization completes with 722
+specializations and no unsupported records.
+
+Vulkan translation then reaches the shared parser and fails in
+`NAXTile_float_2_2__elems` because the explicit cast type still contains the
+struct-scoped alias `elem_type`. No Vulkan artifact is emitted. Cast alias
+canonicalization is tracked in CrossGL/crosstl#1566. Generic member calls with
+explicit type or value arguments in the shared parser remain
 tracked in CrossGL/crosstl#1555, pointer-bearing aggregate propagation remains
 tracked in CrossGL/crosstl#1544, and lowered receiver/reference semantics must
 satisfy CrossGL/crosstl#1557 before the kernel can be considered semantically

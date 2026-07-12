@@ -3641,9 +3641,23 @@ _INTEGRAL_CONSTANT_MULTIPLY_CONTRACT = """
 """
 
 
-def _const_for_loop_preprocessor(*, with_multiply=True, **kwargs):
+_INTEGRAL_CONSTANT_CONVERSION_MEMBERS = """
+      using value_type = T;
+      constexpr operator value_type() const noexcept { return value; }
+"""
+
+
+def _const_for_loop_preprocessor(
+    *, with_multiply=True, with_conversion=False, **kwargs
+):
     preprocessor = MetalPreprocessor(**kwargs)
     contract = _INTEGRAL_CONSTANT_TEST_CONTRACT
+    if with_conversion:
+        contract = contract.replace(
+            "      static constexpr T value = v;",
+            "      static constexpr T value = v;"
+            + _INTEGRAL_CONSTANT_CONVERSION_MEMBERS,
+        )
     if with_multiply:
         contract += _INTEGRAL_CONSTANT_MULTIPLY_CONTRACT
     preprocessor._configure_integral_constant_contracts(contract)
@@ -3889,11 +3903,10 @@ def test_preprocessor_template_member_binding_drops_expression_reference():
 @pytest.mark.parametrize(
     ("outer_stop", "after_inner"),
     [
-        ("2", "if (idx_row.value == 1) { return; }"),
         ("2", "{ int idx_row = 1; out[0] = idx_row; }"),
         ("unresolved_stop", ""),
     ],
-    ids=["callback-local-return", "shadowed-parameter", "unresolved-bounds"],
+    ids=["shadowed-parameter", "unresolved-bounds"],
 )
 def test_preprocessor_preserves_whole_non_expandable_nested_const_for_loop(
     outer_stop, after_inner
@@ -3926,6 +3939,71 @@ def test_preprocessor_preserves_whole_non_expandable_nested_const_for_loop(
     assert output.count("[&](auto") == 2
     assert output.count("out[idx_row.value * 2 + idx_col.value]") == 1
     assert "integral_constant<int, 0>{}" not in output
+
+
+def test_const_for_loop_lowers_nested_callback_returns_to_iteration_escape():
+    source = """const_for_loop<0, 2, 1>([&](auto row) {
+      if (discard_row(row.value)) { return; }
+      const_for_loop<0, 2, 1>([&](auto col) {
+        if (discard_col(col.value)) { return; }
+        int converted = base + col;
+        store(row.value, converted);
+      });
+      after(row.value);
+    });"""
+
+    output = _const_for_loop_preprocessor(
+        with_conversion=True
+    )._lower_concrete_const_for_loop_callbacks(source)
+
+    assert "const_for_loop<" not in output
+    assert "return;" not in output
+    assert output.count("do {") == 6
+    assert output.count("break;") == 6
+    assert output.count("while (false);") == 6
+    assert output.count("int converted = base + 0;") == 2
+    assert output.count("int converted = base + 1;") == 2
+    assert "store(0, converted);" in output
+    assert "store(1, converted);" in output
+    assert "after(0);" in output
+    assert "after(1);" in output
+
+
+def test_const_for_loop_requires_verified_integral_constant_conversion():
+    source = """const_for_loop<0, 2, 1>([&](auto idx) {
+      use(offset + idx);
+    });"""
+
+    unverified = _const_for_loop_preprocessor(
+        with_conversion=False
+    )._lower_concrete_const_for_loop_callbacks(source)
+    verified = _const_for_loop_preprocessor(
+        with_conversion=True
+    )._lower_concrete_const_for_loop_callbacks(source)
+
+    assert unverified == source
+    assert "const_for_loop<" not in verified
+    assert "use(offset + 0);" in verified
+    assert "use(offset + 1);" in verified
+
+
+@pytest.mark.parametrize(
+    "callback_body",
+    [
+        "return idx.value;",
+        "for (int i = 0; i < 2; ++i) { if (i) { return; } }",
+        "switch (idx.value) { case 0: return; default: break; }",
+    ],
+    ids=["value-return", "return-in-loop", "return-in-switch"],
+)
+def test_const_for_loop_preserves_unsupported_callback_return(callback_body):
+    source = f"const_for_loop<0, 2, 1>([&](auto idx) {{ {callback_body} }});"
+
+    output = _const_for_loop_preprocessor()._lower_concrete_const_for_loop_callbacks(
+        source
+    )
+
+    assert output == source
 
 
 @pytest.mark.parametrize(

@@ -423,6 +423,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         ] = {}
         self._integral_constant_binary_operators: Set[str] = set()
         self._integral_constant_contract_verified = False
+        self._integral_constant_conversion_contract_verified = False
         self._int_alias_contract_verified = False
         self._const_for_loop_contract_verified = False
         self._const_for_loop_expansion_work = 0
@@ -461,6 +462,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         self._instantiated_template_member_calls.clear()
         self._integral_constant_binary_operators.clear()
         self._integral_constant_contract_verified = False
+        self._integral_constant_conversion_contract_verified = False
         self._int_alias_contract_verified = False
         self._const_for_loop_contract_verified = False
         self._const_for_loop_expansion_work = 0
@@ -5096,6 +5098,10 @@ class MetalPreprocessor(HLSLPreprocessor):
         self._integral_constant_contract_verified = (
             self._has_integral_constant_contract(source)
         )
+        self._integral_constant_conversion_contract_verified = (
+            self._integral_constant_contract_verified
+            and self._has_integral_constant_conversion_contract(source)
+        )
         self._int_alias_contract_verified = (
             self._integral_constant_contract_verified
             and self._has_int_alias_contract(source)
@@ -5164,6 +5170,34 @@ class MetalPreprocessor(HLSLPreprocessor):
             if self._containing_span(match.start(), ignored_spans) is None
         ]
         return len(declarations) == len(matches) == 1
+
+    def _has_integral_constant_conversion_contract(self, source: str) -> bool:
+        pattern = re.compile(
+            r"template\s*<\s*typename\s+(?P<type>[A-Za-z_]\w*)\s*,\s*"
+            r"(?P=type)\s+(?P<value>[A-Za-z_]\w*)\s*>\s*"
+            r"struct\s+integral_constant\s*\{"
+        )
+        ignored_spans = self._find_comment_and_literal_spans(source)
+        matched_contracts = 0
+        for match in pattern.finditer(source):
+            if self._containing_span(match.start(), ignored_spans) is not None:
+                continue
+            body_open = match.end() - 1
+            body_close = self._find_matching_delimiter(source, body_open, "{", "}")
+            if body_close is None:
+                continue
+            body = source[body_open + 1 : body_close]
+            body = self._remove_spans(body, self._find_comment_and_literal_spans(body))
+            compact = re.sub(r"\s+", "", body)
+            type_name = re.escape(match.group("type"))
+            alias = re.compile(rf"usingvalue_type={type_name};")
+            conversion = re.compile(
+                r"(?:METAL_FUNC)?constexproperatorvalue_type\(\)const"
+                r"(?:noexcept)?\{returnvalue;\}"
+            )
+            if alias.search(compact) and conversion.search(compact):
+                matched_contracts += 1
+        return matched_contracts == 1
 
     def _has_const_for_loop_contract(self, source: str) -> bool:
         pattern = re.compile(
@@ -5557,6 +5591,9 @@ class MetalPreprocessor(HLSLPreprocessor):
             iteration_body = self._substitute_const_for_loop_parameter(
                 callback_body, parameter, value
             )
+            iteration_body = self._lower_const_for_loop_callback_returns(iteration_body)
+            if iteration_body is None:
+                return None
             iteration_body = self._lower_concrete_const_for_loop_callbacks(
                 iteration_body, depth=depth + 1
             )
@@ -5606,7 +5643,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 previous = line_start - 2
                 continue
             break
-        if previous >= 0 and source[previous] not in "{;":
+        if previous >= 0 and source[previous] not in "{;}":
             return False
         following = call_end
         while following < len(source) and source[following].isspace():
@@ -5628,13 +5665,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         if body_close is None or callback[body_close + 1 :].strip():
             return None
         body = callback[body_open + 1 : body_close]
-        control_text = self._remove_spans(
-            body, self._find_comment_and_literal_spans(body)
-        )
-        if any(
-            re.search(rf"\b{keyword}\b", control_text)
-            for keyword in ("break", "continue", "goto", "return")
-        ):
+        if self._lower_const_for_loop_callback_returns(body) is None:
             return None
         parameter = match.group("parameter")
         if parameter in self._local_variable_names(body):
@@ -5642,6 +5673,152 @@ class MetalPreprocessor(HLSLPreprocessor):
         if not self._const_for_loop_parameter_usage_is_safe(body, parameter):
             return None
         return parameter, body
+
+    def _lower_const_for_loop_callback_returns(self, body: str) -> Optional[str]:
+        nested_lambdas = self._const_for_loop_nested_lambda_spans(body)
+        replacements: List[Tuple[int, int, str]] = []
+        has_iteration_control = False
+        i = 0
+        while i < len(body):
+            nested = self._containing_span(i, nested_lambdas)
+            if nested is not None:
+                i = nested[1]
+                continue
+            if body[i] in "\"'":
+                _literal, consumed = self._read_string(body, i)
+                i += consumed
+                continue
+            if body.startswith("//", i):
+                end = body.find("\n", i + 2)
+                i = len(body) if end == -1 else end + 1
+                continue
+            if body.startswith("/*", i):
+                end = body.find("*/", i + 2)
+                if end == -1:
+                    return None
+                i = end + 2
+                continue
+            if not (body[i].isalpha() or body[i] == "_"):
+                i += 1
+                continue
+            identifier, consumed = self._read_identifier(body, i)
+            identifier_end = i + consumed
+            if identifier in {"break", "continue", "goto"}:
+                return None
+            if identifier in {"for", "while", "do", "switch"}:
+                has_iteration_control = True
+            if identifier != "return":
+                i = identifier_end
+                continue
+            statement_end = self._const_for_loop_trivia_end(body, identifier_end)
+            if statement_end >= len(body) or body[statement_end] != ";":
+                return None
+            replacements.append((i, statement_end + 1, "break;"))
+            i = statement_end + 1
+
+        if not replacements:
+            return body
+        if has_iteration_control:
+            return None
+        rewritten = self._apply_text_replacements(body, replacements)
+        return f"do {{{rewritten}}} while (false);"
+
+    def _const_for_loop_nested_lambda_spans(self, source: str) -> List[Tuple[int, int]]:
+        spans: List[Tuple[int, int]] = []
+        i = 0
+        while i < len(source):
+            if source[i] in "\"'":
+                _literal, consumed = self._read_string(source, i)
+                i += consumed
+                continue
+            if source.startswith("//", i):
+                end = source.find("\n", i + 2)
+                i = len(source) if end == -1 else end + 1
+                continue
+            if source.startswith("/*", i):
+                end = source.find("*/", i + 2)
+                i = len(source) if end == -1 else end + 2
+                continue
+            if source[i] != "[":
+                i += 1
+                continue
+            capture_end = self._find_matching_delimiter(source, i, "[", "]")
+            if capture_end is None:
+                i += 1
+                continue
+            cursor = capture_end + 1
+            while cursor < len(source) and source[cursor].isspace():
+                cursor += 1
+            if cursor < len(source) and source[cursor] == "(":
+                parameter_end = self._find_matching_delimiter(source, cursor, "(", ")")
+                if parameter_end is None:
+                    i += 1
+                    continue
+                cursor = parameter_end + 1
+            while cursor < len(source) and source[cursor].isspace():
+                cursor += 1
+            while True:
+                qualifier = re.match(
+                    r"(?:mutable|constexpr|consteval)\b",
+                    source[cursor:],
+                )
+                if qualifier is None:
+                    break
+                cursor += qualifier.end()
+                while cursor < len(source) and source[cursor].isspace():
+                    cursor += 1
+            if source.startswith("noexcept", cursor):
+                cursor += len("noexcept")
+                while cursor < len(source) and source[cursor].isspace():
+                    cursor += 1
+                if cursor < len(source) and source[cursor] == "(":
+                    noexcept_end = self._find_matching_delimiter(
+                        source, cursor, "(", ")"
+                    )
+                    if noexcept_end is None:
+                        i += 1
+                        continue
+                    cursor = noexcept_end + 1
+                    while cursor < len(source) and source[cursor].isspace():
+                        cursor += 1
+            if source.startswith("->", cursor):
+                body_open = source.find("{", cursor + 2)
+            else:
+                body_open = (
+                    cursor if cursor < len(source) and source[cursor] == "{" else -1
+                )
+            if body_open == -1 or ";" in source[cursor:body_open]:
+                i = capture_end + 1
+                continue
+            body_close = self._find_matching_delimiter(source, body_open, "{", "}")
+            if body_close is None:
+                i = capture_end + 1
+                continue
+            spans.append((i, body_close + 1))
+            i = body_close + 1
+        return spans
+
+    @staticmethod
+    def _const_for_loop_trivia_end(source: str, start: int) -> int:
+        cursor = start
+        while cursor < len(source):
+            if source[cursor].isspace():
+                cursor += 1
+                continue
+            if source.startswith("//", cursor):
+                end = source.find("\n", cursor + 2)
+                if end == -1:
+                    return len(source)
+                cursor = end + 1
+                continue
+            if source.startswith("/*", cursor):
+                end = source.find("*/", cursor + 2)
+                if end == -1:
+                    return len(source)
+                cursor = end + 2
+                continue
+            break
+        return cursor
 
     def _const_for_loop_parameter_usage_is_safe(
         self, source: str, parameter: str
@@ -5691,6 +5868,8 @@ class MetalPreprocessor(HLSLPreprocessor):
                 continue
             if not self._const_for_loop_integral_constant_binary_use(
                 source, identifier_end
+            ) and not self._const_for_loop_integral_conversion_use_is_safe(
+                source, i, identifier_end
             ):
                 return False
             i = identifier_end
@@ -5733,6 +5912,22 @@ class MetalPreprocessor(HLSLPreprocessor):
             return False
         brace_end = self._find_matching_delimiter(source, brace_start, "{", "}")
         return brace_end == brace_start + 1
+
+    def _const_for_loop_integral_conversion_use_is_safe(
+        self, source: str, parameter_start: int, parameter_end: int
+    ) -> bool:
+        if not self._integral_constant_conversion_contract_verified:
+            return False
+        previous = parameter_start - 1
+        while previous >= 0 and source[previous].isspace():
+            previous -= 1
+        following = parameter_end
+        while following < len(source) and source[following].isspace():
+            following += 1
+        value_operators = "+-*/%<>=!&|^"
+        return (previous >= 0 and source[previous] in value_operators) or (
+            following < len(source) and source[following] in value_operators
+        )
 
     def _substitute_const_for_loop_parameter(
         self, source: str, parameter: str, value: int
@@ -5787,6 +5982,14 @@ class MetalPreprocessor(HLSLPreprocessor):
                         result.append(self._static_integral_literal_text(value))
                         i = member_name_start + member_consumed
                         continue
+                if self._const_for_loop_integral_conversion_use_is_safe(
+                    source,
+                    i,
+                    identifier_end,
+                ):
+                    result.append(self._static_integral_literal_text(value))
+                    i = identifier_end
+                    continue
                 result.append(f"integral_constant<int, {value}>{{}}")
                 i = identifier_end
                 continue

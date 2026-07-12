@@ -347,7 +347,7 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert pointer_reinterpretation["status"] == "partial"
     assert pointer_reinterpretation["targets"] == list(module.FULL_CORPUS_TARGETS)
     assert pointer_reinterpretation["next_kernel_blocked_by"] == [
-        "https://github.com/CrossGL/crosstl/issues/1479",
+        "https://github.com/CrossGL/crosstl/issues/1566",
         "https://github.com/CrossGL/crosstl/issues/1544",
     ]
     assert set(pointer_reinterpretation["remaining_pointer_cases_blocked_by"]) == {
@@ -361,7 +361,7 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         "https://github.com/CrossGL/crosstl/issues/1554"
     ]
     assert callback["next_kernel_blocked_by"] == [
-        "https://github.com/CrossGL/crosstl/issues/1479",
+        "https://github.com/CrossGL/crosstl/issues/1566",
     ]
 
     compile_time_loop = expected_gaps["compile_time_loop_status"]
@@ -374,11 +374,11 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         "vulkan": "validated-reduced-fixture",
     }
     assert compile_time_loop["next_kernel_blocked_by"] == [
-        "https://github.com/CrossGL/crosstl/issues/1479",
+        "https://github.com/CrossGL/crosstl/issues/1566",
     ]
 
     template_alias = expected_gaps["template_alias_status"]
-    assert template_alias["status"] == "partial"
+    assert template_alias["status"] == "materialized"
     assert template_alias["target"] == "vulkan"
     assert template_alias["plain_helper_supported_contract"] == (
         "call-site deduction through unnamed parameters, empty braced type values, "
@@ -390,23 +390,29 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     )
     assert template_alias["high_budget_report"] == {
         "unsupported_before": 111,
-        "unsupported_after": 1,
+        "unsupported_after": 0,
         "residual_int_alias_uses": 0,
-        "artifact_status": "blocked-before-artifact",
+        "artifact_status": "blocked-after-materialization",
     }
-    assert template_alias["remaining_helpers"] == [
-        "const_for_loop<start, stop, step, F>",
-    ]
+    assert template_alias["remaining_helpers"] == []
     assert template_alias["resolved_helpers"] == [
         "dispatch_bool<F>",
+        "const_for_loop<start, stop, step, F>",
         "tile_matmad_nax<CTile, ATile, BTile, transpose_a, transpose_b>",
     ]
     assert template_alias["resolved_value_arguments"] == [
         "BK_padded",
         "BN_padded",
     ]
+    assert template_alias["post_materialization_translation"] == {
+        "status": "blocked-by-tracked-issue",
+        "diagnostic_code": "project.translate.crossgl-function-body-parse-failed",
+        "function": "NAXTile_float_2_2__elems",
+        "issue": "https://github.com/CrossGL/crosstl/issues/1566",
+        "artifact_status": "failed",
+    }
     assert template_alias["next_kernel_blocked_by"] == [
-        "https://github.com/CrossGL/crosstl/issues/1479",
+        "https://github.com/CrossGL/crosstl/issues/1566",
     ]
 
     gemv = expected_gaps["vulkan_gemv_toolchain_status"]
