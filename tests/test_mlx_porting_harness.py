@@ -347,7 +347,7 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert pointer_reinterpretation["status"] == "partial"
     assert pointer_reinterpretation["targets"] == list(module.FULL_CORPUS_TARGETS)
     assert pointer_reinterpretation["next_kernel_blocked_by"] == [
-        "https://github.com/CrossGL/crosstl/issues/1566",
+        "https://github.com/CrossGL/crosstl/issues/1569",
         "https://github.com/CrossGL/crosstl/issues/1544",
     ]
     assert set(pointer_reinterpretation["remaining_pointer_cases_blocked_by"]) == {
@@ -361,7 +361,7 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         "https://github.com/CrossGL/crosstl/issues/1554"
     ]
     assert callback["next_kernel_blocked_by"] == [
-        "https://github.com/CrossGL/crosstl/issues/1566",
+        "https://github.com/CrossGL/crosstl/issues/1569",
     ]
 
     compile_time_loop = expected_gaps["compile_time_loop_status"]
@@ -374,7 +374,7 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         "vulkan": "validated-reduced-fixture",
     }
     assert compile_time_loop["next_kernel_blocked_by"] == [
-        "https://github.com/CrossGL/crosstl/issues/1566",
+        "https://github.com/CrossGL/crosstl/issues/1569",
     ]
 
     template_alias = expected_gaps["template_alias_status"]
@@ -406,13 +406,65 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     ]
     assert template_alias["post_materialization_translation"] == {
         "status": "blocked-by-tracked-issue",
-        "diagnostic_code": "project.translate.crossgl-function-body-parse-failed",
-        "function": "NAXTile_float_2_2__elems",
-        "issue": "https://github.com/CrossGL/crosstl/issues/1566",
+        "diagnostic_code": "project.translate.metal-unresolved-construct",
+        "rule_label": "Metal namespace qualifier (metal::)",
+        "first_unresolved_type": "BaseNAXFrag::metal::vec<float,kElemsPerFrag>",
+        "issue": "https://github.com/CrossGL/crosstl/issues/1569",
         "artifact_status": "failed",
     }
     assert template_alias["next_kernel_blocked_by"] == [
+        "https://github.com/CrossGL/crosstl/issues/1569",
+    ]
+
+    struct_scoped_cast_alias = expected_gaps["struct_scoped_cast_alias_status"]
+    assert struct_scoped_cast_alias["status"] == "partial"
+    assert struct_scoped_cast_alias["targets"] == list(module.FULL_CORPUS_TARGETS)
+    assert struct_scoped_cast_alias["concrete_specializations"] == ["float", "int"]
+    assert struct_scoped_cast_alias["qualifier_transport"] == "retained-in-metal-ast"
+    assert struct_scoped_cast_alias["strict_crossgl_function_body_parse"] == (
+        "passing-reduced-fixture"
+    )
+    assert struct_scoped_cast_alias["native_validation"] == {
+        "directx": "required-on-windows-ci",
+        "opengl": "validated-reduced-fixture",
+        "vulkan": "validated-reduced-fixture",
+    }
+    assert struct_scoped_cast_alias["high_budget_report"] == {
+        "specialization_count": 722,
+        "unsupported_specialization_count": 0,
+        "resolved_function": "NAXTile_float_2_2__elems",
+        "prior_diagnostic_code": "project.translate.crossgl-function-body-parse-failed",
+        "next_diagnostic_code": "project.translate.metal-unresolved-construct",
+        "artifact_status": "failed",
+    }
+    assert struct_scoped_cast_alias["remaining_contract_blocked_by"] == [
         "https://github.com/CrossGL/crosstl/issues/1566",
+    ]
+    assert struct_scoped_cast_alias["next_kernel_blocked_by"] == [
+        "https://github.com/CrossGL/crosstl/issues/1569",
+    ]
+
+    function_local_alias = expected_gaps["function_local_alias_status"]
+    assert function_local_alias["status"] == "partial"
+    assert function_local_alias["targets"] == list(module.FULL_CORPUS_TARGETS)
+    assert function_local_alias["entry_count"] == 36
+    assert function_local_alias["resolved_use_counts"] == {
+        "declaration_types": 336,
+        "casts": 72,
+        "static_members": 36,
+    }
+    assert function_local_alias["native_validation"] == {
+        "directx": "translated-dxc-blocked-by-existing-issues",
+        "opengl": "validated",
+        "vulkan": "validated",
+    }
+    assert function_local_alias["vulkan_project_warning_count"] == 0
+    assert function_local_alias["single_file_vulkan_unreachable_warning_count"] == 5
+    assert function_local_alias["single_file_vulkan_warnings_blocked_by"] == [
+        "https://github.com/CrossGL/crosstl/issues/1568",
+    ]
+    assert function_local_alias["remaining_alias_shapes_blocked_by"] == [
+        "https://github.com/CrossGL/crosstl/issues/1567",
     ]
 
     gemv = expected_gaps["vulkan_gemv_toolchain_status"]
@@ -605,6 +657,46 @@ def test_scaled_dot_product_attention_tracks_opengl_function_constant_blocker():
     )
     assert static_constant_issue in module.FULL_CORPUS_TRACKED_ISSUES
     assert function_constant_issue in module.FULL_CORPUS_TRACKED_ISSUES
+
+
+def test_scaled_attention_local_alias_evidence_requires_complete_entries(tmp_path):
+    module = _load_harness()
+    mlx_root = tmp_path / "mlx"
+    directx_path = Path("out/directx/scaled_dot_product_attention.hlsl")
+    vulkan_path = Path("out/vulkan/scaled_dot_product_attention.spvasm")
+    for path in (directx_path, vulkan_path):
+        (mlx_root / path).parent.mkdir(parents=True, exist_ok=True)
+
+    directx = "\n".join(
+        f"[numthreads(1, 1, 1)]\nvoid CSMain_{index}() {{}}" for index in range(36)
+    )
+    vulkan = "\n".join(
+        f'  OpEntryPoint GLCompute %{index + 1} "sdpa_{index}"' for index in range(36)
+    )
+    (mlx_root / directx_path).write_text(directx, encoding="utf-8")
+    (mlx_root / vulkan_path).write_text(vulkan, encoding="utf-8")
+    payload = {
+        "artifacts": [
+            {
+                "source": module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
+                "target": target,
+                "path": path.as_posix(),
+                "status": "translated",
+            }
+            for target, path in (
+                ("directx", directx_path),
+                ("vulkan", vulkan_path),
+            )
+        ]
+    }
+
+    evidence = module._scaled_attention_local_alias_evidence(mlx_root, payload)
+
+    assert evidence["entryCountByTarget"] == {"directx": 36, "vulkan": 36}
+    assert evidence["resolvedDeclarationTypeCount"] == 336
+    assert evidence["resolvedCastCount"] == 72
+    assert evidence["resolvedStaticMemberCount"] == 36
+    assert evidence["vulkanProjectWarningCount"] == 0
 
 
 def _vulkan_fence_semantic_payload(module, tmp_path, generated):
@@ -1167,7 +1259,7 @@ def _prepare_gemv_vulkan_check(module, tmp_path, generated):
 
 def _gemv_vulkan_frontier_source():
     entry_points = "\n".join(
-        f'OpEntryPoint GLCompute %main_{index} "compute_main_{index}"'
+        f'  OpEntryPoint GLCompute %main_{index} "compute_main_{index}"'
         for index in range(1, 225)
     )
     return entry_points + "\n"
@@ -2043,10 +2135,16 @@ def test_reduced_frontier_accepts_multiple_vulkan_toolchain_runs_per_artifact(
     ]
     commands = []
     semantic_evidence = {"issue": "https://github.com/CrossGL/crosstl/issues/1537"}
+    alias_evidence = {"source": module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE}
     monkeypatch.setattr(
         module,
         "_vulkan_frontier_semantic_evidence",
         lambda *_args: semantic_evidence,
+    )
+    monkeypatch.setattr(
+        module,
+        "_scaled_attention_local_alias_evidence",
+        lambda *_args: alias_evidence,
     )
 
     def fake_run_command(name, command, *, log_dir, check=True, timeout_seconds=None):
@@ -2123,7 +2221,7 @@ def test_reduced_frontier_accepts_multiple_vulkan_toolchain_runs_per_artifact(
     assert result["status"] == "blocked-by-semantic-contract"
     assert result["vulkanValidationStatus"] == "validated"
     assert result["vulkanSemanticReadinessStatus"] == "blocked"
-    assert result["semanticEvidence"] == [semantic_evidence]
+    assert result["semanticEvidence"] == [semantic_evidence, alias_evidence]
     assert commands[0][0] == "translate-directx-vulkan-frontier"
     assert "--validate" in commands[0][1]
     assert "--run-toolchains" not in commands[0][1]
@@ -2161,10 +2259,16 @@ def test_reduced_frontier_requires_directx_toolchain_runs_per_artifact(
     ]
     commands = []
     semantic_evidence = {"issue": "https://github.com/CrossGL/crosstl/issues/1537"}
+    alias_evidence = {"source": module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE}
     monkeypatch.setattr(
         module,
         "_vulkan_frontier_semantic_evidence",
         lambda *_args: semantic_evidence,
+    )
+    monkeypatch.setattr(
+        module,
+        "_scaled_attention_local_alias_evidence",
+        lambda *_args: alias_evidence,
     )
 
     def fake_run_command(name, command, *, log_dir, check=True, timeout_seconds=None):

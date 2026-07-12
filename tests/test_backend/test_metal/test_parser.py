@@ -345,9 +345,33 @@ def test_parse_indexed_reinterpret_cast_assignment_from_pytorch_mps_quantized():
     """
     ast = parse_ok(code)
     assignment = ast.functions[0].body[0]
+    casts = [node for node in iter_ast_nodes(assignment) if isinstance(node, CastNode)]
 
     assert isinstance(assignment, AssignmentNode)
     assert isinstance(assignment.left, ArrayAccessNode)
+    assert len(casts) == 1
+    assert casts[0].target_type == "vecT*"
+    assert casts[0].qualifiers == ["device"]
+
+
+def test_parse_reinterpret_cast_retains_pointer_qualifiers():
+    code = """
+    void aliases(thread float* values) {
+        thread float* mutable_values =
+            reinterpret_cast<thread float*>(values);
+        const thread float* const_values =
+            reinterpret_cast<const thread float*>(values);
+    }
+    """
+
+    ast = parse_ok(code)
+    casts = [node for node in iter_ast_nodes(ast) if isinstance(node, CastNode)]
+
+    assert [cast.target_type for cast in casts] == ["float*", "float*"]
+    assert [cast.qualifiers for cast in casts] == [
+        ["thread"],
+        ["const", "thread"],
+    ]
 
 
 def test_parse_global_scoped_metal_array_declaration_from_pytorch_mps_scatter():
@@ -542,12 +566,78 @@ def test_parse_block_scope_typedef_alias_from_mlx_fp_quantized():
     ast = parse_ok(code)
 
     body = ast.functions[0].body
-    assert body[1].vtype == "U"
-    assert body[1].qualifiers == ["thread"]
-    assert body[1].array_sizes[0].name == "values_per_thread"
-    assert body[2].left.vtype == "U"
-    assert body[2].left.qualifiers == ["thread"]
-    assert body[2].left.array_sizes == ["8"]
+    alias = body[1]
+    assert isinstance(alias, TypeAliasNode)
+    assert alias.name == "U"
+    assert alias.alias_type == "float"
+    assert alias.source_location is not None
+    assert body[2].vtype == "U"
+    assert body[2].qualifiers == ["thread"]
+    assert body[2].array_sizes[0].name == "values_per_thread"
+    assert body[3].left.vtype == "U"
+    assert body[3].left.qualifiers == ["thread"]
+    assert body[3].left.array_sizes == ["8"]
+
+
+def test_parse_block_scope_typedef_preserves_declarator_metadata():
+    ast = parse_ok("""
+        void prepare() {
+            typedef const device float* DeviceValues;
+            typedef float Lanes[4];
+        }
+        """)
+
+    pointer_alias, array_alias = ast.functions[0].body
+    assert pointer_alias.alias_type == "float*"
+    assert pointer_alias.qualifiers == ["const", "device"]
+    assert pointer_alias.array_sizes == []
+    assert pointer_alias.source_location is not None
+    assert array_alias.alias_type == "float"
+    assert len(array_alias.array_sizes) == 1
+    assert array_alias.array_sizes[0] == "4"
+    assert array_alias.source_location is not None
+
+
+def test_parse_block_scope_typedef_does_not_leak_to_sibling_function():
+    code = """
+    void first() {
+        typedef float LocalScalar;
+        LocalScalar value = 1.0f;
+    }
+
+    void second() {
+        LocalScalar value = 2.0f;
+    }
+    """
+
+    parser = MetalParser(tokenize_code(code))
+    parser.parse()
+
+    assert "LocalScalar" not in parser.known_types
+
+
+def test_parse_switch_typedef_scope_spans_cases_only():
+    source = """
+        void select(int mode) {
+            switch (mode) {
+                case 0:
+                    typedef int CaseValue;
+                    break;
+                case 1:
+                    CaseValue value = 1;
+                    break;
+            }
+            int after = 2;
+        }
+        """
+    parser = MetalParser(tokenize_code(source))
+    ast = parser.parse()
+
+    switch = ast.functions[0].body[0]
+    assert isinstance(switch.cases[0].statements[0], TypeAliasNode)
+    assert switch.cases[1].statements[0].left.vtype == "CaseValue"
+    assert ast.functions[0].body[1].left.vtype == "int"
+    assert "CaseValue" not in parser.known_types
 
 
 def test_parse_dependent_numeric_template_call_from_mlx_fp_quantized():
@@ -2723,6 +2813,7 @@ def test_parse_qualified_casts_and_range_designator_from_llama_cpp():
 
     assert isinstance(cast_assignment.right, CastNode)
     assert cast_assignment.right.target_type == "block_q1_0*"
+    assert cast_assignment.right.qualifiers == ["device", "const"]
     assert designator.designators[0][0] == "range"
     assert designator.designators[0][1] == "0"
     assert designator.designators[0][2] == "r1ptg-1"

@@ -112,9 +112,23 @@ class EnumNode(ASTNode):
 class TypeAliasNode(ASTNode):
     """Node representing a typedef/alias"""
 
-    def __init__(self, alias_type, name):
+    def __init__(
+        self,
+        alias_type,
+        name,
+        qualifiers=None,
+        array_sizes=None,
+        declarator_type_suffix="",
+        declarator_type_suffix_grouped=False,
+        source_location=None,
+    ):
         self.alias_type = alias_type
         self.name = name
+        self.qualifiers = list(qualifiers or [])
+        self.array_sizes = list(array_sizes or [])
+        self.declarator_type_suffix = declarator_type_suffix
+        self.declarator_type_suffix_grouped = declarator_type_suffix_grouped
+        self.source_location = source_location
 
     def __repr__(self):
         return f"TypeAliasNode(alias_type={self.alias_type}, name={self.name})"
@@ -469,9 +483,10 @@ class TernaryOpNode(ASTNode):
 class CastNode(ASTNode):
     """Node representing a type cast"""
 
-    def __init__(self, target_type, expression):
+    def __init__(self, target_type, expression, qualifiers=None):
         self.target_type = target_type
         self.expression = expression
+        self.qualifiers = list(qualifiers or [])
 
     def __repr__(self):
         return f"CastNode(target_type={self.target_type}, expression={self.expression})"

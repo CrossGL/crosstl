@@ -1276,16 +1276,37 @@ class MetalPreprocessor(HLSLPreprocessor):
         excluded_aliases: Optional[Set[str]] = None,
     ) -> str:
         text = self._normalize_template_argument_text(type_text)
+        all_type_aliases = dict(struct.type_aliases)
         type_aliases = {
             alias: target
-            for alias, target in struct.type_aliases.items()
+            for alias, target in all_type_aliases.items()
             if alias not in (excluded_aliases or set())
         }
-        if not text or not type_aliases:
+        if not text or not all_type_aliases:
             return text
         text = re.sub(r"\btypename\s+", "", text)
         text = re.sub(r"::template\s+", "::", text)
         known_structs = structs_by_name or {struct.name: struct}
+
+        owner_names = {struct.name}
+        materialized_owner = self._materialized_struct_specializations.get(struct.name)
+        if materialized_owner is not None:
+            owner_names.add(materialized_owner[0])
+        owner_pattern = "|".join(
+            re.escape(owner) for owner in sorted(owner_names, key=len, reverse=True)
+        )
+        for alias in sorted(all_type_aliases, key=len, reverse=True):
+            qualified_alias = re.compile(
+                rf"(?<![A-Za-z0-9_])"
+                rf"(?:(?:[A-Za-z_]\w*)\s*::\s*)*"
+                rf"(?:{owner_pattern})(?:\s*<[^<>{{}}()]*>)?\s*::\s*"
+                rf"(?:template\s+)?{re.escape(alias)}\b"
+            )
+            qualified_target = re.sub(
+                r"^typename\s+", "", all_type_aliases[alias]
+            ).strip()
+            qualified_target = re.sub(r"::template\s+", "::", qualified_target)
+            text = qualified_alias.sub(qualified_target, text)
 
         def struct_alias_target(alias: str, seen: Set[str]) -> Optional[str]:
             if alias in seen:
@@ -1648,15 +1669,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             type_start = statement_start + leading
             type_end = type_start + name_match.start()
             type_text = body[type_start:type_end]
-            shadowed_aliases = {
-                alias
-                for alias, bindings in local_aliases.items()
-                if any(
-                    declaration_position <= type_start
-                    and scope_start <= type_start < scope_end
-                    for declaration_position, scope_start, scope_end in bindings
-                )
-            }
+            shadowed_aliases = self._shadowed_type_aliases_at(local_aliases, type_start)
             canonical = self._canonicalize_struct_scoped_type(
                 type_text,
                 struct,
@@ -1665,6 +1678,120 @@ class MetalPreprocessor(HLSLPreprocessor):
             )
             if canonical and canonical != type_text.strip():
                 replacements.append((type_start, type_end, f"{canonical} "))
+        return self._apply_text_replacements(body, replacements)
+
+    @staticmethod
+    def _shadowed_type_aliases_at(
+        local_aliases: Dict[str, List[Tuple[int, int, int]]], position: int
+    ) -> Set[str]:
+        return {
+            alias
+            for alias, bindings in local_aliases.items()
+            if any(
+                declaration_position <= position and scope_start <= position < scope_end
+                for declaration_position, scope_start, scope_end in bindings
+            )
+        }
+
+    def _canonicalize_struct_scoped_cast_types(
+        self,
+        body: str,
+        struct: _MetalStructDefinition,
+        structs_by_name: Optional[Dict[str, _MetalStructDefinition]],
+    ) -> str:
+        alias_names = set(struct.type_aliases)
+        if not alias_names or not (set(IDENTIFIER_RE.findall(body)) & alias_names):
+            return body
+
+        ignored_spans = self._find_comment_and_literal_spans(body)
+        local_aliases = self._local_type_alias_shadow_scopes(body)
+        replacements: List[Tuple[int, int, str]] = []
+
+        def canonical_type(type_start: int, type_end: int) -> Optional[str]:
+            type_text = body[type_start:type_end]
+            if not (set(IDENTIFIER_RE.findall(type_text)) & alias_names):
+                return None
+            canonical = self._canonicalize_struct_scoped_type(
+                type_text,
+                struct,
+                structs_by_name,
+                excluded_aliases=self._shadowed_type_aliases_at(
+                    local_aliases, type_start
+                ),
+            )
+            if not canonical or canonical == type_text.strip():
+                return None
+            return canonical
+
+        def add_replacement(type_start: int, type_end: int) -> None:
+            canonical = canonical_type(type_start, type_end)
+            if canonical is not None:
+                replacements.append((type_start, type_end, canonical))
+
+        named_cast_pattern = re.compile(
+            r"\b(?:static_cast|reinterpret_cast|const_cast)\s*<"
+        )
+        for match in named_cast_pattern.finditer(body):
+            if self._containing_span(match.start(), ignored_spans) is not None:
+                continue
+            angle_start = body.find("<", match.start(), match.end())
+            angle_end = self._find_matching_angle(body, angle_start)
+            if angle_end is not None:
+                add_replacement(angle_start + 1, angle_end)
+
+        # Parenthesized expressions overlap C-style cast syntax. Only rewrite a
+        # span that resolves to a pointer/reference type and has a concrete cast
+        # operand; ambiguous scalar groups remain unchanged.
+        allowed_c_style_identifiers = {
+            "atomic",
+            "const",
+            "constant",
+            "device",
+            "packed",
+            "restrict",
+            "thread",
+            "threadgroup",
+            "threadgroup_imageblock",
+            "typename",
+            "volatile",
+            "read",
+            "write",
+            "read_write",
+            "__restrict",
+            "__restrict__",
+        }
+        for alias_target in struct.type_aliases.values():
+            allowed_c_style_identifiers.update(IDENTIFIER_RE.findall(alias_target))
+        alias_pattern = "|".join(
+            re.escape(alias) for alias in sorted(alias_names, key=len, reverse=True)
+        )
+        c_style_cast_pattern = re.compile(
+            rf"\((?P<type>[^(){{}};]*\b(?:{alias_pattern})\b[^(){{}};]*)\)"
+        )
+        for match in c_style_cast_pattern.finditer(body):
+            if self._containing_span(match.start(), ignored_spans) is not None:
+                continue
+            type_text = match.group("type")
+            identifiers = set(IDENTIFIER_RE.findall(type_text))
+            if not (identifiers & alias_names):
+                continue
+            if re.search(r"[=;{}?!|^/%+]", type_text):
+                continue
+            canonical = canonical_type(match.start("type"), match.end("type"))
+            if canonical is None or not ({"*", "&"} & set(canonical)):
+                continue
+            if set(IDENTIFIER_RE.findall(canonical)) - allowed_c_style_identifiers:
+                continue
+            operand_start = match.end()
+            while operand_start < len(body) and body[operand_start].isspace():
+                operand_start += 1
+            if operand_start >= len(body) or not (
+                body[operand_start].isalnum()
+                or body[operand_start] in {"_", "(", "{", "*", "&"}
+            ):
+                continue
+            replacements.append((match.start("type"), match.end("type"), canonical))
+
         return self._apply_text_replacements(body, replacements)
 
     def _split_struct_body(
@@ -2793,6 +2920,9 @@ class MetalPreprocessor(HLSLPreprocessor):
         rewritten_body = self._canonicalize_struct_scoped_local_declarations(
             rewritten_body, struct, structs_by_name
         )
+        rewritten_body = self._canonicalize_struct_scoped_cast_types(
+            rewritten_body, struct, structs_by_name
+        )
         if instantiated_template_functions is not None and template_methods_by_struct:
             rewritten_body = self._lower_internal_template_member_calls(
                 struct,
@@ -2816,9 +2946,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 new_params = f"{self_param}, {params}"
             else:
                 new_params = self_param
-        return (
-            f"{return_type} {method.free_name}({new_params}) " f"{{{rewritten_body}}}"
-        )
+        return f"{return_type} {method.free_name}({new_params}) {{{rewritten_body}}}"
 
     def _resolved_static_data_member_initializers(
         self, struct: _MetalStructDefinition
@@ -3545,23 +3673,36 @@ class MetalPreprocessor(HLSLPreprocessor):
         # Emit `RetType S__m(S self, <pointer params>, <params>) { body' }` for an
         # instance method (pointer members are threaded as parameters), or the
         # ordinary static form for a static method.
+        return_type = self._canonicalize_struct_scoped_type(
+            method.return_type, struct, None
+        )
         rewritten_body = self._rewrite_promoted_method_body(struct, method, plan)
-        params = method.parameters.strip()
+        rewritten_body = self._canonicalize_struct_scoped_local_declarations(
+            rewritten_body, struct, None
+        )
+        rewritten_body = self._canonicalize_struct_scoped_cast_types(
+            rewritten_body, struct, None
+        )
+        params = self._canonicalize_struct_scoped_parameters(
+            method.parameters, struct, None
+        )
         if method.is_static:
             new_params = params if params and params != "void" else ""
         else:
             parts = [f"{struct.name} self"]
             for member in plan.pointer_members:
+                member_type = self._canonicalize_struct_scoped_type(
+                    member.type_text, struct, None
+                )
                 parts.append(
-                    f"{member.type_text} "
+                    f"{member_type} "
                     f"{self._promoted_pointer_param_name(member.name)}"
                 )
             if params and params != "void":
                 parts.append(params)
             new_params = ", ".join(parts)
         return (
-            f"{method.return_type} {method.free_name}({new_params}) "
-            f"{{{rewritten_body}}}"
+            f"{return_type} {method.free_name}({new_params}) " f"{{{rewritten_body}}}"
         )
 
     def _rewrite_promoted_method_body(

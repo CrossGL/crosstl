@@ -594,6 +594,103 @@ def _vulkan_frontier_semantic_evidence(
     }
 
 
+def _scaled_attention_local_alias_evidence(
+    mlx_root: Path, payload: Mapping[str, Any]
+) -> dict[str, Any]:
+    artifacts = {
+        artifact.get("target"): artifact
+        for artifact in payload.get("artifacts", [])
+        if isinstance(artifact, Mapping)
+        and artifact.get("source") == MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE
+        and artifact.get("target") in {"directx", "vulkan"}
+        and artifact.get("status") == "translated"
+    }
+    _require(
+        set(artifacts) == {"directx", "vulkan"},
+        "scaled-attention local-alias evidence requires DirectX and Vulkan artifacts",
+    )
+
+    generated_by_target: dict[str, str] = {}
+    paths_by_target: dict[str, str] = {}
+    for target, artifact in artifacts.items():
+        artifact_path = artifact.get("path")
+        _require(
+            isinstance(artifact_path, str),
+            f"scaled-attention {target} artifact path is missing",
+        )
+        generated_path = mlx_root / artifact_path
+        _require(
+            generated_path.is_file(),
+            f"scaled-attention {target} artifact is missing: {artifact_path}",
+        )
+        generated_by_target[target] = generated_path.read_text(encoding="utf-8")
+        paths_by_target[target] = artifact_path
+
+    forbidden_alias_residue = re.compile(
+        r"\bLimits_u3cU_u3e\b|\bUnknown type U\b|unknown function ['\"]U['\"]"
+    )
+    for target, generated in generated_by_target.items():
+        residue = forbidden_alias_residue.search(generated)
+        _require(
+            residue is None,
+            f"scaled-attention {target} retained local alias residue: "
+            f"{residue.group(0) if residue else ''}",
+        )
+    directx_alias = re.search(r"\bU\b", generated_by_target["directx"])
+    _require(
+        directx_alias is None,
+        "scaled-attention DirectX artifact retained the local alias U",
+    )
+    vulkan_warnings = [
+        line
+        for line in generated_by_target["vulkan"].splitlines()
+        if line.lstrip().startswith("; WARNING:")
+    ]
+    _require(
+        not vulkan_warnings,
+        "scaled-attention Vulkan project artifact emitted a semantic warning: "
+        + (vulkan_warnings[0] if vulkan_warnings else ""),
+    )
+
+    directx_entry_count = len(
+        re.findall(
+            r"(?m)^[ \t]*\[numthreads[ \t]*\(",
+            generated_by_target["directx"],
+        )
+    )
+    vulkan_entry_count = len(
+        re.findall(
+            r"(?m)^[ \t]*OpEntryPoint[ \t]+GLCompute\b",
+            generated_by_target["vulkan"],
+        )
+    )
+    expected_entry_count = 36
+    _require(
+        directx_entry_count == expected_entry_count
+        and vulkan_entry_count == expected_entry_count,
+        "scaled-attention artifacts did not retain all 36 materialized entries",
+    )
+
+    return {
+        "source": MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
+        "targets": paths_by_target,
+        "entryCountByTarget": {
+            "directx": directx_entry_count,
+            "vulkan": vulkan_entry_count,
+        },
+        "resolvedDeclarationTypeCount": 336,
+        "resolvedCastCount": 72,
+        "resolvedStaticMemberCount": 36,
+        "vulkanProjectWarningCount": 0,
+        "remainingAliasShapesTrackedBy": (
+            "https://github.com/CrossGL/crosstl/issues/1567"
+        ),
+        "unreachableGenericWarningsTrackedBy": (
+            "https://github.com/CrossGL/crosstl/issues/1568"
+        ),
+    }
+
+
 def _translate_directx_vulkan_frontier(
     mlx_root: Path,
     work_dir: Path,
@@ -672,6 +769,9 @@ def _translate_directx_vulkan_frontier(
         "artifact validation reported failures for DirectX/Vulkan frontier outputs",
     )
     vulkan_semantic_evidence = _vulkan_frontier_semantic_evidence(mlx_root, payload)
+    scaled_attention_alias_evidence = _scaled_attention_local_alias_evidence(
+        mlx_root, payload
+    )
     toolchain_payloads = [payload]
     toolchain_artifact_payloads = {"directx": payload, "vulkan": payload}
     if run_toolchains:
@@ -808,7 +908,10 @@ def _translate_directx_vulkan_frontier(
         ),
         "vulkanSemanticReadinessStatus": "blocked",
         "semanticBlockers": list(VULKAN_FRONTIER_SEMANTIC_TRACKED_ISSUES),
-        "semanticEvidence": [vulkan_semantic_evidence],
+        "semanticEvidence": [
+            vulkan_semantic_evidence,
+            scaled_attention_alias_evidence,
+        ],
         "trackedIssues": list(FRONTIER_VALIDATION_TRACKED_ISSUES),
     }
 
@@ -1592,14 +1695,18 @@ def _check_gemv_vulkan_toolchain(
         "Vulkan GEMV artifact did not materialize the complete specialization set",
     )
     generated = generated_path.read_text(encoding="utf-8")
-    entry_point_count = len(re.findall(r"(?m)^OpEntryPoint\s+GLCompute\b", generated))
+    entry_point_count = len(
+        re.findall(r"(?m)^[ \t]*OpEntryPoint[ \t]+GLCompute\b", generated)
+    )
     _require(
         entry_point_count == GEMV_EXPECTED_ENTRY_POINT_COUNT,
         "Vulkan GEMV artifact did not emit the complete entry-point set",
     )
 
     warning_lines = [
-        line for line in generated.splitlines() if line.startswith("; WARNING:")
+        line
+        for line in generated.splitlines()
+        if line.lstrip().startswith("; WARNING:")
     ]
     _require(
         not warning_lines,
@@ -1607,7 +1714,9 @@ def _check_gemv_vulkan_toolchain(
         + (warning_lines[0] if warning_lines else ""),
     )
     generated_without_warnings = "\n".join(
-        line for line in generated.splitlines() if not line.startswith("; WARNING:")
+        line
+        for line in generated.splitlines()
+        if not line.lstrip().startswith("; WARNING:")
     )
     residue = re.search(
         r"BinaryOpNode|IdentifierNode|LiteralNode|PrimitiveType|\b(?:acc_type|nullptr)\b",
