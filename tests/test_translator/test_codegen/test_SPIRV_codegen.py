@@ -32448,6 +32448,76 @@ class TestSpirvShaderValidation:
         assert exc_info.value.feature == "cooperative-matrix-lowering"
         assert exc_info.value.missing_capabilities == ("spirv.cooperative_matrix.khr",)
 
+    @pytest.mark.parametrize(
+        ("type_name", "expected"),
+        [
+            ("vec<int64_t, 2>", "v2i64"),
+            ("vec<int64_t, 3>", "v3i64"),
+            ("vec<int64_t, 4>", "v4i64"),
+            ("metal::vec<uint64_t, 2>", "v2u64"),
+            ("metal::vec<uint64_t, 3>", "v3u64"),
+            ("metal::vec<uint64_t, 4>", "v4u64"),
+        ],
+    )
+    def test_concrete_generic_vectors_map_to_spirv_vector_types(
+        self, type_name, expected
+    ):
+        mapped = VulkanSPIRVCodeGen().map_crossgl_type(type_name)
+
+        assert mapped.type.base_type == expected
+
+    @pytest.mark.parametrize(
+        ("type_name", "feature"),
+        [
+            ("vec<float, 8>", "unsupported-generic-vector-width"),
+            ("metal::vec<float, N>", "unresolved-generic-vector-width"),
+            (
+                "metal::vec<float, (N << 1)>",
+                "unresolved-generic-vector-width",
+            ),
+        ],
+    )
+    def test_unsupported_generic_vector_widths_fail_closed(self, type_name, feature):
+        with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
+            VulkanSPIRVCodeGen().map_crossgl_type(type_name)
+
+        assert exc_info.value.feature == feature
+        assert exc_info.value.missing_capabilities == ("spirv.generic_vector_width",)
+
+    def test_generic_int64_vector_preserves_component_updates(self, tmp_path):
+        source_code = """
+        shader GenericInt64Vector {
+            compute {
+                void main() {
+                    vec<int64, 3> location = vec<int64, 3>(
+                        int64(1), int64(2), int64(3));
+                    location.x += int64(4);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        int64_type = re.search(r"(%\d+) = OpTypeInt 64 1\b", spv_code)
+        assert int64_type is not None
+        vector_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(int64_type.group(1))} 3\b",
+            spv_code,
+        )
+        assert vector_type is not None
+        assert re.search(
+            rf"%\d+ = OpCompositeConstruct {re.escape(vector_type.group(1))} "
+            r"%\d+ %\d+ %\d+\b",
+            spv_code,
+        )
+        assert "OpIAdd" in spv_code
+        assert "OpCompositeInsert" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_storage_buffer_pointer_helper_parameters_inline(self, tmp_path):
         source_code = """
         shader StorageBufferPointerHelperParamShader {

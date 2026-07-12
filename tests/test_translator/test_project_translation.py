@@ -14342,6 +14342,152 @@ def test_metal_template_alias_canonicalization_preserves_lexical_lookup():
     assert "// Int<8> is documentation" in output
 
 
+def test_metal_template_alias_canonicalization_resolves_owner_constants():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        struct BaseFrag {
+          static constexpr short kElems = 4;
+
+          template <typename U>
+          using dtype_frag_t = typename metal::vec<U, kElems>;
+
+          dtype_frag_t<float> value;
+        };
+
+        struct IndexFrag {
+          static constexpr short kElems = 3;
+
+          template <typename U>
+          using dtype_frag_t = typename metal::vec<U, kElems>;
+
+          dtype_frag_t<int> value;
+        };
+        """)
+
+    output = project_pipeline._canonicalize_metal_template_aliases(
+        MetalPreprocessor(),
+        source,
+    )
+
+    assert "metal::vec<float, 4> value;" in output
+    assert "metal::vec<int, 3> value;" in output
+    assert "dtype_frag_t<float>" not in output
+    assert "dtype_frag_t<int>" not in output
+    assert "typename metal::vec" not in output
+
+
+def test_metal_template_alias_canonicalization_disambiguates_qualified_owners():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        namespace first {
+        struct Frag {
+          static constexpr short kElems = 2;
+          template <typename U> using value_t = metal::vec<U, kElems>;
+        };
+        }
+
+        namespace second {
+        struct Frag {
+          static constexpr short kElems = 3;
+          template <typename U> using value_t = metal::vec<U, kElems>;
+        };
+        }
+
+        first::Frag::value_t<float> first_value;
+        second::Frag::value_t<float> second_value;
+        """)
+
+    output = project_pipeline._canonicalize_metal_struct_template_aliases(
+        MetalPreprocessor(),
+        source,
+    )
+
+    assert "metal::vec<float, 2> first_value;" in output
+    assert "metal::vec<float, 3> second_value;" in output
+
+
+def test_metal_template_alias_canonicalization_preserves_chain_owner():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        struct Producer {
+          template <typename U> using storage_t = metal::vec<U, 2>;
+          template <typename U> using middle_t = storage_t<U>;
+          template <typename U> using value_t = middle_t<U>;
+        };
+
+        struct Consumer {
+          template <typename U> using storage_t = metal::vec<U, 3>;
+          Producer::value_t<float> value;
+        };
+        """)
+
+    output = project_pipeline._canonicalize_metal_struct_template_aliases(
+        MetalPreprocessor(),
+        source,
+    )
+
+    assert "metal::vec<float, 2> value;" in output
+    assert "metal::vec<float, 3> value;" not in output
+    assert "Producer::storage_t<float>" not in output
+
+
+def test_metal_template_alias_canonicalization_resolves_qualified_owner_constant():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        namespace shapes {
+        struct Frag {
+          static constexpr short kElems = 4;
+          template <typename U>
+          using value_t = metal::vec<U, shapes::Frag::kElems>;
+        };
+        }
+
+        shapes::Frag::value_t<float> value;
+        """)
+
+    output = project_pipeline._canonicalize_metal_struct_template_aliases(
+        MetalPreprocessor(),
+        source,
+    )
+
+    assert "metal::vec<float, (4)> value;" in output
+
+
+def test_metal_template_alias_canonicalization_disambiguates_nested_owners():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        struct First {
+          struct Frag {
+            static constexpr short kElems = 2;
+            template <typename U> using value_t = metal::vec<U, kElems>;
+          };
+        };
+
+        struct Second {
+          struct Frag {
+            static constexpr short kElems = 3;
+            template <typename U> using value_t = metal::vec<U, kElems>;
+          };
+        };
+
+        First::Frag::value_t<float> first_value;
+        Second::Frag::value_t<float> second_value;
+        """)
+
+    output = project_pipeline._canonicalize_metal_struct_template_aliases(
+        MetalPreprocessor(),
+        source,
+    )
+
+    assert "metal::vec<float, 2> first_value;" in output
+    assert "metal::vec<float, 3> second_value;" in output
+
+
 def test_metal_template_alias_canonicalization_keeps_unresolved_cycles():
     from crosstl.backend.Metal.preprocessor import MetalPreprocessor
 
@@ -46381,6 +46527,111 @@ def test_translate_project_resolves_owner_aliases_in_explicit_casts(tmp_path):
     assert_directx_compute_validates_if_available(outputs["directx"], tmp_path)
     assert_compute_glsl_validates_if_available(outputs["opengl"], tmp_path)
     assert_spirv_asm_validates_if_available(outputs["vulkan"], tmp_path)
+
+
+def test_translate_project_resolves_struct_owned_alias_template_vectors(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "owner_alias_template.metal").write_text(
+        textwrap.dedent("""
+            struct BaseFrag {
+                static constexpr short kElems = 4;
+
+                template <typename U>
+                using dtype_frag_t = typename metal::vec<U, kElems>;
+
+                template <typename T>
+                static dtype_frag_t<T> make(T value) {
+                    return dtype_frag_t<T>{
+                        value,
+                        value + T(1),
+                        value + T(2),
+                        value + T(3)};
+                }
+
+                template <typename T>
+                static T first(const thread dtype_frag_t<T>& value) {
+                    return value.x;
+                }
+            };
+
+            [[kernel]] void vector_alias(
+                device float* result_buffer [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {
+                BaseFrag::dtype_frag_t<float> value =
+                    BaseFrag::make<float>(1.0f);
+                result_buffer[gid] = BaseFrag::first(value);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx", "opengl", "vulkan"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
+    assert set(artifacts) == {"directx", "opengl", "vulkan"}
+    outputs = {
+        target: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for target, artifact in artifacts.items()
+    }
+    assert all("dtype_frag_t" not in output for output in outputs.values())
+    assert all("metal::" not in output for output in outputs.values())
+    assert all("WARNING" not in output for output in outputs.values())
+    assert "float4 make_float" in outputs["directx"]
+    assert "float BaseFrag__first__float" in outputs["directx"]
+    assert "vec4 make_float" in outputs["opengl"]
+    assert "float BaseFrag__first__float" in outputs["opengl"]
+    assert "OpTypeVector" in outputs["vulkan"]
+    assert_directx_compute_validates_if_available(outputs["directx"], tmp_path)
+    assert_compute_glsl_validates_if_available(outputs["opengl"], tmp_path)
+    assert_spirv_asm_validates_if_available(outputs["vulkan"], tmp_path)
+
+
+def test_translate_project_rejects_unsupported_struct_alias_vector_width(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "wide_owner_alias.metal").write_text(
+        textwrap.dedent("""
+            struct BaseFrag {
+                static constexpr short kRows = 16;
+                static constexpr short kCols = 16;
+                static constexpr short kElems = (kRows * kCols) / 32;
+
+                template <typename U>
+                using value_t = metal::vec<U, kElems>;
+            };
+
+            [[kernel]] void wide_owner_alias(
+                device float* output [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {
+                BaseFrag::value_t<float> value;
+                output[gid] = value[0];
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["vulkan"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["diagnostics"][0]["code"] == "project.translate.unsupported-feature"
+    assert payload["diagnostics"][0]["missingCapabilities"] == [
+        "spirv.generic_vector_width"
+    ]
+    assert payload["artifacts"][0]["status"] == "failed"
+    assert not (repo / payload["artifacts"][0]["path"]).exists()
 
 
 def test_metal_project_materialization_concretizes_dispatch_bool_functor_helper(

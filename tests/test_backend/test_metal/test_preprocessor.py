@@ -3230,6 +3230,179 @@ def test_preprocessor_resolves_qualified_owner_alias_with_pointer_target():
     assert "Tile_int::elem_ptr" not in output
 
 
+def test_preprocessor_expands_struct_owned_alias_templates():
+    code = """
+    struct BaseFrag {
+      static constexpr short kElems = 4;
+
+      template <typename U>
+      using dtype_frag_t = typename metal::vec<U, kElems>;
+
+      template <typename T>
+      static dtype_frag_t<T> make(T value) {
+        dtype_frag_t<T> result;
+        result[0] = value;
+        return result;
+      }
+    };
+
+    kernel void vector_alias(
+        device float* float_output [[buffer(0)]],
+        device int* int_output [[buffer(1)]],
+        uint gid [[thread_position_in_grid]]) {
+      BaseFrag::dtype_frag_t<float> float_value = BaseFrag::make<float>(1.0f);
+      BaseFrag::dtype_frag_t<int> int_value = BaseFrag::make<int>(2);
+      float_output[gid] = float_value[0];
+      int_output[gid] = int_value[0];
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "using dtype_frag_t = typename metal::vec<U, kElems>;" in output
+    assert "metal::vec<float,4> float_value" in output
+    assert "metal::vec<int,4> int_value" in output
+    assert "metal::vec<float,4> BaseFrag__make__float" in output
+    assert "metal::vec<int,4> BaseFrag__make__int" in output
+    assert "metal::vec<float,4> result" in output
+    assert "metal::vec<int,4> result" in output
+    assert "BaseFrag::dtype_frag_t<float>" not in output
+    assert "BaseFrag::dtype_frag_t<int>" not in output
+
+
+def test_preprocessor_expands_alias_template_defaults_from_owner_constants():
+    code = """
+    struct BaseFrag {
+      static constexpr short kElems = 4;
+
+      template <typename U, short N = kElems>
+      using frag_t = metal::vec<U, N>;
+
+      frag_t<float> values;
+    };
+
+    kernel void vector_alias(
+        device float* output [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {
+      BaseFrag::frag_t<float> value;
+      output[gid] = value[0];
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "metal::vec<float,4> value" in output
+    assert "BaseFrag::frag_t<float>" not in output
+
+
+def test_preprocessor_expands_alias_templates_exposed_by_owner_aliases():
+    preprocessor = MetalPreprocessor()
+    definitions = preprocessor._find_concrete_struct_definitions("""
+        struct BaseFrag {
+          static constexpr short kFragRows = 16;
+          static constexpr short kFragCols = 16;
+          static constexpr short kElems = (kFragRows * kFragCols) / 32;
+
+          template <typename U>
+          using dtype_frag_t = typename metal::vec<U, kElems>;
+        };
+
+        struct Tile {
+          using Frag = BaseFrag;
+          typedef typename Frag::template dtype_frag_t<float> frag_type;
+        };
+        """)
+    structs = {definition.name: definition for definition in definitions}
+
+    resolved = preprocessor._canonicalize_struct_scoped_type(
+        "thread frag_type&",
+        structs["Tile"],
+        structs,
+    )
+
+    assert resolved == "thread metal::vec<float,8>&"
+
+
+def test_preprocessor_keeps_alias_template_chains_with_the_declaring_owner():
+    code = """
+    struct Producer {
+      template <typename U> using storage_t = metal::vec<U, 2>;
+      template <typename U> using value_t = storage_t<U>;
+    };
+
+    struct Consumer {
+      template <typename U> using storage_t = metal::vec<U, 3>;
+      Producer::value_t<float> value;
+    };
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "metal::vec<float,2> value" in output
+    assert "metal::vec<float,3> value" not in output
+    assert "Producer::storage_t<float>" not in output
+
+
+def test_preprocessor_disambiguates_same_named_alias_template_owners():
+    code = """
+    namespace first {
+    struct Frag {
+      static constexpr short kElems = 2;
+      template <typename U> using value_t = metal::vec<U, kElems>;
+    };
+    }
+
+    namespace second {
+    struct Frag {
+      static constexpr short kElems = 3;
+      template <typename U> using value_t = metal::vec<U, kElems>;
+    };
+    }
+
+    first::Frag::value_t<float> first_value;
+    second::Frag::value_t<float> second_value;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "metal::vec<float,2> first_value" in output
+    assert "metal::vec<float,3> second_value" in output
+
+
+def test_preprocessor_expands_alias_template_with_qualified_owner_constant():
+    code = """
+    struct Frag {
+      static constexpr short kElems = 4;
+      template <typename U>
+      using value_t = metal::vec<U, Frag::kElems>;
+    };
+
+    Frag::value_t<float> value;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "metal::vec<float,4> value" in output
+
+
+def test_preprocessor_expands_alias_template_with_fully_qualified_owner_constant():
+    code = """
+    namespace shapes {
+    struct Frag {
+      static constexpr short kElems = 4;
+      template <typename U>
+      using value_t = metal::vec<U, shapes::Frag::kElems>;
+    };
+    }
+
+    shapes::Frag::value_t<float> value;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "metal::vec<float,4> value" in output
+
+
 def test_preprocessor_records_struct_aliases_and_method_const_qualification():
     pp = MetalPreprocessor()
     definitions = pp._find_concrete_struct_definitions("""
@@ -3311,7 +3484,9 @@ def test_preprocessor_lowers_value_only_nested_template_member_call():
 
     assert "Tile__frag_at__runtime_values__int(self, index.value)" in output
     assert "Tile__frag_at__runtime_values__int__const(self, index.value)" in output
-    assert "thread Frag::dtype_frag_t<half>& " in output
+    assert "thread half& dst" in output
+    assert "const thread half& src" in output
+    assert "Frag::dtype_frag_t<half>" not in output
     assert "Frag__load__half(" in output
     assert "Frag__store__half(" in output
     assert "frag_at<" not in output
@@ -3351,6 +3526,55 @@ def test_preprocessor_instantiates_template_method_from_typed_local_arg():
     output = MetalPreprocessor().preprocess(code)
     assert "half Sum__reduce__half(Sum self, half val)" in output
     assert "Sum__reduce__half(op, v)" in output
+
+
+def test_preprocessor_instantiates_template_method_from_generic_vector_local():
+    code = """
+    struct BaseFrag {
+      template <typename T>
+      static T first(const thread metal::vec<T, 4>& value) {
+        return value.x;
+      }
+    };
+
+    kernel void k(device float* out [[buffer(0)]]) {
+      metal::vec<float, 4> value = metal::vec<float, 4>{1.0, 2.0, 3.0, 4.0};
+      out[0] = BaseFrag::first(value);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "float BaseFrag__first__float(" in output
+    assert "BaseFrag__first__float(value)" in output
+    assert "BaseFrag::first" not in output
+
+
+@pytest.mark.parametrize(
+    ("type_text", "expected"),
+    [
+        ("metal::vec<float, 4>", ("float", 4)),
+        ("::metal::vec<float, (4)>", ("float", 4)),
+        ("vec<int, 8>", ("int", 8)),
+        ("metal::vec<T, 4>", None),
+        ("metal::vec<float, N>", None),
+        ("metal::vec<float, 0>", None),
+        ("metal::vec<float>", None),
+    ],
+)
+def test_preprocessor_recognizes_only_concrete_generic_vector_types(
+    type_text, expected
+):
+    assert MetalPreprocessor()._scalar_and_width(type_text) == expected
+
+
+def test_preprocessor_does_not_resolve_types_from_future_declarations():
+    declarations = {"value": [(40, "float"), (80, "int")]}
+    preprocessor = MetalPreprocessor()
+
+    assert preprocessor._resolve_declared_type_at(declarations, "value", 20) is None
+    assert preprocessor._resolve_declared_type_at(declarations, "value", 60) == "float"
+    assert preprocessor._resolve_declared_type_at(declarations, "value", 100) == "int"
 
 
 def test_preprocessor_instantiates_template_operator_call_from_typed_local():

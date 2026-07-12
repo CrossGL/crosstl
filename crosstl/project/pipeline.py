@@ -9347,6 +9347,9 @@ class _MetalTemplateAliasDeclaration:
     target: str
     span: tuple[int, int]
     namespace: str
+    owner_name: str | None = None
+    owner_span: tuple[int, int] | None = None
+    owner_constants: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -13487,6 +13490,24 @@ def _metal_rewrite_qualified_struct_member_values(
     if not owners or not replacements:
         return expression
 
+    qualified_edits: list[tuple[int, int, str]] = []
+    for owner in sorted(owners, key=len, reverse=True):
+        if "::" not in owner:
+            continue
+        owner_pattern = r"\s*::\s*".join(
+            re.escape(component) for component in owner.split("::")
+        )
+        pattern = re.compile(
+            rf"(?<![A-Za-z0-9_:]){owner_pattern}\s*::\s*"
+            r"(?P<member>[A-Za-z_][A-Za-z0-9_]*)\b"
+        )
+        for match in pattern.finditer(expression):
+            value = replacements.get(match.group("member"))
+            if value is not None:
+                qualified_edits.append((match.start(), match.end(), f"({value})"))
+    for start, end, value in sorted(qualified_edits, reverse=True):
+        expression = expression[:start] + value + expression[end:]
+
     edits: list[tuple[int, int, str]] = []
     index = 0
     while index < len(expression):
@@ -13667,6 +13688,7 @@ def _metal_template_alias_declarations(
 ) -> list[_MetalTemplateAliasDeclaration]:
     masked = _masked_metal_non_code_text(source)
     namespace_spans = preprocessor._find_namespace_spans(source)
+    concrete_structs = preprocessor._find_concrete_struct_definitions(source)
     declarations: list[_MetalTemplateAliasDeclaration] = []
     position = 0
     while True:
@@ -13706,10 +13728,27 @@ def _metal_template_alias_declarations(
             continue
         name = declaration_match.group("name")
         namespace = preprocessor._namespace_at(namespace_spans, start)
+        owner = next(
+            (
+                struct
+                for struct in sorted(
+                    concrete_structs,
+                    key=lambda item: item.span[1] - item.span[0],
+                )
+                if struct.span[0] <= start < struct.span[1]
+            ),
+            None,
+        )
+        qualified_components = [
+            owner.qualified_name if owner is not None else namespace,
+            name,
+        ]
         declarations.append(
             _MetalTemplateAliasDeclaration(
                 name=name,
-                qualified_name=f"{namespace}::{name}" if namespace else name,
+                qualified_name="::".join(
+                    component for component in qualified_components if component
+                ),
                 parameters=parameters,
                 parameter_defaults=preprocessor._template_parameter_defaults(
                     parameter_text
@@ -13717,6 +13756,15 @@ def _metal_template_alias_declarations(
                 target=source[equals + 1 : semicolon].strip(),
                 span=(start, semicolon + 1),
                 namespace=namespace,
+                owner_name=(
+                    (owner.qualified_name or owner.name) if owner is not None else None
+                ),
+                owner_span=owner.span if owner is not None else None,
+                owner_constants=(
+                    preprocessor._resolved_static_data_member_initializers(owner)
+                    if owner is not None
+                    else {}
+                ),
             )
         )
         position = semicolon + 1
@@ -13831,6 +13879,16 @@ def _metal_template_alias_reference_matches(
             namespace,
             globally_qualified,
         )
+        if "::" not in raw_name and not globally_qualified:
+            candidates[:0] = [
+                declaration.qualified_name
+                for declaration in declarations
+                if declaration.name == raw_name
+                and declaration.owner_span is not None
+                and declaration.owner_span[0]
+                <= match.start()
+                < declaration.owner_span[1]
+            ]
         visible_namespaces = _metal_visible_using_namespaces(
             using_namespace_directives,
             match.start(),
@@ -13867,7 +13925,9 @@ def _metal_template_alias_reference_matches(
             source[angle_start + 1 : angle_end]
         )
         target_is_visible = (
-            namespace == declaration.namespace
+            "::" in raw_name
+            or globally_qualified
+            or namespace == declaration.namespace
             or declaration.namespace in visible_namespaces
         )
         references.append(
@@ -13880,6 +13940,88 @@ def _metal_template_alias_reference_matches(
             )
         )
     return references
+
+
+def _metal_template_alias_reference_replacement(
+    preprocessor: Any,
+    reference: _MetalTemplateAliasReference,
+    declarations: Sequence[_MetalTemplateAliasDeclaration] = (),
+) -> str | None:
+    bindings = _metal_template_alias_bindings(
+        preprocessor,
+        reference.declaration,
+        reference.arguments,
+    )
+    if bindings is None:
+        return None
+    replacement = preprocessor._replace_identifiers(
+        reference.declaration.target,
+        bindings,
+    ).strip()
+    if reference.declaration.owner_constants:
+        replacement = _metal_rewrite_qualified_struct_member_values(
+            replacement,
+            (reference.declaration.owner_name or "",),
+            reference.declaration.owner_constants,
+        )
+        replacement = preprocessor._substitute_template_argument_static_constants(
+            replacement,
+            dict(reference.declaration.owner_constants),
+        )
+    if reference.declaration.owner_span is not None:
+        for declaration in declarations:
+            if declaration.owner_span != reference.declaration.owner_span:
+                continue
+            replacement = re.sub(
+                rf"(?<![A-Za-z0-9_:]){re.escape(declaration.name)}(?=\s*<)",
+                declaration.qualified_name,
+                replacement,
+            )
+    replacement = re.sub(r"^typename\s+", "", replacement).strip()
+    return replacement or None
+
+
+def _canonicalize_metal_struct_template_aliases(
+    preprocessor: Any,
+    source: str,
+) -> str:
+    declarations = [
+        declaration
+        for declaration in _metal_template_alias_declarations(preprocessor, source)
+        if declaration.owner_name is not None
+    ]
+    if not declarations:
+        return source
+
+    working = source
+    for _ in range(len(declarations) + 1):
+        current_declarations = [
+            declaration
+            for declaration in _metal_template_alias_declarations(
+                preprocessor,
+                working,
+            )
+            if declaration.owner_name is not None
+        ]
+        replacements: list[tuple[int, int, str]] = []
+        for reference in _metal_template_alias_reference_matches(
+            preprocessor,
+            working,
+            current_declarations,
+        ):
+            if not reference.target_is_visible:
+                continue
+            replacement = _metal_template_alias_reference_replacement(
+                preprocessor,
+                reference,
+                current_declarations,
+            )
+            if replacement and replacement != working[reference.start : reference.end]:
+                replacements.append((reference.start, reference.end, replacement))
+        if not replacements:
+            break
+        working = preprocessor._apply_text_replacements(working, replacements)
+    return working
 
 
 def _canonicalize_metal_template_aliases(
@@ -13908,17 +14050,11 @@ def _canonicalize_metal_template_aliases(
         ):
             if not reference.target_is_visible:
                 continue
-            bindings = _metal_template_alias_bindings(
+            replacement = _metal_template_alias_reference_replacement(
                 preprocessor,
-                reference.declaration,
-                reference.arguments,
+                reference,
+                current_declarations,
             )
-            if bindings is None:
-                continue
-            replacement = preprocessor._replace_identifiers(
-                reference.declaration.target,
-                bindings,
-            ).strip()
             if replacement and replacement != working[reference.start : reference.end]:
                 replacements.append((reference.start, reference.end, replacement))
         if not replacements:
@@ -15406,6 +15542,10 @@ def _project_template_materialization_for_artifact(
             file_path=str(unit.path),
         )
         preprocessor._configure_integral_constant_contracts(preprocessed)
+        preprocessed = _canonicalize_metal_struct_template_aliases(
+            preprocessor,
+            preprocessed,
+        )
         templates = preprocessor._find_template_functions(preprocessed)
     except Exception:  # noqa: BLE001
         return None
