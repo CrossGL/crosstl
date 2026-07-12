@@ -116,9 +116,9 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 14,
-        "endOffset": 432,
+        "endOffset": 430,
         "file": "crosstl-out/directx/vectorAdd_kernel.hlsl",
-        "length": 29,
+        "length": 27,
         "line": 13,
         "offset": 403
       },
@@ -138,11 +138,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 15,
-        "endOffset": 462,
+        "endOffset": 460,
         "file": "crosstl-out/directx/vectorAdd_kernel.hlsl",
         "length": 30,
         "line": 14,
-        "offset": 432
+        "offset": 430
       },
       "original": {
         "column": 1,

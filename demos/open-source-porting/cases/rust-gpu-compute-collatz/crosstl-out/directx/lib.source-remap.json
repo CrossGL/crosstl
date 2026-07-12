@@ -138,11 +138,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 29,
-        "endOffset": 596,
+        "endOffset": 594,
         "file": "crosstl-out/directx/lib.hlsl",
         "length": 41,
         "line": 28,
-        "offset": 555
+        "offset": 553
       },
       "original": {
         "column": 1,
@@ -160,11 +160,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 36,
-        "endOffset": 783,
+        "endOffset": 777,
         "file": "crosstl-out/directx/lib.hlsl",
         "length": 49,
         "line": 35,
-        "offset": 734
+        "offset": 728
       },
       "original": {
         "column": 1,
@@ -182,11 +182,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 64,
-        "endOffset": 1329,
+        "endOffset": 1317,
         "file": "crosstl-out/directx/lib.hlsl",
         "length": 18,
         "line": 63,
-        "offset": 1311
+        "offset": 1299
       },
       "original": {
         "column": 1,
@@ -204,11 +204,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 65,
-        "endOffset": 1352,
+        "endOffset": 1340,
         "file": "crosstl-out/directx/lib.hlsl",
         "length": 23,
         "line": 64,
-        "offset": 1329
+        "offset": 1317
       },
       "original": {
         "column": 1,
@@ -226,11 +226,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 67,
-        "endOffset": 1427,
+        "endOffset": 1415,
         "file": "crosstl-out/directx/lib.hlsl",
         "length": 29,
         "line": 66,
-        "offset": 1398
+        "offset": 1386
       },
       "original": {
         "column": 1,
@@ -248,11 +248,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 68,
-        "endOffset": 1508,
+        "endOffset": 1496,
         "file": "crosstl-out/directx/lib.hlsl",
         "length": 81,
         "line": 67,
-        "offset": 1427
+        "offset": 1415
       },
       "original": {
         "column": 1,

@@ -677,9 +677,12 @@ def test_metal_scalar_vector_constructor_lowers_to_directx_splat(tmp_path):
     )
 
     _assert_generated_output_is_usable(generated)
-    assert "Output literalValue = Output(half3(0, 0, 0));" in generated
-    assert "Output scalarValue = Output(half3(scalar, scalar, scalar));" in generated
-    assert "Output nestedValue = Output(half3(half(0), half(0), half(0)));" in generated
+    assert "Output literalValue;" in generated
+    assert "literalValue.viewDir = half3(0, 0, 0);" in generated
+    assert "Output scalarValue;" in generated
+    assert "scalarValue.viewDir = half3(scalar, scalar, scalar);" in generated
+    assert "Output nestedValue;" in generated
+    assert "nestedValue.viewDir = half3(half(0), half(0), half(0));" in generated
     assert "half3(0))" not in generated
     assert "half3(scalar))" not in generated
     assert "half3(half(0)))" not in generated
@@ -719,6 +722,111 @@ def test_metal_threadgroup_scratch_lowers_to_directx_groupshared(tmp_path):
     assert generated.index("groupshared float mat_mul_scratch[256];") < generated.index(
         "void CSMain"
     )
+
+
+def test_metal_constexpr_threadgroup_extent_lowers_to_directx_literal(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "mlx-constexpr-threadgroup-scratch.metal",
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        kernel void extent_copy(
+            const device float* input [[buffer(0)]],
+            device float* output [[buffer(1)]],
+            uint gid [[thread_position_in_grid]],
+            uint lid [[thread_position_in_threadgroup]]
+        ) {
+            constexpr int BASE = 8;
+            constexpr int SIMD_SIZE = BASE * 4;
+            threadgroup float scratch[SIMD_SIZE];
+            scratch[lid] = input[gid];
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+            output[gid] = scratch[lid];
+        }
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend="directx", format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+    assert "groupshared float extent_copy_scratch[32];" in generated
+    global_declarations = generated.split("void CSMain", maxsplit=1)[0]
+    assert "SIMD_SIZE" not in global_declarations
+
+
+def test_metal_value_template_threadgroup_extents_remain_entry_specific(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "template-threadgroup-scratch.metal",
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        template <int Width>
+        kernel void extent_copy(
+            const device float* input [[buffer(0)]],
+            device float* output [[buffer(1)]],
+            uint gid [[thread_position_in_grid]],
+            uint lid [[thread_position_in_threadgroup]]
+        ) {
+            threadgroup float scratch[Width];
+            scratch[lid] = input[gid];
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+            output[gid] = scratch[lid];
+        }
+
+        template [[host_name("extent_copy_16")]] [[kernel]]
+        decltype(extent_copy<16>) extent_copy<16>;
+        template [[host_name("extent_copy_32")]] [[kernel]]
+        decltype(extent_copy<32>) extent_copy<32>;
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend="directx", format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+    assert "groupshared float extent_copy_16_scratch[16];" in generated
+    assert "groupshared float extent_copy_32_scratch[32];" in generated
+    assert generated.count("void CSMain") == 2
+
+
+def test_metal_materialized_local_array_extent_lowers_to_opengl(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "materialized-local-array-extent.metal",
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        template <typename T, int Width, int Lanes>
+        kernel void local_extent(
+            device T* out [[buffer(0)]],
+            uint gid [[thread_position_in_grid]]
+        ) {
+            constexpr int values_per_lane = Width / Lanes;
+            thread T values[values_per_lane] = {0};
+            out[gid] = values[0];
+        }
+
+        template [[host_name("local_extent_float32")]] [[kernel]]
+        decltype(local_extent<float, 64, 32>) local_extent<float, 64, 32>;
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend="opengl", format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+    assert "const int values_per_lane = (64 / 32);" in generated
+    assert "float values[values_per_lane] = float[2](0.0, 0.0);" in generated
+    assert "float[values_per_lane](" not in generated
 
 
 def test_metal_constant_reference_parameter_lowers_to_directx_constant_buffer(

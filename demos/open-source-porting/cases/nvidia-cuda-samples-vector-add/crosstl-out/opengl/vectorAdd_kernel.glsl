@@ -13,7 +13,7 @@ void main() {
     uvec3 block_id = gl_WorkGroupID;
     uvec3 thread_local_id = gl_LocalInvocationID;
     uvec3 block_dim = gl_WorkGroupSize;
-    int i = ((int(gl_WorkGroupSize.x) * int(gl_WorkGroupID.x)) + int(gl_LocalInvocationID.x));
+    int i = int(((gl_WorkGroupSize.x * gl_WorkGroupID.x) + gl_LocalInvocationID.x));
     if ((i < vectorAdd_numElements_Args_numElements)) {
         C[i] = (A[i] + B[i]);
     }

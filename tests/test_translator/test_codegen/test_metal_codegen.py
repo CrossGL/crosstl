@@ -1441,6 +1441,23 @@ def test_metal_synchronization_builtins_lower_to_threadgroup_barriers():
     assert "allMemoryBarrier();" not in generated_code
 
 
+def test_metal_workgroup_execution_barrier_lowers_without_intrinsic_leak():
+    shader = """
+    shader WorkgroupExecutionBarrier {
+        compute {
+            void main() {
+                workgroupExecutionBarrier();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert generated_code.count("threadgroup_barrier(mem_flags::mem_none);") == 1
+    assert "workgroupExecutionBarrier" not in generated_code
+
+
 def test_metal_user_defined_synchronization_names_are_not_lowered():
     shader = """
     shader SynchronizationShadowing {
@@ -1659,6 +1676,91 @@ def test_metal_wave_intrinsics_lower_to_simdgroup_and_diagnose_gaps():
     assert "WaveActiveBallot(anyLane)" not in generated_code
     assert "WaveMatch(value)" not in generated_code
     assert "WaveOpNode" not in generated_code
+
+
+def test_metal_relative_shuffle_intrinsics_round_trip_to_simd_shuffle():
+    # Canonical WaveShuffleDown/Up/Xor round-trip back to the Metal
+    # simd_shuffle_down/up/xor builtins with the same argument order.
+    shader = """
+    shader MetalRelativeShuffle {
+        compute {
+            void main() {
+                uint value = 1u;
+                uint down = WaveShuffleDown(value, 1u);
+                uint up = WaveShuffleUp(down, 1u);
+                uint xored = WaveShuffleXor(up, 2u);
+                uint filled = WaveShuffleAndFillUp(xored, 0u, 1u);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "simd_shuffle_down(value, 1u)" in generated_code
+    assert "simd_shuffle_up(down, 1u)" in generated_code
+    assert "simd_shuffle_xor(up, 2u)" in generated_code
+    assert "simd_shuffle_and_fill_up(xored, 0u, ushort(1u))" in generated_code
+    assert "WaveShuffle" not in generated_code
+
+
+def test_metal_shuffle_and_fill_up_lowers_boolean_payloads():
+    shader = """
+    shader MetalBooleanShuffleAndFill {
+        compute {
+            void main() {
+                bool scalar = WaveShuffleAndFillUp(true, false, 1u);
+                bool converted = WaveShuffleAndFillUp(1u, 0u, 1u);
+                bvec2 vector = WaveShuffleAndFillUp(
+                    bvec2(true, false), bvec2(false, true), 2u);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "simd_shuffle_and_fill_up(uint(true), uint(false), ushort(1u)) != 0u"
+        in generated_code
+    )
+    assert (
+        "simd_shuffle_and_fill_up(uint2(bool2(true, false)), "
+        "uint2(bool2(false, true)), ushort(2u)) != uint2(0u)" in generated_code
+    )
+    assert "simd_shuffle_and_fill_up(1u, 0u, ushort(1u)) != 0u" in generated_code
+
+
+@pytest.mark.parametrize(
+    ("expression", "diagnostic"),
+    (
+        (
+            "WaveShuffleAndFillUp(1u, 0.0, 1u)",
+            "value and fill arguments must have matching types, got uint and float",
+        ),
+        (
+            "WaveShuffleAndFillUp(1u, 0u, 1.0)",
+            "delta must be scalar int or uint, got float",
+        ),
+    ),
+)
+def test_metal_shuffle_and_fill_up_diagnoses_invalid_arguments(expression, diagnostic):
+    shader = f"""
+    shader MetalBadShuffleAndFill {{
+        compute {{
+            void main() {{
+                uint result = {expression};
+            }}
+        }}
+    }}
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "unsupported Metal wave intrinsic: WaveShuffleAndFillUp " + diagnostic
+        in generated_code
+    )
 
 
 def test_metal_wave_op_ir_nodes_lower_to_simdgroup_intrinsics():
@@ -13795,7 +13897,10 @@ def test_compute_hlsl_system_value_semantic_alias_variants_lower_to_metal_builti
     ("param_type", "semantic", "metal_semantic", "expected_type"),
     [
         ("float", "gl_GlobalInvocationID", "thread_position_in_grid", "uint3"),
-        ("uvec2", "gl_LocalInvocationID", "thread_position_in_threadgroup", "uint3"),
+        # A float 2-vector is not a valid index type for a positional builtin.
+        # (Scalar `uint` / `uint2` ARE valid and are covered by the Apple-docs
+        # threads-per-threadgroup roundtrip test.)
+        ("vec2", "gl_LocalInvocationID", "thread_position_in_threadgroup", "uint3"),
         ("int", "gl_LocalInvocationIndex", "thread_index_in_threadgroup", "uint"),
         ("vec3", "gl_NumWorkGroups", "threadgroups_per_grid", "uint3"),
     ],

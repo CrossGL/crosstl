@@ -5,28 +5,6 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 9,
-        "endOffset": 227,
-        "file": "crosstl-out/vulkan/main.spvasm",
-        "length": 60,
-        "line": 8,
-        "offset": 167
-      },
-      "original": {
-        "column": 1,
-        "endColumn": 1,
-        "endLine": 28,
-        "endOffset": 1528,
-        "file": "main.hip",
-        "length": 93,
-        "line": 27,
-        "offset": 1435
-      }
-    },
-    {
-      "generated": {
-        "column": 1,
-        "endColumn": 1,
         "endLine": 12,
         "endOffset": 321,
         "file": "crosstl-out/vulkan/main.spvasm",

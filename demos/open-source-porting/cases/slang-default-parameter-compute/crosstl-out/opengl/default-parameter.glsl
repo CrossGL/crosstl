@@ -1,5 +1,9 @@
 #version 450 core
 layout(std430, binding = 0) buffer outputBufferBuffer { int outputBuffer[]; };
+int helper(int val, int a);
+
+int test(int val);
+
 int helper(int val, int a) {
     return (val + a);
 }

@@ -15,7 +15,7 @@ void CSMain(uint3 id_dispatchThreadID : SV_DispatchThreadID) {
     const uint row_dim_x = params.row_dim_x;
     const uint col_dim_x = params.col_dim_x;
     const uint inner_dim = params.inner_dim;
-    if (((id.x < col_dim_x) && (id.y < row_dim_x))) {
+    if ((id.x < col_dim_x) && (id.y < row_dim_x)) {
         const uint index = ((id.y * col_dim_x) + id.x);
         float sum = 0;
         for (uint k = 0; (k < inner_dim); ++k) {

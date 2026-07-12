@@ -235,6 +235,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         "allMemoryBarrier",
         "deviceMemoryBarrier",
         "workgroupBarrier",
+        "workgroupExecutionBarrier",
     }
     sampled_resource_type_aliases = {
         "Texture1D": "sampler1D",
@@ -645,6 +646,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "allMemoryBarrier": "__threadfence",
             "deviceMemoryBarrier": "__threadfence",
             "workgroupBarrier": "__syncthreads",
+            "workgroupExecutionBarrier": "__syncthreads",
             # Ray tracing placeholders
             "RayDesc": "CglRayDesc",
             "RayQuery": "CglRayQuery",

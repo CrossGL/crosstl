@@ -3,7 +3,7 @@ static const uint BUFFER_ELEMENTS = 32;
 
 RWByteAddressBuffer pos : register(u0);
 uint fibonacci(uint n) {
-    if ((n <= 1)) {
+    if (n <= 1) {
         return n;
     }
     uint curr = 1;
@@ -20,7 +20,7 @@ uint fibonacci(uint n) {
 [numthreads(1, 1, 1)]
 void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID) {
     uint index = dispatchThreadID.x;
-    if ((index >= BUFFER_ELEMENTS)) {
+    if (index >= BUFFER_ELEMENTS) {
         return;
     }
     pos.Store((index * 4), fibonacci(pos.Load((index * 4))));

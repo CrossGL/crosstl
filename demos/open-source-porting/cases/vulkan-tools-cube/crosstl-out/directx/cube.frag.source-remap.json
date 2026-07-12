@@ -72,9 +72,9 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 12,
-        "endOffset": 292,
+        "endOffset": 290,
         "file": "crosstl-out/directx/cube.frag.hlsl",
-        "length": 34,
+        "length": 32,
         "line": 11,
         "offset": 258
       },
@@ -94,11 +94,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 13,
-        "endOffset": 326,
+        "endOffset": 324,
         "file": "crosstl-out/directx/cube.frag.hlsl",
         "length": 34,
         "line": 12,
-        "offset": 292
+        "offset": 290
       },
       "original": {
         "column": 1,
@@ -116,11 +116,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 15,
-        "endOffset": 401,
+        "endOffset": 399,
         "file": "crosstl-out/directx/cube.frag.hlsl",
         "length": 62,
         "line": 14,
-        "offset": 339
+        "offset": 337
       },
       "original": {
         "column": 1,
@@ -138,11 +138,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 21,
-        "endOffset": 563,
+        "endOffset": 561,
         "file": "crosstl-out/directx/cube.frag.hlsl",
         "length": 94,
         "line": 20,
-        "offset": 469
+        "offset": 467
       },
       "original": {
         "column": 1,
@@ -160,11 +160,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 25,
-        "endOffset": 661,
+        "endOffset": 659,
         "file": "crosstl-out/directx/cube.frag.hlsl",
         "length": 57,
         "line": 24,
-        "offset": 604
+        "offset": 602
       },
       "original": {
         "column": 1,
@@ -182,11 +182,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 28,
-        "endOffset": 683,
+        "endOffset": 681,
         "file": "crosstl-out/directx/cube.frag.hlsl",
         "length": 19,
         "line": 27,
-        "offset": 664
+        "offset": 662
       },
       "original": {
         "column": 1,
@@ -204,11 +204,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 30,
-        "endOffset": 755,
+        "endOffset": 753,
         "file": "crosstl-out/directx/cube.frag.hlsl",
         "length": 23,
         "line": 29,
-        "offset": 732
+        "offset": 730
       },
       "original": {
         "column": 1,
@@ -226,11 +226,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 31,
-        "endOffset": 792,
+        "endOffset": 790,
         "file": "crosstl-out/directx/cube.frag.hlsl",
         "length": 37,
         "line": 30,
-        "offset": 755
+        "offset": 753
       },
       "original": {
         "column": 1,
@@ -248,11 +248,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 32,
-        "endOffset": 829,
+        "endOffset": 827,
         "file": "crosstl-out/directx/cube.frag.hlsl",
         "length": 37,
         "line": 31,
-        "offset": 792
+        "offset": 790
       },
       "original": {
         "column": 1,
@@ -270,11 +270,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 33,
-        "endOffset": 875,
+        "endOffset": 873,
         "file": "crosstl-out/directx/cube.frag.hlsl",
         "length": 46,
         "line": 32,
-        "offset": 829
+        "offset": 827
       },
       "original": {
         "column": 1,
@@ -292,11 +292,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 34,
-        "endOffset": 926,
+        "endOffset": 924,
         "file": "crosstl-out/directx/cube.frag.hlsl",
         "length": 51,
         "line": 33,
-        "offset": 875
+        "offset": 873
       },
       "original": {
         "column": 1,
@@ -314,11 +314,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 35,
-        "endOffset": 1010,
+        "endOffset": 1008,
         "file": "crosstl-out/directx/cube.frag.hlsl",
         "length": 84,
         "line": 34,
-        "offset": 926
+        "offset": 924
       },
       "original": {
         "column": 1,

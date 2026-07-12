@@ -38,11 +38,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 28,
-        "endOffset": 842,
+        "endOffset": 839,
         "file": "cube.vsh",
         "length": 62,
         "line": 27,
-        "offset": 780
+        "offset": 777
       }
     },
     {
@@ -60,11 +60,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 19,
-        "endOffset": 396,
+        "endOffset": 393,
         "file": "cube.vsh",
-        "length": 28,
+        "length": 27,
         "line": 18,
-        "offset": 368
+        "offset": 366
       }
     },
     {
@@ -82,11 +82,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 22,
-        "endOffset": 514,
+        "endOffset": 511,
         "file": "cube.vsh",
         "length": 114,
         "line": 21,
-        "offset": 400
+        "offset": 397
       }
     },
     {
@@ -104,11 +104,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 28,
-        "endOffset": 842,
+        "endOffset": 839,
         "file": "cube.vsh",
         "length": 62,
         "line": 27,
-        "offset": 780
+        "offset": 777
       }
     },
     {
@@ -126,11 +126,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 28,
-        "endOffset": 842,
+        "endOffset": 839,
         "file": "cube.vsh",
         "length": 62,
         "line": 27,
-        "offset": 780
+        "offset": 777
       }
     },
     {
@@ -148,11 +148,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 29,
-        "endOffset": 871,
+        "endOffset": 868,
         "file": "cube.vsh",
         "length": 29,
         "line": 28,
-        "offset": 842
+        "offset": 839
       }
     },
     {
@@ -170,11 +170,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 28,
-        "endOffset": 842,
+        "endOffset": 839,
         "file": "cube.vsh",
         "length": 62,
         "line": 27,
-        "offset": 780
+        "offset": 777
       }
     },
     {
@@ -192,11 +192,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 29,
-        "endOffset": 871,
+        "endOffset": 868,
         "file": "cube.vsh",
         "length": 29,
         "line": 28,
-        "offset": 842
+        "offset": 839
       }
     }
   ],

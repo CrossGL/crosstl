@@ -111,6 +111,12 @@ def test_scientific_float_literal_tokenization():
     assert ("IDENTIFIER", "e") not in tokens
 
 
+def test_bfloat16_primitive_type_tokenization():
+    tokens = tokenize_code("bfloat16 value;")
+
+    assert ("BFLOAT16", "bfloat16") in tokens
+
+
 def test_line_continuations_spliced_before_tokenization():
     # HLSL and GLSL preprocessors splice backslash-newline before tokenization.
     code = "\n".join(

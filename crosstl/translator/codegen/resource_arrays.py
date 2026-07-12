@@ -14,6 +14,7 @@ from ..ast import (
     LoopNode,
     MatchArmNode,
     MatchNode,
+    PointerType,
     ReturnNode,
     SwitchNode,
     VariableNode,
@@ -80,6 +81,52 @@ COMPONENT_INDEX_BY_NAME = {
 MAX_STATIC_LOOP_ITERATIONS_FOR_HINTS = 1024
 MAX_VECTOR_ALTERNATIVE_BINDINGS = 64
 
+NON_PRIVATE_POINTER_QUALIFIERS = frozenset(
+    {
+        "buffer",
+        "constant",
+        "device",
+        "global",
+        "groupshared",
+        "local",
+        "shared",
+        "storage",
+        "threadgroup",
+        "threadgroup_imageblock",
+        "uniform",
+        "workgroup",
+    }
+)
+
+
+def is_private_pointer_parameter(parameter):
+    """Return whether a parameter denotes a function-local pointer."""
+    vtype = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+    if not isinstance(vtype, PointerType):
+        return False
+    qualifiers = {
+        str(qualifier).lower()
+        for qualifier in getattr(parameter, "qualifiers", []) or []
+    }
+    return not qualifiers.intersection(NON_PRIVATE_POINTER_QUALIFIERS)
+
+
+def collect_private_pointer_parameters(functions):
+    """Collect private pointer parameters that require target array lowering."""
+    parameters = {}
+    for function in functions:
+        function_name = getattr(function, "name", None)
+        if not function_name:
+            continue
+        for parameter in getattr(
+            function, "parameters", getattr(function, "params", [])
+        ):
+            if is_private_pointer_parameter(parameter):
+                parameters.setdefault(function_name, {})[
+                    parameter.name
+                ] = parameter.param_type
+    return parameters
+
 
 def collect_resource_array_size_hints(
     *,
@@ -96,6 +143,7 @@ def collect_resource_array_size_hints(
     initial_size,
     format_size,
     initial_literal_int_constants=None,
+    strict_fixed_local_array_sizes=False,
 ):
     """Infer resource-array sizes from literal accesses and call propagation."""
     fixed_global_array_sizes = fixed_global_array_sizes or {}
@@ -1969,6 +2017,36 @@ def collect_resource_array_size_hints(
 
         yield from walk(root, constants, dict(initial_index_hints or {}))
 
+    fixed_local_array_sizes = {}
+    for function_name, function in functions_by_name.items():
+        local_sizes = {}
+        ambiguous_names = set()
+        initial_constants = function_initial_constants(function)
+        for node, visible_constants, _index_hints in walk_nodes_with_constants(
+            getattr(function, "body", []), initial_constants
+        ):
+            if not isinstance(node, VariableNode):
+                continue
+            node_type = getattr(node, "var_type", getattr(node, "vtype", None))
+            if "ArrayType" not in node_type.__class__.__name__:
+                continue
+            name = getattr(node, "name", None)
+            size_expression = getattr(node_type, "size", None)
+            size = literal_int_value(size_expression, visible_constants)
+            if not name or size is None or size <= 0:
+                if name:
+                    ambiguous_names.add(name)
+                continue
+            previous = local_sizes.get(name)
+            if previous is not None and previous != size:
+                ambiguous_names.add(name)
+                continue
+            local_sizes[name] = size
+        for name in ambiguous_names:
+            local_sizes.pop(name, None)
+        fixed_local_array_sizes[function_name] = local_sizes
+
+    fixed_local_parameter_sizes = {}
     changed = True
     while changed:
         changed = False
@@ -2122,6 +2200,7 @@ def collect_resource_array_size_hints(
         for caller_name, func in functions_by_name.items():
             caller_param_hints = function_hints.get(caller_name, {})
             caller_fixed_hints = fixed_function_array_sizes.get(caller_name, {})
+            caller_local_fixed_hints = fixed_local_array_sizes.get(caller_name, {})
             for call in walk_nodes(getattr(func, "body", [])) or ():
                 if not isinstance(call, FunctionCallNode):
                     continue
@@ -2171,6 +2250,35 @@ def collect_resource_array_size_hints(
                                 "Conflicting fixed resource array sizes for "
                                 f"'{arg_name}': {arg_size} and {fixed_size}"
                             )
+                    elif arg_name in caller_local_fixed_hints:
+                        arg_size = caller_local_fixed_hints[arg_name]
+                        arg_is_fixed = True
+                        if fixed_size is not None and arg_size != fixed_size:
+                            raise ValueError(
+                                "Conflicting fixed resource array sizes for "
+                                f"'{arg_name}': {arg_size} and {fixed_size}"
+                            )
+                    if (
+                        strict_fixed_local_array_sizes
+                        and arg_name in caller_local_fixed_hints
+                        and callee_param_name in callee_param_hints
+                    ):
+                        parameter_key = (callee_name, callee_param_name)
+                        existing_size = fixed_local_parameter_sizes.get(parameter_key)
+                        if existing_size is not None and existing_size != arg_size:
+                            raise ValueError(
+                                "Conflicting fixed local array sizes for private "
+                                f"pointer parameter '{callee_name}.{callee_param_name}': "
+                                f"{existing_size} and {arg_size}"
+                            )
+                        if callee_param_hints[callee_param_name] > arg_size:
+                            raise ValueError(
+                                "Private pointer parameter "
+                                f"'{callee_name}.{callee_param_name}' requires at least "
+                                f"{callee_param_hints[callee_param_name]} elements, but "
+                                f"caller array '{arg_name}' has {arg_size}"
+                            )
+                        fixed_local_parameter_sizes[parameter_key] = arg_size
                     if arg_scope_key is not None:
                         register_fixed_requirement(arg_scope_key, fixed_size, arg_size)
                     if (
@@ -2216,3 +2324,34 @@ def collect_resource_array_size_hints(
             for func_name, param_hints in function_hints.items()
         },
     )
+
+
+def collect_private_pointer_array_size_hints(
+    *,
+    functions,
+    walk_nodes,
+    expression_name,
+    literal_int_value,
+    visible_literal_int_constants,
+    function_call_name,
+    initial_literal_int_constants=None,
+):
+    """Infer exact target array extents for private pointer parameters."""
+    function_arrays = collect_private_pointer_parameters(functions)
+    if not function_arrays:
+        return {}
+    _global_hints, function_hints = collect_resource_array_size_hints(
+        global_arrays={},
+        function_arrays=function_arrays,
+        functions=functions,
+        walk_nodes=walk_nodes,
+        expression_name=expression_name,
+        literal_int_value=literal_int_value,
+        visible_literal_int_constants=visible_literal_int_constants,
+        function_call_name=function_call_name,
+        initial_size=0,
+        format_size=lambda size: str(size) if size > 0 else "",
+        initial_literal_int_constants=initial_literal_int_constants,
+        strict_fixed_local_array_sizes=True,
+    )
+    return function_hints

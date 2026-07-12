@@ -50,11 +50,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 8,
-        "endOffset": 321,
+        "endOffset": 331,
         "file": "crosstl-out/opengl/shader.vert.glsl",
         "length": 58,
         "line": 7,
-        "offset": 263
+        "offset": 273
       },
       "original": {
         "column": 1,
@@ -72,11 +72,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 9,
-        "endOffset": 358,
+        "endOffset": 368,
         "file": "crosstl-out/opengl/shader.vert.glsl",
         "length": 37,
         "line": 8,
-        "offset": 321
+        "offset": 331
       },
       "original": {
         "column": 1,

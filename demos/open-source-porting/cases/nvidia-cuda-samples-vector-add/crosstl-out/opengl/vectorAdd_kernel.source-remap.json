@@ -116,9 +116,9 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 17,
-        "endOffset": 695,
+        "endOffset": 685,
         "file": "crosstl-out/opengl/vectorAdd_kernel.glsl",
-        "length": 95,
+        "length": 85,
         "line": 16,
         "offset": 600
       },
@@ -138,11 +138,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 19,
-        "endOffset": 781,
+        "endOffset": 771,
         "file": "crosstl-out/opengl/vectorAdd_kernel.glsl",
         "length": 30,
         "line": 18,
-        "offset": 751
+        "offset": 741
       },
       "original": {
         "column": 1,

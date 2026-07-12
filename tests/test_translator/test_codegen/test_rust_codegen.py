@@ -26918,6 +26918,22 @@ def test_workgroup_barrier_emits_rust_sync():
     assert "workgroup_barrier()" in generated_code
 
 
+def test_workgroup_execution_barrier_emits_rust_sync():
+    code = """
+    shader RustExecutionBarrier {
+        compute {
+            void main() {
+                workgroupExecutionBarrier();
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "workgroup_barrier()" in generated_code
+    assert "workgroupExecutionBarrier()" not in generated_code
+
+
 def test_rust_memory_barrier_variants_emit_sync_intrinsics():
     code = """
     shader ComputeSyncVariants {

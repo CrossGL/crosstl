@@ -138,9 +138,9 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 13,
-        "endOffset": 427,
+        "endOffset": 425,
         "file": "crosstl-out/directx/noise.frag.hlsl",
-        "length": 120,
+        "length": 118,
         "line": 12,
         "offset": 307
       },
@@ -160,11 +160,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 14,
-        "endOffset": 460,
+        "endOffset": 458,
         "file": "crosstl-out/directx/noise.frag.hlsl",
         "length": 33,
         "line": 13,
-        "offset": 427
+        "offset": 425
       },
       "original": {
         "column": 1,

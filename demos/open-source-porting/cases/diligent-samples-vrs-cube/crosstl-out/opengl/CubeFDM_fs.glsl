@@ -15,6 +15,8 @@ layout(std140, binding = 0) uniform Uniforms {
     int DrawMode;
 };
 // Fragment Shader
+vec4 FragmentDensityToColor();
+
 vec4 FragmentDensityToColor() {
     float h = (clamp((1.0 - (1.0 / float((gl_FragSizeEXT.x * gl_FragSizeEXT.y)))), 0.0, 1.0) / 1.35);
     vec3 col = vec3((abs(((h * 6.0) - 3.0)) - 1.0), (2.0 - abs(((h * 6.0) - 2.0))), (2.0 - abs(((h * 6.0) - 4.0))));

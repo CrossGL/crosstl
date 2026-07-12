@@ -204,11 +204,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 36,
-        "endOffset": 983,
+        "endOffset": 981,
         "file": "crosstl-out/directx/reduce.hlsl",
         "length": 57,
         "line": 35,
-        "offset": 926
+        "offset": 924
       },
       "original": {
         "column": 1,
@@ -226,11 +226,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 39,
-        "endOffset": 1071,
+        "endOffset": 1069,
         "file": "crosstl-out/directx/reduce.hlsl",
         "length": 43,
         "line": 38,
-        "offset": 1028
+        "offset": 1026
       },
       "original": {
         "column": 1,
@@ -248,11 +248,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 41,
-        "endOffset": 1233,
+        "endOffset": 1229,
         "file": "crosstl-out/directx/reduce.hlsl",
         "length": 137,
         "line": 40,
-        "offset": 1096
+        "offset": 1092
       },
       "original": {
         "column": 1,

@@ -402,16 +402,28 @@ def format_match_condition(generator, condition):
     return f"({condition})"
 
 
+def apply_match_binding_types(generator, binding_types):
+    saved_type_maps = {}
+    for attribute in ("local_variable_types", "local_variable_source_types"):
+        type_map = getattr(generator, attribute, None)
+        if type_map is None:
+            continue
+        saved_type_maps[attribute] = dict(type_map)
+        type_map.update(binding_types)
+    return saved_type_maps
+
+
+def restore_match_binding_types(generator, saved_type_maps):
+    for attribute, type_map in saved_type_maps.items():
+        setattr(generator, attribute, type_map)
+
+
 def generate_match_guard_condition(generator, guard, binding_types):
-    saved_types = getattr(generator, "local_variable_types", None)
-    if saved_types is not None:
-        saved_types = dict(saved_types)
-        generator.local_variable_types.update(binding_types)
+    saved_type_maps = apply_match_binding_types(generator, binding_types)
     try:
         return generator.generate_expression(guard)
     finally:
-        if saved_types is not None:
-            generator.local_variable_types = saved_types
+        restore_match_binding_types(generator, saved_type_maps)
 
 
 def generate_guarded_bound_match_arm(
@@ -984,10 +996,7 @@ def generate_match_expression_assignment_body(
     prefix, value = match_arm_value_parts(getattr(arm, "body", None))
 
     code = "".join(f"{indent_str}{binding}\n" for binding in bindings)
-    saved_types = getattr(generator, "local_variable_types", None)
-    if saved_types is not None:
-        saved_types = dict(saved_types)
-        generator.local_variable_types.update(binding_types)
+    saved_type_maps = apply_match_binding_types(generator, binding_types)
     try:
         if prefix:
             code += generator.generate_scoped_statement_body(prefix, indent)
@@ -1013,21 +1022,16 @@ def generate_match_expression_assignment_body(
             rhs = generator.generate_expression_with_expected(value, target_type)
             code += f"{indent_str}{target_variable} = {rhs};\n"
     finally:
-        if saved_types is not None:
-            generator.local_variable_types = saved_types
+        restore_match_binding_types(generator, saved_type_maps)
     return code
 
 
 def generate_body_with_binding_types(generator, binding_types, body, indent):
-    saved_types = getattr(generator, "local_variable_types", None)
-    if saved_types is not None:
-        saved_types = dict(saved_types)
-        generator.local_variable_types.update(binding_types)
+    saved_type_maps = apply_match_binding_types(generator, binding_types)
     try:
         return generator.generate_scoped_statement_body(body, indent)
     finally:
-        if saved_types is not None:
-            generator.local_variable_types = saved_types
+        restore_match_binding_types(generator, saved_type_maps)
 
 
 def match_subject_requires_temp(expression_node, expression_type):
@@ -1096,15 +1100,11 @@ def infer_match_expression_result_type(generator, node):
         if value is None:
             continue
 
-        saved_types = getattr(generator, "local_variable_types", None)
-        if saved_types is not None:
-            saved_types = dict(saved_types)
-            generator.local_variable_types.update(binding_types)
+        saved_type_maps = apply_match_binding_types(generator, binding_types)
         try:
             arm_type = expression_result_type(generator, value)
         finally:
-            if saved_types is not None:
-                generator.local_variable_types = saved_types
+            restore_match_binding_types(generator, saved_type_maps)
 
         if arm_type is None:
             continue

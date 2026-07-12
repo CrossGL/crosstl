@@ -176,6 +176,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         "allMemoryBarrier",
         "deviceMemoryBarrier",
         "workgroupBarrier",
+        "workgroupExecutionBarrier",
     }
     sampled_resource_type_aliases = {
         "Texture1D": "sampler1D",
@@ -9882,6 +9883,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "allMemoryBarrier": "__threadfence",
             "deviceMemoryBarrier": "__threadfence",
             "workgroupBarrier": "__syncthreads",
+            "workgroupExecutionBarrier": "__syncthreads",
             # Ray tracing placeholders
             "RayDesc": "CglRayDesc",
             "RayQuery": "CglRayQuery",
