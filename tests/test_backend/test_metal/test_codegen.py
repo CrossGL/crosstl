@@ -4650,6 +4650,42 @@ def test_codegen_parses_materialized_owner_alias_pointer_casts():
     assert strict_ast is not None
 
 
+def test_codegen_parses_materialized_struct_alias_template_vectors():
+    source = """
+        struct BaseFrag {
+            static constexpr short kElems = 4;
+
+            template <typename U>
+            using dtype_frag_t = typename metal::vec<U, kElems>;
+
+            template <typename T>
+            static dtype_frag_t<T> make(T value) {
+                dtype_frag_t<T> result;
+                result[0] = value;
+                return result;
+            }
+        };
+
+        kernel void vector_alias(
+            device float* output [[buffer(0)]],
+            uint gid [[thread_position_in_grid]]) {
+            BaseFrag::dtype_frag_t<float> value = BaseFrag::make<float>(1.0f);
+            output[gid] = value[0];
+        }
+        """
+
+    crossgl = convert(MetalPreprocessor().preprocess(source))
+
+    assert "vec4 value = BaseFrag__make__float(1.0f);" in crossgl
+    assert "vec4 BaseFrag__make__float(float value)" in crossgl
+    assert "vec4 result;" in crossgl
+    assert "dtype_frag_t" not in crossgl
+    strict_ast = CrossGLParser(
+        CrossGLLexer(crossgl).get_tokens(), strict_function_bodies=True
+    ).parse()
+    assert strict_ast is not None
+
+
 def test_codegen_sizeof_dependent_typename_from_tinygrad_tile_copy():
     code = """
     template<typename ST>

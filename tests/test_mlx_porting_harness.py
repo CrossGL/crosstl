@@ -380,6 +380,15 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     template_alias = expected_gaps["template_alias_status"]
     assert template_alias["status"] == "materialized"
     assert template_alias["target"] == "vulkan"
+    assert template_alias["struct_owned_alias_template_supported_contract"] == (
+        "concrete non-variadic struct-owned alias templates with declaring-owner "
+        "retention, default argument substitution, dependent owner integral "
+        "constants, cross-owner alias chains, and namespace-qualified or nested "
+        "owner disambiguation"
+    )
+    assert template_alias["struct_owned_alias_template_tracked_by"] == (
+        "https://github.com/CrossGL/crosstl/issues/1490"
+    )
     assert template_alias["plain_helper_supported_contract"] == (
         "call-site deduction through unnamed parameters, empty braced type values, "
         "and proven lexical integral constants"
@@ -406,9 +415,10 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     ]
     assert template_alias["post_materialization_translation"] == {
         "status": "blocked-by-tracked-issue",
-        "diagnostic_code": "project.translate.metal-unresolved-construct",
-        "rule_label": "Metal namespace qualifier (metal::)",
-        "first_unresolved_type": "BaseNAXFrag::metal::vec<float,kElemsPerFrag>",
+        "diagnostic_code": "project.translate.unsupported-feature",
+        "feature": "unsupported-generic-vector-width",
+        "first_unsupported_type": "vec<float,8>",
+        "missing_capability": "spirv.generic_vector_width",
         "issue": "https://github.com/CrossGL/crosstl/issues/1569",
         "artifact_status": "failed",
     }
@@ -434,7 +444,7 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         "unsupported_specialization_count": 0,
         "resolved_function": "NAXTile_float_2_2__elems",
         "prior_diagnostic_code": "project.translate.crossgl-function-body-parse-failed",
-        "next_diagnostic_code": "project.translate.metal-unresolved-construct",
+        "next_diagnostic_code": "project.translate.unsupported-feature",
         "artifact_status": "failed",
     }
     assert struct_scoped_cast_alias["remaining_contract_blocked_by"] == [

@@ -12450,6 +12450,52 @@ class VulkanSPIRVCodeGen:
 
     def normalize_generic_vector_type(self, type_str: str) -> str:
         compact = re.sub(r"\s+", "", str(type_str))
+        generic_prefix = re.match(r"(?:::)?(?:metal::)?vec<", compact)
+        generic_parts = None
+        if generic_prefix is not None and compact.endswith(">"):
+            body = compact[generic_prefix.end() : -1]
+            if "," in body:
+                generic_parts = body.split(",", 1)
+        if generic_parts is not None:
+            source_element_type, source_width = generic_parts
+            element_type = self.normalize_primitive_name(source_element_type)
+            width_text = source_width.strip()
+            while width_text.startswith("(") and width_text.endswith(")"):
+                width_text = width_text[1:-1].strip()
+            try:
+                width = int(width_text, 0)
+            except ValueError as exc:
+                raise UnsupportedSPIRVFeatureError(
+                    "unresolved-generic-vector-width",
+                    "SPIR-V requires a concrete generic-vector width; could not "
+                    f"resolve '{source_width}' in '{compact}'",
+                    missing_capabilities=("spirv.generic_vector_width",),
+                ) from exc
+            if width not in {2, 3, 4}:
+                raise UnsupportedSPIRVFeatureError(
+                    "unsupported-generic-vector-width",
+                    f"SPIR-V generic vector '{compact}' has unsupported width "
+                    f"{width}; lower it to a supported aggregate representation",
+                    missing_capabilities=("spirv.generic_vector_width",),
+                )
+            supported_elements = {
+                "float",
+                "double",
+                "int",
+                "uint",
+                "bool",
+                "i64",
+                "u64",
+                self.BFLOAT16_TYPE_NAME,
+            }
+            if element_type not in supported_elements:
+                raise UnsupportedSPIRVFeatureError(
+                    "unsupported-generic-vector-element-type",
+                    f"SPIR-V generic vector '{compact}' has unsupported element "
+                    f"type '{source_element_type}'",
+                    missing_capabilities=("spirv.generic_vector_element_type",),
+                )
+            compact = f"vec{width}<{element_type}>"
         half_vector_match = re.fullmatch(
             r"(?:f16vec|half|min16float|float16_t)([234])", compact
         )

@@ -285,13 +285,25 @@ retain source qualifiers while exposing a canonical target type to the strict
 CrossGL function-body parser. Reduced DirectX, OpenGL, and Vulkan project
 fixtures pass their native validators.
 
+Concrete struct-owned alias templates now resolve their declaring owner,
+default arguments, dependent owner constants, and alias chains before member
+template deduction. Namespace-qualified and nested same-named owners remain
+distinct, and generic vector locals retain their concrete type instead of
+borrowing a later same-named declaration. Reduced four-component DirectX,
+OpenGL, and Vulkan fixtures pass native validation. This is a partial
+implementation of CrossGL/crosstl#1490; dependent function-local aliases and
+value expressions outside this contract remain tracked there.
+
 The isolated high-budget `quantized_nax.metal` run still completes 722
-specializations with no unsupported records and now advances beyond
-`NAXTile_float_2_2__elems`. Vulkan artifact inspection stops fail-closed at
-owner-qualified `metal::vec<scalar, width>` types, beginning with
-`BaseNAXFrag::metal::vec<float, kElemsPerFrag>`. No Vulkan artifact or validator
-result is claimed. Concrete generic vector canonicalization is tracked in
-CrossGL/crosstl#1569. Complete address-space, const, pointer-provenance, and
+specializations with no unsupported records and now resolves the NAX fragment
+aliases to concrete `vec<scalar, 8>` types. SPIR-V generation rejects the first
+`vec<float, 8>` with `project.translate.unsupported-feature` and the
+`spirv.generic_vector_width` capability instead of substituting a scalar. No
+Vulkan artifact or validator result is claimed. Generic vectors with supported
+widths 2, 3, and 4 now map to SPIR-V vector types; a signed 64-bit three-component
+construction and component update passes `spirv-val`. Aggregate lowering for
+the eight-component NAX representation remains tracked in CrossGL/crosstl#1569.
+Complete address-space, const, pointer-provenance, and
 unresolved-alias diagnostic transport remains tracked in CrossGL/crosstl#1566.
 Generic member calls with explicit type or value arguments in the shared parser
 remain tracked in CrossGL/crosstl#1555, pointer-bearing aggregate propagation

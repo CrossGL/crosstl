@@ -617,7 +617,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 1258
+        "test_count": 1269
       },
       "translator_codegen": {
         "exists": true,
@@ -646,7 +646,7 @@
         "path": "crosstl/backend/SPIRV"
       },
       "signals": {
-        "unsupported_marker_count": 75,
+        "unsupported_marker_count": 82,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
@@ -739,7 +739,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 1127
+        "test_count": 1130
       },
       "translator_codegen": {
         "exists": true,
