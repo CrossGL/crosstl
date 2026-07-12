@@ -242,16 +242,20 @@ aggregate call arguments remains tracked in CrossGL/crosstl#1559.
 
 An isolated high-budget `quantized_nax.metal` Vulkan project run now expands the
 concrete NAX tile callbacks, resolves conditional function-local dimensions, and
-materializes `NAXTile<T, BR, BC>` as concrete 2-by-2 specializations. The first
-remaining translation blocker is member-template binding for the explicit
-`NAXTile<float16_t>::load<U, StrideX, StrideY>` call, tracked in
-CrossGL/crosstl#1476. Generic member calls with explicit type or value arguments
-in the shared parser remain tracked in CrossGL/crosstl#1555, pointer-bearing
-aggregate propagation remains tracked in CrossGL/crosstl#1544, and lowered
-receiver/reference semantics must satisfy CrossGL/crosstl#1557 before the kernel
-can be considered semantically ready. Lazy logical and conditional evaluation
-in SPIR-V remains tracked in CrossGL/crosstl#1560 for full-corpus semantic
-coverage.
+materializes `NAXTile<T, BR, BC>` as concrete 2-by-2 specializations. Explicit
+member-template binding now preserves `float16_t` threadgroup arrays, and the
+template-hostile project path initializes the verified compile-time callback
+contracts before member lowering. The current project report reaches residual
+template auditing: concrete alias-template types such as `Int<1>` are classified
+as unresolved placeholders, while reachable `dispatch_bool`, `const_for_loop`,
+and `tile_matmad_nax` helpers still need contextual materialization. These gaps
+are tracked in CrossGL/crosstl#1490 and CrossGL/crosstl#1479. Generic member calls
+with explicit type or value arguments in the shared parser remain tracked in
+CrossGL/crosstl#1555, pointer-bearing aggregate propagation remains tracked in
+CrossGL/crosstl#1544, and lowered receiver/reference semantics must satisfy
+CrossGL/crosstl#1557 before the kernel can be considered semantically ready.
+Lazy logical and conditional evaluation in SPIR-V remains tracked in
+CrossGL/crosstl#1560 for full-corpus semantic coverage.
 Nested returns and side-effectful compatibility arguments in pointer-preserving
 SPIR-V inlining now fail explicitly; complete lowering remains tracked in
 CrossGL/crosstl#1561 and CrossGL/crosstl#1562.

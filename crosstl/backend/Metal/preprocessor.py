@@ -2182,6 +2182,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         "int16_t": 2,
         "uint16_t": 2,
         "half": 2,
+        "float16_t": 2,
         "bfloat16_t": 2,
         "int": 4,
         "uint": 4,
@@ -2226,6 +2227,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         "long",
         "int64_t",
         "half",
+        "float16_t",
         "bfloat16_t",
         "float",
         "double",
@@ -7410,6 +7412,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         "uint32_t",
         "int64_t",
         "uint64_t",
+        "float16_t",
         "bfloat16_t",
         "size_t",
     }

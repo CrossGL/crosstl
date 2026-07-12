@@ -100,6 +100,8 @@ VULKAN_GEMV_TRANSLATION_BLOCKER_CAPABILITY = (
 FULL_CORPUS_TRANSLATION_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1376",
     "https://github.com/CrossGL/crosstl/issues/1476",
+    "https://github.com/CrossGL/crosstl/issues/1479",
+    "https://github.com/CrossGL/crosstl/issues/1490",
     "https://github.com/CrossGL/crosstl/issues/1544",
     "https://github.com/CrossGL/crosstl/issues/1546",
     "https://github.com/CrossGL/crosstl/issues/1554",
@@ -186,7 +188,6 @@ RESOLVED_FRONTIER_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1551",
     "https://github.com/CrossGL/crosstl/issues/1498",
     "https://github.com/CrossGL/crosstl/issues/1535",
-    "https://github.com/CrossGL/crosstl/issues/1490",
     "https://github.com/CrossGL/crosstl/issues/1489",
     "https://github.com/CrossGL/crosstl/issues/1504",
     "https://github.com/CrossGL/crosstl/issues/1503",

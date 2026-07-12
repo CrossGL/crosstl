@@ -14874,6 +14874,7 @@ def _project_template_materialization_for_artifact(
             source,
             file_path=str(unit.path),
         )
+        preprocessor._configure_integral_constant_contracts(preprocessed)
         templates = preprocessor._find_template_functions(preprocessed)
     except Exception:  # noqa: BLE001
         return None

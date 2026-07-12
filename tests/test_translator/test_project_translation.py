@@ -45767,6 +45767,83 @@ def test_translate_project_metal_const_for_loop_partial_template_materializes_to
     assert validation["success"] is True
 
 
+def test_translate_project_expands_verified_const_for_loop_callbacks(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "callback_loop.metal").write_text(
+        textwrap.dedent("""
+            template <typename T, T Value>
+            struct integral_constant {
+                static constexpr T value = Value;
+            };
+
+            template <int Value>
+            using Int = integral_constant<int, Value>;
+
+            template <int Start, int Stop, int Step, typename F>
+            constexpr void const_for_loop(F callback) {
+                if constexpr (Start < Stop) {
+                    constexpr auto index = Int<Start>{};
+                    callback(index);
+                    const_for_loop<Start + Step, Stop, Step, F>(callback);
+                }
+            }
+
+            template <typename T, T Lhs, typename U, U Rhs>
+            constexpr auto operator*(
+                integral_constant<T, Lhs>,
+                integral_constant<U, Rhs>
+            ) {
+                return integral_constant<decltype(Lhs * Rhs), Lhs * Rhs>{};
+            }
+
+            struct Writer {
+                template <typename Row, typename Column>
+                static void store(device int* out, Row row, Column column) {
+                    out[row.value + column.value] = row.value + column.value;
+                }
+            };
+
+            template <int Rows, int Columns>
+            struct Tile {
+                void run(device int* out) {
+                    const_for_loop<0, Rows, 1>([&](auto row) {
+                        const_for_loop<0, Columns, 1>([&](auto column) {
+                            Writer::store(
+                                out,
+                                row * Int<4>{},
+                                column * Int<1>{}
+                            );
+                        });
+                    });
+                }
+            };
+
+            kernel void write_indices(device int* out [[buffer(0)]]) {
+                Tile<2, 2> tile;
+                tile.run(out);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["vulkan"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert generated.count("OpStore") == 4
+    assert "const_for_loop" not in generated
+    assert "WARNING" not in generated
+    assert_spirv_asm_validates_if_available(generated, tmp_path)
+
+
 def test_metal_project_materialization_concretizes_dispatch_bool_functor_helper(
     tmp_path,
 ):

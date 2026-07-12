@@ -2864,6 +2864,40 @@ def test_preprocessor_instantiates_explicit_value_template_member_call():
     assert "reducer.reduce_many" not in output
 
 
+def test_preprocessor_binds_float16_threadgroup_array_to_explicit_member_template():
+    code = """
+    typedef half float16_t;
+
+    struct Tile {
+      template <typename U, int StrideX, int StrideY>
+      void load(const threadgroup U* src) {
+        U value = src[StrideX + StrideY];
+      }
+    };
+
+    kernel void float_path(device float* output [[buffer(0)]]) {
+      threadgroup float Ws[16];
+      Tile tile;
+      tile.template load<float, 4, 1>(Ws);
+      output[0] = Ws[0];
+    }
+
+    kernel void float16_path(device float16_t* output [[buffer(0)]]) {
+      threadgroup float16_t Ws[16];
+      Tile tile;
+      tile.template load<float16_t, 4, 1>(Ws + 1);
+      output[0] = Ws[0];
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Tile__load__float_4_1(tile, Ws)" in output
+    assert "Tile__load__float16_t_4_1(tile, Ws + 1)" in output
+    assert "const threadgroup float16_t* src" in output
+    assert "tile.template load" not in output
+
+
 def test_preprocessor_selects_template_member_overload_by_arity():
     code = """
     struct Tile {
