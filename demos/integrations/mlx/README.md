@@ -42,8 +42,8 @@ The current harness verifies:
 - on Linux CI, full project materialization of `gemv.metal` to Vulkan for 225
   source specializations and 224 compute entry points, followed by assembly
   with `spirv-as` and validation with `spirv-val`, both targeting Vulkan 1.1;
-  this structurally validated gate remains blocked on tracked semantic warnings
-  and makes no runtime execution claim;
+  the gate rejects every generated warning and makes no numerical runtime
+  execution claim;
 - runtime artifact manifest, runtime-test manifest, and runtime-test plan
   generation for reduced `arange` readiness probes across DirectX, OpenGL, and
   Vulkan;
@@ -208,17 +208,34 @@ warnings tracked in CrossGL/crosstl#1513; any other native compiler warning
 fails the check.
 The full GEMV Vulkan gate materializes 225 specializations into 224 compute
 entry points, then assembles with `spirv-as` and validates with `spirv-val`, both
-targeting Vulkan 1.1. Structural validation passes, but semantic readiness
-remains blocked by one floating subgroup XOR fallback tracked in
-CrossGL/crosstl#1498. The dependent-type fallbacks tracked in
-CrossGL/crosstl#1490 no longer occur. CrossGL/crosstl#1517 tracks transport of
-the remaining warning into the generated portability report. This gate validates
-generated artifacts only and makes no runtime execution claim.
+targeting Vulkan 1.1. Floating subgroup XOR payloads are bitcast through
+equal-width unsigned integer values, so the fallback tracked in
+CrossGL/crosstl#1498 no longer occurs. The dependent-type fallbacks tracked in
+CrossGL/crosstl#1490 also remain absent. The gate rejects every generated
+warning, validates generated artifacts only, and makes no numerical runtime
+execution claim.
+
+Read-only scalar storage-pointer reinterpretation now has a shared AST contract
+and target lowering for DirectX, OpenGL, and Vulkan. A 32-bit scalar storage
+resource can be viewed through aligned 8-, 16-, or 32-bit scalar elements;
+source pointer offsets are converted to bytes before target indexing, and the
+generated OpenGL and Vulkan artifacts pass native validators. Writable views,
+64-bit backing layouts, and incompatible address-space or alignment cases remain
+explicit diagnostics under CrossGL/crosstl#1546. Metal `dispatch_bool` callbacks
+with one integral-constant parameter now lower to a runtime branch whose two
+callback bodies retain distinct compile-time `true` and `false` values. Nested
+dispatches expand the full Cartesian specialization and reduced DirectX,
+OpenGL, and Vulkan project fixtures pass their native validators. Other callback
+helpers, including compile-time `const_for_loop` unrolling, remain tracked in
+CrossGL/crosstl#1554. Pinned `quantized_nax.metal` now reaches contextually typed
+empty braced arguments under CrossGL/crosstl#1555; pointer-bearing aggregate
+propagation beyond that boundary remains tracked in CrossGL/crosstl#1544.
 
 ## Resolved Frontier Issues
 
 The current reduced frontier no longer depends on the previously tracked issues:
-CrossGL/crosstl#1551, CrossGL/crosstl#1394, CrossGL/crosstl#1317,
+CrossGL/crosstl#1551, CrossGL/crosstl#1498, CrossGL/crosstl#1394,
+CrossGL/crosstl#1317,
 CrossGL/crosstl#939, CrossGL/crosstl#940,
 CrossGL/crosstl#941, CrossGL/crosstl#943, CrossGL/crosstl#944,
 CrossGL/crosstl#945, and CrossGL/crosstl#946. CrossGL/crosstl#979,

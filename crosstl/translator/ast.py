@@ -1094,6 +1094,21 @@ class CastNode(ExpressionNode):
         return f"CastNode(expression={self.expression}, target_type={self.target_type})"
 
 
+class PointerReinterpretNode(ExpressionNode):
+    """Alias a pointer's backing storage through a different element type."""
+
+    def __init__(self, expression: ExpressionNode, target_type: PointerType, **kwargs):
+        super().__init__(target_type, **kwargs)
+        self.expression = expression
+        self.target_type = target_type
+
+    def __repr__(self):
+        return (
+            "PointerReinterpretNode("
+            f"expression={self.expression}, target_type={self.target_type})"
+        )
+
+
 class ConstructorNode(ExpressionNode):
     """Type constructors (vec3(1,2,3), MyStruct{field: value})."""
 

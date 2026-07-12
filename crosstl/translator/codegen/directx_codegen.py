@@ -29,6 +29,7 @@ from ..ast import (
     MeshOpNode,
     NamedType,
     PointerAccessNode,
+    PointerReinterpretNode,
     PointerType,
     PreprocessorNode,
     RangeNode,
@@ -303,6 +304,10 @@ from .match_utils import (
     generate_switch_match,
     infer_match_expression_result_type,
     is_switch_lowerable_match,
+)
+from .pointer_reinterpret import (
+    PointerReinterpretationError,
+    scalar_storage_layout,
 )
 from .resource_arrays import (
     collect_private_pointer_array_size_hints,
@@ -6202,6 +6207,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if expression is None:
             return None
 
+        if isinstance(expression, PointerReinterpretNode):
+            binding = self.hlsl_resource_pointer_binding(expression.expression)
+            if binding is None:
+                return None
+            return self.hlsl_pointer_reinterpret_binding(expression, binding)
+
         if isinstance(expression, (str, IdentifierNode, VariableNode)):
             raw_name = (
                 expression
@@ -6235,6 +6246,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 ),
                 "resource_type": resource_type,
                 "element_type": self.hlsl_resource_pointer_element_type(resource_type),
+                "source_element_type": self.hlsl_resource_pointer_element_type(
+                    resource_type
+                ),
                 "access": access,
             }
 
@@ -6269,6 +6283,64 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         return None
 
+    def hlsl_pointer_reinterpret_binding(self, expression, binding):
+        target_type = getattr(expression.target_type, "pointee_type", None)
+        target_type_name = self.type_name_string(target_type)
+        view_type_name = (
+            binding.get("view_element_type")
+            or binding.get("source_element_type")
+            or binding.get("element_type")
+        )
+        source_type_name = binding.get("source_element_type") or view_type_name
+        view_layout = scalar_storage_layout(view_type_name)
+        source_layout = scalar_storage_layout(source_type_name)
+        target_layout = scalar_storage_layout(target_type_name)
+        if (
+            view_layout is None
+            or source_layout is None
+            or target_layout is None
+            or source_layout.bit_width != 32
+            or target_layout.bit_width not in {8, 16, 32}
+            or target_layout.kind == "floating"
+            and target_layout.bit_width != 32
+        ):
+            raise PointerReinterpretationError(
+                "DirectX storage pointer reinterpretation requires a 32-bit "
+                "scalar backing element and an 8-, 16-, or 32-bit scalar view",
+                source_type=source_type_name,
+                target_type=target_type_name,
+                address_space="storage",
+                alignment=target_layout.byte_width if target_layout else None,
+                access=binding.get("access"),
+                reason="unsupported-scalar-layout",
+                source_location=getattr(expression, "source_location", None),
+            )
+
+        rendered_offset = str(binding.get("offset", "0"))
+        scaled_offset = rendered_offset
+        if view_layout.byte_width != 1 and rendered_offset not in {"0", "0u"}:
+            scaled_offset = f"({rendered_offset} * {view_layout.byte_width})"
+        existing_byte_offset = str(binding.get("byte_offset", "0"))
+        if existing_byte_offset in {"0", "0u"}:
+            byte_offset = scaled_offset
+        elif scaled_offset in {"0", "0u"}:
+            byte_offset = existing_byte_offset
+        else:
+            byte_offset = f"({existing_byte_offset} + {scaled_offset})"
+
+        return {
+            **binding,
+            "offset": "0",
+            "byte_offset": byte_offset,
+            "element_type": target_type_name,
+            "view_element_type": target_type_name,
+            "source_element_type": source_type_name,
+            "pointer_reinterpretation": {
+                "source_layout": source_layout,
+                "target_layout": target_layout,
+            },
+        }
+
     def generate_hlsl_resource_pointer_alias_declaration(self, node, indent):
         vtype = getattr(node, "var_type", getattr(node, "vtype", None))
         if not isinstance(vtype, PointerType):
@@ -6286,6 +6358,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             and backing_element_type is not None
             and self.map_type(declared_element_type)
             != self.map_type(backing_element_type)
+            and binding.get("pointer_reinterpretation") is None
         ):
             raise ValueError(
                 "DirectX resource pointer alias "
@@ -6391,6 +6464,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             raise ValueError(
                 f"DirectX resource pointer '{name}' does not provide writable storage"
             )
+        reinterpretation = binding.get("pointer_reinterpretation")
+        if require_write and reinterpretation is not None:
+            raise PointerReinterpretationError(
+                "DirectX cannot preserve writes through a reinterpreted typed "
+                "storage-buffer view",
+                source_type=reinterpretation["source_layout"].name,
+                target_type=reinterpretation["target_layout"].name,
+                address_space="storage",
+                alignment=reinterpretation["target_layout"].byte_width,
+                access="write",
+                reason="write-requires-byte-address-storage",
+                source_location=getattr(pointer_expression, "source_location", None),
+            )
 
         resource_name = self.hlsl_resource_type_name(binding.get("resource_type"))
         if resource_name not in {
@@ -6414,7 +6500,54 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         effective_index = self.hlsl_resource_pointer_offset_sum(
             binding.get("offset"), rendered_index
         )
+        reinterpret_read = self.hlsl_pointer_reinterpret_read_expression(
+            binding, effective_index
+        )
+        if reinterpret_read is not None:
+            return reinterpret_read
         return f"{binding['root']}[uint({effective_index})]"
+
+    def hlsl_pointer_reinterpret_read_expression(self, binding, element_index):
+        reinterpretation = binding.get("pointer_reinterpretation")
+        if reinterpretation is None:
+            return None
+
+        source_layout = reinterpretation["source_layout"]
+        target_layout = reinterpretation["target_layout"]
+        byte_offset = str(binding.get("byte_offset", "0"))
+        element_bytes = str(element_index)
+        if target_layout.byte_width != 1:
+            element_bytes = f"({element_bytes} * {target_layout.byte_width})"
+        if byte_offset in {"0", "0u"}:
+            byte_index = element_bytes
+        elif element_bytes in {"0", "0u"}:
+            byte_index = byte_offset
+        else:
+            byte_index = f"({byte_offset} + {element_bytes})"
+
+        source_index = f"uint(({byte_index}) / {source_layout.byte_width})"
+        source_value = f"{binding['root']}[{source_index}]"
+        if source_layout.kind == "floating" or source_layout.signed:
+            source_bits = f"asuint({source_value})"
+        else:
+            source_bits = source_value
+
+        if target_layout.bit_width == 32:
+            if target_layout.kind == "floating":
+                return f"asfloat({source_bits})"
+            if target_layout.signed:
+                return f"asint({source_bits})"
+            return source_bits
+
+        bit_offset = f"uint((({byte_index}) % {source_layout.byte_width}) * 8)"
+        if target_layout.signed:
+            left_shift = f"(32u - {bit_offset} - {target_layout.bit_width}u)"
+            return (
+                f"(int({source_bits} << {left_shift}) >> "
+                f"{32 - target_layout.bit_width})"
+            )
+        mask = (1 << target_layout.bit_width) - 1
+        return f"(({source_bits} >> {bit_offset}) & {mask}u)"
 
     def generate_hlsl_resource_pointer_dereference_assignment(self, target, value, op):
         if not (

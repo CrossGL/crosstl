@@ -8,6 +8,7 @@ import pytest
 import crosstl
 from crosstl.backend.Metal.MetalCrossGLCodeGen import (
     MetalBuiltinOverloadResolutionError,
+    MetalCallableLoweringError,
     MetalSizeofResolutionError,
     MetalStaticConstantResolutionError,
     MetalToCrossGLConverter,
@@ -4736,7 +4737,7 @@ def test_codegen_threadgroup_memory_and_barrier():
     assert "@threadgroup" in result or "threadgroup" in result
 
 
-def test_codegen_preserves_lambda_callback_from_mlx_fp_quantized_nax():
+def test_codegen_lowers_dispatch_bool_callback_from_mlx_fp_quantized_nax():
     # Reduced from:
     # Repo: https://github.com/ml-explore/mlx
     # Commit: b155224b9963cd9476363b464a559232a0868000
@@ -4753,11 +4754,14 @@ def test_codegen_preserves_lambda_callback_from_mlx_fp_quantized_nax():
     result = convert(code)
     compact = normalize(result)
 
-    assert "dispatch_bool" in compact
-    assert "[&](auto kAlignedM)" in compact
-    assert "if (kAlignedM.value)" in compact
+    assert "dispatch_bool" not in compact
+    assert "[&]" not in compact
+    assert "if ((!is_unaligned_sm))" in compact
+    assert "if (true)" in compact
+    assert "if (false)" in compact
     assert "workgroupBarrier();" in compact
     assert "Unhandled expression" not in compact
+    assert parse_crossgl(result) is not None
 
 
 def test_codegen_sanitizes_template_id_value_expression_from_mlx_gemm_gather_nax():
@@ -4782,11 +4786,126 @@ def test_codegen_sanitizes_template_id_value_expression_from_mlx_gemm_gather_nax
     result = convert(code)
     compact = normalize(result)
 
-    assert "gemm_loop_u3cT_u2cSM_u2ckAlignedM_u2evalue_u2cAccumType_u3e" in compact
+    assert "gemm_loop_u3cT_u2cSM_u2ctrue_u2cAccumType_u3e" in compact
+    assert "gemm_loop_u3cT_u2cSM_u2cfalse_u2cAccumType_u3e" in compact
     assert "gemm_loop<" not in compact
-    assert "if (kAlignedM.value)" in compact
+    assert "if (true)" in compact
+    assert "if (false)" in compact
     assert "Unhandled expression" not in compact
     assert parse_crossgl(result) is not None
+
+
+def test_codegen_lowers_nested_dispatch_bool_callbacks():
+    code = """
+    void run(bool align_m, bool align_n, device uint* out) {
+      dispatch_bool(align_m, [&](auto kAlignedM) {
+        dispatch_bool(align_n, [&](auto kAlignedN) {
+          if constexpr (kAlignedM.value && kAlignedN.value) {
+            out[0] = 1;
+          }
+        });
+      });
+    }
+    """
+
+    result = convert(code)
+    compact = normalize(result)
+
+    assert compact.count("if (align_m)") == 1
+    assert compact.count("if (align_n)") == 2
+    assert "if (true && true)" in compact
+    assert "if (true && false)" in compact
+    assert "if (false && true)" in compact
+    assert "if (false && false)" in compact
+    assert "dispatch_bool" not in compact
+    assert parse_crossgl(result) is not None
+
+
+def test_codegen_rejects_dispatch_bool_callback_without_parameter():
+    code = """
+    void run(bool condition) {
+      dispatch_bool(condition, [&]() {});
+    }
+    """
+
+    with pytest.raises(MetalCallableLoweringError) as error:
+        convert(code)
+
+    assert error.value.project_diagnostic_code == (
+        "project.translate.metal-callable-unsupported"
+    )
+    assert "exactly one integral-constant parameter" in error.value.reason
+
+
+@pytest.mark.parametrize(
+    ("callback", "reason"),
+    [
+        ("[=](auto flag) { out[0] = 1u; }", "reference-default capture"),
+        ("[&](auto flag) { return; }", "callback-local return statements"),
+    ],
+)
+def test_codegen_rejects_unsafe_dispatch_bool_callback_shapes(callback, reason):
+    code = f"""
+    void run(bool condition, device uint* out) {{
+      dispatch_bool(condition, {callback});
+    }}
+    """
+
+    with pytest.raises(MetalCallableLoweringError) as error:
+        convert(code)
+
+    assert reason in error.value.reason
+
+
+def test_codegen_preserves_dispatch_bool_call_with_named_functor():
+    code = """
+    void run(bool condition, Handler handler) {
+      dispatch_bool(condition, handler);
+    }
+    """
+
+    result = convert(code)
+
+    assert "dispatch_bool(condition, handler);" in result
+    assert parse_crossgl(result) is not None
+
+
+def test_codegen_nested_dispatch_bool_parameter_shadowing_uses_inner_value():
+    code = """
+    void run(bool outer, bool inner, device uint* out) {
+      dispatch_bool(outer, [&](auto flag) {
+        dispatch_bool(inner, [&](auto flag) {
+          if constexpr (flag.value) {
+            out[0] = 1u;
+          }
+        });
+      });
+    }
+    """
+
+    compact = normalize(convert(code))
+
+    assert compact.count("if (true)") == 2
+    assert compact.count("if (false)") == 2
+
+
+def test_codegen_rejects_callback_helper_without_semantic_lowering():
+    code = """
+    void run(device uint* out) {
+      apply_callback([&](auto value) {
+        out[0] = value.value ? 1u : 0u;
+      });
+    }
+    """
+
+    with pytest.raises(MetalCallableLoweringError) as error:
+        convert(code)
+
+    assert error.value.helper == "apply_callback"
+    assert error.value.capture == "&"
+    assert error.value.enclosing_function == "run"
+    assert error.value.source_location["line"] == 3
+    assert "invocation count" in error.value.suggested_action
 
 
 def test_codegen_names_unnamed_template_tag_parameters_from_mlx_nax():

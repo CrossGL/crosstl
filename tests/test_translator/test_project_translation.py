@@ -45296,7 +45296,7 @@ def test_translate_project_signature_instantiation_materializes_convolution_help
     assert validation["success"] is True
 
 
-def test_translate_project_rejects_unparsed_materialized_entry_body(tmp_path):
+def test_translate_project_lowers_materialized_pointer_reinterpretation(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     source_path = repo / "reinterpret.metal"
@@ -45307,9 +45307,9 @@ def test_translate_project_rejects_unparsed_materialized_entry_body(tmp_path):
 
             [[kernel]] void reinterpret_words_u8(
                 const device uint8_t* values [[buffer(0)]],
-                device uint8_t* output [[buffer(1)]],
+                device uint8_t* out_values [[buffer(1)]],
                 uint gid [[thread_position_in_grid]]) {
-                output[gid] = values[gid];
+                out_values[gid] = values[gid];
             }
             """).strip(),
         encoding="utf-8",
@@ -45324,11 +45324,10 @@ def test_translate_project_rejects_unparsed_materialized_entry_body(tmp_path):
     assert all(
         (repo / artifact["path"]).is_file() for artifact in initial_payload["artifacts"]
     )
-    initial_remap_paths = [
-        repo / artifact["sourceRemap"]["path"]
+    assert all(
+        (repo / artifact["sourceRemap"]["path"]).is_file()
         for artifact in initial_payload["artifacts"]
-    ]
-    assert all(path.is_file() for path in initial_remap_paths)
+    )
 
     source_path.write_text(
         textwrap.dedent("""
@@ -45338,10 +45337,11 @@ def test_translate_project_rejects_unparsed_materialized_entry_body(tmp_path):
             template <typename T>
             [[kernel]] void reinterpret_words(
                 const device uint32_t* words [[buffer(0)]],
-                device T* output [[buffer(1)]],
+                device T* out_values [[buffer(1)]],
                 uint gid [[thread_position_in_grid]]) {
-                const device T* values = (const device T*)words;
-                output[gid] = values[gid];
+                const device uint32_t* shifted = words + 2;
+                const device T* values = (const device T*)shifted;
+                out_values[gid] = values[gid];
             }
 
             instantiate_kernel(
@@ -45359,24 +45359,64 @@ def test_translate_project_rejects_unparsed_materialized_entry_body(tmp_path):
         format_output=False,
     ).to_json()
 
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+    outputs = {}
+    for artifact in payload["artifacts"]:
+        artifact_path = repo / artifact["path"]
+        assert artifact["status"] == "translated"
+        assert artifact_path.is_file()
+        assert (repo / artifact["sourceRemap"]["path"]).is_file()
+        outputs[artifact["target"]] = artifact_path.read_text(encoding="utf-8")
+
+    assert "& 255u" in outputs["directx"]
+    assert "shifted_offset" in outputs["directx"]
+    assert "* 4" in outputs["directx"]
+    assert "bitfieldExtract" in outputs["opengl"]
+    assert "shifted_offset" in outputs["opengl"]
+    assert "* 4" in outputs["opengl"]
+    assert "OpShiftRightLogical" in outputs["vulkan"]
+    assert "OpBitwiseAnd" in outputs["vulkan"]
+    for output in outputs.values():
+        assert "PointerReinterpretNode" not in output
+        assert "WARNING" not in output
+    assert_compute_glsl_validates_if_available(outputs["opengl"], tmp_path)
+    assert_spirv_asm_validates_if_available(outputs["vulkan"], tmp_path)
+
+
+def test_translate_project_reports_reinterpreted_pointer_writes(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "reinterpret_write.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            [[kernel]] void write_byte(
+                device uint32_t* words [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {
+                device uint8_t* bytes = (device uint8_t*)words;
+                bytes[gid] = uint8_t(gid);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx", "opengl", "vulkan"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
     assert payload["summary"]["translatedCount"] == 0
     assert payload["summary"]["failedCount"] == 3
     assert all(artifact["status"] == "failed" for artifact in payload["artifacts"])
-    for artifact in payload["artifacts"]:
-        assert not (repo / artifact["path"]).exists()
-        assert "generatedHash" not in artifact
-        assert "generatedSizeBytes" not in artifact
-        assert "sourceMap" not in artifact
-        assert "sourceRemap" not in artifact
-    assert all(not path.exists() for path in initial_remap_paths)
-    artifacts_by_target = {
-        artifact["target"]: artifact for artifact in payload["artifacts"]
-    }
-
     diagnostics = [
         diagnostic
         for diagnostic in payload["diagnostics"]
-        if diagnostic["code"] == "project.translate.crossgl-function-body-parse-failed"
+        if diagnostic["code"] == "project.translate.pointer-reinterpret-unsupported"
     ]
     assert {diagnostic["target"] for diagnostic in diagnostics} == {
         "directx",
@@ -45384,17 +45424,65 @@ def test_translate_project_rejects_unparsed_materialized_entry_body(tmp_path):
         "vulkan",
     }
     for diagnostic in diagnostics:
-        assert diagnostic["missingCapabilities"] == ["crossgl.function-body-parsing"]
-        assert diagnostic["details"]["sourcePath"] == "reinterpret.metal"
-        assert diagnostic["details"]["targetArtifact"] == (
-            artifacts_by_target[diagnostic["target"]]["path"]
-        )
-        assert diagnostic["details"]["functionBody"] == {
-            "function": "reinterpret_words_u8",
-            "reason": "Expected RPAREN, got IDENTIFIER 'words'",
-            "tokenType": "IDENTIFIER",
-            "tokenValue": "words",
+        assert diagnostic["missingCapabilities"] == ["pointer.reinterpretation"]
+        details = diagnostic["details"]
+        assert details["sourcePath"] == "reinterpret_write.metal"
+        assert details["targetArtifact"]
+        assert details["pointerReinterpretation"] == {
+            "access": "write",
+            "addressSpace": "storage",
+            "alignment": 1,
+            "reason": "write-requires-byte-address-storage",
+            "sourceType": "uint",
+            "targetType": "uint8",
         }
+
+
+@pytest.mark.parametrize(
+    "target", ["cuda", "hip", "metal", "mojo", "rust", "slang", "webgl", "wgsl"]
+)
+def test_translate_project_rejects_pointer_reinterpretation_without_target_lowering(
+    tmp_path, target
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "reinterpret.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            [[kernel]] void read_byte(
+                const device uint32_t* words [[buffer(0)]],
+                device uint8_t* out_values [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {
+                const device uint8_t* bytes = (const device uint8_t*)words;
+                out_values[gid] = bytes[gid];
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=[target],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    diagnostic = next(
+        item
+        for item in payload["diagnostics"]
+        if item["code"] == "project.translate.pointer-reinterpret-unsupported"
+    )
+    assert diagnostic["target"] == target
+    assert diagnostic["missingCapabilities"] == ["pointer.reinterpretation"]
+    assert diagnostic["details"]["pointerReinterpretation"] == {
+        "reason": "target-lowering-unavailable",
+        "targetBackend": target,
+        "targetType": "uint8",
+    }
 
 
 def test_translate_project_metal_reduction_source_instantiation_records_nontype_sources(
@@ -45755,6 +45843,139 @@ def test_metal_project_materialization_concretizes_dispatch_bool_functor_helper(
     assert "WriteTrue_float writer{out, gid};" in materialized.text
     assert "dispatch_bool_WriteTrue_float(true, writer);" in materialized.text
     assert "dispatch_bool<" not in materialized.text
+
+
+def test_translate_project_lowers_captured_dispatch_bool_callbacks(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "dispatch_bool.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            [[kernel]] void write_flag(
+                device uint* result_data [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {
+                dispatch_bool((gid & 1u) == 0u, [&](auto flag) {
+                    if constexpr (flag.value) {
+                        result_data[gid] = 1u;
+                    } else {
+                        result_data[gid] = 0u;
+                    }
+                });
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx", "opengl", "vulkan"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 3
+    outputs = {
+        artifact["target"]: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for artifact in payload["artifacts"]
+    }
+    assert all("dispatch_bool" not in output for output in outputs.values())
+    assert_directx_compute_validates_if_available(outputs["directx"], tmp_path)
+    assert_compute_glsl_validates_if_available(outputs["opengl"], tmp_path)
+    assert_spirv_asm_validates_if_available(outputs["vulkan"], tmp_path)
+
+
+def test_translate_project_reports_unsupported_captured_callback_shape(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "dispatch_bool.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            [[kernel]] void invalid_callback(
+                device uint* output [[buffer(0)]]) {
+                dispatch_bool(true, [&]() {
+                    output[0] = 1u;
+                });
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["vulkan"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["failedCount"] == 1
+    diagnostic = next(
+        item
+        for item in payload["diagnostics"]
+        if item["code"] == "project.translate.metal-callable-unsupported"
+    )
+    assert diagnostic["missingCapabilities"] == ["metal.captured-callback-lowering"]
+    assert diagnostic["details"]["capturedCallback"] == {
+        "capture": "&",
+        "enclosingFunction": "invalid_callback",
+        "helper": "dispatch_bool",
+        "reason": "callback must declare exactly one integral-constant parameter",
+        "suggestedAction": (
+            "add a helper-specific lowering that preserves callback invocation "
+            "count, compile-time arguments, and capture mutation semantics"
+        ),
+    }
+    assert diagnostic["details"]["sourcePath"] == "dispatch_bool.metal"
+
+
+def test_translate_project_reports_callback_helper_without_semantic_lowering(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "callback.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            [[kernel]] void unknown_callback(
+                device uint* result_data [[buffer(0)]]) {
+                apply_callback([&](auto value) {
+                    result_data[0] = value.value ? 1u : 0u;
+                });
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["vulkan"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["failedCount"] == 1
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+    diagnostic = next(
+        item
+        for item in payload["diagnostics"]
+        if item["code"] == "project.translate.metal-callable-unsupported"
+    )
+    assert diagnostic["location"]["line"] == 6
+    assert diagnostic["missingCapabilities"] == ["metal.captured-callback-lowering"]
+    callback = diagnostic["details"]["capturedCallback"]
+    assert callback["helper"] == "apply_callback"
+    assert callback["capture"] == "&"
+    assert callback["enclosingFunction"] == "unknown_callback"
+    assert callback["reason"] == (
+        "the callback helper has no semantics-preserving CrossGL lowering"
+    )
+    assert "invocation count" in callback["suggestedAction"]
 
 
 def test_translate_project_metal_multi_entry_instantiations_scope_vulkan_bindings(

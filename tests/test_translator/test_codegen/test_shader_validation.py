@@ -200,6 +200,8 @@ shader HLSLWaveIntrinsicsValidation {
             uint multiAnd = WaveMultiPrefixBitAnd(value, mask);
             uint multiOr = WaveMultiPrefixBitOr(value, mask);
             uint multiXor = WaveMultiPrefixBitXor(value, mask);
+            float floatValue = 1.5;
+            float floatXor = WaveActiveBitXor(floatValue);
             uint readLane = WaveReadLaneAt(value, lane);
             uint firstLane = WaveReadLaneFirst(value);
             uint quadX = QuadReadAcrossX(value);
@@ -209,6 +211,7 @@ shader HLSLWaveIntrinsicsValidation {
             folded = folded + countValue + prefixSum + prefixCount;
             folded = folded + matchMask.x + multiSum + multiCount;
             folded = folded + multiProduct + multiAnd + multiOr + multiXor;
+            folded = folded + asuint(floatXor);
             folded = folded + readLane + firstLane + quadX;
             folded = folded + (quadAny ? value : 0u) + (quadAll ? value : 0u);
         }
@@ -12567,6 +12570,7 @@ def test_generated_hlsl_wave_intrinsics_compute_validates_with_dxc(tmp_path):
         crosstl.translator.parse(HLSL_WAVE_INTRINSICS_COMPUTE_SHADER),
         "compute",
     )
+    assert "asfloat(WaveActiveBitXor(asuint(floatValue)))" in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

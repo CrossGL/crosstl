@@ -4349,6 +4349,7 @@ class MetalParser:
         raise SyntaxError(f"Unexpected token in expression: {self.current_token[0]}")
 
     def parse_lambda_expression(self):
+        start_token = self.current_token
         capture = self.parse_lambda_capture()
         params = []
         if self.current_token[0] == "LPAREN":
@@ -4374,13 +4375,17 @@ class MetalParser:
             {param.name for param in params if getattr(param, "name", None)}
         )
         body = self.parse_block()
-        return LambdaNode(
+        node = LambdaNode(
             capture,
             params,
             body,
             return_type,
             self.format_generic_type_tokens(specifier_tokens).split(),
         )
+        node.source_location = self.source_span_from_tokens(
+            start_token, self.tokens[self.pos - 1]
+        )
+        return node
 
     def parse_lambda_capture(self):
         self.eat("LBRACKET")

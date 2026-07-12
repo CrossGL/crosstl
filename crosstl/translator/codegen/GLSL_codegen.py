@@ -28,6 +28,7 @@ from ..ast import (
     MemberAccessNode,
     MeshOpNode,
     PointerAccessNode,
+    PointerReinterpretNode,
     PointerType,
     PreprocessorNode,
     PrimitiveType,
@@ -280,6 +281,10 @@ from .match_utils import (
     generate_switch_match,
     infer_match_expression_result_type,
     is_switch_lowerable_match,
+)
+from .pointer_reinterpret import (
+    PointerReinterpretationError,
+    scalar_storage_layout,
 )
 from .resource_arrays import (
     collect_private_pointer_array_size_hints,
@@ -1071,6 +1076,11 @@ class GLSLCodeGen:
         "QuadReadAcrossY": "subgroupQuadSwapVertical",
         "QuadReadAcrossDiagonal": "subgroupQuadSwapDiagonal",
         "QuadReadLaneAt": "subgroupQuadBroadcast",
+    }
+    GLSL_WAVE_BITWISE_VALUE_OPERATIONS = {
+        "WaveActiveBitAnd",
+        "WaveActiveBitOr",
+        "WaveActiveBitXor",
     }
     GLSL_METAL_SIMD_GROUP_HELPER_PREFIX = "__metal_simd"
     GLSL_METAL_SIMD_GROUP_PLAIN_HELPER_OPERATIONS = {
@@ -8608,6 +8618,7 @@ class GLSLCodeGen:
             "expression": root_name,
             "offset": 0,
             "element_type": self.map_type(element_type),
+            "source_element_type": element_type,
             "type": resource_type,
             "access": access,
             "specializable": True,
@@ -11219,6 +11230,12 @@ class GLSLCodeGen:
         if expression is None:
             return None
 
+        if isinstance(expression, PointerReinterpretNode):
+            binding = self.glsl_storage_pointer_binding(expression.expression, aliases)
+            if binding is None:
+                return None
+            return self.glsl_pointer_reinterpret_binding(expression, binding)
+
         if isinstance(expression, (str, IdentifierNode, VariableNode)):
             raw_name = getattr(expression, "name", expression)
             name = self.expression_name(expression)
@@ -11273,6 +11290,66 @@ class GLSLCodeGen:
             return binding
 
         return None
+
+    def glsl_pointer_reinterpret_binding(self, expression, binding):
+        target_type = getattr(expression.target_type, "pointee_type", None)
+        target_type_name = self.strip_metal_parameter_indirection(
+            self.type_name_string(target_type)
+        )
+        view_type_name = (
+            binding.get("view_element_type")
+            or binding.get("source_element_type")
+            or binding.get("element_type")
+        )
+        source_type_name = binding.get("source_element_type") or view_type_name
+        view_layout = scalar_storage_layout(view_type_name)
+        source_layout = scalar_storage_layout(source_type_name)
+        target_layout = scalar_storage_layout(target_type_name)
+        if (
+            view_layout is None
+            or source_layout is None
+            or target_layout is None
+            or source_layout.bit_width != 32
+            or target_layout.bit_width not in {8, 16, 32}
+            or target_layout.kind == "floating"
+            and target_layout.bit_width != 32
+        ):
+            raise PointerReinterpretationError(
+                "OpenGL storage pointer reinterpretation requires a 32-bit "
+                "scalar backing element and an 8-, 16-, or 32-bit scalar view",
+                source_type=source_type_name,
+                target_type=target_type_name,
+                address_space="storage",
+                alignment=target_layout.byte_width if target_layout else None,
+                access=binding.get("access"),
+                reason="unsupported-scalar-layout",
+                source_location=getattr(expression, "source_location", None),
+            )
+
+        rendered_offset = self.glsl_workgroup_pointer_offset_expression(binding)
+        scaled_offset = rendered_offset
+        if view_layout.byte_width != 1 and rendered_offset not in {"0", "0u"}:
+            scaled_offset = f"({rendered_offset} * {view_layout.byte_width})"
+        existing_byte_offset = str(binding.get("byte_offset", "0"))
+        if existing_byte_offset in {"0", "0u"}:
+            byte_offset = scaled_offset
+        elif scaled_offset in {"0", "0u"}:
+            byte_offset = existing_byte_offset
+        else:
+            byte_offset = f"({existing_byte_offset} + {scaled_offset})"
+
+        return {
+            **binding,
+            "offset": 0,
+            "byte_offset": byte_offset,
+            "element_type": self.map_type(target_type_name),
+            "view_element_type": target_type_name,
+            "source_element_type": source_type_name,
+            "pointer_reinterpretation": {
+                "source_layout": source_layout,
+                "target_layout": target_layout,
+            },
+        }
 
     def glsl_storage_pointer_aliases(self, aliases=None):
         return {
@@ -11472,6 +11549,11 @@ class GLSLCodeGen:
             if index_type in {"uint", "uint64_t"}:
                 rendered_index = f"int({rendered_index})"
             composed_index = f"({rendered_offset} + {rendered_index})"
+        reinterpret_read = self.glsl_pointer_reinterpret_read_expression(
+            binding, composed_index
+        )
+        if reinterpret_read is not None:
+            return reinterpret_read
         return f"{binding['root']}[{composed_index}]"
 
     def glsl_storage_pointer_element_expression(self, expression, index=0):
@@ -11489,7 +11571,55 @@ class GLSLCodeGen:
             composed_index = rendered_offset
         else:
             composed_index = f"({rendered_offset} + int({rendered_index}))"
+        reinterpret_read = self.glsl_pointer_reinterpret_read_expression(
+            binding, composed_index
+        )
+        if reinterpret_read is not None:
+            return reinterpret_read
         return f"{binding['root']}[{composed_index}]"
+
+    def glsl_pointer_reinterpret_read_expression(self, binding, element_index):
+        reinterpretation = binding.get("pointer_reinterpretation")
+        if reinterpretation is None:
+            return None
+
+        source_layout = reinterpretation["source_layout"]
+        target_layout = reinterpretation["target_layout"]
+        byte_offset = str(binding.get("byte_offset", "0"))
+        element_bytes = str(element_index)
+        if target_layout.byte_width != 1:
+            element_bytes = f"({element_bytes} * {target_layout.byte_width})"
+        if byte_offset in {"0", "0u"}:
+            byte_index = element_bytes
+        elif element_bytes in {"0", "0u"}:
+            byte_index = byte_offset
+        else:
+            byte_index = f"({byte_offset} + {element_bytes})"
+
+        source_index = f"int(({byte_index}) / {source_layout.byte_width})"
+        source_value = f"{binding['root']}[{source_index}]"
+        if source_layout.kind == "floating":
+            source_bits = f"floatBitsToUint({source_value})"
+        elif source_layout.signed:
+            source_bits = f"uint({source_value})"
+        else:
+            source_bits = source_value
+
+        if target_layout.bit_width == 32:
+            if target_layout.kind == "floating":
+                return f"uintBitsToFloat({source_bits})"
+            if target_layout.signed:
+                return f"int({source_bits})"
+            return source_bits
+
+        bit_offset = f"int((({byte_index}) % {source_layout.byte_width}) * 8)"
+        extraction_source = (
+            f"int({source_bits})" if target_layout.signed else source_bits
+        )
+        return (
+            f"bitfieldExtract({extraction_source}, {bit_offset}, "
+            f"{target_layout.bit_width})"
+        )
 
     def glsl_workgroup_pointer_member_expression(
         self, pointer_expression, member, source_location=None
@@ -11574,6 +11704,19 @@ class GLSLCodeGen:
         binding = self.glsl_storage_pointer_mutation_binding(
             expression, self.glsl_storage_pointer_aliases()
         )
+        reinterpretation = binding.get("pointer_reinterpretation") if binding else None
+        if reinterpretation is not None:
+            raise PointerReinterpretationError(
+                "OpenGL cannot preserve writes through a reinterpreted typed "
+                "storage-buffer view",
+                source_type=reinterpretation["source_layout"].name,
+                target_type=reinterpretation["target_layout"].name,
+                address_space="storage",
+                alignment=reinterpretation["target_layout"].byte_width,
+                access="write",
+                reason="write-requires-byte-address-storage",
+                source_location=getattr(expression, "source_location", None),
+            )
         self.validate_glsl_storage_pointer_binding_access(
             binding, "read_write", expression
         )
@@ -13772,6 +13915,9 @@ complex64_t crossgl_complex64_mod_assign(
     def expression_result_type(self, expr):
         if expr is None:
             return None
+        if isinstance(expr, PointerReinterpretNode):
+            target_type = getattr(expr.target_type, "pointee_type", None)
+            return self.map_type(self.type_name_string(target_type))
         if isinstance(expr, VariableNode):
             name = getattr(expr, "name", None)
             return (
@@ -16392,6 +16538,12 @@ complex64_t crossgl_complex64_mod_assign(
                 f"expects {expected_arity} arguments, got {actual_arity}",
             )
 
+        floating_bitwise = self.glsl_floating_bitwise_wave_operation(
+            operation, arguments
+        )
+        if floating_bitwise is not None:
+            return floating_bitwise
+
         type_diagnostic = self.glsl_wave_type_diagnostic(
             operation, arguments, diagnostic_operation
         )
@@ -16437,6 +16589,28 @@ complex64_t crossgl_complex64_mod_assign(
 
         args = ", ".join(self.generate_expression(arg) for arg in arguments)
         return f"{mapped}({args})"
+
+    def glsl_floating_bitwise_wave_operation(self, operation, arguments):
+        if operation not in self.GLSL_WAVE_BITWISE_VALUE_OPERATIONS:
+            return None
+        if len(arguments) != 1:
+            return None
+
+        value_expr = arguments[0]
+        value_type = self.map_type(self.expression_result_type(value_expr))
+        component_type = self.vector_component_type(value_type) or value_type
+        if component_type != "float":
+            return None
+
+        integer_type = "uint"
+        if self.is_vector_value_type(value_type):
+            integer_type = f"uvec{value_type[-1]}"
+        value = self.generate_expression(value_expr)
+        integer_value = self.generate_glsl_explicit_bitcast(
+            value_type, integer_type, value
+        )
+        reduced = f"{self.GLSL_WAVE_DIRECT_MAPPINGS[operation]}({integer_value})"
+        return self.generate_glsl_explicit_bitcast(integer_type, value_type, reduced)
 
     def glsl_wave_result_type(self, operation, arguments):
         if operation in {"WaveGetLaneCount", "WaveGetLaneIndex"}:

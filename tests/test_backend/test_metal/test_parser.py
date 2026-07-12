@@ -3234,6 +3234,9 @@ def test_parse_lambda_argument_from_mlx_fp_quantized_nax():
     assert lambda_arg.capture == "&"
     assert lambda_arg.params[0].vtype == "auto"
     assert lambda_arg.params[0].name == "kAlignedM"
+    assert lambda_arg.source_location["line"] == 3
+    assert lambda_arg.source_location["end_line"] == 7
+    assert lambda_arg.source_location["length"] > 0
 
     barrier_calls = [
         node

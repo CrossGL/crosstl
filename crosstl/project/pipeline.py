@@ -15835,6 +15835,41 @@ def _metal_sizeof_failure_details(
     return dict(sorted(details.items()))
 
 
+def _metal_callable_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.metal-callable-unsupported"
+    ):
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    callback = {}
+    helper = getattr(exc, "helper", None)
+    reason = getattr(exc, "reason", None)
+    capture = getattr(exc, "capture", None)
+    enclosing_function = getattr(exc, "enclosing_function", None)
+    suggested_action = getattr(exc, "suggested_action", None)
+    if _is_non_empty_string(helper):
+        callback["helper"] = helper
+    if _is_non_empty_string(reason):
+        callback["reason"] = reason
+    if _is_non_empty_string(capture):
+        callback["capture"] = capture
+    if _is_non_empty_string(enclosing_function):
+        callback["enclosingFunction"] = enclosing_function
+    if _is_non_empty_string(suggested_action):
+        callback["suggestedAction"] = suggested_action
+    if callback:
+        details["capturedCallback"] = dict(sorted(callback.items()))
+    return dict(sorted(details.items()))
+
+
 def _opengl_mapped_overload_failure_details(
     exc: Exception,
     unit: ProjectTranslationUnit,
@@ -16139,6 +16174,40 @@ def _opengl_reference_parameter_failure_details(
     return dict(sorted(details.items()))
 
 
+def _pointer_reinterpret_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.pointer-reinterpret-unsupported"
+    ):
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    reinterpretation = {}
+    fields = {
+        "sourceType": getattr(exc, "source_type", None),
+        "targetType": getattr(exc, "target_type", None),
+        "addressSpace": getattr(exc, "address_space", None),
+        "alignment": getattr(exc, "alignment", None),
+        "access": getattr(exc, "access", None),
+        "targetBackend": getattr(exc, "target_backend", None),
+        "reason": getattr(exc, "reason", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value) or (
+            isinstance(value, int) and not isinstance(value, bool)
+        ):
+            reinterpretation[name] = value
+    if reinterpretation:
+        details["pointerReinterpretation"] = dict(sorted(reinterpretation.items()))
+    return dict(sorted(details.items()))
+
+
 def _translation_failure_details(
     exc: Exception,
     target: str,
@@ -16159,8 +16228,10 @@ def _translation_failure_details(
         **_opengl_workgroup_pointer_failure_details(exc, unit, artifact_path),
         **_opengl_storage_pointer_failure_details(exc, unit, artifact_path),
         **_opengl_reference_parameter_failure_details(exc, unit, artifact_path),
+        **_pointer_reinterpret_failure_details(exc, unit, artifact_path),
         **_metal_static_constant_failure_details(exc, unit, artifact_path),
         **_metal_sizeof_failure_details(exc, unit, artifact_path),
+        **_metal_callable_failure_details(exc, unit, artifact_path),
         **_template_materialization_failure_details(exc),
     }
 

@@ -55,6 +55,30 @@ class MetalSizeofResolutionError(ValueError):
         super().__init__(f"Cannot materialize Metal sizeof({operand}): {reason}")
 
 
+class MetalCallableLoweringError(ValueError):
+    """Raised when a Metal callback cannot be lowered without changing semantics."""
+
+    project_diagnostic_code = "project.translate.metal-callable-unsupported"
+    missing_capabilities = ("metal.captured-callback-lowering",)
+
+    def __init__(
+        self,
+        helper,
+        reason,
+        source_location=None,
+        capture=None,
+        enclosing_function=None,
+        suggested_action=None,
+    ):
+        self.helper = helper
+        self.reason = reason
+        self.source_location = source_location
+        self.capture = capture
+        self.enclosing_function = enclosing_function
+        self.suggested_action = suggested_action
+        super().__init__(f"Cannot lower Metal callback passed to {helper}: {reason}")
+
+
 class MetalToCrossGLConverter:
     """Serialize Metal backend AST nodes back into CrossGL source."""
 
@@ -613,6 +637,8 @@ class MetalToCrossGLConverter:
         self.struct_static_constant_resolution_stack = []
         self.current_struct_static_constant_owner = None
         self.local_struct_type_aliases = {}
+        self.integral_constant_bindings = []
+        self.current_function_name = None
         self.identifier_maps = [{}]
         self.used_identifier_names = [set()]
         self.texture_method_functions = {
@@ -782,6 +808,7 @@ class MetalToCrossGLConverter:
         return candidate
 
     def render_identifier(self, name):
+        name = self.substitute_integral_constant_members(name)
         for scope in reversed(self.identifier_maps):
             if name in scope:
                 return scope[name]
@@ -792,6 +819,21 @@ class MetalToCrossGLConverter:
         if static_member is not None:
             return static_member
         return self.sanitize_identifier(name)
+
+    def substitute_integral_constant_members(self, name):
+        rendered = str(name)
+        substituted = set()
+        for bindings in reversed(self.integral_constant_bindings):
+            for parameter_name, value in bindings.items():
+                if parameter_name in substituted:
+                    continue
+                rendered = re.sub(
+                    rf"\b{re.escape(parameter_name)}\s*\.\s*value\b",
+                    "true" if value else "false",
+                    rendered,
+                )
+                substituted.add(parameter_name)
+        return rendered
 
     def render_local_static_struct_member_identifier(self, name):
         owner = self.current_struct_static_constant_owner
@@ -1923,6 +1965,8 @@ class MetalToCrossGLConverter:
         self.struct_static_constant_resolution_stack = []
         self.current_struct_static_constant_owner = None
         self.local_struct_type_aliases = {}
+        self.integral_constant_bindings = []
+        self.current_function_name = None
 
     def format_array_suffix(self, var, include_declarator_arrays=True):
         array_type = self.metal_array_type_parts(getattr(var, "vtype", None))
@@ -2248,6 +2292,8 @@ class MetalToCrossGLConverter:
         previous_stage_entry_resource_parameter_ids = (
             self.current_stage_entry_resource_parameter_ids
         )
+        previous_function_name = self.current_function_name
+        self.current_function_name = func.name
         self.current_stage_entry_resource_parameter_ids = (
             {id(param) for param in func.params} if stage_entry else set()
         )
@@ -2303,6 +2349,7 @@ class MetalToCrossGLConverter:
             self.current_stage_entry_resource_parameter_ids = (
                 previous_stage_entry_resource_parameter_ids
             )
+            self.current_function_name = previous_function_name
         return code
 
     def format_value_template_parameter_declarations(self, func, indent, body=None):
@@ -2563,11 +2610,15 @@ class MetalToCrossGLConverter:
                 code += self.generate_if_statement(stmt, indent, is_main)
             elif isinstance(stmt, SwitchNode):
                 code += self.generate_switch_statement(stmt, indent, is_main)
-            elif (
-                isinstance(stmt, FunctionCallNode)
-                or isinstance(stmt, MethodCallNode)
-                or isinstance(stmt, CallNode)
-            ):
+            elif isinstance(stmt, FunctionCallNode):
+                lowered_callback = self.generate_callback_statement(
+                    stmt, indent, is_main
+                )
+                if lowered_callback is not None:
+                    code += lowered_callback
+                else:
+                    code += f"{self.generate_expression(stmt, is_main)};\n"
+            elif isinstance(stmt, (MethodCallNode, CallNode)):
                 code += f"{self.generate_expression(stmt, is_main)};\n"
             elif isinstance(stmt, PostfixOpNode):
                 code += f"{self.generate_expression(stmt, is_main)};\n"
@@ -2599,6 +2650,129 @@ class MetalToCrossGLConverter:
                 else:
                     code += f"// Unhandled statement type: {type(stmt).__name__}\n"
         return code
+
+    def generate_callback_statement(self, call, indent, is_main=False):
+        helper = str(call.name).rsplit("::", 1)[-1]
+        if helper != "dispatch_bool":
+            return None
+
+        source_location = getattr(call, "source_location", None)
+        if len(call.args) != 2:
+            callback = next(
+                (arg for arg in call.args if isinstance(arg, LambdaNode)), None
+            )
+            if callback is None:
+                return None
+            raise self.callback_lowering_error(
+                helper,
+                "expected a condition and one lambda callback",
+                callback=callback,
+                source_location=source_location,
+            )
+        if not isinstance(call.args[1], LambdaNode):
+            return None
+
+        callback = call.args[1]
+        if callback.capture != "&":
+            raise self.callback_lowering_error(
+                helper,
+                "callback must use reference-default capture",
+                callback=callback,
+                source_location=source_location,
+            )
+        if len(callback.params) != 1 or not callback.params[0].name:
+            raise self.callback_lowering_error(
+                helper,
+                "callback must declare exactly one integral-constant parameter",
+                callback=callback,
+                source_location=source_location,
+            )
+        if callback.params[0].vtype != "auto":
+            raise self.callback_lowering_error(
+                helper,
+                "callback parameter must use the deduced integral-constant type",
+                callback=callback,
+                source_location=source_location,
+            )
+        if getattr(callback, "return_type", None) not in (None, "void"):
+            raise self.callback_lowering_error(
+                helper,
+                "callback return values cannot be represented by dispatch_bool",
+                callback=callback,
+                source_location=source_location,
+            )
+        if self.callback_contains_return(callback):
+            raise self.callback_lowering_error(
+                helper,
+                "callback-local return statements cannot be inlined into the caller",
+                callback=callback,
+                source_location=source_location,
+            )
+
+        condition = self.generate_expression(call.args[0], is_main)
+        parameter_name = callback.params[0].name
+        true_body = self.generate_integral_constant_callback_body(
+            callback.body, parameter_name, True, indent + 1, is_main
+        )
+        false_body = self.generate_integral_constant_callback_body(
+            callback.body, parameter_name, False, indent + 1, is_main
+        )
+        branch_indent = "    " * indent
+        return (
+            f"if ({condition}) {{\n"
+            f"{true_body}"
+            f"{branch_indent}}} else {{\n"
+            f"{false_body}"
+            f"{branch_indent}}}\n"
+        )
+
+    def generate_integral_constant_callback_body(
+        self, body, parameter_name, value, indent, is_main
+    ):
+        previous_variable_types = self.current_variable_types
+        previous_type_aliases = dict(self.type_aliases)
+        previous_local_type_alias_names = set(self.local_type_alias_names)
+        previous_local_struct_type_aliases = dict(self.local_struct_type_aliases)
+        previous_storage_texture_names = self.current_storage_texture_names
+        previous_structured_buffer_names = self.current_structured_buffer_names
+        self.current_variable_types = dict(previous_variable_types)
+        self.current_storage_texture_names = set(previous_storage_texture_names)
+        self.current_structured_buffer_names = set(previous_structured_buffer_names)
+        self.integral_constant_bindings.append({parameter_name: value})
+        self.push_identifier_scope()
+        try:
+            return self.generate_function_body(body, indent, is_main)
+        finally:
+            self.pop_identifier_scope()
+            self.integral_constant_bindings.pop()
+            self.current_variable_types = previous_variable_types
+            self.type_aliases = previous_type_aliases
+            self.local_type_alias_names = previous_local_type_alias_names
+            self.local_struct_type_aliases = previous_local_struct_type_aliases
+            self.current_storage_texture_names = previous_storage_texture_names
+            self.current_structured_buffer_names = previous_structured_buffer_names
+
+    def callback_contains_return(self, callback):
+        def visit(node):
+            if isinstance(node, ReturnNode):
+                return True
+            if isinstance(node, LambdaNode) and node is not callback:
+                return False
+            return any(visit(child) for child in self.iter_ast_children(node))
+
+        return any(visit(statement) for statement in callback.body)
+
+    def integral_constant_binding(self, name):
+        for bindings in reversed(self.integral_constant_bindings):
+            if name in bindings:
+                return bindings[name]
+        return None
+
+    def render_integral_constant_binding(self, name):
+        value = self.integral_constant_binding(name)
+        if value is None:
+            return None
+        return "true" if value else "false"
 
     def register_local_type_alias(self, alias):
         """Register a function-body ``using`` alias so subsequent declarations in
@@ -2837,6 +3011,9 @@ class MetalToCrossGLConverter:
             if expr.vtype:
                 return self.format_decl(expr, include_semantic=False)
             else:
+                constant = self.render_integral_constant_binding(expr.name)
+                if constant is not None:
+                    return constant
                 return self.render_identifier(expr.name)
         elif isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr, is_main)
@@ -2868,6 +3045,11 @@ class MetalToCrossGLConverter:
             atomic_call = self.metal_atomic_function_call(expr.name, expr.args, is_main)
             if atomic_call is not None:
                 return atomic_call
+            callback = next(
+                (arg for arg in expr.args if isinstance(arg, LambdaNode)), None
+            )
+            if callback is not None:
+                raise self.unsupported_callback_error(expr.name, callback)
             function_name = self.map_function_call_name(expr.name, expr.args)
             if function_name == "sampler":
                 args = ", ".join(
@@ -2965,6 +3147,10 @@ class MetalToCrossGLConverter:
                 return f"{descriptor['function']}({obj}, {args})"
             return f"{obj}.{method}({args})"
         elif isinstance(expr, MemberAccessNode):
+            if expr.member == "value" and isinstance(expr.object, VariableNode):
+                constant = self.render_integral_constant_binding(expr.object.name)
+                if constant is not None:
+                    return constant
             static_member = self.render_decltype_static_struct_member(expr)
             if static_member is not None:
                 return static_member
@@ -3075,30 +3261,30 @@ class MetalToCrossGLConverter:
             return f"/* Unhandled expression: {type(expr).__name__} */"
 
     def generate_lambda_expression(self, expr, is_main=False):
-        previous_variable_types = self.current_variable_types
-        self.current_variable_types = dict(previous_variable_types)
-        self.push_identifier_scope()
-        try:
-            for param in expr.params:
-                self.current_variable_types[param.name] = param.vtype
-            params = ", ".join(
-                self.format_decl(param, include_semantic=False) for param in expr.params
-            )
-            specifiers = getattr(expr, "specifiers", []) or []
-            specifier_text = f" {' '.join(specifiers)}" if specifiers else ""
-            return_type = getattr(expr, "return_type", None)
-            return_text = f" -> {self.map_type(return_type)}" if return_type else ""
-            body = self.generate_function_body(expr.body, indent=1, is_main=is_main)
-            if body:
-                return (
-                    f"[{expr.capture}]({params}){specifier_text}{return_text} {{\n"
-                    f"{body}"
-                    "}"
-                )
-            return f"[{expr.capture}]({params}){specifier_text}{return_text} {{}}"
-        finally:
-            self.pop_identifier_scope()
-            self.current_variable_types = previous_variable_types
+        del is_main
+        raise self.unsupported_callback_error("callback expression", expr)
+
+    def unsupported_callback_error(self, helper, callback):
+        return self.callback_lowering_error(
+            helper,
+            "the callback helper has no semantics-preserving CrossGL lowering",
+            callback=callback,
+        )
+
+    def callback_lowering_error(
+        self, helper, reason, callback=None, source_location=None
+    ):
+        return MetalCallableLoweringError(
+            str(helper),
+            reason,
+            getattr(callback, "source_location", None) or source_location,
+            capture=getattr(callback, "capture", None),
+            enclosing_function=self.current_function_name,
+            suggested_action=(
+                "add a helper-specific lowering that preserves callback invocation "
+                "count, compile-time arguments, and capture mutation semantics"
+            ),
+        )
 
     def metal_synchronization_function_call(self, name, args):
         unscoped_name = str(name).split("::")[-1]

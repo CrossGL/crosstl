@@ -1363,6 +1363,39 @@
     },
     {
       "category": "language",
+      "description": "Preserve read-only 32-bit scalar storage resources through aligned 8-, 16-, and 32-bit scalar pointer views with byte-composed offsets.",
+      "id": "language.pointer_reinterpretation",
+      "name": "Storage-backed pointer reinterpretation",
+      "support": {
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_storage_pointer_reinterpret_reads_byte_lanes",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_lowers_materialized_pointer_reinterpretation",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_reinterpreted_pointer_writes"
+          ],
+          "notes": "The repo-owned contract lowers read-only scalar views through typed StructuredBuffer loads, bit extraction, and bit reinterpretation. Writes, 64-bit backing layouts, and incompatible views are structured diagnostics.",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_pointer_reinterpretation_without_target_lowering"
+          ],
+          "notes": "The shared pipeline rejects pointer reinterpretation before Metal target generation until the target code generator consumes the shared pointer-view node.",
+          "status": "diagnostic"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_storage_pointer_reinterpret_reads_byte_lanes",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_lowers_materialized_pointer_reinterpretation",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_reinterpreted_pointer_writes"
+          ],
+          "notes": "The repo-owned contract lowers read-only scalar views through SSBO loads, floatBitsToUint/uintBitsToFloat where required, and bitfieldExtract. Writes, 64-bit backing layouts, and incompatible views are structured diagnostics.",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "language",
       "description": "Lower helper functions, entry functions, call expressions, and return statements.",
       "id": "language.functions",
       "name": "Function declarations and calls",
@@ -4379,18 +4412,18 @@
         "validated_rejection": 0
       }
     },
-    "feature_count": 69,
+    "feature_count": 70,
     "status_counts": {
       "directx": {
         "diagnostic": 2,
         "partial": 0,
-        "supported": 67,
+        "supported": 68,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
       },
       "metal": {
-        "diagnostic": 3,
+        "diagnostic": 4,
         "partial": 0,
         "supported": 66,
         "unknown": 0,
@@ -4400,7 +4433,7 @@
       "opengl": {
         "diagnostic": 2,
         "partial": 0,
-        "supported": 67,
+        "supported": 68,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0

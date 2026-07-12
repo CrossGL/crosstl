@@ -22,7 +22,7 @@
         "path": "crosstl/backend/DirectX"
       },
       "signals": {
-        "unsupported_marker_count": 300,
+        "unsupported_marker_count": 301,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/directx_codegen.py",
@@ -123,7 +123,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1172
+        "test_count": 1173
       },
       "translator_codegen": {
         "exists": true,
@@ -152,7 +152,7 @@
         "path": "crosstl/backend/GLSL"
       },
       "signals": {
-        "unsupported_marker_count": 216,
+        "unsupported_marker_count": 217,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
@@ -247,7 +247,7 @@
           "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1297
+        "test_count": 1299
       },
       "translator_codegen": {
         "exists": true,
@@ -524,7 +524,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 520,
+        "unsupported_marker_count": 524,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
@@ -617,7 +617,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 1206
+        "test_count": 1212
       },
       "translator_codegen": {
         "exists": true,
@@ -646,7 +646,7 @@
         "path": "crosstl/backend/SPIRV"
       },
       "signals": {
-        "unsupported_marker_count": 72,
+        "unsupported_marker_count": 73,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
@@ -739,7 +739,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 1118
+        "test_count": 1120
       },
       "translator_codegen": {
         "exists": true,
@@ -5383,6 +5383,97 @@
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
           ],
           "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
+          "status": "diagnostic"
+        }
+      }
+    },
+    {
+      "category": "language",
+      "description": "Preserve read-only 32-bit scalar storage resources through aligned 8-, 16-, and 32-bit scalar pointer views with byte-composed offsets.",
+      "id": "language.pointer_reinterpretation",
+      "name": "Storage-backed pointer reinterpretation",
+      "support": {
+        "cuda": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_pointer_reinterpretation_without_target_lowering"
+          ],
+          "notes": "The shared pipeline rejects pointer reinterpretation before CUDA code generation until resource-preserving target lowering is implemented.",
+          "status": "diagnostic"
+        },
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_storage_pointer_reinterpret_reads_byte_lanes",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_lowers_materialized_pointer_reinterpretation",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_reinterpreted_pointer_writes"
+          ],
+          "notes": "The repo-owned contract lowers read-only scalar views through typed StructuredBuffer loads, bit extraction, and bit reinterpretation. Writes, 64-bit backing layouts, and incompatible views are structured diagnostics.",
+          "status": "supported"
+        },
+        "hip": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_pointer_reinterpretation_without_target_lowering"
+          ],
+          "notes": "The shared pipeline rejects pointer reinterpretation before HIP code generation until resource-preserving target lowering is implemented.",
+          "status": "diagnostic"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_pointer_reinterpretation_without_target_lowering"
+          ],
+          "notes": "The shared pipeline rejects pointer reinterpretation before Metal target generation until the target code generator consumes the shared pointer-view node.",
+          "status": "diagnostic"
+        },
+        "mojo": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_pointer_reinterpretation_without_target_lowering"
+          ],
+          "notes": "The shared pipeline rejects pointer reinterpretation before Mojo code generation until resource-preserving target lowering is implemented.",
+          "status": "diagnostic"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_storage_pointer_reinterpret_reads_byte_lanes",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_lowers_materialized_pointer_reinterpretation",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_reinterpreted_pointer_writes"
+          ],
+          "notes": "The repo-owned contract lowers read-only scalar views through SSBO loads, floatBitsToUint/uintBitsToFloat where required, and bitfieldExtract. Writes, 64-bit backing layouts, and incompatible views are structured diagnostics.",
+          "status": "supported"
+        },
+        "rust": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_pointer_reinterpretation_without_target_lowering"
+          ],
+          "notes": "The shared pipeline rejects pointer reinterpretation before Rust code generation until resource-preserving target lowering is implemented.",
+          "status": "diagnostic"
+        },
+        "slang": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_pointer_reinterpretation_without_target_lowering"
+          ],
+          "notes": "The shared pipeline rejects pointer reinterpretation before Slang code generation until resource-preserving target lowering is implemented.",
+          "status": "diagnostic"
+        },
+        "vulkan": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_spirv_storage_pointer_reinterpret_reads_byte_lanes",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_lowers_materialized_pointer_reinterpretation",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_reinterpreted_pointer_writes"
+          ],
+          "notes": "The repo-owned contract lowers read-only scalar views to byte-index composition, typed storage-buffer loads, and SPIR-V shift/mask or bitcast operations with spirv-val coverage. Writes, 64-bit backing layouts, and incompatible views are structured diagnostics.",
+          "status": "supported"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_pointer_reinterpretation_without_target_lowering"
+          ],
+          "notes": "The shared pipeline rejects storage pointer reinterpretation because WebGL has no corresponding storage-buffer contract.",
+          "status": "diagnostic"
+        },
+        "wgsl": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_pointer_reinterpretation_without_target_lowering"
+          ],
+          "notes": "The shared pipeline rejects pointer reinterpretation before WGSL code generation until resource-preserving target lowering is implemented.",
           "status": "diagnostic"
         }
       }
@@ -15672,10 +15763,10 @@
   "summary": {
     "backend_count": 11,
     "backlog_count": 0,
-    "feature_count": 69,
+    "feature_count": 70,
     "status_counts": {
       "cuda": {
-        "diagnostic": 7,
+        "diagnostic": 8,
         "partial": 0,
         "supported": 62,
         "unknown": 0,
@@ -15685,13 +15776,13 @@
       "directx": {
         "diagnostic": 2,
         "partial": 0,
-        "supported": 67,
+        "supported": 68,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
       },
       "hip": {
-        "diagnostic": 7,
+        "diagnostic": 8,
         "partial": 0,
         "supported": 62,
         "unknown": 0,
@@ -15699,7 +15790,7 @@
         "validated_rejection": 0
       },
       "metal": {
-        "diagnostic": 3,
+        "diagnostic": 4,
         "partial": 0,
         "supported": 66,
         "unknown": 0,
@@ -15707,7 +15798,7 @@
         "validated_rejection": 0
       },
       "mojo": {
-        "diagnostic": 5,
+        "diagnostic": 6,
         "partial": 0,
         "supported": 64,
         "unknown": 0,
@@ -15717,13 +15808,13 @@
       "opengl": {
         "diagnostic": 2,
         "partial": 0,
-        "supported": 67,
+        "supported": 68,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
       },
       "rust": {
-        "diagnostic": 4,
+        "diagnostic": 5,
         "partial": 0,
         "supported": 65,
         "unknown": 0,
@@ -15731,7 +15822,7 @@
         "validated_rejection": 0
       },
       "slang": {
-        "diagnostic": 3,
+        "diagnostic": 4,
         "partial": 0,
         "supported": 66,
         "unknown": 0,
@@ -15741,13 +15832,13 @@
       "vulkan": {
         "diagnostic": 2,
         "partial": 0,
-        "supported": 67,
+        "supported": 68,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
       },
       "webgl": {
-        "diagnostic": 22,
+        "diagnostic": 23,
         "partial": 0,
         "supported": 38,
         "unknown": 0,
@@ -15755,7 +15846,7 @@
         "validated_rejection": 9
       },
       "wgsl": {
-        "diagnostic": 20,
+        "diagnostic": 21,
         "partial": 0,
         "supported": 42,
         "unknown": 0,
