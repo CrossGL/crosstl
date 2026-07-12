@@ -109,6 +109,7 @@ class MetalTemplateSpecializationError(ValueError):
         owner_struct_name: Optional[str] = None,
         owner_aliases: Optional[Tuple[str, ...]] = None,
         nested_struct_name: Optional[str] = None,
+        unresolved_local_constants: Optional[Tuple[str, ...]] = None,
     ):
         super().__init__(message)
         self.limit = limit
@@ -121,6 +122,7 @@ class MetalTemplateSpecializationError(ValueError):
         self.owner_struct_name = owner_struct_name
         self.owner_aliases = owner_aliases
         self.nested_struct_name = nested_struct_name
+        self.unresolved_local_constants = unresolved_local_constants
 
 
 @dataclass
@@ -1562,11 +1564,11 @@ class MetalPreprocessor(HLSLPreprocessor):
         return bindings
 
     @staticmethod
-    def _local_integral_constants_at(
+    def _local_integral_constant_bindings_at(
         bindings: Dict[str, List[_MetalIntegralConstantBinding]],
         position: int,
-    ) -> Dict[str, str]:
-        constants: Dict[str, str] = {}
+    ) -> Dict[str, _MetalIntegralConstantBinding]:
+        visible: Dict[str, _MetalIntegralConstantBinding] = {}
         for name, candidates in bindings.items():
             best: Optional[_MetalIntegralConstantBinding] = None
             for binding in candidates:
@@ -1579,9 +1581,23 @@ class MetalPreprocessor(HLSLPreprocessor):
                     or binding.declaration_position > best.declaration_position
                 ):
                     best = binding
-            if best is not None and best.value is not None:
-                constants[name] = best.value
-        return constants
+            if best is not None:
+                visible[name] = best
+        return visible
+
+    @classmethod
+    def _local_integral_constants_at(
+        cls,
+        bindings: Dict[str, List[_MetalIntegralConstantBinding]],
+        position: int,
+    ) -> Dict[str, str]:
+        return {
+            name: binding.value
+            for name, binding in cls._local_integral_constant_bindings_at(
+                bindings, position
+            ).items()
+            if binding.value is not None
+        }
 
     def _strip_function_parameter_defaults(self, parameters: str) -> str:
         declarations: List[str] = []
@@ -3001,6 +3017,13 @@ class MetalPreprocessor(HLSLPreprocessor):
         ).strip()
         if not text or len(text) > 512:
             return False, None
+        if re.search(r"\b(?:if|else)\b", text):
+            return False, None
+        if self._static_integral_expression_has_ambiguous_precedence(text):
+            return False, None
+        text = self._rewrite_static_integral_conditional_expressions(text)
+        if text is None:
+            return False, None
         text = re.sub(r"\btrue\b", "True", text)
         text = re.sub(r"\bfalse\b", "False", text)
         text = text.replace("&&", " and ").replace("||", " or ")
@@ -3031,6 +3054,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             ast.BoolOp,
             ast.And,
             ast.Or,
+            ast.IfExp,
             ast.Compare,
             ast.Eq,
             ast.NotEq,
@@ -3045,6 +3069,189 @@ class MetalPreprocessor(HLSLPreprocessor):
         ):
             return False, None
         return self._evaluate_static_integral_node(parsed.body)
+
+    def _static_integral_expression_has_ambiguous_precedence(
+        self, expression: str, *, depth: int = 0
+    ) -> bool:
+        # Python groups bitwise operators above comparisons and `not` below
+        # arithmetic, unlike C++. Reject only unparenthesized mixed groups;
+        # explicit parentheses split the recursive checks and remain foldable.
+        if depth > 32:
+            return True
+        question = self._top_level_conditional_question(expression)
+        if question is not None:
+            colon = self._matching_conditional_colon(expression, question)
+            if colon is None:
+                return True
+            return any(
+                self._static_integral_expression_has_ambiguous_precedence(
+                    part, depth=depth + 1
+                )
+                for part in (
+                    expression[:question],
+                    expression[question + 1 : colon],
+                    expression[colon + 1 :],
+                )
+            )
+
+        top_level: List[str] = []
+        cursor = 0
+        while cursor < len(expression):
+            if expression[cursor] in "\"'":
+                _literal, consumed = self._read_string(expression, cursor)
+                cursor += consumed
+                continue
+            if expression[cursor] == "(":
+                close = self._find_matching_delimiter(expression, cursor, "(", ")")
+                if (
+                    close is None
+                    or self._static_integral_expression_has_ambiguous_precedence(
+                        expression[cursor + 1 : close], depth=depth + 1
+                    )
+                ):
+                    return True
+                cursor = close + 1
+                continue
+            operator_text = next(
+                (
+                    operator_text
+                    for operator_text in (
+                        "<<",
+                        ">>",
+                        "<=",
+                        ">=",
+                        "==",
+                        "!=",
+                        "&&",
+                        "||",
+                    )
+                    if expression.startswith(operator_text, cursor)
+                ),
+                None,
+            )
+            if operator_text is not None:
+                top_level.append(operator_text)
+                cursor += len(operator_text)
+                continue
+            if expression[cursor] in "+-*/%<>&|^!":
+                top_level.append(expression[cursor])
+            cursor += 1
+
+        comparisons = {"<", "<=", ">", ">=", "==", "!="}
+        bitwise = {"&", "|", "^"}
+        comparison_count = sum(
+            operator_text in comparisons for operator_text in top_level
+        )
+        if comparison_count > 1:
+            return True
+        if comparisons.intersection(top_level) and bitwise.intersection(top_level):
+            return True
+        if "!" in top_level and any(
+            operator_text not in {"!", "&&", "||"} for operator_text in top_level
+        ):
+            return True
+        return False
+
+    def _rewrite_static_integral_conditional_expressions(
+        self, expression: str, *, depth: int = 0
+    ) -> Optional[str]:
+        if depth > 32:
+            return None
+        question = self._top_level_conditional_question(expression)
+        if question is not None:
+            colon = self._matching_conditional_colon(expression, question)
+            if colon is None:
+                return None
+            condition = self._rewrite_static_integral_conditional_expressions(
+                expression[:question], depth=depth + 1
+            )
+            true_value = self._rewrite_static_integral_conditional_expressions(
+                expression[question + 1 : colon], depth=depth + 1
+            )
+            false_value = self._rewrite_static_integral_conditional_expressions(
+                expression[colon + 1 :], depth=depth + 1
+            )
+            if condition is None or true_value is None or false_value is None:
+                return None
+            if (
+                not condition.strip()
+                or not true_value.strip()
+                or not false_value.strip()
+            ):
+                return None
+            return f"(({true_value}) if ({condition}) else ({false_value}))"
+
+        rewritten: List[str] = []
+        cursor = 0
+        while cursor < len(expression):
+            if expression[cursor] in "\"'":
+                literal, consumed = self._read_string(expression, cursor)
+                rewritten.append(literal)
+                cursor += consumed
+                continue
+            if expression[cursor] != "(":
+                rewritten.append(expression[cursor])
+                cursor += 1
+                continue
+            close = self._find_matching_delimiter(expression, cursor, "(", ")")
+            if close is None:
+                return None
+            inner = self._rewrite_static_integral_conditional_expressions(
+                expression[cursor + 1 : close], depth=depth + 1
+            )
+            if inner is None:
+                return None
+            rewritten.append(f"({inner})")
+            cursor = close + 1
+        return "".join(rewritten)
+
+    def _top_level_conditional_question(self, expression: str) -> Optional[int]:
+        depth = 0
+        i = 0
+        while i < len(expression):
+            if expression[i] in "\"'":
+                _literal, consumed = self._read_string(expression, i)
+                i += consumed
+                continue
+            if expression[i] in "([{":
+                depth += 1
+            elif expression[i] in ")]}" and depth:
+                depth -= 1
+            elif expression[i] == "?" and depth == 0:
+                return i
+            i += 1
+        return None
+
+    def _matching_conditional_colon(
+        self, expression: str, question: int
+    ) -> Optional[int]:
+        depth = 0
+        nested_conditionals = 0
+        i = question + 1
+        while i < len(expression):
+            if expression[i] in "\"'":
+                _literal, consumed = self._read_string(expression, i)
+                i += consumed
+                continue
+            token = expression[i]
+            if token in "([{":
+                depth += 1
+            elif token in ")]}" and depth:
+                depth -= 1
+            elif depth == 0 and token == "?":
+                nested_conditionals += 1
+            elif depth == 0 and token == ":":
+                if (i > 0 and expression[i - 1] == ":") or (
+                    i + 1 < len(expression) and expression[i + 1] == ":"
+                ):
+                    i += 1
+                    continue
+                if nested_conditionals:
+                    nested_conditionals -= 1
+                else:
+                    return i
+            i += 1
+        return None
 
     def _evaluate_static_integral_node(
         self, node: ast.AST
@@ -3137,6 +3344,16 @@ class MetalPreprocessor(HLSLPreprocessor):
                         return True, 1
                 return True, 0
             return False, None
+
+        if isinstance(node, ast.IfExp):
+            valid, condition = self._evaluate_static_integral_node(node.test)
+            if not valid or condition is None:
+                return False, None
+            body_valid, body = self._evaluate_static_integral_node(node.body)
+            else_valid, else_value = self._evaluate_static_integral_node(node.orelse)
+            if not body_valid or body is None or not else_valid or else_value is None:
+                return False, None
+            return True, body if condition else else_value
 
         if isinstance(node, ast.Compare):
             valid, left = self._evaluate_static_integral_node(node.left)
@@ -8896,10 +9113,15 @@ class MetalPreprocessor(HLSLPreprocessor):
                     )
                     for argument in template_arguments
                 ]
-                local_constants = self._local_integral_constants_at(
+                visible_local_constants = self._local_integral_constant_bindings_at(
                     local_integral_constants,
                     i,
                 )
+                local_constants = {
+                    name: binding.value
+                    for name, binding in visible_local_constants.items()
+                    if binding.value is not None
+                }
                 if local_constants:
                     template_arguments = [
                         self._substitute_template_argument_static_constants(
@@ -8908,6 +9130,45 @@ class MetalPreprocessor(HLSLPreprocessor):
                         )
                         for argument in template_arguments
                     ]
+                unresolved_local_constants = sorted(
+                    name
+                    for name, binding in visible_local_constants.items()
+                    if binding.value is None
+                    and any(
+                        self._substitute_template_argument_static_constants(
+                            argument,
+                            {name: "0"},
+                        )
+                        != argument
+                        for argument in template_arguments
+                    )
+                )
+                if unresolved_local_constants:
+                    requested_signature = self._template_specialization_signature(
+                        ident, template_arguments
+                    )
+                    constant_names = ", ".join(
+                        f"'{name}'" for name in unresolved_local_constants
+                    )
+                    suggested_action = (
+                        "make each function-local template argument a constexpr "
+                        "integral expression composed from concrete values"
+                    )
+                    raise MetalTemplateSpecializationError(
+                        "Metal nested struct template materialization left "
+                        f"function-local constant {constant_names} unresolved in "
+                        f"'{requested_signature}'. Suggested action: "
+                        f"{suggested_action}.",
+                        requested_signature=requested_signature,
+                        suggested_action=suggested_action,
+                        source_location=self._source_location_for_offsets(
+                            code,
+                            self._scoped_identifier_start(code, i),
+                            angle_end + 1,
+                        ),
+                        nested_struct_name=ident,
+                        unresolved_local_constants=tuple(unresolved_local_constants),
+                    )
                 containing_contexts = [
                     context
                     for context in owner_contexts
@@ -9214,7 +9475,12 @@ class MetalPreprocessor(HLSLPreprocessor):
                 previous = i - 1
                 while previous >= 0 and argument[previous].isspace():
                     previous -= 1
-                scoped = previous >= 0 and argument[previous] in ".:"
+                scoped = previous >= 0 and argument[previous] == "."
+                if previous >= 0 and argument[previous] == ":":
+                    qualifier_colon = previous - 1
+                    while qualifier_colon >= 0 and argument[qualifier_colon].isspace():
+                        qualifier_colon -= 1
+                    scoped = qualifier_colon >= 0 and argument[qualifier_colon] == ":"
                 following = i + consumed
                 while following < len(argument) and argument[following].isspace():
                     following += 1

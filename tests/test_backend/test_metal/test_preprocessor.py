@@ -1667,11 +1667,12 @@ def test_preprocessor_resolves_local_sizeof_constants_through_type_aliases():
 
 def test_template_argument_static_constant_substitution_skips_qualified_members():
     output = MetalPreprocessor()._substitute_template_argument_static_constants(
-        "Other::thread_count + thread_count",
+        "Other::thread_count + Other :: thread_count + "
+        "(true ? thread_count : thread_count)",
         {"thread_count": "32"},
     )
 
-    assert output == "Other::thread_count + 32"
+    assert output == ("Other::thread_count + Other :: thread_count + (true ? 32 : 32)")
 
 
 def test_preprocessor_selects_full_struct_specialization_by_argument_key():
@@ -1828,6 +1829,11 @@ def test_preprocessor_resolves_function_local_integral_constants_lexically():
         constexpr int WM = 1;
         BlockLoader<float, 32, (32 / (8 * WM)) * 1> conflicting;
     }
+
+    void third() {
+        constexpr int Width = 4;
+        BlockLoader<float, 32, (32 / (8 * Width)) * 1> equivalent;
+    }
     """
 
     output = MetalPreprocessor().preprocess(code)
@@ -1840,13 +1846,130 @@ def test_preprocessor_resolves_function_local_integral_constants_lexically():
     assert f"{inner} inner;" in output
     assert f"{outer} restored;" in output
     assert f"{conflicting} conflicting;" in output
+    assert f"{outer} equivalent;" in output
     assert output.count(f"struct {outer} {{") == 1
     assert output.count(f"struct {inner} {{") == 1
     assert output.count(f"struct {conflicting} {{") == 1
     assert "BlockLoader_float_32_32_8_WM_1" not in output
 
 
-def test_preprocessor_leaves_unproven_function_local_constants_unresolved():
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [
+        ("true ? 4 : 2", 4),
+        ("(false) ? (4) : (2)", 2),
+        ("false ? 1 : true ? 5 : 6", 5),
+        ("true ? (false ? 1 : 2) : 3", 2),
+        ("(false ? 1 : 2) ? 3 : 4", 3),
+        ("(true ? 4 : 3) * 2", 8),
+        ("(1 & 2) == 0 ? 4 : 5", 4),
+        ("1 & (2 == 0) ? 4 : 5", 5),
+        ("(!0) < 0 ? 4 : 5", 5),
+        ("true ? ((3 < 2) < 1) : 9", 1),
+    ],
+)
+def test_preprocessor_folds_cpp_integral_conditional_expressions(expression, expected):
+    assert MetalPreprocessor()._evaluate_static_integral_expression(expression) == (
+        True,
+        expected,
+    )
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "true ? 4",
+        "true ? : 2",
+        "true ? 4 :",
+        "true ? 4 : 2 : 1",
+        "(true ? 4 : 2",
+        "4 if true else 2",
+        'true ? 4 : "x"',
+        "true ? -1 : 0xffffffff",
+        "ns::flag ? 1 : 2",
+        "1 & 2 == 0 ? 4 : 5",
+        "!0 < 0 ? 4 : 5",
+        "true ? 3 < 2 < 1 : 9",
+    ],
+)
+def test_preprocessor_rejects_malformed_integral_conditional_expressions(expression):
+    assert MetalPreprocessor()._evaluate_static_integral_expression(expression) == (
+        False,
+        None,
+    )
+
+
+def test_preprocessor_materializes_nested_struct_from_local_conditional_constants():
+    code = """
+    template <typename T, int Rows, int Columns>
+    struct Tile {
+        T values[Rows * Columns];
+    };
+
+    template <typename T, int M, int N, bool Transpose>
+    [[kernel]] void compute(device T* out [[buffer(0)]]) {
+        constexpr short base_rows = M;
+        constexpr short base_columns = N;
+        constexpr short rows = Transpose ? base_columns : base_rows;
+        constexpr short columns = Transpose ? base_rows : base_columns;
+        constexpr short half_rows = rows / 2;
+        Tile<T, half_rows, columns> tile;
+        out[0] = T(sizeof(tile.values));
+    }
+
+    instantiate_kernel("compute_float", compute, float, 2, 4, true)
+    instantiate_kernel("compute_float_row_major", compute, float, 2, 4, false)
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "struct Tile_float_2_2" in output
+    assert "Tile_float_2_2 tile;" in output
+    assert "struct Tile_float_1_4" in output
+    assert "Tile_float_1_4 tile;" in output
+    assert "Tile_float_half_rows_columns" not in output
+    assert "Tile<T, half_rows, columns>" not in output
+
+
+@pytest.mark.parametrize(
+    ("function_source", "constant_name", "expected_line"),
+    [
+        (
+            """
+            void runtime(int input) {
+                int WM = input;
+                Block<WM> runtime_value;
+            }
+            """,
+            "WM",
+            13,
+        ),
+        (
+            """
+            void unsupported_call() {
+                constexpr int Width = choose_width();
+                Block<Width> call_value;
+            }
+            """,
+            "Width",
+            13,
+        ),
+        (
+            """
+            void cyclic() {
+                constexpr int First = Second;
+                constexpr int Second = First;
+                Block<First> cycle;
+            }
+            """,
+            "First",
+            14,
+        ),
+    ],
+)
+def test_preprocessor_reports_unproven_function_local_constants(
+    function_source, constant_name, expected_line
+):
     code = """
     template <int N>
     struct Block {
@@ -1856,30 +1979,17 @@ def test_preprocessor_leaves_unproven_function_local_constants_unresolved():
     constexpr int choose_width() {
         return 2;
     }
+    """ + function_source
 
-    void proven() {
-        constexpr int WM = 4;
-        Block<WM> value;
-    }
+    with pytest.raises(MetalTemplateSpecializationError) as caught:
+        MetalPreprocessor().preprocess(code)
 
-    void runtime(int input) {
-        int WM = input;
-        Block<WM> runtime_value;
-    }
-
-    void unsupported_call() {
-        constexpr int WM = choose_width();
-        Block<WM> call_value;
-    }
-    """
-
-    output = MetalPreprocessor().preprocess(code)
-
-    assert "Block_4 value;" in output
-    assert "Block_WM runtime_value;" in output
-    assert "Block_WM call_value;" in output
-    assert "Block_4 runtime_value;" not in output
-    assert "Block_4 call_value;" not in output
+    error = caught.value
+    assert "function-local constant" in str(error)
+    assert error.requested_signature == f"Block<{constant_name}>"
+    assert error.unresolved_local_constants == (constant_name,)
+    assert error.nested_struct_name == "Block"
+    assert error.source_location["line"] == expected_line
 
 
 def test_preprocessor_resolves_struct_alias_in_static_constant_initializer():
