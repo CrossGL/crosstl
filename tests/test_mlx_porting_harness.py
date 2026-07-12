@@ -343,6 +343,14 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         module.MLX_REDUCED_FRONTIER_SOURCES
     ) - set(module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES)
 
+    gemv = expected_gaps["vulkan_gemv_toolchain_status"]
+    assert gemv["status"] == "passing"
+    assert gemv["semantic_readiness_status"] == "no-known-codegen-fallbacks"
+    assert gemv["semantic_warning_count"] == 0
+    assert gemv["semantic_warnings_by_issue"] == {}
+    assert gemv["semantic_blockers"] == []
+    assert gemv["report_warning_transport_tracked_by"] is None
+
     runtime = expected_gaps["runtime_readiness_status"]
     assert runtime["fixture_count"] == len(
         module._runtime_readiness_fixtures(("directx", "opengl", "vulkan"))
@@ -482,6 +490,15 @@ def test_arg_reduce_advances_into_clean_toolchain_frontiers():
     assert "https://github.com/CrossGL/crosstl/issues/1551" in (
         module.RESOLVED_FRONTIER_ISSUES
     )
+
+
+def test_float_subgroup_xor_issue_is_resolved_for_mlx_gemv():
+    module = _load_harness()
+    issue = "https://github.com/CrossGL/crosstl/issues/1498"
+
+    assert module.VULKAN_GEMV_SEMANTIC_TRACKED_ISSUES == ()
+    assert issue in module.RESOLVED_FRONTIER_ISSUES
+    assert issue not in module.FULL_CORPUS_TRACKED_ISSUES
 
 
 def test_scaled_dot_product_attention_tracks_opengl_function_constant_blocker():
@@ -1069,11 +1086,7 @@ def _gemv_vulkan_frontier_source():
         f'OpEntryPoint GLCompute %main_{index} "compute_main_{index}"'
         for index in range(1, 225)
     )
-    subgroup_warning = (
-        "; WARNING: WaveActiveBitXor requires a compatible arithmetic or "
-        "bitwise operand; got float"
-    )
-    return "\n".join([subgroup_warning, entry_points]) + "\n"
+    return entry_points + "\n"
 
 
 def _stub_gemv_vulkan_toolchain(module, monkeypatch, commands):
@@ -1108,20 +1121,16 @@ def test_gemv_vulkan_toolchain_check_structurally_validates_full_artifact(
 
     result = module._check_gemv_vulkan_toolchain(*paths, "python")
 
-    assert result["status"] == "blocked-by-semantic-warnings"
+    assert result["status"] == "passed"
     assert result["specializationCount"] == 225
     assert result["entryPointCount"] == 224
     assert result["structuralValidationStatus"] == "validated"
-    assert result["semanticReadinessStatus"] == "blocked"
-    assert result["semanticWarningCount"] == 1
-    assert result["semanticWarningsByIssue"] == {
-        "https://github.com/CrossGL/crosstl/issues/1498": 1,
-    }
-    assert result["semanticBlockers"] == [
-        "https://github.com/CrossGL/crosstl/issues/1498",
-    ]
+    assert result["semanticReadinessStatus"] == "no-known-codegen-fallbacks"
+    assert result["semanticWarningCount"] == 0
+    assert result["semanticWarningsByIssue"] == {}
+    assert result["semanticBlockers"] == []
     assert result["reportWarningCount"] == 0
-    assert result["reportWarningTransportTrackedBy"].endswith("/1517")
+    assert result["reportWarningTransportTrackedBy"] is None
     assert result["runtimeIntegrationIncluded"] is False
     assert [name for name, _command in commands] == [
         "translate-gemv-vulkan",
@@ -1158,23 +1167,21 @@ def test_gemv_vulkan_toolchain_check_rejects_untracked_warning(
 
     with pytest.raises(
         module.PortingCheckError,
-        match="emitted an untracked semantic warning",
+        match="emitted a semantic warning",
     ):
         module._check_gemv_vulkan_toolchain(*paths, "python")
 
     assert [name for name, _command in commands] == ["translate-gemv-vulkan"]
 
 
-def test_gemv_vulkan_toolchain_check_rejects_warning_count_drift(
+def test_gemv_vulkan_toolchain_check_rejects_resolved_float_fallback_warning(
     tmp_path,
     monkeypatch,
 ):
     module = _load_harness()
-    generated = _gemv_vulkan_frontier_source().replace(
+    generated = (
         "; WARNING: WaveActiveBitXor requires a compatible arithmetic or "
-        "bitwise operand; got float\n",
-        "",
-        1,
+        "bitwise operand; got float\n" + _gemv_vulkan_frontier_source()
     )
     paths = _prepare_gemv_vulkan_check(module, tmp_path, generated)
     commands = []
@@ -1182,7 +1189,7 @@ def test_gemv_vulkan_toolchain_check_rejects_warning_count_drift(
 
     with pytest.raises(
         module.PortingCheckError,
-        match="semantic warning counts changed",
+        match="emitted a semantic warning",
     ):
         module._check_gemv_vulkan_toolchain(*paths, "python")
 
@@ -2178,7 +2185,7 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
         "_check_gemv_vulkan_toolchain",
         lambda *args: {
             "name": "gemv-vulkan-toolchain",
-            "status": "blocked-by-semantic-warnings",
+            "status": "passed",
         },
     )
     monkeypatch.setattr(

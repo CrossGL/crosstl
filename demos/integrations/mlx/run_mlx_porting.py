@@ -98,9 +98,7 @@ RUNTIME_READINESS_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1388",
     "https://github.com/CrossGL/crosstl/issues/1471",
 )
-VULKAN_GEMV_SEMANTIC_TRACKED_ISSUES = (
-    "https://github.com/CrossGL/crosstl/issues/1498",
-)
+VULKAN_GEMV_SEMANTIC_TRACKED_ISSUES: tuple[str, ...] = ()
 VULKAN_FRONTIER_SEMANTIC_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1537",
 )
@@ -172,6 +170,7 @@ FULL_CORPUS_TRACKED_ISSUES = (
 )
 RESOLVED_FRONTIER_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1551",
+    "https://github.com/CrossGL/crosstl/issues/1498",
     "https://github.com/CrossGL/crosstl/issues/1535",
     "https://github.com/CrossGL/crosstl/issues/1490",
     "https://github.com/CrossGL/crosstl/issues/1489",
@@ -1436,16 +1435,6 @@ def _check_gemv_opengl_toolchain(
     }
 
 
-def _classify_gemv_vulkan_warning(line: str) -> str | None:
-    (subgroup_xor_issue,) = VULKAN_GEMV_SEMANTIC_TRACKED_ISSUES
-    if line == (
-        "; WARNING: WaveActiveBitXor requires a compatible arithmetic or "
-        "bitwise operand; got float"
-    ):
-        return subgroup_xor_issue
-    return None
-
-
 def _check_gemv_vulkan_toolchain(
     mlx_root: Path,
     work_dir: Path,
@@ -1548,28 +1537,10 @@ def _check_gemv_vulkan_toolchain(
     warning_lines = [
         line for line in generated.splitlines() if line.startswith("; WARNING:")
     ]
-    warning_counts: Counter[str] = Counter()
-    untracked_warnings: list[str] = []
-    for line in warning_lines:
-        issue = _classify_gemv_vulkan_warning(line)
-        if issue is None:
-            untracked_warnings.append(line)
-        else:
-            warning_counts[issue] += 1
     _require(
-        not untracked_warnings,
-        "Vulkan GEMV artifact emitted an untracked semantic warning: "
-        + (untracked_warnings[0] if untracked_warnings else ""),
-    )
-    expected_warning_counts = {
-        VULKAN_GEMV_SEMANTIC_TRACKED_ISSUES[0]: 1,
-    }
-    _require(
-        dict(warning_counts) == expected_warning_counts,
-        "Vulkan GEMV semantic warning counts changed: expected {}, found {}".format(
-            expected_warning_counts,
-            dict(warning_counts),
-        ),
+        not warning_lines,
+        "Vulkan GEMV artifact emitted a semantic warning: "
+        + (warning_lines[0] if warning_lines else ""),
     )
     generated_without_warnings = "\n".join(
         line for line in generated.splitlines() if not line.startswith("; WARNING:")
@@ -1648,7 +1619,7 @@ def _check_gemv_vulkan_toolchain(
     )
     return {
         "name": "gemv-vulkan-toolchain",
-        "status": "blocked-by-semantic-warnings",
+        "status": "passed",
         "report": _relpath(report_path, mlx_root),
         "source": MLX_GEMV_SOURCE,
         "target": "vulkan",
@@ -1657,14 +1628,12 @@ def _check_gemv_vulkan_toolchain(
         "structuralValidationStatus": "validated",
         "assembler": "spirv-as",
         "spirvValidator": "spirv-val",
-        "semanticReadinessStatus": "blocked",
+        "semanticReadinessStatus": "no-known-codegen-fallbacks",
         "semanticWarningCount": len(warning_lines),
-        "semanticWarningsByIssue": dict(warning_counts),
+        "semanticWarningsByIssue": {},
         "semanticBlockers": list(VULKAN_GEMV_SEMANTIC_TRACKED_ISSUES),
         "reportWarningCount": report_warning_count,
-        "reportWarningTransportTrackedBy": (
-            VULKAN_GEMV_REPORTING_TRACKED_ISSUE if report_warning_count == 0 else None
-        ),
+        "reportWarningTransportTrackedBy": None,
         "structuralValidationOutput": _relpath(output_path, mlx_root),
         "runtimeIntegrationIncluded": False,
     }

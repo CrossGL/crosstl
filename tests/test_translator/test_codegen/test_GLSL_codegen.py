@@ -13367,6 +13367,33 @@ def test_glsl_wave_intrinsics_lower_to_khr_subgroup_builtins():
     assert "QuadRead" not in generated
 
 
+def test_glsl_bitwise_wave_ops_bitcast_float_operands(tmp_path):
+    code = """
+    shader GLSLBitwiseFloat {
+        compute {
+            void main() {
+                float value = 1.5;
+                float reduced = WaveActiveBitXor(value);
+                vec3 values = vec3(1.5, 2.5, 3.5);
+                vec3 reducedValues = WaveActiveBitXor(values);
+            }
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uintBitsToFloat(subgroupXor(floatBitsToUint(value)))" in generated
+    assert "uintBitsToFloat(subgroupXor(floatBitsToUint(values)))" in generated
+    assert "GLSL wave intrinsic diagnostic" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "bitwise_wave_float_payloads",
+        spirv_target="spirv1.3",
+    )
+
+
 def test_glsl_relative_shuffle_intrinsics_lower_to_subgroup_shuffle():
     # Canonical WaveShuffleDown/Up/Xor (Metal simd_shuffle_down/up/xor) map to the
     # KHR relative-shuffle builtins. Down/Up require the shuffle_relative
@@ -13730,7 +13757,7 @@ def test_glsl_wave_intrinsic_type_mismatches_emit_diagnostics():
                 vec2 values;
                 mat2 transform;
                 float badSum = WaveActiveSum(flag);
-                uint badBits = WaveActiveBitAnd(value);
+                uint badBits = WaveActiveBitAnd(transform);
                 bool badVote = WaveActiveAnyTrue(values);
                 uint badLane = WaveReadLaneAt(1u, value);
                 uvec4 badMatch = WaveMatch(transform);
@@ -13751,7 +13778,7 @@ def test_glsl_wave_intrinsic_type_mismatches_emit_diagnostics():
         ),
         (
             "WaveActiveBitAnd requires an integer or boolean scalar or vector "
-            "value argument: value has type float"
+            "value argument: transform has type mat2"
         ),
         (
             "WaveActiveAnyTrue requires a boolean scalar value argument: "
@@ -13777,7 +13804,7 @@ def test_glsl_wave_intrinsic_type_mismatches_emit_diagnostics():
         assert expected in generated
 
     assert "subgroupAdd(flag)" not in generated
-    assert "subgroupAnd(value)" not in generated
+    assert "subgroupAnd(transform)" not in generated
     assert "subgroupAny(values)" not in generated
     assert "subgroupShuffle(1u, value)" not in generated
     assert "crossglWaveMatch(transform)" not in generated

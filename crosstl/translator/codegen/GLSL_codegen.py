@@ -1072,6 +1072,11 @@ class GLSLCodeGen:
         "QuadReadAcrossDiagonal": "subgroupQuadSwapDiagonal",
         "QuadReadLaneAt": "subgroupQuadBroadcast",
     }
+    GLSL_WAVE_BITWISE_VALUE_OPERATIONS = {
+        "WaveActiveBitAnd",
+        "WaveActiveBitOr",
+        "WaveActiveBitXor",
+    }
     GLSL_METAL_SIMD_GROUP_HELPER_PREFIX = "__metal_simd"
     GLSL_METAL_SIMD_GROUP_PLAIN_HELPER_OPERATIONS = {
         "simd_sum": "WaveActiveSum",
@@ -16392,6 +16397,12 @@ complex64_t crossgl_complex64_mod_assign(
                 f"expects {expected_arity} arguments, got {actual_arity}",
             )
 
+        floating_bitwise = self.glsl_floating_bitwise_wave_operation(
+            operation, arguments
+        )
+        if floating_bitwise is not None:
+            return floating_bitwise
+
         type_diagnostic = self.glsl_wave_type_diagnostic(
             operation, arguments, diagnostic_operation
         )
@@ -16437,6 +16448,28 @@ complex64_t crossgl_complex64_mod_assign(
 
         args = ", ".join(self.generate_expression(arg) for arg in arguments)
         return f"{mapped}({args})"
+
+    def glsl_floating_bitwise_wave_operation(self, operation, arguments):
+        if operation not in self.GLSL_WAVE_BITWISE_VALUE_OPERATIONS:
+            return None
+        if len(arguments) != 1:
+            return None
+
+        value_expr = arguments[0]
+        value_type = self.map_type(self.expression_result_type(value_expr))
+        component_type = self.vector_component_type(value_type) or value_type
+        if component_type != "float":
+            return None
+
+        integer_type = "uint"
+        if self.is_vector_value_type(value_type):
+            integer_type = f"uvec{value_type[-1]}"
+        value = self.generate_expression(value_expr)
+        integer_value = self.generate_glsl_explicit_bitcast(
+            value_type, integer_type, value
+        )
+        reduced = f"{self.GLSL_WAVE_DIRECT_MAPPINGS[operation]}({integer_value})"
+        return self.generate_glsl_explicit_bitcast(integer_type, value_type, reduced)
 
     def glsl_wave_result_type(self, operation, arguments):
         if operation in {"WaveGetLaneCount", "WaveGetLaneIndex"}:

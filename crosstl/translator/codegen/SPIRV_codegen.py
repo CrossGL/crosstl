@@ -10086,7 +10086,15 @@ class VulkanSPIRVCodeGen:
             self.emit(f"; WARNING: {operation} requires exactly one argument")
             return self.wave_result_default(operation, args)
 
-        result_type = self.ensure_registered_type(args[0].type)
+        source_result_type = self.ensure_registered_type(args[0].type)
+        result_type = source_result_type
+        operand = args[0]
+        floating_bitwise_type = self.floating_bitwise_wave_integer_type(
+            operation, source_result_type
+        )
+        if floating_bitwise_type is not None:
+            result_type = floating_bitwise_type
+            operand = self.bitcast_wave_value(operand, result_type)
         component_type = self.scalar_or_vector_component_type(result_type.type)
         if operation in {"WavePrefixSum", "WavePrefixProduct"}:
             group_operation = "ExclusiveScan"
@@ -10170,12 +10178,47 @@ class VulkanSPIRVCodeGen:
         id_value = self.get_id()
         self.emit(
             f"%{id_value} = {opcode} %{result_type.id} %{scope.id} "
-            f"{group_operation} %{args[0].id}"
+            f"{group_operation} %{operand.id}"
         )
 
         spirv_id = SpirvId(id_value, result_type.type)
         self.value_types[id_value] = result_type
+        if floating_bitwise_type is not None:
+            return self.bitcast_wave_value(spirv_id, source_result_type)
         return spirv_id
+
+    def floating_bitwise_wave_integer_type(
+        self, operation: str, value_type: SpirvId
+    ) -> Optional[SpirvId]:
+        if operation not in {
+            "WaveActiveBitAnd",
+            "WaveActiveBitOr",
+            "WaveActiveBitXor",
+        }:
+            return None
+
+        vector_info = self.vector_component_type_and_count(value_type.type.base_type)
+        component_type = (
+            vector_info[0]
+            if vector_info is not None
+            else self.normalize_primitive_name(value_type.type.base_type)
+        )
+        if component_type != "float":
+            return None
+
+        integer_component = self.register_primitive_type("uint")
+        if vector_info is None:
+            return integer_component
+        return self.register_vector_type(integer_component, vector_info[1])
+
+    def bitcast_wave_value(self, value: SpirvId, target_type: SpirvId) -> SpirvId:
+        id_value = self.get_id()
+        self.emit(f"%{id_value} = OpBitcast %{target_type.id} %{value.id}")
+        result = SpirvId(id_value, target_type.type)
+        self.value_types[id_value] = target_type
+        if self.is_non_uniform_value(value):
+            self.mark_non_uniform_result(result)
+        return result
 
     def call_group_non_uniform_vote(
         self, operation: str, args: List[SpirvId]

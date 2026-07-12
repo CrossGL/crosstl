@@ -8603,6 +8603,38 @@ class TestVulkanSPIRVCodeGen:
         assert "WaveReadLane" not in spv_code
         assert "WARNING" not in spv_code
 
+    def test_compute_bitwise_wave_ops_bitcast_float_operands(self, tmp_path):
+        source_code = """
+        shader ComputeBitwiseFloat {
+            compute {
+                void main() {
+                    float value = 1.5;
+                    float reduced = WaveActiveBitXor(value);
+                    vec3 values = vec3(1.5, 2.5, 3.5);
+                    vec3 reducedValues = WaveActiveBitXor(values);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        uint_type = re.search(r"%(\d+) = OpTypeInt 32 0", spv_code)
+        assert uint_type is not None
+        uint_vector_type = re.search(
+            rf"%(\d+) = OpTypeVector %{uint_type.group(1)} 3", spv_code
+        )
+        assert uint_vector_type is not None
+        result_types = re.findall(
+            r"%\d+ = OpGroupNonUniformBitwiseXor %(\d+) ", spv_code
+        )
+        assert result_types == [uint_type.group(1), uint_vector_type.group(1)]
+        assert spv_code.count("OpBitcast") == 4
+        assert "WaveActiveBitXor requires" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_compute_relative_shuffle_intrinsics_emit_group_non_uniform_shuffle(
         self, tmp_path
     ):
