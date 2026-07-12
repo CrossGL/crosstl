@@ -39,11 +39,12 @@ The current harness verifies:
 - on Linux CI, full project materialization of `gemv.metal` to OpenGL followed
   by native GLSL compilation and SPIR-V 1.3 validation for all 225 source
   specializations represented by the generated artifact;
-- on Linux CI, full project materialization of `gemv.metal` to Vulkan for 225
-  source specializations and 224 compute entry points, followed by assembly
-  with `spirv-as` and validation with `spirv-val`, both targeting Vulkan 1.1;
-  the gate rejects every generated warning and makes no numerical runtime
-  execution claim;
+- on Linux CI, full project translation of `gemv.metal` to Vulkan with
+  `spirv-as` and `spirv-val` available. The current gate requires the exact
+  structured nested-return diagnostic tracked in
+  [#1561](https://github.com/CrossGL/crosstl/issues/1561) and confirms that no
+  artifact reaches structural validation while pointer-preserving inlining is
+  unsafe;
 - runtime artifact manifest, runtime-test manifest, and runtime-test plan
   generation for reduced `arange` readiness probes across DirectX, OpenGL, and
   Vulkan;
@@ -206,14 +207,14 @@ translation successes.
 The full GEMV OpenGL gate accepts only the reserved double-underscore identifier
 warnings tracked in CrossGL/crosstl#1513; any other native compiler warning
 fails the check.
-The full GEMV Vulkan gate materializes 225 specializations into 224 compute
-entry points, then assembles with `spirv-as` and validates with `spirv-val`, both
-targeting Vulkan 1.1. Floating subgroup XOR payloads are bitcast through
-equal-width unsigned integer values, so the fallback tracked in
-CrossGL/crosstl#1498 no longer occurs. The dependent-type fallbacks tracked in
-CrossGL/crosstl#1490 also remain absent. The gate rejects every generated
-warning, validates generated artifacts only, and makes no numerical runtime
-execution claim.
+The full GEMV Vulkan gate keeps `spirv-as` and `spirv-val` available but now
+stops before artifact emission. Pointer-preserving inlining rejects the nested
+return in the materialized GEMV helper under CrossGL/crosstl#1561; the gate
+accepts only that diagnostic and fails on any untracked translation error. The
+previous 225-specialization, 224-entry structural result is not treated as
+current proof because validating an artifact with incorrect return semantics
+would be misleading. Assembly and validation resume only after the nested
+return contract is implemented. No numerical runtime execution claim is made.
 
 Read-only scalar storage-pointer reinterpretation now has a shared AST contract
 and target lowering for DirectX, OpenGL, and Vulkan. A 32-bit scalar storage
@@ -226,10 +227,38 @@ with one integral-constant parameter now lower to a runtime branch whose two
 callback bodies retain distinct compile-time `true` and `false` values. Nested
 dispatches expand the full Cartesian specialization and reduced DirectX,
 OpenGL, and Vulkan project fixtures pass their native validators. Other callback
-helpers, including compile-time `const_for_loop` unrolling, remain tracked in
-CrossGL/crosstl#1554. Pinned `quantized_nax.metal` now reaches contextually typed
-empty braced arguments under CrossGL/crosstl#1555; pointer-bearing aggregate
-propagation beyond that boundary remains tracked in CrossGL/crosstl#1544.
+helpers remain tracked in CrossGL/crosstl#1554. Concrete `const_for_loop`
+callbacks now expand in source order when all three bounds are integral, the
+callback has reference capture and one `auto` parameter, and its body has no
+callback-local control transfer. Expansion is enabled only when the source
+defines the recognized `integral_constant`, `Int`, recursive loop, and arithmetic
+operator contracts; unrelated helpers with the same names remain opaque. Nested
+loops preserve exact
+`integral_constant<int, N>` argument types; unresolved or unsafe callbacks remain
+opaque and fail through the existing structured materialization path. A reduced
+Vulkan fixture preserves four stores at indices `0`, `1`, `4`, and `5`, then
+passes `spirv-as` and `spirv-val`. OpenGL expected-type propagation for the same
+aggregate call arguments remains tracked in CrossGL/crosstl#1559.
+
+An isolated high-budget `quantized_nax.metal` Vulkan project run now expands the
+concrete NAX tile callbacks, resolves conditional function-local dimensions, and
+materializes `NAXTile<T, BR, BC>` as concrete 2-by-2 specializations. Explicit
+member-template binding now preserves `float16_t` threadgroup arrays, and the
+template-hostile project path initializes the verified compile-time callback
+contracts before member lowering. The current project report reaches residual
+template auditing: concrete alias-template types such as `Int<1>` are classified
+as unresolved placeholders, while reachable `dispatch_bool`, `const_for_loop`,
+and `tile_matmad_nax` helpers still need contextual materialization. These gaps
+are tracked in CrossGL/crosstl#1490 and CrossGL/crosstl#1479. Generic member calls
+with explicit type or value arguments in the shared parser remain tracked in
+CrossGL/crosstl#1555, pointer-bearing aggregate propagation remains tracked in
+CrossGL/crosstl#1544, and lowered receiver/reference semantics must satisfy
+CrossGL/crosstl#1557 before the kernel can be considered semantically ready.
+Lazy logical and conditional evaluation in SPIR-V remains tracked in
+CrossGL/crosstl#1560 for full-corpus semantic coverage.
+Nested returns and side-effectful compatibility arguments in pointer-preserving
+SPIR-V inlining now fail explicitly; complete lowering remains tracked in
+CrossGL/crosstl#1561 and CrossGL/crosstl#1562.
 
 ## Resolved Frontier Issues
 

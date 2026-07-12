@@ -347,7 +347,8 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert pointer_reinterpretation["status"] == "partial"
     assert pointer_reinterpretation["targets"] == list(module.FULL_CORPUS_TARGETS)
     assert pointer_reinterpretation["next_kernel_blocked_by"] == [
-        "https://github.com/CrossGL/crosstl/issues/1555",
+        "https://github.com/CrossGL/crosstl/issues/1479",
+        "https://github.com/CrossGL/crosstl/issues/1490",
         "https://github.com/CrossGL/crosstl/issues/1544",
     ]
     assert set(pointer_reinterpretation["remaining_pointer_cases_blocked_by"]) == {
@@ -361,15 +362,42 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         "https://github.com/CrossGL/crosstl/issues/1554"
     ]
     assert callback["next_kernel_blocked_by"] == [
-        "https://github.com/CrossGL/crosstl/issues/1555"
+        "https://github.com/CrossGL/crosstl/issues/1479",
+        "https://github.com/CrossGL/crosstl/issues/1490",
+    ]
+
+    compile_time_loop = expected_gaps["compile_time_loop_status"]
+    assert compile_time_loop["status"] == "partial"
+    assert compile_time_loop["targets"] == list(module.FULL_CORPUS_TARGETS)
+    assert "verified integral_constant" in compile_time_loop["supported_contract"]
+    assert compile_time_loop["native_validation"] == {
+        "directx": "generated-reduced-fixture-dxc-not-run",
+        "opengl": "blocked-by-tracked-issue",
+        "vulkan": "validated-reduced-fixture",
+    }
+    assert compile_time_loop["next_kernel_blocked_by"] == [
+        "https://github.com/CrossGL/crosstl/issues/1479",
+        "https://github.com/CrossGL/crosstl/issues/1490",
     ]
 
     gemv = expected_gaps["vulkan_gemv_toolchain_status"]
-    assert gemv["status"] == "passing"
-    assert gemv["semantic_readiness_status"] == "no-known-codegen-fallbacks"
+    assert gemv["status"] == "blocked-by-tracked-issue"
+    assert gemv["structural_validation_status"] == "blocked-before-artifact"
+    assert gemv["semantic_readiness_status"] == "blocked-before-artifact"
     assert gemv["semantic_warning_count"] == 0
     assert gemv["semantic_warnings_by_issue"] == {}
-    assert gemv["semantic_blockers"] == []
+    assert gemv["semantic_blockers"] == [
+        "https://github.com/CrossGL/crosstl/issues/1561"
+    ]
+    assert gemv["translation_diagnostic_code"] == (
+        "project.translate.unsupported-feature"
+    )
+    assert gemv["translation_missing_capabilities"] == [
+        "spirv.nested_return_storage_buffer_function"
+    ]
+    assert gemv["tracked_translation_issues"] == [
+        "https://github.com/CrossGL/crosstl/issues/1561"
+    ]
     assert gemv["report_warning_transport_tracked_by"] is None
 
     runtime = expected_gaps["runtime_readiness_status"]
@@ -1171,6 +1199,98 @@ def test_gemv_vulkan_toolchain_check_structurally_validates_full_artifact(
     config = (paths[2] / "gemv-vulkan.toml").read_text(encoding="utf-8")
     assert "max_template_specializations = 4096" in config
     assert "max_template_materialization_work = 2097152" in config
+
+
+def test_gemv_vulkan_toolchain_check_accepts_tracked_nested_return_blocker(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_harness()
+    paths = _prepare_gemv_vulkan_check(module, tmp_path, "")
+    mlx_root, _work_dir, _config_dir, report_dir, log_dir = paths
+    report = {
+        "summary": {
+            "translatedCount": 0,
+            "failedCount": 1,
+            "diagnosticCounts": {"error": 1},
+        },
+        "artifacts": [
+            {
+                "source": module.MLX_GEMV_SOURCE,
+                "sourceBackend": "metal",
+                "target": "vulkan",
+                "status": "failed",
+            }
+        ],
+        "diagnostics": [
+            {
+                "code": "project.translate.unsupported-feature",
+                "sourceBackend": "metal",
+                "target": "vulkan",
+                "missingCapabilities": ["spirv.nested_return_storage_buffer_function"],
+                "message": (
+                    "SPIR-V pointer-preserving function inlining requires returns "
+                    "to be top-level statements; helper 'run' contains a nested "
+                    "return"
+                ),
+            }
+        ],
+    }
+    (report_dir / "gemv-vulkan.json").write_text(
+        json.dumps(report),
+        encoding="utf-8",
+    )
+    commands = []
+
+    def fake_run_command(name, command, *, log_dir, **_kwargs):
+        commands.append((name, list(command)))
+        stdout_path = log_dir / f"{name}.stdout"
+        stderr_path = log_dir / f"{name}.stderr"
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text("", encoding="utf-8")
+        return module.CommandResult(name, list(command), 1, stdout_path, stderr_path)
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+    monkeypatch.setattr(module.shutil, "which", lambda name: f"/tools/{name}")
+
+    result = module._check_gemv_vulkan_toolchain(*paths, "python")
+
+    assert result == {
+        "name": "gemv-vulkan-toolchain",
+        "status": "blocked-by-tracked-issue",
+        "report": (report_dir / "gemv-vulkan.json").relative_to(mlx_root).as_posix(),
+        "source": module.MLX_GEMV_SOURCE,
+        "target": "vulkan",
+        "translationDiagnosticCode": "project.translate.unsupported-feature",
+        "translationMissingCapabilities": [
+            "spirv.nested_return_storage_buffer_function"
+        ],
+        "trackedTranslationIssues": ["https://github.com/CrossGL/crosstl/issues/1561"],
+        "structuralValidationStatus": "blocked-before-artifact",
+        "semanticReadinessStatus": "blocked-before-artifact",
+        "semanticBlockers": ["https://github.com/CrossGL/crosstl/issues/1561"],
+        "availableValidators": ["spirv-as", "spirv-val"],
+        "runtimeIntegrationIncluded": False,
+    }
+    assert [name for name, _command in commands] == ["translate-gemv-vulkan"]
+    assert not (paths[1] / "validation" / "gemv-vulkan.spv").exists()
+
+    report["diagnostics"].append(
+        {
+            "code": "project.translate.unexpected",
+            "sourceBackend": "metal",
+            "target": "vulkan",
+            "message": "additional translation failure",
+        }
+    )
+    (report_dir / "gemv-vulkan.json").write_text(
+        json.dumps(report),
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        module.PortingCheckError, match="Vulkan GEMV translation failed"
+    ):
+        module._check_gemv_vulkan_toolchain(*paths, "python")
 
 
 def test_gemv_vulkan_toolchain_check_rejects_untracked_warning(

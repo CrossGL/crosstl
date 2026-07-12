@@ -105,6 +105,36 @@ def spirv_uint_constant_values(spv_code):
     }
 
 
+def spirv_integer_constant_values(spv_code):
+    integer_types = set(re.findall(r"(%\d+) = OpTypeInt \d+ [01]\b", spv_code))
+    return {
+        result_id: int(value)
+        for result_id, type_id, value in re.findall(
+            r"(%\d+) = OpConstant (%\d+) (-?\d+)\b", spv_code
+        )
+        if type_id in integer_types
+    }
+
+
+def spirv_storage_buffer_store_operands(spv_code, variable_name):
+    variable = spirv_named_variable(spv_code, variable_name, storage_class="Uniform")
+    integer_constants = spirv_integer_constant_values(spv_code)
+    access_indexes = {}
+    for result_id, operands in re.findall(
+        rf"(%\d+) = Op(?:InBounds)?AccessChain %\d+ " rf"{re.escape(variable)}([^\n]*)",
+        spv_code,
+    ):
+        operand_ids = re.findall(r"%\d+", operands)
+        if operand_ids and operand_ids[-1] in integer_constants:
+            access_indexes[result_id] = integer_constants[operand_ids[-1]]
+
+    return [
+        (access_indexes[pointer_id], value_id)
+        for pointer_id, value_id in re.findall(r"OpStore (%\d+) (%\d+)\b", spv_code)
+        if pointer_id in access_indexes
+    ]
+
+
 def spirv_vector_type_widths(spv_code):
     return {
         type_id: int(width)
@@ -17445,6 +17475,268 @@ class TestVulkanSPIRVCodeGen:
         assert "WARNING" not in spv_code
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_unused_inlined_parameter_preserves_side_effectful_argument(self, tmp_path):
+        source_code = """
+        shader UnusedInlineParameter {
+            RWStructuredBuffer<int> values @binding(0);
+
+            int writeSideEffect(RWStructuredBuffer<int> data, int index) {
+                data.Store(index, 7);
+                return index;
+            }
+
+            void writeFixed(
+                RWStructuredBuffer<int> data,
+                int unused) {
+                data.Store(0, 1);
+            }
+
+            compute {
+                void main() {
+                    writeFixed(values, writeSideEffect(values, 1));
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        integer_constants = spirv_integer_constant_values(spv_code)
+        stores = {
+            (index, integer_constants[value_id])
+            for index, value_id in spirv_storage_buffer_store_operands(
+                spv_code, "values"
+            )
+        }
+        assert stores == {(0, 1), (1, 7)}
+        assert "writeSideEffect" not in spv_code
+        assert "writeFixed" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_block_scope_restores_shadowed_local_after_if(self, tmp_path):
+        source_code = """
+        shader BlockLocalShadow {
+            RWStructuredBuffer<int> values @binding(0);
+
+            compute {
+                void main() {
+                    int selected = 1;
+                    if (values.Load(2) != 0) {
+                        int selected = 7;
+                        values.Store(1, selected);
+                    }
+                    values.Store(0, selected);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        selected_variables = spirv_named_ids(spv_code, "selected")
+        assert len(selected_variables) == 2
+        outer_loads = set(
+            re.findall(
+                rf"(%\d+) = OpLoad %\d+ {re.escape(selected_variables[0])}\b",
+                spv_code,
+            )
+        )
+        inner_loads = set(
+            re.findall(
+                rf"(%\d+) = OpLoad %\d+ {re.escape(selected_variables[1])}\b",
+                spv_code,
+            )
+        )
+        stores = dict(spirv_storage_buffer_store_operands(spv_code, "values"))
+        assert stores[0] in outer_loads
+        assert stores[1] in inner_loads
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_nested_local_constant_does_not_escape_block(self, tmp_path):
+        source_code = """
+        shader BlockConstantShadow {
+            const int FLAG = 1;
+            RWStructuredBuffer<int> values @binding(0);
+
+            compute {
+                void main() {
+                    {
+                        const int FLAG = 0;
+                        if (FLAG) {
+                            values.Store(1, 9);
+                        } else {
+                            values.Store(1, 3);
+                        }
+                    }
+                    if (FLAG) {
+                        values.Store(0, 1);
+                    } else {
+                        values.Store(0, 2);
+                    }
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        integer_constants = spirv_integer_constant_values(spv_code)
+        stores = {
+            (index, integer_constants[value_id])
+            for index, value_id in spirv_storage_buffer_store_operands(
+                spv_code, "values"
+            )
+        }
+        assert stores == {(0, 1), (1, 3)}
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_local_constant_resolution_follows_source_order(self, tmp_path):
+        source_code = """
+        shader OrderedLocalConstants {
+            const int FLAG = 1;
+            RWStructuredBuffer<int> values @binding(0);
+
+            compute {
+                void main() {
+                    if (FLAG) {
+                        values.Store(0, 4);
+                    } else {
+                        values.Store(0, 5);
+                    }
+                    const int FLAG = 0;
+                    if (FLAG) {
+                        values.Store(1, 6);
+                    } else {
+                        values.Store(1, 7);
+                    }
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        integer_constants = spirv_integer_constant_values(spv_code)
+        stores = {
+            (index, integer_constants[value_id])
+            for index, value_id in spirv_storage_buffer_store_operands(
+                spv_code, "values"
+            )
+        }
+        assert stores == {(0, 4), (1, 7)}
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_inlined_storage_buffer_helper_rejects_nested_return(self):
+        source_code = """
+        shader NestedInlineReturn {
+            RWStructuredBuffer<int> values @binding(0);
+
+            void writeMaybe(
+                RWStructuredBuffer<int> data,
+                int enabled) {
+                if (enabled != 0) {
+                    return;
+                }
+                data.Store(0, 1);
+            }
+
+            compute {
+                void main() {
+                    writeMaybe(values, 1);
+                }
+            }
+        }
+        """
+
+        with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert exc_info.value.feature == (
+            "nested-return-storage-buffer-function-inline"
+        )
+        assert exc_info.value.missing_capabilities == (
+            "spirv.nested_return_storage_buffer_function",
+        )
+        assert "helper 'writeMaybe' contains a nested return" in str(exc_info.value)
+
+    def test_nested_inline_return_detection_ignores_caller_constant_scope(self):
+        source_code = """
+        shader NestedInlineReturnShadow {
+            const int ENABLED = 0;
+            RWStructuredBuffer<int> values @binding(0);
+
+            void writeMaybe(RWStructuredBuffer<int> data) {
+                const int ENABLED = 1;
+                if (ENABLED) {
+                    return;
+                }
+                data.Store(0, 1);
+            }
+
+            compute {
+                void main() {
+                    writeMaybe(values);
+                }
+            }
+        }
+        """
+
+        with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert exc_info.value.feature == (
+            "nested-return-storage-buffer-function-inline"
+        )
+        assert exc_info.value.missing_capabilities == (
+            "spirv.nested_return_storage_buffer_function",
+        )
+
+    def test_ordered_argument_alignment_rejects_side_effectful_skipped_argument(self):
+        source_code = """
+        shader SkippedInlineArgument {
+            RWStructuredBuffer<int> values @binding(0);
+
+            int writeSideEffect(RWStructuredBuffer<int> data) {
+                data.Store(2, 9);
+                return 0;
+            }
+
+            void writeFixed(RWStructuredBuffer<int> data, int value) {
+                data.Store(0, value);
+            }
+
+            compute {
+                void main() {
+                    writeFixed(writeSideEffect(values), values, 1);
+                }
+            }
+        }
+        """
+
+        with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert exc_info.value.feature == (
+            "side-effectful-skipped-storage-buffer-call-argument"
+        )
+        assert exc_info.value.missing_capabilities == (
+            "spirv.storage_buffer_call_argument_alignment_side_effect",
+        )
+        assert "argument 1 from call to 'writeFixed'" in str(exc_info.value)
 
     def test_structured_buffer_array_parameters_inline_with_accesses(self, tmp_path):
         source_code = """

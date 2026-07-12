@@ -45767,6 +45767,83 @@ def test_translate_project_metal_const_for_loop_partial_template_materializes_to
     assert validation["success"] is True
 
 
+def test_translate_project_expands_verified_const_for_loop_callbacks(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "callback_loop.metal").write_text(
+        textwrap.dedent("""
+            template <typename T, T Value>
+            struct integral_constant {
+                static constexpr T value = Value;
+            };
+
+            template <int Value>
+            using Int = integral_constant<int, Value>;
+
+            template <int Start, int Stop, int Step, typename F>
+            constexpr void const_for_loop(F callback) {
+                if constexpr (Start < Stop) {
+                    constexpr auto index = Int<Start>{};
+                    callback(index);
+                    const_for_loop<Start + Step, Stop, Step, F>(callback);
+                }
+            }
+
+            template <typename T, T Lhs, typename U, U Rhs>
+            constexpr auto operator*(
+                integral_constant<T, Lhs>,
+                integral_constant<U, Rhs>
+            ) {
+                return integral_constant<decltype(Lhs * Rhs), Lhs * Rhs>{};
+            }
+
+            struct Writer {
+                template <typename Row, typename Column>
+                static void store(device int* out, Row row, Column column) {
+                    out[row.value + column.value] = row.value + column.value;
+                }
+            };
+
+            template <int Rows, int Columns>
+            struct Tile {
+                void run(device int* out) {
+                    const_for_loop<0, Rows, 1>([&](auto row) {
+                        const_for_loop<0, Columns, 1>([&](auto column) {
+                            Writer::store(
+                                out,
+                                row * Int<4>{},
+                                column * Int<1>{}
+                            );
+                        });
+                    });
+                }
+            };
+
+            kernel void write_indices(device int* out [[buffer(0)]]) {
+                Tile<2, 2> tile;
+                tile.run(out);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["vulkan"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert generated.count("OpStore") == 4
+    assert "const_for_loop" not in generated
+    assert "WARNING" not in generated
+    assert_spirv_asm_validates_if_available(generated, tmp_path)
+
+
 def test_metal_project_materialization_concretizes_dispatch_bool_functor_helper(
     tmp_path,
 ):
@@ -48607,3 +48684,60 @@ def test_translate_project_reports_unresolved_cyclic_owner_alias_at_nested_use(
     assert re.search(r"'(?:first|second)_frag_t'", diagnostic["message"])
     assert re.search(r"Tile<float,\s*(?:first|second)_frag_t>", diagnostic["message"])
     assert diagnostic["location"]["line"] == 13
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl", "vulkan"])
+def test_translate_project_reports_unresolved_function_local_template_argument(
+    tmp_path,
+    target,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "local_constant.metal").write_text(
+        textwrap.dedent("""
+            template <int Count>
+            struct Block {
+                float values[Count];
+            };
+
+            kernel void launch(device float* out [[buffer(0)]]) {
+                int Width = int(out[0]);
+                Block<Width> block;
+                out[0] = block.values[0];
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=[target],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-template-specialization": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["target"] == target
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["location"]["file"] == "local_constant.metal"
+    assert diagnostic["location"]["line"] == 8
+    assert diagnostic["location"]["column"] == 5
+    assert diagnostic["missingCapabilities"] == ["template.specialization"]
+    assert diagnostic["details"]["templateMaterialization"] == {
+        "requestedSignature": "Block<Width>",
+        "suggestedAction": (
+            "make each function-local template argument a constexpr integral "
+            "expression composed from concrete values"
+        ),
+        "functionLocalConstantArgument": {
+            "nestedStruct": "Block",
+            "constants": ["Width"],
+        },
+    }
+    assert "function-local constant 'Width' unresolved" in diagnostic["message"]

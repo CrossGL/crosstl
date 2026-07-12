@@ -14874,6 +14874,7 @@ def _project_template_materialization_for_artifact(
             source,
             file_path=str(unit.path),
         )
+        preprocessor._configure_integral_constant_contracts(preprocessed)
         templates = preprocessor._find_template_functions(preprocessed)
     except Exception:  # noqa: BLE001
         return None
@@ -15682,6 +15683,7 @@ def _template_materialization_failure_details(exc: Exception) -> dict[str, Any]:
     owner_struct_name = getattr(exc, "owner_struct_name", None)
     owner_aliases = getattr(exc, "owner_aliases", None)
     nested_struct_name = getattr(exc, "nested_struct_name", None)
+    unresolved_local_constants = getattr(exc, "unresolved_local_constants", None)
 
     template_materialization = {}
     if isinstance(limit, int) and not isinstance(limit, bool):
@@ -15712,6 +15714,15 @@ def _template_materialization_failure_details(exc: Exception) -> dict[str, Any]:
             "nestedStruct": nested_struct_name,
             "aliases": [
                 str(alias) for alias in owner_aliases if _is_non_empty_string(alias)
+            ],
+        }
+    if _is_non_empty_string(nested_struct_name) and unresolved_local_constants:
+        template_materialization["functionLocalConstantArgument"] = {
+            "nestedStruct": nested_struct_name,
+            "constants": [
+                str(name)
+                for name in unresolved_local_constants
+                if _is_non_empty_string(name)
             ],
         }
 
