@@ -15,6 +15,7 @@ on:
       - "pyproject.toml"
       - "requirements.txt"
       - "tests/test_ci_workflows.py"
+      - "tests/test_translator/test_codegen/test_GLSL_codegen.py"
   pull_request:
     branches: [main]
     paths:
@@ -25,6 +26,7 @@ on:
       - "pyproject.toml"
       - "requirements.txt"
       - "tests/test_ci_workflows.py"
+      - "tests/test_translator/test_codegen/test_GLSL_codegen.py"
   schedule:
     - cron: "31 4 * * 1"
   workflow_dispatch:
@@ -63,11 +65,48 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libvulkan1 mesa-vulkan-drivers spirv-tools vulkan-tools
+          sudo apt-get install -y glslang-tools libvulkan1 mesa-vulkan-drivers spirv-tools vulkan-tools
+          glslangValidator --version
 
       - name: Install Linux DXC
         if: runner.os == 'Linux'
         uses: ./.github/actions/install-linux-dxc
+
+      - name: Validate OpenGL scalar conversions
+        if: runner.os == 'Linux'
+        run: |
+          python -m pip install pytest
+          python -m pytest -q tests/test_translator/test_codegen/test_GLSL_codegen.py \
+            -k "opengl_lowers_expected_scalar_and_vector_conversions or opengl_preserves_metal_arithmetic_conversion_order or opengl_helper_parameters_preserve_out_and_inout_qualifiers"
+
+      - name: Install Windows DirectX Shader Compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ProgressPreference = "SilentlyContinue"
+          $archive = Join-Path $env:RUNNER_TEMP "dxc.zip"
+          $dxcRoot = Join-Path $env:RUNNER_TEMP "dxc"
+          $dxcUri = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/dxc_2026_05_27.zip"
+          for ($attempt = 1; $attempt -le 5; $attempt++) {
+            try {
+              Invoke-WebRequest -Uri $dxcUri -OutFile $archive
+              break
+            } catch {
+              if ($attempt -eq 5) {
+                throw
+              }
+              Write-Warning "DXC download failed on attempt $attempt; retrying."
+              Start-Sleep -Seconds (10 * $attempt)
+            }
+          }
+          Expand-Archive -Path $archive -DestinationPath $dxcRoot -Force
+          $dxc = Get-ChildItem -Path $dxcRoot -Recurse -Filter dxc.exe |
+            Where-Object { $_.FullName -match "\\bin\\x64\\dxc.exe$" } |
+            Select-Object -First 1
+          if ($null -eq $dxc) {
+            throw "dxc.exe not found in release archive."
+          }
+          $dxc.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install Linux Vulkan runtime dependency
         if: runner.os == 'Linux'
@@ -93,8 +132,17 @@ jobs:
             python demos/integrations/mlx/run_mlx_porting.py \
               --mode reduced-frontier \
               --mlx-root mlx-upstream \
+              --require-opengl-frontier-toolchain \
+              --require-opengl-gemv-toolchain \
+              --require-vulkan-gemv-toolchain \
               --require-vulkan-toolchain \
               --require-vulkan-native-runtime
+          elif [ "$RUNNER_OS" = "Windows" ]; then
+            dxc --version
+            python demos/integrations/mlx/run_mlx_porting.py \
+              --mode reduced-frontier \
+              --mlx-root mlx-upstream \
+              --require-directx-toolchain
           else
             python demos/integrations/mlx/run_mlx_porting.py \
               --mode reduced-frontier \

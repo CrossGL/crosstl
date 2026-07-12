@@ -406,6 +406,54 @@ class MetalParser:
             file_path=self.file_path,
         )
 
+    def source_span_from_tokens(self, start_token, end_token):
+        line = getattr(start_token, "line", None)
+        column = getattr(start_token, "column", None)
+        end_line = getattr(end_token, "line", None)
+        end_column = getattr(end_token, "column", None)
+        if None in {line, column, end_line, end_column}:
+            return None
+
+        end_text = str(end_token[1] or "")
+        if "\n" in end_text:
+            end_line += end_text.count("\n")
+            end_column = len(end_text.rsplit("\n", 1)[-1]) + 1
+        else:
+            end_column += len(end_text)
+        location = {
+            "file": self.file_path,
+            "line": line,
+            "column": column,
+            "end_line": end_line,
+            "end_column": end_column,
+        }
+        start_offset = getattr(start_token, "offset", None)
+        end_offset = getattr(end_token, "offset", None)
+        if start_offset is not None and end_offset is not None:
+            location["offset"] = start_offset
+            location["length"] = end_offset + len(end_text) - start_offset
+            location["end_offset"] = end_offset + len(end_text)
+        return location
+
+    def expression_contains_scoped_reference(self, node):
+        if node is None or isinstance(node, (str, int, float, bool)):
+            return False
+        if isinstance(node, VariableNode) and "::" in str(node.name):
+            return True
+        if isinstance(node, dict):
+            return any(
+                self.expression_contains_scoped_reference(value)
+                for value in node.values()
+            )
+        if isinstance(node, (list, tuple, set)):
+            return any(
+                self.expression_contains_scoped_reference(value) for value in node
+            )
+        return any(
+            self.expression_contains_scoped_reference(value)
+            for value in getattr(node, "__dict__", {}).values()
+        )
+
     def current_declaration_context(self):
         if not self.declaration_context_stack:
             return None
@@ -3146,6 +3194,8 @@ class MetalParser:
                     "BITWISE_AND",
                 ]:
                     return True
+                if next_idx < len(self.tokens) and self.is_name_token_at(next_idx):
+                    return True
                 while next_idx < len(self.tokens) and self.is_qualifier_token_at(
                     next_idx
                 ):
@@ -3264,8 +3314,11 @@ class MetalParser:
             self.parse_pragma_statement()
             return None
         if self.current_token[0] == "USING":
-            self.parse_using_statement()
-            return None
+            # Retain body-local ``using X = Y;`` aliases (parse_using_statement
+            # returns a TypeAliasNode) so codegen can resolve declarations that
+            # reference the alias; ``using namespace``/using-declarations return
+            # None and are filtered out by the statement collector.
+            return self.parse_using_statement()
         if self.current_token[0] == "TYPEDEF":
             self.parse_typedef()
             return None
@@ -3759,7 +3812,9 @@ class MetalParser:
                 return FunctionCallNode(op, [type_name])
             operand = self.parse_unary()
             return FunctionCallNode(op, [operand])
-        if self.current_token[0] == "LPAREN" and self.is_type_in_parens():
+        if self.current_token[0] == "LPAREN" and self.is_type_in_parens(
+            require_cast_operand=True
+        ):
             self.eat("LPAREN")
             type_name, _quals = self.parse_type_specifier()
             self.eat("RPAREN")
@@ -3781,7 +3836,7 @@ class MetalParser:
             return UnaryOpNode(op, operand)
         return self.parse_postfix()
 
-    def is_type_in_parens(self):
+    def is_type_in_parens(self, *, require_cast_operand=False):
         if self.current_token[0] != "LPAREN":
             return False
         idx = self.pos + 1
@@ -3800,10 +3855,16 @@ class MetalParser:
             tok_type = self.tokens[idx][0]
         if tok_type not in TYPE_TOKENS:
             return False
+        type_reference_start = idx
+        type_name_evidence = (
+            typename_prefix or saw_qualifier or tok_type != "IDENTIFIER"
+        )
         if tok_type == "IDENTIFIER":
             name = self.tokens[idx][1]
+            type_name_evidence = type_name_evidence or name in self.known_types
             next_type = self.tokens[idx + 1][0] if idx + 1 < len(self.tokens) else "EOF"
             if name in SIGNED_TYPE_PREFIXES and next_type in TYPE_TOKENS:
+                type_name_evidence = True
                 idx += 2
             else:
                 if (
@@ -3823,18 +3884,64 @@ class MetalParser:
         else:
             idx += 1
         idx = self.skip_type_reference_suffix_at(idx)
+        if any(
+            token_type == "SCOPE"
+            for token_type, _token_value in self.tokens[type_reference_start:idx]
+        ):
+            tail_name = self.scoped_type_tail_name_at(type_reference_start, idx)
+            type_name_evidence = (
+                typename_prefix or saw_qualifier or tail_name in self.known_types
+            )
+        saw_pointer_suffix = False
         while idx < len(self.tokens) and self.tokens[idx][0] in [
             "MULTIPLY",
             "BITWISE_AND",
         ]:
+            saw_pointer_suffix = True
             idx += 1
-        return idx < len(self.tokens) and self.tokens[idx][0] == "RPAREN"
+        type_name_evidence = type_name_evidence or saw_pointer_suffix
+        if idx >= len(self.tokens) or self.tokens[idx][0] != "RPAREN":
+            return False
+        if require_cast_operand:
+            return self.is_cast_operand_start_at(
+                idx + 1,
+                allow_unary=type_name_evidence,
+            )
+        return True
 
-    def is_cast_operand_start_at(self, idx):
+    def scoped_type_tail_name_at(self, start, end):
+        tail_name = self.tokens[start][1]
+        angle_depth = 0
+        expect_scoped_part = False
+        for token_type, token_value in self.tokens[start + 1 : end]:
+            if token_type == "LESS_THAN":
+                angle_depth += 1
+                continue
+            if token_type == "GREATER_THAN" and angle_depth > 0:
+                angle_depth -= 1
+                continue
+            if token_type == "SHIFT_RIGHT" and angle_depth > 0:
+                angle_depth = max(0, angle_depth - 2)
+                continue
+            if angle_depth > 0:
+                continue
+            if token_type == "SCOPE":
+                expect_scoped_part = True
+                continue
+            if not expect_scoped_part:
+                continue
+            if (token_type, token_value) == ("IDENTIFIER", "template"):
+                continue
+            if token_type in SCOPED_IDENTIFIER_PART_TOKENS:
+                tail_name = token_value
+            expect_scoped_part = False
+        return tail_name
+
+    def is_cast_operand_start_at(self, idx, *, allow_unary=False):
         if idx >= len(self.tokens):
             return False
         token_type = self.tokens[idx][0]
-        return token_type in CONSTRUCTOR_TYPE_TOKENS or token_type in {
+        if token_type in CONSTRUCTOR_TYPE_TOKENS or token_type in {
             "IDENTIFIER",
             "METAL",
             "SCOPE",
@@ -3845,6 +3952,17 @@ class MetalParser:
             "STRING",
             "LPAREN",
             "LBRACE",
+        }:
+            return True
+        return allow_unary and token_type in {
+            "PLUS",
+            "MINUS",
+            "NOT",
+            "BITWISE_NOT",
+            "INCREMENT",
+            "DECREMENT",
+            "MULTIPLY",
+            "BITWISE_AND",
         }
 
     def parse_postfix(self):
@@ -4172,9 +4290,23 @@ class MetalParser:
                 self.eat("STRING")
             return value
         if self.current_token[0] == "LPAREN":
+            open_token = self.current_token
             self.eat("LPAREN")
             expr = self.parse_expression(allow_comma=True)
+            close_token = self.current_token
             self.eat("RPAREN")
+            group_location = self.source_span_from_tokens(open_token, close_token)
+            if (
+                group_location is not None
+                and hasattr(expr, "__dict__")
+                and self.expression_contains_scoped_reference(expr)
+            ):
+                group_locations = list(
+                    getattr(expr, "group_source_locations", ()) or ()
+                )
+                group_locations.append(group_location)
+                expr.group_source_locations = group_locations
+                expr.group_source_location = group_location
             return expr
         if self.current_token[0] == "LBRACKET":
             return self.parse_lambda_expression()
@@ -4185,8 +4317,15 @@ class MetalParser:
                 "LPAREN",
                 "LBRACE",
             }:
+                start_token = self.current_token
                 name = self.parse_scoped_identifier()
-                return VariableNode("", name)
+                node = VariableNode("", name)
+                if "::" in name:
+                    node.source_location = self.source_span_from_tokens(
+                        start_token,
+                        self.tokens[self.pos - 1],
+                    )
+                return node
             type_name = self.current_token[1]
             self.eat(self.current_token[0])
             if self.current_token[0] == "LPAREN":
@@ -4198,8 +4337,15 @@ class MetalParser:
                 return node
             raise SyntaxError(f"Unexpected type in expression: {type_name}")
         if self.current_token[0] in {"METAL", "SCOPE"} or self.is_current_name_token():
+            start_token = self.current_token
             name = self.parse_scoped_identifier()
-            return VariableNode("", name)
+            node = VariableNode("", name)
+            if "::" in name:
+                node.source_location = self.source_span_from_tokens(
+                    start_token,
+                    self.tokens[self.pos - 1],
+                )
+            return node
         raise SyntaxError(f"Unexpected token in expression: {self.current_token[0]}")
 
     def parse_lambda_expression(self):

@@ -1171,6 +1171,22 @@ class TestCudaCodeGen:
         assert "workgroupBarrier();" not in cuda_code
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
+    def test_workgroup_execution_barrier_emits_syncthreads(self):
+        source_code = """
+        shader CudaExecutionBarrier {
+            compute {
+                void main() {
+                    workgroupExecutionBarrier();
+                }
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "__syncthreads();" in cuda_code
+        assert "workgroupExecutionBarrier();" not in cuda_code
+
     def test_wave_intrinsics_lower_to_cuda_subgroup_helpers(self):
         source_code = """
         shader CudaWaveShader {
@@ -1472,6 +1488,7 @@ class TestCudaCodeGen:
             "allMemoryBarrier",
             "deviceMemoryBarrier",
             "workgroupBarrier",
+            "workgroupExecutionBarrier",
         ],
     )
     def test_synchronization_builtins_reject_arguments(self, builtin):

@@ -6,6 +6,8 @@ layout(std430, binding = 0) buffer Pos {
     uint values[];
 } pos;
 // Compute Shader
+uint fibonacci(uint n);
+
 uint fibonacci(uint n) {
     if ((n <= 1)) {
         return n;

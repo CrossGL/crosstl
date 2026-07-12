@@ -3274,6 +3274,23 @@ def test_workgroup_barrier_lowers_to_slang_group_sync():
     assert "workgroupBarrier();" not in generated_code
 
 
+def test_workgroup_execution_barrier_lowers_to_slang_group_sync():
+    code = """
+    shader SlangExecutionBarrier {
+        compute {
+            void main() {
+                workgroupExecutionBarrier();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "GroupMemoryBarrierWithGroupSync();" in generated_code
+    assert "workgroupExecutionBarrier();" not in generated_code
+
+
 def test_user_defined_workgroup_barrier_is_not_lowered_to_group_sync():
     code = """
     shader BarrierGap {
@@ -3370,6 +3387,7 @@ def test_user_defined_synchronization_names_are_not_lowered_to_slang_barriers():
     [
         "barrier",
         "workgroupBarrier",
+        "workgroupExecutionBarrier",
         "groupMemoryBarrier",
         "memoryBarrierShared",
         "memoryBarrierBuffer",
@@ -3405,6 +3423,7 @@ def test_synchronization_intrinsics_reject_arguments(builtin_name):
     [
         "barrier",
         "workgroupBarrier",
+        "workgroupExecutionBarrier",
         "groupMemoryBarrier",
         "memoryBarrierShared",
         "memoryBarrierBuffer",

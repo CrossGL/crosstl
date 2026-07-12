@@ -314,9 +314,9 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 35,
-        "endOffset": 990,
+        "endOffset": 988,
         "file": "crosstl-out/directx/lighting.fs.hlsl",
-        "length": 40,
+        "length": 38,
         "line": 34,
         "offset": 950
       },
@@ -336,11 +336,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 36,
-        "endOffset": 1040,
+        "endOffset": 1038,
         "file": "crosstl-out/directx/lighting.fs.hlsl",
         "length": 50,
         "line": 35,
-        "offset": 990
+        "offset": 988
       },
       "original": {
         "column": 1,
@@ -358,11 +358,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 38,
-        "endOffset": 1158,
+        "endOffset": 1154,
         "file": "crosstl-out/directx/lighting.fs.hlsl",
         "length": 77,
         "line": 37,
-        "offset": 1081
+        "offset": 1077
       },
       "original": {
         "column": 1,
@@ -380,11 +380,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 41,
-        "endOffset": 1291,
+        "endOffset": 1285,
         "file": "crosstl-out/directx/lighting.fs.hlsl",
         "length": 78,
         "line": 40,
-        "offset": 1213
+        "offset": 1207
       },
       "original": {
         "column": 1,
@@ -402,11 +402,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 43,
-        "endOffset": 1361,
+        "endOffset": 1355,
         "file": "crosstl-out/directx/lighting.fs.hlsl",
         "length": 56,
         "line": 42,
-        "offset": 1305
+        "offset": 1299
       },
       "original": {
         "column": 1,
@@ -424,11 +424,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 44,
-        "endOffset": 1416,
+        "endOffset": 1410,
         "file": "crosstl-out/directx/lighting.fs.hlsl",
         "length": 55,
         "line": 43,
-        "offset": 1361
+        "offset": 1355
       },
       "original": {
         "column": 1,
@@ -446,11 +446,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 45,
-        "endOffset": 1448,
+        "endOffset": 1442,
         "file": "crosstl-out/directx/lighting.fs.hlsl",
         "length": 32,
         "line": 44,
-        "offset": 1416
+        "offset": 1410
       },
       "original": {
         "column": 1,
@@ -468,11 +468,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 47,
-        "endOffset": 1564,
+        "endOffset": 1556,
         "file": "crosstl-out/directx/lighting.fs.hlsl",
         "length": 83,
         "line": 46,
-        "offset": 1481
+        "offset": 1473
       },
       "original": {
         "column": 1,
@@ -490,11 +490,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 49,
-        "endOffset": 1610,
+        "endOffset": 1602,
         "file": "crosstl-out/directx/lighting.fs.hlsl",
         "length": 32,
         "line": 48,
-        "offset": 1578
+        "offset": 1570
       },
       "original": {
         "column": 1,
@@ -512,11 +512,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 52,
-        "endOffset": 1716,
+        "endOffset": 1708,
         "file": "crosstl-out/directx/lighting.fs.hlsl",
         "length": 90,
         "line": 51,
-        "offset": 1626
+        "offset": 1618
       },
       "original": {
         "column": 1,
@@ -534,11 +534,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 53,
-        "endOffset": 1776,
+        "endOffset": 1768,
         "file": "crosstl-out/directx/lighting.fs.hlsl",
         "length": 60,
         "line": 52,
-        "offset": 1716
+        "offset": 1708
       },
       "original": {
         "column": 1,
@@ -556,11 +556,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 54,
-        "endOffset": 1870,
+        "endOffset": 1862,
         "file": "crosstl-out/directx/lighting.fs.hlsl",
         "length": 94,
         "line": 53,
-        "offset": 1776
+        "offset": 1768
       },
       "original": {
         "column": 1,

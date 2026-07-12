@@ -1,12 +1,19 @@
 #version 450 core
+#extension GL_ARB_gpu_shader_int64 : require
 layout(std430, binding = 0) buffer frontBuffer { int front[]; };
 layout(std430, binding = 1) buffer backBuffer { int back[]; };
 shared int shared_[1024];
 // Constant Buffers
 layout(std140, binding = 2) uniform reduce_Args {
-    uint length;
+    uint64_t length;
     int zero_elem;
 };
+int op(int lhs, int rhs);
+
+int read_local(int shared_[1024], uint count, int zero, uint i);
+
+uint zmin(uint a, uint b);
+
 int op(int lhs, int rhs) {
     return min(lhs, rhs);
 }

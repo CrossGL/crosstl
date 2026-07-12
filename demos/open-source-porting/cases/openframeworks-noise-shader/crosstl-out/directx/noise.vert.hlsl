@@ -40,7 +40,7 @@ VertexOutput VSMain(VertexInput input) {
     float noiseB = noise(float2((timeValY * 0.25), (pos.y / 2000.0)), 20.0);
     float2 d = (float2(pos.x, pos.y) - mouse);
     float len = sqrt(((d.x * d.x) + (d.y * d.y)));
-    if (((len < 300.0) && (len > 0.0))) {
+    if ((len < 300.0) && (len > 0.0)) {
         float pct = (len / 300.0);
         pct *= pct;
         pct = (1.0 - pct);

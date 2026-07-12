@@ -2078,6 +2078,10 @@ def test_translator_test_matrix_matches_support_catalog_and_frontend_policy():
         in translator_tests
     )
     assert (
+        "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py"
+        in translator_tests
+    )
+    assert (
         "--junitxml support/generated/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml"
         in translator_tests
     )
@@ -2120,7 +2124,18 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert 'cron: "31 4 * * 1"' in mlx_porting
     assert "github.event_name != 'schedule'" in mlx_porting
     assert "--mode reduced-frontier" in mlx_porting
+    assert "--require-directx-toolchain" in mlx_porting
+    assert "--require-opengl-gemv-toolchain" in mlx_porting
+    assert "--require-vulkan-gemv-toolchain" in mlx_porting
     assert "--require-vulkan-native-runtime" in mlx_porting
+    assert "Install Windows DirectX Shader Compiler" in mlx_porting
+    assert "DirectXShaderCompiler/releases/download/v1.9.2602.24" in mlx_porting
+    assert "dxc --version" in mlx_porting
+    assert "glslang-tools" in mlx_porting
+    assert "glslangValidator --version" in mlx_porting
+    assert "Validate OpenGL scalar conversions" in mlx_porting
+    assert "opengl_lowers_expected_scalar_and_vector_conversions" in mlx_porting
+    assert "opengl_preserves_metal_arithmetic_conversion_order" in mlx_porting
     assert "mesa-vulkan-drivers" in mlx_porting
     assert "python -m pip install vulkan==1.3.275.1" in mlx_porting
     assert "vulkaninfo --summary" in mlx_porting
@@ -2136,7 +2151,8 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "name: mlx-full-corpus-scout" in mlx_porting
     assert "include-hidden-files: true" in mlx_porting
     assert "retention-days: 30" in mlx_porting
-    assert "validate-vulkan-frontier-toolchain" in harness
+    assert 'f"validate-{toolchain_name}-frontier-toolchain"' in harness
+    assert "require_directx_toolchain" in harness
     assert '"--run-toolchains"' in harness
     assert '"--validate"' in harness
     assert "FULL_CORPUS_EXPECTED_ARTIFACT_COUNT" in harness
@@ -2155,7 +2171,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         1388,
         1392,
         1394,
-        1396,
+        1471,
     ):
         assert f"https://github.com/CrossGL/crosstl/issues/{tracked_issue_number}" in (
             harness
@@ -2188,6 +2204,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         1355,
         1354,
         1362,
+        1396,
         1452,
         1453,
         1454,

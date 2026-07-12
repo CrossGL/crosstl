@@ -529,6 +529,7 @@ class VariableNode(ASTNode):
         attributes: List["AttributeNode"] = None,
         qualifiers: List[str] = None,
         is_mutable: bool = True,
+        is_type_alias: bool = False,
         visibility: str = "private",
         **kwargs,
     ):
@@ -539,6 +540,7 @@ class VariableNode(ASTNode):
         self.attributes = attributes or []
         self.qualifiers = qualifiers or []
         self.is_mutable = is_mutable
+        self.is_type_alias = is_type_alias
         self.visibility = visibility
 
         # Legacy aliases

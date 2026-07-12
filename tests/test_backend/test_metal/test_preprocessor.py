@@ -34,6 +34,30 @@ def test_containing_span_preserves_unsorted_overlap_order():
     assert preprocessor._containing_span(5, spans) == (0, 15)
 
 
+def test_containing_span_caches_multiple_span_lists_without_thrashing():
+    # The template-materialization scan alternates lookups between two different
+    # span lists (template-declaration spans and reachable-function spans) at
+    # nearly every source position. A single cache slot thrashed between them and
+    # rebuilt its sortedness decision on every call, making the scan quadratic on
+    # the large expanded MLX kernels. The cache now keeps one entry per span list
+    # keyed by identity, so alternating lookups stay correct AND both lists remain
+    # cached at the same time.
+    preprocessor = MetalPreprocessor()
+    declarations = [(0, 5), (10, 15)]
+    reachable = [(2, 8), (20, 25)]
+
+    assert preprocessor._containing_span(3, declarations) == (0, 5)
+    assert preprocessor._containing_span(4, reachable) == (2, 8)
+    assert preprocessor._containing_span(12, declarations) == (10, 15)
+    assert preprocessor._containing_span(22, reachable) == (20, 25)
+    assert preprocessor._containing_span(7, declarations) is None
+    assert preprocessor._containing_span(9, reachable) is None
+
+    # A single-slot cache could only retain the most recent list; the per-list
+    # cache retains both so the alternating lookups never rebuild.
+    assert len(preprocessor._containing_span_cache) == 2
+
+
 def test_preprocessor_conditional_expansion():
     code = """
     #define ENABLED 1
@@ -122,6 +146,262 @@ def test_preprocessor_materializes_mlx_instantiations_with_template_defaults():
     assert "device const uint* positions" in output
     assert "uint pos = positions[gid];" in output
     assert "dst[gid] = src[pos] + float(4);" in output
+
+
+def test_preprocessor_materializes_struct_template_trait_defaults():
+    code = """
+    template <typename U>
+    struct DefaultAccT {
+        using type = float;
+    };
+
+    template <>
+    struct DefaultAccT<complex64_t> {
+        using type = complex64_t;
+    };
+
+    template <
+        typename T,
+        const bool kDoAxpby, /* Do out = alpha * out + beta * bias */
+        typename AccT = typename DefaultAccT<T>::type>
+    struct Kernel {
+        using acc_type = AccT;
+
+        static void run(threadgroup AccT* shared) {
+            thread AccT values[4];
+            values[0] = AccT(0);
+            shared[0] = values[0];
+        }
+    };
+
+    Kernel<half, false> half_kernel;
+    Kernel<complex64_t, true> complex_kernel;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "struct Kernel_half_false" in output
+    assert "using acc_type = float;" in output
+    assert "void Kernel_half_false__run(threadgroup float* shared)" in output
+    assert "thread float values[4];" in output
+    assert "struct Kernel_complex64_t_true" in output
+    assert "using acc_type = complex64_t;" in output
+    assert (
+        "void Kernel_complex64_t_true__run(threadgroup complex64_t* shared)" in output
+    )
+
+
+def test_preprocessor_template_parameter_comments_preserve_declarations():
+    parameter_text = """
+        typename T,
+        // The following type controls output.
+        typename U /* descriptive prose ... */,
+        typename V = float
+    """
+
+    parameters = MetalPreprocessor()._parse_template_parameter_list(parameter_text)
+
+    assert [parameter.name for parameter in parameters] == ["T", "U", "V"]
+    assert [parameter.is_variadic for parameter in parameters] == [False] * 3
+    assert [parameter.default for parameter in parameters] == [None, None, "float"]
+
+
+def test_preprocessor_resolves_namespace_qualified_template_traits():
+    code = """
+    namespace A {
+    template <typename T>
+    struct Trait { using type = float; };
+    }
+
+    namespace B {
+    template <typename T>
+    struct Trait { using type = int; };
+    }
+    """
+    preprocessor = MetalPreprocessor()
+    traits = preprocessor._find_template_type_traits(code)
+
+    assert (
+        preprocessor._resolve_template_type_trait(
+            "typename A::Trait<half>::type", traits
+        )
+        == "float"
+    )
+    assert (
+        preprocessor._resolve_template_type_trait(
+            "typename B::Trait<half>::type", traits
+        )
+        == "int"
+    )
+    assert (
+        preprocessor._resolve_template_type_trait(
+            "typename Trait<half>::type", traits, "A"
+        )
+        == "float"
+    )
+
+
+def test_preprocessor_resolves_global_trait_in_commented_namespace_declaration():
+    code = """
+    namespace /* before name */ A /* before body */ {
+    template <typename T>
+    struct Trait { using type = float; };
+    }
+    """
+    preprocessor = MetalPreprocessor()
+    traits = preprocessor._find_template_type_traits(code)
+
+    assert (
+        preprocessor._resolve_template_type_trait(
+            "typename ::A::Trait<half>::type", traits
+        )
+        == "float"
+    )
+
+
+def test_preprocessor_resolves_partial_template_trait_specialization():
+    code = """
+    template <typename T>
+    struct Trait { using type = int; };
+
+    template <typename T>
+    struct Trait<T*> { using type = T; };
+    """
+    preprocessor = MetalPreprocessor()
+    traits = preprocessor._find_template_type_traits(code)
+
+    assert (
+        preprocessor._resolve_template_type_trait(
+            "typename Trait<float*>::type", traits
+        )
+        == "float"
+    )
+    assert (
+        preprocessor._resolve_template_type_trait("typename Trait<float>::type", traits)
+        == "int"
+    )
+
+
+def test_preprocessor_matches_boolean_trait_specialization_with_folded_literal():
+    code = """
+    template <bool Select, typename A, typename B>
+    struct ConditionalType { using type = B; };
+
+    template <typename A, typename B>
+    struct ConditionalType<true, A, B> { using type = A; };
+    """
+    preprocessor = MetalPreprocessor()
+    traits = preprocessor._find_template_type_traits(code)
+
+    assert (
+        preprocessor._resolve_template_type_trait(
+            "typename ConditionalType<1, uint, uchar>::type",
+            traits,
+        )
+        == "uint"
+    )
+    assert (
+        preprocessor._resolve_template_type_trait(
+            "typename ConditionalType<0, uint, uchar>::type",
+            traits,
+        )
+        == "uchar"
+    )
+
+
+def test_preprocessor_prefers_more_specific_partial_template_trait_specialization():
+    code = """
+    template <typename T, typename U>
+    struct Trait { using type = char; };
+
+    template <typename T>
+    struct Trait<T*, T*> { using type = float; };
+
+    template <typename T, typename U>
+    struct Trait<T*, U> { using type = int; };
+    """
+    preprocessor = MetalPreprocessor()
+    traits = preprocessor._find_template_type_traits(code)
+
+    assert (
+        preprocessor._resolve_template_type_trait(
+            "typename Trait<int*, int*>::type", traits
+        )
+        == "float"
+    )
+
+
+def test_preprocessor_resolves_relative_qualified_trait_in_enclosing_namespace():
+    code = """
+    namespace B {
+    template <typename T>
+    struct Trait { using type = int; };
+    }
+
+    namespace A {
+    namespace B {
+    template <typename T>
+    struct Trait { using type = float; };
+    }
+    }
+    """
+    preprocessor = MetalPreprocessor()
+    traits = preprocessor._find_template_type_traits(code)
+
+    assert (
+        preprocessor._resolve_template_type_trait(
+            "typename B::Trait<half>::type", traits, "A"
+        )
+        == "float"
+    )
+
+
+def test_preprocessor_preserves_comment_separated_template_default_arguments():
+    parameter_text = """
+        typename T,
+        typename U = Pair /* note */ <T, float>,
+        typename V = int
+    """
+    preprocessor = MetalPreprocessor()
+
+    parameters = preprocessor._parse_template_parameter_list(parameter_text)
+
+    assert [parameter.name for parameter in parameters] == ["T", "U", "V"]
+    assert parameters[1].default == "Pair /* note */ <T, float>"
+    assert parameters[2].default == "int"
+
+    value_parameters = preprocessor._parse_template_parameter_list(
+        "int N, bool enabled = N < 8, typename Result = float"
+    )
+    assert [parameter.name for parameter in value_parameters] == [
+        "N",
+        "enabled",
+        "Result",
+    ]
+    assert value_parameters[1].default == "N < 8"
+
+
+def test_preprocessor_does_not_fall_back_past_variadic_partial_trait():
+    code = """
+    template <typename T>
+    struct Trait { using type = int; };
+
+    template <typename... Ts>
+    struct Trait<Pack<Ts...>> { using type = float; };
+    """
+    preprocessor = MetalPreprocessor()
+    traits = preprocessor._find_template_type_traits(code)
+
+    assert (
+        preprocessor._resolve_template_type_trait(
+            "typename Trait<Pack<half, float>>::type", traits
+        )
+        is None
+    )
+    assert (
+        preprocessor._resolve_template_type_trait("typename Trait<float>::type", traits)
+        == "int"
+    )
 
 
 def test_preprocessor_materializes_multiple_mlx_instantiations_from_one_macro():
@@ -338,6 +618,45 @@ def test_preprocessor_materializes_explicit_template_helper_calls():
     assert "return src[index] + float(7);" in output
 
 
+def test_preprocessor_materializes_helper_calls_from_local_alias_arguments():
+    code = """
+    template <typename T, typename U, int Count>
+    U load_values(const device T* src, thread U* scratch) {
+        scratch[0] = U(src[0]);
+        return scratch[Count - 2];
+    }
+
+    template <typename U, int Count>
+    U qdot(const thread U* scratch) {
+        return scratch[Count - 2];
+    }
+
+    kernel void compute(
+        const device float* src [[buffer(0)]],
+        device float* dst [[buffer(1)]]) {
+        using Scalar = float;
+        typedef Scalar U;
+        constexpr int Count = 2;
+        thread U scratch[Count];
+        U loaded = load_values<float, U, Count>(src, scratch);
+        dst[0] = qdot<U, Count>(scratch) + loaded;
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "load_values<float, U, Count>" not in output
+    assert "qdot<U, Count>" not in output
+    assert "load_values_float_float_2(src, scratch)" in output
+    assert "qdot_float_2(scratch)" in output
+    assert "float load_values_float_float_2(" in output
+    assert "float qdot_float_2(" in output
+    assert "thread float* scratch" in output
+    assert "return scratch[2 - 2];" in output
+    assert "load_values_float_U" not in output
+    assert "qdot_U" not in output
+
+
 def test_preprocessor_leaves_large_decltype_instantiation_families_bounded():
     declarations = "\n".join(
         f'template [[host_name("kernel" "{index}")]] [[kernel]] '
@@ -360,6 +679,43 @@ def test_preprocessor_leaves_large_decltype_instantiation_families_bounded():
     assert "decltype(arange<uint>)" in output
     assert "void kernel0(" not in output
     assert "template <typename T>" in output
+
+
+def test_preprocessor_materializes_all_project_instantiations_when_limit_not_enforced():
+    # Counterpart of the "bounded" test above: template-hostile targets cannot
+    # emit residual generic templates, so the project pipeline calls the
+    # instantiation materializer with enforce_specialization_limit=False. Every
+    # explicit instantiation is then materialized even though the count (4)
+    # exceeds max_template_specializations (3); the default path still bails.
+    declarations = "\n".join(
+        f'template [[host_name("kernel" "{index}")]] [[kernel]] '
+        f"decltype(arange<uint>) arange<uint>;"
+        for index in range(4)
+    )
+    code = f"""
+    template <typename T>
+    [[kernel]] void arange(
+        device T* out [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {{
+        out[gid] = T(gid);
+    }}
+
+    {declarations}
+    """
+
+    preprocessor = MetalPreprocessor(max_template_specializations=3)
+
+    bounded = preprocessor._materialize_project_template_instantiations(code)
+    assert "decltype(arange<uint>)" in bounded
+    assert "void kernel0(" not in bounded
+
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code, enforce_specialization_limit=False
+    )
+    assert "decltype(arange<uint>)" not in materialized
+    assert "template <typename T>" not in materialized
+    for index in range(4):
+        assert f"void kernel{index}(" in materialized
 
 
 def test_preprocessor_materializes_nested_explicit_template_helper_calls():
@@ -464,6 +820,31 @@ def test_preprocessor_preserves_explicit_template_specialization_calls():
     output = MetalPreprocessor().preprocess(code)
 
     assert "convert_type<uint>(1.0)" in output
+    assert "convert_type_uint(1.0)" not in output
+    assert "uint convert_type<uint>(float value)" in output
+    assert "uint convert_type_uint(float value)" not in output
+
+
+def test_preprocessor_preserves_explicit_specialization_called_through_local_alias():
+    code = """
+    template <typename T>
+    T convert_type(float value) {
+        return T(value);
+    }
+
+    template <> uint convert_type<uint>(float value) {
+        return uint(value + 1.0);
+    }
+
+    kernel void copy(device uint* dst [[buffer(0)]]) {
+        using U = uint;
+        dst[0] = convert_type<U>(1.0);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "convert_type<U>(1.0)" in output
     assert "convert_type_uint(1.0)" not in output
     assert "uint convert_type<uint>(float value)" in output
     assert "uint convert_type_uint(float value)" not in output
@@ -868,24 +1249,890 @@ def test_preprocessor_materializes_nested_struct_template_instantiations():
     assert "Inner<float, 8>" not in output
 
 
-def test_preprocessor_leaves_specialized_struct_templates_unmaterialized():
-    # A struct template with an explicit specialization is left for the future
-    # specialization-aware path rather than incorrectly materializing only the
-    # primary template; the residual instantiation falls back to the diagnostic.
+def test_preprocessor_materializes_nested_struct_with_enclosing_static_constant():
     code = """
-    template <typename T> struct Trait { T value; };
-    template <> struct Trait<bool> { int value; };
+    template <int Threads>
+    struct Loader {
+        static constexpr int reads = 256 / Threads;
+
+        struct alignas(reads * sizeof(float)) ReadVector {
+            uint8_t data[reads * sizeof(float)];
+        };
+    };
+
+    template <int Rows, int Columns>
+    struct Kernel {
+        static constexpr int thread_count = Rows * Columns;
+        using loader_t = Loader<thread_count>;
+        loader_t loader;
+    };
+
+    Kernel<4, 8> kernel;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "struct Kernel_4_8" in output
+    assert "using loader_t = Loader_32;" in output
+    assert "struct Loader_32" in output
+    assert "alignas(8 * sizeof(float))" in output
+    assert "uint8_t data[8 * sizeof(float)];" in output
+    assert "Loader_thread_count" not in output
+
+
+def test_preprocessor_resolves_owner_alias_before_nested_struct_materialization():
+    code = """
+    template <typename T, int Rows, int Columns>
+    struct BaseFrag {
+        using value_type = T;
+        static constexpr int width = Columns;
+        T values[Rows * Columns];
+    };
+
+    template <typename T, int Rows, int Columns, typename Frag>
+    struct Tile {
+        static constexpr int width = Frag::width;
+        typename Frag::value_type values[Rows * Columns];
+    };
+
+    template <typename T, int Rows, int Columns>
+    struct Kernel {
+        static constexpr int frag_size = 8;
+        using frag_t = BaseFrag<T, frag_size, frag_size>;
+        Tile<T, Rows, Columns, frag_t> tile;
+    };
+
+    Kernel<float, 4, 1> kernel;
+    """
+    preprocessor = MetalPreprocessor()
+
+    output = preprocessor.preprocess(code)
+
+    tile_name = "Tile_float_4_1_BaseFrag_float_8_8"
+    tile_body = output.split(f"struct {tile_name} {{", 1)[1].split("};", 1)[0]
+    assert f"{tile_name} tile;" in output
+    assert "BaseFrag_float_8_8::width" in tile_body
+    assert "BaseFrag_float_8_8::value_type" in tile_body
+    assert "frag_t" not in tile_name
+    assert "frag_t" not in tile_body
+    assert preprocessor._materialized_struct_specializations[tile_name] == (
+        "Tile",
+        ("float", "4", "1", "BaseFrag_float_8_8"),
+    )
+    assert "frag_t" not in repr(
+        preprocessor._materialized_struct_specializations[tile_name]
+    )
+
+
+def test_preprocessor_resolves_shadowed_owner_aliases_independently():
+    code = """
+    template <typename T, int Width>
+    struct BaseFrag {
+        using value_type = T;
+        T values[Width];
+    };
+
+    template <typename Frag>
+    struct Tile {
+        typename Frag::value_type value;
+    };
+
+    template <typename T>
+    struct NarrowKernel {
+        using frag_t = BaseFrag<T, 4>;
+        Tile<frag_t> tile;
+    };
+
+    template <typename T>
+    struct WideKernel {
+        using frag_t = BaseFrag<T, 8>;
+        Tile<frag_t> tile;
+    };
+
+    NarrowKernel<float> narrow;
+    WideKernel<half> wide;
+    """
+    preprocessor = MetalPreprocessor()
+
+    output = preprocessor.preprocess(code)
+
+    expected = {
+        "Tile_BaseFrag_float_4": ("Tile", ("BaseFrag_float_4",)),
+        "Tile_BaseFrag_half_8": ("Tile", ("BaseFrag_half_8",)),
+    }
+    tile_specializations = {
+        name: provenance
+        for name, provenance in (
+            preprocessor._materialized_struct_specializations.items()
+        )
+        if provenance[0] == "Tile"
+    }
+    assert tile_specializations == expected
+    for tile_name in expected:
+        tile_body = output.split(f"struct {tile_name} {{", 1)[1].split("};", 1)[0]
+        assert f"{tile_name} tile;" in output
+        assert "frag_t" not in tile_name
+        assert "frag_t" not in tile_body
+    assert "frag_t" not in repr(tile_specializations)
+
+
+def test_preprocessor_dedupes_nested_struct_aliases_by_canonical_target():
+    code = """
+    template <typename T, int Width>
+    struct BaseFrag {
+        T values[Width];
+    };
+
+    template <typename Frag>
+    struct Tile {
+        Frag frag;
+    };
+
+    template <typename T>
+    struct Kernel {
+        static constexpr int frag_size = 8;
+        using base_frag_t = BaseFrag<T, frag_size>;
+        using first_frag_t = base_frag_t;
+        using second_frag_t = BaseFrag<T, frag_size>;
+        Tile<first_frag_t> first;
+        Tile<second_frag_t> second;
+    };
+
+    Kernel<float> kernel;
+    """
+    preprocessor = MetalPreprocessor()
+
+    output = preprocessor.preprocess(code)
+
+    tile_name = "Tile_BaseFrag_float_8"
+    tile_body = output.split(f"struct {tile_name} {{", 1)[1].split("};", 1)[0]
+    tile_specializations = {
+        name: provenance
+        for name, provenance in (
+            preprocessor._materialized_struct_specializations.items()
+        )
+        if provenance[0] == "Tile"
+    }
+    assert output.count(f"struct {tile_name} {{") == 1
+    assert f"{tile_name} first;" in output
+    assert f"{tile_name} second;" in output
+    assert tile_specializations == {
+        tile_name: ("Tile", ("BaseFrag_float_8",)),
+    }
+    for alias in ("base_frag_t", "first_frag_t", "second_frag_t"):
+        assert alias not in tile_name
+        assert alias not in tile_body
+        assert alias not in repr(tile_specializations)
+
+
+def test_preprocessor_bounds_owner_alias_materialization_work():
+    class CountingWorkBudget:
+        def __init__(self):
+            self.used = 0
+            self.contexts = []
+
+        def consume(self, amount, **kwargs):
+            self.used += amount
+            self.contexts.append(kwargs.get("context"))
+
+    uses = "\n".join(
+        f"Kernel<float, {width}> kernel_{width};" for width in range(1, 33)
+    )
+    code = f"""
+    template <typename T, int Width>
+    struct BaseFrag {{ T values[Width]; }};
+
+    template <typename Frag>
+    struct Tile {{ Frag frag; }};
+
+    template <typename T, int Width>
+    struct Kernel {{
+        using frag_t = BaseFrag<T, Width>;
+        Tile<frag_t> tile;
+    }};
+
+    {uses}
+    """
+    preprocessor = MetalPreprocessor(max_template_specializations=256)
+    work_budget = CountingWorkBudget()
+
+    output = preprocessor._materialize_explicit_template_struct_instantiations(
+        code,
+        work_budget=work_budget,
+    )
+
+    assert output.count("struct Tile_BaseFrag_float_") == 32
+    assert "struct Tile_frag_t" not in output
+    assert work_budget.contexts.count("explicit template struct source scan") == 3
+    assert work_budget.used <= 2200
+
+
+def test_preprocessor_reports_dependent_owner_alias_at_nested_instantiation():
+    code = """
+    template <typename Frag>
+    struct Tile {
+        Frag value;
+    };
+
+    struct Kernel {
+        using first_frag_t = second_frag_t;
+        using second_frag_t = first_frag_t;
+        Tile<first_frag_t> tile;
+    };
+    """
+
+    with pytest.raises(MetalTemplateSpecializationError) as caught:
+        MetalPreprocessor().preprocess(code)
+
+    error = caught.value
+    assert "owner-scoped alias 'second_frag_t' dependent" in str(error)
+    assert error.requested_signature == "Tile<second_frag_t>"
+    assert error.source_location == {
+        "line": 10,
+        "column": 9,
+        "offset": 192,
+        "length": 18,
+        "endLine": 10,
+        "endColumn": 27,
+        "endOffset": 210,
+    }
+
+
+def test_preprocessor_materializes_nested_tile_dimensions_from_static_constants():
+    code = """
+    template <int Rows, int Columns>
+    struct Tile {
+        float values[Rows * Columns];
+    };
+
+    template <int BlockRows, int BlockColumns>
+    struct Matrix {
+        static constexpr int tile_rows = BlockRows / 8;
+        static constexpr int tile_columns = BlockColumns / 8;
+        using tile_t = Tile<tile_rows, tile_columns>;
+        tile_t tile;
+    };
+
+    Matrix<64, 32> matrix;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "struct Matrix_64_32" in output
+    assert "using tile_t = Tile_8_4;" in output
+    assert "struct Tile_8_4" in output
+    assert "float values[8 * 4];" in output
+    assert "Tile_tile_rows_tile_columns" not in output
+
+
+def test_preprocessor_concretizes_nested_ternary_stride_arguments():
+    code = """
+    template <typename T, int Lda, int Ldb>
+    struct Block {
+        T value;
+    };
+
+    template <typename T, int BM, int BN, int BK, bool TransposeA, bool TransposeB>
+    struct Kernel {
+        static constexpr int padding = 16 / sizeof(T);
+        using block_t = Block<
+            T,
+            TransposeA ? BM + padding : BK + padding,
+            TransposeB ? BK + padding : BN + padding>;
+        block_t block;
+    };
+
+    Kernel<half, 64, 64, 16, false, false> kernel;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+    concrete = output.split("struct Kernel_half_64_64_16_false_false", 1)[1].split(
+        "};", 1
+    )[0]
+
+    expected_alias = "using block_t = Block_half_false_64_8_16_8_false_16_8_64_8;"
+    assert expected_alias in concrete
+    assert "sizeof_half" not in concrete
+    assert "BM" not in concrete
+    assert "BN" not in concrete
+    assert "BK" not in concrete
+
+
+def test_materialized_static_layout_substitution_preserves_method_shadowing():
+    code = """
+    template <int Threads>
+    struct Layout {
+        static constexpr int width = Threads * 2;
+
+        struct alignas(width) Storage {
+            uint8_t data[width];
+        };
+
+        int read(int width) const {
+            return width;
+        }
+    };
+
+    Layout<4> layout;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "struct alignas(8) Storage" in output
+    assert "uint8_t data[8];" in output
+    assert "int Layout_4__read(Layout_4 self, int width)" in output
+    assert "return width;" in output
+
+
+def test_materialized_static_layout_substitutes_equality_operands():
+    code = """
+    template <int Width>
+    struct Layout {
+        static constexpr int width = Width;
+        bool matches[width == 4 ? 1 : 2];
+    };
+
+    Layout<4> layout;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "bool matches[4 == 4 ? 1 : 2];" in output
+
+
+def test_materialized_static_layout_substitution_leaves_cycles_unresolved():
+    code = """
+    template <int Threads>
+    struct Layout {
+        static constexpr int first = second;
+        static constexpr int second = first;
+        uint8_t data[first];
+    };
+
+    Layout<4> layout;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "static constexpr int first = second;" in output
+    assert "static constexpr int second = first;" in output
+    assert "uint8_t data[first];" in output
+
+
+def test_materialized_static_constant_folds_concrete_sizeof_for_layout():
+    code = """
+    template <typename T>
+    struct Layout {
+        static constexpr int padding = 16 / sizeof(T);
+        uint8_t data[padding];
+    };
+
+    Layout<float> layout;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "static constexpr int padding = 16 / sizeof(float);" in output
+    assert "uint8_t data[4];" in output
+
+
+def test_preprocessor_resolves_local_sizeof_constants_through_type_aliases():
+    code = """
+    template <int Padding>
+    struct Block {
+        uint8_t data[Padding];
+    };
+
+    void float_layout() {
+        using Scalar = float;
+        constexpr int padding = 16 / sizeof(Scalar);
+        Block<padding> value;
+    }
+
+    void half_layout() {
+        using Scalar = half;
+        constexpr int padding = 16 / sizeof(Scalar);
+        Block<padding> value;
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Block_4 value;" in output
+    assert "Block_8 value;" in output
+    assert "uint8_t data[4];" in output
+    assert "uint8_t data[8];" in output
+    assert "Block_padding" not in output
+
+
+def test_template_argument_static_constant_substitution_skips_qualified_members():
+    output = MetalPreprocessor()._substitute_template_argument_static_constants(
+        "Other::thread_count + thread_count",
+        {"thread_count": "32"},
+    )
+
+    assert output == "Other::thread_count + 32"
+
+
+def test_preprocessor_selects_full_struct_specialization_by_argument_key():
+    code = """
+    template <int Rows> struct Tile { float values[Rows]; };
+
+    template <typename T, int Rows>
+    struct Trait {
+        static constexpr int tile_rows = Rows / 2;
+        Tile<tile_rows> tile;
+        T value;
+    };
+
+    template <> struct Trait<bool, 8> { int value; };
 
     [[kernel]] void k(
         device int* out [[buffer(0)]],
         uint i [[thread_position_in_grid]]) {
-        Trait<bool> t;
-        out[i] = t.value;
+        Trait<bool, 8> specialized;
+        Trait<float, 8> primary;
+        out[i] = specialized.value + int(primary.value);
     }
     """
     output = MetalPreprocessor().preprocess(code)
-    assert "Trait<bool>" in output
-    assert "struct Trait_bool {" not in output
+
+    assert "Trait<bool, 8> specialized;" in output
+    assert "struct Trait_bool_8 {" not in output
+    assert "Trait_float_8 primary;" in output
+    assert "struct Trait_float_8" in output
+    assert "Tile_4 tile;" in output
+    assert "struct Tile_4" in output
+
+
+def test_preprocessor_matches_full_struct_specialization_across_default_arguments():
+    code = """
+    template <typename T, typename U = float>
+    struct Trait {
+        T value;
+    };
+
+    template <>
+    struct Trait<bool> {
+        int value;
+    };
+
+    Trait<bool, float> specialized;
+    Trait<int> primary;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Trait<bool, float> specialized;" in output
+    assert "struct Trait_bool_float {" not in output
+    assert "Trait_int primary;" in output
+    assert "struct Trait_int" in output
+
+
+@pytest.mark.parametrize(
+    "alias_declaration",
+    [
+        pytest.param("typedef float U;", id="typedef"),
+        pytest.param("using U = float;", id="using"),
+        pytest.param(
+            "typedef float Base;\n        typedef Base U;",
+            id="typedef-chain",
+        ),
+        pytest.param(
+            "using Base = float;\n        using U = Base;",
+            id="using-chain",
+        ),
+    ],
+)
+def test_preprocessor_resolves_local_alias_before_struct_specialization_selection(
+    alias_declaration,
+):
+    code = f"""
+    template <typename T>
+    struct Limits {{
+        static constexpr constant T finite_min = T(-1);
+    }};
+
+    template <>
+    struct Limits<float> {{
+        static constexpr constant float finite_min =
+            -metal::numeric_limits<float>::max();
+    }};
+
+    template <typename T>
+    [[kernel]] void use_limit(device T* out [[buffer(0)]]) {{
+        {alias_declaration}
+        out[0] = T(Limits<U>::finite_min);
+    }}
+
+    instantiate_kernel("use_limit_float", use_limit, float)
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Limits_U" not in output
+    assert "Limits<U>::finite_min" in output
+    assert output.count("struct Limits<float>") == 1
+    assert "metal::numeric_limits<float>::max()" in output
+
+
+def test_preprocessor_materializes_struct_through_nearest_local_alias():
+    code = """
+    template <typename T>
+    struct Box {
+        T value;
+    };
+
+    [[kernel]] void use_box(device float* out [[buffer(0)]]) {
+        using U = float;
+        Box<U> outer;
+        {
+            using U = half;
+            Box<U> inner;
+            out[0] = float(inner.value);
+        }
+        Box<U> restored;
+        out[1] = outer.value + restored.value;
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Box_float outer;" in output
+    assert "Box_half inner;" in output
+    assert "Box_float restored;" in output
+    assert output.count("struct Box_float") == 1
+    assert output.count("struct Box_half") == 1
+    assert "Box_U" not in output
+
+
+def test_preprocessor_resolves_function_local_integral_constants_lexically():
+    code = """
+    template <typename T, int BM, int Loads>
+    struct BlockLoader {
+        T values[BM * Loads];
+    };
+
+    void first() {
+        constexpr int WM = 4;
+        BlockLoader<float, 32, (32 / (8 * WM)) * 1> outer;
+        {
+            BlockLoader<float, 32, (32 / (8 * WM)) * 1> before_shadow;
+            constexpr int WM = 2;
+            BlockLoader<float, 32, (32 / (8 * WM)) * 1> inner;
+        }
+        BlockLoader<float, 32, (32 / (8 * WM)) * 1> restored;
+    }
+
+    void second() {
+        constexpr int WM = 1;
+        BlockLoader<float, 32, (32 / (8 * WM)) * 1> conflicting;
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    outer = "BlockLoader_float_32_32_8_4_1"
+    inner = "BlockLoader_float_32_32_8_2_1"
+    conflicting = "BlockLoader_float_32_32_8_1_1"
+    assert f"{outer} outer;" in output
+    assert f"{outer} before_shadow;" in output
+    assert f"{inner} inner;" in output
+    assert f"{outer} restored;" in output
+    assert f"{conflicting} conflicting;" in output
+    assert output.count(f"struct {outer} {{") == 1
+    assert output.count(f"struct {inner} {{") == 1
+    assert output.count(f"struct {conflicting} {{") == 1
+    assert "BlockLoader_float_32_32_8_WM_1" not in output
+
+
+def test_preprocessor_leaves_unproven_function_local_constants_unresolved():
+    code = """
+    template <int N>
+    struct Block {
+        int values[N];
+    };
+
+    constexpr int choose_width() {
+        return 2;
+    }
+
+    void proven() {
+        constexpr int WM = 4;
+        Block<WM> value;
+    }
+
+    void runtime(int input) {
+        int WM = input;
+        Block<WM> runtime_value;
+    }
+
+    void unsupported_call() {
+        constexpr int WM = choose_width();
+        Block<WM> call_value;
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Block_4 value;" in output
+    assert "Block_WM runtime_value;" in output
+    assert "Block_WM call_value;" in output
+    assert "Block_4 runtime_value;" not in output
+    assert "Block_4 call_value;" not in output
+
+
+def test_preprocessor_resolves_struct_alias_in_static_constant_initializer():
+    code = """
+    template <typename T>
+    struct Base {
+        static constexpr int count = 2;
+    };
+
+    template <typename T>
+    struct Tile {
+        using Fragment = Base<T>;
+        static constexpr int count = Fragment::count;
+    };
+
+    Tile<float> value;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "struct Base_float" in output
+    assert "struct Tile_float" in output
+    assert "static constexpr int count = Base_float::count;" in output
+    assert output.count("Fragment::count") == 1
+
+
+def test_preprocessor_matches_cv_qualified_full_struct_specialization():
+    code = """
+    template <typename T>
+    struct Trait {
+        T value;
+    };
+
+    template <>
+    struct Trait<float const> {
+        int value;
+    };
+
+    Trait<const float> specialized;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Trait<const float> specialized;" in output
+    assert "struct Trait_const_float {" not in output
+
+
+def test_preprocessor_selects_partial_struct_specialization_by_fixed_argument():
+    code = """
+    template <int Rows> struct Tile { float values[Rows]; };
+
+    template <typename T, typename U, int Rows>
+    struct Trait {
+        static constexpr int tile_rows = Rows / 2;
+        Tile<tile_rows> tile;
+        T value;
+    };
+
+    template <typename U, int Rows>
+    struct Trait<bool, U, Rows> {
+        int value;
+    };
+
+    Trait<bool, half, 8> specialized;
+    Trait<float, half, 8> primary;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Trait<bool, half, 8> specialized;" in output
+    assert "struct Trait_bool_half_8 {" not in output
+    assert "Trait_float_half_8 primary;" in output
+    assert "struct Trait_float_half_8" in output
+    assert "Tile_4 tile;" in output
+
+
+def test_preprocessor_materializes_unique_partial_for_static_member_owner():
+    code = """
+    template <typename T, int Rows>
+    struct Trait {
+        static constexpr int count = Rows;
+    };
+
+    template <typename T>
+    struct Trait<T, 8> {
+        static constexpr int count = 2;
+    };
+
+    int count() {
+        return Trait<float, 8>::count;
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "struct Trait_float_8 {" in output
+    assert "struct Trait_float_8<float, 8>" not in output
+    assert "return Trait_float_8::count;" in output
+
+
+def test_preprocessor_resolves_scalar_alias_from_selected_partial_specialization():
+    code = """
+    template <bool Select, typename A, typename B>
+    struct ConditionalType {
+        using type = B;
+    };
+
+    template <typename A, typename B>
+    struct ConditionalType<true, A, B> {
+        using type = A;
+    };
+
+    template <int Bits>
+    [[kernel]] void select_word(device uint* out [[buffer(0)]]) {
+        constexpr int power_of_two = (Bits & (Bits - 1)) == 0;
+        using W_T =
+            typename ConditionalType<power_of_two, uint, uchar>::type;
+        W_T value = W_T(Bits);
+        out[0] = uint(value);
+    }
+
+    instantiate_kernel("select_word_pow2", select_word, 4)
+    instantiate_kernel("select_word_non_pow2", select_word, 3)
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert len(re.findall(r"using\s+W_T\s*=\s*uint\s*;", output)) == 1
+    assert len(re.findall(r"using\s+W_T\s*=\s*uchar\s*;", output)) == 1
+    assert "typename ConditionalType_" not in output
+    assert "struct ConditionalType_1_uint_uchar" not in output
+    assert "struct ConditionalType_0_uint_uchar" not in output
+
+
+def test_preprocessor_deduces_partial_struct_specialization_pattern():
+    code = """
+    template <typename T>
+    struct Trait {
+        T value;
+    };
+
+    template <typename T>
+    struct Trait<T*> {
+        T pointed_value;
+    };
+
+    Trait<float*> specialized;
+    Trait<float> primary;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Trait<float*> specialized;" in output
+    assert "struct Trait_float {" in output
+    assert "Trait_float primary;" in output
+
+
+def test_preprocessor_matches_cv_qualified_partial_struct_specialization():
+    code = """
+    template <typename T>
+    struct Trait {
+        T value;
+    };
+
+    template <typename T>
+    struct Trait<T const> {
+        int value;
+    };
+
+    Trait<const float> specialized;
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Trait<const float> specialized;" in output
+    assert "struct Trait_const_float {" not in output
+
+
+def test_preprocessor_merges_nested_static_constant_contexts():
+    code = """
+    template <int Width>
+    struct Box {
+        float values[Width];
+    };
+
+    struct Outer {
+        static constexpr int width = 4;
+
+        struct Inner {
+            static constexpr int unrelated = 1;
+            Box<width> box;
+        };
+    };
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Box_4 box;" in output
+    assert "struct Box_4" in output
+    assert "Box_width" not in output
+
+
+def test_preprocessor_prunes_unreferenced_materialized_struct_templates():
+    code = """
+    template <int Rows>
+    struct Tile {
+        float values[Rows];
+    };
+
+    template <typename T, int Rows>
+    struct Layout {
+        Tile<Rows> tile;
+        T value;
+    };
+
+    Layout<float, 4> layout;
+    """
+    preprocessor = MetalPreprocessor()
+
+    materialized = preprocessor._materialize_explicit_template_struct_instantiations(
+        code
+    )
+    output = preprocessor._prune_unreferenced_template_struct_declarations(materialized)
+
+    assert "template <" not in output
+    assert "struct Layout_float_4" in output
+    assert "struct Tile_4" in output
+
+
+def test_preprocessor_keeps_struct_templates_with_unresolved_specialization_use():
+    code = """
+    template <typename T>
+    struct Trait {
+        T value;
+    };
+
+    template <typename T>
+    struct Trait<T*> {
+        T pointed_value;
+    };
+
+    Trait<float*> specialized;
+    """
+    preprocessor = MetalPreprocessor()
+
+    materialized = preprocessor._materialize_explicit_template_struct_instantiations(
+        code
+    )
+    output = preprocessor._prune_unreferenced_template_struct_declarations(materialized)
+
+    assert "template <typename T>" in output
+    assert "struct Trait<T*>" in output
+    assert "Trait<float*> specialized;" in output
 
 
 def test_preprocessor_struct_materializer_ignores_non_template_structs():
@@ -905,6 +2152,29 @@ def test_preprocessor_struct_materializer_ignores_non_template_structs():
     output = MetalPreprocessor().preprocess(code)
     assert "struct Plain {" in output
     assert "Plain_" not in output
+
+
+def test_preprocessor_lowers_method_with_elaborated_struct_return_type():
+    code = """
+    struct Result { int value; };
+
+    struct Factory {
+        struct Result make() {
+            Result result;
+            result.value = 4;
+            return result;
+        }
+    };
+
+    Factory factory;
+    Result result = factory.make();
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "struct Result Factory__make(Factory self)" in output
+    assert "Result result = Factory__make(factory);" in output
+    assert "factory.make()" not in output
 
 
 def test_preprocessor_lowers_instance_method_with_member_reference():
@@ -1005,6 +2275,354 @@ def test_preprocessor_lowers_materialized_template_functor():
     assert "= op(" not in output
 
 
+def test_preprocessor_substitutes_materialized_static_bool_and_int_constants():
+    code = """
+    template <int N>
+    struct Reduction {
+        static constant bool needs_reduction = N > 1;
+        static constexpr int lane_count = N * 2;
+        static constant int adjusted_count = base_count + 1;
+
+        int apply(int value) const {
+            return needs_reduction ? value + lane_count + adjusted_count : value;
+        }
+    };
+
+    constant int base_count = 4;
+
+    [[kernel]] void k(device int* out [[buffer(0)]]) {
+        Reduction<1> reduction;
+        out[0] = reduction.apply(out[0]);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "int Reduction_1__apply(Reduction_1 self, int value)" in output
+    assert "return (false) ? value + (2) + (base_count + 1) : value;" in output
+    assert "Reduction_1__apply(reduction, out[0])" in output
+
+
+def test_preprocessor_resolves_transitive_static_initializer_dependencies():
+    code = """
+    template <int N>
+    struct BlockShape {
+        static constant int threadsM = N * 8;
+        static constant int blockM = threadsM * 4;
+
+        int block_size() const {
+            return blockM;
+        }
+    };
+
+    [[kernel]] void k(device int* out [[buffer(0)]]) {
+        BlockShape<1> shape;
+        out[0] = shape.block_size();
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+    lowered = output.split("int BlockShape_1__block_size", 1)[1].split("}", 1)[0]
+
+    assert "return (32);" in lowered
+    assert "threadsM" not in lowered
+    assert "blockM" not in lowered
+
+
+def test_preprocessor_static_initializer_substitution_respects_shadowing_and_context():
+    code = """
+    struct Other { int value; };
+
+    struct Constants {
+        static constant int value = 2 + 3;
+        int instance_value = 11;
+
+        int parameter_shadow(int value) const {
+            return value + instance_value;
+        }
+
+        int local_shadow() const {
+            int value = 9;
+            return value + instance_value;
+        }
+
+        int read(Other other) const {
+            // keep value in comment
+            const char* label = "value";
+            return value + other.value + instance_value;
+        }
+    };
+    """
+
+    output = MetalPreprocessor()._lower_struct_member_functions(code)
+
+    assert "return value + self.instance_value;" in output
+    assert "int value = 9;\n            return value + self.instance_value;" in output
+    assert "// keep value in comment" in output
+    assert 'const char* label = "value";' in output
+    assert "return (5) + other.value + self.instance_value;" in output
+    assert "(11)" not in output
+
+
+def test_preprocessor_materialized_template_struct_constructor_is_left_in_place():
+    # Regression: a materialized template struct (`ReadWriter<T, U>` ->
+    # `ReadWriter_float_float`) keeps a CONSTRUCTOR that still carries the
+    # ORIGINAL template name `ReadWriter`, because only the struct header is
+    # renamed. The `method_name == struct_name` constructor check therefore
+    # cannot see it, and its sole "return type" is the qualifier macro
+    # `METAL_FUNC`. Such a constructor must be LEFT IN PLACE like every other
+    # constructor rather than lowered to a malformed
+    # `METAL_FUNC ReadWriter_float_float__ReadWriter(...)` free function, which
+    # previously made the materialized source fail to parse with
+    # "Unexpected token in expression: CONST".
+    code = """
+    template <typename T, typename U>
+    struct ReadWriter {
+        const device T* in;
+        int n;
+
+        METAL_FUNC ReadWriter(const device T* in_, const int n_) : in(in_), n(n_) {}
+
+        METAL_FUNC U read() const { return in[n]; }
+    };
+
+    [[kernel]] void k(
+        const device float* src [[buffer(0)]],
+        device float* out [[buffer(1)]],
+        uint i [[thread_position_in_grid]]) {
+        ReadWriter<float, float> rw(src, 3);
+        out[i] = rw.read();
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    # The template struct is materialized to a concrete struct.
+    assert "struct ReadWriter_float_float {" in output
+    # The struct carries a device pointer member, so it takes the pointer-member
+    # promotion path: `in` leaves the struct and is threaded through `read` as a
+    # promoted pointer parameter, while the scalar `self` still carries `n`.
+    assert (
+        "ReadWriter_float_float__read(ReadWriter_float_float self, "
+        "const device float* crosstl_ptr_in)" in output
+    )
+    # The constructor is NOT lowered to a macro-typed free function; it is left
+    # in place (rewritten to drop the promoted pointer parameter `in_`).
+    assert "ReadWriter_float_float__ReadWriter(" not in output
+    assert "METAL_FUNC ReadWriter_float_float__ReadWriter" not in output
+    # The construction drops the pointer argument and the call forwards it.
+    assert "ReadWriter_float_float rw(3)" in output
+    assert "ReadWriter_float_float__read(rw, src)" in output
+    # The materialized source parses cleanly (the original bug crashed here).
+    ast = MetalParser(MetalLexer(output).tokenize()).parse()
+    assert ast is not None
+
+
+_POINTER_MEMBER_STRUCT = """
+using namespace metal;
+
+struct Rw {
+  threadgroup float* buf;
+  const device float* in;
+  device float* out;
+  int n;
+  int total;
+
+  Rw(threadgroup float* buf_,
+     const device float* in_,
+     device float* out_,
+     const int n_)
+      : buf(buf_), in(in_), out(out_), n(n_) {
+    total = n_ * 2;
+  }
+
+  float load(int i) const {
+    return buf[i] + in[i] + float(n) + float(total);
+  }
+
+  void store(int i) const {
+    out[i] = buf[i];
+  }
+};
+
+[[kernel]] void k(
+    const device float* input [[buffer(0)]],
+    device float* output [[buffer(1)]]) {
+  threadgroup float shared[64];
+  Rw rw = Rw(&shared[0], input, output, 8);
+  float x = rw.load(2);
+  rw.store(3);
+  output[0] = x;
+}
+"""
+
+
+def test_pointer_member_promotion_removes_pointer_members_from_struct():
+    # A struct carrying device/threadgroup pointer members cannot be passed by
+    # value under SPIR-V logical addressing, so its pointer members are promoted
+    # OUT of the struct: the residual struct is a pure scalar aggregate and the
+    # constructor drops the pointer parameters (and their initializer entries)
+    # while still computing the scalar members.
+    output = MetalPreprocessor().preprocess(_POINTER_MEMBER_STRUCT)
+    struct_body = output.split("struct Rw {", 1)[1].split("};", 1)[0]
+    # Scalar members remain; pointer members are gone.
+    assert "int n;" in struct_body
+    assert "int total;" in struct_body
+    assert "float* buf;" not in struct_body
+    assert "float* in;" not in struct_body
+    assert "float* out;" not in struct_body
+    # The constructor keeps only the scalar parameter and its computation.
+    assert "Rw(const int n_) : n(n_)" in struct_body
+    assert "total = n_ * 2;" in struct_body
+
+
+def test_pointer_member_promotion_threads_pointers_through_methods():
+    # Each instance method is lowered to a free function that takes `self`
+    # followed by the promoted pointer parameters; the body references pointer
+    # members through the (uniquely prefixed) parameters and scalar members
+    # through `self`.
+    output = MetalPreprocessor().preprocess(_POINTER_MEMBER_STRUCT)
+    assert (
+        "float Rw__load(Rw self, threadgroup float* crosstl_ptr_buf, "
+        "const device float* crosstl_ptr_in, device float* crosstl_ptr_out, "
+        "int i)" in output
+    )
+    assert (
+        "return crosstl_ptr_buf[i] + crosstl_ptr_in[i] + float(self.n) "
+        "+ float(self.total);" in output
+    )
+    assert (
+        "void Rw__store(Rw self, threadgroup float* crosstl_ptr_buf, "
+        "const device float* crosstl_ptr_in, device float* crosstl_ptr_out, "
+        "int i)" in output
+    )
+    assert "crosstl_ptr_out[i] = crosstl_ptr_buf[i];" in output
+
+
+def test_pointer_member_promotion_rewrites_construction_and_calls():
+    # The construction drops the pointer arguments (the scalar `8` remains) and
+    # each method call forwards the construction's pointer expressions in
+    # declaration order.
+    output = MetalPreprocessor().preprocess(_POINTER_MEMBER_STRUCT)
+    assert "Rw rw = Rw(8);" in output
+    assert "Rw__load(rw, &shared[0], input, output, 2)" in output
+    assert "Rw__store(rw, &shared[0], input, output, 3)" in output
+    # The lowered source parses cleanly.
+    ast = MetalParser(MetalLexer(output).tokenize()).parse()
+    assert ast is not None
+
+
+def test_pointer_member_promotion_via_using_alias():
+    # A struct constructed through a local `using` alias
+    # (`using T = Struct; T v = T(...)`) is still promoted, and the alias
+    # construction drops the pointer arguments.
+    code = """
+    using namespace metal;
+
+    struct Rw {
+      threadgroup float* buf;
+      const device float* in;
+      int n;
+      Rw(threadgroup float* buf_, const device float* in_, const int n_)
+          : buf(buf_), in(in_), n(n_) {}
+      float load(int i) const { return buf[i] + in[i] + float(n); }
+    };
+
+    [[kernel]] void k(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]],
+        uint tid [[thread_position_in_grid]]) {
+      threadgroup float shared[64];
+      using rw_t = Rw;
+      rw_t rw = rw_t(&shared[0], input, 8);
+      output[tid] = rw.load(int(tid));
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert "buf;" not in output.split("struct Rw {", 1)[1].split("};", 1)[0]
+    assert "rw_t rw = rw_t(8);" in output
+    assert "Rw__load(rw, &shared[0], input, int(tid))" in output
+
+
+def test_pointer_member_promotion_bails_when_pointer_not_from_ctor_parameter():
+    # If a pointer member is NOT sourced directly from a constructor parameter,
+    # the construction cannot supply its expression, so the struct is left on the
+    # ordinary lowering path (its pointer member stays in the struct).
+    code = """
+    using namespace metal;
+
+    struct Holder {
+      device float* out;
+      int n;
+      Holder(const int n_) : n(n_) { out = nullptr; }
+      float read(int i) const { return out[i] + float(n); }
+    };
+
+    [[kernel]] void k(device float* dst [[buffer(0)]]) {
+      Holder h = Holder(4);
+      dst[0] = h.read(1);
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    # `out` stays a member (not promoted) because it is not a constructor
+    # parameter; the method keeps the plain `self`-passing signature and accesses
+    # the pointer through `self.out`.
+    assert "device float* out;" in output
+    assert "Holder__read(Holder self, int i)" in output
+    assert "self.out[i]" in output
+    assert "crosstl_ptr_out" not in output
+
+
+def test_pointer_member_promotion_leaves_pointerless_structs_unchanged():
+    # A struct without pointer members is untouched by the promotion path: it is
+    # lowered exactly as before (self passed by value, no promoted parameters).
+    code = """
+    using namespace metal;
+
+    struct Adder {
+      int bias;
+      Adder(const int bias_) : bias(bias_) {}
+      int apply(int x) const { return x + bias; }
+    };
+
+    [[kernel]] void k(device int* out [[buffer(0)]]) {
+      Adder a = Adder(5);
+      out[0] = a.apply(3);
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert "int Adder__apply(Adder self, int x)" in output
+    assert "Adder__apply(a, 3)" in output
+    assert "crosstl_ptr" not in output
+
+
+def test_pointer_member_promotion_resolves_receiver_per_construction():
+    # Two kernels reuse the receiver name `rw` for different pointer expressions;
+    # each call forwards the pointer expression from its NEAREST preceding
+    # construction.
+    code = """
+    using namespace metal;
+
+    struct Rw {
+      const device float* in;
+      int n;
+      Rw(const device float* in_, const int n_) : in(in_), n(n_) {}
+      float load(int i) const { return in[i] + float(n); }
+    };
+
+    [[kernel]] void k1(const device float* a [[buffer(0)]], device float* o [[buffer(1)]]) {
+      Rw rw = Rw(a, 1);
+      o[0] = rw.load(0);
+    }
+
+    [[kernel]] void k2(const device float* b [[buffer(0)]], device float* o [[buffer(1)]]) {
+      Rw rw = Rw(b, 2);
+      o[0] = rw.load(0);
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert "Rw__load(rw, a, 0)" in output
+    assert "Rw__load(rw, b, 0)" in output
+
+
 def test_preprocessor_lowering_qualifies_member_only_when_not_shadowed():
     # A member reference shadowed by a parameter or a local stays bare; the
     # `this->member` spelling is always rewritten to `self.member`.
@@ -1079,6 +2697,266 @@ def test_preprocessor_instantiates_template_method_from_buffer_element_arg():
     assert "op.reduce(" not in output
 
 
+def test_preprocessor_instantiates_template_method_from_pointer_arguments():
+    code = """
+    struct Tile {
+      template <typename U>
+      void store(device U* dst, int ld) { dst[0] = dst[ld]; }
+      template <typename U>
+      void load(const device U* src, int ld) { U value = src[ld]; }
+    };
+
+    kernel void k(
+        device half* input [[buffer(0)]],
+        device float* output [[buffer(1)]],
+        const constant int& offset [[buffer(2)]]) {
+        Tile tile;
+        tile.store(output, 1);
+        tile.load(input + offset, 1);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Tile__store__float(tile, output, 1)" in output
+    assert "Tile__load__half(tile, input + offset, 1)" in output
+    assert "tile.store(" not in output
+    assert "tile.load(" not in output
+
+
+def test_preprocessor_instantiates_explicit_value_template_member_call():
+    code = """
+    struct Reducer {
+      template <int N>
+      int reduce_many(int best, thread int* values, uint offset) {
+        for (int i = 0; i < N; i++) {
+          best += values[i] + int(offset);
+        }
+        return best;
+      }
+    };
+
+    kernel void k(
+        device int* output [[buffer(0)]],
+        uint index [[thread_position_in_grid]]) {
+      Reducer reducer;
+      int values[4] = {1, 2, 3, 4};
+      output[index] = reducer.template reduce_many<4>(0, values, index);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "int Reducer__reduce_many__4(" in output
+    assert "for (int i = 0; i < 4; i++)" in output
+    assert "Reducer__reduce_many__4(reducer, 0, values, index)" in output
+    assert "reducer.template reduce_many" not in output
+    assert "reducer.reduce_many" not in output
+
+
+def test_preprocessor_selects_template_member_overload_by_arity():
+    code = """
+    struct Tile {
+      template <typename U, int StrideX, int StrideY>
+      void load(const threadgroup U* src) { U value = src[0]; }
+
+      template <typename U>
+      void load(const device U* src, int stride) { U value = src[stride]; }
+    };
+
+    kernel void k(
+        const device float* input [[buffer(0)]],
+        const constant int& stride [[buffer(1)]]) {
+        Tile tile;
+        tile.load(input, stride);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Tile__load__float(tile, input, stride)" in output
+    assert "void Tile__load__float(Tile self, const device float* src, int stride)" in (
+        output
+    )
+    assert "StrideX" not in output
+    assert "StrideY" not in output
+    assert "tile.load(" not in output
+
+
+def test_preprocessor_selects_reference_template_overload_with_pointer_field():
+    code = """
+    struct Params { const int ldc; const int fdc; };
+    struct Transform { float scale; };
+    struct Tile {
+      template <typename UnaryEpilogue>
+      void apply(thread const UnaryEpilogue& op) {}
+
+      template <typename BinaryEpilogue>
+      void apply(
+          const device half* src,
+          const int ldc,
+          const int fdc,
+          thread const BinaryEpilogue& op) {}
+    };
+
+    kernel void k(
+        const device half* input [[buffer(0)]],
+        const constant Params* params [[buffer(1)]]) {
+        Tile tile;
+        Transform transform;
+        tile.apply(input, params->ldc, params->fdc, transform);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert (
+        "Tile__apply__Transform(tile, input, params->ldc, params->fdc, transform)"
+        in output
+    )
+    assert (
+        "void Tile__apply__Transform(Tile self, const device half* src, "
+        "const int ldc, const int fdc, thread const Transform& op)" in output
+    )
+    assert "tile.apply(" not in output
+
+
+def test_preprocessor_resolves_struct_scoped_alias_in_lowered_method():
+    code = """
+    struct Helper {
+      template <typename U>
+      static void apply(U value) { U copy = value; }
+    };
+
+    struct Wrapper {
+      using HelperAlias = Helper;
+
+      template <typename U>
+      void apply(U value) { U copy = value; }
+
+      void run(float value) {
+        HelperAlias::apply(value);
+      }
+    };
+
+    kernel void k(device float* output [[buffer(0)]]) {
+      Wrapper wrapper;
+      wrapper.run(output[0]);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Helper__apply__float(value)" in output
+    assert "void Helper__apply__float(float value)" in output
+    assert "HelperAlias::apply" not in output
+    assert "Wrapper__apply" not in output
+
+
+def test_preprocessor_records_struct_aliases_and_method_const_qualification():
+    pp = MetalPreprocessor()
+    definitions = pp._find_concrete_struct_definitions("""
+        struct Base {};
+        struct Wrapper {
+          using BaseAlias = Base;
+          typedef float value_type;
+          float value() const { return 1.0; }
+        };
+        """)
+
+    wrapper = next(item for item in definitions if item.name == "Wrapper")
+
+    assert wrapper.type_aliases == {"BaseAlias": "Base", "value_type": "float"}
+    assert len(wrapper.methods) == 1
+    assert wrapper.methods[0].name == "value"
+    assert wrapper.methods[0].is_const is True
+
+
+def test_preprocessor_lowers_value_only_nested_template_member_call():
+    code = """
+    struct Frag {
+      template <typename T>
+      using dtype_frag_t = T;
+
+      template <typename T>
+      static void load(thread dtype_frag_t<T>& dst, const device T* src) {
+        dst = src[0];
+      }
+
+      template <typename T>
+      static void store(const thread dtype_frag_t<T>& src, device T* dst) {
+        dst[0] = src;
+      }
+    };
+
+    struct Index {
+      static constexpr int value = 0;
+    };
+
+    struct Tile {
+      using FragType = Frag;
+      typedef typename FragType::template dtype_frag_t<half> frag_type;
+      frag_type values[4];
+
+      template <int I>
+      thread frag_type& frag_at() {
+        return values[I];
+      }
+
+      template <int I>
+      const thread frag_type& frag_at() const {
+        return values[I];
+      }
+
+      template <typename U>
+      void load(const device U* src) {
+        Index index;
+        FragType::load(frag_at<index.value>(), src);
+      }
+
+      template <typename U>
+      void store(device U* dst) const {
+        Index index;
+        FragType::store(frag_at<index.value>(), dst);
+      }
+    };
+
+    kernel void k(
+        const device half* input [[buffer(0)]],
+        device half* output [[buffer(1)]]) {
+      Tile tile;
+      tile.load(input);
+      tile.store(output);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Tile__frag_at__runtime_values__int(self, index.value)" in output
+    assert "Tile__frag_at__runtime_values__int__const(self, index.value)" in output
+    assert "thread Frag::dtype_frag_t<half>& " in output
+    assert "Frag__load__half(" in output
+    assert "Frag__store__half(" in output
+    assert "frag_at<" not in output
+    assert "FragType::load" not in output
+
+
+def test_preprocessor_does_not_runtime_lower_compile_time_template_body():
+    pp = MetalPreprocessor()
+    definitions = pp._find_concrete_struct_definitions("""
+        struct Tile {
+          template <int I>
+          int select() {
+            if constexpr (I == 0) { return 1; }
+            return 2;
+          }
+        };
+        """)
+    method = definitions[0].template_methods[0]
+
+    assert pp._runtime_value_template_method_is_safe(method, ["index.value"]) is False
+
+
 def test_preprocessor_instantiates_template_method_from_typed_local_arg():
     # The argument is a bare local declared `half v = ...;` so the method
     # instantiates with T=half.
@@ -1127,6 +3005,291 @@ def test_preprocessor_instantiates_template_operator_call_from_typed_local():
     assert "= op(" not in output
 
 
+def test_preprocessor_instantiates_template_operator_call_from_temporary_functor():
+    code = """
+    struct Select {
+      template <typename T>
+      T operator()(bool condition, T x, T y) {
+        return condition ? x : y;
+      }
+    };
+
+    [[kernel]] void k(
+        device float* out [[buffer(0)]],
+        uint i [[thread_position_in_grid]]) {
+        float x = out[i];
+        out[i] = Select{}(true, x, 1.0);
+        out[i] = Select()(false, x, 2.0);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert (
+        "float Select__operator_call__float(Select self, bool condition, "
+        "float x, float y)"
+    ) in output
+    assert (
+        "float Select__operator_call__float__temporary(bool condition, "
+        "float x, float y)"
+    ) in output
+    assert "Select__operator_call__float__temporary(true, x, 1.0)" in output
+    assert "Select__operator_call__float__temporary(false, x, 2.0)" in output
+    assert "Select{}(" not in output
+    assert "Select()(" not in output
+
+
+def test_preprocessor_lowers_temporary_functor_call_with_arithmetic_and_functor_argument():
+    # Regression: a template member method called with an argument that is a
+    # BINARY ARITHMETIC expression built from complex-typed values and a NESTED
+    # functor construction-and-call -- `Log{}(x + i * Sqrt{}(1.0 - x * x))`, the
+    # exact shape MLX's complex arccos/arcsin/arctan feed to Log -- must lower.
+    # Previously this clean-failed with "could not be inferred conservatively"
+    # because argument inference handled neither the enclosing out-of-line
+    # `operator()` parameter, the `auto` construction-initialized local, the
+    # arithmetic operators, nor the `Sqrt{}(...)` functor-call result type. The
+    # inference is now general enough that the outer call resolves to the concrete
+    # `complex64_t operator()` overload and lowers to a free function.
+    code = """
+    struct complex64_t { float real; float imag; };
+
+    constexpr complex64_t operator+(complex64_t a, complex64_t b) {
+      return {a.real + b.real, a.imag + b.imag};
+    }
+    constexpr complex64_t operator-(float a, complex64_t b) {
+      return {a - b.real, -b.imag};
+    }
+    constexpr complex64_t operator*(complex64_t a, complex64_t b) {
+      return {a.real * b.real - a.imag * b.imag, a.real * b.imag + a.imag * b.real};
+    }
+
+    struct Sqrt {
+      template <typename T>
+      T operator()(T x) { return metal::precise::sqrt(x); }
+      complex64_t operator()(complex64_t x) { return {x.real, x.imag}; }
+    };
+
+    struct Log {
+      template <typename T>
+      T operator()(T x) { return metal::precise::log(x); }
+      complex64_t operator()(complex64_t x) { return {x.real, x.imag}; }
+    };
+
+    struct ArcCos {
+      template <typename T>
+      T operator()(T x) { return metal::precise::acos(x); }
+      complex64_t operator()(complex64_t x);
+    };
+
+    complex64_t ArcCos::operator()(complex64_t x) {
+      auto i = complex64_t{0.0, 1.0};
+      auto y = Log{}(x + i * Sqrt{}(1.0 - x * x));
+      return {y.imag, -y.real};
+    }
+
+    [[kernel]] void k(
+        device const complex64_t* in [[buffer(0)]],
+        device complex64_t* out [[buffer(1)]],
+        uint gid [[thread_position_in_grid]]) {
+        ArcCos op;
+        out[gid] = op(in[gid]);
+    }
+    """
+
+    # A single un-inferable argument would raise MetalStructMethodError out of
+    # preprocess(); reaching an output at all means the argument was inferred.
+    output = MetalPreprocessor().preprocess(code)
+
+    # The outer `Log{}(...)` temporary functor call lowered to a free function;
+    # no dangling `Log{}(` temporary and no un-inferred failure survive.
+    assert "Log__operator_call__temporary(" in output
+    assert "Log{}(" not in output
+    assert "could not be inferred" not in output
+    # The complex `Sqrt`/`Log` operator() overloads were emitted as free
+    # functions (the argument resolved to the concrete complex overload).
+    assert "complex64_t Log__operator_call(Log self, complex64_t x)" in output
+    assert "complex64_t Sqrt__operator_call(Sqrt self, complex64_t x)" in output
+
+
+def test_preprocessor_skips_calls_inside_residual_template_declarations():
+    # After a template struct is materialized to a concrete struct (e.g.
+    # `CumLogaddexp_float`), the ORIGINAL `template <typename U> struct
+    # CumLogaddexp { ... }` declaration is left in the source with its template
+    # parameter U still unbound. A functor call inside that residual template
+    # body (`LogAddExp{}(a, static_cast<U>(b))`) references the unbound type U,
+    # so its argument type cannot be inferred and it must NOT be lowered — only
+    # the concrete materialized copy carries lowerable calls. The call-site
+    # rewriter must therefore skip residual template declaration spans; otherwise
+    # it descends into the template body and clean-fails with
+    # "could not be inferred conservatively".
+    code = """
+    struct LogAddExp {
+      template <typename T>
+      T operator()(T x, T y) { return x + y; }
+    };
+
+    template <typename U>
+    struct CumLogaddexp {
+      template <typename T>
+      U operator()(U a, T b) {
+        return LogAddExp{}(a, static_cast<U>(b));
+      }
+    };
+
+    template [[host_name("k_f")]] [[kernel]] void
+    k<float, float, CumLogaddexp<float>>(
+        const device float* in [[buffer(0)]],
+        device float* out [[buffer(1)]]);
+
+    template <typename T, typename U, typename Op>
+    [[kernel]] void k(
+        const device T* in [[buffer(0)]],
+        device U* out [[buffer(1)]]) {
+      Op op;
+      out[0] = op(U(in[0]), in[1]);
+    }
+    """
+    # Must not raise MetalStructMethodError for the residual template's call.
+    output = MetalPreprocessor().preprocess(code)
+    # The concrete instantiation is materialized and its call is lowerable.
+    assert "CumLogaddexp_float" in output
+    # The residual generic template declaration is left untouched.
+    assert "template <typename U>" in output
+
+
+def test_preprocessor_rewrites_temporary_functor_calls_inside_template_operator():
+    code = """
+    struct complex64_t {
+      float real;
+      float imag;
+    };
+
+    struct FloorDivide {
+      template <typename T>
+      T operator()(T x, T y) {
+        return x / y;
+      }
+    };
+
+    struct Remainder {
+      template <typename T>
+      T operator()(T x, T y) {
+        return x % y;
+      }
+    };
+
+    struct DivMod {
+      template <typename T>
+      metal::array<T, 2> operator()(T x, T y) {
+        return {FloorDivide{}(x, y), Remainder{}(x, y)};
+      }
+    };
+
+    [[kernel]] void k(
+        device complex64_t* a [[buffer(0)]],
+        device complex64_t* b [[buffer(1)]],
+        uint i [[thread_position_in_grid]]) {
+      DivMod op;
+      auto out = op(a[i], b[i]);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "FloorDivide__operator_call__complex64_t__temporary(x, y)" in output
+    assert "Remainder__operator_call__complex64_t__temporary(x, y)" in output
+    assert (
+        "complex64_t FloorDivide__operator_call__complex64_t"
+        "(FloorDivide self, complex64_t x, complex64_t y)"
+    ) in output
+    assert (
+        "complex64_t Remainder__operator_call__complex64_t"
+        "(Remainder self, complex64_t x, complex64_t y)"
+    ) in output
+    assert "FloorDivide{}(" not in output
+    assert "Remainder{}(" not in output
+
+
+def test_preprocessor_selects_unsigned_integral_sfinae_overload_for_bool():
+    code = """
+    struct Remainder {
+      template <typename T>
+      metal::enable_if_t<metal::is_integral_v<T> & !metal::is_signed_v<T>, T>
+      operator()(T x, T y) {
+        return x % y;
+      }
+
+      template <typename T>
+      metal::enable_if_t<metal::is_integral_v<T> & metal::is_signed_v<T>, T>
+      operator()(T x, T y) {
+        return y;
+      }
+
+      template <typename T>
+      metal::enable_if_t<!metal::is_integral_v<T>, T> operator()(T x, T y) {
+        return x;
+      }
+    };
+
+    [[kernel]] void k(
+        device bool* out [[buffer(0)]],
+        device bool* a [[buffer(1)]],
+        device bool* b [[buffer(2)]],
+        uint i [[thread_position_in_grid]]) {
+      Remainder op;
+      out[i] = op(a[i], b[i]);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "bool Remainder__operator_call__bool" in output
+    assert "return x % y;" in output
+    assert "return y;" not in output
+
+
+def test_preprocessor_prefers_explicit_operator_specialization():
+    code = """
+    struct complex64_t {
+      float real;
+      float imag;
+    };
+
+    struct Remainder {
+      template <typename T>
+      metal::enable_if_t<metal::is_integral_v<T> & !metal::is_signed_v<T>, T>
+      operator()(T x, T y) {
+        return x;
+      }
+
+      template <typename T>
+      metal::enable_if_t<!metal::is_integral_v<T>, T> operator()(T x, T y) {
+        return y;
+      }
+
+      template <>
+      complex64_t operator()(complex64_t x, complex64_t y) {
+        return x % y;
+      }
+    };
+
+    [[kernel]] void k(
+        device complex64_t* out [[buffer(0)]],
+        device complex64_t* a [[buffer(1)]],
+        device complex64_t* b [[buffer(2)]],
+        uint i [[thread_position_in_grid]]) {
+      Remainder op;
+      out[i] = op(a[i], b[i]);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "complex64_t Remainder__operator_call" in output
+    assert "return x % y;" in output
+    assert "return y;" not in output
+
+
 def test_preprocessor_instantiates_static_template_method_from_literal():
     # A static template member method called as `S::m(literal)` instantiates from
     # the literal type and lowers WITHOUT a `self` parameter.
@@ -1144,6 +3307,415 @@ def test_preprocessor_instantiates_static_template_method_from_literal():
     assert "Maths self" not in output
     assert "Maths__twice__float(2.5f)" in output
     assert "Maths::twice" not in output
+
+
+def test_preprocessor_materializes_static_template_helper_from_concrete_method():
+    code = """
+    template <typename T, int N>
+    struct BlockKernel {
+      template <typename U = T>
+      static void load(const device T* src, thread U dst[N]) {
+        for (int i = 0; i < N; ++i) {
+          dst[i] = static_cast<U>(src[i]);
+        }
+      }
+
+      template <typename U = T>
+      static U zero() {
+        return U(0);
+      }
+
+      static void run(const device T* src, device T* out) {
+        thread T values[N];
+        load(src, values);
+        values[0] += zero();
+        out[0] = values[0];
+      }
+    };
+
+    [[kernel]] void k(
+        const device float* src [[buffer(0)]],
+        device float* out [[buffer(1)]]) {
+      BlockKernel<float, 4>::run(src, out);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "void BlockKernel_float_4__load__float(" in output
+    assert "float BlockKernel_float_4__zero__float()" in output
+    assert "BlockKernel_float_4__load__float(src, values);" in output
+    assert "BlockKernel_float_4__zero__float();" in output
+    assert "BlockKernel_float_4__run(src, out);" in output
+    # The only unqualified call left belongs to the deliberately retained
+    # unspecialized template declaration.
+    assert output.count("load(src, values)") == 1
+
+
+def test_preprocessor_template_helper_deduction_precedes_default():
+    code = """
+    template <typename T, int N>
+    struct BlockKernel {
+      template <typename U = T>
+      static void load(const device T* src, thread U dst[N]) {
+        for (int i = 0; i < N; ++i) {
+          dst[i] = static_cast<U>(src[i]);
+        }
+      }
+
+      static void run(const device T* src, device half* out) {
+        thread half values[N];
+        load(src, values);
+        out[0] = values[0];
+      }
+    };
+
+    [[kernel]] void k(
+        const device float* src [[buffer(0)]],
+        device half* out [[buffer(1)]]) {
+      BlockKernel<float, 4>::run(src, out);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "void BlockKernel_float_4__load__half(" in output
+    assert "thread half dst[4]" in output
+    assert "BlockKernel_float_4__load__half(src, values);" in output
+    assert "BlockKernel_float_4__load__float(" not in output
+
+
+def test_preprocessor_materializes_explicit_static_template_helper_from_method():
+    code = """
+    template <typename T, int N>
+    struct BlockKernel {
+      template <typename U = T>
+      static void load(const device T* src, thread U dst[N]) {
+        for (int i = 0; i < N; ++i) {
+          dst[i] = static_cast<U>(src[i]);
+        }
+      }
+
+      static void run(const device T* src, device T* out) {
+        thread T values[N];
+        load<float>(src, values);
+        out[0] = values[0];
+      }
+    };
+
+    [[kernel]] void k(
+        const device float* src [[buffer(0)]],
+        device float* out [[buffer(1)]]) {
+      BlockKernel<float, 4>::run(src, out);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "void BlockKernel_float_4__load__float(" in output
+    assert "BlockKernel_float_4__load__float(src, values);" in output
+    assert "BlockKernel_float_4__run(src, out);" in output
+    assert output.count("load<float>(src, values)") == 1
+
+
+def test_preprocessor_expands_omitted_template_member_defaults():
+    code = """
+    struct Tag {};
+    struct Loader {
+      float value;
+      Loader(float input) : value(input) {}
+    };
+
+    struct Runner {
+      using loader_t = Loader;
+
+      template <bool Enabled>
+      static float apply(
+          thread loader_t& loader,
+          float value,
+          int bias = 2,
+          Tag tag = {}) {
+        return Enabled ? loader.value + value + bias : value;
+      }
+
+      static float run(float value) {
+        thread loader_t loader(value);
+        return apply<true>(loader, value);
+      }
+    };
+
+    kernel void k(device float* output [[buffer(0)]]) {
+      output[0] = Runner::run(output[0]);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Runner__apply__true(loader, value, 2, Tag{})" in output
+    assert "thread Loader& loader" in output
+    assert "int bias, Tag tag)" in output
+    assert "int bias = 2" not in output
+    assert output.count("apply<true>(loader, value)") == 0
+
+    repeated_output = MetalPreprocessor().preprocess(output)
+
+    assert "Runner__apply__true(loader, value, 2, Tag{})" in repeated_output
+    assert "loader_t loader" not in repeated_output
+
+
+def test_preprocessor_materializes_reference_and_static_member_defaults():
+    code = """
+    struct Tag {};
+
+    struct Runner {
+      static constexpr int default_bias = 3;
+
+      template <typename T>
+      static T apply(
+          T value,
+          const Tag& tag = {},
+          int bias = default_bias) {
+        return value + T(bias);
+      }
+    };
+
+    kernel void k(device float* output [[buffer(0)]]) {
+      output[0] = Runner::apply(output[0]);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Runner__apply__float(output[0], Tag{}, (3))" in output
+    assert "const Tag& tag, int bias)" in output
+    assert "const Tag&{}" not in output
+    assert "bias = default_bias" not in output
+
+
+def test_preprocessor_preserves_parameter_named_like_struct_alias():
+    code = """
+    struct Runner {
+      using value_t = float;
+
+      template <typename T>
+      static T apply(float value_t, T input) {
+        return input + T(value_t);
+      }
+    };
+
+    kernel void k(device float* output [[buffer(0)]]) {
+      output[0] = Runner::apply(output[0], output[0]);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Runner__apply__float(float value_t, float input)" in output
+    assert "float float" not in output
+
+
+def test_preprocessor_preserves_method_local_alias_shadowing_struct_alias():
+    code = """
+    struct Runner {
+      using value_t = float;
+
+      template <bool Enabled>
+      static int apply(int input) {
+        using value_t = int;
+        value_t local = input;
+        return Enabled ? local : input;
+      }
+
+      static int run(int input) {
+        return apply<true>(input);
+      }
+    };
+
+    kernel void k(device int* output [[buffer(0)]]) {
+      output[0] = Runner::run(output[0]);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "using value_t = int" in output
+    assert "value_t local = input" in output
+    assert "float local = input" not in output
+
+
+def test_preprocessor_rejects_omitted_required_template_member_parameter():
+    code = """
+    struct Runner {
+      template <bool Enabled>
+      static float apply(float value, int required, int bias = 2) {
+        return Enabled ? value + required + bias : value;
+      }
+
+      static float run(float value) {
+        return apply<true>(value);
+      }
+    };
+
+    kernel void k(device float* output [[buffer(0)]]) {
+      output[0] = Runner::run(output[0]);
+    }
+    """
+
+    with pytest.raises(MetalStructMethodError):
+        MetalPreprocessor().preprocess(code)
+
+
+def test_preprocessor_rejects_conflicting_explicit_member_template_binding():
+    code = """
+    struct Runner {
+      template <typename T>
+      static T convert(T value) {
+        return value;
+      }
+
+      static float run(float value) {
+        return convert<int>(value);
+      }
+    };
+
+    kernel void k(device float* output [[buffer(0)]]) {
+      output[0] = Runner::run(output[0]);
+    }
+    """
+
+    with pytest.raises(MetalStructMethodError, match="did not bind consistently"):
+        MetalPreprocessor().preprocess(code)
+
+
+def test_preprocessor_resolves_qualified_struct_member_alias_for_template_call():
+    code = """
+    struct Loader {
+      float value;
+      Loader(float input) : value(input) {}
+    };
+
+    struct Runner {
+      using loader_t = Loader;
+
+      template <typename U>
+      static U apply(thread loader_t& loader, U value, int bias = 2) {
+        return loader.value + value + bias;
+      }
+    };
+
+    kernel void k(device float* output [[buffer(0)]]) {
+      using runner_t = Runner;
+      using loader_t = typename runner_t::loader_t;
+      thread loader_t loader(output[0]);
+      output[0] = runner_t::apply(loader, output[0]);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Runner__apply__float(loader, output[0], 2)" in output
+    assert "Runner__apply__float(thread Loader& loader" in output
+    assert "runner_t::apply(loader, output[0])" not in output
+
+
+def test_preprocessor_resolves_member_alias_from_materialization_provenance():
+    code = """
+    struct Owner {
+      using value_t = Materialized_Value_with_tag;
+    };
+
+    void use_value() {
+      using owner_t = Owner;
+      using value_t = typename owner_t::value_t;
+      value_t value{};
+    }
+    """
+    preprocessor = MetalPreprocessor()
+    structs = preprocessor._find_concrete_struct_definitions(code)
+    structs_by_name = {struct.name: struct for struct in structs}
+    struct_spans = [struct.span for struct in structs]
+    preprocessor._materialized_struct_specializations["Materialized_Value_with_tag"] = (
+        "Value",
+        ("with-tag",),
+    )
+
+    aliases = preprocessor._collect_struct_type_aliases(
+        code,
+        set(structs_by_name),
+        struct_spans,
+        structs_by_name,
+    )
+    variables = preprocessor._collect_aliased_struct_variable_types(
+        code,
+        aliases,
+        struct_spans,
+    )
+
+    assert aliases["value_t"][0].target == "Materialized_Value_with_tag"
+    assert variables["value"][0][1] == "Materialized_Value_with_tag"
+
+
+def test_preprocessor_collects_pointer_to_aliased_struct_parameter():
+    code = """
+    struct Params { int stride; };
+    using params_t = Params;
+
+    void use_params(const constant params_t* params) {
+      int stride = params->stride;
+    }
+    """
+    preprocessor = MetalPreprocessor()
+    structs = preprocessor._find_concrete_struct_definitions(code)
+    structs_by_name = {struct.name: struct for struct in structs}
+    struct_spans = [struct.span for struct in structs]
+    aliases = preprocessor._collect_struct_type_aliases(
+        code,
+        set(structs_by_name),
+        struct_spans,
+        structs_by_name,
+    )
+
+    variables = preprocessor._collect_aliased_struct_variable_types(
+        code,
+        aliases,
+        struct_spans,
+    )
+    field_types = preprocessor._struct_field_types_at(
+        variables,
+        structs_by_name,
+        code.index("params->stride"),
+    )
+
+    assert variables["params"][0][1] == "Params*"
+    assert field_types == {"params->": {"stride": "int"}}
+
+
+def test_preprocessor_deduces_template_bindings_from_materialization_provenance():
+    preprocessor = MetalPreprocessor()
+    preprocessor._materialized_struct_specializations["Holder_metal_half_t_true"] = (
+        "Holder",
+        ("metal::half_t", "true"),
+    )
+    bindings = {}
+
+    preprocessor._infer_template_parameter_bindings_from_type(
+        "Holder<T, Enabled>",
+        "Holder_metal_half_t_true",
+        {"T", "Enabled"},
+        bindings,
+    )
+
+    assert bindings == {"T": "metal::half_t", "Enabled": "true"}
+
+    plain_binding = {}
+    preprocessor._infer_template_parameter_bindings_from_type(
+        "T",
+        "Holder_metal_half_t_true",
+        {"T"},
+        plain_binding,
+    )
+
+    assert plain_binding == {"T": "Holder_metal_half_t_true"}
 
 
 def test_preprocessor_template_method_instantiations_are_deduplicated():
@@ -1362,6 +3934,80 @@ def test_preprocessor_instantiates_template_method_from_member_access_subscript(
     assert "Sum__reduce__float(op, init.data[i])" in output
 
 
+def test_preprocessor_instantiates_template_method_from_stdint_array_subscript():
+    # C stdint scalar aliases (`int32_t`, `uint8_t`, ...) are recognized element
+    # types, so an `int32_t values[N]` array subscript binds a called template
+    # member method's parameter to int32_t. This is the shape that blocked MLX
+    # scan (`op.simd_exclusive_scan(values[i])` on `int32_t values[N]`).
+    code = """
+    struct Sum { template <typename T> T reduce(T val){ return val; } };
+
+    kernel void k(
+        device int* out [[buffer(0)]],
+        uint i [[thread_position_in_grid]]) {
+        Sum op;
+        int32_t values[4];
+        values[i] = out[i];
+        out[i] = op.reduce(values[i]);
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert "int32_t Sum__reduce__int32_t(Sum self, int32_t val)" in output
+    assert "Sum__reduce__int32_t(op, values[i])" in output
+
+
+def test_infer_argument_type_recognizes_stdint_scalar_aliases():
+    # stdint scalar aliases infer as themselves across the subscript / cast /
+    # bare-local shapes (they carry known sizes for SFINAE `sizeof(T)`).
+    pp = MetalPreprocessor()
+    assert pp._infer_argument_type("vals[i]", {"vals": "int32_t"}, {}) == "int32_t"
+    assert pp._infer_argument_type("uint8_t(x)", {}, {}) == "uint8_t"
+    assert pp._infer_argument_type("v", {}, {"v": "int64_t"}) == "int64_t"
+
+
+def test_infer_argument_type_recognizes_pointer_arguments_and_offsets():
+    pp = MetalPreprocessor()
+    buffers = {
+        "input": "half",
+        "output": "float",
+        "same_type_input": "half",
+        "other": "int",
+    }
+    locals_ = {"offset": "int", "wide_offset": "uint64_t"}
+
+    assert pp._infer_argument_type("output", buffers, locals_) == "float"
+    assert pp._infer_argument_type("input + offset", buffers, locals_) == "half"
+    assert pp._infer_argument_type("wide_offset + input", buffers, locals_) == "half"
+    assert pp._infer_argument_type("input - offset", buffers, locals_) == "half"
+    assert pp._infer_argument_type("input + offset + 1", buffers, locals_) == "half"
+    assert pp._infer_argument_type("input + other", buffers, locals_) is None
+    assert pp._infer_argument_type("input - same_type_input", buffers, locals_) is None
+    assert pp._infer_argument_type("2 - input", buffers, locals_) is None
+    assert pp._infer_argument_type("input + 1.0", buffers, locals_) is None
+    assert pp._infer_argument_type("input * 2", buffers, locals_) is None
+    assert pp._infer_argument_type("input / 2", buffers, locals_) is None
+    assert pp._infer_argument_type("input * offset", buffers, locals_) is None
+
+
+def test_infer_argument_type_simd_group_builtin_returns_first_arg_type():
+    # A SIMD/quad group built-in that moves/combines lane values returns the type
+    # of its first argument, so scan's
+    # `operator()(val, simd_shuffle_and_fill_up(val, init, i))` can be typed.
+    pp = MetalPreprocessor()
+    locals_ = {"val": "float", "x": "int32_t"}
+    assert (
+        pp._infer_argument_type("simd_shuffle_and_fill_up(val, init, i)", {}, locals_)
+        == "float"
+    )
+    assert (
+        pp._infer_argument_type("simd_prefix_inclusive_sum(x)", {}, locals_)
+        == "int32_t"
+    )
+    assert pp._infer_argument_type("simd_sum(val)", {}, locals_) == "float"
+    # An unrecognized function name is not inferred (never guesses).
+    assert pp._infer_argument_type("some_helper(val)", {}, locals_) is None
+
+
 def test_preprocessor_instantiates_template_method_from_member_access():
     # A bare member access `obj.member` (non-subscript) resolves to the field's
     # declared type.
@@ -1380,6 +4026,24 @@ def test_preprocessor_instantiates_template_method_from_member_access():
     output = MetalPreprocessor().preprocess(code)
     assert "float Sum__reduce__float(Sum self, float val)" in output
     assert "Sum__reduce__float(op, p.x)" in output
+
+
+def test_preprocessor_instantiates_template_method_from_pointer_member_access():
+    code = """
+    struct Params { const int stride; device float* data; };
+    struct Sum { template <typename T> T reduce(T val){ return val; } };
+
+    kernel void k(
+        constant const Params* params [[buffer(0)]],
+        device int* out [[buffer(1)]],
+        uint i [[thread_position_in_grid]]) {
+        Sum op;
+        out[i] = op.reduce(params->stride);
+    }
+    """
+    output = MetalPreprocessor().preprocess(code)
+    assert "int Sum__reduce__int(Sum self, int val)" in output
+    assert "Sum__reduce__int(op, params->stride)" in output
 
 
 def test_preprocessor_instantiates_template_method_from_union_local():
@@ -1522,6 +4186,24 @@ def test_infer_argument_type_local_array_and_member_subscript():
     )
     # Bare member access -> field type.
     assert pp._infer_argument_type("init.scale", buffers, locals_, fields) == "half"
+    pointer_fields = {"params->": {"stride": "int", "data": "float*"}}
+    assert (
+        pp._infer_argument_type("params->stride", buffers, locals_, pointer_fields)
+        == "int"
+    )
+    assert (
+        pp._infer_argument_type("params->data[i]", buffers, locals_, pointer_fields)
+        == "float"
+    )
+    assert (
+        pp._infer_argument_type("params->data", buffers, locals_, pointer_fields)
+        is None
+    )
+    assert (
+        pp._infer_argument_type("params.stride", buffers, locals_, pointer_fields)
+        is None
+    )
+    assert pp._infer_argument_type("init->scale", buffers, locals_, fields) is None
     # Union / struct local -> its declared type.
     assert (
         pp._infer_argument_type("update", buffers, locals_, fields) == "bool4_or_uint"
@@ -1530,6 +4212,71 @@ def test_infer_argument_type_local_array_and_member_subscript():
     assert pp._infer_argument_type("missing[i]", buffers, locals_, fields) is None
     assert pp._infer_argument_type("init.unknown", buffers, locals_, fields) is None
     assert pp._infer_argument_type("foo()", buffers, locals_, fields) is None
+
+
+def test_infer_argument_type_arithmetic_construction_and_functor_call():
+    # Direct coverage of the arithmetic / construction / functor-call inference
+    # rules, using struct metadata parsed from a small snippet exactly as the
+    # call site builds it. These are the shapes MLX's complex unary ops feed to
+    # template member methods (e.g. `x + i * Sqrt{}(1.0 - x * x)`).
+    pp = MetalPreprocessor()
+    snippet = """
+    struct complex64_t { float real; float imag; };
+    struct Sqrt {
+        template <typename T> T operator()(T x) { return x; }
+        complex64_t operator()(complex64_t x) { return {x.real, x.imag}; }
+    };
+    struct Square {
+        template <typename T> T operator()(T x) { return x * x; }
+    };
+    struct Real {
+        float operator()(complex64_t x) { return x.real; }
+    };
+    """
+    structs = {
+        struct.name: struct for struct in pp._find_concrete_struct_definitions(snippet)
+    }
+    buffers = {"buf": "complex64_t"}
+    locals_ = {"x": "complex64_t", "i": "complex64_t", "f": "float", "n": "int"}
+
+    def infer(expr):
+        return pp._infer_argument_type(expr, buffers, locals_, {}, structs)
+
+    # Binary arithmetic between identical operand types keeps that type.
+    assert infer("x + i") == "complex64_t"
+    assert infer("x * i - x") == "complex64_t"
+    assert infer("n + n") == "int"
+    # An AGGREGATE concrete operand absorbs a numeric literal (its arithmetic
+    # operators return the aggregate).
+    assert infer("1.0 - x * x") == "complex64_t"
+    assert infer("x / 2.0") == "complex64_t"
+    assert infer("buf[i] + 1.0") == "complex64_t"
+    # A scalar keeps its type when the literal does not out-rank it.
+    assert infer("f + 1") == "float"
+    # ...but a floating literal meeting an INTEGER scalar promotes to an unknown
+    # floating width, so we bail rather than mis-claim `int`.
+    assert infer("n + 1.0") is None
+    # Two DIFFERENT concrete non-literal types are ambiguous -> never guess.
+    assert infer("x + f") is None
+    # Brace construction of a recognized type.
+    assert infer("complex64_t{0.0, 1.0}") == "complex64_t"
+    assert infer("IndexTag<1>{}") == "IndexTag<1>"
+    # Functor construction-and-call: concrete overload match, template identity,
+    # and an argument-independent (fixed) return type.
+    assert infer("Sqrt{}(x)") == "complex64_t"
+    assert infer("Sqrt{}(1.0 - x * x)") == "complex64_t"
+    assert infer("Square{}(f)") == "float"
+    assert infer("Real{}(x)") == "float"
+    # The full composed argument from MLX's complex arccos infers conservatively.
+    assert infer("x + i * Sqrt{}(1.0 - x * x)") == "complex64_t"
+    # Still never guesses for un-inferable shapes (missing struct / operand).
+    assert infer("Mystery{}(x)") is None
+    assert infer("x + mystery") is None
+    # Without struct metadata, construction / functor-call shapes stay un-inferable.
+    assert (
+        pp._infer_argument_type("complex64_t{0.0, 1.0}", buffers, locals_, {}) is None
+    )
+    assert pp._infer_argument_type("Sqrt{}(x)", buffers, locals_, {}) is None
 
 
 def test_collect_buffer_element_types_rejects_non_declaration_subscripts():
@@ -1641,7 +4388,9 @@ def test_sfinae_simd_reduce_recognized_as_template_methods():
     # constraints captured and the return-type SFINAE unwrapped to the value type.
     pp = MetalPreprocessor()
     body = _SFINAE_SIMD_REDUCE_STRUCT.split("struct Red {", 1)[1].rsplit("};", 1)[0]
-    _names, _types, concrete, templates = pp._split_struct_body("Red", body, 0)
+    _names, _types, concrete, templates, _members, _ctors = pp._split_struct_body(
+        "Red", body, 0
+    )
     by_name = {}
     for method in templates:
         by_name.setdefault(method.name, []).append(method)

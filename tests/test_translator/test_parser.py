@@ -40,13 +40,14 @@ from crosstl.translator.ast import (
     ShaderNode,
     ShaderStage,
     StructPatternNode,
+    TernaryOpNode,
     UnaryOpNode,
     VariableNode,
     VectorType,
     WaveOpNode,
 )
 from crosstl.translator.lexer import Lexer
-from crosstl.translator.parser import Parser
+from crosstl.translator.parser import CrossGLFunctionBodyParseError, Parser
 
 
 def tokenize_code(code: str) -> List:
@@ -64,6 +65,73 @@ def parse_code(tokens: List):
     """
     parser = Parser(tokens)
     return parser.parse()
+
+
+def test_explicit_compute_stage_entry_malformed_body_raises_parse_error():
+    code = """
+    shader main {
+        @compute
+        @stage_entry
+        void unpack_words() {
+            auto bytes = (uint8*)words;
+        }
+    }
+    """
+
+    with pytest.raises(CrossGLFunctionBodyParseError) as exc_info:
+        Parser(tokenize_code(code), strict_function_bodies=True).parse()
+
+    error = exc_info.value
+    assert error.function_name == "unpack_words"
+    assert error.token_type == "IDENTIFIER"
+    assert error.token_value == "words"
+    assert error.reason == "Expected RPAREN, got IDENTIFIER 'words'"
+
+
+def test_non_entry_helper_malformed_body_raises_parse_error():
+    code = """
+    shader main {
+        int malformed_helper() {
+            return (1];
+        }
+
+        @compute
+        @stage_entry
+        void kernel() {}
+    }
+    """
+
+    with pytest.raises(CrossGLFunctionBodyParseError) as exc_info:
+        Parser(tokenize_code(code), strict_function_bodies=True).parse()
+
+    error = exc_info.value
+    assert error.function_name == "malformed_helper"
+    assert error.token_type == "RBRACKET"
+    assert error.token_value == "]"
+    assert error.reason == "Expected RPAREN, got RBRACKET ']'"
+
+
+def test_explicit_compute_stage_entry_preserves_pointer_dereference():
+    code = """
+    shader main {
+        @compute
+        @stage_entry
+        void reduce_values() {
+            float value = (*current_in);
+            buffer_store(output, 0, value);
+        }
+    }
+    """
+
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    function = next(func for func in ast.functions if func.name == "reduce_values")
+    body = function.body.statements
+    declaration = body[0]
+
+    assert isinstance(declaration, VariableNode)
+    assert isinstance(declaration.initial_value, UnaryOpNode)
+    assert declaration.initial_value.op == "*"
+    assert declaration.initial_value.operand.name == "current_in"
 
 
 def test_square_bracket_generic_type_arguments_parse_as_named_type_args():
@@ -110,6 +178,57 @@ def test_square_bracket_generic_type_arguments_do_not_replace_arrays():
 
     assert isinstance(function.parameters[0].param_type, ArrayType)
     assert isinstance(function.body.statements[0].value, ArrayAccessNode)
+
+
+def test_c_style_type_aliases_retain_declaration_provenance():
+    code = """
+    shader TypeAliases {
+        typedef f16 float16_t;
+        float runtime_value;
+
+        void use_local_alias() {
+            typedef float LocalFloat;
+            LocalFloat value = LocalFloat(1);
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+
+    assert [(node.name, node.is_type_alias) for node in ast.global_variables] == [
+        ("float16_t", True),
+        ("runtime_value", False),
+    ]
+    statements = ast.functions[0].body.statements
+    assert [(node.name, node.is_type_alias) for node in statements] == [
+        ("LocalFloat", True),
+        ("value", False),
+    ]
+
+
+def test_named_type_ternary_extent_parses_as_array():
+    code = """
+    shader NamedTypeTernaryArray {
+        struct ComplexValue {
+            float real;
+            float imag;
+        };
+
+        compute {
+            void main() {
+                threadgroup ComplexValue[64 == 0 ? 1 : 64] values;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    declaration = ast.stages[ShaderStage.COMPUTE].entry_point.body.statements[0]
+
+    assert isinstance(declaration.var_type, ArrayType)
+    assert isinstance(declaration.var_type.element_type, NamedType)
+    assert declaration.var_type.element_type.name == "ComplexValue"
+    assert isinstance(declaration.var_type.size, TernaryOpNode)
 
 
 def test_mojo_style_callable_type_parameter_reparses_to_function_type():
@@ -1808,6 +1927,24 @@ def test_array_parameter_syntax():
 
     assert isinstance(function.parameters[0].param_type, ArrayType)
     assert isinstance(function.parameters[1].param_type, ArrayType)
+
+
+def test_bfloat16_primitive_type_syntax():
+    code = """
+    shader BFloatTypes {
+        bfloat16 convert(bfloat16 value) {
+            return value;
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    function = ast.functions[0]
+
+    assert isinstance(function.return_type, PrimitiveType)
+    assert function.return_type.name == "bfloat16"
+    assert isinstance(function.parameters[0].param_type, PrimitiveType)
+    assert function.parameters[0].param_type.name == "bfloat16"
 
 
 def test_resource_parameter_syntax():
@@ -3678,6 +3815,100 @@ def test_literal_generic_type_arguments_parse():
     assert param_type.generic_args[0].name == "HSInput"
     assert isinstance(param_type.generic_args[1], LiteralNode)
     assert param_type.generic_args[1].value == 3
+
+
+def test_generic_value_expression_in_struct_member_default_parse():
+    code = """
+    shader GenericMemberDefault {
+        struct Loop {
+            static const int value = Loop<x + 1>.value;
+        };
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    default_value = ast.structs[0].members[0].default_value
+
+    assert isinstance(default_value, MemberAccessNode)
+    assert isinstance(default_value.object_expr, IdentifierNode)
+    assert default_value.object_expr.name == "Loop<x + 1>"
+    assert default_value.member == "value"
+
+
+def test_nested_generic_value_expression_close_parse():
+    code = """
+    shader NestedGenericValue {
+        void consume(Outer<Inner<width + 1>> value) { }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    assert any(token[0] == "BITWISE_SHIFT_RIGHT" for token in tokens)
+
+    ast = parse_code(tokens)
+    outer_type = ast.functions[0].parameters[0].param_type
+    inner_type = outer_type.generic_args[0]
+
+    assert isinstance(inner_type, NamedType)
+    assert inner_type.name == "Inner"
+    assert isinstance(inner_type.generic_args[0], BinaryOpNode)
+    assert inner_type.generic_args[0].operator == "+"
+
+
+@pytest.mark.parametrize(
+    ("expression", "operator"),
+    [
+        ("width > 1", ">"),
+        ("width < limit", "<"),
+    ],
+)
+def test_parenthesized_comparison_generic_value_parse(expression, operator):
+    code = f"""
+    shader GenericComparisonValue {{
+        void consume(Flag<({expression})> value) {{ }}
+    }}
+    """
+
+    ast = parse_code(tokenize_code(code))
+    argument = ast.functions[0].parameters[0].param_type.generic_args[0]
+
+    assert isinstance(argument, BinaryOpNode)
+    assert argument.operator == operator
+
+
+def test_less_than_generic_value_expression_parse():
+    code = """
+    shader GenericLessThanValue {
+        void consume(Flag<width < limit> value) { }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    argument = ast.functions[0].parameters[0].param_type.generic_args[0]
+
+    assert isinstance(argument, BinaryOpNode)
+    assert argument.operator == "<"
+
+
+def test_parenthesized_shift_generic_value_parse():
+    code = """
+    shader GenericShiftValue {
+        void consume(Flag<(width >> 1)> value) { }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    argument = ast.functions[0].parameters[0].param_type.generic_args[0]
+
+    assert isinstance(argument, BinaryOpNode)
+    assert argument.operator == ">>"
+
+
+def test_unterminated_generic_value_expression_is_rejected():
+    parser = Parser(tokenize_code("Tile<width + 1"))
+
+    with pytest.raises(SyntaxError, match="Unterminated generic argument list"):
+        parser.parse_type()
 
 
 def test_nested_generic_type_close_does_not_eat_shift_operator():

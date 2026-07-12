@@ -410,6 +410,7 @@ class WGSLCodeGen:
         "barrier",
         "groupmemorybarrierwithgroupsync",
         "workgroupbarrier",
+        "workgroupexecutionbarrier",
     }
     WGSL_RESERVED_IDENTIFIERS = {
         "NULL",

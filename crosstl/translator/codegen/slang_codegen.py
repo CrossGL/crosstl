@@ -338,6 +338,7 @@ class SlangCodeGen:
             "intBitsToFloat": "asfloat",
             "uintBitsToFloat": "asfloat",
             "workgroupBarrier": "GroupMemoryBarrierWithGroupSync",
+            "workgroupExecutionBarrier": "GroupMemoryBarrierWithGroupSync",
         }
 
     def indent(self):
@@ -9377,6 +9378,7 @@ class SlangCodeGen:
         return {
             "barrier": "GroupMemoryBarrierWithGroupSync",
             "workgroupBarrier": "GroupMemoryBarrierWithGroupSync",
+            "workgroupExecutionBarrier": "GroupMemoryBarrierWithGroupSync",
             "groupMemoryBarrier": "GroupMemoryBarrier",
             "memoryBarrierShared": "GroupMemoryBarrier",
             "memoryBarrierBuffer": "DeviceMemoryBarrier",

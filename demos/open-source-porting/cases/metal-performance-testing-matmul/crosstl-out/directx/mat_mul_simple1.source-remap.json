@@ -204,9 +204,9 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 19,
-        "endOffset": 597,
+        "endOffset": 595,
         "file": "crosstl-out/directx/mat_mul_simple1.hlsl",
-        "length": 54,
+        "length": 52,
         "line": 18,
         "offset": 543
       },
@@ -226,11 +226,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 20,
-        "endOffset": 653,
+        "endOffset": 651,
         "file": "crosstl-out/directx/mat_mul_simple1.hlsl",
         "length": 56,
         "line": 19,
-        "offset": 597
+        "offset": 595
       },
       "original": {
         "column": 1,
@@ -248,11 +248,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 21,
-        "endOffset": 676,
+        "endOffset": 674,
         "file": "crosstl-out/directx/mat_mul_simple1.hlsl",
         "length": 23,
         "line": 20,
-        "offset": 653
+        "offset": 651
       },
       "original": {
         "column": 1,
@@ -270,11 +270,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 22,
-        "endOffset": 725,
+        "endOffset": 723,
         "file": "crosstl-out/directx/mat_mul_simple1.hlsl",
         "length": 49,
         "line": 21,
-        "offset": 676
+        "offset": 674
       },
       "original": {
         "column": 1,
@@ -292,11 +292,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 23,
-        "endOffset": 784,
+        "endOffset": 782,
         "file": "crosstl-out/directx/mat_mul_simple1.hlsl",
         "length": 59,
         "line": 22,
-        "offset": 725
+        "offset": 723
       },
       "original": {
         "column": 1,
@@ -314,11 +314,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 24,
-        "endOffset": 843,
+        "endOffset": 841,
         "file": "crosstl-out/directx/mat_mul_simple1.hlsl",
         "length": 59,
         "line": 23,
-        "offset": 784
+        "offset": 782
       },
       "original": {
         "column": 1,
@@ -336,11 +336,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 25,
-        "endOffset": 899,
+        "endOffset": 897,
         "file": "crosstl-out/directx/mat_mul_simple1.hlsl",
         "length": 56,
         "line": 24,
-        "offset": 843
+        "offset": 841
       },
       "original": {
         "column": 1,
@@ -358,11 +358,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 27,
-        "endOffset": 933,
+        "endOffset": 931,
         "file": "crosstl-out/directx/mat_mul_simple1.hlsl",
         "length": 24,
         "line": 26,
-        "offset": 909
+        "offset": 907
       },
       "original": {
         "column": 1,

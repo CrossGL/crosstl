@@ -5,22 +5,22 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 20,
-        "endOffset": 481,
+        "endLine": 66,
+        "endOffset": 1678,
         "file": "crosstl-out/vulkan/spv.specConstant.spvasm",
-        "length": 22,
-        "line": 19,
-        "offset": 459
+        "length": 29,
+        "line": 65,
+        "offset": 1649
       },
       "original": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 9,
-        "endOffset": 278,
+        "endLine": 8,
+        "endOffset": 194,
         "file": "spv.specConstant.vert",
-        "length": 84,
-        "line": 8,
-        "offset": 194
+        "length": 53,
+        "line": 7,
+        "offset": 141
       }
     }
   ],

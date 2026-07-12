@@ -31,17 +31,17 @@ void CSMain(uint3 groupThreadID : SV_GroupThreadID, uint3 groupID : SV_GroupID) 
     uint wsi = crossglNumWorkGroups.x;
     uint wg_stride = (lsi * 2);
     uint valid_count = zmin(wg_stride, (uint(length) - (wid * wg_stride)));
-    if ((lid < valid_count)) {
+    if (lid < valid_count) {
         shared_[lid] = front[((wid * wg_stride) + lid)];
     }
     GroupMemoryBarrierWithGroupSync();
     for (uint i = lsi; (i != 0); i /= 2) {
-        if ((lid < i)) {
+        if (lid < i) {
             shared_[lid] = op(read_local(shared_, valid_count, zero_elem, lid), read_local(shared_, valid_count, zero_elem, (lid + i)));
         }
         GroupMemoryBarrierWithGroupSync();
     }
-    if ((lid == 0)) {
+    if (lid == 0) {
         back[wid] = shared_[0];
     }
 }

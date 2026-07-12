@@ -509,6 +509,7 @@ class RustCodeGen:
             "fmod": "modulo",
             "barrier": "workgroup_barrier",
             "workgroupBarrier": "workgroup_barrier",
+            "workgroupExecutionBarrier": "workgroup_barrier",
             "memoryBarrier": "memory_barrier",
             "memoryBarrierShared": "memory_barrier_shared",
             "memoryBarrierBuffer": "memory_barrier_buffer",
@@ -566,6 +567,7 @@ class RustCodeGen:
         self.sync_map = {
             "barrier": "workgroup_barrier",
             "workgroupBarrier": "workgroup_barrier",
+            "workgroupExecutionBarrier": "workgroup_barrier",
             "memoryBarrier": "memory_barrier",
             "memoryBarrierShared": "memory_barrier_shared",
             "memoryBarrierBuffer": "memory_barrier_buffer",

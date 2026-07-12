@@ -29,7 +29,7 @@ void main() {
     vec3 viewD = normalize((viewPos - fragPosition));
     vec3 specular = vec3(0.0);
     vec4 tint = (colDiffuse * fragColor);
-    for (int i = 0; (i < 4); (++i)) {
+    for (int i = 0; (i < 4); (i++)) {
         if ((lights[i].enabled == 1)) {
             vec3 light = vec3(0.0);
             if ((lights[i].type == 0)) {

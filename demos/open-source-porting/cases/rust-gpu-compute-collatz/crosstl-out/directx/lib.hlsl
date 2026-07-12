@@ -24,14 +24,14 @@ Option_u32 Option_u32_Absent_make() {
 RWStructuredBuffer<uint> prime_indices : register(u0);
 Option_u32 collatz(uint n) {
     int i = 0;
-    if ((n == 0)) {
+    if (n == 0) {
         return Option_u32_Absent_make();
     }
     while ((n != 1)) {
-        if (((n % 2) == 0)) {
+        if ((n % 2) == 0) {
             n = (n / 2);
         } else {
-            if ((n >= 1431655765)) {
+            if (n >= 1431655765) {
                 return Option_u32_Absent_make();
             }
             n = ((3 * n) + 1);
@@ -43,14 +43,14 @@ Option_u32 collatz(uint n) {
 
 uint collatz_unwrap_or(uint n, uint _rust_option_fallback) {
     int i = 0;
-    if ((n == 0)) {
+    if (n == 0) {
         return _rust_option_fallback;
     }
     while ((n != 1)) {
-        if (((n % 2) == 0)) {
+        if ((n % 2) == 0) {
             n = (n / 2);
         } else {
-            if ((n >= 1431655765)) {
+            if (n >= 1431655765) {
                 return _rust_option_fallback;
             }
             n = ((3 * n) + 1);

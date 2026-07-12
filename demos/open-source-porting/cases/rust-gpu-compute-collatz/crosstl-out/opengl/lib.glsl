@@ -22,6 +22,8 @@ Option_u32 Option_u32_None_make() {
 }
 
 layout(std430, binding = 0) buffer prime_indicesBuffer { uint prime_indices[]; };
+uint collatz_unwrap_or(uint n, uint _rust_option_fallback);
+
 Option_u32 collatz(uint n) {
     int i = 0;
     if ((n == 0)) {
@@ -38,7 +40,7 @@ Option_u32 collatz(uint n) {
         }
         i += 1;
     }
-    return Option_u32_Some_make(i);
+    return Option_u32_Some_make(uint(i));
 }
 
 uint collatz_unwrap_or(uint n, uint _rust_option_fallback) {
@@ -57,7 +59,7 @@ uint collatz_unwrap_or(uint n, uint _rust_option_fallback) {
         }
         i += 1;
     }
-    return i;
+    return uint(i);
 }
 
 // Compute Shader

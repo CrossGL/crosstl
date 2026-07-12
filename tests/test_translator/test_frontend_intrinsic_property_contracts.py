@@ -39,9 +39,15 @@ WAVE_CASES = (
     IntrinsicCase("WaveActiveAnyTrue", "WaveActiveAnyTrue(false)", WaveOpNode, 1),
     IntrinsicCase("WaveReadLaneAt", "WaveReadLaneAt(8, 0)", WaveOpNode, 2),
     IntrinsicCase("WaveReadLaneFirst", "WaveReadLaneFirst(9)", WaveOpNode, 1),
-    IntrinsicCase("WavePrefixSum", "WavePrefixSum(10)", WaveOpNode, 1),
-    IntrinsicCase("WavePrefixProduct", "WavePrefixProduct(11)", WaveOpNode, 1),
-    IntrinsicCase("QuadReadLaneAt", "QuadReadLaneAt(12, 1)", WaveOpNode, 2),
+    IntrinsicCase(
+        "WaveShuffleAndFillUp",
+        "WaveShuffleAndFillUp(10, 0, 1)",
+        WaveOpNode,
+        3,
+    ),
+    IntrinsicCase("WavePrefixSum", "WavePrefixSum(11)", WaveOpNode, 1),
+    IntrinsicCase("WavePrefixProduct", "WavePrefixProduct(12)", WaveOpNode, 1),
+    IntrinsicCase("QuadReadLaneAt", "QuadReadLaneAt(13, 1)", WaveOpNode, 2),
 )
 
 RAY_TRACING_CASES = (

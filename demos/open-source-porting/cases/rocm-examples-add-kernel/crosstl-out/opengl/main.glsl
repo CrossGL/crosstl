@@ -4,6 +4,6 @@ layout(std430, binding = 1) readonly buffer bBuffer { float b[]; };
 // Compute Shader
 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 void main() {
-    int global_idx = (int(gl_LocalInvocationID.x) + (int(gl_WorkGroupID.x) * int(gl_WorkGroupSize.x)));
+    int global_idx = int((gl_LocalInvocationID.x + (gl_WorkGroupID.x * gl_WorkGroupSize.x)));
     a[global_idx] += b[global_idx];
 }

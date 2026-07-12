@@ -25,6 +25,10 @@ from crosstl.project.runtime_verification import (
     VulkanRuntimeParityAdapter,
     verify_runtime_test_manifest,
 )
+from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
+from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
+from crosstl.translator.lexer import Lexer
+from crosstl.translator.parser import Parser
 
 
 def _runtime_request(tmp_path: Path) -> RuntimeExecutionRequest:
@@ -319,6 +323,370 @@ void main() {
                             "dtype": "float32",
                             "shape": [2],
                             "values": [11.0, 22.0],
+                        }
+                    ],
+                }
+            ],
+        },
+        executors={
+            "vulkan": VulkanRuntimeParityAdapter(
+                runtime=VulkanComputeRuntime(),
+                required_tools=("spirv-val",),
+            )
+        },
+    )
+
+    result = report["results"][0]
+    failure_context = json.dumps(report, indent=2, sort_keys=True)
+    assert report["success"] is True, failure_context
+    assert result["status"] == "passed"
+    assert result["comparisons"][0]["status"] == "passed", failure_context
+
+
+def test_runtime_parity_glsl_workgroup_alias_offset_executes_on_vulkan(tmp_path):
+    if os.environ.get("CROSTL_RUN_VULKAN_DEVICE_TEST") != "1":
+        pytest.skip("set CROSTL_RUN_VULKAN_DEVICE_TEST=1 to run Vulkan device test")
+    pytest.importorskip("vulkan")
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is required to build the Vulkan fixture")
+
+    source_code = """
+    shader WorkgroupAliasRuntime {
+        RWStructuredBuffer<float> outValues @binding(0);
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup float storage[8];
+                storage[3] = -11.0;
+                threadgroup float* tile = storage + 3;
+                tile[0] = 7.0;
+                buffer_store(outValues, 0, storage[3]);
+            }
+        }
+    }
+    """
+    generated = GLSLCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+    shader_path = tmp_path / "workgroup-alias.comp"
+    artifact_path = tmp_path / "out" / "vulkan" / "workgroup-alias.spv"
+    artifact_path.parent.mkdir(parents=True)
+    shader_path.write_text(generated, encoding="utf-8")
+    subprocess.run(
+        [glslang, "-V", "-S", "comp", str(shader_path), "-o", str(artifact_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    report = verify_runtime_test_manifest(
+        {
+            "kind": "crosstl-project-portability-report",
+            "project": {"root": str(tmp_path), "targets": ["vulkan"]},
+            "artifacts": [
+                {
+                    "source": "kernels/workgroup-alias.cgl",
+                    "path": "out/vulkan/workgroup-alias.spv",
+                    "target": "vulkan",
+                    "status": "translated",
+                    "entryPoints": [{"name": "main", "stage": "compute"}],
+                    "resourceBindings": [
+                        {
+                            "name": "outValues",
+                            "kind": "buffer",
+                            "set": 0,
+                            "binding": 0,
+                        }
+                    ],
+                    "dispatch": {
+                        "entryPoint": "main",
+                        "workgroupCount": [1, 1, 1],
+                    },
+                }
+            ],
+        },
+        {
+            "kind": "crosstl-project-runtime-test-manifest",
+            "adapters": [
+                {
+                    "id": "native-vulkan",
+                    "executor": "vulkan",
+                    "adapterKind": "vulkan-native-runtime",
+                    "platformRequirements": {"requiredTools": []},
+                }
+            ],
+            "tests": [
+                {
+                    "id": "opengl-workgroup-alias-device",
+                    "selector": {
+                        "source": "kernels/workgroup-alias.cgl",
+                        "target": "vulkan",
+                    },
+                    "adapter": "native-vulkan",
+                    "expectedOutputs": [
+                        {
+                            "name": "outValues",
+                            "dtype": "float32",
+                            "shape": [1],
+                            "values": [7.0],
+                        }
+                    ],
+                }
+            ],
+        },
+        executors={
+            "vulkan": VulkanRuntimeParityAdapter(
+                runtime=VulkanComputeRuntime(),
+                required_tools=("spirv-val",),
+            )
+        },
+    )
+
+    result = report["results"][0]
+    failure_context = json.dumps(report, indent=2, sort_keys=True)
+    assert report["success"] is True, failure_context
+    assert result["status"] == "passed"
+    assert result["comparisons"][0]["status"] == "passed", failure_context
+
+
+def test_runtime_parity_glsl_partial_aggregate_executes_on_vulkan(tmp_path):
+    if os.environ.get("CROSTL_RUN_VULKAN_DEVICE_TEST") != "1":
+        pytest.skip("set CROSTL_RUN_VULKAN_DEVICE_TEST=1 to run Vulkan device test")
+    pytest.importorskip("vulkan")
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is required to build the Vulkan fixture")
+
+    source_code = """
+    shader PartialAggregateRuntime {
+        struct Pair {
+            float x;
+            float y;
+        };
+
+        struct Bundle {
+            Pair pair;
+            float values[2];
+        };
+
+        RWStructuredBuffer<float> outValues @binding(0);
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                Bundle value = {{5.0}};
+                buffer_store(outValues, 0, value.pair.x);
+                buffer_store(outValues, 1, value.pair.y + 10.0);
+                buffer_store(outValues, 2, value.values[0] + 20.0);
+                buffer_store(outValues, 3, value.values[1] + 30.0);
+            }
+        }
+    }
+    """
+    generated = GLSLCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+    shader_path = tmp_path / "partial-aggregate.comp"
+    artifact_path = tmp_path / "out" / "vulkan" / "partial-aggregate.spv"
+    artifact_path.parent.mkdir(parents=True)
+    shader_path.write_text(generated, encoding="utf-8")
+    subprocess.run(
+        [glslang, "-V", "-S", "comp", str(shader_path), "-o", str(artifact_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    report = verify_runtime_test_manifest(
+        {
+            "kind": "crosstl-project-portability-report",
+            "project": {"root": str(tmp_path), "targets": ["vulkan"]},
+            "artifacts": [
+                {
+                    "source": "kernels/partial-aggregate.cgl",
+                    "path": "out/vulkan/partial-aggregate.spv",
+                    "target": "vulkan",
+                    "status": "translated",
+                    "entryPoints": [{"name": "main", "stage": "compute"}],
+                    "resourceBindings": [
+                        {
+                            "name": "outValues",
+                            "kind": "buffer",
+                            "set": 0,
+                            "binding": 0,
+                        }
+                    ],
+                    "dispatch": {
+                        "entryPoint": "main",
+                        "workgroupCount": [1, 1, 1],
+                    },
+                }
+            ],
+        },
+        {
+            "kind": "crosstl-project-runtime-test-manifest",
+            "adapters": [
+                {
+                    "id": "native-vulkan",
+                    "executor": "vulkan",
+                    "adapterKind": "vulkan-native-runtime",
+                    "platformRequirements": {"requiredTools": []},
+                }
+            ],
+            "tests": [
+                {
+                    "id": "opengl-partial-aggregate-device",
+                    "selector": {
+                        "source": "kernels/partial-aggregate.cgl",
+                        "target": "vulkan",
+                    },
+                    "adapter": "native-vulkan",
+                    "expectedOutputs": [
+                        {
+                            "name": "outValues",
+                            "dtype": "float32",
+                            "shape": [4],
+                            "values": [5.0, 10.0, 20.0, 30.0],
+                        }
+                    ],
+                }
+            ],
+        },
+        executors={
+            "vulkan": VulkanRuntimeParityAdapter(
+                runtime=VulkanComputeRuntime(),
+                required_tools=("spirv-val",),
+            )
+        },
+    )
+
+    result = report["results"][0]
+    failure_context = json.dumps(report, indent=2, sort_keys=True)
+    assert report["success"] is True, failure_context
+    assert result["status"] == "passed"
+    assert result["comparisons"][0]["status"] == "passed", failure_context
+
+
+def test_runtime_parity_vulkan_array_aliases_and_offsets_execute_on_device(tmp_path):
+    if os.environ.get("CROSTL_RUN_VULKAN_DEVICE_TEST") != "1":
+        pytest.skip("set CROSTL_RUN_VULKAN_DEVICE_TEST=1 to run Vulkan device test")
+    pytest.importorskip("vulkan")
+    spirv_as = shutil.which("spirv-as")
+    if spirv_as is None:
+        pytest.skip("spirv-as is required to build the Vulkan fixture")
+
+    source_code = """
+    shader WritableArrayRuntime {
+        struct Payload {
+            float[4] values;
+        }
+
+        StructuredBuffer<float> input @binding(0);
+        RWStructuredBuffer<Payload> output @binding(1);
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void fill(inout float[4] values) {
+                values[0] = 1.0;
+                values[1] = 2.0;
+                values[2] = 3.0;
+                values[3] = 4.0;
+            }
+
+            float readValue(device float* src, int index) {
+                return src[index];
+            }
+
+            float relayRead(device float* src, int index) {
+                return readValue(src + 1, index);
+            }
+
+            void main() {
+                fill(output[0].values);
+                output[0].values[3] = relayRead(&input[3], 2);
+            }
+        }
+    }
+    """
+    spv_assembly = VulkanSPIRVCodeGen().generate(
+        Parser(Lexer(source_code).tokens).parse()
+    )
+    assembly_path = tmp_path / "inout-array.spvasm"
+    artifact_path = tmp_path / "out" / "vulkan" / "inout-array.spv"
+    artifact_path.parent.mkdir(parents=True)
+    assembly_path.write_text(spv_assembly, encoding="utf-8")
+    subprocess.run(
+        [spirv_as, str(assembly_path), "-o", str(artifact_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    report = verify_runtime_test_manifest(
+        {
+            "kind": "crosstl-project-portability-report",
+            "project": {"root": str(tmp_path), "targets": ["vulkan"]},
+            "artifacts": [
+                {
+                    "source": "kernels/inout-array.cgl",
+                    "path": "out/vulkan/inout-array.spv",
+                    "target": "vulkan",
+                    "status": "translated",
+                    "entryPoints": [{"name": "main", "stage": "compute"}],
+                    "resourceBindings": [
+                        {
+                            "name": "input",
+                            "kind": "buffer",
+                            "set": 0,
+                            "binding": 0,
+                        },
+                        {
+                            "name": "output",
+                            "kind": "buffer",
+                            "set": 0,
+                            "binding": 1,
+                        },
+                    ],
+                    "dispatch": {
+                        "entryPoint": "main",
+                        "workgroupCount": [1, 1, 1],
+                    },
+                }
+            ],
+        },
+        {
+            "kind": "crosstl-project-runtime-test-manifest",
+            "adapters": [
+                {
+                    "id": "native-vulkan",
+                    "executor": "vulkan",
+                    "adapterKind": "vulkan-native-runtime",
+                    "platformRequirements": {"requiredTools": []},
+                }
+            ],
+            "tests": [
+                {
+                    "id": "vulkan-inout-array-device",
+                    "selector": {
+                        "source": "kernels/inout-array.cgl",
+                        "target": "vulkan",
+                    },
+                    "adapter": "native-vulkan",
+                    "inputs": [
+                        {
+                            "name": "input",
+                            "dtype": "float32",
+                            "shape": [8],
+                            "values": [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+                        }
+                    ],
+                    "expectedOutputs": [
+                        {
+                            "name": "output",
+                            "dtype": "float32",
+                            "shape": [4],
+                            "values": [1.0, 2.0, 3.0, 6.0],
                         }
                     ],
                 }

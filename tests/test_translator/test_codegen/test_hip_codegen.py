@@ -11908,6 +11908,22 @@ class TestHipCodeGen:
         assert "__syncthreads();" in hip_code
         assert "workgroupBarrier()" not in hip_code
 
+    def test_workgroup_execution_barrier_emits_syncthreads(self):
+        source_code = """
+        shader HipExecutionBarrier {
+            compute {
+                void main() {
+                    workgroupExecutionBarrier();
+                }
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "__syncthreads();" in hip_code
+        assert "workgroupExecutionBarrier()" not in hip_code
+
     def test_hip_memory_barrier_variants_emit_sync_intrinsics(self):
         source_code = """
         shader HipMemoryBarrierVariants {
@@ -12028,6 +12044,7 @@ class TestHipCodeGen:
             "allMemoryBarrier",
             "deviceMemoryBarrier",
             "workgroupBarrier",
+            "workgroupExecutionBarrier",
         ],
     )
     def test_hip_synchronization_builtins_reject_arguments(self, builtin):

@@ -10,7 +10,7 @@ cbuffer vectorAdd_Args : register(b3) {
 [numthreads(1, 1, 1)]
 void CSMain(uint3 groupThreadID : SV_GroupThreadID, uint3 groupID : SV_GroupID) {
     int i = ((uint3(1, 1, 1).x * groupID.x) + groupThreadID.x);
-    if ((i < numElements)) {
+    if (i < numElements) {
         C[i] = (A[i] + B[i]);
     }
 }

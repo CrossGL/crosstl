@@ -194,7 +194,13 @@ def translate(
             cgl_spec = SOURCE_REGISTRY.get("cgl")
             if not cgl_spec:
                 raise ValueError("CrossGL parser not available for intermediate step")
-            cgl_ast = cgl_spec.parse(intermediate_code)
+            cgl_source_options = {
+                "strict_function_bodies": source_spec.name != "mojo",
+            }
+            cgl_ast = cgl_spec.parse(
+                intermediate_code,
+                source_options=cgl_source_options,
+            )
             if source_spec.name == "opencl" and normalized_backend != "webgl":
                 cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
                 validate_opencl_intermediate_for_target(cgl_ast, normalized_backend)

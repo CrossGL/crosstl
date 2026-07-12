@@ -1510,10 +1510,10 @@ def test_codegen_double_float_suffix_literals_from_glslang_numeral_reparse():
     assert "double gf4 = .4e1;" in crossgl
 
     glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
-    assert "double gf1 = 1.0;" in glsl
-    assert "double gf2 = 2.0;" in glsl
-    assert "double gf3 = 3.0;" in glsl
-    assert "double gf4 = 4.0;" in glsl
+    assert "double gf1 = double(1.0);" in glsl
+    assert "double gf2 = double(2.0);" in glsl
+    assert "double gf3 = double(3.0);" in glsl
+    assert "double gf4 = double(4.0);" in glsl
     assert "outValue = (((gf1 + gf2) + gf3) + gf4);" in glsl
     assert "fragColor = outValue;" in glsl
 
@@ -2410,7 +2410,7 @@ def test_codegen_const_gather_offset_arrays_roundtrip():
     assert "textureGatherCompareOffsets(" not in glsl
     assert "textureGatherOffset(tex" in glsl
     assert "textureGatherOffset(shadowArray" in glsl
-    assert "const ivec2 nested[2][2] = {" in glsl
+    assert "const ivec2 nested[2][2] = ivec2[2][2](" in glsl
     assert "ivec2 selected = nested[1][0];" in glsl
 
 

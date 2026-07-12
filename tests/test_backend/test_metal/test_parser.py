@@ -22,7 +22,12 @@ from crosstl.backend.common_ast import (
     VectorConstructorNode,
     WhileNode,
 )
-from crosstl.backend.Metal.MetalAst import BlockNode, EnumNode, LambdaNode
+from crosstl.backend.Metal.MetalAst import (
+    BlockNode,
+    EnumNode,
+    LambdaNode,
+    TypeAliasNode,
+)
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
 
@@ -493,11 +498,16 @@ def test_parse_block_scope_using_decltype_alias_from_mlx_steel_attention():
     ast = parse_ok(code)
 
     body = ast.functions[0].body
-    assert body[1].left.name == "neg_inf"
-    assert body[1].left.vtype == "auto"
-    assert body[1].right.name == "Limits<selem_t>::finite_min"
-    assert body[2].left.name == "kRowsPT"
-    assert body[2].right.name == "stile_t::kRowsPerThread"
+    # Body-local ``using X = Y;`` aliases are retained as TypeAliasNode
+    # statements so codegen can resolve later declarations that reference them.
+    aliases = [stmt for stmt in body if isinstance(stmt, TypeAliasNode)]
+    assert [alias.name for alias in aliases] == ["stile_t", "selem_t"]
+    statements = [stmt for stmt in body if not isinstance(stmt, TypeAliasNode)]
+    assert statements[1].left.name == "neg_inf"
+    assert statements[1].left.vtype == "auto"
+    assert statements[1].right.name == "Limits<selem_t>::finite_min"
+    assert statements[2].left.name == "kRowsPT"
+    assert statements[2].right.name == "stile_t::kRowsPerThread"
 
 
 def test_parse_block_scope_decltype_variable_declaration():
@@ -2972,6 +2982,108 @@ def test_parse_scoped_variable_template_expression_from_mlx_gemv_masked():
     assert isinstance(second_value, BinaryOpNode)
     assert second_value.op == "&&"
     assert second_value.right.operand.name == "metal::is_same_v<op_mask_t,bool>"
+
+
+def test_parse_parenthesized_scoped_constant_expressions_from_mlx_steel():
+    code = """
+    struct Base {
+      static constant constexpr const int kFragRows = 8;
+    };
+
+    struct Tile {
+      static constant constexpr const int direct = (Base::kFragRows);
+      static constant constexpr const int product = 4 * (Base::kFragRows);
+      static constant constexpr const int sum = (Base::kFragRows) + 1;
+      static constant constexpr const int difference = (Base::kFragRows) - 1;
+      static constant constexpr const int scaled = (Base::kFragRows) * 2;
+      static constant constexpr const int grouped_arithmetic =
+          (Base::kFragRows + 1);
+      static constant constexpr const int nested =
+          ((outer::inner::Limits::value));
+      static constant constexpr const int negated = -(Base::kFragRows);
+      static constant constexpr const int selected =
+          true ? (Base::kFragRows) : 0;
+    };
+
+    void consume(int value) {}
+
+    void use_constant() {
+      consume((Base::kFragRows));
+    }
+    """
+    ast = parse_ok(code)
+
+    members = {member.name: member.default_value for member in ast.structs[1].members}
+    direct = members["direct"]
+    assert direct.name == "Base::kFragRows"
+    assert direct.source_location["file"] is None
+    assert direct.group_source_location["offset"] < direct.source_location["offset"]
+    assert direct.group_source_location["end_offset"] > (
+        direct.source_location["end_offset"]
+    )
+    assert members["product"].right.name == "Base::kFragRows"
+    assert members["sum"].left.name == "Base::kFragRows"
+    assert members["difference"].left.name == "Base::kFragRows"
+    assert members["scaled"].left.name == "Base::kFragRows"
+    grouped_arithmetic = members["grouped_arithmetic"]
+    assert grouped_arithmetic.left.name == "Base::kFragRows"
+    assert grouped_arithmetic.group_source_location["offset"] < (
+        grouped_arithmetic.left.source_location["offset"]
+    )
+    nested = members["nested"]
+    assert nested.name == "outer::inner::Limits::value"
+    assert len(nested.group_source_locations) == 2
+    inner_group, outer_group = nested.group_source_locations
+    assert outer_group["offset"] < inner_group["offset"]
+    assert outer_group["end_offset"] > inner_group["end_offset"]
+    assert members["negated"].operand.name == "Base::kFragRows"
+    assert members["selected"].true_expr.name == "Base::kFragRows"
+
+    call = ast.functions[1].body[0]
+    assert isinstance(call, FunctionCallNode)
+    assert call.args[0].name == "Base::kFragRows"
+
+
+def test_parenthesized_scoped_values_remain_distinct_from_casts_and_constructors():
+    code = """
+    namespace outer {
+    struct Payload {
+      int value;
+    };
+    }
+
+    void convert(outer::Payload input) {
+      outer::Payload qualified = (outer::Payload)input;
+      outer::Payload unary_qualified = (outer::Payload)-input;
+      int scalar = (int)-1.5;
+      int constructed = int(2.5);
+    }
+
+    template <typename T>
+    T negate(T input) {
+      return (T)-input;
+    }
+    """
+    ast = parse_ok(code)
+
+    body = ast.functions[0].body
+    assert isinstance(body[0].right, CastNode)
+    assert body[0].right.target_type == "outer::Payload"
+    assert isinstance(body[1].right, CastNode)
+    assert body[1].right.target_type == "outer::Payload"
+    assert isinstance(body[1].right.expression, UnaryOpNode)
+    assert isinstance(body[2].right, CastNode)
+    assert body[2].right.target_type == "int"
+    assert isinstance(body[2].right.expression, UnaryOpNode)
+    assert isinstance(body[3].right, VectorConstructorNode)
+    assert body[3].right.vector_type == "int"
+
+    template_casts = [
+        node for node in iter_ast_nodes(ast.functions[1]) if isinstance(node, CastNode)
+    ]
+    assert len(template_casts) == 1
+    assert template_casts[0].target_type == "T"
+    assert isinstance(template_casts[0].expression, UnaryOpNode)
 
 
 def test_parse_typename_qualified_threadgroup_type_from_mlx_gemv():

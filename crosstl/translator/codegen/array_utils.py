@@ -7,6 +7,10 @@ and type detection across different code generators.
 from typing import Any, Dict, Optional, Tuple
 
 
+class _UnsignedLiteralInt(int):
+    """Integer constant whose unsigned source type must survive lookup."""
+
+
 def parse_array_type(type_name: str) -> Tuple[str, Optional[int]]:
     """Parse an array type string into base type and size, returning None size for dynamic arrays."""
     if not type_name or "[" not in type_name:
@@ -145,9 +149,9 @@ def evaluate_literal_int_expression(
     """Evaluate a narrow integer-only AST expression.
 
     This is used for declaration sizing hints where accepting dynamic values would
-    be unsafe. It intentionally supports only literals, unary signs, and basic
-    arithmetic over integer literals. Named constants are resolved only from the
-    explicit constants map supplied by the caller.
+    be unsafe. It supports integer arithmetic, comparisons, logical operators,
+    and conditionals over compile-time values. Named constants are resolved only
+    from the explicit constants map supplied by the caller.
     """
     constants = constants or {}
 
@@ -155,7 +159,7 @@ def evaluate_literal_int_expression(
         return None
 
     if isinstance(expr, bool):
-        return None
+        return int(expr)
 
     if isinstance(expr, int):
         return expr
@@ -166,17 +170,21 @@ def evaluate_literal_int_expression(
             return parsed
         return constants.get(expr)
 
+    class_name = expr.__class__.__name__
     if hasattr(expr, "value"):
         value = getattr(expr, "value")
         parsed = evaluate_literal_int_expression(value, constants)
         if parsed is not None:
+            if "Literal" in class_name:
+                literal_type = _literal_type_name(getattr(expr, "literal_type", None))
+                if literal_type is not None:
+                    return _coerce_literal_int(literal_type, parsed)
             return parsed
 
     name = getattr(expr, "name", None)
     if isinstance(name, str) and name in constants:
         return constants[name]
 
-    class_name = expr.__class__.__name__
     if "UnaryOp" in class_name:
         operand = evaluate_literal_int_expression(
             getattr(expr, "operand", None), constants
@@ -184,24 +192,92 @@ def evaluate_literal_int_expression(
         if operand is None:
             return None
         operator = getattr(expr, "operator", getattr(expr, "op", None))
+        if isinstance(operand, _UnsignedLiteralInt) and operator != "!":
+            return None
         if operator == "+":
             return operand
         if operator == "-":
             return -operand
+        if operator == "~":
+            return ~operand
+        if operator == "!":
+            return int(not operand)
         return None
+
+    if "TernaryOp" in class_name:
+        condition = evaluate_literal_int_expression(
+            getattr(expr, "condition", None), constants
+        )
+        if condition is None:
+            return None
+        selected = (
+            getattr(expr, "true_expr", None)
+            if condition != 0
+            else getattr(expr, "false_expr", None)
+        )
+        return evaluate_literal_int_expression(selected, constants)
 
     if "BinaryOp" in class_name:
         left = evaluate_literal_int_expression(getattr(expr, "left", None), constants)
-        right = evaluate_literal_int_expression(getattr(expr, "right", None), constants)
-        if left is None or right is None:
-            return None
         operator = getattr(expr, "operator", getattr(expr, "op", None))
+        if left is None:
+            return None
+        if operator in {"&&", "and"}:
+            if left == 0:
+                return 0
+            right = evaluate_literal_int_expression(
+                getattr(expr, "right", None), constants
+            )
+            return None if right is None else int(right != 0)
+        if operator in {"||", "or"}:
+            if left != 0:
+                return 1
+            right = evaluate_literal_int_expression(
+                getattr(expr, "right", None), constants
+            )
+            return None if right is None else int(right != 0)
+        right = evaluate_literal_int_expression(getattr(expr, "right", None), constants)
+        if right is None:
+            return None
+        if isinstance(left, _UnsignedLiteralInt) or isinstance(
+            right, _UnsignedLiteralInt
+        ):
+            return None
         if operator == "+":
             return left + right
         if operator == "-":
             return left - right
         if operator == "*":
             return left * right
+        if operator == "/" and right != 0:
+            quotient = abs(left) // abs(right)
+            return -quotient if (left < 0) != (right < 0) else quotient
+        if operator == "%" and right != 0:
+            quotient = abs(left) // abs(right)
+            quotient = -quotient if (left < 0) != (right < 0) else quotient
+            return left - quotient * right
+        if operator == "<<" and right >= 0:
+            return left << right
+        if operator == ">>" and right >= 0:
+            return left >> right
+        if operator == "&":
+            return left & right
+        if operator == "|":
+            return left | right
+        if operator == "^":
+            return left ^ right
+        if operator == "==":
+            return int(left == right)
+        if operator == "!=":
+            return int(left != right)
+        if operator == "<":
+            return int(left < right)
+        if operator == "<=":
+            return int(left <= right)
+        if operator == ">":
+            return int(left > right)
+        if operator == ">=":
+            return int(left >= right)
 
     if "Cast" in class_name:
         return _evaluate_literal_int_cast(
@@ -308,11 +384,55 @@ def _coerce_literal_int(type_name, value) -> Optional[int]:
     """Return an integer value when the target type preserves integer indexing."""
     if value is None:
         return None
-    if type_name in {"int", "int32_t", "long"}:
-        return value
-    if type_name in {"uint", "uint32_t", "unsigned", "ulong"}:
-        return value if value >= 0 else None
+    if _is_signed_integer_scalar_type(type_name):
+        return None if isinstance(value, _UnsignedLiteralInt) else value
+    if _is_unsigned_integer_scalar_type(type_name):
+        # Preserve unsigned provenance for direct fixed extents. Arithmetic and
+        # comparisons reject this marker until the evaluator carries bit width.
+        return _UnsignedLiteralInt(value) if value >= 0 else None
     return None
+
+
+def _is_signed_integer_scalar_type(type_name) -> bool:
+    normalized = "".join(str(type_name or "").split()).lower()
+    return normalized in {
+        "bool",
+        "char",
+        "short",
+        "int",
+        "long",
+        "int8_t",
+        "int16_t",
+        "int32_t",
+        "int64_t",
+        "signed",
+        "signedchar",
+        "signedshort",
+        "signedint",
+        "signedlong",
+        "signedlonglong",
+    }
+
+
+def _is_unsigned_integer_scalar_type(type_name) -> bool:
+    normalized = "".join(str(type_name or "").split()).lower()
+    return normalized in {
+        "uchar",
+        "ushort",
+        "uint",
+        "ulong",
+        "size_t",
+        "uint8_t",
+        "uint16_t",
+        "uint32_t",
+        "uint64_t",
+        "unsigned",
+        "unsignedchar",
+        "unsignedshort",
+        "unsignedint",
+        "unsignedlong",
+        "unsignedlonglong",
+    }
 
 
 def _is_integer_vector_type(type_name) -> bool:
@@ -355,11 +475,24 @@ def collect_literal_int_constants(constants) -> Dict[str, int]:
             if not name or name in resolved:
                 continue
 
+            const_type = _literal_type_name(getattr(const, "const_type", None))
+            signed_type = _is_signed_integer_scalar_type(const_type)
+            unsigned_type = _is_unsigned_integer_scalar_type(const_type)
+            if const_type is not None and not (signed_type or unsigned_type):
+                continue
+
             value = evaluate_literal_int_expression(
                 getattr(const, "value", None), resolved
             )
             if value is None:
                 remaining.append(const)
+                continue
+
+            if unsigned_type:
+                if value < 0:
+                    continue
+                value = _UnsignedLiteralInt(value)
+            elif isinstance(value, _UnsignedLiteralInt):
                 continue
 
             resolved[name] = value

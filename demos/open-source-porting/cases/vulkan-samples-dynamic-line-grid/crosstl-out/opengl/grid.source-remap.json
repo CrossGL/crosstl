@@ -72,9 +72,9 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 6,
-        "endOffset": 133,
+        "endOffset": 132,
         "file": "crosstl-out/opengl/grid.glsl",
-        "length": 22,
+        "length": 21,
         "line": 5,
         "offset": 111
       },
@@ -93,12 +93,34 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 7,
-        "endOffset": 158,
+        "endLine": 8,
+        "endOffset": 155,
+        "file": "crosstl-out/opengl/grid.glsl",
+        "length": 22,
+        "line": 7,
+        "offset": 133
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 8,
+        "endOffset": 156,
+        "file": "grid.frag",
+        "length": 22,
+        "line": 7,
+        "offset": 134
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 180,
         "file": "crosstl-out/opengl/grid.glsl",
         "length": 25,
-        "line": 6,
-        "offset": 133
+        "line": 8,
+        "offset": 155
       },
       "original": {
         "column": 1,
@@ -115,12 +137,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 8,
-        "endOffset": 195,
+        "endLine": 10,
+        "endOffset": 217,
         "file": "crosstl-out/opengl/grid.glsl",
         "length": 37,
-        "line": 7,
-        "offset": 158
+        "line": 9,
+        "offset": 180
       },
       "original": {
         "column": 1,
@@ -137,12 +159,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 9,
-        "endOffset": 265,
+        "endLine": 11,
+        "endOffset": 287,
         "file": "crosstl-out/opengl/grid.glsl",
         "length": 70,
-        "line": 8,
-        "offset": 195
+        "line": 10,
+        "offset": 217
       },
       "original": {
         "column": 1,
@@ -159,12 +181,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 10,
-        "endOffset": 311,
+        "endLine": 12,
+        "endOffset": 333,
         "file": "crosstl-out/opengl/grid.glsl",
         "length": 46,
-        "line": 9,
-        "offset": 265
+        "line": 11,
+        "offset": 287
       },
       "original": {
         "column": 1,
@@ -181,12 +203,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 11,
-        "endOffset": 367,
+        "endLine": 13,
+        "endOffset": 389,
         "file": "crosstl-out/opengl/grid.glsl",
         "length": 56,
-        "line": 10,
-        "offset": 311
+        "line": 12,
+        "offset": 333
       },
       "original": {
         "column": 1,
@@ -203,12 +225,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 14,
-        "endOffset": 411,
+        "endLine": 16,
+        "endOffset": 433,
         "file": "crosstl-out/opengl/grid.glsl",
         "length": 41,
-        "line": 13,
-        "offset": 370
+        "line": 15,
+        "offset": 392
       },
       "original": {
         "column": 1,
@@ -225,12 +247,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 16,
-        "endOffset": 444,
+        "endLine": 18,
+        "endOffset": 466,
         "file": "crosstl-out/opengl/grid.glsl",
         "length": 19,
-        "line": 15,
-        "offset": 425
+        "line": 17,
+        "offset": 447
       },
       "original": {
         "column": 1,
@@ -247,12 +269,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 17,
-        "endOffset": 505,
+        "endLine": 19,
+        "endOffset": 527,
         "file": "crosstl-out/opengl/grid.glsl",
         "length": 61,
-        "line": 16,
-        "offset": 444
+        "line": 18,
+        "offset": 466
       },
       "original": {
         "column": 1,
@@ -269,12 +291,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 18,
-        "endOffset": 564,
+        "endLine": 20,
+        "endOffset": 586,
         "file": "crosstl-out/opengl/grid.glsl",
         "length": 59,
-        "line": 17,
-        "offset": 505
+        "line": 19,
+        "offset": 527
       },
       "original": {
         "column": 1,
@@ -291,12 +313,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 19,
-        "endOffset": 590,
+        "endLine": 21,
+        "endOffset": 612,
         "file": "crosstl-out/opengl/grid.glsl",
         "length": 26,
-        "line": 18,
-        "offset": 564
+        "line": 20,
+        "offset": 586
       },
       "original": {
         "column": 1,

@@ -38,11 +38,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 28,
-        "endOffset": 842,
+        "endOffset": 839,
         "file": "cube.vsh",
         "length": 62,
         "line": 27,
-        "offset": 780
+        "offset": 777
       }
     },
     {
@@ -60,11 +60,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 29,
-        "endOffset": 871,
+        "endOffset": 868,
         "file": "cube.vsh",
         "length": 29,
         "line": 28,
-        "offset": 842
+        "offset": 839
       }
     }
   ],

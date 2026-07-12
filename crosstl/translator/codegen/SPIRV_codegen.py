@@ -1,6 +1,8 @@
 """CrossGL-to-Vulkan SPIR-V code generator."""
 
 import re
+import struct
+from dataclasses import dataclass
 from typing import List, Optional, Set, Tuple, Union
 
 from ..ast import (
@@ -111,6 +113,16 @@ class SpirvId:
         return f"%{self.id} ({self.type})"
 
 
+@dataclass(frozen=True)
+class PointerOffsetState:
+    """Mutable offset cell and immutable root for one logical pointer value."""
+
+    root_pointer: SpirvId
+    offset_variable: Optional[SpirvId]
+    domain: str
+    reset_marker: Optional[str] = None
+
+
 class UnsupportedSPIRVFeatureError(ValueError):
     """Raised when SPIR-V codegen sees a feature it cannot safely lower."""
 
@@ -133,6 +145,8 @@ class UnsupportedSPIRVFeatureError(ValueError):
 class VulkanSPIRVCodeGen:
     """Generates SPIR-V code from a CrossGL shader AST."""
 
+    POINTER_OFFSET_RESET_MARKER_PREFIX = "; __crosstl_pointer_offset_reset_"
+
     SIGNED_INT32_MIN = -(1 << 31)
     SIGNED_INT32_MAX = (1 << 31) - 1
     UNSIGNED_INT32_MAX = (1 << 32) - 1
@@ -148,6 +162,7 @@ class VulkanSPIRVCodeGen:
     SIGNED_INTEGER_TYPES = {"int", "i64"}
     UNSIGNED_INTEGER_TYPES = {"uint", "u64"}
     INTEGER_TYPE_NAMES = SIGNED_INTEGER_TYPES | UNSIGNED_INTEGER_TYPES
+    BFLOAT16_TYPE_NAME = "bfloat16"
 
     def __init__(self, *, include_resource_interface_variables: bool = False):
         """Initialize an empty SPIR-V module-generation state."""
@@ -171,6 +186,7 @@ class VulkanSPIRVCodeGen:
         self.layout_array_types = {}
         self.layout_struct_types = {}
         self.layout_struct_source_types = {}
+        self.std430_runtime_array_struct_types = set()
         self.resource_types = {}
         self.resource_image_types = {}
         self.ray_query_types = {}
@@ -200,14 +216,20 @@ class VulkanSPIRVCodeGen:
         self.constants = {}
         self.constant_values_by_id = {}
         self.literal_int_constants = {}
+        self.current_function_literal_int_constants = {}
+        self.current_function_literal_int_constant_shadows = set()
         self.literal_scalar_constants = {}
         self.vector_constants = {}
         self.composite_constants = {}
         self.specialization_constants = {}
+        self.specialization_constant_result_ids = set()
+        self.specialization_constant_default_values = {}
+        self.undefined_values = {}
         self.resource_type_metadata = {}
         self.structured_buffer_metadata = {}
         self.storage_buffer_access_metadata = {}
         self.storage_buffer_pointer_offset_aliases = {}
+        self.pointer_offset_reset_marker_count = 0
         self.source_variable_type_names = {}
         self.uniform_block_wrapped_variables = {}
         self.precise_global_variables = set()
@@ -253,6 +275,7 @@ class VulkanSPIRVCodeGen:
         self.stage_local_function_storage_image_pointer_params = {}
         self.function_execution_models = {}
         self.current_execution_model = None
+        self.current_function_node = None
         self.current_function_name = None
         self.current_function_id = None
         self.current_stage = None
@@ -289,6 +312,7 @@ class VulkanSPIRVCodeGen:
         self.struct_member_metadata = {}
         self.task_payload_shared_variables = {}
         self.task_payload_interface_by_function = {}
+        self.workgroup_variables_by_declaration = {}
         self.entry_point_private_variables = []
         self.local_size_warning_keys = set()
         self.tessellation_control_stage = None
@@ -391,6 +415,9 @@ class VulkanSPIRVCodeGen:
         elif name == "u64":
             self.require_capability("Int64")
             self.emit(f"%{id_value} = OpTypeInt 64 0")
+        elif name == self.BFLOAT16_TYPE_NAME:
+            self.require_capability("Int16")
+            self.emit(f"%{id_value} = OpTypeInt 16 0")
 
         spirv_type = SpirvType(name)
         spirv_id = SpirvId(id_value, spirv_type, name)
@@ -723,6 +750,9 @@ class VulkanSPIRVCodeGen:
         self, value: Union[bool, int, float], type_id: SpirvId
     ) -> SpirvId:
         """Create and register a constant value."""
+        type_name = self.normalize_primitive_name(type_id.type.base_type)
+        if type_name == self.BFLOAT16_TYPE_NAME and isinstance(value, float):
+            value = self.bfloat16_bits_for_float(value)
         key = (value, type_id.id)
         if key in self.constants:
             return self.constants[key]
@@ -809,7 +839,196 @@ class VulkanSPIRVCodeGen:
         spirv_id = SpirvId(id_value, type_id.type, f"{type_name}_{value}")
         self.value_types[id_value] = type_id
         self.specialization_constants[key] = spirv_id
+        self.specialization_constant_result_ids.add(id_value)
+        self.specialization_constant_default_values[id_value] = value
         return spirv_id
+
+    def is_specialization_constant_value(self, value_id) -> bool:
+        """Return whether an id is a specialization constant or spec-op result."""
+        id_number = value_id.id if isinstance(value_id, SpirvId) else value_id
+        return id_number in self.specialization_constant_result_ids
+
+    def emit_spec_constant_op(
+        self, opcode: str, result_type: SpirvId, operands: List[SpirvId]
+    ) -> SpirvId:
+        """Emit an OpSpecConstantOp specialization-constant operation.
+
+        Module/constant-scope arithmetic whose operands are specialization
+        constants must be encoded as an OpSpecConstantOp (a constant instruction)
+        rather than an ordinary arithmetic instruction, which SPIR-V only permits
+        inside a function block. The result is tracked as a specialization-constant
+        result so nested expressions chain into further OpSpecConstantOp encodings.
+        """
+        id_value = self.get_id()
+        operand_list = " ".join(f"%{operand.id}" for operand in operands)
+        self.emit(
+            f"%{id_value} = OpSpecConstantOp %{result_type.id} {opcode} {operand_list}"
+        )
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        self.specialization_constant_result_ids.add(id_value)
+        return spirv_id
+
+    def specialization_constant_binary_opcode(
+        self, operator: str, component_type: str
+    ) -> Optional[str]:
+        """Return the OpSpecConstantOp opcode for an integer/bool binary operator.
+
+        Only integer and boolean operations are valid specialization-constant
+        operations under the Shader capability; floating-point spec-constant ops
+        require the Kernel capability and are intentionally left unhandled here.
+        """
+        is_integer = component_type in self.INTEGER_TYPE_NAMES
+        is_unsigned = component_type in self.UNSIGNED_INTEGER_TYPES
+        is_signed = component_type in self.SIGNED_INTEGER_TYPES
+
+        if is_integer:
+            arithmetic = {"+": "IAdd", "-": "ISub", "*": "IMul", "MULTIPLY": "IMul"}
+            if operator in arithmetic:
+                return arithmetic[operator]
+            if operator == "/":
+                return "UDiv" if is_unsigned else "SDiv"
+            if operator == "%":
+                return "UMod" if is_unsigned else "SMod"
+            if operator in {"&", "|", "^"}:
+                return {
+                    "&": "BitwiseAnd",
+                    "|": "BitwiseOr",
+                    "^": "BitwiseXor",
+                }[operator]
+            if operator == "<<":
+                return "ShiftLeftLogical"
+            if operator == ">>":
+                return "ShiftRightArithmetic" if is_signed else "ShiftRightLogical"
+            return {
+                "==": "IEqual",
+                "!=": "INotEqual",
+                "<": "ULessThan" if is_unsigned else "SLessThan",
+                ">": "UGreaterThan" if is_unsigned else "SGreaterThan",
+                "<=": "ULessThanEqual" if is_unsigned else "SLessThanEqual",
+                ">=": "UGreaterThanEqual" if is_unsigned else "SGreaterThanEqual",
+            }.get(operator)
+
+        if component_type == "bool":
+            return {
+                "&&": "LogicalAnd",
+                "&": "LogicalAnd",
+                "||": "LogicalOr",
+                "|": "LogicalOr",
+                "==": "LogicalEqual",
+                "!=": "LogicalNotEqual",
+                "^": "LogicalNotEqual",
+            }.get(operator)
+
+        return None
+
+    def emit_specialization_constant_binary_operation(
+        self, operator: str, left: SpirvId, right: SpirvId
+    ) -> Optional[SpirvId]:
+        """Lower a constant binary op with spec-constant operands to OpSpecConstantOp."""
+        left_type = self.registered_value_type(left) or self.ensure_registered_type(
+            left.type
+        )
+        right_type = self.registered_value_type(right) or self.ensure_registered_type(
+            right.type
+        )
+        if (
+            self.vector_component_type_and_count(left_type.type.base_type) is not None
+            or self.vector_component_type_and_count(right_type.type.base_type)
+            is not None
+        ):
+            return None
+
+        if operator in {"==", "!=", "<", ">", "<=", ">="}:
+            operand_component = self.promoted_numeric_type_name(
+                [left_type.type.base_type, right_type.type.base_type]
+            )
+            if operand_component is None:
+                return None
+            opcode = self.specialization_constant_binary_opcode(
+                operator, operand_component
+            )
+            if opcode is None:
+                return None
+            operand_type = self.register_primitive_type(operand_component)
+            left = self.coerce_scalar_constant_to_type(left, operand_type)
+            right = self.coerce_scalar_constant_to_type(right, operand_type)
+            result_type = self.register_primitive_type("bool")
+            return self.emit_spec_constant_op(opcode, result_type, [left, right])
+
+        result_type = self.binary_expression_result_type(
+            operator, left_type, right_type
+        )
+        if result_type is None:
+            return None
+        component_type = self.normalize_primitive_name(result_type.type.base_type)
+        opcode = self.specialization_constant_binary_opcode(operator, component_type)
+        if opcode is None:
+            return None
+
+        left = self.coerce_scalar_constant_to_type(left, result_type)
+        if operator not in {"<<", ">>"}:
+            right = self.coerce_scalar_constant_to_type(right, result_type)
+        return self.emit_spec_constant_op(opcode, result_type, [left, right])
+
+    def emit_specialization_constant_unary_operation(
+        self, operator: str, operand: SpirvId
+    ) -> Optional[SpirvId]:
+        """Lower a constant unary op with a spec-constant operand to OpSpecConstantOp."""
+        operand_type = self.registered_value_type(
+            operand
+        ) or self.ensure_registered_type(operand.type)
+        if (
+            self.vector_component_type_and_count(operand_type.type.base_type)
+            is not None
+        ):
+            return None
+        component_type = self.normalize_primitive_name(operand_type.type.base_type)
+
+        if operator == "+":
+            return operand
+        if operator == "-":
+            if component_type in self.SIGNED_INTEGER_TYPES:
+                return self.emit_spec_constant_op("SNegate", operand_type, [operand])
+            if component_type in self.UNSIGNED_INTEGER_TYPES:
+                zero = self.register_constant(0, operand_type)
+                return self.emit_spec_constant_op("ISub", operand_type, [zero, operand])
+            return None
+        if operator == "~" and component_type in self.INTEGER_TYPE_NAMES:
+            return self.emit_spec_constant_op("Not", operand_type, [operand])
+        if operator == "!" and component_type == "bool":
+            return self.emit_spec_constant_op("LogicalNot", operand_type, [operand])
+        return None
+
+    def process_specialization_constant_operation(
+        self, expr, target_type: Optional[SpirvId] = None
+    ) -> Optional[SpirvId]:
+        """Emit OpSpecConstantOp for module-scope ops over specialization constants.
+
+        Returns None when no operand is a specialization constant so that plain
+        constant expressions continue to use the existing folding/evaluation path.
+        """
+        if isinstance(expr, BinaryOpNode):
+            left = self.process_constant_expression(getattr(expr, "left", None))
+            right = self.process_constant_expression(getattr(expr, "right", None))
+            if left is None or right is None:
+                return None
+            if not (
+                self.is_specialization_constant_value(left)
+                or self.is_specialization_constant_value(right)
+            ):
+                return None
+            operator = getattr(expr, "operator", getattr(expr, "op", None))
+            return self.emit_specialization_constant_binary_operation(
+                operator, left, right
+            )
+        if isinstance(expr, UnaryOpNode):
+            operand = self.process_constant_expression(getattr(expr, "operand", None))
+            if operand is None or not self.is_specialization_constant_value(operand):
+                return None
+            operator = getattr(expr, "operator", getattr(expr, "op", None))
+            return self.emit_specialization_constant_unary_operation(operator, operand)
+        return None
 
     def register_vector_constant(
         self, vector_type: SpirvId, components: List[SpirvId]
@@ -835,6 +1054,10 @@ class VulkanSPIRVCodeGen:
         self, composite_type: SpirvId, components: List[SpirvId]
     ) -> SpirvId:
         """Create and register a composite constant."""
+        composite_type = self.ensure_registered_type(composite_type)
+        components = self.coerce_composite_components(
+            composite_type, components, constant=True
+        )
         key = (composite_type.id, tuple(component.id for component in components))
         if key in self.composite_constants:
             return self.composite_constants[key]
@@ -865,6 +1088,7 @@ class VulkanSPIRVCodeGen:
                 constant.id == value_id.id
                 for constant in self.specialization_constants.values()
             )
+            or value_id.id in self.specialization_constant_result_ids
         )
 
     def emit_named_constant_debug_name(self, name: str, value_id: SpirvId):
@@ -1018,7 +1242,9 @@ class VulkanSPIRVCodeGen:
         if type_name == "bool":
             return self.coerce_scalar_constant_value(expr, type_id)
         if type_name in self.INTEGER_TYPE_NAMES:
-            value = evaluate_literal_int_expression(expr, self.literal_int_constants)
+            value = evaluate_literal_int_expression(
+                expr, self.active_literal_int_constants()
+            )
             if value is None:
                 return None
             if type_name in self.UNSIGNED_INTEGER_TYPES and value < 0:
@@ -1043,7 +1269,7 @@ class VulkanSPIRVCodeGen:
                 value = self.literal_scalar_constants.get(expr)
                 if isinstance(value, (int, float)):
                     return float(value)
-                int_value = self.literal_int_constants.get(expr)
+                int_value = self.active_literal_int_constants().get(expr)
                 return None if int_value is None else float(int_value)
         if hasattr(expr, "value"):
             value = self.evaluate_literal_float_expression(getattr(expr, "value"))
@@ -1054,7 +1280,7 @@ class VulkanSPIRVCodeGen:
             value = self.literal_scalar_constants.get(name)
             if isinstance(value, (int, float)):
                 return float(value)
-            int_value = self.literal_int_constants.get(name)
+            int_value = self.active_literal_int_constants().get(name)
             return None if int_value is None else float(int_value)
 
         class_name = expr.__class__.__name__
@@ -1271,7 +1497,13 @@ class VulkanSPIRVCodeGen:
         source_array_type = self.pointer_pointee_type(source_pointer)
         source_array_info = self.array_type_info_from_type(source_array_type)
         if source_array_info is None:
-            return None
+            return self.copy_structured_buffer_to_function_storage(
+                source_pointer,
+                target_array_type,
+                target_element_type,
+                int(target_size),
+                name,
+            )
 
         source_element_type, source_size = source_array_info
         if source_size is not None and int(source_size) != int(target_size):
@@ -1306,6 +1538,62 @@ class VulkanSPIRVCodeGen:
                 source_pointer, source_element_pointer
             )
             self.propagate_readonly_pointer_name(source_pointer, source_element_pointer)
+
+            target_element_pointer = self.access_chain(
+                scratch_array, [index], target_element_ptr_type
+            )
+            self.variable_value_types[target_element_pointer.id] = target_element_type
+
+            value = self.load_from_variable(source_element_pointer, source_element_type)
+            value = self.convert_value_to_type(value, target_element_type)
+            self.store_to_variable(target_element_pointer, value)
+
+        return scratch_array
+
+    def copy_structured_buffer_to_function_storage(
+        self,
+        source_pointer: SpirvId,
+        target_array_type: SpirvId,
+        target_element_type: SpirvId,
+        target_size: int,
+        name: Optional[str] = None,
+    ) -> Optional[SpirvId]:
+        """Materialize a Function-local array from a structured/SSBO buffer source.
+
+        Some helpers take a fixed-size array parameter (e.g. ``int64_t strides[2]``)
+        whose SPIR-V parameter type is ``OpTypePointer Function (array<T, N>)``. When
+        the matching caller argument is a buffer pointer (``constant const T*``), it
+        lowers to a Uniform block struct wrapping a runtime array rather than a
+        directly-registered array type, so the real-array copy path cannot see through
+        it. Copy the first ``target_size`` elements out of the buffer into a
+        Function-local scratch array whose pointer type matches the parameter type.
+
+        Returns ``None`` when the source is not an indexable structured buffer, in
+        which case the caller preserves its existing behaviour unchanged.
+        """
+        metadata = self.structured_buffer_metadata_for_pointer(source_pointer)
+        if metadata is None or metadata.get("_access_path") == "member":
+            return None
+
+        scratch_array = self.create_variable(target_array_type, "Function", name)
+        index_type = self.register_primitive_type("int")
+        target_element_ptr_type = self.register_pointer_type(
+            target_element_type, "Function"
+        )
+
+        for index_value in range(target_size):
+            index = self.register_constant(index_value, index_type)
+            source_element_pointer = self.structured_buffer_element_pointer(
+                source_pointer, index
+            )
+            if source_element_pointer is None:
+                return None
+
+            source_element_type = (
+                self.variable_value_types.get(source_element_pointer.id)
+                or metadata.get("element_type")
+                or target_element_type
+            )
 
             target_element_pointer = self.access_chain(
                 scratch_array, [index], target_element_ptr_type
@@ -1373,13 +1661,23 @@ class VulkanSPIRVCodeGen:
             return value_id
 
         components = [converted]
-        for _ in range(1, int(size)):
+        for _ in range(1, self.array_length_default_value(size)):
             components.append(self.default_value_for_type(element_type))
         return self.composite_construct(target_type, components)
 
     def load_entry_point_interface_value(
         self, variable_id: SpirvId, result_type: SpirvId
     ) -> SpirvId:
+        if variable_id.type.storage_class is None:
+            # Constant builtins such as gl_WorkGroupSize are materialized as an
+            # OpConstantComposite value rather than a pointer variable, so the
+            # value is used directly; emitting OpLoad against a non-pointer would
+            # be invalid SPIR-V. A scalar parameter (e.g. threads_per_threadgroup)
+            # takes the leading component, mirroring the other compute builtins.
+            return self.convert_value_to_type(
+                variable_id, result_type, allow_vector_to_scalar=True
+            )
+
         if not self.is_sample_mask_builtin_variable(variable_id):
             variable_type = self.pointer_pointee_type(variable_id)
             if (
@@ -1731,13 +2029,28 @@ class VulkanSPIRVCodeGen:
         return self.composite_construct(target_type, values)
 
     def promoted_numeric_type_name(self, type_names: List[str]) -> Optional[str]:
-        numeric_types = {"float", "double"} | self.INTEGER_TYPE_NAMES
+        numeric_types = {
+            "float",
+            "double",
+            self.BFLOAT16_TYPE_NAME,
+        } | self.INTEGER_TYPE_NAMES
         normalized = [self.normalize_primitive_name(name) for name in type_names]
+        # C++ integral promotion: bool operands promote to int before the usual
+        # arithmetic conversions. Without this, an arithmetic expression whose
+        # operands are both bool (e.g. MLX's `Sign` functor
+        # `(x > 0) - (x < 0)`) would infer a bool result type, causing the
+        # subtraction to be computed in uint and coerced back to bool -- which
+        # both loses the sign and produces a bool that cannot be returned from a
+        # numeric (float/int) function. Treating bool as int keeps the result
+        # numeric so it converts to the actual result/return type on use.
+        normalized = ["int" if name == "bool" else name for name in normalized]
         if any(name not in numeric_types for name in normalized):
             return None
         if "double" in normalized:
             return "double"
         if "float" in normalized:
+            return "float"
+        if self.BFLOAT16_TYPE_NAME in normalized:
             return "float"
         if any(self.integer_type_width(name) == 64 for name in normalized):
             if any(name in self.UNSIGNED_INTEGER_TYPES for name in normalized):
@@ -1992,6 +2305,10 @@ class VulkanSPIRVCodeGen:
         self, result_type: SpirvId, components: List[SpirvId]
     ) -> SpirvId:
         """Construct a composite value from component values."""
+        result_type = self.ensure_registered_type(result_type)
+        components = self.coerce_composite_components(
+            result_type, components, constant=False
+        )
         id_value = self.get_id()
         component_list = " ".join(f"%{component.id}" for component in components)
         self.emit(
@@ -2001,6 +2318,93 @@ class VulkanSPIRVCodeGen:
         spirv_id = SpirvId(id_value, result_type.type)
         self.value_types[id_value] = result_type
         return spirv_id
+
+    def composite_member_types(
+        self, composite_type: SpirvId
+    ) -> Optional[List[SpirvId]]:
+        """Return the ordered constituent types for a composite result type.
+
+        Handles vectors, matrices, arrays, and structs. Returns ``None`` when
+        the constituent layout cannot be determined (for example a
+        runtime-sized array), signalling callers to leave the components as-is.
+        """
+        vector_info = self.vector_type_info_from_type(composite_type)
+        if vector_info is not None:
+            component_type, count = vector_info
+            return [component_type] * count
+
+        matrix_info = self.matrix_type_info_from_type(composite_type)
+        if matrix_info is not None:
+            column_type, count = matrix_info
+            return [column_type] * count
+
+        array_info = self.array_type_info_from_type(composite_type)
+        if array_info is not None:
+            element_type, size = array_info
+            if size is None:
+                return None
+            return [element_type] * size
+
+        members = self.current_struct_members.get(composite_type.type.base_type)
+        if members is not None:
+            return [member_type for member_type, _ in members]
+
+        return None
+
+    def coerce_composite_components(
+        self,
+        composite_type: SpirvId,
+        components: List[SpirvId],
+        *,
+        constant: bool,
+    ) -> List[SpirvId]:
+        """Coerce every constituent to its declared member/element type.
+
+        ``OpCompositeConstruct`` and ``OpConstantComposite`` require each
+        constituent type to match the corresponding member type of the result
+        exactly. Callers do not always coerce (for example a brace initializer
+        ``{x, 0}`` for a ``struct { float a; float b; }`` supplies an integer
+        literal for a float member), so the coercion is centralised here to
+        cover every construction site.
+
+        Vector constructions may legitimately pass fewer constituents than the
+        component count (for example a ``vec4`` assembled from two ``vec2``
+        values), so coercion is only applied when the constituent count matches
+        the member layout; otherwise the components are returned unchanged.
+        """
+        member_types = self.composite_member_types(composite_type)
+        if member_types is None or len(member_types) != len(components):
+            return components
+
+        coerced = []
+        changed = False
+        for component, member_type in zip(components, member_types):
+            new_component = self.coerce_composite_component(
+                component, member_type, constant=constant
+            )
+            changed = changed or new_component.id != component.id
+            coerced.append(new_component)
+        return coerced if changed else components
+
+    def coerce_composite_component(
+        self, component: SpirvId, member_type: SpirvId, *, constant: bool
+    ) -> SpirvId:
+        """Coerce a single constituent to ``member_type``.
+
+        Constant scalar literals are folded to a member-typed constant so the
+        constituent matches exactly (an integer ``0`` used for a ``float``
+        member becomes a ``float`` constant). Runtime constituents fall back to
+        the general value conversion. Constant composites keep any non-foldable
+        constituent unchanged because runtime conversions are not permitted in a
+        constant context.
+        """
+        member_type = self.ensure_registered_type(member_type)
+        folded = self.coerce_scalar_constant_to_type(component, member_type)
+        if folded.id != component.id:
+            return folded
+        if constant:
+            return component
+        return self.convert_value_to_type(component, member_type)
 
     def vector_member_info(self, vector_type: str, member_name: str):
         vector_info = self.vector_component_type_and_count(vector_type)
@@ -2533,6 +2937,28 @@ class VulkanSPIRVCodeGen:
         if complex_result is not None:
             return complex_result
 
+        result_type = self.ensure_registered_type(result_type)
+        result_component_type = self.scalar_or_vector_component_type(result_type.type)
+        if (
+            op in {"+", "-", "*", "MULTIPLY", "/", "%"}
+            and result_component_type == self.BFLOAT16_TYPE_NAME
+        ):
+            result_vector = self.vector_component_type_and_count(
+                result_type.type.base_type
+            )
+            float_type = self.register_primitive_type("float")
+            arithmetic_type = (
+                self.register_vector_type(float_type, result_vector[1])
+                if result_vector is not None
+                else float_type
+            )
+            promoted_left = self.convert_value_to_type(left, arithmetic_type)
+            promoted_right = self.convert_value_to_type(right, arithmetic_type)
+            promoted_result = self.binary_operation(
+                op, arithmetic_type, promoted_left, promoted_right
+            )
+            return self.convert_value_to_type(promoted_result, result_type)
+
         arithmetic_ops = {
             "+": ("OpFAdd", "OpIAdd", "OpIAdd"),
             "-": ("OpFSub", "OpISub", "OpISub"),
@@ -2570,6 +2996,22 @@ class VulkanSPIRVCodeGen:
             component_type = self.scalar_or_vector_component_type(left.type)
             if component_type == "bool" and op in {"==", "!="}:
                 spv_op = "OpLogicalEqual" if op == "==" else "OpLogicalNotEqual"
+            elif component_type == "bool":
+                # SPIR-V has no ordered/integer comparison for bool operands, so an
+                # ordered comparison (<, >, <=, >=) of booleans -- e.g. ArgMin/ArgMax
+                # over a bool tensor comparing best.val > current.val -- must promote
+                # the operands to uint (false -> 0, true -> 1) like C++ bool
+                # arithmetic and use the unsigned comparison opcode.
+                vector_info = self.vector_component_type_and_count(left.type.base_type)
+                uint_type = self.register_primitive_type("uint")
+                operand_type = (
+                    self.register_vector_type(uint_type, vector_info[1])
+                    if vector_info is not None
+                    else uint_type
+                )
+                left = self.convert_value_to_type(left, operand_type)
+                right = self.convert_value_to_type(right, operand_type)
+                spv_op = unsigned_op
             else:
                 spv_op = (
                     unsigned_op
@@ -2581,6 +3023,24 @@ class VulkanSPIRVCodeGen:
                     )
                 )
         elif op in arithmetic_ops:
+            bool_arithmetic_type = self.bool_arithmetic_integer_type(result_type)
+            if bool_arithmetic_type is not None:
+                left = self.convert_value_to_type(left, bool_arithmetic_type)
+                right = self.convert_value_to_type(right, bool_arithmetic_type)
+                _float_op, _signed_op, spv_op = arithmetic_ops[op]
+                id_value = self.get_id()
+                self.emit(
+                    f"%{id_value} = {spv_op} %{bool_arithmetic_type.id} "
+                    f"%{left.id} %{right.id}"
+                )
+                self.decorate_no_contraction_result(
+                    id_value,
+                    spv_op,
+                    bool_arithmetic_type,
+                )
+                arithmetic_result = SpirvId(id_value, bool_arithmetic_type.type)
+                self.value_types[id_value] = bool_arithmetic_type
+                return self.convert_value_to_type(arithmetic_result, result_type)
             result_type, left, right = self.align_binary_arithmetic_operands(
                 result_type, left, right
             )
@@ -2596,22 +3056,42 @@ class VulkanSPIRVCodeGen:
                 )
             )
         elif op in {"&", "|", "^"}:
-            result_type, left, right = self.align_binary_bitwise_operands(
-                result_type, left, right
-            )
-            spv_op = {
+            bitwise_op = {
                 "&": "OpBitwiseAnd",
                 "|": "OpBitwiseOr",
                 "^": "OpBitwiseXor",
             }[op]
-        elif op in {"<<", ">>"}:
-            result_type, left, right = self.align_binary_shift_operands(
+            # SPIR-V's OpBitwiseAnd/Or/Xor require integer operands, so a bitwise
+            # op whose result type is bool -- e.g. MLX's integer-power `exp & 1`
+            # and the BitwiseAnd/Or/Xor bool specializations of binary.metal --
+            # must be evaluated on a promoted integer type and converted back to
+            # bool (SPIR-V rejects `OpBitwise* %bool`).
+            bool_integer_type = self.bool_arithmetic_integer_type(result_type)
+            if bool_integer_type is not None:
+                return self.emit_bool_result_integer_binary_operation(
+                    bitwise_op, bool_integer_type, result_type, left, right
+                )
+            result_type, left, right = self.align_binary_bitwise_operands(
                 result_type, left, right
             )
-            spv_op = {
+            spv_op = bitwise_op
+        elif op in {"<<", ">>"}:
+            shift_op = {
                 "<<": "OpShiftLeftLogical",
                 ">>": "OpShiftRightLogical",
             }[op]
+            # OpShiftLeftLogical/OpShiftRightLogical likewise reject a bool result
+            # type -- e.g. the `exp >>= 1` step of the same integer-power bool
+            # specialization -- so promote to an integer type and convert back.
+            bool_integer_type = self.bool_arithmetic_integer_type(result_type)
+            if bool_integer_type is not None:
+                return self.emit_bool_result_integer_binary_operation(
+                    shift_op, bool_integer_type, result_type, left, right
+                )
+            result_type, left, right = self.align_binary_shift_operands(
+                result_type, left, right
+            )
+            spv_op = shift_op
         else:
             spv_op = f"Op{op}"
 
@@ -2622,6 +3102,43 @@ class VulkanSPIRVCodeGen:
         spirv_id = SpirvId(id_value, result_type.type)
         self.value_types[id_value] = result_type
         return spirv_id
+
+    def bool_arithmetic_integer_type(self, result_type: SpirvId) -> Optional[SpirvId]:
+        result_type = self.ensure_registered_type(result_type)
+        component_type = self.scalar_or_vector_component_type(result_type.type)
+        if component_type != "bool":
+            return None
+        uint_type = self.register_primitive_type("uint")
+        vector_info = self.vector_component_type_and_count(result_type.type.base_type)
+        if vector_info is None:
+            return uint_type
+        return self.register_vector_type(uint_type, vector_info[1])
+
+    def emit_bool_result_integer_binary_operation(
+        self,
+        spv_op: str,
+        integer_type: SpirvId,
+        result_type: SpirvId,
+        left: SpirvId,
+        right: SpirvId,
+    ) -> SpirvId:
+        """Evaluate an integer-only opcode whose source result type is bool.
+
+        SPIR-V's integer opcodes (OpBitwiseAnd/Or/Xor, OpShiftLeftLogical/
+        OpShiftRightLogical) reject bool result types. C++ promotes bool operands
+        to int for these operators, so the operands are converted to
+        ``integer_type`` (false -> 0, true -> 1), the opcode is emitted on that
+        integer type, and the result is converted back to the bool result type.
+        Mirrors the bool arithmetic handling in ``binary_operation``.
+        """
+        result_type = self.ensure_registered_type(result_type)
+        left = self.convert_value_to_type(left, integer_type)
+        right = self.convert_value_to_type(right, integer_type)
+        id_value = self.get_id()
+        self.emit(f"%{id_value} = {spv_op} %{integer_type.id} %{left.id} %{right.id}")
+        self.value_types[id_value] = integer_type
+        integer_result = SpirvId(id_value, integer_type.type)
+        return self.convert_value_to_type(integer_result, result_type)
 
     def align_binary_bitwise_operands(
         self, result_type: SpirvId, left: SpirvId, right: SpirvId
@@ -3037,6 +3554,36 @@ class VulkanSPIRVCodeGen:
             return None
         return type_id, members
 
+    def complex_struct_negate_operation(self, operand: SpirvId) -> Optional[SpirvId]:
+        """Negate a complex-number struct componentwise.
+
+        SPIR-V has no negation opcode for aggregate (struct) types, so unary
+        minus on a complex value negates its real and imaginary members and
+        reconstructs the struct: ``-(a + b*i) == (-a) + (-b)*i``. Returns None
+        when the operand is not a complex struct so scalar/vector negation keeps
+        using the direct OpFNegate/OpSNegate path.
+        """
+        operand_info = self.complex_struct_operand_info(operand)
+        if operand_info is None:
+            return None
+
+        result_type, members = operand_info
+        real_type = members[0][0]
+        imag_type = members[1][0]
+        real = self.composite_extract(operand, real_type, 0)
+        imag = self.composite_extract(operand, imag_type, 1)
+        negated_real = self.convert_value_to_type(
+            self.unary_operation("-", real_type, real), real_type
+        )
+        negated_imag = self.convert_value_to_type(
+            self.unary_operation("-", imag_type, imag), imag_type
+        )
+        if not self.value_has_type(negated_real, real_type) or not self.value_has_type(
+            negated_imag, imag_type
+        ):
+            return None
+        return self.composite_construct(result_type, [negated_real, negated_imag])
+
     def complex_struct_arithmetic_operation(
         self, op: str, left: SpirvId, right: SpirvId
     ) -> Optional[SpirvId]:
@@ -3444,12 +3991,109 @@ class VulkanSPIRVCodeGen:
         self.value_types[id_value] = vector_type
         return SpirvId(id_value, vector_type.type)
 
+    @staticmethod
+    def bfloat16_bits_for_float(value: float) -> int:
+        """Round a binary32 value to bfloat16, preserving a quiet NaN payload."""
+        bits = struct.unpack("<I", struct.pack("<f", float(value)))[0]
+        absolute_bits = bits & 0x7FFFFFFF
+        if absolute_bits > 0x7F800000:
+            return ((bits >> 16) | 0x40) & 0xFFFF
+        rounding_bias = 0x7FFF + ((bits >> 16) & 1)
+        return ((bits + rounding_bias) >> 16) & 0xFFFF
+
+    def convert_bfloat16_to_float(self, value: SpirvId) -> SpirvId:
+        """Expand bfloat16 storage bits into an IEEE binary32 value."""
+        uint_type = self.register_primitive_type("uint")
+        float_type = self.register_primitive_type("float")
+
+        widened_id = self.get_id()
+        self.emit(f"%{widened_id} = OpUConvert %{uint_type.id} %{value.id}")
+        self.value_types[widened_id] = uint_type
+        widened = SpirvId(widened_id, uint_type.type)
+
+        shift = self.register_constant(16, uint_type)
+        shifted = self.binary_operation("<<", uint_type, widened, shift)
+        result_id = self.get_id()
+        self.emit(f"%{result_id} = OpBitcast %{float_type.id} %{shifted.id}")
+        self.value_types[result_id] = float_type
+        result = SpirvId(result_id, float_type.type)
+        if self.is_non_uniform_value(value):
+            self.mark_non_uniform_result(result)
+        return result
+
+    def convert_float_to_bfloat16(
+        self, value: SpirvId, target_type: SpirvId
+    ) -> SpirvId:
+        """Round binary32 to bfloat16 storage bits using round-to-nearest-even."""
+        uint_type = self.register_primitive_type("uint")
+        bool_type = self.register_primitive_type("bool")
+
+        bits_id = self.get_id()
+        self.emit(f"%{bits_id} = OpBitcast %{uint_type.id} %{value.id}")
+        self.value_types[bits_id] = uint_type
+        bits = SpirvId(bits_id, uint_type.type)
+
+        absolute_mask = self.register_constant(0x7FFFFFFF, uint_type)
+        positive_infinity = self.register_constant(0x7F800000, uint_type)
+        absolute_bits = self.binary_operation("&", uint_type, bits, absolute_mask)
+        is_nan = self.binary_operation(">", bool_type, absolute_bits, positive_infinity)
+
+        shift = self.register_constant(16, uint_type)
+        one = self.register_constant(1, uint_type)
+        upper_bits = self.binary_operation(">>", uint_type, bits, shift)
+        least_significant_bit = self.binary_operation("&", uint_type, upper_bits, one)
+        rounding_bias = self.binary_operation(
+            "+",
+            uint_type,
+            self.register_constant(0x7FFF, uint_type),
+            least_significant_bit,
+        )
+        rounded = self.binary_operation("+", uint_type, bits, rounding_bias)
+        rounded_upper_bits = self.binary_operation(">>", uint_type, rounded, shift)
+
+        quiet_nan_bits = self.binary_operation(
+            "|",
+            uint_type,
+            upper_bits,
+            self.register_constant(0x40, uint_type),
+        )
+        selected_bits = self.select_operation(
+            uint_type, is_nan, quiet_nan_bits, rounded_upper_bits
+        )
+
+        result_id = self.get_id()
+        self.emit(f"%{result_id} = OpUConvert %{target_type.id} %{selected_bits.id}")
+        self.value_types[result_id] = target_type
+        result = SpirvId(result_id, target_type.type)
+        if self.is_non_uniform_value(value):
+            self.mark_non_uniform_result(result)
+        return result
+
     def convert_scalar_to_type(self, value: SpirvId, target_type: SpirvId) -> SpirvId:
         """Convert a scalar value to a compatible scalar target type."""
         source_type_name = self.normalize_primitive_name(value.type.base_type)
         target_type_name = self.normalize_primitive_name(target_type.type.base_type)
         if source_type_name == target_type_name:
             return value
+
+        if source_type_name == self.BFLOAT16_TYPE_NAME:
+            decoded = self.convert_bfloat16_to_float(value)
+            return self.convert_scalar_to_type(decoded, target_type)
+
+        if target_type_name == self.BFLOAT16_TYPE_NAME:
+            float_type = self.register_primitive_type("float")
+            if source_type_name == "bool":
+                float_value = self.select_operation(
+                    float_type,
+                    value,
+                    self.register_constant(1.0, float_type),
+                    self.register_constant(0.0, float_type),
+                )
+            else:
+                float_value = self.convert_scalar_to_type(value, float_type)
+            if self.normalize_primitive_name(float_value.type.base_type) != "float":
+                return value
+            return self.convert_float_to_bfloat16(float_value, target_type)
 
         float_types = {"float", "double"}
         integer_types = self.INTEGER_TYPE_NAMES
@@ -3533,11 +4177,53 @@ class VulkanSPIRVCodeGen:
         if op == "+":
             spv_op = None
         elif op == "-":
+            # Unary minus on a complex-number struct: SPIR-V's OpFNegate/OpSNegate
+            # only accept scalar or vector numeric types, so negating a complex
+            # struct (e.g. MLX's `Negative` functor `return -x;` instantiated for
+            # complex64_t) must negate the real and imaginary members separately
+            # and rebuild the struct rather than emit an invalid struct-typed
+            # OpFNegate.
+            complex_negation = self.complex_struct_negate_operation(operand)
+            if complex_negation is not None:
+                return complex_negation
             component_type = self.scalar_or_vector_component_type(result_type.type)
-            if component_type == "uint":
+            # Unary minus on a bool result: SPIR-V has no negation opcode for
+            # bool (OpFNegate/OpSNegate reject bool), and C++ promotes bool to int
+            # for unary minus (e.g. MLX's `Negative` functor `return -x;`
+            # instantiated for bool). Negate on a promoted integer type and
+            # convert the result back to bool.
+            bool_integer_type = self.bool_arithmetic_integer_type(result_type)
+            if bool_integer_type is not None:
+                integer_operand = self.convert_value_to_type(operand, bool_integer_type)
+                negated = self.unary_operation("-", bool_integer_type, integer_operand)
+                return self.convert_value_to_type(negated, result_type)
+            if component_type == self.BFLOAT16_TYPE_NAME:
+                vector_info = self.vector_component_type_and_count(
+                    result_type.type.base_type
+                )
+                float_type = self.register_primitive_type("float")
+                promoted_type = (
+                    self.register_vector_type(float_type, vector_info[1])
+                    if vector_info is not None
+                    else float_type
+                )
+                promoted_operand = self.convert_value_to_type(operand, promoted_type)
+                negated = self.unary_operation("-", promoted_type, promoted_operand)
+                return self.convert_value_to_type(negated, result_type)
+            # Unsigned integers of any width (uint, u64) have no signed-negate
+            # opcode, so negate as `0 - x` (two's-complement wrap). Signed
+            # integers of any width (int, i64) use OpSNegate; only genuine
+            # floating types use OpFNegate. Matching against the width-agnostic
+            # type sets keeps 64-bit operands (e.g. MLX's `Negative` functor for
+            # int64/uint64) from falling through to an invalid `OpFNegate`.
+            if component_type in self.UNSIGNED_INTEGER_TYPES:
                 zero = self.default_value_for_type(result_type)
                 return self.binary_operation("-", result_type, zero, operand)
-            spv_op = "OpSNegate" if component_type == "int" else "OpFNegate"
+            spv_op = (
+                "OpSNegate"
+                if component_type in self.SIGNED_INTEGER_TYPES
+                else "OpFNegate"
+            )
         elif op == "!":
             bool_type = self.register_primitive_type("bool")
             operand_vector = self.vector_component_type_and_count(
@@ -3693,8 +4379,10 @@ class VulkanSPIRVCodeGen:
         id_value = self.get_id()
 
         arg_list = " ".join([f"%{arg.id}" for arg in args])
+        arg_suffix = f" {arg_list}" if arg_list else ""
         self.emit(
-            f"%{id_value} = OpFunctionCall %{return_type.id} %{function_id.id} {arg_list}"
+            f"%{id_value} = OpFunctionCall %{return_type.id} "
+            f"%{function_id.id}{arg_suffix}"
         )
 
         spirv_id = SpirvId(id_value, return_type.type)
@@ -9139,18 +9827,25 @@ class VulkanSPIRVCodeGen:
             value |= semantic_values[semantic]
         return self.register_constant(value, self.register_primitive_type("uint"))
 
+    def execution_models_for_function(self, function_node) -> set:
+        if function_node is None:
+            return set()
+        models = set(self.function_execution_models.get(id(function_node), ()))
+        source_function_id = getattr(function_node, "_generic_source_function_id", None)
+        if source_function_id is not None:
+            models.update(self.function_execution_models.get(source_function_id, ()))
+        return models
+
     def current_synchronization_execution_models(self) -> set:
-        if self.current_stage is None and self.current_function_name is not None:
-            execution_models = self.function_execution_models.get(
-                self.current_function_name, ()
-            )
+        execution_models = self.execution_models_for_function(
+            self.current_function_node
+        )
+        if self.current_stage is None:
             if execution_models:
-                return set(execution_models)
+                return execution_models
         if self.current_execution_model is not None:
             return {self.current_execution_model}
-        if self.current_function_name is None:
-            return set()
-        return set(self.function_execution_models.get(self.current_function_name, ()))
+        return execution_models
 
     def current_execution_model_label(self) -> str:
         execution_models = self.current_synchronization_execution_models()
@@ -9177,6 +9872,7 @@ class VulkanSPIRVCodeGen:
             "barrier",
             "groupMemoryBarrier",
             "workgroupBarrier",
+            "workgroupExecutionBarrier",
             "memoryBarrier",
             "memoryBarrierBuffer",
             "memoryBarrierImage",
@@ -9197,6 +9893,7 @@ class VulkanSPIRVCodeGen:
             "groupMemoryBarrier",
             "memoryBarrierShared",
             "workgroupBarrier",
+            "workgroupExecutionBarrier",
         }
         if (
             function_name in workgroup_synchronization_functions
@@ -9206,6 +9903,15 @@ class VulkanSPIRVCodeGen:
                 f"; WARNING: synchronization builtin '{function_name}' requires "
                 "a workgroup-capable execution model; current execution model: "
                 f"{self.current_execution_model_label()}"
+            )
+            return self.register_constant(0, self.register_primitive_type("int"))
+
+        if function_name == "workgroupExecutionBarrier":
+            workgroup_scope = self.spirv_scope_constant("Workgroup")
+            no_memory_semantics = self.spirv_memory_semantics_constant()
+            self.emit(
+                f"OpControlBarrier %{workgroup_scope.id} %{workgroup_scope.id} "
+                f"%{no_memory_semantics.id}"
             )
             return self.register_constant(0, self.register_primitive_type("int"))
 
@@ -9327,6 +10033,8 @@ class VulkanSPIRVCodeGen:
             "WaveActiveBitXor",
             "WavePrefixSum",
             "WavePrefixProduct",
+            "WavePrefixInclusiveSum",
+            "WavePrefixInclusiveProduct",
         }:
             return self.call_group_non_uniform_arithmetic(operation, args)
 
@@ -9338,6 +10046,12 @@ class VulkanSPIRVCodeGen:
 
         if operation == "WaveReadLaneAt":
             return self.call_group_non_uniform_shuffle(operation, args)
+
+        if operation == "WaveShuffleAndFillUp":
+            return self.call_group_non_uniform_shuffle_and_fill_up(operation, args)
+
+        if operation in {"WaveShuffleDown", "WaveShuffleUp", "WaveShuffleXor"}:
+            return self.call_group_non_uniform_shuffle_relative(operation, args)
 
         if operation == "WaveReadLaneFirst":
             return self.call_group_non_uniform_broadcast_first(operation, args)
@@ -9374,11 +10088,12 @@ class VulkanSPIRVCodeGen:
 
         result_type = self.ensure_registered_type(args[0].type)
         component_type = self.scalar_or_vector_component_type(result_type.type)
-        group_operation = (
-            "ExclusiveScan"
-            if operation in {"WavePrefixSum", "WavePrefixProduct"}
-            else "Reduce"
-        )
+        if operation in {"WavePrefixSum", "WavePrefixProduct"}:
+            group_operation = "ExclusiveScan"
+        elif operation in {"WavePrefixInclusiveSum", "WavePrefixInclusiveProduct"}:
+            group_operation = "InclusiveScan"
+        else:
+            group_operation = "Reduce"
 
         arithmetic_ops = {
             "WaveActiveSum": {
@@ -9400,6 +10115,18 @@ class VulkanSPIRVCodeGen:
                 "uint": "OpGroupNonUniformIMul",
             },
             "WavePrefixProduct": {
+                "float": "OpGroupNonUniformFMul",
+                "double": "OpGroupNonUniformFMul",
+                "int": "OpGroupNonUniformIMul",
+                "uint": "OpGroupNonUniformIMul",
+            },
+            "WavePrefixInclusiveSum": {
+                "float": "OpGroupNonUniformFAdd",
+                "double": "OpGroupNonUniformFAdd",
+                "int": "OpGroupNonUniformIAdd",
+                "uint": "OpGroupNonUniformIAdd",
+            },
+            "WavePrefixInclusiveProduct": {
                 "float": "OpGroupNonUniformFMul",
                 "double": "OpGroupNonUniformFMul",
                 "int": "OpGroupNonUniformIMul",
@@ -9548,6 +10275,135 @@ class VulkanSPIRVCodeGen:
         spirv_id = SpirvId(id_value, result_type.type)
         self.value_types[id_value] = result_type
         return spirv_id
+
+    def call_group_non_uniform_shuffle_relative(
+        self, operation: str, args: List[SpirvId]
+    ) -> SpirvId:
+        # `WaveShuffleDown/Up(value, delta)` and `WaveShuffleXor(value, mask)`
+        # read a value from a lane relative to the current one, mirroring Metal
+        # `simd_shuffle_down/up/xor` and GLSL `subgroupShuffleDown/Up/Xor`.
+        # ShuffleDown/Up need the GroupNonUniformShuffleRelative capability;
+        # ShuffleXor lives under GroupNonUniformShuffle.
+        if len(args) != 2:
+            self.emit(f"; WARNING: {operation} requires value and delta arguments")
+            return self.wave_result_default(operation, args)
+
+        result_type = self.ensure_registered_type(args[0].type)
+        # The delta/mask operand is an unsigned lane offset.
+        delta = self.convert_wave_lane_operand(operation, args[1])
+        if delta is None:
+            return self.wave_result_default(operation, args)
+
+        opcodes = {
+            "WaveShuffleDown": (
+                "OpGroupNonUniformShuffleDown",
+                "GroupNonUniformShuffleRelative",
+            ),
+            "WaveShuffleUp": (
+                "OpGroupNonUniformShuffleUp",
+                "GroupNonUniformShuffleRelative",
+            ),
+            "WaveShuffleXor": ("OpGroupNonUniformShuffleXor", "GroupNonUniformShuffle"),
+        }
+        opcode, capability = opcodes[operation]
+        self.require_group_non_uniform(capability)
+        scope = self.subgroup_scope_id()
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = {opcode} %{result_type.id} "
+            f"%{scope.id} %{args[0].id} %{delta.id}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
+
+    def call_group_non_uniform_shuffle_and_fill_up(
+        self, operation: str, args: List[SpirvId]
+    ) -> SpirvId:
+        if len(args) != 3:
+            self.emit(
+                f"; WARNING: {operation} requires exactly three arguments "
+                "(value, fill, and delta)"
+            )
+            return self.wave_result_default(operation, args)
+
+        value, fill, delta_value = args
+        result_type = self.registered_value_type(value) or self.ensure_registered_type(
+            value.type
+        )
+        fill_type = self.registered_value_type(fill) or self.ensure_registered_type(
+            fill.type
+        )
+        if result_type.type.base_type != fill_type.type.base_type:
+            self.emit(
+                f"; WARNING: {operation} requires compatible value and fill types"
+            )
+            return self.wave_result_default(operation, args)
+
+        result_vector = self.vector_component_type_and_count(result_type.type.base_type)
+        component_type = (
+            result_vector[0]
+            if result_vector is not None
+            else self.normalize_primitive_name(result_type.type.base_type)
+        )
+        if component_type not in {
+            "bool",
+            "float",
+            "double",
+            *self.INTEGER_TYPE_NAMES,
+        }:
+            self.emit(
+                f"; WARNING: {operation} requires a scalar or vector Boolean, "
+                "integer, or floating-point value"
+            )
+            return self.wave_result_default(operation, args)
+
+        delta_type = self.registered_value_type(
+            delta_value
+        ) or self.ensure_registered_type(delta_value.type)
+        if (
+            self.vector_component_type_and_count(delta_type.type.base_type) is not None
+            or self.normalize_primitive_name(delta_type.type.base_type)
+            not in self.INTEGER_TYPE_NAMES
+        ):
+            self.emit(f"; WARNING: {operation} requires a scalar integer delta")
+            return self.wave_result_default(operation, args)
+
+        uint_type = self.register_primitive_type("uint")
+        delta = self.convert_scalar_to_type(delta_value, uint_type)
+        if not self.value_has_type(delta, uint_type):
+            self.emit(f"; WARNING: {operation} requires a scalar integer delta")
+            return self.wave_result_default(operation, args)
+
+        self.require_group_non_uniform("GroupNonUniformShuffleRelative")
+        scope = self.subgroup_scope_id()
+        shuffled_id = self.get_id()
+        self.emit(
+            f"%{shuffled_id} = OpGroupNonUniformShuffleUp %{result_type.id} "
+            f"%{scope.id} %{value.id} %{delta.id}"
+        )
+        shuffled = SpirvId(shuffled_id, result_type.type)
+        self.value_types[shuffled_id] = result_type
+
+        invocation_variable = self.ensure_compute_builtin("gl_SubgroupInvocationID")
+        if invocation_variable is None:
+            raise UnsupportedSPIRVFeatureError(
+                "spirv.wave_shuffle_and_fill_up",
+                f"{operation} requires the SubgroupLocalInvocationId built-in",
+                missing_capabilities=(
+                    "GroupNonUniform",
+                    "GroupNonUniformShuffleRelative",
+                ),
+            )
+        invocation_id = self.get_variable_value(invocation_variable)
+        bool_type = self.register_primitive_type("bool")
+        in_range = self.binary_operation(">=", bool_type, invocation_id, delta)
+        if result_vector is not None:
+            selector_type = self.register_vector_type(bool_type, result_vector[1])
+            in_range = self.splat_scalar_to_vector(in_range, selector_type)
+
+        return self.select_operation(result_type, in_range, shuffled, fill)
 
     def call_group_non_uniform_partition(self, args: List[SpirvId]) -> SpirvId:
         if len(args) != 1:
@@ -9742,6 +10598,190 @@ class VulkanSPIRVCodeGen:
             )
         return source_component_name in {"float", "int", "uint"}
 
+    def explicit_bitcast_target_name(self, function_name: str) -> Optional[str]:
+        target_match = re.fullmatch(
+            r"(?:metal::)?as_type<(.+)>", str(function_name).strip()
+        )
+        if target_match is None:
+            return None
+        return target_match.group(1).strip()
+
+    def explicit_bitcast_target_type(self, function_name: str) -> Optional[SpirvId]:
+        target_name = self.explicit_bitcast_target_name(function_name)
+        if target_name is None:
+            return None
+
+        normalized_name = self.normalize_generic_vector_type(target_name)
+        primitive_name = self.normalize_primitive_name(normalized_name)
+        if primitive_name in {
+            "float",
+            "double",
+            *self.INTEGER_TYPE_NAMES,
+            self.BFLOAT16_TYPE_NAME,
+        }:
+            return self.register_primitive_type(primitive_name)
+
+        vector_info = self.vector_component_type_and_count(normalized_name)
+        if vector_info is None:
+            return None
+        component_name, component_count = vector_info
+        if component_name not in {
+            "float",
+            "double",
+            *self.INTEGER_TYPE_NAMES,
+            self.BFLOAT16_TYPE_NAME,
+        }:
+            return None
+        return self.register_vector_type(
+            self.register_primitive_type(component_name), component_count
+        )
+
+    def numeric_bitcast_type_width(self, value_type: SpirvId) -> Optional[int]:
+        registered_type = self.ensure_registered_type(value_type)
+        type_name = registered_type.type.base_type
+        component_count = 1
+        vector_info = self.vector_component_type_and_count(type_name)
+        if vector_info is not None:
+            type_name, component_count = vector_info
+
+        primitive_name = self.normalize_primitive_name(type_name)
+        component_width = {
+            "float": 32,
+            "double": 64,
+            "int": 32,
+            "uint": 32,
+            "i64": 64,
+            "u64": 64,
+            self.BFLOAT16_TYPE_NAME: 16,
+        }.get(primitive_name)
+        if component_width is None:
+            return None
+        return component_width * component_count
+
+    def call_explicit_bitcast_function(
+        self, function_name: str, args: List[SpirvId]
+    ) -> Optional[SpirvId]:
+        target_name = self.explicit_bitcast_target_name(function_name)
+        if target_name is None:
+            return None
+
+        target_type = self.explicit_bitcast_target_type(function_name)
+        if target_type is None:
+            raise UnsupportedSPIRVFeatureError(
+                "shape-preserving-bitcast",
+                f"SPIR-V cannot bitcast to non-numeric type '{target_name}'",
+            )
+        if len(args) != 1:
+            raise UnsupportedSPIRVFeatureError(
+                "shape-preserving-bitcast",
+                f"{function_name} requires exactly one operand",
+            )
+
+        source_type = self.registered_value_type(
+            args[0]
+        ) or self.ensure_registered_type(args[0].type)
+        source_width = self.numeric_bitcast_type_width(source_type)
+        target_width = self.numeric_bitcast_type_width(target_type)
+        if source_width is None:
+            raise UnsupportedSPIRVFeatureError(
+                "shape-preserving-bitcast",
+                "SPIR-V explicit bitcasts require a numeric scalar or vector "
+                f"operand, got '{source_type.type.base_type}'",
+            )
+        if source_width != target_width:
+            raise UnsupportedSPIRVFeatureError(
+                "shape-preserving-bitcast",
+                f"SPIR-V cannot bitcast {source_type.type.base_type} "
+                f"({source_width} bits) to {target_type.type.base_type} "
+                f"({target_width} bits); total bit widths must match",
+            )
+        if source_type.id == target_type.id:
+            return args[0]
+
+        result_id = self.get_id()
+        self.emit(f"%{result_id} = OpBitcast %{target_type.id} %{args[0].id}")
+        result = SpirvId(result_id, target_type.type)
+        self.value_types[result_id] = target_type
+        if self.is_non_uniform_value(args[0]):
+            self.mark_non_uniform_result(result)
+        return result
+
+    def call_bfloat16_bitcast_function(
+        self, function_name: str, args: List[SpirvId]
+    ) -> Optional[SpirvId]:
+        """Lower Metal's 16-bit ``as_type`` operations without numeric conversion."""
+        operation = self.bfloat16_bitcast_operation(function_name, args)
+        if operation is None:
+            return None
+
+        result_type = self.register_primitive_type(
+            self.BFLOAT16_TYPE_NAME if operation == "asbfloat16" else "uint"
+        )
+        if len(args) != 1:
+            self.emit(f"; WARNING: {function_name} requires exactly one operand")
+            return self.default_value_for_type(result_type)
+
+        source_type_name = self.normalize_primitive_name(args[0].type.base_type)
+        if operation == "asbfloat16":
+            if source_type_name == self.BFLOAT16_TYPE_NAME:
+                return args[0]
+            if source_type_name not in self.INTEGER_TYPE_NAMES:
+                self.emit(
+                    "; WARNING: asbfloat16 requires a 16-bit integer bit-pattern "
+                    "operand"
+                )
+                return self.default_value_for_type(result_type)
+            opcode = (
+                "OpUConvert"
+                if source_type_name in self.UNSIGNED_INTEGER_TYPES
+                else "OpSConvert"
+            )
+        else:
+            if source_type_name != self.BFLOAT16_TYPE_NAME:
+                self.emit("; WARNING: asuint16 requires a bfloat16 bit-pattern operand")
+                return self.default_value_for_type(result_type)
+            opcode = "OpUConvert"
+
+        result_id = self.get_id()
+        self.emit(f"%{result_id} = {opcode} %{result_type.id} %{args[0].id}")
+        self.value_types[result_id] = result_type
+        result = SpirvId(result_id, result_type.type)
+        if self.is_non_uniform_value(args[0]):
+            self.mark_non_uniform_result(result)
+        return result
+
+    def bfloat16_bitcast_operation(
+        self, function_name: str, args: Optional[List[SpirvId]] = None
+    ) -> Optional[str]:
+        if function_name in {"asbfloat16", "asuint16"}:
+            return function_name
+
+        target_match = re.fullmatch(r"(?:metal::)?as_type<(.+)>", function_name)
+        if target_match is not None:
+            target_type = self.normalize_primitive_name(target_match.group(1).strip())
+            if target_type == self.BFLOAT16_TYPE_NAME:
+                return "asbfloat16"
+            if function_name and args and len(args) == 1:
+                source_type = self.normalize_primitive_name(args[0].type.base_type)
+                if target_type == "uint" and source_type == self.BFLOAT16_TYPE_NAME:
+                    return "asuint16"
+
+        if function_name == "asuint" and args and len(args) == 1:
+            source_type = self.normalize_primitive_name(args[0].type.base_type)
+            if source_type == self.BFLOAT16_TYPE_NAME:
+                return "asuint16"
+        return None
+
+    def infer_bfloat16_bitcast_result_type(
+        self, function_name: str
+    ) -> Optional[SpirvId]:
+        operation = self.bfloat16_bitcast_operation(function_name)
+        if operation == "asbfloat16":
+            return self.register_primitive_type(self.BFLOAT16_TYPE_NAME)
+        if operation == "asuint16":
+            return self.register_primitive_type("uint")
+        return None
+
     def call_bitcast_builtin_function(
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
@@ -9914,6 +10954,14 @@ class VulkanSPIRVCodeGen:
         synchronization_call = self.call_synchronization_function(function_name, args)
         if synchronization_call is not None:
             return synchronization_call
+
+        bfloat16_bitcast = self.call_bfloat16_bitcast_function(function_name, args)
+        if bfloat16_bitcast is not None:
+            return bfloat16_bitcast
+
+        explicit_bitcast = self.call_explicit_bitcast_function(function_name, args)
+        if explicit_bitcast is not None:
+            return explicit_bitcast
 
         scalar_constructor = self.call_scalar_constructor(function_name, args)
         if scalar_constructor is not None:
@@ -10144,6 +11192,9 @@ class VulkanSPIRVCodeGen:
                 elif component_type_name in {"int", "uint"}:
                     zero_value = 0
                     one_value = 1
+                elif component_type_name == self.BFLOAT16_TYPE_NAME:
+                    zero_value = 0
+                    one_value = self.bfloat16_bits_for_float(1.0)
                 else:
                     zero_value = 0.0
                     one_value = 1.0
@@ -10166,6 +11217,10 @@ class VulkanSPIRVCodeGen:
 
         if function_name in self.struct_types:
             struct_type = self.struct_types[function_name]
+            if len(args) == 1:
+                converted = self.convert_value_to_type(args[0], struct_type)
+                if self.value_has_type(converted, struct_type):
+                    return converted
             constructor_args = self.struct_constructor_args(function_name, args)
             return self.composite_construct(struct_type, constructor_args)
 
@@ -10497,7 +11552,16 @@ class VulkanSPIRVCodeGen:
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
         primitive_name = self.normalize_primitive_name(function_name)
-        if primitive_name not in {"bool", "float", "double"} | self.INTEGER_TYPE_NAMES:
+        if (
+            primitive_name
+            not in {
+                "bool",
+                "float",
+                "double",
+                self.BFLOAT16_TYPE_NAME,
+            }
+            | self.INTEGER_TYPE_NAMES
+        ):
             return None
 
         target_type = self.register_primitive_type(primitive_name)
@@ -10610,10 +11674,20 @@ class VulkanSPIRVCodeGen:
         if not args:
             return self.register_primitive_type("float")
 
-        component_type = self.scalar_or_vector_component_type(args[0].type)
+        source_type = self.ensure_registered_type(args[0].type)
+        component_type = self.scalar_or_vector_component_type(source_type.type)
         primitive_type = self.normalize_primitive_name(component_type)
-        if primitive_type in {"float", "double", "bool"} | self.INTEGER_TYPE_NAMES:
-            return self.register_primitive_type(primitive_type)
+        if (
+            primitive_type
+            in {
+                "float",
+                "double",
+                "bool",
+                self.BFLOAT16_TYPE_NAME,
+            }
+            | self.INTEGER_TYPE_NAMES
+        ):
+            return source_type
 
         return self.register_primitive_type("float")
 
@@ -11295,6 +12369,8 @@ class VulkanSPIRVCodeGen:
             "float16_t": "float",
             "half": "float",
             "min16float": "float",
+            "bfloat": self.BFLOAT16_TYPE_NAME,
+            "bfloat16_t": self.BFLOAT16_TYPE_NAME,
             "i8": "int",
             "int8": "int",
             "int8_t": "int",
@@ -11329,10 +12405,19 @@ class VulkanSPIRVCodeGen:
         )
         if half_vector_match:
             return f"vec{half_vector_match.group(1)}"
+        bfloat_vector_match = re.fullmatch(
+            r"(?:bfloat|bfloat16|bfloat16_t)(?:vec)?([234])", compact
+        )
+        if bfloat_vector_match:
+            return f"v{bfloat_vector_match.group(1)}{self.BFLOAT16_TYPE_NAME}"
         narrow_vector_match = re.fullmatch(r"([iu])(?:8|16)vec([234])", compact)
         if narrow_vector_match:
             signedness, size = narrow_vector_match.groups()
             return f"{'i' if signedness == 'i' else 'u'}vec{size}"
+        wide_vector_match = re.fullmatch(r"([iu])64vec([234])", compact)
+        if wide_vector_match:
+            signedness, size = wide_vector_match.groups()
+            return f"v{size}{signedness}64"
         match = re.fullmatch(r"vec([234])<([^>]+)>", compact)
         if match:
             size, element_type = match.groups()
@@ -11350,6 +12435,8 @@ class VulkanSPIRVCodeGen:
 
         if element_type in {"i64", "u64"}:
             return f"v{size}{element_type}"
+        if element_type == self.BFLOAT16_TYPE_NAME:
+            return f"v{size}{self.BFLOAT16_TYPE_NAME}"
         prefixes = {
             "float": "vec",
             "double": "dvec",
@@ -11381,7 +12468,7 @@ class VulkanSPIRVCodeGen:
     ) -> Optional[Tuple[str, int]]:
         type_str = self.normalize_generic_vector_type(type_str)
         internal_match = re.fullmatch(
-            r"v([234])(float|double|int|uint|bool|i64|u64)", type_str
+            r"v([234])(float|double|int|uint|bool|i64|u64|bfloat16)", type_str
         )
         if internal_match:
             size, component_type = internal_match.groups()
@@ -12946,6 +14033,26 @@ class VulkanSPIRVCodeGen:
         return None
 
     def storage_buffer_expression_type_name(self, expr) -> Optional[str]:
+        if isinstance(expr, TernaryOpNode):
+            true_is_null = self.is_null_pointer_expression(expr.true_expr)
+            false_is_null = self.is_null_pointer_expression(expr.false_expr)
+            if true_is_null != false_is_null:
+                pointer_expr = expr.false_expr if true_is_null else expr.true_expr
+                return self.storage_buffer_expression_type_name(pointer_expr)
+        if (
+            isinstance(expr, UnaryOpNode)
+            and self.is_address_of_unary(expr)
+            and isinstance(expr.operand, ArrayAccessNode)
+        ):
+            array_expr = getattr(
+                expr.operand, "array", getattr(expr.operand, "array_expr", None)
+            )
+            base_type = self.storage_buffer_expression_type_name(array_expr)
+            type_info = self.storage_buffer_resource_type_info(base_type)
+            if type_info is not None:
+                element_type = type_info.get("element_type_name")
+                if element_type is not None:
+                    return f"{element_type}*"
         if isinstance(expr, ArrayAccessNode):
             base_type = self.storage_buffer_expression_type_name(
                 getattr(expr, "array", getattr(expr, "array_expr", None))
@@ -13075,9 +14182,13 @@ class VulkanSPIRVCodeGen:
         if declared_info.get("byte_address"):
             return True
 
-        if declared_info.get("element_type_name") != actual_info.get(
-            "element_type_name"
-        ):
+        declared_element_type = self.normalize_signature_type_name(
+            declared_info.get("element_type_name")
+        )
+        actual_element_type = self.normalize_signature_type_name(
+            actual_info.get("element_type_name")
+        )
+        if declared_element_type != actual_element_type:
             return False
 
         if (
@@ -13106,15 +14217,209 @@ class VulkanSPIRVCodeGen:
     def function_has_storage_buffer_parameters(self, function_node) -> bool:
         return bool(self.function_storage_buffer_parameters(function_node))
 
-    def format_array_size(self, size):
+    def function_has_aliasing_array_parameters(self, function_node) -> bool:
+        for param in self.function_parameters(function_node):
+            qualifiers = self.parameter_qualifier_names(param)
+            param_type = getattr(param, "param_type", getattr(param, "vtype", None))
+            type_name = self.type_name_from_value(param_type)
+            explicit_reference = bool(
+                type_name
+                and (
+                    str(type_name).strip().startswith("&")
+                    or str(type_name).strip().endswith("&")
+                )
+            )
+            if "inout" not in qualifiers and not explicit_reference:
+                continue
+            type_name = self.function_parameter_type_name(param)
+            type_name = self.normalize_reference_type_name(type_name)
+            if type_name is not None and self.split_outer_array_type(type_name):
+                return True
+        return False
+
+    def function_requires_pointer_preserving_inlining(self, function_node) -> bool:
+        return self.function_has_storage_buffer_parameters(
+            function_node
+        ) or self.function_has_aliasing_array_parameters(function_node)
+
+    def functions_for_local_constant_collection(self, ast):
+        """Return every function whose body may declare local int constants."""
+        functions = []
+        seen = set()
+
+        def add(func):
+            if func is None or id(func) in seen:
+                return
+            seen.add(id(func))
+            functions.append(func)
+
+        for func in getattr(ast, "functions", []) or []:
+            add(func)
+        for stage in (getattr(ast, "stages", None) or {}).values():
+            for func in getattr(stage, "local_functions", []) or []:
+                add(func)
+            add(getattr(stage, "entry_point", None))
+        return functions
+
+    def collect_local_int_constants(self, ast) -> dict:
+        """Resolve function-local compile-time integer constants by name.
+
+        Threadgroup reduction arrays in kernels such as softmax/rms_norm are
+        sized by a function-local ``constexpr int`` (e.g.
+        ``constexpr int SIMD_SIZE = 32;``). Unlike module-scope constants these
+        never reach ``ast.constants``, so their names must be resolved here for
+        an array-dimension expression like ``float[SIMD_SIZE]`` to lower to a
+        fixed-size array instead of collapsing to a runtime array (and, in turn,
+        to a scalar). Names that resolve to conflicting values across functions
+        are dropped so an ambiguous size is never substituted.
+        """
+        integer_type_names = {"int", "uint", "short", "ushort", "long", "ulong"}
+        resolved: dict = {}
+        conflicting: set = set()
+        for function_node in self.functions_for_local_constant_collection(ast):
+            for node in self.walk_ast_nodes(getattr(function_node, "body", [])):
+                if not isinstance(node, VariableNode):
+                    continue
+                name = getattr(node, "name", None)
+                if not name or name in conflicting:
+                    continue
+                qualifiers = {
+                    str(q).lower() for q in getattr(node, "qualifiers", []) or []
+                }
+                if not qualifiers & {"const", "constexpr", "constant"}:
+                    continue
+                declared = self.type_name_from_value(
+                    getattr(node, "var_type", getattr(node, "vtype", None))
+                )
+                if declared not in integer_type_names:
+                    continue
+                value = evaluate_literal_int_expression(
+                    getattr(node, "initial_value", None), resolved
+                )
+                if value is None:
+                    continue
+                existing = resolved.get(name)
+                if existing is not None and existing != value:
+                    resolved.pop(name, None)
+                    conflicting.add(name)
+                    continue
+                resolved[name] = value
+        return resolved
+
+    def format_array_size(self, size, constants=None):
         if size is None:
             return None
-        literal_size = evaluate_literal_int_expression(size, self.literal_int_constants)
+        size_text = self.struct_array_extent_expression_text(size)
+        if self.named_specialization_array_length(size_text) is not None:
+            return size_text
+        literal_size = evaluate_literal_int_expression(
+            size,
+            self.active_literal_int_constants() if constants is None else constants,
+        )
         if literal_size is not None:
             return literal_size
         if hasattr(size, "value"):
             return size.value
-        return size
+        return size_text
+
+    def active_literal_int_constants(self) -> dict:
+        """Return visible compile-time integer values for the current function."""
+        resolved = dict(self.literal_int_constants)
+        for name in self.current_function_literal_int_constant_shadows:
+            resolved.pop(name, None)
+        resolved.update(self.current_generic_literal_int_constants())
+        resolved.update(self.current_function_literal_int_constants)
+        return resolved
+
+    def current_generic_literal_int_constants(self) -> dict:
+        """Return concrete integer value bindings for the current specialization."""
+        resolved = {}
+        for name, value in (self.current_generic_function_substitutions or {}).items():
+            literal_value = evaluate_literal_int_expression(
+                value,
+                {**self.literal_int_constants, **resolved},
+            )
+            if literal_value is not None:
+                resolved[name] = literal_value
+        return resolved
+
+    def collect_function_local_int_constants(self, function_node) -> dict:
+        """Collect unambiguous integer constants within one function scope."""
+        integer_type_names = {"int", "uint", "short", "ushort", "long", "ulong"}
+        resolved = dict(self.literal_int_constants)
+        for name in self.current_function_literal_int_constant_shadows:
+            resolved.pop(name, None)
+        resolved.update(self.current_generic_literal_int_constants())
+        local_names = set()
+        conflicting = set()
+        for node in self.walk_ast_nodes(getattr(function_node, "body", [])):
+            if not isinstance(node, VariableNode):
+                continue
+            name = getattr(node, "name", None)
+            if not name or name in conflicting:
+                continue
+            qualifiers = {
+                str(qualifier).lower()
+                for qualifier in getattr(node, "qualifiers", []) or []
+            }
+            if not qualifiers & {"const", "constexpr", "constant"}:
+                continue
+            declared = self.type_name_from_value(
+                getattr(node, "var_type", getattr(node, "vtype", None))
+            )
+            if declared not in integer_type_names:
+                continue
+            value = evaluate_literal_int_expression(
+                getattr(node, "initial_value", None), resolved
+            )
+            if value is None:
+                continue
+            if name in local_names and resolved.get(name) != value:
+                resolved.pop(name, None)
+                conflicting.add(name)
+                continue
+            local_names.add(name)
+            resolved[name] = value
+        return {name: resolved[name] for name in local_names if name in resolved}
+
+    def unresolved_fixed_array_extent(self, type_value) -> Optional[str]:
+        """Return the first non-empty array extent that is not compile-time known."""
+        if type_value is None:
+            return None
+
+        if type_value.__class__.__name__ == "ArrayType":
+            size = getattr(type_value, "size", None)
+            size_text = self.struct_array_extent_expression_text(size)
+            if (
+                size is not None
+                and self.named_specialization_array_length(size_text) is None
+                and evaluate_literal_int_expression(
+                    size, self.active_literal_int_constants()
+                )
+                is None
+            ):
+                return size_text
+            return self.unresolved_fixed_array_extent(
+                getattr(type_value, "element_type", None)
+            )
+
+        type_name = self.type_name_from_value(type_value)
+        if type_name is None or "[" not in type_name:
+            return None
+        for extent in re.findall(r"\[([^\[\]]*)\]", type_name):
+            extent = extent.strip()
+            if not extent:
+                continue
+            if self.named_specialization_array_length(extent) is not None:
+                continue
+            if (
+                evaluate_literal_int_expression(
+                    extent, self.active_literal_int_constants()
+                )
+                is None
+            ):
+                return extent
+        return None
 
     def find_registered_type_by_base(self, base_type: str) -> Optional[SpirvId]:
         for type_dict in [
@@ -13179,6 +14484,15 @@ class VulkanSPIRVCodeGen:
         type_str = self.normalize_hlsl_matrix_type(type_str)
         if type_str.startswith("&"):
             return self.map_crossgl_type(type_str[1:].strip())
+        if self.is_metal_simdgroup_matrix_type(type_str):
+            raise UnsupportedSPIRVFeatureError(
+                "cooperative-matrix-lowering",
+                "SPIR-V cooperative-matrix lowering is not available for "
+                f"'{type_str}'; scalar substitution would change "
+                "subgroup-distributed matrix semantics",
+                missing_capabilities=("spirv.cooperative_matrix.khr",),
+                source_location=getattr(type_name, "source_location", None),
+            )
 
         array_type = self.split_outer_array_type(type_str)
         if array_type is not None:
@@ -13196,6 +14510,7 @@ class VulkanSPIRVCodeGen:
             "u64",
             "bool",
             "void",
+            self.BFLOAT16_TYPE_NAME,
         }:
             return self.register_primitive_type(primitive_type)
 
@@ -13273,6 +14588,19 @@ class VulkanSPIRVCodeGen:
         else:
             self.emit(f"; WARNING: Unknown type {type_str}, using float as default")
             return self.register_primitive_type("float")
+
+    def is_metal_simdgroup_matrix_type(self, type_name: str) -> bool:
+        """Return whether a type names a Metal subgroup-distributed matrix."""
+        compact = re.sub(r"\s+", "", str(type_name))
+        generic_base, generic_args = generic_type_parts(compact)
+        if generic_args and generic_base.rsplit("::", 1)[-1] == "simdgroup_matrix":
+            return True
+        return bool(
+            re.fullmatch(
+                r"(?:metal::)?simdgroup_(?:float|half|bfloat)\d+x\d+",
+                compact,
+            )
+        )
 
     def ensure_declared_struct_type(self, type_name: str) -> Optional[SpirvId]:
         if type_name in self.struct_types:
@@ -13789,6 +15117,18 @@ class VulkanSPIRVCodeGen:
                 f"{', '.join(unknown_names)}"
             )
 
+        if (
+            len(positional_args) == 1
+            and not named_args
+            and self.expression_result_type(positional_args[0]) == type_name
+        ):
+            copy_value = self.process_expression_with_expected_type(
+                positional_args[0],
+                type_name,
+            )
+            if copy_value is not None and self.value_has_type(copy_value, struct_type):
+                return copy_value
+
         components = []
         for index, (member_type, member_name) in enumerate(members):
             if index < len(positional_args):
@@ -13814,16 +15154,23 @@ class VulkanSPIRVCodeGen:
 
         return self.composite_construct(struct_type, components)
 
-    def process_crossgl_struct(self, struct_node: StructNode) -> SpirvId:
+    def process_crossgl_struct(self, struct_node: StructNode) -> Optional[SpirvId]:
         """Process a CrossGL struct definition."""
         if struct_node.name in self.generic_enum_struct_definitions:
             return self.struct_types.get(struct_node.name)
+        if getattr(
+            struct_node, "generic_params", None
+        ) and self.generic_struct_requires_materialization(struct_node):
+            return None
 
         members = []
         member_metadata = {}
         allow_runtime_array = struct_node.name in self.glsl_buffer_block_type_names
+        struct_constants = self.struct_compile_time_integer_constants(struct_node)
 
         for member in struct_node.members:
+            if self.is_static_struct_member(member):
+                continue
             member_type = None
             member_name = member.name
 
@@ -13833,11 +15180,17 @@ class VulkanSPIRVCodeGen:
                     element_type, "element_type"
                 ):
                     element_type = self.convert_type_node_to_string(element_type)
-                size = self.format_array_size(member.size)
+                size = self.format_array_size(member.size, struct_constants)
                 member_type_name = (
                     f"{element_type}[{size}]"
                     if size is not None
                     else f"{element_type}[]"
+                )
+                member_type_name = self.resolve_struct_member_array_extents(
+                    member_type_name,
+                    struct_constants,
+                    struct_name=struct_node.name,
+                    member_name=member_name,
                 )
                 member_type = self.map_crossgl_type(
                     self.spirv_struct_member_storage_type_name(
@@ -13851,6 +15204,12 @@ class VulkanSPIRVCodeGen:
                     getattr(member, "var_type", getattr(member, "vtype", None)),
                 )
                 if member_type_source is not None:
+                    member_type_source = self.resolve_struct_member_array_extents(
+                        member_type_source,
+                        struct_constants,
+                        struct_name=struct_node.name,
+                        member_name=member_name,
+                    )
                     member_type = self.map_crossgl_type(
                         self.spirv_struct_member_storage_type_name(
                             member_type_source,
@@ -13866,8 +15225,165 @@ class VulkanSPIRVCodeGen:
                     "type": member_type,
                 }
 
+        if any(
+            self.type_contains_runtime_array(member_type)
+            for member_type, _member_name in members
+        ):
+            members = [
+                (self.storage_layout_type(member_type, "std430"), member_name)
+                for member_type, member_name in members
+            ]
+            self.std430_runtime_array_struct_types.add(struct_node.name)
+            for member_type, member_name in members:
+                if member_name in member_metadata:
+                    member_metadata[member_name]["type"] = member_type
+
         self.struct_member_metadata[struct_node.name] = member_metadata
         return self.register_struct_type(struct_node.name, members)
+
+    def generic_struct_requires_materialization(self, struct_node) -> bool:
+        """Return whether a generic struct has no legal placeholder layout."""
+        for member in getattr(struct_node, "members", []) or []:
+            if isinstance(member, ArrayNode):
+                if (
+                    member.size is None
+                    or evaluate_literal_int_expression(
+                        member.size, self.literal_int_constants
+                    )
+                    is None
+                ):
+                    return True
+                member_type = member.element_type
+            else:
+                member_type = getattr(
+                    member,
+                    "member_type",
+                    getattr(member, "var_type", getattr(member, "vtype", None)),
+                )
+            if self.generic_struct_member_type_requires_materialization(member_type):
+                return True
+        return False
+
+    def generic_struct_member_type_requires_materialization(self, type_value) -> bool:
+        if type_value is None:
+            return False
+        if type_value.__class__.__name__ == "ArrayType":
+            if (
+                type_value.size is None
+                or evaluate_literal_int_expression(
+                    type_value.size, self.literal_int_constants
+                )
+                is None
+            ):
+                return True
+            return self.generic_struct_member_type_requires_materialization(
+                type_value.element_type
+            )
+        if hasattr(type_value, "pointee_type"):
+            return True
+        if isinstance(type_value, str):
+            if "*" in type_value:
+                return True
+            for extent in re.findall(r"\[([^\[\]]*)\]", type_value):
+                if (
+                    not extent.strip()
+                    or evaluate_literal_int_expression(
+                        extent, self.literal_int_constants
+                    )
+                    is None
+                ):
+                    return True
+        return False
+
+    def is_static_struct_member(self, member) -> bool:
+        attributes = {
+            str(getattr(attribute, "name", attribute)).lower()
+            for attribute in getattr(member, "attributes", []) or []
+        }
+        return "static" in attributes
+
+    def struct_compile_time_integer_constants(self, struct_node) -> dict:
+        constants = dict(self.literal_int_constants)
+        for member in getattr(struct_node, "members", []) or []:
+            if not self.is_static_struct_member(member):
+                continue
+            default_value = getattr(member, "default_value", None)
+            if default_value is None:
+                continue
+            value = evaluate_literal_int_expression(default_value, constants)
+            if value is not None:
+                constants[member.name] = value
+        return constants
+
+    def resolve_struct_member_array_extents(
+        self,
+        type_name,
+        constants: dict,
+        *,
+        struct_name: str,
+        member_name: str,
+    ) -> str:
+        if type_name.__class__.__name__ == "ArrayType":
+            element_type = self.resolve_struct_member_array_extents(
+                type_name.element_type,
+                constants,
+                struct_name=struct_name,
+                member_name=member_name,
+            )
+            if type_name.size is None:
+                return f"{element_type}[]"
+            value = evaluate_literal_int_expression(type_name.size, constants)
+            if value is None:
+                extent = self.struct_array_extent_expression_text(type_name.size)
+                if self.named_specialization_array_length(extent) is not None:
+                    return f"{element_type}[{extent}]"
+                raise UnsupportedSPIRVFeatureError(
+                    "unresolved fixed array extent",
+                    "SPIR-V requires a concrete fixed-array extent for "
+                    f"{struct_name}.{member_name}; could not resolve '{extent}'",
+                )
+            return f"{element_type}[{value}]"
+
+        type_text = self.type_name_from_value(type_name)
+        if type_text is None or "[" not in type_text:
+            return type_text
+
+        def resolve_extent(match):
+            extent = match.group(1).strip()
+            if not extent:
+                return "[]"
+            value = evaluate_literal_int_expression(extent, constants)
+            if value is None:
+                if self.named_specialization_array_length(extent) is not None:
+                    return f"[{extent}]"
+                raise UnsupportedSPIRVFeatureError(
+                    "unresolved fixed array extent",
+                    "SPIR-V requires a concrete fixed-array extent for "
+                    f"{struct_name}.{member_name}; could not resolve '{extent}'",
+                )
+            return f"[{value}]"
+
+        return re.sub(r"\[([^\[\]]*)\]", resolve_extent, type_text)
+
+    def struct_array_extent_expression_text(self, expression) -> str:
+        if isinstance(expression, IdentifierNode):
+            return expression.name
+        if isinstance(expression, LiteralNode):
+            return str(expression.value)
+        if isinstance(expression, BinaryOpNode):
+            left = self.struct_array_extent_expression_text(expression.left)
+            right = self.struct_array_extent_expression_text(expression.right)
+            if isinstance(expression.left, BinaryOpNode):
+                left = f"({left})"
+            if isinstance(expression.right, BinaryOpNode):
+                right = f"({right})"
+            return f"{left} {expression.op} {right}"
+        if isinstance(expression, UnaryOpNode):
+            operand = self.struct_array_extent_expression_text(expression.operand)
+            if isinstance(expression.operand, BinaryOpNode):
+                operand = f"({operand})"
+            return f"{expression.op}{operand}"
+        return str(expression)
 
     def process_cbuffer_declaration(self, cbuffer_node: StructNode) -> SpirvId:
         """Emit a CrossGL cbuffer as a SPIR-V Uniform block."""
@@ -13923,6 +15439,8 @@ class VulkanSPIRVCodeGen:
         element_type = self.storage_layout_type(
             self.map_crossgl_type(metadata["element_type_name"]), "std430"
         )
+        if self.type_contains_bfloat16(element_type):
+            self.require_bfloat16_storage()
         self.decorate_storage_buffer_nested_type(element_type)
         runtime_array_type = self.register_array_type(element_type, None)
         self.decorations.append(
@@ -14398,6 +15916,11 @@ class VulkanSPIRVCodeGen:
     def decorate_cbuffer_type(
         self, cbuffer_type: SpirvId, members: List[Tuple[SpirvId, str]]
     ):
+        if self.type_contains_bfloat16(cbuffer_type):
+            self.require_bfloat16_storage(uniform=True)
+        self.validate_specialization_sized_member_layout(
+            cbuffer_type.type.base_type, members
+        )
         self.decorations.append(f"OpDecorate %{cbuffer_type.id} Block")
         self.decorate_uniform_nested_type(cbuffer_type)
 
@@ -14415,7 +15938,22 @@ class VulkanSPIRVCodeGen:
                     f"OpMemberDecorate %{cbuffer_type.id} {member_index} MatrixStride 16"
                 )
             self.decorate_uniform_array_strides(member_type)
-            offset += self.uniform_layout_size(member_type)
+            if member_index + 1 < len(members):
+                offset += self.uniform_layout_size(member_type)
+
+    def validate_specialization_sized_member_layout(
+        self, type_name: str, members: List[Tuple[SpirvId, str]]
+    ):
+        """Reject variable-size members that would shift later block offsets."""
+        for member_type, member_name in members[:-1]:
+            if not self.type_contains_specialization_sized_array(member_type):
+                continue
+            raise UnsupportedSPIRVFeatureError(
+                "specialization-sized block member layout",
+                "SPIR-V block layout cannot assign stable offsets after "
+                f"specialization-sized member {type_name}.{member_name}",
+                missing_capabilities=("spirv.specialization_array_layout",),
+            )
 
     def decorate_uniform_nested_type(
         self, type_id: SpirvId, decorated_structs: Optional[set] = None
@@ -14436,6 +15974,9 @@ class VulkanSPIRVCodeGen:
             return
 
         decorated_structs.add(type_id.id)
+        self.validate_specialization_sized_member_layout(
+            type_id.type.base_type, members
+        )
         offset = 0
         for member_index, (member_type, _) in enumerate(members):
             offset = self.align_to(offset, self.uniform_layout_alignment(member_type))
@@ -14450,12 +15991,51 @@ class VulkanSPIRVCodeGen:
                     f"OpMemberDecorate %{type_id.id} {member_index} MatrixStride 16"
                 )
             self.decorate_uniform_nested_type(member_type, decorated_structs)
-            offset += self.uniform_layout_size(member_type)
+            if member_index + 1 < len(members):
+                offset += self.uniform_layout_size(member_type)
 
     def align_to(self, value: int, alignment: int) -> int:
         if alignment <= 1:
             return value
         return ((value + alignment - 1) // alignment) * alignment
+
+    def require_bfloat16_storage(self, *, uniform: bool = False):
+        """Enable the Vulkan 16-bit storage contract for a block member."""
+        self.require_extension("SPV_KHR_16bit_storage")
+        self.require_capability(
+            "UniformAndStorageBuffer16BitAccess"
+            if uniform
+            else "StorageBuffer16BitAccess"
+        )
+
+    def type_contains_bfloat16(
+        self, type_id: Optional[SpirvId], visited: Optional[set] = None
+    ) -> bool:
+        if type_id is None:
+            return False
+        if visited is None:
+            visited = set()
+        if type_id.id in visited:
+            return False
+        visited.add(type_id.id)
+
+        if (
+            self.normalize_primitive_name(type_id.type.base_type)
+            == self.BFLOAT16_TYPE_NAME
+        ):
+            return True
+        vector_info = self.vector_component_type_and_count(type_id.type.base_type)
+        if vector_info is not None:
+            return vector_info[0] == self.BFLOAT16_TYPE_NAME
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is not None:
+            return self.type_contains_bfloat16(array_info[0], visited)
+        return any(
+            self.type_contains_bfloat16(member_type, visited)
+            for member_type, _ in self.current_struct_members.get(
+                type_id.type.base_type, []
+            )
+        )
 
     def uniform_layout_alignment(self, type_id: SpirvId) -> int:
         if self.matrix_type_info_from_type(type_id) is not None:
@@ -14481,9 +16061,14 @@ class VulkanSPIRVCodeGen:
 
         vector_info = self.vector_type_info_from_type(type_id)
         if vector_info is not None:
-            _, component_count = vector_info
+            component_type, component_count = vector_info
+            if self.type_contains_bfloat16(component_type):
+                component_size = self.uniform_scalar_size(component_type)
+                return component_size * (2 if component_count == 2 else 4)
             return 8 if component_count == 2 else 16
 
+        if self.type_contains_bfloat16(type_id):
+            return 2
         return 4
 
     def uniform_layout_size(self, type_id: SpirvId) -> int:
@@ -14496,7 +16081,7 @@ class VulkanSPIRVCodeGen:
         if array_info is not None:
             element_type, size = array_info
             stride = self.uniform_array_stride(element_type)
-            return stride * int(size or 1)
+            return stride * self.array_length_default_value(size)
 
         struct_members = self.current_struct_members.get(type_id.type.base_type)
         if struct_members is not None:
@@ -14511,12 +16096,16 @@ class VulkanSPIRVCodeGen:
         if vector_info is not None:
             component_type, component_count = vector_info
             component_size = self.uniform_scalar_size(component_type)
+            if self.type_contains_bfloat16(component_type):
+                return component_size * component_count
             return self.align_to(component_size * component_count, 16)
 
         return self.uniform_scalar_size(type_id)
 
     def uniform_scalar_size(self, type_id: SpirvId) -> int:
         primitive_name = self.normalize_primitive_name(type_id.type.base_type)
+        if primitive_name == self.BFLOAT16_TYPE_NAME:
+            return 2
         return 8 if primitive_name in {"double", "i64", "u64"} else 4
 
     def uniform_array_stride(self, element_type: SpirvId) -> int:
@@ -14569,23 +16158,19 @@ class VulkanSPIRVCodeGen:
         if array_info is not None:
             element_type, size = array_info
             layout_element_type = self.storage_layout_type(element_type, layout)
-            if layout == "std430" and layout_element_type.id == element_type.id:
-                return type_id
             return self.register_layout_array_type(layout_element_type, size, layout)
 
         struct_members = self.current_struct_members.get(type_id.type.base_type)
         if struct_members is not None:
+            if (
+                layout == "std430"
+                and type_id.type.base_type in self.std430_runtime_array_struct_types
+            ):
+                return type_id
             cloned_members = [
                 (self.storage_layout_type(member_type, layout), member_name)
                 for member_type, member_name in struct_members
             ]
-            if layout == "std430" and all(
-                cloned_type.id == member_type.id
-                for (cloned_type, _), (member_type, _member_name) in zip(
-                    cloned_members, struct_members
-                )
-            ):
-                return type_id
             return self.register_layout_struct_type(type_id, layout, cloned_members)
 
         return type_id
@@ -14593,10 +16178,14 @@ class VulkanSPIRVCodeGen:
     def decorate_storage_buffer_block_type(
         self, block_type: SpirvId, layout: str = "std430"
     ):
+        if self.type_contains_bfloat16(block_type):
+            self.require_bfloat16_storage()
         self.decorations.append(f"OpDecorate %{block_type.id} BufferBlock")
-        for member_index, (member_type, _) in enumerate(
-            self.current_struct_members.get(block_type.type.base_type, [])
-        ):
+        members = self.current_struct_members.get(block_type.type.base_type, [])
+        self.validate_specialization_sized_member_layout(
+            block_type.type.base_type, members
+        )
+        for member_index, (member_type, _) in enumerate(members):
             offset = self.storage_struct_member_offset(block_type, member_index, layout)
             self.decorations.append(
                 f"OpMemberDecorate %{block_type.id} {member_index} Offset {offset}"
@@ -14617,6 +16206,9 @@ class VulkanSPIRVCodeGen:
     ):
         struct_members = self.current_struct_members.get(type_id.type.base_type)
         if struct_members is not None:
+            self.validate_specialization_sized_member_layout(
+                type_id.type.base_type, struct_members
+            )
             for member_index, (member_type, _) in enumerate(struct_members):
                 offset = self.storage_struct_member_offset(
                     type_id, member_index, layout
@@ -14693,7 +16285,10 @@ class VulkanSPIRVCodeGen:
 
         vector_info = self.vector_type_info_from_type(type_id)
         if vector_info is not None:
-            _, component_count = vector_info
+            component_type, component_count = vector_info
+            if self.type_contains_bfloat16(component_type):
+                component_size = self.uniform_scalar_size(component_type)
+                return component_size * (2 if component_count == 2 else 4)
             if component_count == 2:
                 return 8
             if component_count in {3, 4}:
@@ -14715,7 +16310,9 @@ class VulkanSPIRVCodeGen:
         array_info = self.array_type_info_from_type(type_id)
         if array_info is not None:
             element_type, size = array_info
-            return self.storage_array_stride(element_type, layout) * int(size or 1)
+            return self.storage_array_stride(
+                element_type, layout
+            ) * self.array_length_default_value(size)
 
         struct_members = self.current_struct_members.get(type_id.type.base_type)
         if struct_members is not None:
@@ -14785,7 +16382,9 @@ class VulkanSPIRVCodeGen:
         array_info = self.array_type_info_from_type(type_id)
         if array_info is not None:
             element_type, size = array_info
-            return self.scalar_array_stride(element_type) * int(size or 1)
+            return self.scalar_array_stride(
+                element_type
+            ) * self.array_length_default_value(size)
 
         struct_members = self.current_struct_members.get(type_id.type.base_type)
         if struct_members is not None:
@@ -14834,7 +16433,7 @@ class VulkanSPIRVCodeGen:
         if qualifier is not None:
             return self.spirv_execution_model(qualifier)
 
-        execution_models = self.function_execution_models.get(function_node.name, set())
+        execution_models = self.execution_models_for_function(function_node)
         if "GLCompute" in execution_models:
             return "GLCompute"
         if len(execution_models) == 1:
@@ -14843,6 +16442,30 @@ class VulkanSPIRVCodeGen:
 
     def process_function_node(self, function_node, stage=None):
         """Process a CrossGL function definition."""
+        previous_storage_buffer_pointer_offset_aliases = (
+            self.storage_buffer_pointer_offset_aliases
+        )
+        self.storage_buffer_pointer_offset_aliases = {}
+        previous_generic_function_substitutions = (
+            self.current_generic_function_substitutions
+        )
+        self.current_generic_function_substitutions = (
+            getattr(function_node, "_generic_substitutions", {}) or {}
+        )
+        previous_function_literal_int_constant_shadows = (
+            self.current_function_literal_int_constant_shadows
+        )
+        self.current_function_literal_int_constant_shadows = {
+            param.name
+            for param in self.function_parameters(function_node)
+            if getattr(param, "name", None)
+        }
+        previous_function_literal_int_constants = (
+            self.current_function_literal_int_constants
+        )
+        self.current_function_literal_int_constants = (
+            self.collect_function_local_int_constants(function_node)
+        )
         return_type = self.map_crossgl_type(function_node.return_type)
         self.function_nodes[function_node.name] = function_node
         previous_return_type = self.current_return_type
@@ -14850,20 +16473,16 @@ class VulkanSPIRVCodeGen:
         previous_return_semantic_output = self.current_return_semantic_output
         previous_entry_point_return_outputs = self.current_entry_point_return_outputs
         previous_stage = self.current_stage
+        previous_function_node = self.current_function_node
         previous_function_name = self.current_function_name
-        previous_generic_function_substitutions = (
-            self.current_generic_function_substitutions
-        )
         self.current_return_type = return_type
         self.current_return_type_source = self.type_name_from_value(
             function_node.return_type
         )
         self.current_return_semantic_output = None
         self.current_entry_point_return_outputs = None
+        self.current_function_node = function_node
         self.current_function_name = function_node.name
-        self.current_generic_function_substitutions = (
-            getattr(function_node, "_generic_substitutions", {}) or {}
-        )
         if stage is not None:
             self.current_stage = stage
 
@@ -15082,6 +16701,8 @@ class VulkanSPIRVCodeGen:
             ):
                 if i not in value_array_param_indices:
                     continue
+                if self.function_parameter_is_reference_like(param):
+                    continue
                 param_name = getattr(param, "name", f"param{i}")
                 param_id = self.local_variables.get(param_name)
                 if param_id is None:
@@ -15160,6 +16781,7 @@ class VulkanSPIRVCodeGen:
         self.current_execution_model = previous_execution_model
         self.current_function_id = previous_function_id
         self.current_mesh_output_parameters = previous_mesh_output_parameters
+        self.current_function_node = previous_function_node
         self.current_function_name = previous_function_name
         self.current_stage = previous_stage
         self.current_return_type = previous_return_type
@@ -15169,11 +16791,20 @@ class VulkanSPIRVCodeGen:
         self.current_generic_function_substitutions = (
             previous_generic_function_substitutions
         )
+        self.current_function_literal_int_constants = (
+            previous_function_literal_int_constants
+        )
+        self.current_function_literal_int_constant_shadows = (
+            previous_function_literal_int_constant_shadows
+        )
         if previous_entry_resource_binding_state is not None:
             self.restore_resource_binding_state(previous_entry_resource_binding_state)
         self.local_variables.clear()
         self.precise_local_variables.clear()
         self.resource_alias_variables.clear()
+        self.storage_buffer_pointer_offset_aliases = (
+            previous_storage_buffer_pointer_offset_aliases
+        )
         return function_id
 
     def process_statements(self, statements):
@@ -15416,6 +17047,7 @@ class VulkanSPIRVCodeGen:
                 "u64",
                 "float",
                 "double",
+                self.BFLOAT16_TYPE_NAME,
             }:
                 return self.register_primitive_type(primitive_name)
             specialized_callee_name = generic_function_call_name(
@@ -15440,6 +17072,12 @@ class VulkanSPIRVCodeGen:
                 return signature[0]
             if callee_name in self.struct_types:
                 return self.struct_types[callee_name]
+            bfloat16_bitcast_type = self.infer_bfloat16_bitcast_result_type(callee_name)
+            if bfloat16_bitcast_type is not None:
+                return bfloat16_bitcast_type
+            explicit_bitcast_type = self.explicit_bitcast_target_type(callee_name)
+            if explicit_bitcast_type is not None:
+                return explicit_bitcast_type
             bitcast_type = self.infer_bitcast_builtin_result_type(
                 callee_name, expr.args
             )
@@ -15497,6 +17135,10 @@ class VulkanSPIRVCodeGen:
             return true_type or false_type
         if isinstance(expr, MatchNode):
             return self.infer_match_expression_result_type(expr)
+        if isinstance(expr, WaveOpNode):
+            if expr.operation == "WaveShuffleAndFillUp" and expr.arguments:
+                return self.infer_expression_result_type(expr.arguments[0])
+            return None
         return None
 
     def infer_builtin_expression_result_type(self, name: str) -> Optional[SpirvId]:
@@ -15563,6 +17205,8 @@ class VulkanSPIRVCodeGen:
     def process_variable_declaration(self, node: VariableNode):
         """Process a local CrossGL variable declaration."""
         var_type_source = getattr(node, "var_type", getattr(node, "vtype", "float"))
+        storage_class = self.local_variable_storage_class(node)
+        self.current_function_literal_int_constant_shadows.add(node.name)
         if self.type_name_from_value(var_type_source) == "auto":
             var_type_source = None
         var_type_name = self.type_name_from_value(var_type_source)
@@ -15571,11 +17215,25 @@ class VulkanSPIRVCodeGen:
             node, var_type_source, var_type_name
         ):
             return
+        if self.process_local_array_pointer_alias_declaration(
+            node, var_type_source, var_type_name
+        ):
+            return
 
         if self.local_variable_requires_descriptor_storage(node, var_type_name):
             raise ValueError(
                 f"SPIR-V descriptor resource '{node.name}' cannot be declared "
                 "inside a function; declare it at shader or stage scope"
+            )
+
+        unresolved_extent = self.unresolved_fixed_array_extent(var_type_source)
+        if unresolved_extent is not None:
+            raise UnsupportedSPIRVFeatureError(
+                "unresolved fixed array extent",
+                "SPIR-V requires a concrete fixed-array extent for local variable "
+                f"{node.name}; could not resolve '{unresolved_extent}'",
+                missing_capabilities=("spirv.fixed_array_extent",),
+                source_location=getattr(node, "source_location", None),
             )
 
         initial_value = getattr(node, "initial_value", None)
@@ -15610,6 +17268,33 @@ class VulkanSPIRVCodeGen:
             )
             return
 
+        if storage_class == "Workgroup":
+            var_id = self.get_or_create_workgroup_variable(node, var_type)
+            self.local_variables[node.name] = var_id
+            if is_precise:
+                self.precise_local_variables.add(node.name)
+            if initial_value is not None:
+                if isinstance(initial_value, MatchNode):
+                    self.process_match_expression_assignment(
+                        initial_value, var_id, var_type
+                    )
+                elif isinstance(initial_value, ArrayLiteralNode):
+                    rhs_value = self.process_array_literal(initial_value, var_type)
+                    if rhs_value is not None:
+                        self.store_to_variable(var_id, rhs_value)
+                else:
+                    if is_precise:
+                        rhs_value = self.process_expression_with_precision(
+                            initial_value, is_precise
+                        )
+                    else:
+                        rhs_value = self.process_expression_with_expected_type(
+                            initial_value, var_type_name
+                        )
+                    if rhs_value is not None:
+                        self.store_to_variable(var_id, rhs_value)
+            return
+
         var_id = self.create_variable(var_type, "Function", node.name)
         self.local_variables[node.name] = var_id
         if is_precise:
@@ -15635,6 +17320,56 @@ class VulkanSPIRVCodeGen:
                     )
                 if rhs_value is not None:
                     self.store_to_variable(var_id, rhs_value)
+
+    def local_variable_storage_class(self, node: VariableNode) -> str:
+        metadata = self.declaration_metadata_names(node)
+        if not metadata & {"groupshared", "shared", "threadgroup", "workgroup"}:
+            return "Function"
+
+        execution_models = self.current_synchronization_execution_models()
+        allowed_models = {"GLCompute", "MeshEXT", "TaskEXT"}
+        if execution_models and not execution_models.issubset(allowed_models):
+            label = self.current_execution_model_label()
+            raise UnsupportedSPIRVFeatureError(
+                "workgroup storage execution model",
+                "SPIR-V workgroup storage is only available to compute, mesh, "
+                f"and task execution models; '{node.name}' is reachable from {label}",
+                missing_capabilities=("spirv.workgroup_storage.execution_model",),
+                source_location=getattr(node, "source_location", None),
+            )
+        return "Workgroup"
+
+    def workgroup_variable_cache_key(
+        self,
+        node: VariableNode,
+        var_type: SpirvId,
+    ) -> tuple:
+        type_bindings = tuple(
+            sorted(
+                (str(name), str(value))
+                for name, value in self.current_generic_type_substitutions.items()
+            )
+        )
+        value_bindings = tuple(
+            sorted(
+                (str(name), str(value))
+                for name, value in self.current_generic_function_substitutions.items()
+            )
+        )
+        return id(node), var_type.id, type_bindings, value_bindings
+
+    def get_or_create_workgroup_variable(
+        self,
+        node: VariableNode,
+        var_type: SpirvId,
+    ) -> SpirvId:
+        cache_key = self.workgroup_variable_cache_key(node, var_type)
+        variable = self.workgroup_variables_by_declaration.get(cache_key)
+        if variable is None:
+            variable = self.create_variable(var_type, "Workgroup", node.name)
+            self.workgroup_variables_by_declaration[cache_key] = variable
+        self.mark_function_interface_variable(variable)
+        return variable
 
     def process_local_resource_alias_declaration(
         self, node: VariableNode, var_type_source, var_type_name: str
@@ -15671,11 +17406,146 @@ class VulkanSPIRVCodeGen:
             ):
                 return False
 
-        self.local_variables[node.name] = source_pointer
+        alias_pointer = self.copy_storage_buffer_pointer_alias(
+            source_pointer,
+            node.name,
+        )
+        self.local_variables[node.name] = alias_pointer
         if alias_type_name is not None:
             self.local_variable_types[node.name] = alias_type_name
         self.resource_alias_variables.add(node.name)
         return True
+
+    def process_local_array_pointer_alias_declaration(
+        self, node: VariableNode, var_type_source, var_type_name: str
+    ) -> bool:
+        # `threadgroup/device T* p = &arr[i]` (or `= q`, where q already aliases a
+        # local-array element): bind `p` to the element pointer so `p`, `p[j]`
+        # and `p + j` resolve to `arr[i + j]` rather than squashing `p` to a
+        # scalar Function variable. Only takes over when the initializer is an
+        # offset-aliased local-array element pointer; resource / storage-buffer
+        # pointer aliases keep their existing dedicated path, and any other shape
+        # falls through to the ordinary variable handling unchanged.
+        initial_value = getattr(node, "initial_value", None)
+        if initial_value is None:
+            return False
+        if self.pointer_pointee_type_name_from_string(var_type_name) is None:
+            return False
+        source_pointer = self.variable_pointer_from_expression(initial_value)
+        if source_pointer is None:
+            return False
+        if (
+            self.storage_buffer_pointer_alias_key(source_pointer)
+            not in self.storage_buffer_pointer_offset_aliases
+        ):
+            return False
+        alias_pointer = self.copy_storage_buffer_pointer_alias(
+            source_pointer,
+            node.name,
+        )
+        self.local_variables[node.name] = alias_pointer
+        self.resource_alias_variables.add(node.name)
+        return True
+
+    def copy_storage_buffer_pointer_alias(
+        self, source_pointer: SpirvId, name: Optional[str]
+    ) -> SpirvId:
+        """Create independent mutable offset state for a pointer value copy."""
+        alias_pointer = SpirvId(source_pointer.id, source_pointer.type, name)
+        source_alias = self.storage_buffer_pointer_offset_aliases.get(
+            self.storage_buffer_pointer_alias_key(source_pointer)
+        )
+        if source_alias is None or source_alias.offset_variable is None:
+            root_pointer = (
+                source_alias.root_pointer
+                if source_alias is not None
+                else source_pointer
+            )
+            domain = (
+                source_alias.domain
+                if source_alias is not None
+                else self.storage_buffer_pointer_alias_domain(root_pointer)
+            )
+            reset_marker = self.next_pointer_offset_reset_marker()
+            self.emit(reset_marker)
+            self.storage_buffer_pointer_offset_aliases[
+                self.storage_buffer_pointer_alias_key(alias_pointer)
+            ] = PointerOffsetState(
+                root_pointer,
+                None,
+                domain,
+                reset_marker,
+            )
+            return alias_pointer
+
+        root_pointer = source_alias.root_pointer
+        source_offset_variable = source_alias.offset_variable
+        offset_type = self.variable_value_types[source_offset_variable.id]
+        source_offset = self.load_from_variable(source_offset_variable, offset_type)
+        zero = self.register_constant(0, offset_type)
+        alias_offset_variable = self.create_variable(
+            offset_type,
+            "Function",
+            initializer=zero,
+        )
+        self.store_to_variable(alias_offset_variable, source_offset)
+        self.storage_buffer_pointer_offset_aliases[
+            self.storage_buffer_pointer_alias_key(alias_pointer)
+        ] = PointerOffsetState(
+            root_pointer,
+            alias_offset_variable,
+            source_alias.domain,
+        )
+        return alias_pointer
+
+    def storage_buffer_pointer_alias_domain(self, pointer: SpirvId) -> str:
+        """Classify a pointer root for offset-aware element access."""
+        if self.pointer_points_to_indexable_array(pointer):
+            return "local_array"
+        return "storage_buffer"
+
+    def next_pointer_offset_reset_marker(self) -> str:
+        """Reserve a source-order location for a deferred pointer-copy reset."""
+        self.pointer_offset_reset_marker_count += 1
+        return (
+            f"{self.POINTER_OFFSET_RESET_MARKER_PREFIX}"
+            f"{self.pointer_offset_reset_marker_count}__"
+        )
+
+    def materialize_storage_buffer_pointer_offset_alias(
+        self,
+        pointer: SpirvId,
+        state: PointerOffsetState,
+        offset_type: SpirvId,
+    ) -> PointerOffsetState:
+        """Create a typed offset cell and place any deferred reset at its copy."""
+        if state.offset_variable is not None:
+            return state
+
+        zero = self.register_constant(0, offset_type)
+        offset_variable = self.create_variable(
+            offset_type,
+            "Function",
+            initializer=zero,
+        )
+        if state.reset_marker is not None:
+            try:
+                marker_index = self.code_lines.index(state.reset_marker)
+            except ValueError as exc:
+                raise RuntimeError(
+                    "Deferred pointer-offset reset marker is missing"
+                ) from exc
+            self.code_lines[marker_index] = f"OpStore %{offset_variable.id} %{zero.id}"
+
+        materialized = PointerOffsetState(
+            state.root_pointer,
+            offset_variable,
+            state.domain,
+        )
+        self.storage_buffer_pointer_offset_aliases[
+            self.storage_buffer_pointer_alias_key(pointer)
+        ] = materialized
+        return materialized
 
     def local_variable_requires_descriptor_storage(
         self, node: VariableNode, type_name: str
@@ -15743,6 +17613,22 @@ class VulkanSPIRVCodeGen:
             initializer = self.process_constant_expression(initial_value, var_type)
             if initializer is not None:
                 initializer = self.coerce_scalar_constant_to_type(initializer, var_type)
+
+        if (
+            storage_class == "Private"
+            and initializer is not None
+            and self.is_specialization_constant_value(initializer)
+        ):
+            # A module-scope constant whose initializer folds to a
+            # specialization-constant operation (e.g. `span_h = tgp_h * str_h + ...`)
+            # is registered as a named constant rather than a Private variable, so
+            # that references resolve to the OpSpecConstantOp result directly instead
+            # of emitting an OpLoad of a runtime variable at constant scope.
+            self.emit_named_constant_debug_name(node.name, initializer)
+            self.named_constants[node.name] = initializer
+            if self.has_attribute(node, "precise"):
+                self.precise_global_variables.add(node.name)
+            return initializer
 
         if storage_class == "Input":
             var_id = self.global_interface_builtin_variable(node, "Input", var_type)
@@ -16463,7 +18349,7 @@ class VulkanSPIRVCodeGen:
         array_info = self.array_type_info_from_type(value_type)
         if array_info is not None:
             element_type, size = array_info
-            for index in range(size or 0):
+            for index in range(self.array_length_default_value(size, fallback=0)):
                 yield index, self.composite_extract(value, element_type, index)
             return
 
@@ -16852,7 +18738,7 @@ class VulkanSPIRVCodeGen:
             element_widths = self.interface_type_location_component_widths(
                 element_type_name
             )
-            element_count = max(size or 1, 1)
+            element_count = max(self.array_length_default_value(size), 1)
             return element_widths * element_count
 
         matrix_match = re.fullmatch(r"(d)?mat([234])(?:x([234]))?", type_name)
@@ -17186,6 +19072,10 @@ class VulkanSPIRVCodeGen:
         return 2
 
     def function_parameter_is_reference_like(self, param) -> bool:
+        qualifiers = self.parameter_qualifier_names(param)
+        if qualifiers & {"out", "inout"}:
+            return True
+
         param_type = getattr(param, "param_type", getattr(param, "vtype", None))
         type_name = self.type_name_from_value(param_type)
         if type_name is None:
@@ -17358,6 +19248,9 @@ class VulkanSPIRVCodeGen:
         type_name = self.normalize_reference_type_name(type_name)
         type_name = self.normalize_generic_vector_type(type_name)
         type_name = self.normalize_hlsl_matrix_type(type_name)
+        primitive_name = self.normalize_primitive_name(type_name)
+        if primitive_name == self.BFLOAT16_TYPE_NAME:
+            type_name = primitive_name
         return re.sub(r"\s+", "", str(type_name))
 
     def call_argument_type_name(self, arg) -> Optional[str]:
@@ -17382,7 +19275,16 @@ class VulkanSPIRVCodeGen:
         if declared_type == actual_type:
             return True
 
-        numeric_types = {"float", "double", "int", "uint", "i64", "u64", "bool"}
+        numeric_types = {
+            "float",
+            "double",
+            "int",
+            "uint",
+            "i64",
+            "u64",
+            "bool",
+            self.BFLOAT16_TYPE_NAME,
+        }
         if declared_type in numeric_types and actual_type in numeric_types:
             return True
 
@@ -17483,7 +19385,7 @@ class VulkanSPIRVCodeGen:
         for function_node in self.function_nodes_by_name.get(function_name, []):
             if getattr(function_node, "_generic_source_name", None) == function_name:
                 continue
-            if self.function_has_storage_buffer_parameters(function_node):
+            if self.function_requires_pointer_preserving_inlining(function_node):
                 continue
             parameters, args = self.storage_buffer_effective_call_signature(
                 function_node, call_args
@@ -17856,11 +19758,18 @@ class VulkanSPIRVCodeGen:
         return None
 
     def storage_buffer_parameter_root_name(self, expr, storage_buffer_parameters):
+        def parameter_root(name):
+            if name not in storage_buffer_parameters:
+                return None
+            if isinstance(storage_buffer_parameters, dict):
+                return storage_buffer_parameters.get(name)
+            return name
+
         if isinstance(expr, str):
-            return expr if expr in storage_buffer_parameters else None
+            return parameter_root(expr)
         if isinstance(expr, (IdentifierNode, VariableNode)):
             name = getattr(expr, "name", None)
-            return name if name in storage_buffer_parameters else None
+            return parameter_root(name)
         if isinstance(expr, ArrayAccessNode):
             return self.storage_buffer_parameter_root_name(
                 getattr(expr, "array", getattr(expr, "array_expr", None)),
@@ -17871,7 +19780,76 @@ class VulkanSPIRVCodeGen:
                 getattr(expr, "object", getattr(expr, "object_expr", None)),
                 storage_buffer_parameters,
             )
+        if isinstance(expr, UnaryOpNode) and expr.op == "*":
+            return self.storage_buffer_parameter_root_name(
+                expr.operand, storage_buffer_parameters
+            )
         return None
+
+    def storage_buffer_pointer_root_name(self, expr, storage_buffer_parameters):
+        """Resolve a pointer-valued expression to its formal buffer parameter."""
+        root_name = self.storage_buffer_parameter_root_name(
+            expr, storage_buffer_parameters
+        )
+        if root_name is not None:
+            return root_name
+        if isinstance(expr, UnaryOpNode) and expr.op == "&":
+            return self.storage_buffer_parameter_root_name(
+                expr.operand, storage_buffer_parameters
+            )
+        if isinstance(expr, BinaryOpNode) and expr.op in {"+", "-"}:
+            left_root = self.storage_buffer_pointer_root_name(
+                expr.left, storage_buffer_parameters
+            )
+            right_root = self.storage_buffer_pointer_root_name(
+                expr.right, storage_buffer_parameters
+            )
+            if left_root is not None and right_root is None:
+                return left_root
+            if expr.op == "+" and right_root is not None and left_root is None:
+                return right_root
+            return None
+        if isinstance(expr, TernaryOpNode):
+            true_root = self.storage_buffer_pointer_root_name(
+                expr.true_expr, storage_buffer_parameters
+            )
+            false_root = self.storage_buffer_pointer_root_name(
+                expr.false_expr, storage_buffer_parameters
+            )
+            if true_root == false_root:
+                return true_root
+        return None
+
+    def function_storage_buffer_alias_roots(
+        self, function_node, storage_buffer_parameters
+    ):
+        """Map local buffer aliases to the formal parameters that own access."""
+        roots = {name: name for name in storage_buffer_parameters}
+        declarations = [
+            node
+            for node in self.walk_ast_nodes(getattr(function_node, "body", []))
+            if isinstance(node, VariableNode)
+            and self.storage_buffer_resource_type_name(
+                getattr(node, "var_type", getattr(node, "vtype", None))
+            )
+            is not None
+            and getattr(node, "initial_value", None) is not None
+        ]
+
+        changed = True
+        while changed:
+            changed = False
+            for declaration in declarations:
+                if declaration.name in roots:
+                    continue
+                root_name = self.storage_buffer_pointer_root_name(
+                    declaration.initial_value, roots
+                )
+                if root_name is None:
+                    continue
+                roots[declaration.name] = root_name
+                changed = True
+        return roots
 
     def function_storage_buffer_parameter_indices(self, function_node) -> set:
         return {
@@ -17949,7 +19927,7 @@ class VulkanSPIRVCodeGen:
                 required_access = self.storage_buffer_member_method_access_requirement(
                     getattr(callee_expr, "member", None)
                 )
-                target_name = self.storage_buffer_parameter_root_name(
+                target_name = self.storage_buffer_pointer_root_name(
                     getattr(callee_expr, "object", None),
                     storage_buffer_parameters,
                 )
@@ -17980,7 +19958,7 @@ class VulkanSPIRVCodeGen:
             args = getattr(expr, "arguments", getattr(expr, "args", []))
             required_access = self.buffer_operation_access_requirement(callee_name)
             if required_access is not None and args:
-                target_name = self.storage_buffer_parameter_root_name(
+                target_name = self.storage_buffer_pointer_root_name(
                     args[0], storage_buffer_parameters
                 )
                 self.merge_storage_buffer_access_requirement_for_parameter(
@@ -18011,7 +19989,7 @@ class VulkanSPIRVCodeGen:
             for arg_index, arg in enumerate(args):
                 if (
                     arg_index in storage_buffer_indices
-                    and self.storage_buffer_parameter_root_name(
+                    and self.storage_buffer_pointer_root_name(
                         arg, storage_buffer_parameters
                     )
                     is not None
@@ -18039,6 +20017,8 @@ class VulkanSPIRVCodeGen:
             expr, storage_buffer_parameters
         )
         if target_name is not None:
+            if isinstance(expr, (IdentifierNode, VariableNode)):
+                return
             self.merge_storage_buffer_access_requirement_for_parameter(
                 requirements, func_name, target_name, "read"
             )
@@ -18145,6 +20125,8 @@ class VulkanSPIRVCodeGen:
             target, storage_buffer_parameters
         )
         if target_name is not None:
+            if isinstance(target, (str, IdentifierNode, VariableNode)):
+                return
             required_access = "write" if operator == "=" else "read_write"
             self.merge_storage_buffer_access_requirement_for_parameter(
                 requirements, func_name, target_name, required_access
@@ -18320,8 +20302,10 @@ class VulkanSPIRVCodeGen:
         requirements = {
             id(func): {} for func in functions if getattr(func, "name", None)
         }
-        storage_buffer_parameter_sets = {
-            id(func): self.function_storage_buffer_parameters(func)
+        storage_buffer_parameter_roots = {
+            id(func): self.function_storage_buffer_alias_roots(
+                func, self.function_storage_buffer_parameters(func)
+            )
             for func in functions
             if getattr(func, "name", None)
         }
@@ -18343,7 +20327,7 @@ class VulkanSPIRVCodeGen:
             self.scan_storage_buffer_requirement_node(
                 getattr(func, "body", []),
                 func_key,
-                storage_buffer_parameter_sets.get(func_key, set()),
+                storage_buffer_parameter_roots.get(func_key, {}),
                 storage_buffer_parameter_indices,
                 requirements,
                 set(),
@@ -18395,7 +20379,10 @@ class VulkanSPIRVCodeGen:
                             if index >= len(args):
                                 continue
 
-                            target_name = self.expression_name(args[index])
+                            target_name = self.storage_buffer_pointer_root_name(
+                                args[index],
+                                storage_buffer_parameter_roots.get(func_key, {}),
+                            )
                             if target_name not in parameter_set:
                                 continue
 
@@ -18486,7 +20473,7 @@ class VulkanSPIRVCodeGen:
                     requirements.get(function_name, {})
                 )
                 self.stage_local_inline_storage_buffer_functions.setdefault(key, [])
-                if self.function_has_storage_buffer_parameters(function_node):
+                if self.function_requires_pointer_preserving_inlining(function_node):
                     self.stage_local_inline_storage_buffer_functions[key].append(
                         function_node
                     )
@@ -18544,7 +20531,7 @@ class VulkanSPIRVCodeGen:
 
     def expression_debug_name(self, expr) -> str:
         name = self.expression_name(expr)
-        return name if name is not None else str(expr)
+        return name if name is not None else self.diagnostic_expression(expr)
 
     def validate_function_image_access_arguments(self, func_name, args) -> bool:
         callee_requirements = self.resolve_function_image_access_requirements(func_name)
@@ -18626,7 +20613,7 @@ class VulkanSPIRVCodeGen:
             function_name = self.function_source_name(func)
             if not function_name:
                 continue
-            if not self.function_has_storage_buffer_parameters(func):
+            if not self.function_requires_pointer_preserving_inlining(func):
                 continue
             functions.setdefault(function_name, []).append(func)
         return functions
@@ -18688,6 +20675,7 @@ class VulkanSPIRVCodeGen:
 
         previous_locals = self.local_variables.copy()
         previous_precise_locals = set(self.precise_local_variables)
+        previous_resource_alias_variables = set(self.resource_alias_variables)
         previous_return_type = self.current_return_type
         previous_generic_type_substitutions = self.current_generic_type_substitutions
         generic_type_substitutions = self.generic_storage_function_type_bindings(
@@ -18703,6 +20691,20 @@ class VulkanSPIRVCodeGen:
         self.current_generic_function_substitutions = (
             getattr(function_node, "_generic_substitutions", {}) or {}
         )
+        previous_function_literal_int_constant_shadows = (
+            self.current_function_literal_int_constant_shadows
+        )
+        self.current_function_literal_int_constant_shadows = {
+            param.name
+            for param in self.function_parameters(function_node)
+            if getattr(param, "name", None)
+        }
+        previous_function_literal_int_constants = (
+            self.current_function_literal_int_constants
+        )
+        self.current_function_literal_int_constants = (
+            self.collect_function_local_int_constants(function_node)
+        )
         self.inline_storage_buffer_call_stack.append((function_key, func_name))
 
         try:
@@ -18714,6 +20716,13 @@ class VulkanSPIRVCodeGen:
                     param
                 )
                 if storage_buffer_type_name is not None:
+                    if self.pointer_ternary_statically_selects_null(arg):
+                        if not self.function_parameter_has_reachable_use(
+                            function_node,
+                            param_name,
+                        ):
+                            continue
+                        raise self.unsupported_null_pointer_argument_error(arg)
                     pointer_arg = self.variable_pointer_from_expression(arg)
                     if pointer_arg is None:
                         self.emit(
@@ -18736,8 +20745,55 @@ class VulkanSPIRVCodeGen:
                             f"passed to parameter {param_name}: got {actual_type_name}"
                         )
                         return self.default_value_for_function(function_node)
-                    self.local_variables[param_name] = pointer_arg
+                    if self.function_parameter_is_reference_like(param):
+                        parameter_pointer = pointer_arg
+                    else:
+                        parameter_pointer = self.copy_storage_buffer_pointer_alias(
+                            pointer_arg,
+                            param_name,
+                        )
+                    self.local_variables[param_name] = parameter_pointer
+                    self.resource_alias_variables.add(param_name)
                     continue
+
+                if self.function_parameter_is_reference_like(param):
+                    param_type_name = self.function_parameter_type_name(param)
+                    param_value_type = (
+                        self.map_crossgl_type(param_type_name)
+                        if param_type_name is not None
+                        else None
+                    )
+                    if (
+                        param_value_type is not None
+                        and self.array_type_info_from_type(param_value_type) is not None
+                    ):
+                        pointer_arg = self.variable_pointer_from_expression(arg)
+                        source_value_type = (
+                            self.pointer_pointee_type(pointer_arg)
+                            if pointer_arg is not None
+                            else None
+                        )
+                        if pointer_arg is None or source_value_type is None:
+                            self.emit(
+                                f"; WARNING: function call '{func_name}' requires "
+                                f"an array storage argument for parameter {param_name}"
+                            )
+                            return self.default_value_for_function(function_node)
+                        if (
+                            source_value_type.id != param_value_type.id
+                            and not self.aggregate_types_are_layout_compatible(
+                                source_value_type, param_value_type
+                            )
+                        ):
+                            self.emit(
+                                f"; WARNING: function call '{func_name}' requires "
+                                f"{param_type_name} array storage for argument "
+                                f"{self.expression_debug_name(arg)} passed to "
+                                f"parameter {param_name}"
+                            )
+                            return self.default_value_for_function(function_node)
+                        self.local_variables[param_name] = pointer_arg
+                        continue
 
                 arg_value = self.process_call_argument(func_name, arg, index)
                 if arg_value is None:
@@ -18759,12 +20815,19 @@ class VulkanSPIRVCodeGen:
             self.inline_storage_buffer_call_stack.pop()
             self.local_variables = previous_locals
             self.precise_local_variables = previous_precise_locals
+            self.resource_alias_variables = previous_resource_alias_variables
             self.current_return_type = previous_return_type
             self.current_generic_type_substitutions = (
                 previous_generic_type_substitutions
             )
             self.current_generic_function_substitutions = (
                 previous_generic_function_substitutions
+            )
+            self.current_function_literal_int_constants = (
+                previous_function_literal_int_constants
+            )
+            self.current_function_literal_int_constant_shadows = (
+                previous_function_literal_int_constant_shadows
             )
 
     def inline_function_body(self, function_node) -> Optional[SpirvId]:
@@ -18789,37 +20852,162 @@ class VulkanSPIRVCodeGen:
 
         return None
 
-    def collect_function_execution_models(self, ast):
-        functions = {
-            getattr(func, "name", None): func
-            for func in self.collect_ast_functions(ast)
-        }
-        functions = {name: func for name, func in functions.items() if name}
+    def collect_function_execution_models(self, ast, all_functions=None):
+        ast_functions = self.collect_ast_functions(ast)
+        functions = {id(func): func for func in ast_functions}
+
+        stage_scopes = {}
+        stage_function_ids = set()
+        stage_entries = []
+        for stage_type, stage in (getattr(ast, "stages", None) or {}).items():
+            scope = list(getattr(stage, "local_functions", []) or [])
+            entry_function = getattr(stage, "entry_point", None)
+            if entry_function is not None:
+                scope.append(entry_function)
+                stage_entries.append((stage_type, entry_function))
+            scope = list({id(func): func for func in scope}.values())
+            for func in scope:
+                functions[id(func)] = func
+                stage_function_ids.add(id(func))
+                stage_scopes.setdefault(id(func), []).append(scope)
+
+        global_functions = list(getattr(ast, "functions", []) or [])
+        global_function_ids = {id(func) for func in global_functions}
+        global_functions.extend(
+            func
+            for func in ast_functions
+            if id(func) not in global_function_ids
+            and id(func) not in stage_function_ids
+        )
+        global_functions = list({id(func): func for func in global_functions}.values())
+
+        def functions_named(candidates, name):
+            return [
+                candidate
+                for candidate in candidates
+                if getattr(candidate, "name", None) == name
+            ]
+
+        def accepts_arity(candidate, argument_count):
+            parameters = self.function_parameters(candidate)
+            required_count = sum(
+                getattr(param, "default_value", None) is None for param in parameters
+            )
+            return required_count <= argument_count <= len(parameters)
+
+        def function_value_types(function_node):
+            value_types = {
+                param.name: self.function_parameter_type_name(param)
+                for param in self.function_parameters(function_node)
+                if getattr(param, "name", None)
+            }
+            for node in self.walk_ast_nodes(getattr(function_node, "body", [])):
+                if isinstance(node, VariableNode):
+                    value_types[node.name] = self.type_name_from_value(
+                        getattr(node, "var_type", getattr(node, "vtype", None))
+                    )
+                elif isinstance(node, ConstantNode):
+                    value_types[node.name] = self.type_name_from_value(
+                        getattr(node, "const_type", None)
+                    )
+            return value_types
+
+        def expression_type_name(expression, value_types):
+            expression_type = getattr(expression, "expression_type", None)
+            if expression_type is not None:
+                return self.normalize_signature_type_name(expression_type)
+            if isinstance(expression, LiteralNode):
+                return self.normalize_signature_type_name(expression.literal_type)
+            if isinstance(expression, IdentifierNode):
+                return self.normalize_signature_type_name(
+                    value_types.get(expression.name)
+                )
+            if isinstance(expression, ConstructorNode):
+                return self.normalize_signature_type_name(expression.constructor_type)
+            return None
+
+        def matching_overloads(candidates, call, value_types):
+            arguments = list(
+                getattr(call, "arguments", getattr(call, "args", [])) or []
+            )
+            candidates = [
+                candidate
+                for candidate in candidates
+                if accepts_arity(candidate, len(arguments))
+            ]
+            if len(candidates) <= 1:
+                return candidates
+
+            argument_types = [
+                expression_type_name(argument, value_types) for argument in arguments
+            ]
+            scores = {}
+            for candidate in candidates:
+                parameter_types = [
+                    self.normalize_signature_type_name(
+                        self.function_parameter_type_name(param)
+                    )
+                    for param in self.function_parameters(candidate)
+                ]
+                scores[id(candidate)] = sum(
+                    argument_type is not None
+                    and parameter_type is not None
+                    and argument_type == parameter_type
+                    for argument_type, parameter_type in zip(
+                        argument_types, parameter_types
+                    )
+                )
+            best_score = max(scores.values())
+            if best_score == 0:
+                return candidates
+            return [
+                candidate
+                for candidate in candidates
+                if scores[id(candidate)] == best_score
+            ]
+
+        def call_targets(function_node, call, value_types):
+            call_name = self.function_call_name(call)
+            if call_name is None:
+                return []
+
+            scopes = stage_scopes.get(id(function_node))
+            candidate_groups = []
+            if scopes:
+                candidate_groups.extend(scopes)
+            candidate_groups.append(global_functions)
+            for candidates in candidate_groups:
+                matches = matching_overloads(
+                    functions_named(candidates, call_name), call, value_types
+                )
+                if matches:
+                    return matches
+            return []
 
         calls_by_function = {}
-        for function_name, func in functions.items():
-            calls_by_function[function_name] = {
-                call_name
-                for call_name in (
-                    self.function_call_name(call)
-                    for call in self.walk_ast_nodes(getattr(func, "body", []))
-                    if isinstance(call, FunctionCallNode)
+        for function_id, func in functions.items():
+            value_types = function_value_types(func)
+            callees = set()
+            for call in self.walk_ast_nodes(getattr(func, "body", [])):
+                if not isinstance(call, FunctionCallNode):
+                    continue
+                callees.update(
+                    id(target) for target in call_targets(func, call, value_types)
                 )
-                if call_name in functions
-            }
+            calls_by_function[function_id] = callees
 
-        execution_models = {function_name: set() for function_name in functions}
+        execution_models = {function_id: set() for function_id in functions}
 
-        def mark_callgraph(entry_name: str, execution_model: str):
-            pending = [entry_name]
+        def mark_callgraph(entry_function, execution_model: str):
+            pending = [id(entry_function)]
             visited = set()
             while pending:
-                function_name = pending.pop()
-                if function_name in visited or function_name not in functions:
+                function_id = pending.pop()
+                if function_id in visited or function_id not in functions:
                     continue
-                visited.add(function_name)
-                execution_models[function_name].add(execution_model)
-                pending.extend(calls_by_function.get(function_name, ()))
+                visited.add(function_id)
+                execution_models[function_id].add(execution_model)
+                pending.extend(calls_by_function.get(function_id, ()))
 
         stage_qualifiers = {
             "vertex",
@@ -18842,18 +21030,27 @@ class VulkanSPIRVCodeGen:
         for func in getattr(ast, "functions", []):
             qualifier = self.get_function_qualifier(func)
             if func.name == "main" or qualifier in stage_qualifiers:
-                mark_callgraph(func.name, self.spirv_execution_model(qualifier))
+                mark_callgraph(func, self.spirv_execution_model(qualifier))
 
-        for stage_type, stage in (getattr(ast, "stages", None) or {}).items():
-            stage_name = self.stage_key(stage_type)
-            execution_model = self.spirv_execution_model(stage_name)
-            entry_function = getattr(stage, "entry_point", None)
-            if entry_function is not None:
-                mark_callgraph(entry_function.name, execution_model)
+        for stage_type, entry_function in stage_entries:
+            mark_callgraph(
+                entry_function,
+                self.spirv_execution_model(self.stage_key(stage_type)),
+            )
+
+        for function_node in all_functions or ():
+            source_function_id = getattr(
+                function_node, "_generic_source_function_id", None
+            )
+            if source_function_id not in execution_models:
+                continue
+            execution_models[id(function_node)] = set(
+                execution_models[source_function_id]
+            )
 
         return {
-            function_name: models
-            for function_name, models in execution_models.items()
+            function_id: models
+            for function_id, models in execution_models.items()
             if models
         }
 
@@ -19316,9 +21513,11 @@ class VulkanSPIRVCodeGen:
         size_text = type_name[open_bracket + 1 : close_bracket].strip()
         if not size_text:
             return element_type, None
+        if self.named_specialization_array_length(size_text) is not None:
+            return element_type, size_text
 
         literal_size = evaluate_literal_int_expression(
-            size_text, self.literal_int_constants
+            size_text, self.active_literal_int_constants()
         )
         return element_type, literal_size
 
@@ -19440,15 +21639,29 @@ class VulkanSPIRVCodeGen:
         self.structured_buffer_metadata[target_pointer.id] = access_metadata
         self.storage_buffer_access_metadata[target_pointer.id] = access_metadata
 
-    def storage_buffer_pointer_alias_index(self, base_index: SpirvId, index: SpirvId):
+    def storage_buffer_pointer_alias_index(
+        self, base_index: SpirvId, index: SpirvId, operator: str = "+"
+    ):
         index_type = self.value_types.get(base_index.id) or self.ensure_registered_type(
             base_index.type
         )
         converted_index = self.convert_value_to_type(index, index_type)
-        return self.binary_operation("+", index_type, base_index, converted_index)
+        return self.binary_operation(
+            operator,
+            index_type,
+            base_index,
+            converted_index,
+        )
+
+    def storage_buffer_pointer_alias_key(self, pointer: SpirvId) -> SpirvId:
+        """Use generator object identity so copied pointer aliases remain distinct."""
+        return pointer
 
     def is_storage_buffer_pointer_arithmetic_base(self, pointer: SpirvId) -> bool:
-        if pointer.id in self.storage_buffer_pointer_offset_aliases:
+        if (
+            self.storage_buffer_pointer_alias_key(pointer)
+            in self.storage_buffer_pointer_offset_aliases
+        ):
             return True
 
         metadata = self.structured_buffer_metadata_for_pointer(pointer)
@@ -19468,24 +21681,167 @@ class VulkanSPIRVCodeGen:
         ) in {"StructuredBuffer", "RWStructuredBuffer", "StorageBufferPointer"}
 
     def record_storage_buffer_pointer_offset_alias(
-        self, source_pointer: SpirvId, alias_pointer: SpirvId, index: SpirvId
+        self,
+        source_pointer: SpirvId,
+        alias_pointer: SpirvId,
+        index: SpirvId,
+        operator: str = "+",
     ):
+        same_pointer = alias_pointer is source_pointer
         existing_alias = self.storage_buffer_pointer_offset_aliases.get(
-            source_pointer.id
+            self.storage_buffer_pointer_alias_key(source_pointer)
         )
         if existing_alias is None:
-            root_pointer, root_index = source_pointer, index
+            root_pointer = source_pointer
+            domain = self.storage_buffer_pointer_alias_domain(root_pointer)
+            index_type = self.value_types.get(index.id) or self.ensure_registered_type(
+                index.type
+            )
+            zero = self.register_constant(0, index_type)
+            if same_pointer:
+                offset_variable = self.create_variable(
+                    index_type,
+                    "Function",
+                    initializer=zero,
+                )
+                root_index = self.load_from_variable(offset_variable, index_type)
+            else:
+                offset_variable = None
+                root_index = zero
         else:
-            root_pointer, root_index = existing_alias
-            root_index = self.storage_buffer_pointer_alias_index(root_index, index)
-        self.storage_buffer_pointer_offset_aliases[alias_pointer.id] = (
-            root_pointer,
+            index_type = self.value_types.get(index.id) or self.ensure_registered_type(
+                index.type
+            )
+            existing_alias = self.materialize_storage_buffer_pointer_offset_alias(
+                source_pointer,
+                existing_alias,
+                index_type,
+            )
+            root_pointer = existing_alias.root_pointer
+            source_offset_variable = existing_alias.offset_variable
+            domain = existing_alias.domain
+            source_offset_type = self.variable_value_types[source_offset_variable.id]
+            root_index = self.load_from_variable(
+                source_offset_variable,
+                source_offset_type,
+            )
+            if same_pointer:
+                offset_variable = source_offset_variable
+            else:
+                zero = self.register_constant(0, source_offset_type)
+                offset_variable = self.create_variable(
+                    source_offset_type,
+                    "Function",
+                    initializer=zero,
+                )
+
+        if offset_variable is None:
+            offset_type = self.value_types.get(
+                root_index.id
+            ) or self.ensure_registered_type(root_index.type)
+            zero = self.register_constant(0, offset_type)
+            offset_variable = self.create_variable(
+                offset_type,
+                "Function",
+                initializer=zero,
+            )
+
+        combined_index = self.storage_buffer_pointer_alias_index(
             root_index,
+            index,
+            operator,
+        )
+        self.store_to_variable(offset_variable, combined_index)
+        self.storage_buffer_pointer_offset_aliases[
+            self.storage_buffer_pointer_alias_key(alias_pointer)
+        ] = PointerOffsetState(root_pointer, offset_variable, domain)
+
+    def storage_buffer_pointer_alias_access(
+        self, pointer: SpirvId, index: SpirvId
+    ) -> Tuple[SpirvId, SpirvId, bool]:
+        """Resolve a resource pointer and index through its mutable offset state."""
+        offset_alias = self.storage_buffer_pointer_offset_aliases.get(
+            self.storage_buffer_pointer_alias_key(pointer)
+        )
+        if offset_alias is None:
+            return pointer, index, False
+
+        root_pointer = offset_alias.root_pointer
+        offset_variable = offset_alias.offset_variable
+        if offset_variable is None:
+            return root_pointer, index, True
+        offset_type = self.variable_value_types[offset_variable.id]
+        base_index = self.load_from_variable(offset_variable, offset_type)
+        combined_index = self.storage_buffer_pointer_alias_index(base_index, index)
+        return root_pointer, combined_index, True
+
+    def storage_buffer_pointer_alias_root(self, pointer: SpirvId) -> SpirvId:
+        """Resolve descriptor-level operations without applying element offsets."""
+        offset_alias = self.storage_buffer_pointer_offset_aliases.get(
+            self.storage_buffer_pointer_alias_key(pointer)
+        )
+        return offset_alias.root_pointer if offset_alias is not None else pointer
+
+    def dereference_pointer_from_expression(self, expression) -> Optional[SpirvId]:
+        pointer = self.variable_pointer_from_expression(expression)
+        if pointer is None or not self.is_storage_buffer_pointer_arithmetic_base(
+            pointer
+        ):
+            return None
+
+        offset_alias = self.storage_buffer_pointer_offset_aliases.get(
+            self.storage_buffer_pointer_alias_key(pointer)
+        )
+        if offset_alias is not None:
+            if offset_alias.offset_variable is not None:
+                index_type = self.variable_value_types[offset_alias.offset_variable.id]
+            else:
+                index_type = self.register_primitive_type("uint")
+            zero = self.register_constant(0, index_type)
+            root_pointer, effective_index, _ = self.storage_buffer_pointer_alias_access(
+                pointer, zero
+            )
+            structured_access = self.structured_buffer_element_pointer(
+                root_pointer,
+                effective_index,
+                apply_pointer_offset=False,
+            )
+            if structured_access is not None:
+                return structured_access
+            local_access = self.local_array_offset_element_pointer(
+                root_pointer, effective_index
+            )
+            if local_access is not None:
+                return local_access
+
+        zero = self.register_constant(0, self.register_primitive_type("uint"))
+        structured_access = self.structured_buffer_element_pointer(pointer, zero)
+        if structured_access is not None:
+            return structured_access
+
+        return None
+
+    def unsupported_pointer_dereference_error(self, expression):
+        return UnsupportedSPIRVFeatureError(
+            "pointer dereference",
+            "SPIR-V pointer dereference requires a pointer with preserved storage "
+            "provenance",
+            missing_capabilities=("spirv.pointer_dereference",),
+            source_location=getattr(expression, "source_location", None),
         )
 
     def structured_buffer_element_pointer(
-        self, buffer_pointer: SpirvId, index_id: SpirvId
+        self,
+        buffer_pointer: SpirvId,
+        index_id: SpirvId,
+        *,
+        apply_pointer_offset: bool = True,
     ) -> Optional[SpirvId]:
+        if apply_pointer_offset:
+            buffer_pointer, index_id, _ = self.storage_buffer_pointer_alias_access(
+                buffer_pointer,
+                index_id,
+            )
         metadata = self.structured_buffer_metadata_for_pointer(buffer_pointer)
         if metadata is None:
             return None
@@ -19553,6 +21909,10 @@ class VulkanSPIRVCodeGen:
     def emit_structured_buffer_dimensions(
         self, buffer_pointer: SpirvId, metadata, diagnostic_name: str
     ) -> SpirvId:
+        buffer_pointer = self.storage_buffer_pointer_alias_root(buffer_pointer)
+        metadata = (
+            self.structured_buffer_metadata_for_pointer(buffer_pointer) or metadata
+        )
         block_type = metadata.get("block_type") if metadata is not None else None
         if block_type is None:
             self.emit(f"; WARNING: {diagnostic_name} requires a buffer block operand")
@@ -20588,6 +22948,161 @@ class VulkanSPIRVCodeGen:
         )
         return True, None
 
+    def is_address_of_unary(self, expr) -> bool:
+        # A prefix address-of (`&x`) unary operator.
+        if getattr(expr, "is_postfix", False):
+            return False
+        op = getattr(expr, "op", getattr(expr, "operator", None))
+        return op == "&"
+
+    def pointer_points_to_indexable_array(self, pointer: SpirvId) -> bool:
+        # True when the pointer's pointee is an array type we can index (a plain
+        # local `shared[N]` / stack array), so `&arr[i]` can be offset-aliased.
+        if pointer is None:
+            return False
+        pointee = self.variable_value_types.get(pointer.id)
+        if pointee is None:
+            return False
+        return self.array_element_type_from_type(pointee) is not None
+
+    def array_element_pointer_alias(self, array_expr, index_expr) -> Optional[SpirvId]:
+        # Produce a pointer to `array_expr[index_expr]` and, for a plain local
+        # array base, record an offset alias `(array_root, index)` on it so a
+        # pointer aliasing this element resolves `[j]` / `+ j` to
+        # `array_root[index + j]`.
+        index = self.process_expression(index_expr)
+        if index is None:
+            return None
+        access, _ = self.create_array_element_access(array_expr, index, index_expr)
+        if access is None:
+            return None
+        if (
+            self.storage_buffer_pointer_alias_key(access)
+            not in self.storage_buffer_pointer_offset_aliases
+        ):
+            array_root = self.variable_pointer_from_expression(array_expr)
+            if self.pointer_points_to_indexable_array(
+                array_root
+            ) or self.is_storage_buffer_pointer_arithmetic_base(array_root):
+                self.record_storage_buffer_pointer_offset_alias(
+                    array_root, access, index
+                )
+        return access
+
+    def local_array_offset_element_pointer(
+        self, root_pointer: SpirvId, index: SpirvId
+    ) -> Optional[SpirvId]:
+        # Access `root_pointer[index]` for a plain local array root (the generic
+        # counterpart of structured_buffer_element_pointer, used to resolve an
+        # offset alias whose root is a threadgroup/function array rather than a
+        # storage buffer).
+        pointee = self.variable_value_types.get(root_pointer.id)
+        element_type = (
+            self.array_element_type_from_type(pointee) if pointee is not None else None
+        )
+        if element_type is None:
+            return None
+        storage_class = root_pointer.type.storage_class or "Function"
+        ptr_type = self.register_pointer_type(element_type, storage_class)
+        access = self.access_chain(root_pointer, [index], ptr_type)
+        self.variable_value_types[access.id] = element_type
+        self.propagate_storage_buffer_access_metadata(root_pointer, access)
+        return access
+
+    def is_null_pointer_expression(self, expr) -> bool:
+        if isinstance(expr, str):
+            return expr == "nullptr"
+        if isinstance(expr, (IdentifierNode, VariableNode)):
+            return getattr(expr, "name", None) == "nullptr"
+        return False
+
+    def unsupported_pointer_ternary_error(
+        self,
+        expr: TernaryOpNode,
+        pointer: SpirvId,
+    ) -> UnsupportedSPIRVFeatureError:
+        if pointer.type.storage_class == "Workgroup":
+            pointer_domain = "Workgroup"
+            missing_capabilities = ("spirv.variable_pointers",)
+        elif self.storage_buffer_access_metadata_for_pointer(pointer) is not None:
+            pointer_domain = "storage-buffer"
+            missing_capabilities = ("spirv.variable_pointers_storage_buffer",)
+        else:
+            pointer_domain = pointer.type.storage_class or "general"
+            missing_capabilities = ("spirv.variable_pointers",)
+        return UnsupportedSPIRVFeatureError(
+            "variable-pointer-ternary",
+            "SPIR-V pointer selection between nullptr and a "
+            f"{pointer_domain} pointer requires target support for variable "
+            "pointers; the active target profile does not enable that feature",
+            missing_capabilities=missing_capabilities,
+            source_location=getattr(expr, "source_location", None),
+        )
+
+    def unsupported_null_pointer_argument_error(
+        self,
+        expr: TernaryOpNode,
+    ) -> UnsupportedSPIRVFeatureError:
+        return UnsupportedSPIRVFeatureError(
+            "null-pointer-argument",
+            "SPIR-V helper inlining cannot bind a statically selected nullptr "
+            "argument without proving that the pointer parameter is unreachable",
+            missing_capabilities=("spirv.null_pointer_argument",),
+            source_location=getattr(expr, "source_location", None),
+        )
+
+    def pointer_ternary_statically_selects_null(self, expr) -> bool:
+        if not isinstance(expr, TernaryOpNode):
+            return False
+        literal_condition = evaluate_literal_int_expression(
+            expr.condition,
+            self.active_literal_int_constants(),
+        )
+        if literal_condition is None:
+            return False
+        selected = expr.true_expr if literal_condition != 0 else expr.false_expr
+        return self.is_null_pointer_expression(selected)
+
+    def function_parameter_has_reachable_use(
+        self,
+        function_node,
+        parameter_name: str,
+    ) -> bool:
+        visited = set()
+
+        def references(value) -> bool:
+            if value is None or isinstance(value, (str, int, float, bool)):
+                return False
+            if isinstance(value, dict):
+                return any(references(child) for child in value.values())
+            if isinstance(value, (list, tuple, set)):
+                return any(references(child) for child in value)
+
+            value_id = id(value)
+            if value_id in visited:
+                return False
+            visited.add(value_id)
+            if isinstance(value, (IdentifierNode, VariableNode)) and (
+                getattr(value, "name", None) == parameter_name
+            ):
+                return True
+            if isinstance(value, IfNode):
+                if references(value.if_condition):
+                    return True
+                literal_condition = evaluate_literal_int_expression(
+                    value.if_condition,
+                    self.active_literal_int_constants(),
+                )
+                if literal_condition is None:
+                    return references(value.if_body) or references(value.else_body)
+                selected = value.if_body if literal_condition != 0 else value.else_body
+                return references(selected)
+            if not hasattr(value, "__dict__"):
+                return False
+            return any(references(child) for child in vars(value).values())
+
+        return references(getattr(function_node, "body", []))
+
     def variable_pointer_from_expression(self, expr) -> Optional[SpirvId]:
         if isinstance(expr, IdentifierNode):
             name = expr.name
@@ -20601,6 +23116,21 @@ class VulkanSPIRVCodeGen:
                 return None
             access, _ = self.create_array_element_access(expr.array, index, expr.index)
             return access
+        elif (
+            isinstance(expr, UnaryOpNode)
+            and self.is_address_of_unary(expr)
+            and isinstance(expr.operand, ArrayAccessNode)
+        ):
+            # `&arr[i]` yields a POINTER to the element. For a plain local array
+            # (threadgroup/function `shared[...]`) we record an offset alias on
+            # the element pointer so a pointer bound to it resolves `ptr[j]` /
+            # `ptr + j` to `arr[i + j]` instead of indexing a squashed scalar.
+            # Only the array-element form is handled here; `&scalar` and other
+            # address-of forms keep their prior behavior (fall through to None)
+            # so thread-local pointer arguments are unaffected.
+            return self.array_element_pointer_alias(
+                expr.operand.array, expr.operand.index
+            )
         elif isinstance(expr, MemberAccessNode):
             base_pointer = self.variable_pointer_from_expression(expr.object)
             if base_pointer is None:
@@ -20621,7 +23151,9 @@ class VulkanSPIRVCodeGen:
                 )
                 if access is not None:
                     self.record_storage_buffer_pointer_offset_alias(
-                        left_pointer, access, index
+                        left_pointer,
+                        access,
+                        index,
                     )
                 return access
 
@@ -20642,6 +23174,26 @@ class VulkanSPIRVCodeGen:
                     )
                 return access
             return None
+        elif isinstance(expr, TernaryOpNode):
+            literal_condition = evaluate_literal_int_expression(
+                expr.condition,
+                self.active_literal_int_constants(),
+            )
+            if literal_condition is not None:
+                selected = expr.true_expr if literal_condition != 0 else expr.false_expr
+                if self.is_null_pointer_expression(selected):
+                    raise self.unsupported_null_pointer_argument_error(expr)
+                return self.variable_pointer_from_expression(selected)
+
+            true_is_null = self.is_null_pointer_expression(expr.true_expr)
+            false_is_null = self.is_null_pointer_expression(expr.false_expr)
+            if true_is_null == false_is_null:
+                return None
+            pointer_expr = expr.false_expr if true_is_null else expr.true_expr
+            pointer = self.variable_pointer_from_expression(pointer_expr)
+            if pointer is None:
+                return None
+            raise self.unsupported_pointer_ternary_error(expr, pointer)
         else:
             return None
 
@@ -20743,6 +23295,8 @@ class VulkanSPIRVCodeGen:
         primitive_name = self.normalize_primitive_name(type_id.type.base_type)
         if primitive_name in {"float", "double"}:
             return self.register_constant(0.0, type_id)
+        if primitive_name == self.BFLOAT16_TYPE_NAME:
+            return self.register_constant(0, type_id)
         if primitive_name in self.INTEGER_TYPE_NAMES:
             return self.register_constant(0, type_id)
         if primitive_name == "bool":
@@ -20752,6 +23306,8 @@ class VulkanSPIRVCodeGen:
                 "runtime-array aggregate default values cannot be materialized "
                 "in SPIR-V"
             )
+        if self.type_contains_specialization_sized_array(type_id):
+            return self.register_undefined_value(type_id)
 
         vector_info = self.vector_type_info_from_type(type_id)
         if vector_info is not None:
@@ -20771,7 +23327,8 @@ class VulkanSPIRVCodeGen:
         if array_info is not None:
             element_type, size = array_info
             elements = [
-                self.default_value_for_type(element_type) for _ in range(size or 0)
+                self.default_value_for_type(element_type)
+                for _ in range(self.array_length_default_value(size, fallback=0))
             ]
             return self.register_composite_constant(type_id, elements)
 
@@ -20799,6 +23356,15 @@ class VulkanSPIRVCodeGen:
             array_info = self.array_type_info_from_type(array_type)
             if array_info is not None:
                 element_type, target_size = array_info
+                if self.named_specialization_array_length(target_size) is not None:
+                    raise UnsupportedSPIRVFeatureError(
+                        "specialization-sized array initializer",
+                        "SPIR-V aggregate initializers require a fixed constituent "
+                        f"count; array extent '{target_size}' is specialization-dependent",
+                        missing_capabilities=(
+                            "spirv.specialization_array_initializer",
+                        ),
+                    )
 
         values = []
         for element in expr.elements:
@@ -20831,14 +23397,11 @@ class VulkanSPIRVCodeGen:
                 return None
             return self.register_composite_constant(array_type, values)
 
-        id_value = self.get_id()
-        component_list = " ".join(f"%{value.id}" for value in values)
-        self.emit(
-            f"%{id_value} = OpCompositeConstruct %{array_type.id} {component_list}"
-        )
-        spirv_id = SpirvId(id_value, array_type.type)
-        self.value_types[id_value] = array_type
-        return spirv_id
+        # Route through composite_construct so every constituent is coerced to
+        # its member/element type. Brace initializers targeting a struct (for
+        # example ``return {x, 0};``) reach this path with an array-literal
+        # node, and their constituents must match the struct member types.
+        return self.composite_construct(array_type, values)
 
     def process_array_literal_element(
         self,
@@ -20882,6 +23445,10 @@ class VulkanSPIRVCodeGen:
 
         if target_type_name in {"float", "double"}:
             return self.register_constant(float(value), target_type)
+        if target_type_name == self.BFLOAT16_TYPE_NAME:
+            return self.register_constant(
+                self.bfloat16_bits_for_float(float(value)), target_type
+            )
         if target_type_name in self.INTEGER_TYPE_NAMES:
             if target_type_name in self.UNSIGNED_INTEGER_TYPES and value < 0:
                 return None
@@ -20958,6 +23525,12 @@ class VulkanSPIRVCodeGen:
 
                     return self.register_vector_constant(vector_type, components)
 
+        specialization_constant_op = self.process_specialization_constant_operation(
+            expr, target_type
+        )
+        if specialization_constant_op is not None:
+            return specialization_constant_op
+
         value = self.process_expression(expr)
         if value is not None and self.is_constant_instruction(value):
             return value
@@ -21003,6 +23576,10 @@ class VulkanSPIRVCodeGen:
             return None
 
         args = getattr(expr, "args", [])
+        if len(args) == 1 and self.expression_result_type(args[0]) == struct_name:
+            copy_value = self.process_constant_expression(args[0], target_type)
+            if copy_value is not None and self.value_has_type(copy_value, target_type):
+                return copy_value
         values = []
         for index, (member_type, _) in enumerate(members):
             if index < len(args):
@@ -21053,6 +23630,12 @@ class VulkanSPIRVCodeGen:
         return var_id
 
     def assignable_pointer_from_expression(self, expr) -> Optional[SpirvId]:
+        if (
+            isinstance(expr, UnaryOpNode)
+            and not getattr(expr, "is_postfix", False)
+            and expr.op == "*"
+        ):
+            return self.dereference_pointer_from_expression(expr.operand)
         if isinstance(expr, IdentifierNode):
             return self.ensure_assignable_pointer_for_name(expr.name)
         if isinstance(expr, VariableNode):
@@ -21080,6 +23663,29 @@ class VulkanSPIRVCodeGen:
                 array_variable, index, expr.index
             ):
                 return None
+
+            # An offset-aliased pointer (e.g. `p = &shared[base]`) resolves
+            # `p[j]` to its root array at `base + j` rather than indexing the
+            # element pointer itself.
+            offset_alias = self.storage_buffer_pointer_offset_aliases.get(
+                self.storage_buffer_pointer_alias_key(array_variable)
+            )
+            if offset_alias is not None:
+                root_pointer, combined_index, _ = (
+                    self.storage_buffer_pointer_alias_access(array_variable, index)
+                )
+                structured_access = self.structured_buffer_element_pointer(
+                    root_pointer,
+                    combined_index,
+                    apply_pointer_offset=False,
+                )
+                if structured_access is not None:
+                    return structured_access
+                generic_access = self.local_array_offset_element_pointer(
+                    root_pointer, combined_index
+                )
+                if generic_access is not None:
+                    return generic_access
 
             structured_access = self.structured_buffer_element_pointer(
                 array_variable, index
@@ -21230,19 +23836,29 @@ class VulkanSPIRVCodeGen:
                 return block_alias, self.variable_value_types.get(block_alias.id)
 
             offset_alias = self.storage_buffer_pointer_offset_aliases.get(
-                array_variable.id
+                self.storage_buffer_pointer_alias_key(array_variable)
             )
             if offset_alias is not None:
-                root_pointer, base_index = offset_alias
-                combined_index = self.storage_buffer_pointer_alias_index(
-                    base_index, index
+                root_pointer, combined_index, _ = (
+                    self.storage_buffer_pointer_alias_access(array_variable, index)
                 )
                 structured_access = self.structured_buffer_element_pointer(
-                    root_pointer, combined_index
+                    root_pointer,
+                    combined_index,
+                    apply_pointer_offset=False,
                 )
                 if structured_access is not None:
                     return structured_access, self.variable_value_types.get(
                         structured_access.id
+                    )
+                # A plain local-array root (threadgroup/function `shared[...]`):
+                # index it directly at the combined offset.
+                generic_access = self.local_array_offset_element_pointer(
+                    root_pointer, combined_index
+                )
+                if generic_access is not None:
+                    return generic_access, self.variable_value_types.get(
+                        generic_access.id
                     )
 
             structured_access = self.structured_buffer_element_pointer(
@@ -21416,6 +24032,18 @@ class VulkanSPIRVCodeGen:
                 f"; WARNING: Could not find member {member_name} in {struct_type}"
             )
 
+        elif (
+            isinstance(target, UnaryOpNode)
+            and not getattr(target, "is_postfix", False)
+            and target.op == "*"
+        ):
+            access = self.assignable_pointer_from_expression(target)
+            element_type = (
+                self.variable_value_types.get(access.id) if access is not None else None
+            )
+            if access is None or element_type is None:
+                raise self.unsupported_pointer_dereference_error(target)
+            self.store_to_variable(access, rhs_value)
         elif isinstance(target, ArrayAccessNode):
             access = self.assignable_pointer_from_expression(target)
             element_type = (
@@ -21455,14 +24083,17 @@ class VulkanSPIRVCodeGen:
         if not isinstance(target, MemberAccessNode):
             target_pointer = self.assignable_pointer_from_expression(target)
             if (
-                spv_operator == "+"
+                spv_operator in {"+", "-"}
                 and target_pointer is not None
                 and self.is_storage_buffer_pointer_arithmetic_base(target_pointer)
             ):
                 offset = self.process_expression(node.value)
                 if offset is not None:
                     self.record_storage_buffer_pointer_offset_alias(
-                        target_pointer, target_pointer, offset
+                        target_pointer,
+                        target_pointer,
+                        offset,
+                        spv_operator,
                     )
                 return
 
@@ -21873,10 +24504,27 @@ class VulkanSPIRVCodeGen:
 
     def process_if(self, node: IfNode):
         """Process a CrossGL if statement."""
+        literal_condition = evaluate_literal_int_expression(
+            node.if_condition,
+            self.active_literal_int_constants(),
+        )
+        if literal_condition is not None:
+            reachable_body = node.if_body if literal_condition != 0 else node.else_body
+            if reachable_body:
+                self.process_statements(reachable_body)
+            return
+
         condition = self.process_expression(node.if_condition)
         if condition is None:
             condition = self.register_constant(True, self.primitive_types["bool"])
         condition = self.ensure_bool_value(condition)
+
+        constant_condition = self.constant_values_by_id.get(condition.id)
+        if isinstance(constant_condition, bool):
+            reachable_body = node.if_body if constant_condition else node.else_body
+            if reachable_body:
+                self.process_statements(reachable_body)
+            return
 
         merge_label = SpirvId(self.get_id(), SpirvType("label"))
         then_label = SpirvId(self.get_id(), SpirvType("label"))
@@ -21982,7 +24630,9 @@ class VulkanSPIRVCodeGen:
                 return int(size, 0)
             except ValueError:
                 return None
-        literal_size = evaluate_literal_int_expression(size, self.literal_int_constants)
+        literal_size = evaluate_literal_int_expression(
+            size, self.active_literal_int_constants()
+        )
         return int(literal_size) if literal_size is not None else None
 
     def process_sequence_for_in(self, node: ForInNode, pattern: str, iterable) -> bool:
@@ -22770,6 +25420,34 @@ class VulkanSPIRVCodeGen:
             int_type = self.register_primitive_type("int")
             return self.register_constant(0, int_type)
 
+        if self.is_storage_buffer_pointer_arithmetic_base(variable_id):
+            is_postfix = getattr(
+                node,
+                "is_postfix",
+                getattr(node, "postfix", False),
+            )
+            old_pointer = (
+                self.copy_storage_buffer_pointer_alias(variable_id, None)
+                if is_postfix
+                else None
+            )
+            offset_alias = self.storage_buffer_pointer_offset_aliases.get(
+                self.storage_buffer_pointer_alias_key(variable_id)
+            )
+            if offset_alias is None or offset_alias.offset_variable is None:
+                offset_type = self.register_primitive_type("int")
+            else:
+                offset_type = self.variable_value_types[offset_alias.offset_variable.id]
+            step_value = self.register_constant(1, offset_type)
+            operator = "+" if node.op == "++" else "-"
+            self.record_storage_buffer_pointer_offset_alias(
+                variable_id,
+                variable_id,
+                step_value,
+                operator,
+            )
+            return old_pointer or variable_id
+
         value_type = self.variable_value_types.get(variable_id.id)
         if value_type is None:
             value_type = self.find_registered_type_by_base(
@@ -22852,6 +25530,15 @@ class VulkanSPIRVCodeGen:
             if expr in self.local_variables:
                 var_id = self.local_variables[expr]
                 return self.get_variable_value(var_id)
+            generic_literal = self.current_generic_literal_int_constants().get(expr)
+            if generic_literal is not None:
+                primitive_type = self.integer_literal_type_for_value(
+                    "int", generic_literal
+                )
+                return self.register_constant(
+                    generic_literal,
+                    self.register_primitive_type(primitive_type),
+                )
             elif expr in self.named_constants:
                 return self.named_constants[expr]
             else:
@@ -23028,6 +25715,16 @@ class VulkanSPIRVCodeGen:
         elif isinstance(expr, UnaryOpNode):
             if expr.op in {"++", "--"}:
                 return self.process_increment_expression(expr)
+            if expr.op == "*" and not getattr(expr, "is_postfix", False):
+                pointer = self.dereference_pointer_from_expression(expr.operand)
+                value_type = (
+                    self.variable_value_types.get(pointer.id)
+                    if pointer is not None
+                    else None
+                )
+                if pointer is None or value_type is None:
+                    raise self.unsupported_pointer_dereference_error(expr)
+                return self.load_from_variable(pointer, value_type)
 
             operand = self.process_expression(expr.operand)
             if operand is None:
@@ -23720,11 +26417,7 @@ class VulkanSPIRVCodeGen:
         execution_model = self.current_execution_model
         if execution_model is not None:
             return execution_model
-        if self.current_function_name is None:
-            return None
-        function_models = self.function_execution_models.get(
-            self.current_function_name, set()
-        )
+        function_models = self.execution_models_for_function(self.current_function_node)
         if len(function_models) == 1:
             return next(iter(function_models))
         return None
@@ -23981,9 +26674,7 @@ class VulkanSPIRVCodeGen:
         id_value = self.get_id()
 
         if size is not None:
-            size_const = self.register_constant(
-                size, self.register_primitive_type("int")
-            )
+            size_const = self.array_length_constant(size)
             self.emit(f"%{id_value} = OpTypeArray %{element_type.id} %{size_const.id}")
         else:
             self.emit(f"%{id_value} = OpTypeRuntimeArray %{element_type.id}")
@@ -24004,9 +26695,7 @@ class VulkanSPIRVCodeGen:
 
         id_value = self.get_id()
         if size is not None:
-            size_const = self.register_constant(
-                size, self.register_primitive_type("int")
-            )
+            size_const = self.array_length_constant(size)
             self.emit(f"%{id_value} = OpTypeArray %{element_type.id} %{size_const.id}")
         else:
             self.emit(f"%{id_value} = OpTypeRuntimeArray %{element_type.id}")
@@ -24017,6 +26706,91 @@ class VulkanSPIRVCodeGen:
         spirv_id = SpirvId(id_value, SpirvType(type_name), type_name)
         self.layout_array_types[key] = spirv_id
         return spirv_id
+
+    def named_specialization_array_length(self, name: str) -> Optional[SpirvId]:
+        """Return an integer specialization constant usable as an array length."""
+        if not isinstance(name, str):
+            return None
+        normalized_name = name.strip()
+        if normalized_name in self.current_function_literal_int_constant_shadows:
+            return None
+        value = self.named_constants.get(normalized_name)
+        if value is None or not self.is_specialization_constant_value(value):
+            return None
+        value_type = self.value_types.get(value.id)
+        if value_type is None:
+            return None
+        primitive_type = self.normalize_primitive_name(value_type.type.base_type)
+        return value if primitive_type in self.INTEGER_TYPE_NAMES else None
+
+    def array_length_default_value(self, size, fallback: int = 1) -> int:
+        """Return a concrete default used only for static layout bookkeeping."""
+        if isinstance(size, int):
+            return size
+        specialization_length = self.named_specialization_array_length(size)
+        if specialization_length is not None:
+            value = self.specialization_constant_default_values.get(
+                specialization_length.id
+            )
+            if isinstance(value, int):
+                return value
+            raise UnsupportedSPIRVFeatureError(
+                "specialization array default evaluation",
+                "SPIR-V array layout requires a concrete default for "
+                f"specialization-dependent extent '{size}'",
+                missing_capabilities=("spirv.specialization_array_default",),
+            )
+        literal_size = evaluate_literal_int_expression(
+            size, self.active_literal_int_constants()
+        )
+        return fallback if literal_size is None else literal_size
+
+    def array_length_constant(self, size) -> SpirvId:
+        """Resolve a literal or named specialization-dependent array length."""
+        specialization_length = self.named_specialization_array_length(size)
+        if specialization_length is not None:
+            return specialization_length
+        return self.register_constant(size, self.register_primitive_type("int"))
+
+    def type_contains_specialization_sized_array(
+        self, type_id: Optional[SpirvId], seen: Optional[set] = None
+    ) -> bool:
+        """Return whether an aggregate contains a specialization-sized array."""
+        if type_id is None:
+            return False
+        if seen is None:
+            seen = set()
+        if type_id.id in seen:
+            return False
+        seen.add(type_id.id)
+
+        array_info = self.array_type_info_from_type(type_id)
+        if array_info is not None:
+            element_type, size = array_info
+            if self.named_specialization_array_length(size) is not None:
+                return True
+            return self.type_contains_specialization_sized_array(element_type, seen)
+
+        struct_members = self.current_struct_members.get(type_id.type.base_type)
+        if struct_members is None:
+            return False
+        return any(
+            self.type_contains_specialization_sized_array(member_type, seen)
+            for member_type, _ in struct_members
+        )
+
+    def register_undefined_value(self, type_id: SpirvId) -> SpirvId:
+        """Return a module-scope undefined value for an aggregate type."""
+        type_id = self.ensure_registered_type(type_id)
+        if type_id.id in self.undefined_values:
+            return self.undefined_values[type_id.id]
+
+        id_value = self.get_id()
+        self.emit(f"%{id_value} = OpUndef %{type_id.id}")
+        undefined = SpirvId(id_value, type_id.type)
+        self.value_types[id_value] = type_id
+        self.undefined_values[type_id.id] = undefined
+        return undefined
 
     def determine_array_element_type(self, array_id: "SpirvId") -> Optional["SpirvId"]:
         """Determine the element type of an array based on its SpirvId.
@@ -24576,6 +27350,8 @@ class VulkanSPIRVCodeGen:
         seen_interface_ids = set()
         interface_ids = []
         for variable in interface_variables:
+            if variable.type.storage_class == "Workgroup":
+                continue
             if variable.id in seen_interface_ids:
                 continue
             seen_interface_ids.add(variable.id)
@@ -24675,6 +27451,8 @@ class VulkanSPIRVCodeGen:
         body = []
 
         for line in raw_lines:
+            if line.startswith(self.POINTER_OFFSET_RESET_MARKER_PREFIX):
+                continue
             if line.startswith("OpCapability "):
                 if line not in capabilities:
                     capabilities.append(line)
@@ -24699,6 +27477,12 @@ class VulkanSPIRVCodeGen:
                 global_variables.append(line)
             else:
                 body.append(line)
+
+        if self.spirv_module_version() == "1.4":
+            entry_points = [
+                self.append_spirv_1_4_workgroup_interfaces(line)
+                for line in entry_points
+            ]
 
         annotations.extend(self.decorations)
 
@@ -24729,6 +27513,22 @@ class VulkanSPIRVCodeGen:
             + global_variables
             + body
         )
+
+    def append_spirv_1_4_workgroup_interfaces(self, entry_point: str) -> str:
+        match = re.match(r"OpEntryPoint\s+\w+\s+%(\d+)\s+", entry_point)
+        if match is None:
+            return entry_point
+        function_id = int(match.group(1))
+        existing_ids = set(re.findall(r"%\d+", entry_point))
+        workgroup_ids = [
+            f"%{variable.id}"
+            for variable in self.function_interface_variables.get(function_id, [])
+            if variable.type.storage_class == "Workgroup"
+            and f"%{variable.id}" not in existing_ids
+        ]
+        if not workgroup_ids:
+            return entry_point
+        return f"{entry_point} {' '.join(workgroup_ids)}"
 
     def ordered_function_body_lines(self, lines: List[str]) -> List[str]:
         """Move function-scope variables into each function's first block."""
@@ -24836,9 +27636,16 @@ class VulkanSPIRVCodeGen:
         self.register_primitive_type("int")
         self.register_primitive_type("float")
 
+        literal_integer_declarations = [
+            constant
+            for constant in getattr(ast, "constants", []) or []
+            if not self.spirv_specialization_constant_attributes(constant)
+        ]
         self.literal_int_constants = collect_literal_int_constants(
-            getattr(ast, "constants", [])
+            literal_integer_declarations
         )
+        for name, value in self.collect_local_int_constants(ast).items():
+            self.literal_int_constants.setdefault(name, value)
 
         float_type = self.primitive_types["float"]
         for i in range(2, 5):
@@ -24873,6 +27680,21 @@ class VulkanSPIRVCodeGen:
             self.type_name_string,
         )
 
+        preprocessed_specialization_constant_declarations = set()
+        for constant in getattr(ast, "constants", []) or []:
+            if not isinstance(constant, ConstantNode):
+                continue
+            if not self.spirv_specialization_constant_attributes(constant):
+                continue
+            self.process_named_constant_declaration(constant)
+            preprocessed_specialization_constant_declarations.add(id(constant))
+        for var in getattr(ast, "global_variables", []) or []:
+            declaration = self.spirv_specialization_constant_declaration_node(var)
+            if declaration is None:
+                continue
+            self.process_named_constant_declaration(declaration)
+            preprocessed_specialization_constant_declarations.add(id(declaration))
+
         self.collect_enum_metadata(ast.structs)
         for stage in (getattr(ast, "stages", None) or {}).values():
             self.collect_enum_metadata(getattr(stage, "local_structs", []) or [])
@@ -24893,18 +27715,23 @@ class VulkanSPIRVCodeGen:
                 self.process_crossgl_struct(struct)
 
         for constant in getattr(ast, "constants", []) or []:
-            if isinstance(constant, ConstantNode):
+            if (
+                isinstance(constant, ConstantNode)
+                and id(constant)
+                not in preprocessed_specialization_constant_declarations
+            ):
                 self.process_named_constant_declaration(constant)
 
         self.source_variable_type_names = self.collect_source_variable_type_names(ast)
 
-        global_specialization_constant_declarations = set()
-        for var in getattr(ast, "global_variables", []) or []:
-            declaration = self.spirv_specialization_constant_declaration_node(var)
-            if declaration is None:
-                continue
-            self.process_named_constant_declaration(declaration)
-            global_specialization_constant_declarations.add(id(declaration))
+        global_specialization_constant_declarations = {
+            id(declaration)
+            for var in getattr(ast, "global_variables", []) or []
+            for declaration in [
+                self.spirv_specialization_constant_declaration_node(var)
+            ]
+            if declaration is not None
+        }
 
         all_functions = self.collect_ast_functions(ast)
         generic_function_specializations = prepare_generic_function_specializations(
@@ -24935,7 +27762,9 @@ class VulkanSPIRVCodeGen:
         self.inline_storage_buffer_functions = (
             self.collect_inline_storage_buffer_functions(all_functions)
         )
-        self.function_execution_models = self.collect_function_execution_models(ast)
+        self.function_execution_models = self.collect_function_execution_models(
+            ast, all_functions
+        )
         (
             self.spirv_skipped_function_parameter_indices,
             self.spirv_skipped_function_parameter_indices_by_id,

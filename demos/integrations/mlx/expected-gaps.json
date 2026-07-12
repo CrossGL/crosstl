@@ -3,41 +3,144 @@
   "repository": "https://github.com/ml-explore/mlx",
   "commit": "968d264f2903d578e699c4452a4dbf48633921aa",
   "frontier_status": {
-    "status": "passing",
-    "sources": 5,
+    "status": "blocked-by-semantic-contract",
+    "sources": 12,
     "targets": [
       "directx",
       "vulkan"
     ],
-    "artifacts": 10,
-    "blocked_by": []
+    "artifacts": 24,
+    "structural_validation_status": "validated",
+    "semantic_readiness_status": "blocked",
+    "blocked_by": [
+      "https://github.com/CrossGL/crosstl/issues/1537"
+    ]
+  },
+  "arg_reduce_status": {
+    "status": "translated",
+    "source": "mlx/backend/metal/kernels/arg_reduce.metal",
+    "targets": [
+      "directx",
+      "opengl",
+      "vulkan"
+    ],
+    "artifact_records": 3,
+    "translated_artifacts": 3,
+    "failed_artifacts": 0,
+    "template_materialization_status": "materialized",
+    "specialization_count": 51,
+    "unsupported_specialization_count": 0,
+    "native_validation": {
+      "directx": "required-on-windows-ci",
+      "opengl": "validated",
+      "vulkan": "validated"
+    },
+    "entry_packaging_blocked_by": [
+      "https://github.com/CrossGL/crosstl/issues/1523"
+    ]
+  },
+  "directx_toolchain_status": {
+    "status": "passing",
+    "note": "Windows CI compiles every discovered entry in the generated DirectX HLSL for the verified subset below. Other clean frontier kernels translate to DirectX but remain outside the compile gate for the listed structural or semantic defects.",
+    "dxc_validated_sources": [
+      "mlx/backend/metal/kernels/arange.metal",
+      "mlx/backend/metal/kernels/arg_reduce.metal",
+      "mlx/backend/metal/kernels/fence.metal"
+    ],
+    "directx_toolchain_gaps": {
+      "mlx/backend/metal/kernels/random.metal": "the generated dispatch-info cbuffer still requires reflected runtime binding and dispatch-plan coverage before it enters the DXC/runtime gate (https://github.com/CrossGL/crosstl/issues/1542)",
+      "mlx/backend/metal/kernels/binary_two.metal": "operator-functor call lowering emits duplicated/temporary helper names and a conditional operator over a non-numeric result (https://github.com/CrossGL/crosstl/issues/1536)",
+      "mlx/backend/metal/kernels/layer_norm.metal": "pointer-style helpers and resource rebasing remain, and partial fixed-array initialization is invalid HLSL (https://github.com/CrossGL/crosstl/issues/1518, https://github.com/CrossGL/crosstl/issues/1519)",
+      "mlx/backend/metal/kernels/logsumexp.metal": "storage-resource cursor arithmetic remains invalid HLSL (https://github.com/CrossGL/crosstl/issues/1518)",
+      "mlx/backend/metal/kernels/rms_norm.metal": "storage-resource cursor arithmetic remains invalid HLSL (https://github.com/CrossGL/crosstl/issues/1518)",
+      "mlx/backend/metal/kernels/rope.metal": "read-only source buffers are emitted as read-write helper parameters, so StructuredBuffer arguments cannot bind to the generated helpers (https://github.com/CrossGL/crosstl/issues/1518)",
+      "mlx/backend/metal/kernels/scaled_dot_product_attention.metal": "storage-resource cursor arithmetic remains, and partial fixed-array initialization is invalid HLSL (https://github.com/CrossGL/crosstl/issues/1518, https://github.com/CrossGL/crosstl/issues/1519)",
+      "mlx/backend/metal/kernels/softmax.metal": "storage-resource cursor arithmetic remains invalid HLSL (https://github.com/CrossGL/crosstl/issues/1518)",
+      "mlx/backend/metal/kernels/ternary.metal": "static template-trait member WorkPerThread<T>::n is emitted as an undeclared identifier and a conditional operator returns a non-numeric type (https://github.com/CrossGL/crosstl/issues/1491, https://github.com/CrossGL/crosstl/issues/1524)"
+    }
   },
   "opengl_smoke_status": {
     "status": "passing",
     "source": "mlx/backend/metal/kernels/arange.metal",
     "target": "opengl",
-    "artifacts": 1
+    "artifacts": 1,
+    "mapped_overload_collision": "passing",
+    "aggregate_initializer_lowering": "passing",
+    "scalar_coercion_lowering": "passing",
+    "native_validation_first_blocker": null,
+    "native_validation_status": "validated",
+    "native_validation_blocked_by": []
+  },
+  "vulkan_gemv_toolchain_status": {
+    "status": "blocked-by-semantic-warnings",
+    "source": "mlx/backend/metal/kernels/gemv.metal",
+    "target": "vulkan",
+    "specialization_count": 225,
+    "entry_point_count": 224,
+    "structural_validation_status": "validated",
+    "assembler": "spirv-as",
+    "spirv_validator": "spirv-val",
+    "target_environment": "vulkan1.1",
+    "semantic_readiness_status": "blocked",
+    "semantic_warning_count": 1,
+    "semantic_warnings_by_issue": {
+      "https://github.com/CrossGL/crosstl/issues/1498": 1
+    },
+    "semantic_warning_descriptions_by_issue": {
+      "https://github.com/CrossGL/crosstl/issues/1498": "floating subgroup XOR fallback"
+    },
+    "semantic_blockers": [
+      "https://github.com/CrossGL/crosstl/issues/1498"
+    ],
+    "report_warning_transport_tracked_by": "https://github.com/CrossGL/crosstl/issues/1517",
+    "runtime_integration_included": false
   },
   "runtime_readiness_status": {
-    "status": "planned",
+    "status": "blocked-by-tracked-issues",
     "source": "mlx/backend/metal/kernels/arange.metal",
     "targets": [
       "directx",
       "opengl",
       "vulkan"
     ],
+    "fixture_count": 5,
     "artifact_manifest_included": true,
-    "metadata_manifest_status": "passing",
-    "blocked_by": [],
-    "metadata_diagnostics_by_code": {},
-    "runtime_artifact_diagnostics_by_code": {
-      "project.runtime-manifest.resource-binding-layout-incomplete": 1
+    "metadata_manifest_status": "incomplete",
+    "blocked_by": [
+      "https://github.com/CrossGL/crosstl/issues/1388",
+      "https://github.com/CrossGL/crosstl/issues/1471",
+      "https://github.com/CrossGL/crosstl/issues/1472",
+      "https://github.com/CrossGL/crosstl/issues/1516",
+      "https://github.com/CrossGL/crosstl/issues/1523"
+    ],
+    "metadata_diagnostics_by_code": {
+      "project.runtime-test-manifest.runtime-metadata-incomplete": 5,
+      "project.runtime-verification.entry-point-constant-scope-ambiguous": 3
     },
+    "runtime_artifact_diagnostics_by_code": {},
     "runtime_plan_diagnostics_by_code": {
       "project.runtime-test.platform-requirements-unavailable": 1,
-      "project.runtime-verification.entry-point-constant-scope-ambiguous": 1,
-      "project.runtime-verification.entry-point-resource-scope-ambiguous": 1,
-      "project.runtime-verification.resource-unbound": 1
+      "project.runtime-verification.entry-point-constant-scope-ambiguous": 3,
+      "project.runtime-verification.resource-unbound": 22
+    },
+    "reference_fixture_execution": {
+      "status": "partial",
+      "passed": 4,
+      "blocked": 1
+    },
+    "native_vulkan_execution": {
+      "required_on_linux_ci": true,
+      "entry_points": [
+        "arangeuint32",
+        "arangeint32",
+        "arangefloat32"
+      ]
+    },
+    "target_specializations": {
+      "directx": "uint8 via CSMain",
+      "opengl": "uint8 via main",
+      "vulkan": "uint32, int32, and float32 via named entry points",
+      "per_entry_packaging_tracked_by": "https://github.com/CrossGL/crosstl/issues/1523"
     }
   },
   "full_corpus_scout": {
@@ -57,6 +160,9 @@
     ],
     "translation_blocked_by": [
       "https://github.com/CrossGL/crosstl/issues/1376"
+    ],
+    "semantic_blocked_by": [
+      "https://github.com/CrossGL/crosstl/issues/1491"
     ],
     "last_completed": {
       "translated_artifacts": 24,
@@ -83,10 +189,33 @@
     "https://github.com/CrossGL/crosstl/issues/1312",
     "https://github.com/CrossGL/crosstl/issues/1376",
     "https://github.com/CrossGL/crosstl/issues/1388",
-    "https://github.com/CrossGL/crosstl/issues/1392",
-    "https://github.com/CrossGL/crosstl/issues/1396"
+    "https://github.com/CrossGL/crosstl/issues/1471",
+    "https://github.com/CrossGL/crosstl/issues/1472",
+    "https://github.com/CrossGL/crosstl/issues/1491",
+    "https://github.com/CrossGL/crosstl/issues/1498",
+    "https://github.com/CrossGL/crosstl/issues/1516",
+    "https://github.com/CrossGL/crosstl/issues/1517",
+    "https://github.com/CrossGL/crosstl/issues/1518",
+    "https://github.com/CrossGL/crosstl/issues/1519",
+    "https://github.com/CrossGL/crosstl/issues/1523",
+    "https://github.com/CrossGL/crosstl/issues/1524",
+    "https://github.com/CrossGL/crosstl/issues/1536",
+    "https://github.com/CrossGL/crosstl/issues/1537",
+    "https://github.com/CrossGL/crosstl/issues/1540",
+    "https://github.com/CrossGL/crosstl/issues/1541",
+    "https://github.com/CrossGL/crosstl/issues/1542"
   ],
   "resolved_issues": [
+    "https://github.com/CrossGL/crosstl/issues/1551",
+    "https://github.com/CrossGL/crosstl/issues/1535",
+    "https://github.com/CrossGL/crosstl/issues/1490",
+    "https://github.com/CrossGL/crosstl/issues/1489",
+    "https://github.com/CrossGL/crosstl/issues/1504",
+    "https://github.com/CrossGL/crosstl/issues/1503",
+    "https://github.com/CrossGL/crosstl/issues/1502",
+    "https://github.com/CrossGL/crosstl/issues/1500",
+    "https://github.com/CrossGL/crosstl/issues/1396",
+    "https://github.com/CrossGL/crosstl/issues/1392",
     "https://github.com/CrossGL/crosstl/issues/1454",
     "https://github.com/CrossGL/crosstl/issues/1453",
     "https://github.com/CrossGL/crosstl/issues/1452",
