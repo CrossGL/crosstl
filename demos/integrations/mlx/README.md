@@ -13,9 +13,12 @@ The current harness verifies:
   `mlx/backend/metal/kernels`;
 - Metal-to-CrossGL-to-Metal translation of pinned `fence.metal`, including
   project artifact hashes, sizes, source maps, provenance, and native Metal
-  compilation on macOS CI. Resource coherence and volatility preservation
-  remain blocked by [#1660](https://github.com/CrossGL/crosstl/issues/1660), so
-  this is a source and toolchain check rather than a semantic-equivalence claim;
+  compilation on macOS CI. The gate requires all three device-memory,
+  sequentially consistent, system-scope atomic fences to survive the round
+  trip without a weaker barrier fallback. Resource coherence and volatility
+  preservation remain blocked by
+  [#1660](https://github.com/CrossGL/crosstl/issues/1660), so this is not yet a
+  complete semantic-equivalence claim;
 - DirectX and Vulkan artifact generation for the 12-source clean reduced
   frontier: `arange.metal`, `arg_reduce.metal`, `binary_two.metal`, `fence.metal`,
   `layer_norm.metal`, `logsumexp.metal`, `random.metal`, `rms_norm.metal`,

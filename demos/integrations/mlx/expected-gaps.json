@@ -27,6 +27,15 @@
     "artifact_count": 1,
     "project_metadata_validation": "required",
     "native_validation": "required-on-macos-ci",
+    "fence_contract": {
+      "memory_flags": [
+        "mem_device"
+      ],
+      "memory_order": "memory_order_seq_cst",
+      "thread_scope": "thread_scope_system",
+      "occurrences": 3,
+      "preserved": true
+    },
     "semantic_readiness_status": "blocked",
     "blocked_by": [
       "https://github.com/CrossGL/crosstl/issues/1660"

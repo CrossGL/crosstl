@@ -129,9 +129,18 @@ def _write_metal_roundtrip_report(module, mlx_root, work_dir, report_path):
                 "#include <metal_stdlib>",
                 "using namespace metal;",
                 "kernel void input_coherent(device uint* input [[buffer(0)]], ",
-                "    uint index [[thread_position_in_grid]]) {}",
-                "kernel void fence_update(device uint* out [[buffer(0)]]) {}",
-                "kernel void fence_wait(device uint* out [[buffer(0)]]) {}",
+                "    uint index [[thread_position_in_grid]]) {",
+                "  metal::atomic_thread_fence(metal::mem_flags::mem_device,",
+                "      metal::memory_order_seq_cst, metal::thread_scope_system);",
+                "}",
+                "kernel void fence_update(device uint* out [[buffer(0)]]) {",
+                "  metal::atomic_thread_fence(metal::mem_flags::mem_device,",
+                "      metal::memory_order_seq_cst, metal::thread_scope_system);",
+                "}",
+                "kernel void fence_wait(device uint* out [[buffer(0)]]) {",
+                "  metal::atomic_thread_fence(metal::mem_flags::mem_device,",
+                "      metal::memory_order_seq_cst, metal::thread_scope_system);",
+                "}",
                 "",
             )
         ),
@@ -251,6 +260,13 @@ def test_metal_roundtrip_validates_generated_artifact_natively(tmp_path, monkeyp
     assert 'targets = ["metal"]' in config
     assert result["roundTripStages"] == ["metal", "crossgl", "metal"]
     assert result["artifactValidationStatus"] == "validated"
+    assert result["fenceContract"] == {
+        "memoryFlags": ["mem_device"],
+        "memoryOrder": "memory_order_seq_cst",
+        "threadScope": "thread_scope_system",
+        "occurrences": module.MLX_FENCE_EXPECTED_ATOMIC_FENCE_COUNT,
+        "preserved": True,
+    }
     assert result["semanticReadinessStatus"] == "blocked"
     assert result["semanticTrackedIssues"] == [
         "https://github.com/CrossGL/crosstl/issues/1660"

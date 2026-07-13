@@ -34,6 +34,7 @@ MLX_METAL_KERNEL_ROOT = "mlx/backend/metal/kernels"
 MLX_ARANGE_SOURCE = "mlx/backend/metal/kernels/arange.metal"
 MLX_ARG_REDUCE_SOURCE = "mlx/backend/metal/kernels/arg_reduce.metal"
 MLX_FENCE_SOURCE = "mlx/backend/metal/kernels/fence.metal"
+MLX_FENCE_EXPECTED_ATOMIC_FENCE_COUNT = 3
 MLX_GEMV_SOURCE = "mlx/backend/metal/kernels/gemv.metal"
 MLX_METAL_ROUNDTRIP_SOURCE = MLX_FENCE_SOURCE
 MLX_ROPE_SOURCE = "mlx/backend/metal/kernels/rope.metal"
@@ -714,8 +715,10 @@ def _check_metal_roundtrip(
     )
     diagnostic_counts = summary.get("diagnosticCounts", {})
     _require(
-        isinstance(diagnostic_counts, dict) and diagnostic_counts.get("error", 0) == 0,
-        "Metal round-trip translation reported errors",
+        isinstance(diagnostic_counts, dict)
+        and diagnostic_counts.get("error", 0) == 0
+        and diagnostic_counts.get("warning", 0) == 0,
+        "Metal round-trip translation reported diagnostics",
     )
 
     artifacts = payload.get("artifacts", [])
@@ -786,10 +789,23 @@ def _check_metal_roundtrip(
         "kernel void fence_wait",
         "[[buffer(0)]]",
         "[[thread_position_in_grid]]",
+        "metal::mem_flags::mem_device",
+        "metal::memory_order_seq_cst",
+        "metal::thread_scope_system",
     ):
         _require(
             fragment in generated,
             f"Metal round-trip artifact is missing expected generated form: {fragment}",
+        )
+    _require(
+        generated.count("metal::atomic_thread_fence(")
+        == MLX_FENCE_EXPECTED_ATOMIC_FENCE_COUNT,
+        "Metal round-trip artifact did not preserve every source atomic fence",
+    )
+    for forbidden in ("threadgroup_barrier(", "unsupported", "fallback"):
+        _require(
+            forbidden not in generated,
+            f"Metal round-trip artifact contains forbidden generated form: {forbidden}",
         )
 
     validation = payload.get("validation", {})
@@ -844,6 +860,13 @@ def _check_metal_roundtrip(
         "diagnosticCounts": diagnostic_counts,
         "artifactValidationStatus": "validated",
         "nativeMetalValidation": native_validation,
+        "fenceContract": {
+            "memoryFlags": ["mem_device"],
+            "memoryOrder": "memory_order_seq_cst",
+            "threadScope": "thread_scope_system",
+            "occurrences": MLX_FENCE_EXPECTED_ATOMIC_FENCE_COUNT,
+            "preserved": True,
+        },
         "semanticReadinessStatus": "blocked",
         "semanticTrackedIssues": list(METAL_ROUNDTRIP_SEMANTIC_TRACKED_ISSUES),
         "shaderArtifactsOnly": True,
