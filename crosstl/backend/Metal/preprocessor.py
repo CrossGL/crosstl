@@ -60,14 +60,11 @@ TEMPLATE_MATERIALIZATION_SCAN_CHARS_PER_WORK_ITEM = 8
 class MetalStructMethodError(ValueError):
     """A struct member-function call that cannot be lowered safely.
 
-    Raised when a CALLED template member method of a struct cannot be
-    instantiated — either because a call argument type cannot be inferred with
-    the conservative rules, or because the method's template parameters do not
-    bind consistently. It deliberately PROPAGATES out of ``preprocess`` (it is
-    NOT swallowed by the regression-safety ``try/except`` in
-    ``_lower_struct_member_functions``) so the pipeline reports the kernel as a
-    clean translation FAILURE rather than emitting a dangling ``obj.method(...)``
-    call / broken output.
+    Raised when a called member method cannot be instantiated or when its object
+    or return-value semantics cannot be represented without changing behavior.
+    It deliberately propagates out of ``preprocess`` so project translation
+    reports a structured failure instead of emitting a dangling call or a
+    validating artifact with value-copy semantics.
     """
 
     project_diagnostic_code = "project.translate.metal-struct-method"
@@ -82,6 +79,9 @@ class MetalStructMethodError(ValueError):
         requested_signature: Optional[str] = None,
         suggested_action: Optional[str] = None,
         source_location: Optional[object] = None,
+        missing_capabilities: Optional[Tuple[str, ...]] = None,
+        reason: Optional[str] = None,
+        return_type: Optional[str] = None,
     ):
         super().__init__(message)
         self.struct_name = struct_name
@@ -89,6 +89,10 @@ class MetalStructMethodError(ValueError):
         self.requested_signature = requested_signature
         self.suggested_action = suggested_action
         self.source_location = source_location
+        self.reason = reason
+        self.return_type = return_type
+        if missing_capabilities is not None:
+            self.missing_capabilities = missing_capabilities
 
 
 class MetalTemplateSpecializationError(ValueError):
@@ -3173,7 +3177,8 @@ class MetalPreprocessor(HLSLPreprocessor):
         operator_call_structs: Optional[Set[str]] = None,
         structs_by_name: Optional[Dict[str, _MetalStructDefinition]] = None,
     ) -> str:
-        # Emit `RetType S__m(S self, <params>) { body' }` for an instance method,
+        # Emit `RetType S__m(thread S& self, <params>) { body' }` for an instance
+        # method,
         # or `RetType S__m(<params>) { body' }` for a static method. References to
         # the struct's data members inside the body are rewritten to `self.x`.
         return_type = self._canonicalize_struct_scoped_type(
@@ -3212,12 +3217,20 @@ class MetalPreprocessor(HLSLPreprocessor):
         if method.is_static:
             new_params = params if params and params != "void" else ""
         else:
-            self_param = f"{struct.name} self"
+            self_param = self._instance_receiver_parameter(struct, method)
             if params and params != "void":
                 new_params = f"{self_param}, {params}"
             else:
                 new_params = self_param
         return f"{return_type} {method.free_name}({new_params}) {{{rewritten_body}}}"
+
+    @staticmethod
+    def _instance_receiver_parameter(
+        struct: _MetalStructDefinition,
+        method: _MetalStructMethod,
+    ) -> str:
+        const_qualifier = "const " if method.is_const else ""
+        return f"thread {const_qualifier}{struct.name}& self"
 
     def _resolved_static_data_member_initializers(
         self, struct: _MetalStructDefinition
@@ -3941,13 +3954,17 @@ class MetalPreprocessor(HLSLPreprocessor):
         method: _MetalStructMethod,
         plan: _PointerPromotionPlan,
     ) -> str:
-        # Emit `RetType S__m(S self, <pointer params>, <params>) { body' }` for an
-        # instance method (pointer members are threaded as parameters), or the
-        # ordinary static form for a static method.
+        # Emit an instance helper with a reference receiver and promoted pointer
+        # parameters, or the ordinary static form for a static method.
         return_type = self._canonicalize_struct_scoped_type(
             method.return_type, struct, None
         )
         rewritten_body = self._rewrite_promoted_method_body(struct, method, plan)
+        rewritten_body = self._rewrite_promoted_internal_method_calls(
+            struct,
+            plan,
+            rewritten_body,
+        )
         rewritten_body = self._canonicalize_struct_scoped_local_declarations(
             rewritten_body, struct, None
         )
@@ -3960,7 +3977,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         if method.is_static:
             new_params = params if params and params != "void" else ""
         else:
-            parts = [f"{struct.name} self"]
+            parts = [self._instance_receiver_parameter(struct, method)]
             for member in plan.pointer_members:
                 member_type = self._canonicalize_struct_scoped_type(
                     member.type_text, struct, None
@@ -3975,6 +3992,152 @@ class MetalPreprocessor(HLSLPreprocessor):
         return (
             f"{return_type} {method.free_name}({new_params}) " f"{{{rewritten_body}}}"
         )
+
+    def _rewrite_promoted_internal_method_calls(
+        self,
+        struct: _MetalStructDefinition,
+        plan: _PointerPromotionPlan,
+        body: str,
+    ) -> str:
+        """Forward the implicit receiver and promoted pointers to sibling helpers."""
+        siblings: Dict[str, List[_MetalStructMethod]] = {}
+        for method in struct.methods:
+            siblings.setdefault(method.name, []).append(method)
+
+        result: List[str] = []
+        index = 0
+        while index < len(body):
+            if body[index] in "\"'":
+                literal, consumed = self._read_string(body, index)
+                result.append(literal)
+                index += consumed
+                continue
+            if body.startswith("//", index):
+                end = body.find("\n", index)
+                if end == -1:
+                    result.append(body[index:])
+                    break
+                result.append(body[index:end])
+                index = end
+                continue
+            if body.startswith("/*", index):
+                end = body.find("*/", index + 2)
+                if end == -1:
+                    result.append(body[index:])
+                    break
+                result.append(body[index : end + 2])
+                index = end + 2
+                continue
+            if not (body[index].isalpha() or body[index] == "_"):
+                result.append(body[index])
+                index += 1
+                continue
+
+            ident, consumed = self._read_identifier(body, index)
+            ident_end = index + consumed
+            rewrite = self._try_rewrite_promoted_internal_method_call(
+                struct,
+                plan,
+                body,
+                ident,
+                index,
+                ident_end,
+                siblings,
+            )
+            if rewrite is not None:
+                end, replacement = rewrite
+                result.append(replacement)
+                index = end
+                continue
+            result.append(ident)
+            index = ident_end
+        return "".join(result)
+
+    def _try_rewrite_promoted_internal_method_call(
+        self,
+        struct: _MetalStructDefinition,
+        plan: _PointerPromotionPlan,
+        body: str,
+        ident: str,
+        ident_start: int,
+        ident_end: int,
+        siblings: Dict[str, List[_MetalStructMethod]],
+    ) -> Optional[Tuple[int, str]]:
+        method_name = ident
+        method_name_end = ident_end
+
+        if ident == "self":
+            cursor = ident_end
+            while cursor < len(body) and body[cursor].isspace():
+                cursor += 1
+            if body.startswith("->", cursor):
+                cursor += 2
+            elif cursor < len(body) and body[cursor] == ".":
+                cursor += 1
+            else:
+                return None
+            while cursor < len(body) and body[cursor].isspace():
+                cursor += 1
+            if cursor >= len(body) or not (
+                body[cursor].isalpha() or body[cursor] == "_"
+            ):
+                return None
+            method_name, consumed = self._read_identifier(body, cursor)
+            method_name_end = cursor + consumed
+        else:
+            previous = ident_start - 1
+            while previous >= 0 and body[previous].isspace():
+                previous -= 1
+            if previous >= 0 and (
+                body[previous] == "."
+                or (previous >= 1 and body[previous - 1 : previous + 1] in {"->", "::"})
+            ):
+                return None
+
+        if method_name == "operator":
+            empty_open = method_name_end
+            while empty_open < len(body) and body[empty_open].isspace():
+                empty_open += 1
+            if empty_open >= len(body) or body[empty_open] != "(":
+                return None
+            empty_close = self._find_matching_delimiter(body, empty_open, "(", ")")
+            if empty_close is None or body[empty_open + 1 : empty_close].strip():
+                return None
+            method_name = "operator()"
+            method_name_end = empty_close + 1
+
+        overloads = siblings.get(method_name, [])
+        if len(overloads) != 1:
+            return None
+        call_suffix = self._member_template_call_suffix(body, method_name_end)
+        if call_suffix is None:
+            return None
+        arg_open, explicit_template_arguments = call_suffix
+        if explicit_template_arguments is not None:
+            return None
+        arg_close = self._find_matching_delimiter(body, arg_open, "(", ")")
+        if arg_close is None:
+            return None
+
+        sibling = overloads[0]
+        self._reject_reference_returning_method_call(
+            body,
+            struct,
+            sibling,
+            arg_open,
+            arg_close,
+        )
+        raw_args = body[arg_open + 1 : arg_close].strip()
+        forwarded: List[str] = []
+        if not sibling.is_static:
+            forwarded.append("self")
+            forwarded.extend(
+                self._promoted_pointer_param_name(member.name)
+                for member in plan.pointer_members
+            )
+        if raw_args:
+            forwarded.append(raw_args)
+        return arg_close + 1, f"{sibling.free_name}({', '.join(forwarded)})"
 
     def _rewrite_promoted_method_body(
         self,
@@ -4529,6 +4692,16 @@ class MetalPreprocessor(HLSLPreprocessor):
             arg_open, explicit_template_arguments = call_suffix
             method = methods_by_struct.get(qualified_struct, {}).get(member)
             if method is not None and explicit_template_arguments is None:
+                arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
+                if arg_close is None:
+                    return None
+                self._reject_reference_returning_method_call(
+                    code,
+                    structs_by_name.get(qualified_struct, qualified_struct),
+                    method,
+                    arg_open,
+                    arg_close,
+                )
                 return arg_open, method.free_name
             # A static TEMPLATE member call `S::m(args)`: instantiate from args.
             template_overloads = template_methods_by_struct.get(
@@ -4641,7 +4814,13 @@ class MetalPreprocessor(HLSLPreprocessor):
             arg_open, explicit_template_arguments = call_suffix
             method = methods_by_struct.get(struct_type, {}).get(member)
             if method is not None and explicit_template_arguments is None:
-                return self._build_instance_call_rewrite(code, ident, method, arg_open)
+                return self._build_instance_call_rewrite(
+                    code,
+                    ident,
+                    method,
+                    arg_open,
+                    struct_name=structs_by_name.get(struct_type, struct_type),
+                )
             # An instance TEMPLATE member call `var.m(args)`.
             template_overloads = template_methods_by_struct.get(struct_type, {}).get(
                 member
@@ -4685,7 +4864,13 @@ class MetalPreprocessor(HLSLPreprocessor):
                     field_structs_by_name,
                 )
             ):
-                return self._build_instance_call_rewrite(code, ident, method, j)
+                return self._build_instance_call_rewrite(
+                    code,
+                    ident,
+                    method,
+                    j,
+                    struct_name=structs_by_name.get(struct_type, struct_type),
+                )
             # A template `operator()` functor call `var(args)`.
             if template_overloads:
                 return self._instantiate_template_member_call(
@@ -4782,7 +4967,14 @@ class MetalPreprocessor(HLSLPreprocessor):
                 method = methods_by_struct.get(current_struct_name, {}).get(member)
                 if method is not None and explicit_template_arguments is None:
                     return self._build_instance_call_rewrite(
-                        code, receiver, method, arg_open
+                        code,
+                        receiver,
+                        method,
+                        arg_open,
+                        struct_name=structs_by_name.get(
+                            current_struct_name,
+                            current_struct_name,
+                        ),
                     )
                 template_overloads = template_methods_by_struct.get(
                     current_struct_name, {}
@@ -4944,6 +5136,13 @@ class MetalPreprocessor(HLSLPreprocessor):
         arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
         if arg_close is None:
             return None
+        self._reject_reference_returning_method_call(
+            code,
+            struct,
+            method,
+            arg_open,
+            arg_close,
+        )
         wrapper_name = f"{method.free_name}__temporary"
         if wrapper_name not in instantiated_template_functions:
             helper_source = self._emit_free_function(struct, method)
@@ -5350,6 +5549,21 @@ class MetalPreprocessor(HLSLPreprocessor):
                 ),
             )
         selected, bindings = selected_candidate
+        resolved_return_type = self._replace_identifiers(
+            selected.return_type,
+            bindings,
+        )
+        resolved_return_type = self._canonicalize_struct_scoped_type(
+            resolved_return_type,
+            struct,
+            rewrite_structs_by_name,
+        )
+        self._reject_selected_reference_return(
+            struct,
+            selected,
+            resolved_return_type,
+            signature,
+        )
         ordered_arguments = [bindings[name] for name in selected.template_parameters]
         free_name = self._template_member_free_name(struct, selected, ordered_arguments)
         self._instantiated_template_member_calls[free_name] = (
@@ -6641,6 +6855,13 @@ class MetalPreprocessor(HLSLPreprocessor):
             re.search(r"\bself\s*(?:\.|->)", instantiated_body)
             and (methods_by_struct or template_methods_by_struct)
         )
+        has_concrete_sibling_call = any(
+            re.search(
+                rf"(?<![\w.:>]){re.escape(sibling.name)}\s*\(",
+                instantiated_body,
+            )
+            for sibling in struct.methods
+        )
         # A method whose body has no sibling-template or external struct call
         # candidate is returned unchanged.
         if (
@@ -6648,6 +6869,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             and not operator_call_structs
             and not has_external_qualified_call
             and not has_external_member_call
+            and not has_concrete_sibling_call
         ):
             return instantiated_body
         # Build flat name->type views for the body scope from the concrete
@@ -6884,6 +7106,21 @@ class MetalPreprocessor(HLSLPreprocessor):
         if len(candidates) != 1:
             return None
         selected = candidates[0]
+        self._reject_selected_reference_return(
+            struct,
+            selected,
+            self._canonicalize_struct_scoped_type(
+                selected.return_type,
+                struct,
+                structs_by_name,
+            ),
+            f"{struct.name}::{selected.name}<" f"{', '.join(explicit_arguments)}>()",
+            source_location=self._source_location_for_offsets(
+                body,
+                ident_end - len(ident),
+                arg_close + 1,
+            ),
+        )
         parameter_types = [
             selected.template_parameter_types[name]
             for name in selected.template_parameters
@@ -7051,6 +7288,13 @@ class MetalPreprocessor(HLSLPreprocessor):
             if len(concrete_siblings) != 1:
                 return None
             concrete = concrete_siblings[0]
+            self._reject_reference_returning_method_call(
+                body,
+                struct,
+                concrete,
+                arg_open,
+                arg_close,
+            )
             if concrete.is_static:
                 replacement = (
                     f"{concrete.free_name}({args})"
@@ -7226,6 +7470,13 @@ class MetalPreprocessor(HLSLPreprocessor):
         # only the end offset is needed.
         concrete = next((m for m in struct.methods if m.name == "operator()"), None)
         if concrete is not None:
+            self._reject_reference_returning_method_call(
+                body,
+                struct,
+                concrete,
+                arg_open,
+                arg_close,
+            )
             replacement = (
                 f"{concrete.free_name}(self, {args})"
                 if args
@@ -7348,16 +7599,94 @@ class MetalPreprocessor(HLSLPreprocessor):
         receiver: str,
         method: _MetalStructMethod,
         arg_open: int,
+        *,
+        struct_name: Optional[object] = None,
     ) -> Optional[Tuple[int, str]]:
         arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
         if arg_close is None:
             return None
+        self._reject_reference_returning_method_call(
+            code,
+            struct_name,
+            method,
+            arg_open,
+            arg_close,
+        )
         args = code[arg_open + 1 : arg_close].strip()
         if args:
             replacement = f"{method.free_name}({receiver}, {args})"
         else:
             replacement = f"{method.free_name}({receiver})"
         return arg_close + 1, replacement
+
+    def _reject_reference_returning_method_call(
+        self,
+        code: str,
+        struct_name: Optional[object],
+        method: _MetalStructMethod,
+        arg_open: int,
+        arg_close: int,
+    ) -> None:
+        struct = struct_name or method.free_name.split("__", 1)[0]
+        owner = getattr(struct, "name", None) or str(struct)
+        return_type = method.return_type
+        if isinstance(struct, _MetalStructDefinition):
+            return_type = self._canonicalize_struct_scoped_type(
+                return_type,
+                struct,
+                None,
+            )
+        arguments = code[arg_open + 1 : arg_close].strip()
+        signature = f"{owner}::{method.name}({arguments})"
+        call_start = code.rfind(method.name, 0, arg_open)
+        if call_start < 0:
+            call_start = arg_open
+        self._reject_selected_reference_return(
+            struct,
+            method,
+            return_type,
+            signature,
+            source_location=self._source_location_for_offsets(
+                code,
+                call_start,
+                arg_close + 1,
+            ),
+        )
+
+    def _reject_selected_reference_return(
+        self,
+        struct: object,
+        method: _MetalStructMethod,
+        return_type: str,
+        signature: str,
+        *,
+        source_location: Optional[object] = None,
+    ) -> None:
+        normalized_return_type = self._normalize_template_argument_text(return_type)
+        if (
+            re.search(r"&&?\s*$", normalized_return_type) is None
+            and normalized_return_type != "decltype(auto)"
+        ):
+            return
+
+        owner = getattr(struct, "name", None) or str(struct)
+        raise MetalStructMethodError(
+            "Cannot lower reference-returning struct method "
+            f"'{owner}::{method.name}' without preserving the returned lvalue "
+            f"identity. Requested call: {signature}.",
+            struct_name=owner,
+            method_name=method.name,
+            requested_signature=signature,
+            suggested_action=(
+                "rewrite the accessor as a direct operation on the underlying "
+                "storage, or avoid binding or assigning through its returned "
+                "reference until reference identity lowering is available"
+            ),
+            source_location=source_location,
+            missing_capabilities=("struct.reference-return",),
+            reason="reference-return-identity-unsupported",
+            return_type=normalized_return_type,
+        )
 
     # ------------------------------------------------------------------ #
     # Pointer-member promotion: construction and call-site rewriting.     #
@@ -7756,6 +8085,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         # `S__method(receiver, <pointer exprs>, args)`, forwarding the pointer
         # expressions captured at the receiver's construction.
         methods_by_struct: Dict[str, Dict[str, _MetalStructMethod]] = {}
+        structs_by_name = {struct.name: struct for struct in promoted_structs}
         for struct in promoted_structs:
             methods_by_struct[struct.name] = {
                 method.name: method for method in struct.methods
@@ -7792,7 +8122,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                             code,
                             ident,
                             ident_end,
-                            struct_name,
+                            structs_by_name[struct_name],
                             pointer_exprs,
                             methods_by_struct.get(struct_name, {}),
                         )
@@ -7811,7 +8141,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         code: str,
         receiver: str,
         ident_end: int,
-        struct_name: str,
+        struct: _MetalStructDefinition,
         pointer_exprs: List[str],
         methods_by_name: Dict[str, _MetalStructMethod],
     ) -> Optional[Tuple[int, str]]:
@@ -7839,6 +8169,13 @@ class MetalPreprocessor(HLSLPreprocessor):
         arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
         if arg_close is None:
             return None
+        self._reject_reference_returning_method_call(
+            code,
+            struct,
+            method,
+            arg_open,
+            arg_close,
+        )
         args = code[arg_open + 1 : arg_close].strip()
         pieces = [receiver]
         pieces.extend(pointer_exprs)

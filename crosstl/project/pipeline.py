@@ -16374,6 +16374,13 @@ def _translation_failure_missing_capabilities(
 
 
 def _template_materialization_failure_details(exc: Exception) -> dict[str, Any]:
+    if (
+        _translation_failure_diagnostic_code(exc)
+        == "project.translate.metal-struct-method"
+        and getattr(exc, "reason", None) == "reference-return-identity-unsupported"
+    ):
+        return {}
+
     limit = getattr(exc, "limit", None)
     limit_source = getattr(exc, "limit_source", None)
     required_work_items = getattr(exc, "required_work_items", None)
@@ -16951,6 +16958,39 @@ def _generic_member_call_failure_details(
     return dict(sorted(details.items()))
 
 
+def _metal_struct_method_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if (
+        _translation_failure_diagnostic_code(exc)
+        != "project.translate.metal-struct-method"
+        or getattr(exc, "reason", None) != "reference-return-identity-unsupported"
+    ):
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    struct_method = {}
+    fields = {
+        "reason": getattr(exc, "reason", None),
+        "structName": getattr(exc, "struct_name", None),
+        "methodName": getattr(exc, "method_name", None),
+        "returnType": getattr(exc, "return_type", None),
+        "requestedSignature": getattr(exc, "requested_signature", None),
+        "suggestedAction": getattr(exc, "suggested_action", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            struct_method[name] = value
+    if struct_method:
+        details["structMethod"] = dict(sorted(struct_method.items()))
+    return dict(sorted(details.items()))
+
+
 def _translation_failure_details(
     exc: Exception,
     target: str,
@@ -16973,6 +17013,7 @@ def _translation_failure_details(
         **_opengl_reference_parameter_failure_details(exc, unit, artifact_path),
         **_pointer_reinterpret_failure_details(exc, unit, artifact_path),
         **_generic_member_call_failure_details(exc, unit, artifact_path),
+        **_metal_struct_method_failure_details(exc, unit, artifact_path),
         **_metal_static_constant_failure_details(exc, unit, artifact_path),
         **_metal_sizeof_failure_details(exc, unit, artifact_path),
         **_metal_callable_failure_details(exc, unit, artifact_path),

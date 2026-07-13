@@ -700,7 +700,7 @@ EXTERNAL_FIXTURES = [
         "contains": [
             "constant vec3 colorA = vec3(0.000f, 0.129f, 0.647f);",
             "vec3 color = mix(colorA, colorB, fraction);",
-            "vec4 fragment_main(FragmentIn in_, constant Uniforms& uniforms @buffer(0))",
+            "vec4 fragment_main(FragmentIn in_, constant Uniforms uniforms @buffer(0))",
         ],
         "source": (
             """
@@ -737,8 +737,8 @@ EXTERNAL_FIXTURES = [
         "source_path": "naga/tests/out/msl/wgsl-memory-decorations-coherent.metal",
         "roundtrip": True,
         "contains": [
-            "void main_(device Data& coherent_buf @user(fake0), "
-            "device Data& plain_buf @user(fake0))",
+            "void main_(inout device Data coherent_buf @user(fake0), "
+            "device Data plain_buf @user(fake0))",
             "coherent_buf.values[0] = value;",
         ],
         "not_contains": ["coherent device"],
@@ -1685,7 +1685,7 @@ EXTERNAL_FIXTURES = [
         "contains": [
             "typedef matrix<bfloat,4,4> bfloat4x4;",
             "typedef matrix<bfloat,2,4> bfloat2x4;",
-            "void kernel_memset(constant ggml_metal_kargs_memset& args",
+            "void kernel_memset(constant ggml_metal_kargs_memset args",
         ],
         "source": (
             """

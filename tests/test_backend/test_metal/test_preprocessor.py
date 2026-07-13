@@ -1580,7 +1580,7 @@ def test_materialized_static_layout_substitution_preserves_method_shadowing():
 
     assert "struct alignas(8) Storage" in output
     assert "uint8_t data[8];" in output
-    assert "int Layout_4__read(Layout_4 self, int width)" in output
+    assert "int Layout_4__read(thread const Layout_4& self, int width)" in output
     assert "return width;" in output
 
 
@@ -2282,15 +2282,15 @@ def test_preprocessor_lowers_method_with_elaborated_struct_return_type():
 
     output = MetalPreprocessor().preprocess(code)
 
-    assert "struct Result Factory__make(Factory self)" in output
+    assert "struct Result Factory__make(thread Factory& self)" in output
     assert "Result result = Factory__make(factory);" in output
     assert "factory.make()" not in output
 
 
 def test_preprocessor_lowers_instance_method_with_member_reference():
     # CrossGL structs are data-only, so an instance member function is lowered to
-    # a free function taking the receiver `self` by value, and bare references to
-    # the struct's data members inside the body are rewritten to `self.member`.
+    # a free function taking the receiver `self` by reference, and bare references
+    # to the struct's data members inside the body are rewritten to `self.member`.
     code = """
     struct Adder { float bias; float add(float a, float b){ return a + b + bias; } };
 
@@ -2307,9 +2307,9 @@ def test_preprocessor_lowers_instance_method_with_member_reference():
     # The struct keeps only its data member; the method is gone from the struct.
     assert "struct Adder { float bias;" in output
     assert "float add(" not in output.split("struct Adder")[1].split("}")[0]
-    # The method is re-emitted as a free function with a by-value `self` receiver
+    # The method is re-emitted as a free function with a mutable `self` receiver
     # and the member reference qualified.
-    assert "float Adder__add(Adder self, float a, float b)" in output
+    assert "float Adder__add(thread Adder& self, float a, float b)" in output
     assert "a + b + self.bias" in output
     # The call site is rewritten to pass the receiver as the first argument.
     assert "Adder__add(adder, in[i], 2.0)" in output
@@ -2317,6 +2317,264 @@ def test_preprocessor_lowers_instance_method_with_member_reference():
     assert "adder.bias = 1.0;" in output
     # No dangling method call survives.
     assert "adder.add(" not in output
+
+
+def test_preprocessor_mutating_method_uses_mutable_receiver_reference():
+    code = """
+    struct NestedState { int value; };
+
+    struct State {
+        int scalar;
+        int values[2];
+        NestedState nested;
+
+        void mutate(int amount) {
+            scalar += amount;
+            values[1] = amount;
+            nested.value += amount;
+        }
+    };
+
+    void apply(thread State& state) {
+        state.mutate(3);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "void State__mutate(thread State& self, int amount)" in output
+    assert "self.scalar += amount;" in output
+    assert "self.values[1] = amount;" in output
+    assert "self.nested.value += amount;" in output
+    assert "State__mutate(state, 3);" in output
+
+
+def test_preprocessor_const_method_receiver_is_read_only():
+    code = """
+    struct State {
+        int value;
+        int read() const { return value; }
+    };
+
+    int inspect(thread const State& state) {
+        return state.read();
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "int State__read(thread const State& self)" in output
+    assert "return State__read(state);" in output
+    assert "State__read(thread State& self)" not in output
+
+
+@pytest.mark.parametrize(
+    ("code", "struct_name", "method_name", "signature", "return_type"),
+    [
+        pytest.param(
+            """
+            struct State {
+                int value;
+                thread int& element() { return value; }
+            };
+            void assign(thread State& state) { state.element() = 1; }
+            """,
+            "State",
+            "element",
+            "State::element()",
+            "thread int&",
+            id="direct-instance",
+        ),
+        pytest.param(
+            """
+            struct Leaf {
+                int value;
+                thread int& element() { return value; }
+            };
+            struct Holder { Leaf leaf; };
+            void assign(thread Holder& holder) { holder.leaf.element() = 1; }
+            """,
+            "Leaf",
+            "element",
+            "Leaf::element()",
+            "thread int&",
+            id="nested-receiver",
+        ),
+        pytest.param(
+            """
+            struct State {
+                int value;
+                thread int& element() { return value; }
+            };
+            void assign(thread State* state) { state->element() = 1; }
+            """,
+            "State",
+            "element",
+            "State::element()",
+            "thread int&",
+            id="pointer-receiver",
+        ),
+        pytest.param(
+            """
+            struct State {
+                static thread int& element(thread int& value) { return value; }
+            };
+            void assign(thread int& value) { State::element(value) = 1; }
+            """,
+            "State",
+            "element",
+            "State::element(value)",
+            "thread int&",
+            id="concrete-static",
+        ),
+        pytest.param(
+            """
+            struct State {
+                template <typename T>
+                thread T& element(thread T& value) { return value; }
+            };
+            void assign(thread State& state) {
+                int value = 0;
+                state.element(value) = 1;
+            }
+            """,
+            "State",
+            "element",
+            "state.element(value)",
+            "thread int&",
+            id="template-member",
+        ),
+        pytest.param(
+            """
+            struct Select {
+                thread int& operator()(thread int& value) { return value; }
+            };
+            void assign(thread int& value) { Select{}(value) = 1; }
+            """,
+            "Select",
+            "operator()",
+            "Select::operator()(value)",
+            "thread int&",
+            id="temporary-functor",
+        ),
+        pytest.param(
+            """
+            struct State {
+                int value;
+                thread int& element() { return value; }
+                int read() { return element(); }
+            };
+            int inspect(thread State& state) { return state.read(); }
+            """,
+            "State",
+            "element",
+            "State::element()",
+            "thread int&",
+            id="internal-concrete",
+        ),
+        pytest.param(
+            """
+            struct State {
+                int value;
+                thread int& operator()(int index) { return value; }
+                int read() { return operator()(0); }
+            };
+            int inspect(thread State& state) { return state.read(); }
+            """,
+            "State",
+            "operator()",
+            "State::operator()(0)",
+            "thread int&",
+            id="internal-operator",
+        ),
+        pytest.param(
+            """
+            struct Index { int value; };
+            struct State {
+                int values[2];
+                template <int I>
+                thread int& element() { return values[I]; }
+                int read() {
+                    Index index;
+                    return element<index.value>();
+                }
+            };
+            int inspect(thread State& state) { return state.read(); }
+            """,
+            "State",
+            "element",
+            "State::element<index.value>()",
+            "thread int&",
+            id="runtime-value-template",
+        ),
+        pytest.param(
+            """
+            struct View {
+                device int* values;
+                View(device int* values_) : values(values_) {}
+                device int& element(uint index) { return values[index]; }
+            };
+            kernel void assign(device int* values [[buffer(0)]]) {
+                View view(values);
+                view.element(0) = 1;
+            }
+            """,
+            "View",
+            "element",
+            "View::element(0)",
+            "device int&",
+            id="promoted-receiver",
+        ),
+    ],
+)
+def test_preprocessor_called_reference_returning_paths_fail_closed(
+    code, struct_name, method_name, signature, return_type
+):
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.project_diagnostic_code == "project.translate.metal-struct-method"
+    assert error.missing_capabilities == ("struct.reference-return",)
+    assert error.struct_name == struct_name
+    assert error.method_name == method_name
+    assert error.requested_signature == signature
+    assert error.reason == "reference-return-identity-unsupported"
+    assert error.return_type == return_type
+    assert error.suggested_action
+    assert "preserving the returned lvalue identity" in str(error)
+    assert error.source_location["length"] > 0
+
+
+@pytest.mark.parametrize(
+    ("method", "expected_helper"),
+    [
+        pytest.param(
+            "thread int& element() { return value; }",
+            "thread int& State__element(thread State& self)",
+            id="concrete",
+        ),
+        pytest.param(
+            "template <typename T> "
+            "thread T& element(thread T& value) { return value; }",
+            None,
+            id="template",
+        ),
+    ],
+)
+def test_preprocessor_uncalled_reference_returning_declarations_are_accepted(
+    method, expected_helper
+):
+    code = f"struct State {{ int value; {method} }};\nState state;\n"
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "struct State { int value;" in output
+    assert "State state;" in output
+    if expected_helper is None:
+        assert "State__element" not in output
+    else:
+        assert expected_helper in output
 
 
 def test_preprocessor_lowers_static_method_without_self_parameter():
@@ -2334,7 +2592,7 @@ def test_preprocessor_lowers_static_method_without_self_parameter():
     output = MetalPreprocessor().preprocess(code)
     assert "float Maths__twice(float a)" in output
     # No `self` is introduced for a static method.
-    assert "Maths self" not in output
+    assert re.search(r"\bMaths\s*(?:&\s*)?self\b", output) is None
     assert "Maths__twice(out[i])" in output
     assert "Maths::twice" not in output
 
@@ -2355,7 +2613,7 @@ def test_preprocessor_lowers_call_operator_functor():
     }
     """
     output = MetalPreprocessor().preprocess(code)
-    assert "float Sum__operator_call(Sum self, float a, float b)" in output
+    assert "float Sum__operator_call(thread Sum& self, float a, float b)" in output
     assert "Sum__operator_call(op, in[i], out[i])" in output
 
 
@@ -2377,7 +2635,10 @@ def test_preprocessor_lowers_materialized_template_functor():
     """
     output = MetalPreprocessor().preprocess(code)
     assert "struct Sum_float {" in output
-    assert "float Sum_float__operator_call(Sum_float self, float a, float b)" in output
+    assert (
+        "float Sum_float__operator_call(thread Sum_float& self, float a, float b)"
+        in output
+    )
     assert "Sum_float__operator_call(op, in[i], out[i])" in output
     # The primary template is left untouched (template methods are out of scope).
     assert "template <typename U>" in output
@@ -2408,7 +2669,7 @@ def test_preprocessor_substitutes_materialized_static_bool_and_int_constants():
 
     output = MetalPreprocessor().preprocess(code)
 
-    assert "int Reduction_1__apply(Reduction_1 self, int value)" in output
+    assert "int Reduction_1__apply(thread const Reduction_1& self, int value)" in output
     assert "return (false) ? value + (2) + (base_count + 1) : value;" in output
     assert "Reduction_1__apply(reduction, out[0])" in output
 
@@ -2511,7 +2772,7 @@ def test_preprocessor_materialized_template_struct_constructor_is_left_in_place(
     # promotion path: `in` leaves the struct and is threaded through `read` as a
     # promoted pointer parameter, while the scalar `self` still carries `n`.
     assert (
-        "ReadWriter_float_float__read(ReadWriter_float_float self, "
+        "ReadWriter_float_float__read(thread const ReadWriter_float_float& self, "
         "const device float* crosstl_ptr_in)" in output
     )
     # The constructor is NOT lowered to a macro-typed free function; it is left
@@ -2591,7 +2852,7 @@ def test_pointer_member_promotion_threads_pointers_through_methods():
     # through `self`.
     output = MetalPreprocessor().preprocess(_POINTER_MEMBER_STRUCT)
     assert (
-        "float Rw__load(Rw self, threadgroup float* crosstl_ptr_buf, "
+        "float Rw__load(thread const Rw& self, threadgroup float* crosstl_ptr_buf, "
         "const device float* crosstl_ptr_in, device float* crosstl_ptr_out, "
         "int i)" in output
     )
@@ -2600,7 +2861,7 @@ def test_pointer_member_promotion_threads_pointers_through_methods():
         "+ float(self.total);" in output
     )
     assert (
-        "void Rw__store(Rw self, threadgroup float* crosstl_ptr_buf, "
+        "void Rw__store(thread const Rw& self, threadgroup float* crosstl_ptr_buf, "
         "const device float* crosstl_ptr_in, device float* crosstl_ptr_out, "
         "int i)" in output
     )
@@ -2629,7 +2890,7 @@ def test_pointer_member_promotion_resolves_owner_alias_casts():
     output = MetalPreprocessor().preprocess(code)
 
     assert (
-        "device float* Writer__data(Writer self, "
+        "device float* Writer__data(thread const Writer& self, "
         "device float* crosstl_ptr_output)" in output
     )
     assert "return (device float*)crosstl_ptr_output;" in output
@@ -2647,6 +2908,40 @@ def test_pointer_member_promotion_rewrites_construction_and_calls():
     # The lowered source parses cleanly.
     ast = MetalParser(MetalLexer(output).tokenize()).parse()
     assert ast is not None
+
+
+def test_pointer_member_promotion_rewrites_internal_method_calls():
+    code = """
+    struct Writer {
+      device float* output;
+      int offset;
+
+      Writer(device float* output_, int offset_)
+          : output(output_), offset(offset_) {}
+
+      void store(int index, float value) {
+        output[offset + index] = value;
+      }
+
+      void store_pair(int index, float value) {
+        store(index, value);
+        this->store(index + 1, value);
+      }
+    };
+
+    kernel void k(device float* output [[buffer(0)]]) {
+      Writer writer(output, 2);
+      writer.store_pair(0, 1.0f);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    forwarded_call = "Writer__store(self, crosstl_ptr_output, index, value);"
+    assert output.count(forwarded_call) == 1
+    assert "Writer__store(self, crosstl_ptr_output, index + 1, value);" in output
+    assert "Writer__store_pair(writer, output, 0, 1.0f);" in output
+    assert MetalParser(MetalLexer(output).tokenize()).parse() is not None
 
 
 def test_pointer_member_promotion_via_using_alias():
@@ -2702,17 +2997,17 @@ def test_pointer_member_promotion_bails_when_pointer_not_from_ctor_parameter():
     """
     output = MetalPreprocessor().preprocess(code)
     # `out` stays a member (not promoted) because it is not a constructor
-    # parameter; the method keeps the plain `self`-passing signature and accesses
-    # the pointer through `self.out`.
+    # parameter; the method keeps the ordinary reference-receiver signature and
+    # accesses the pointer through `self.out`.
     assert "device float* out;" in output
-    assert "Holder__read(Holder self, int i)" in output
+    assert "Holder__read(thread const Holder& self, int i)" in output
     assert "self.out[i]" in output
     assert "crosstl_ptr_out" not in output
 
 
 def test_pointer_member_promotion_leaves_pointerless_structs_unchanged():
     # A struct without pointer members is untouched by the promotion path: it is
-    # lowered exactly as before (self passed by value, no promoted parameters).
+    # lowered with no promoted parameters.
     code = """
     using namespace metal;
 
@@ -2728,7 +3023,7 @@ def test_pointer_member_promotion_leaves_pointerless_structs_unchanged():
     }
     """
     output = MetalPreprocessor().preprocess(code)
-    assert "int Adder__apply(Adder self, int x)" in output
+    assert "int Adder__apply(thread const Adder& self, int x)" in output
     assert "Adder__apply(a, 3)" in output
     assert "crosstl_ptr" not in output
 
@@ -2815,7 +3110,7 @@ def test_preprocessor_lowering_leaves_method_free_source_untouched():
 def test_preprocessor_instantiates_template_method_from_buffer_element_arg():
     # A CALLED template member method is instantiated from a buffer-element
     # argument (`in[i]` whose element type is float) and lowered to a concrete
-    # free function `S__m__float(S self, float val)`; the call is rewritten.
+    # free function `S__m__float(thread S& self, float val)`; the call is rewritten.
     code = """
     struct Sum { template <typename T> T reduce(T val){ return val + val; } };
 
@@ -2828,7 +3123,7 @@ def test_preprocessor_instantiates_template_method_from_buffer_element_arg():
     }
     """
     output = MetalPreprocessor().preprocess(code)
-    assert "float Sum__reduce__float(Sum self, float val)" in output
+    assert "float Sum__reduce__float(thread Sum& self, float val)" in output
     assert "Sum__reduce__float(op, in[i])" in output
     # The struct is data-only; the template method is gone from it.
     assert "template" not in output.split("struct Sum")[1].split("}")[0]
@@ -3098,10 +3393,10 @@ def test_preprocessor_resolves_local_constants_in_template_member_arguments():
     assert "Loader__load__Int_4(loader, Int<Padding>{})" in output
     assert "Loader__load__Int_16(loader, Int<Padding>{})" in output
     assert "Loader__explicit_width__8(loader)" in output
-    assert "int Loader__load__Int_8(Loader self, Int<8> stride)" in output
-    assert "int Loader__load__Int_4(Loader self, Int<4> stride)" in output
-    assert "int Loader__load__Int_16(Loader self, Int<16> stride)" in output
-    assert "int Loader__explicit_width__8(Loader self)" in output
+    assert "int Loader__load__Int_8(thread Loader& self, Int<8> stride)" in output
+    assert "int Loader__load__Int_4(thread Loader& self, Int<4> stride)" in output
+    assert "int Loader__load__Int_16(thread Loader& self, Int<16> stride)" in output
+    assert "int Loader__explicit_width__8(thread Loader& self)" in output
 
 
 def test_preprocessor_does_not_borrow_template_member_constant_from_sibling():
@@ -3167,7 +3462,7 @@ def test_preprocessor_resolves_local_constant_in_instantiated_member_body():
 
     assert "Loader__run__int(loader, output[0])" in output
     assert "Loader__consume__Int_4(self, Int<Padding>{})" in output
-    assert "int Loader__consume__Int_4(Loader self, Int<4> stride)" in output
+    assert "int Loader__consume__Int_4(thread Loader& self, Int<4> stride)" in output
     assert "Loader__consume__Int_Padding" not in output
 
 
@@ -3192,8 +3487,9 @@ def test_preprocessor_selects_template_member_overload_by_arity():
     output = MetalPreprocessor().preprocess(code)
 
     assert "Tile__load__float(tile, input, stride)" in output
-    assert "void Tile__load__float(Tile self, const device float* src, int stride)" in (
-        output
+    assert (
+        "void Tile__load__float(thread Tile& self, "
+        "const device float* src, int stride)" in output
     )
     assert "StrideX" not in output
     assert "StrideY" not in output
@@ -3232,7 +3528,7 @@ def test_preprocessor_selects_reference_template_overload_with_pointer_field():
         in output
     )
     assert (
-        "void Tile__apply__Transform(Tile self, const device half* src, "
+        "void Tile__apply__Transform(thread Tile& self, const device half* src, "
         "const int ldc, const int fdc, thread const Transform& op)" in output
     )
     assert "tile.apply(" not in output
@@ -3556,13 +3852,13 @@ def test_preprocessor_lowers_value_only_nested_template_member_call():
       using dtype_frag_t = T;
 
       template <typename T>
-      static void load(thread dtype_frag_t<T>& dst, const device T* src) {
-        dst = src[0];
+      static T load(dtype_frag_t<T> value, const device T* src) {
+        return value + src[0];
       }
 
       template <typename T>
-      static void store(const thread dtype_frag_t<T>& src, device T* dst) {
-        dst[0] = src;
+      static void store(dtype_frag_t<T> value, device T* dst) {
+        dst[0] = value;
       }
     };
 
@@ -3576,19 +3872,19 @@ def test_preprocessor_lowers_value_only_nested_template_member_call():
       frag_type values[4];
 
       template <int I>
-      thread frag_type& frag_at() {
+      frag_type frag_at() {
         return values[I];
       }
 
       template <int I>
-      const thread frag_type& frag_at() const {
+      frag_type frag_at() const {
         return values[I];
       }
 
       template <typename U>
       void load(const device U* src) {
         Index index;
-        FragType::load(frag_at<index.value>(), src);
+        values[0] = FragType::load(frag_at<index.value>(), src);
       }
 
       template <typename U>
@@ -3611,8 +3907,13 @@ def test_preprocessor_lowers_value_only_nested_template_member_call():
 
     assert "Tile__frag_at__runtime_values__int(self, index.value)" in output
     assert "Tile__frag_at__runtime_values__int__const(self, index.value)" in output
-    assert "thread half& dst" in output
-    assert "const thread half& src" in output
+    assert "half Tile__frag_at__runtime_values__int(thread Tile& self, int I)" in output
+    assert (
+        "half Tile__frag_at__runtime_values__int__const"
+        "(thread const Tile& self, int I)" in output
+    )
+    assert "half Frag__load__half(half value, const device half* src)" in output
+    assert "void Frag__store__half(half value, device half* dst)" in output
     assert "Frag::dtype_frag_t<half>" not in output
     assert "Frag__load__half(" in output
     assert "Frag__store__half(" in output
@@ -3651,7 +3952,7 @@ def test_preprocessor_instantiates_template_method_from_typed_local_arg():
     }
     """
     output = MetalPreprocessor().preprocess(code)
-    assert "half Sum__reduce__half(Sum self, half val)" in output
+    assert "half Sum__reduce__half(thread Sum& self, half val)" in output
     assert "Sum__reduce__half(op, v)" in output
 
 
@@ -3725,8 +4026,8 @@ def test_preprocessor_instantiates_template_operator_call_from_typed_local():
     output = MetalPreprocessor().preprocess(code)
     assert "struct Op_float {" in output
     assert (
-        "float Op_float__operator_call__float(Op_float self, float a, float b)"
-        in output
+        "float Op_float__operator_call__float(thread Op_float& self, "
+        "float a, float b)" in output
     )
     assert "Op_float__operator_call__float(op, acc, x)" in output
     # No dangling functor call survives.
@@ -3754,7 +4055,7 @@ def test_preprocessor_instantiates_template_operator_call_from_temporary_functor
     output = MetalPreprocessor().preprocess(code)
 
     assert (
-        "float Select__operator_call__float(Select self, bool condition, "
+        "float Select__operator_call__float(thread Select& self, bool condition, "
         "float x, float y)"
     ) in output
     assert (
@@ -3835,8 +4136,8 @@ def test_preprocessor_lowers_temporary_functor_call_with_arithmetic_and_functor_
     assert "could not be inferred" not in output
     # The complex `Sqrt`/`Log` operator() overloads were emitted as free
     # functions (the argument resolved to the concrete complex overload).
-    assert "complex64_t Log__operator_call(Log self, complex64_t x)" in output
-    assert "complex64_t Sqrt__operator_call(Sqrt self, complex64_t x)" in output
+    assert "complex64_t Log__operator_call(thread Log& self, complex64_t x)" in output
+    assert "complex64_t Sqrt__operator_call(thread Sqrt& self, complex64_t x)" in output
 
 
 def test_preprocessor_skips_calls_inside_residual_template_declarations():
@@ -3928,11 +4229,11 @@ def test_preprocessor_rewrites_temporary_functor_calls_inside_template_operator(
     assert "Remainder__operator_call__complex64_t__temporary(x, y)" in output
     assert (
         "complex64_t FloorDivide__operator_call__complex64_t"
-        "(FloorDivide self, complex64_t x, complex64_t y)"
+        "(thread FloorDivide& self, complex64_t x, complex64_t y)"
     ) in output
     assert (
         "complex64_t Remainder__operator_call__complex64_t"
-        "(Remainder self, complex64_t x, complex64_t y)"
+        "(thread Remainder& self, complex64_t x, complex64_t y)"
     ) in output
     assert "FloorDivide{}(" not in output
     assert "Remainder{}(" not in output
@@ -4032,7 +4333,7 @@ def test_preprocessor_instantiates_static_template_method_from_literal():
     """
     output = MetalPreprocessor().preprocess(code)
     assert "float Maths__twice__float(float a)" in output
-    assert "Maths self" not in output
+    assert re.search(r"\bMaths\s*(?:&\s*)?self\b", output) is None
     assert "Maths__twice__float(2.5f)" in output
     assert "Maths::twice" not in output
 
@@ -5033,7 +5334,7 @@ def test_preprocessor_template_method_instantiations_are_deduplicated():
     }
     """
     output = MetalPreprocessor().preprocess(code)
-    assert output.count("float Sum__reduce__float(Sum self, float val)") == 1
+    assert output.count("float Sum__reduce__float(thread Sum& self, float val)") == 1
     assert "Sum__reduce__float(op, in[i])" in output
     assert "Sum__reduce__float(op, a)" in output
 
@@ -5095,7 +5396,7 @@ def test_preprocessor_template_method_consistent_multi_param_instantiates():
     }
     """
     output = MetalPreprocessor().preprocess(code)
-    assert "float D__pick__float(D self, float a, float b)" in output
+    assert "float D__pick__float(thread D& self, float a, float b)" in output
     assert "D__pick__float(d, o[i], o[i])" in output
 
 
@@ -5159,7 +5460,9 @@ def test_preprocessor_template_method_full_pipeline_to_hlsl():
         "}\n"
     )
     pre = MetalPreprocessor().preprocess(code)
-    assert "float Sum_float__simd_reduce__float(Sum_float self, float val)" in pre
+    assert (
+        "float Sum_float__simd_reduce__float(thread Sum_float& self, float val)" in pre
+    )
     tokens = MetalLexer(pre).tokenize()
     ast = MetalParser(tokens).parse()
     crossgl = MetalToCrossGLConverter().generate(ast)
@@ -5191,7 +5494,7 @@ def test_preprocessor_instantiates_template_method_from_local_array_subscript():
     }
     """
     output = MetalPreprocessor().preprocess(code)
-    assert "float Sum__reduce__float(Sum self, float val)" in output
+    assert "float Sum__reduce__float(thread Sum& self, float val)" in output
     assert "Sum__reduce__float(op, totals[i])" in output
 
 
@@ -5209,7 +5512,7 @@ def test_preprocessor_instantiates_template_method_from_threadgroup_array_subscr
     }
     """
     output = MetalPreprocessor().preprocess(code)
-    assert "half Sum__reduce__half(Sum self, half val)" in output
+    assert "half Sum__reduce__half(thread Sum& self, half val)" in output
     assert "Sum__reduce__half(op, shared_vals[i])" in output
 
 
@@ -5229,7 +5532,7 @@ def test_preprocessor_instantiates_template_method_from_member_access_subscript(
     }
     """
     output = MetalPreprocessor().preprocess(code)
-    assert "float Sum__reduce__float(Sum self, float val)" in output
+    assert "float Sum__reduce__float(thread Sum& self, float val)" in output
     assert "Sum__reduce__float(op, init.data[i])" in output
 
 
@@ -5251,7 +5554,7 @@ def test_preprocessor_instantiates_template_method_from_stdint_array_subscript()
     }
     """
     output = MetalPreprocessor().preprocess(code)
-    assert "int32_t Sum__reduce__int32_t(Sum self, int32_t val)" in output
+    assert "int32_t Sum__reduce__int32_t(thread Sum& self, int32_t val)" in output
     assert "Sum__reduce__int32_t(op, values[i])" in output
 
 
@@ -5337,7 +5640,7 @@ def test_preprocessor_instantiates_template_method_from_member_access():
     }
     """
     output = MetalPreprocessor().preprocess(code)
-    assert "float Sum__reduce__float(Sum self, float val)" in output
+    assert "float Sum__reduce__float(thread Sum& self, float val)" in output
     assert "Sum__reduce__float(op, p.x)" in output
 
 
@@ -5355,7 +5658,7 @@ def test_preprocessor_instantiates_template_method_from_pointer_member_access():
     }
     """
     output = MetalPreprocessor().preprocess(code)
-    assert "int Sum__reduce__int(Sum self, int val)" in output
+    assert "int Sum__reduce__int(thread Sum& self, int val)" in output
     assert "Sum__reduce__int(op, params->stride)" in output
 
 
@@ -5376,8 +5679,8 @@ def test_preprocessor_instantiates_template_method_from_union_local():
     """
     output = MetalPreprocessor().preprocess(code)
     assert (
-        "bool4_or_uint Sum__reduce__bool4_or_uint(Sum self, bool4_or_uint val)"
-        in output
+        "bool4_or_uint Sum__reduce__bool4_or_uint(thread Sum& self, "
+        "bool4_or_uint val)" in output
     )
     assert "Sum__reduce__bool4_or_uint(op, update)" in output
 
@@ -5397,7 +5700,7 @@ def test_preprocessor_instantiates_template_method_from_struct_local():
     }
     """
     output = MetalPreprocessor().preprocess(code)
-    assert "Pair Sum__reduce__Pair(Sum self, Pair val)" in output
+    assert "Pair Sum__reduce__Pair(thread Sum& self, Pair val)" in output
     assert "Sum__reduce__Pair(op, p)" in output
 
 
@@ -5419,7 +5722,7 @@ def test_preprocessor_instantiates_template_method_from_function_pointer_paramet
     }
     """
     output = MetalPreprocessor().preprocess(code)
-    assert "float Sum__reduce__float(Sum self, float val)" in output
+    assert "float Sum__reduce__float(thread Sum& self, float val)" in output
     assert "Sum__reduce__float(op, p[i])" in output
 
 
@@ -5442,7 +5745,7 @@ def test_preprocessor_instantiates_template_method_from_function_scalar_paramete
     }
     """
     output = MetalPreprocessor().preprocess(code)
-    assert "half Sum__reduce__half(Sum self, half val)" in output
+    assert "half Sum__reduce__half(thread Sum& self, half val)" in output
     assert "Sum__reduce__half(op, v)" in output
 
 
@@ -5474,8 +5777,8 @@ def test_preprocessor_template_member_lowering_is_deterministic_across_kernels()
     """
     output = MetalPreprocessor().preprocess(code)
     # Each kernel binds `op` to its OWN struct type and element type.
-    assert "float SumF__reduce__float(SumF self, float val)" in output
-    assert "int MaxF__reduce__int(MaxF self, int val)" in output
+    assert "float SumF__reduce__float(thread SumF& self, float val)" in output
+    assert "int MaxF__reduce__int(thread MaxF& self, int val)" in output
     assert "SumF__reduce__float(op, totals[i])" in output
     assert "MaxF__reduce__int(op, totals[i])" in output
     # No cross-kernel mis-binding.
@@ -5824,7 +6127,10 @@ def test_sfinae_simd_reduce_selects_less8_overload_and_lowers_chain(elem, impl_s
     # `simd_reduce_impl` — the second SFINAE layer is resolved too, so the whole
     # chain lowers to free functions with no dangling call.
     output = MetalPreprocessor().preprocess(_sfinae_reduce_source(elem))
-    reduce_fn = f"{elem} Red_{elem}__simd_reduce__{elem}(Red_{elem} self, {elem} val)"
+    reduce_fn = (
+        f"{elem} Red_{elem}__simd_reduce__{elem}"
+        f"(thread Red_{elem}& self, {elem} val)"
+    )
     assert reduce_fn in output
     assert f"Red_{elem}__simd_reduce_impl__{impl_suffix}" in output
     assert f"Red_{elem}__simd_reduce__{elem}(op, total)" in output
@@ -5848,7 +6154,10 @@ def test_sfinae_simd_reduce_selects_eq8_overload(elem):
     # with `operator()` (lowered to the concrete call operator) and never calls
     # `simd_reduce_impl`.
     output = MetalPreprocessor().preprocess(_sfinae_reduce_source(elem))
-    reduce_fn = f"{elem} Red_{elem}__simd_reduce__{elem}(Red_{elem} self, {elem} val)"
+    reduce_fn = (
+        f"{elem} Red_{elem}__simd_reduce__{elem}"
+        f"(thread Red_{elem}& self, {elem} val)"
+    )
     assert reduce_fn in output
     assert f"Red_{elem}__simd_reduce__{elem}(op, total)" in output
     # The ==8 body's `operator()(...)` is lowered to the concrete free function.
@@ -5904,7 +6213,7 @@ def test_sfinae_simd_reduce_full_pipeline_to_hlsl():
     from crosstl.translator.parser import Parser as CrossGLParser
 
     pre = MetalPreprocessor().preprocess(_sfinae_reduce_source("float"))
-    assert "Red_float__simd_reduce__float(Red_float self, float val)" in pre
+    assert "Red_float__simd_reduce__float(thread Red_float& self, float val)" in pre
     tokens = MetalLexer(pre).tokenize()
     ast = MetalParser(tokens).parse()
     crossgl = MetalToCrossGLConverter().generate(ast)
