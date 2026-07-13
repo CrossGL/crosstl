@@ -347,7 +347,6 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert pointer_reinterpretation["status"] == "partial"
     assert pointer_reinterpretation["targets"] == list(module.FULL_CORPUS_TARGETS)
     assert pointer_reinterpretation["next_kernel_blocked_by"] == [
-        "https://github.com/CrossGL/crosstl/issues/1573",
         "https://github.com/CrossGL/crosstl/issues/1574",
         "https://github.com/CrossGL/crosstl/issues/1544",
     ]
@@ -362,7 +361,6 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         "https://github.com/CrossGL/crosstl/issues/1554"
     ]
     assert callback["next_kernel_blocked_by"] == [
-        "https://github.com/CrossGL/crosstl/issues/1573",
         "https://github.com/CrossGL/crosstl/issues/1574",
     ]
 
@@ -376,7 +374,6 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         "vulkan": "validated-reduced-fixture",
     }
     assert compile_time_loop["next_kernel_blocked_by"] == [
-        "https://github.com/CrossGL/crosstl/issues/1573",
         "https://github.com/CrossGL/crosstl/issues/1574",
     ]
 
@@ -437,14 +434,13 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert template_alias["post_materialization_translation"] == {
         "status": "blocked-by-tracked-issue",
         "diagnostic_code": "project.translate.unsupported-feature",
-        "feature": "untyped empty initializer",
+        "feature": "empty initializer on unresolved dependent static call",
         "first_unsupported_expression": "metal::bool_constant<false>{}",
         "missing_capability": "spirv.empty_initializer_type_inference",
-        "issue": "https://github.com/CrossGL/crosstl/issues/1573",
+        "issue": "https://github.com/CrossGL/crosstl/issues/1574",
         "artifact_status": "failed",
     }
     assert template_alias["next_kernel_blocked_by"] == [
-        "https://github.com/CrossGL/crosstl/issues/1573",
         "https://github.com/CrossGL/crosstl/issues/1574",
     ]
     assert template_alias["semantic_readiness_blocked_by"] == [
@@ -477,7 +473,6 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         "https://github.com/CrossGL/crosstl/issues/1566",
     ]
     assert struct_scoped_cast_alias["next_kernel_blocked_by"] == [
-        "https://github.com/CrossGL/crosstl/issues/1573",
         "https://github.com/CrossGL/crosstl/issues/1574",
     ]
 
@@ -503,6 +498,38 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert function_local_alias["remaining_alias_shapes_blocked_by"] == [
         "https://github.com/CrossGL/crosstl/issues/1567",
     ]
+
+    generic_member_call = expected_gaps["generic_member_call_status"]
+    assert generic_member_call["status"] == "validated-reduced-fixture"
+    assert generic_member_call["sources"] == [
+        "mlx/backend/metal/kernels/fp_quantized.metal",
+        "mlx/backend/metal/kernels/quantized_nax.metal",
+    ]
+    assert generic_member_call["targets"] == list(module.FULL_CORPUS_TARGETS)
+    assert generic_member_call["native_validation"] == {
+        "directx": "validated-with-glslang-hlsl",
+        "opengl": "validated-with-glslang",
+        "vulkan": "validated-with-spirv-tools",
+    }
+    assert generic_member_call["pinned_vulkan_replay"] == {
+        "mlx/backend/metal/kernels/fp_quantized.metal": {
+            "status": "blocked-by-tracked-issue",
+            "diagnostic_code": "project.translate.metal-struct-method",
+            "missing_capability": "struct.template-method",
+            "first_unresolved_expression": "frag_at(i, j)",
+            "issue": "https://github.com/CrossGL/crosstl/issues/1557",
+            "artifact_status": "failed",
+        },
+        "mlx/backend/metal/kernels/quantized_nax.metal": {
+            "status": "blocked-by-tracked-issue",
+            "diagnostic_code": "project.translate.unsupported-feature",
+            "missing_capability": "spirv.empty_initializer_type_inference",
+            "first_unresolved_call": "mma",
+            "issue": "https://github.com/CrossGL/crosstl/issues/1574",
+            "artifact_status": "failed",
+        },
+    }
+    assert generic_member_call["runtime_integration_included"] is False
 
     gemv = expected_gaps["vulkan_gemv_toolchain_status"]
     assert gemv == {
@@ -680,6 +707,43 @@ def test_nested_return_inlining_issue_is_resolved_for_mlx_gemv():
     assert issue in module.RESOLVED_FRONTIER_ISSUES
     assert issue not in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
     assert issue not in module.FULL_CORPUS_TRACKED_ISSUES
+
+
+def test_generic_member_call_issue_is_resolved_for_pinned_quantized_kernels():
+    module = _load_harness()
+    issue = "https://github.com/CrossGL/crosstl/issues/1555"
+    expected_gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert issue in module.RESOLVED_FRONTIER_ISSUES
+    assert issue not in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
+    assert issue not in module.FULL_CORPUS_TRACKED_ISSUES
+    assert issue in expected_gaps["resolved_issues"]
+    assert issue not in expected_gaps["tracked_issues"]
+    assert issue not in expected_gaps["full_corpus_scout"]["translation_blocked_by"]
+
+
+def test_empty_initializer_issue_is_resolved_for_pinned_quantized_nax():
+    module = _load_harness()
+    issue = "https://github.com/CrossGL/crosstl/issues/1573"
+    next_issue = "https://github.com/CrossGL/crosstl/issues/1574"
+    expected_gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert issue in module.RESOLVED_FRONTIER_ISSUES
+    assert issue not in module.FULL_CORPUS_TRACKED_ISSUES
+    assert issue in expected_gaps["resolved_issues"]
+    assert issue not in expected_gaps["tracked_issues"]
+    replay = expected_gaps["generic_member_call_status"]["pinned_vulkan_replay"]
+    assert replay["mlx/backend/metal/kernels/quantized_nax.metal"]["issue"] == (
+        next_issue
+    )
 
 
 def test_scaled_dot_product_attention_tracks_opengl_function_constant_blocker():

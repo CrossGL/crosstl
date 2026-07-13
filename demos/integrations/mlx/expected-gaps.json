@@ -57,7 +57,6 @@
       "https://github.com/CrossGL/crosstl/issues/1546"
     ],
     "next_kernel_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1573",
       "https://github.com/CrossGL/crosstl/issues/1574",
       "https://github.com/CrossGL/crosstl/issues/1544"
     ]
@@ -80,7 +79,6 @@
       "https://github.com/CrossGL/crosstl/issues/1554"
     ],
     "next_kernel_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1573",
       "https://github.com/CrossGL/crosstl/issues/1574"
     ]
   },
@@ -105,7 +103,6 @@
       ]
     },
     "next_kernel_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1573",
       "https://github.com/CrossGL/crosstl/issues/1574"
     ],
     "semantic_readiness_blocked_by": [
@@ -155,14 +152,13 @@
     "post_materialization_translation": {
       "status": "blocked-by-tracked-issue",
       "diagnostic_code": "project.translate.unsupported-feature",
-      "feature": "untyped empty initializer",
+      "feature": "empty initializer on unresolved dependent static call",
       "first_unsupported_expression": "metal::bool_constant<false>{}",
       "missing_capability": "spirv.empty_initializer_type_inference",
-      "issue": "https://github.com/CrossGL/crosstl/issues/1573",
+      "issue": "https://github.com/CrossGL/crosstl/issues/1574",
       "artifact_status": "failed"
     },
     "next_kernel_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1573",
       "https://github.com/CrossGL/crosstl/issues/1574"
     ],
     "semantic_readiness_blocked_by": [
@@ -202,7 +198,6 @@
       "https://github.com/CrossGL/crosstl/issues/1566"
     ],
     "next_kernel_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1573",
       "https://github.com/CrossGL/crosstl/issues/1574"
     ]
   },
@@ -237,6 +232,45 @@
     "semantic_readiness_blocked_by": [
       "https://github.com/CrossGL/crosstl/issues/1538"
     ]
+  },
+  "generic_member_call_status": {
+    "status": "validated-reduced-fixture",
+    "sources": [
+      "mlx/backend/metal/kernels/fp_quantized.metal",
+      "mlx/backend/metal/kernels/quantized_nax.metal"
+    ],
+    "targets": [
+      "directx",
+      "opengl",
+      "vulkan"
+    ],
+    "supported_contract": "member and pointer-member calls with ordered type and value arguments, including nested generic types and parenthesized integral values",
+    "materialization_contract": "concrete template methods on direct or nested struct-field receivers are emitted as dependency-ordered target helpers",
+    "unresolved_call_contract": "unmaterialized generic member calls fail with receiver, method, target, and argument details",
+    "native_validation": {
+      "directx": "validated-with-glslang-hlsl",
+      "opengl": "validated-with-glslang",
+      "vulkan": "validated-with-spirv-tools"
+    },
+    "pinned_vulkan_replay": {
+      "mlx/backend/metal/kernels/fp_quantized.metal": {
+        "status": "blocked-by-tracked-issue",
+        "diagnostic_code": "project.translate.metal-struct-method",
+        "missing_capability": "struct.template-method",
+        "first_unresolved_expression": "frag_at(i, j)",
+        "issue": "https://github.com/CrossGL/crosstl/issues/1557",
+        "artifact_status": "failed"
+      },
+      "mlx/backend/metal/kernels/quantized_nax.metal": {
+        "status": "blocked-by-tracked-issue",
+        "diagnostic_code": "project.translate.unsupported-feature",
+        "missing_capability": "spirv.empty_initializer_type_inference",
+        "first_unresolved_call": "mma",
+        "issue": "https://github.com/CrossGL/crosstl/issues/1574",
+        "artifact_status": "failed"
+      }
+    },
+    "runtime_integration_included": false
   },
   "directx_toolchain_status": {
     "status": "passing",
@@ -361,7 +395,6 @@
       "https://github.com/CrossGL/crosstl/issues/1544",
       "https://github.com/CrossGL/crosstl/issues/1546",
       "https://github.com/CrossGL/crosstl/issues/1554",
-      "https://github.com/CrossGL/crosstl/issues/1555",
       "https://github.com/CrossGL/crosstl/issues/1559",
       "https://github.com/CrossGL/crosstl/issues/1562",
       "https://github.com/CrossGL/crosstl/issues/1566",
@@ -419,7 +452,6 @@
     "https://github.com/CrossGL/crosstl/issues/1544",
     "https://github.com/CrossGL/crosstl/issues/1546",
     "https://github.com/CrossGL/crosstl/issues/1554",
-    "https://github.com/CrossGL/crosstl/issues/1555",
     "https://github.com/CrossGL/crosstl/issues/1557",
     "https://github.com/CrossGL/crosstl/issues/1558",
     "https://github.com/CrossGL/crosstl/issues/1559",
@@ -429,10 +461,11 @@
     "https://github.com/CrossGL/crosstl/issues/1567",
     "https://github.com/CrossGL/crosstl/issues/1568",
     "https://github.com/CrossGL/crosstl/issues/1569",
-    "https://github.com/CrossGL/crosstl/issues/1573",
     "https://github.com/CrossGL/crosstl/issues/1574"
   ],
   "resolved_issues": [
+    "https://github.com/CrossGL/crosstl/issues/1573",
+    "https://github.com/CrossGL/crosstl/issues/1555",
     "https://github.com/CrossGL/crosstl/issues/1561",
     "https://github.com/CrossGL/crosstl/issues/1551",
     "https://github.com/CrossGL/crosstl/issues/1498",

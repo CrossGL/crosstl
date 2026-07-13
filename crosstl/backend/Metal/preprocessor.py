@@ -4475,6 +4475,25 @@ class MetalPreprocessor(HLSLPreprocessor):
             field_variable_types = variable_types
         if field_structs_by_name is None:
             field_structs_by_name = structs_by_name
+        nested_member_rewrite = self._try_rewrite_nested_member_call_at(
+            code,
+            ident_start,
+            ident,
+            ident_end,
+            methods_by_struct,
+            template_methods_by_struct,
+            operator_call_structs,
+            variable_types,
+            structs_by_name,
+            buffer_element_types,
+            local_variable_types,
+            instantiated_template_functions,
+            field_variable_types,
+            field_structs_by_name,
+            local_integral_constants,
+        )
+        if nested_member_rewrite is not None:
+            return nested_member_rewrite
         # Member access on a previous object (`a.var.m(...)`) is not a struct
         # variable we tracked; skip when the identifier is a member access.
         if self._is_member_identifier_context(code, ident_start):
@@ -4686,9 +4705,151 @@ class MetalPreprocessor(HLSLPreprocessor):
                     rewrite_structs_by_name=structs_by_name,
                     local_integral_constants=local_integral_constants,
                 )
-            return None
 
         return None
+
+    def _try_rewrite_nested_member_call_at(
+        self,
+        code: str,
+        ident_start: int,
+        ident: str,
+        ident_end: int,
+        methods_by_struct: Dict[str, Dict[str, _MetalStructMethod]],
+        template_methods_by_struct: Dict[str, Dict[str, List[_MetalStructMethod]]],
+        operator_call_structs: Set[str],
+        variable_types: Dict[str, List[Tuple[int, str]]],
+        structs_by_name: Dict[str, _MetalStructDefinition],
+        buffer_element_types: Dict[str, List[Tuple[int, str]]],
+        local_variable_types: Dict[str, List[Tuple[int, str]]],
+        instantiated_template_functions: Dict[str, str],
+        field_variable_types: Dict[str, List[Tuple[int, str]]],
+        field_structs_by_name: Dict[str, _MetalStructDefinition],
+        local_integral_constants: Optional[
+            Dict[str, List[_MetalIntegralConstantBinding]]
+        ],
+    ) -> Optional[Tuple[int, str]]:
+        """Rewrite a method call whose receiver is a nested struct field."""
+        if self._is_member_identifier_context(code, ident_start):
+            return None
+
+        declared_type = self._resolve_declared_type_at(
+            field_variable_types, ident, ident_start
+        ) or self._resolve_declared_type_at(variable_types, ident, ident_start)
+        receiver_info = self._nested_member_receiver_info(
+            declared_type, field_structs_by_name
+        )
+        if receiver_info is None:
+            return None
+        current_struct_name, required_access = receiver_info
+
+        receiver_end = ident_end
+        cursor = ident_end
+        while True:
+            while cursor < len(code) and code[cursor].isspace():
+                cursor += 1
+            if code.startswith("->", cursor):
+                access = "->"
+                cursor += 2
+            elif cursor < len(code) and code[cursor] == ".":
+                access = "."
+                cursor += 1
+            else:
+                return None
+            if access != required_access:
+                return None
+
+            while cursor < len(code) and code[cursor].isspace():
+                cursor += 1
+            member, consumed = self._read_identifier(code, cursor)
+            if not member:
+                return None
+            cursor += consumed
+            explicit_template_marker = member == "template"
+            if explicit_template_marker:
+                while cursor < len(code) and code[cursor].isspace():
+                    cursor += 1
+                member, consumed = self._read_identifier(code, cursor)
+                if not member:
+                    return None
+                cursor += consumed
+
+            call_suffix = self._member_template_call_suffix(code, cursor)
+            if call_suffix is not None:
+                arg_open, explicit_template_arguments = call_suffix
+                receiver = code[ident_start:receiver_end].strip()
+                if access == "->":
+                    receiver = f"{receiver}[0]"
+                method = methods_by_struct.get(current_struct_name, {}).get(member)
+                if method is not None and explicit_template_arguments is None:
+                    return self._build_instance_call_rewrite(
+                        code, receiver, method, arg_open
+                    )
+                template_overloads = template_methods_by_struct.get(
+                    current_struct_name, {}
+                ).get(member)
+                if template_overloads:
+                    struct = structs_by_name.get(current_struct_name)
+                    if struct is None:
+                        return None
+                    return self._instantiate_template_member_call(
+                        code,
+                        struct,
+                        template_overloads,
+                        receiver=receiver,
+                        arg_open=arg_open,
+                        buffer_element_types=buffer_element_types,
+                        local_variable_types=local_variable_types,
+                        instantiated_template_functions=instantiated_template_functions,
+                        structs_by_name=field_structs_by_name,
+                        variable_types=field_variable_types,
+                        template_methods_by_struct=template_methods_by_struct,
+                        methods_by_struct=methods_by_struct,
+                        operator_call_structs=operator_call_structs,
+                        rewrite_structs_by_name=structs_by_name,
+                        explicit_template_arguments=explicit_template_arguments,
+                        local_integral_constants=local_integral_constants,
+                    )
+                return None
+            if explicit_template_marker:
+                return None
+
+            current_struct = field_structs_by_name.get(current_struct_name)
+            if current_struct is None:
+                return None
+            field_type = current_struct.data_member_types.get(member)
+            receiver_info = self._nested_member_receiver_info(
+                field_type, field_structs_by_name
+            )
+            if receiver_info is None:
+                return None
+            current_struct_name, required_access = receiver_info
+            receiver_end = cursor
+
+    def _nested_member_receiver_info(
+        self,
+        type_text: Optional[str],
+        structs_by_name: Dict[str, _MetalStructDefinition],
+    ) -> Optional[Tuple[str, str]]:
+        """Return a concrete receiver struct and its required access operator."""
+        normalized = self._normalize_inferred_type(type_text or "")
+        if not normalized:
+            return None
+        indirection_match = re.search(r"(?P<indirection>[*&]+)\s*$", normalized)
+        indirection = (
+            indirection_match.group("indirection")
+            if indirection_match is not None
+            else ""
+        )
+        if indirection not in {"", "*", "&"}:
+            return None
+        struct_name = (
+            normalized[: indirection_match.start()].strip()
+            if indirection_match is not None
+            else normalized
+        )
+        if struct_name not in structs_by_name:
+            return None
+        return struct_name, "->" if indirection == "*" else "."
 
     def _concrete_method_matches_call(
         self,
@@ -6476,12 +6637,17 @@ class MetalPreprocessor(HLSLPreprocessor):
         has_external_qualified_call = bool(
             qualified_identifiers & (rewrite_struct_names | set(struct_type_aliases))
         )
+        has_external_member_call = bool(
+            re.search(r"\bself\s*(?:\.|->)", instantiated_body)
+            and (methods_by_struct or template_methods_by_struct)
+        )
         # A method whose body has no sibling-template or external struct call
         # candidate is returned unchanged.
         if (
             not sibling_overloads
             and not operator_call_structs
             and not has_external_qualified_call
+            and not has_external_member_call
         ):
             return instantiated_body
         # Build flat name->type views for the body scope from the concrete
@@ -6511,6 +6677,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                     element_type, struct, rewrite_structs_by_name
                 )
                 local_view.setdefault(name, element_type)
+        local_view["self"] = struct.name
         positioned_buffer_types = {
             name: [(0, value)] for name, value in buffer_view.items()
         }
@@ -7018,8 +7185,6 @@ class MetalPreprocessor(HLSLPreprocessor):
                 )
                 if argument.strip()
             ]
-            if not explicit_template_arguments:
-                return None
             index = angle_end + 1
             while index < len(code) and code[index].isspace():
                 index += 1

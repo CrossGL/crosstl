@@ -74,6 +74,7 @@ from .generic_function_utils import (
     generic_function_value_arguments,
     iter_function_nodes,
     prepare_generic_function_specializations,
+    reject_unresolved_generic_member_call,
 )
 from .image_access_contracts import (
     collect_function_image_access_requirements,
@@ -28180,6 +28181,7 @@ class VulkanSPIRVCodeGen:
             return None
 
         elif isinstance(expr, FunctionCallNode):
+            reject_unresolved_generic_member_call(expr, "Vulkan SPIR-V")
             ray_query_call = self.ray_query_call_from_function_call(expr)
             if ray_query_call is not None:
                 return self.process_ray_query_operation(ray_query_call)
