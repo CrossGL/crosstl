@@ -637,6 +637,10 @@
         {
           "name": "Khronos SPIR-V headers",
           "url": "https://github.com/KhronosGroup/SPIRV-Headers"
+        },
+        {
+          "name": "SPV_KHR_cooperative_matrix specification",
+          "url": "https://github.khronos.org/SPIRV-Registry/extensions/KHR/SPV_KHR_cooperative_matrix.html"
         }
       ],
       "id": "vulkan",
@@ -646,7 +650,7 @@
         "path": "crosstl/backend/SPIRV"
       },
       "signals": {
-        "unsupported_marker_count": 100,
+        "unsupported_marker_count": 104,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
@@ -655,6 +659,10 @@
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
             "text": "project_diagnostic_code = \"project.translate.unsupported-feature\""
+          },
+          {
+            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
+            "text": "raise UnsupportedSPIRVFeatureError("
           },
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
@@ -723,23 +731,21 @@
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
             "text": "raise self.unsupported_call_initializer_binding_error("
-          },
-          {
-            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "def unsupported_lambda_default_value("
           }
         ]
       },
       "source_kind": "native",
       "target_aliases": [],
       "target_extension": ".spvasm",
-      "target_profiles": [],
+      "target_profiles": [
+        "vulkan-khr-cooperative-matrix"
+      ],
       "tests": {
         "paths": [
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 1144
+        "test_count": 1150
       },
       "translator_codegen": {
         "exists": true,
