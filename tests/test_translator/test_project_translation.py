@@ -31021,6 +31021,84 @@ def test_translate_project_reports_directx_unresolved_source_type_diagnostic(
     assert not (repo / artifact["path"]).exists()
 
 
+@pytest.mark.parametrize(
+    ("target", "diagnostic_code", "missing_capability"),
+    [
+        (
+            "directx",
+            "project.translate.directx-atomic-fence-unsupported",
+            "directx.atomic-thread-fence-contract-lowering",
+        ),
+        (
+            "opengl",
+            "project.translate.opengl-atomic-fence-unsupported",
+            "opengl.atomic-thread-fence-contract-lowering",
+        ),
+        (
+            "vulkan",
+            "project.translate.vulkan-atomic-fence-unsupported",
+            "spirv.atomic-thread-fence-contract-lowering",
+        ),
+    ],
+)
+def test_translate_project_reports_unrepresentable_atomic_fence_contract(
+    tmp_path,
+    target,
+    diagnostic_code,
+    missing_capability,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "atomic_fence.cgl").write_text(
+        textwrap.dedent("""
+            shader AtomicFenceContract {
+                compute {
+                    void main() {
+                        atomicThreadFence(
+                            mem_device,
+                            memory_order_seq_cst,
+                            thread_scope_system
+                        );
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=[target],
+        output_dir="out",
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {diagnostic_code: 1}
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        missing_capability: 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == diagnostic_code
+    assert diagnostic["target"] == target
+    assert diagnostic["sourceBackend"] == "cgl"
+    assert diagnostic["location"]["file"] == "atomic_fence.cgl"
+    assert diagnostic["missingCapabilities"] == [missing_capability]
+    for contract_operand in (
+        "mem_device",
+        "memory_order_seq_cst",
+        "thread_scope_system",
+    ):
+        assert contract_operand in diagnostic["message"]
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["target"] == target
+    assert diagnostic_code not in artifact["error"]
+    assert "thread_scope_system" in artifact["error"]
+    assert not (repo / artifact["path"]).exists()
+
+
 def test_translate_project_rewrites_directx_nontype_startswith_failure(
     tmp_path,
     monkeypatch,
