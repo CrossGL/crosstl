@@ -112,6 +112,166 @@ def _runtime_arange_artifact_manifest(module, target, output_name="out"):
     }
 
 
+def _write_metal_roundtrip_report(module, mlx_root, work_dir, report_path):
+    source_path = mlx_root / module.MLX_METAL_ROUNDTRIP_SOURCE
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_text(
+        "#include <metal_atomic>\n[[kernel]] void fence_wait() {}\n",
+        encoding="utf-8",
+    )
+    generated_path = (
+        work_dir / "out-metal-roundtrip" / "metal" / module.MLX_METAL_ROUNDTRIP_SOURCE
+    )
+    generated_path.parent.mkdir(parents=True, exist_ok=True)
+    generated_path.write_text(
+        "\n".join(
+            (
+                "#include <metal_stdlib>",
+                "using namespace metal;",
+                "kernel void input_coherent(device uint* input [[buffer(0)]], ",
+                "    uint index [[thread_position_in_grid]]) {}",
+                "kernel void fence_update(device uint* out [[buffer(0)]]) {}",
+                "kernel void fence_wait(device uint* out [[buffer(0)]]) {}",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    artifact_path = generated_path.relative_to(mlx_root).as_posix()
+    artifact = {
+        "source": module.MLX_METAL_ROUNDTRIP_SOURCE,
+        "sourceBackend": "metal",
+        "target": "metal",
+        "path": artifact_path,
+        "status": "translated",
+        "provenance": {
+            "pipeline": "single-file-translate",
+            "intermediate": "crossgl",
+        },
+        "sourceHash": {
+            "algorithm": "sha256",
+            "value": module._sha256(source_path),
+        },
+        "generatedHash": {
+            "algorithm": "sha256",
+            "value": module._sha256(generated_path),
+        },
+        "sourceSizeBytes": source_path.stat().st_size,
+        "generatedSizeBytes": generated_path.stat().st_size,
+    }
+    report_path.write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "unitCount": 1,
+                    "artifactCount": 1,
+                    "translatedCount": 1,
+                    "failedCount": 0,
+                    "diagnosticCounts": {"error": 0, "note": 0, "warning": 0},
+                },
+                "artifacts": [artifact],
+                "validation": {
+                    "summary": {
+                        "artifactCount": 1,
+                        "okCount": 1,
+                        "failedCount": 0,
+                    },
+                    "artifacts": [
+                        {
+                            "path": artifact_path,
+                            "status": "ok",
+                            "sourceHashStatus": "ok",
+                            "generatedHashStatus": "ok",
+                            "sourceSizeStatus": "ok",
+                            "generatedSizeStatus": "ok",
+                            "sourceMapStatus": "ok",
+                            "sourceRemapStatus": "ok",
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_metal_roundtrip_validates_generated_artifact_natively(tmp_path, monkeypatch):
+    module = _load_harness()
+    mlx_root = tmp_path / "mlx"
+    work_dir = mlx_root / ".crosstl-mlx-porting"
+    config_dir = work_dir / "configs"
+    report_dir = work_dir / "reports"
+    log_dir = work_dir / "logs"
+    for directory in (config_dir, report_dir, log_dir):
+        directory.mkdir(parents=True)
+    commands = []
+
+    def fake_run_command(name, command, *, log_dir, check=True, timeout_seconds=None):
+        commands.append((name, list(command)))
+        if name == "translate-metal-roundtrip":
+            _write_metal_roundtrip_report(
+                module,
+                mlx_root,
+                work_dir,
+                report_dir / "metal-roundtrip.json",
+            )
+        elif name == "validate-metal-roundtrip-native":
+            output_path = Path(command[command.index("-o") + 1])
+            output_path.write_bytes(b"AIR")
+        stdout_path = log_dir / f"{name}.stdout"
+        stderr_path = log_dir / f"{name}.stderr"
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text("", encoding="utf-8")
+        return module.CommandResult(name, list(command), 0, stdout_path, stderr_path)
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+    monkeypatch.setattr(
+        module,
+        "_probe_native_metal_toolchain",
+        lambda *args: {
+            "status": "available",
+            "platform": "darwin",
+            "xcrun": "/usr/bin/xcrun",
+            "reason": None,
+        },
+    )
+
+    result = module._check_metal_roundtrip(
+        mlx_root,
+        work_dir,
+        config_dir,
+        report_dir,
+        log_dir,
+        "python",
+        require_metal_toolchain=True,
+    )
+
+    config = (config_dir / "metal-roundtrip.toml").read_text(encoding="utf-8")
+    assert f'include = ["{module.MLX_METAL_ROUNDTRIP_SOURCE}"]' in config
+    assert 'targets = ["metal"]' in config
+    assert result["roundTripStages"] == ["metal", "crossgl", "metal"]
+    assert result["artifactValidationStatus"] == "validated"
+    assert result["runtimeParityClaimed"] is False
+    assert result["nativeMetalValidation"]["status"] == "validated"
+    assert result["nativeMetalValidation"]["required"] is True
+    assert result["nativeMetalValidation"]["artifactCompiled"] is True
+    assert [name for name, _command in commands] == [
+        "translate-metal-roundtrip",
+        "validate-metal-roundtrip-native",
+    ]
+    assert "--validate" in commands[0][1]
+    native_command = commands[1][1]
+    assert native_command[:5] == [
+        "/usr/bin/xcrun",
+        "-sdk",
+        "macosx",
+        "metal",
+        "-c",
+    ]
+    assert Path(native_command[5]) == mlx_root / result["artifact"]
+    assert (mlx_root / result["nativeMetalValidation"]["compiledArtifact"]).is_file()
+
+
 def test_runtime_readiness_uses_runtime_artifact_manifest_metadata(
     tmp_path, monkeypatch
 ):
@@ -2437,6 +2597,30 @@ def test_reduced_frontier_requires_directx_toolchain_runs_per_artifact(
         assert source in toolchain_config
 
 
+def test_directx_toolchain_frontier_includes_rope_and_gap_ledger_matches():
+    module = _load_harness()
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert module.MLX_ROPE_SOURCE in module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
+    assert module.MLX_ROPE_SOURCE in module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
+    directx_status = gaps["directx_toolchain_status"]
+    assert module.MLX_ROPE_SOURCE in directx_status["dxc_validated_sources"]
+    assert module.MLX_ROPE_SOURCE not in directx_status["directx_toolchain_gaps"]
+
+
+def test_binary_resource_relocation_issue_is_full_corpus_only():
+    module = _load_harness()
+    issue = "https://github.com/CrossGL/crosstl/issues/1659"
+
+    assert issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
+    assert issue not in module.FRONTIER_VALIDATION_TRACKED_ISSUES
+    assert issue not in module.RUNTIME_READINESS_TRACKED_ISSUES
+
+
 def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatch):
     module = _load_harness()
     mlx_root = tmp_path / "mlx"
@@ -2451,6 +2635,11 @@ def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatc
         module,
         "_scan_metal_kernels",
         lambda *args: {"name": "metal-kernel-scan", "status": "passed"},
+    )
+    monkeypatch.setattr(
+        module,
+        "_check_metal_roundtrip",
+        lambda *args, **kwargs: {"name": "metal-roundtrip", "status": "passed"},
     )
     monkeypatch.setattr(
         module,
@@ -2488,9 +2677,11 @@ def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatc
     assert [check["name"] for check in result["checks"]] == [
         "mlx-checkout",
         "metal-kernel-scan",
+        "metal-roundtrip",
         "full-corpus",
     ]
     assert result["scope"]["mode"] == module.FULL_CORPUS_MODE
+    assert result["scope"]["metalRoundTripIncluded"] is True
     assert result["scope"]["fullCorpusExpectedUnitCount"] == 40
     assert result["scope"]["fullCorpusExpectedArtifactCount"] == 120
 
@@ -2509,6 +2700,11 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
         module,
         "_scan_metal_kernels",
         lambda *args: {"name": "metal-kernel-scan", "status": "passed"},
+    )
+    monkeypatch.setattr(
+        module,
+        "_check_metal_roundtrip",
+        lambda *args, **kwargs: {"name": "metal-roundtrip", "status": "passed"},
     )
     monkeypatch.setattr(
         module,
@@ -2580,6 +2776,7 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
     assert [check["name"] for check in result["checks"]] == [
         "mlx-checkout",
         "metal-kernel-scan",
+        "metal-roundtrip",
         "directx-vulkan-frontier",
         "arange-opengl",
         "opengl-frontier",

@@ -2124,6 +2124,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert 'cron: "31 4 * * 1"' in mlx_porting
     assert "github.event_name != 'schedule'" in mlx_porting
     assert "--mode reduced-frontier" in mlx_porting
+    assert "--require-metal-toolchain" in mlx_porting
     assert "--require-directx-toolchain" in mlx_porting
     assert "--require-opengl-gemv-toolchain" in mlx_porting
     assert "--require-vulkan-gemv-toolchain" in mlx_porting

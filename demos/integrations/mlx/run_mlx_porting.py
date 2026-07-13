@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import shutil
@@ -34,6 +35,8 @@ MLX_ARANGE_SOURCE = "mlx/backend/metal/kernels/arange.metal"
 MLX_ARG_REDUCE_SOURCE = "mlx/backend/metal/kernels/arg_reduce.metal"
 MLX_FENCE_SOURCE = "mlx/backend/metal/kernels/fence.metal"
 MLX_GEMV_SOURCE = "mlx/backend/metal/kernels/gemv.metal"
+MLX_METAL_ROUNDTRIP_SOURCE = MLX_FENCE_SOURCE
+MLX_ROPE_SOURCE = "mlx/backend/metal/kernels/rope.metal"
 MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE = (
     "mlx/backend/metal/kernels/scaled_dot_product_attention.metal"
 )
@@ -51,7 +54,7 @@ MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
     "mlx/backend/metal/kernels/logsumexp.metal",
     "mlx/backend/metal/kernels/random.metal",
     "mlx/backend/metal/kernels/rms_norm.metal",
-    "mlx/backend/metal/kernels/rope.metal",
+    MLX_ROPE_SOURCE,
     MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
     "mlx/backend/metal/kernels/softmax.metal",
     "mlx/backend/metal/kernels/ternary.metal",
@@ -74,7 +77,8 @@ MLX_REDUCED_FRONTIER_SOURCES = tuple(
 MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES = (
     "mlx/backend/metal/kernels/arange.metal",
     MLX_ARG_REDUCE_SOURCE,
-    "mlx/backend/metal/kernels/fence.metal",
+    MLX_FENCE_SOURCE,
+    MLX_ROPE_SOURCE,
 )
 EXPECTED_METAL_KERNEL_COUNT = 40
 FULL_CORPUS_TARGETS = ("directx", "opengl", "vulkan")
@@ -101,6 +105,7 @@ FULL_CORPUS_TRANSLATION_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1554",
     "https://github.com/CrossGL/crosstl/issues/1559",
     "https://github.com/CrossGL/crosstl/issues/1562",
+    "https://github.com/CrossGL/crosstl/issues/1659",
 )
 RUNTIME_READINESS_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1388",
@@ -393,6 +398,136 @@ def _run_command(
     return result
 
 
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _probe_native_metal_toolchain(
+    mlx_root: Path,
+    work_dir: Path,
+    log_dir: Path,
+) -> dict[str, Any]:
+    if sys.platform != "darwin":
+        return {
+            "status": "not-applicable",
+            "platform": sys.platform,
+            "reason": "native Metal validation requires macOS",
+        }
+
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        return {
+            "status": "toolchain-unavailable",
+            "platform": sys.platform,
+            "reason": "xcrun is not installed",
+        }
+
+    native_dir = work_dir / "native-metal"
+    native_dir.mkdir(parents=True, exist_ok=True)
+    source_path = native_dir / "toolchain-probe.metal"
+    output_path = native_dir / "toolchain-probe.air"
+    output_path.unlink(missing_ok=True)
+    source_path.write_text(
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "kernel void crosstl_mlx_probe() {}\n",
+        encoding="utf-8",
+    )
+    result = _run_command(
+        "probe-native-metal-toolchain",
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-c",
+            str(source_path),
+            "-o",
+            str(output_path),
+        ],
+        log_dir=log_dir,
+        check=False,
+    )
+    available = result.returncode == 0 and output_path.is_file()
+    return {
+        "status": "available" if available else "toolchain-unavailable",
+        "platform": sys.platform,
+        "xcrun": xcrun,
+        "probeSource": _relpath(source_path, mlx_root),
+        "probeArtifact": (
+            _relpath(output_path, mlx_root) if output_path.is_file() else None
+        ),
+        "returncode": result.returncode,
+        "stdout": _relpath(result.stdout_path, mlx_root),
+        "stderr": _relpath(result.stderr_path, mlx_root),
+        "reason": (
+            None
+            if available
+            else "a minimal Metal compilation did not produce an AIR artifact"
+        ),
+    }
+
+
+def _validate_native_metal_artifact(
+    *,
+    mlx_root: Path,
+    work_dir: Path,
+    log_dir: Path,
+    artifact_path: Path,
+    required: bool,
+) -> dict[str, Any]:
+    probe = _probe_native_metal_toolchain(mlx_root, work_dir, log_dir)
+    if probe["status"] != "available":
+        _require(
+            not required,
+            "native Metal validation was required, but a usable macOS Metal "
+            f"toolchain was not available ({probe['reason']})",
+        )
+        return {
+            **probe,
+            "required": required,
+            "artifactCompiled": False,
+        }
+
+    output_path = work_dir / "native-metal" / "mlx-fence-roundtrip.air"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.unlink(missing_ok=True)
+    result = _run_command(
+        "validate-metal-roundtrip-native",
+        [
+            str(probe["xcrun"]),
+            "-sdk",
+            "macosx",
+            "metal",
+            "-c",
+            str(artifact_path),
+            "-o",
+            str(output_path),
+        ],
+        log_dir=log_dir,
+        check=False,
+    )
+    _require(
+        result.returncode == 0,
+        "native Metal validation failed for the generated MLX fence round-trip "
+        f"artifact; see {result.stdout_path} and {result.stderr_path}",
+    )
+    _require(
+        output_path.is_file() and output_path.stat().st_size > 0,
+        "native Metal validation did not produce the expected AIR artifact",
+    )
+    return {
+        **probe,
+        "status": "validated",
+        "required": required,
+        "artifactCompiled": True,
+        "sourceArtifact": _relpath(artifact_path, mlx_root),
+        "compiledArtifact": _relpath(output_path, mlx_root),
+        "compileStdout": _relpath(result.stdout_path, mlx_root),
+        "compileStderr": _relpath(result.stderr_path, mlx_root),
+    }
+
+
 def _write_project_config(
     path: Path,
     *,
@@ -521,6 +656,193 @@ def _scan_metal_kernels(
         "unitCount": summary.get("unitCount"),
         "includeDependencyCount": summary.get("includeDependencyCount"),
         "targets": ["directx", "opengl", "vulkan"],
+    }
+
+
+def _check_metal_roundtrip(
+    mlx_root: Path,
+    work_dir: Path,
+    config_dir: Path,
+    report_dir: Path,
+    log_dir: Path,
+    python: str,
+    *,
+    require_metal_toolchain: bool,
+) -> dict[str, Any]:
+    config_path = config_dir / "metal-roundtrip.toml"
+    report_path = report_dir / "metal-roundtrip.json"
+    output_dir = work_dir / "out-metal-roundtrip"
+    _write_project_config(
+        config_path,
+        include=MLX_METAL_ROUNDTRIP_SOURCE,
+        targets=("metal",),
+        output_dir=_relpath(output_dir, mlx_root),
+    )
+    _run_command(
+        "translate-metal-roundtrip",
+        [
+            python,
+            "-m",
+            "crosstl",
+            "translate-project",
+            str(mlx_root),
+            "--config",
+            str(config_path),
+            "--report",
+            str(report_path),
+            "--validate",
+        ],
+        log_dir=log_dir,
+    )
+
+    payload = _load_json(report_path)
+    summary = payload.get("summary", {})
+    _require(isinstance(summary, dict), "Metal round-trip summary must be an object")
+    _require(
+        summary.get("unitCount") == 1,
+        "Metal round-trip translation must scan exactly one pinned MLX source",
+    )
+    _require(
+        summary.get("artifactCount") == 1
+        and summary.get("translatedCount") == 1
+        and summary.get("failedCount") == 0,
+        "Metal round-trip translation must emit one clean artifact",
+    )
+    diagnostic_counts = summary.get("diagnosticCounts", {})
+    _require(
+        isinstance(diagnostic_counts, dict) and diagnostic_counts.get("error", 0) == 0,
+        "Metal round-trip translation reported errors",
+    )
+
+    artifacts = payload.get("artifacts", [])
+    _require(isinstance(artifacts, list), "Metal round-trip artifacts must be a list")
+    artifact = next(
+        (
+            item
+            for item in artifacts
+            if isinstance(item, dict)
+            and item.get("source") == MLX_METAL_ROUNDTRIP_SOURCE
+            and item.get("sourceBackend") == "metal"
+            and item.get("target") == "metal"
+        ),
+        None,
+    )
+    _require(isinstance(artifact, dict), "Metal round-trip artifact is missing")
+    _require(
+        artifact.get("status") == "translated",
+        "Metal round-trip artifact was not translated",
+    )
+    expected_path = output_dir / "metal" / MLX_METAL_ROUNDTRIP_SOURCE
+    expected_report_path = _relpath(expected_path, mlx_root)
+    _require(
+        artifact.get("path") == expected_report_path,
+        "Metal round-trip artifact path does not match the bounded project output",
+    )
+    _require(
+        artifact.get("provenance")
+        == {
+            "pipeline": "single-file-translate",
+            "intermediate": "crossgl",
+        },
+        "Metal round-trip artifact did not traverse the CrossGL project pipeline",
+    )
+    _require(
+        expected_path.is_file() and expected_path.stat().st_size > 0,
+        f"Metal round-trip artifact is missing or empty: {expected_report_path}",
+    )
+
+    source_path = mlx_root / MLX_METAL_ROUNDTRIP_SOURCE
+    source_hash = artifact.get("sourceHash", {})
+    generated_hash = artifact.get("generatedHash", {})
+    _require(
+        source_hash.get("algorithm") == "sha256"
+        and source_hash.get("value") == _sha256(source_path),
+        "Metal round-trip source hash does not match the pinned MLX source",
+    )
+    _require(
+        generated_hash.get("algorithm") == "sha256"
+        and generated_hash.get("value") == _sha256(expected_path),
+        "Metal round-trip generated hash does not match the emitted artifact",
+    )
+    _require(
+        artifact.get("sourceSizeBytes") == source_path.stat().st_size
+        and artifact.get("generatedSizeBytes") == expected_path.stat().st_size,
+        "Metal round-trip source or generated byte-size metadata is inconsistent",
+    )
+    _require(
+        source_hash.get("value") != generated_hash.get("value"),
+        "Metal round-trip unexpectedly copied the source without translation",
+    )
+
+    generated = expected_path.read_text(encoding="utf-8")
+    for fragment in (
+        "#include <metal_stdlib>",
+        "kernel void input_coherent",
+        "kernel void fence_update",
+        "kernel void fence_wait",
+        "[[buffer(0)]]",
+        "[[thread_position_in_grid]]",
+    ):
+        _require(
+            fragment in generated,
+            f"Metal round-trip artifact is missing expected generated form: {fragment}",
+        )
+
+    validation = payload.get("validation", {})
+    _require(isinstance(validation, dict), "Metal round-trip validation is missing")
+    validation_summary = validation.get("summary", {})
+    _require(
+        isinstance(validation_summary, dict)
+        and validation_summary.get("artifactCount") == 1
+        and validation_summary.get("okCount") == 1
+        and validation_summary.get("failedCount") == 0,
+        "Metal round-trip generated-artifact validation was not clean",
+    )
+    validation_artifact = next(
+        (
+            item
+            for item in validation.get("artifacts", [])
+            if isinstance(item, dict) and item.get("path") == expected_report_path
+        ),
+        None,
+    )
+    _require(
+        isinstance(validation_artifact, dict)
+        and validation_artifact.get("status") == "ok"
+        and validation_artifact.get("sourceHashStatus") == "ok"
+        and validation_artifact.get("generatedHashStatus") == "ok"
+        and validation_artifact.get("sourceSizeStatus") == "ok"
+        and validation_artifact.get("generatedSizeStatus") == "ok"
+        and validation_artifact.get("sourceMapStatus") == "ok"
+        and validation_artifact.get("sourceRemapStatus") == "ok",
+        "Metal round-trip artifact metadata did not pass project validation",
+    )
+
+    native_validation = _validate_native_metal_artifact(
+        mlx_root=mlx_root,
+        work_dir=work_dir,
+        log_dir=log_dir,
+        artifact_path=expected_path,
+        required=require_metal_toolchain,
+    )
+    return {
+        "name": "metal-roundtrip",
+        "status": "passed",
+        "report": _relpath(report_path, mlx_root),
+        "source": MLX_METAL_ROUNDTRIP_SOURCE,
+        "target": "metal",
+        "roundTripStages": ["metal", "crossgl", "metal"],
+        "unitCount": 1,
+        "artifactCount": 1,
+        "artifact": expected_report_path,
+        "generatedHash": generated_hash,
+        "generatedSizeBytes": artifact.get("generatedSizeBytes"),
+        "diagnosticCounts": diagnostic_counts,
+        "artifactValidationStatus": "validated",
+        "nativeMetalValidation": native_validation,
+        "shaderArtifactsOnly": True,
+        "runtimeIntegrationIncluded": False,
+        "runtimeParityClaimed": False,
     }
 
 
@@ -2654,6 +2976,7 @@ def _translate_full_corpus(
 
 def run_checks(args: argparse.Namespace) -> dict[str, Any]:
     mlx_root = Path(args.mlx_root).resolve()
+    require_metal_toolchain = bool(getattr(args, "require_metal_toolchain", False))
     require_opengl_frontier_toolchain = bool(
         getattr(args, "require_opengl_frontier_toolchain", False)
     )
@@ -2695,6 +3018,17 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             args.python,
         ),
     ]
+    checks.append(
+        _check_metal_roundtrip(
+            mlx_root,
+            work_dir,
+            config_dir,
+            report_dir,
+            log_dir,
+            args.python,
+            require_metal_toolchain=require_metal_toolchain,
+        )
+    )
     if args.mode == REDUCED_FRONTIER_MODE:
         checks.append(
             _translate_directx_vulkan_frontier(
@@ -2781,6 +3115,9 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
         "scope": {
             "mode": args.mode,
             "sourceRoot": MLX_METAL_KERNEL_ROOT,
+            "metalRoundTripSource": MLX_METAL_ROUNDTRIP_SOURCE,
+            "metalRoundTripIncluded": True,
+            "metalToolchainRequired": require_metal_toolchain,
             "frontierSources": list(MLX_REDUCED_FRONTIER_SOURCES),
             "cleanFrontierSources": list(MLX_CLEAN_REDUCED_FRONTIER_SOURCES),
             "blockedFrontierSources": [],
@@ -2829,6 +3166,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--python",
         default=sys.executable,
         help="Python executable used to invoke `python -m crosstl`.",
+    )
+    parser.add_argument(
+        "--require-metal-toolchain",
+        action="store_true",
+        help=(
+            "Fail unless the generated Metal round-trip artifact compiles "
+            "natively with the macOS Metal compiler."
+        ),
     )
     parser.add_argument(
         "--require-directx-toolchain",

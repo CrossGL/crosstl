@@ -11,6 +11,9 @@ The current harness verifies:
 
 - discovery of the MLX Metal kernel project surface under
   `mlx/backend/metal/kernels`;
+- Metal-to-CrossGL-to-Metal translation of pinned `fence.metal`, including
+  project artifact hashes, sizes, source maps, provenance, and native Metal
+  compilation on macOS CI;
 - DirectX and Vulkan artifact generation for the 12-source clean reduced
   frontier: `arange.metal`, `arg_reduce.metal`, `binary_two.metal`, `fence.metal`,
   `layer_norm.metal`, `logsumexp.metal`, `random.metal`, `rms_norm.metal`,
@@ -21,10 +24,10 @@ The current harness verifies:
   and both OpenGL-derived and native SPIR-V validation run in the required Linux
   toolchain gate;
 - DirectX HLSL smoke checks with DXC on Windows CI for the verified subset
-  (`arange.metal`, `arg_reduce.metal`, `fence.metal`). The gate compiles every
-  discovered entry, including the unsuffixed `CSMain`. Other clean frontier
-  kernels translate to DirectX but are excluded for structural and semantic gaps
-  recorded in `expected-gaps.json`;
+  (`arange.metal`, `arg_reduce.metal`, `fence.metal`, and `rope.metal`). The gate
+  compiles every discovered entry, including the unsuffixed `CSMain`. Other
+  clean frontier kernels translate to DirectX but are excluded for structural
+  and semantic gaps recorded in `expected-gaps.json`;
 - Vulkan assembly and validator checks when SPIR-V tools are available. The
   reduced frontier remains semantically blocked on the Metal atomic-fence order
   and scope contract tracked in
@@ -98,7 +101,10 @@ buffers. The native execution report attempts the built-in native adapter
 contract separately. On Windows CI the generated DirectX frontier HLSL must
 compile with DXC. Current DirectX smoke artifacts lower MLX bfloat16 aliases to
 HLSL `half` for toolchain coverage; exact bfloat16 storage and conversion
-semantics remain tracked separately. On Linux CI the generated Vulkan
+semantics remain tracked separately. On macOS CI, the generated `fence.metal`
+round-trip artifact must compile to AIR with the native Metal compiler. This
+checks generated source and project metadata, not numerical runtime parity. On
+Linux CI the generated Vulkan
 `arangeuint32`, `arangeint32`, and `arangefloat32` entry points must assemble,
 load, dispatch, read back, and compare on the Vulkan compute runtime; other
 unavailable native backends remain structured blockers until backend runtime
@@ -156,12 +162,23 @@ python demos/integrations/mlx/run_mlx_porting.py \
   --require-directx-toolchain
 ```
 
+On macOS, require native compilation of the generated Metal round-trip artifact:
+
+```bash
+python demos/integrations/mlx/run_mlx_porting.py \
+  --mlx-root /tmp/mlx \
+  --require-metal-toolchain
+```
+
 The harness writes reports, generated artifacts, and command logs under
 `<mlx-root>/.crosstl-mlx-porting`.
 
 ## Current Translator Gaps
 
 CrossGL/crosstl#1376 tracks bounded runtime for the scheduled full-corpus scout.
+CrossGL/crosstl#1659 tracks quadratic DirectX resource-register relocation for
+large aggregate artifacts; a high-budget `binary.metal` DirectX translation
+reaches that allocator after template materialization.
 CrossGL/crosstl#1312 tracks native toolchain validation coverage for project
 CI. CrossGL/crosstl#1388 tracks the artifact execution metadata required by
 runtime-test manifests and native adapters. OpenGL type aliases are inlined

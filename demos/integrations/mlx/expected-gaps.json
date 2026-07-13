@@ -16,6 +16,20 @@
       "https://github.com/CrossGL/crosstl/issues/1537"
     ]
   },
+  "metal_roundtrip_status": {
+    "status": "validated",
+    "source": "mlx/backend/metal/kernels/fence.metal",
+    "stages": [
+      "metal",
+      "crossgl",
+      "metal"
+    ],
+    "artifact_count": 1,
+    "project_metadata_validation": "required",
+    "native_validation": "required-on-macos-ci",
+    "runtime_integration_included": false,
+    "runtime_parity_claimed": false
+  },
   "arg_reduce_status": {
     "status": "translated",
     "source": "mlx/backend/metal/kernels/arg_reduce.metal",
@@ -278,7 +292,8 @@
     "dxc_validated_sources": [
       "mlx/backend/metal/kernels/arange.metal",
       "mlx/backend/metal/kernels/arg_reduce.metal",
-      "mlx/backend/metal/kernels/fence.metal"
+      "mlx/backend/metal/kernels/fence.metal",
+      "mlx/backend/metal/kernels/rope.metal"
     ],
     "directx_toolchain_gaps": {
       "mlx/backend/metal/kernels/random.metal": "the generated dispatch-info cbuffer still requires reflected runtime binding and dispatch-plan coverage before it enters the DXC/runtime gate (https://github.com/CrossGL/crosstl/issues/1542)",
@@ -286,7 +301,6 @@
       "mlx/backend/metal/kernels/layer_norm.metal": "pointer-style helpers and resource rebasing remain, and partial fixed-array initialization is invalid HLSL (https://github.com/CrossGL/crosstl/issues/1518, https://github.com/CrossGL/crosstl/issues/1519)",
       "mlx/backend/metal/kernels/logsumexp.metal": "storage-resource cursor arithmetic remains invalid HLSL (https://github.com/CrossGL/crosstl/issues/1518)",
       "mlx/backend/metal/kernels/rms_norm.metal": "storage-resource cursor arithmetic remains invalid HLSL (https://github.com/CrossGL/crosstl/issues/1518)",
-      "mlx/backend/metal/kernels/rope.metal": "read-only source buffers are emitted as read-write helper parameters, so StructuredBuffer arguments cannot bind to the generated helpers (https://github.com/CrossGL/crosstl/issues/1518)",
       "mlx/backend/metal/kernels/scaled_dot_product_attention.metal": "storage-resource cursor arithmetic remains, and partial fixed-array initialization is invalid HLSL (https://github.com/CrossGL/crosstl/issues/1518, https://github.com/CrossGL/crosstl/issues/1519)",
       "mlx/backend/metal/kernels/softmax.metal": "storage-resource cursor arithmetic remains invalid HLSL (https://github.com/CrossGL/crosstl/issues/1518)",
       "mlx/backend/metal/kernels/ternary.metal": "static template-trait member WorkPerThread<T>::n is emitted as an undeclared identifier and a conditional operator returns a non-numeric type (https://github.com/CrossGL/crosstl/issues/1491, https://github.com/CrossGL/crosstl/issues/1524)"
@@ -398,7 +412,8 @@
       "https://github.com/CrossGL/crosstl/issues/1559",
       "https://github.com/CrossGL/crosstl/issues/1562",
       "https://github.com/CrossGL/crosstl/issues/1566",
-      "https://github.com/CrossGL/crosstl/issues/1567"
+      "https://github.com/CrossGL/crosstl/issues/1567",
+      "https://github.com/CrossGL/crosstl/issues/1659"
     ],
     "semantic_blocked_by": [
       "https://github.com/CrossGL/crosstl/issues/1491",
@@ -461,7 +476,8 @@
     "https://github.com/CrossGL/crosstl/issues/1567",
     "https://github.com/CrossGL/crosstl/issues/1568",
     "https://github.com/CrossGL/crosstl/issues/1569",
-    "https://github.com/CrossGL/crosstl/issues/1574"
+    "https://github.com/CrossGL/crosstl/issues/1574",
+    "https://github.com/CrossGL/crosstl/issues/1659"
   ],
   "resolved_issues": [
     "https://github.com/CrossGL/crosstl/issues/1573",

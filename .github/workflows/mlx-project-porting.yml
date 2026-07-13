@@ -146,7 +146,8 @@ jobs:
           else
             python demos/integrations/mlx/run_mlx_porting.py \
               --mode reduced-frontier \
-              --mlx-root mlx-upstream
+              --mlx-root mlx-upstream \
+              --require-metal-toolchain
           fi
 
       - name: Upload MLX project-porting reports
