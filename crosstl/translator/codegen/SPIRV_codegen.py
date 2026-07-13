@@ -15007,6 +15007,155 @@ class VulkanSPIRVCodeGen:
             )
         return value, contract
 
+    def cooperative_matrix_element_contract(self, expr):
+        if len(expr.arguments) != 2:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-element-arity",
+                "SPIR-V cooperative-matrix element access requires exactly "
+                f"two operands; got {len(expr.arguments)}",
+                "spirv.cooperative_matrix.element-arity",
+            )
+
+        matrix_expr, _ = expr.arguments
+        matrix_pointer = self.variable_pointer_from_expression(matrix_expr)
+        if matrix_pointer is None or not matrix_pointer.type.storage_class:
+            matrix_value = (
+                matrix_pointer
+                if matrix_pointer is not None
+                else self.process_expression(matrix_expr)
+            )
+            matrix_type = (
+                self.registered_value_type(matrix_value)
+                if matrix_value is not None
+                else None
+            )
+            if self.cooperative_matrix_type_info(matrix_type) is None:
+                raise self.cooperative_matrix_operation_error(
+                    expr,
+                    "cooperative-matrix-element-operand-type",
+                    "SPIR-V cooperative-matrix element access requires an "
+                    "addressable cooperative-matrix operand",
+                    "spirv.cooperative_matrix.element-operand-type",
+                )
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-element-addressability",
+                "SPIR-V cooperative-matrix element access requires Function "
+                "or Private storage; temporary matrix values are not yet "
+                "addressable",
+                "spirv.cooperative_matrix.element-addressability",
+            )
+
+        matrix_type = self.pointer_pointee_type(matrix_pointer)
+        contract = self.cooperative_matrix_type_info(matrix_type)
+        if contract is None:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-element-operand-type",
+                "SPIR-V cooperative-matrix element access requires an "
+                "addressable cooperative-matrix operand",
+                "spirv.cooperative_matrix.element-operand-type",
+            )
+
+        storage_class = matrix_pointer.type.storage_class
+        if storage_class not in {"Function", "Private"}:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-storage-class",
+                "SPIR-V KHR cooperative-matrix element access requires "
+                "Function or Private storage; "
+                f"got {storage_class or 'unknown'}",
+                "spirv.cooperative_matrix.storage-class",
+            )
+
+        return matrix_pointer, contract
+
+    def cooperative_matrix_element_pointer(self, expr):
+        matrix_pointer, contract = self.cooperative_matrix_element_contract(expr)
+        index_expr = expr.arguments[1]
+
+        index = self.process_expression(index_expr)
+        index_type = self.registered_value_type(index) if index is not None else None
+        index_type_name = (
+            self.normalize_primitive_name(index_type.type.base_type)
+            if index_type is not None
+            else None
+        )
+        if index_type_name not in self.INTEGER_TYPE_NAMES:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-element-index-type",
+                "SPIR-V cooperative-matrix element access requires a scalar "
+                f"integer index; got {index_type_name or 'unknown'}",
+                "spirv.cooperative_matrix.element-index-type",
+            )
+
+        # The lane-local upper bound is implementation-defined and must not be
+        # inferred from the logical row and column counts.
+        literal_index = evaluate_literal_int_expression(
+            index_expr, self.active_literal_int_constants()
+        )
+        if literal_index is not None and literal_index < 0:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-element-index-range",
+                "SPIR-V cooperative-matrix lane-local element indices cannot "
+                f"be negative; got {literal_index}",
+                "spirv.cooperative_matrix.element-index-range",
+            )
+
+        component_type = contract["component_type"]
+        storage_class = matrix_pointer.type.storage_class
+        pointer_type = self.register_pointer_type(component_type, storage_class)
+        element_pointer = self.access_chain(matrix_pointer, [index], pointer_type)
+        self.variable_value_types[element_pointer.id] = component_type
+        return element_pointer, component_type
+
+    def process_cooperative_matrix_element(self, expr):
+        element_pointer, component_type = self.cooperative_matrix_element_pointer(expr)
+        return self.load_from_variable(element_pointer, component_type)
+
+    def process_cooperative_matrix_element_assignment(
+        self, expr, value_expr, target_is_precise: bool
+    ):
+        value = self.process_expression_with_precision(value_expr, target_is_precise)
+        if value is None:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-element-value-type",
+                "SPIR-V cooperative-matrix element assignment could not "
+                "evaluate a scalar component value",
+                "spirv.cooperative_matrix.element-value-type",
+            )
+
+        element_pointer, component_type = self.cooperative_matrix_element_pointer(expr)
+        value_type = self.registered_value_type(value) or self.ensure_registered_type(
+            value.type
+        )
+        value_type_name = self.normalize_primitive_name(value_type.type.base_type)
+        scalar_types = {"bool", "float", "double"} | self.INTEGER_TYPE_NAMES
+        if value_type_name not in scalar_types:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-element-value-type",
+                "SPIR-V cooperative-matrix element assignment requires a scalar "
+                f"component value; got {value_type_name}",
+                "spirv.cooperative_matrix.element-value-type",
+            )
+
+        value = self.convert_value_to_type(value, component_type)
+        converted_type = self.registered_value_type(value)
+        if converted_type is None or converted_type.id != component_type.id:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-element-value-type",
+                "SPIR-V cooperative-matrix element assignment could not convert "
+                f"{value_type_name} to {component_type.type.base_type}",
+                "spirv.cooperative_matrix.element-value-type",
+            )
+        self.store_to_variable(element_pointer, value)
+
     def cooperative_matrix_operation_result_type(self, expr):
         result_source = getattr(expr, "result_type", None)
         if result_source is None:
@@ -15032,6 +15181,8 @@ class VulkanSPIRVCodeGen:
         return result_type, contract
 
     def process_cooperative_matrix_operation(self, expr):
+        if expr.operation == "element":
+            return self.process_cooperative_matrix_element(expr)
         if expr.operation != "multiply":
             raise self.cooperative_matrix_operation_error(
                 expr,
@@ -25015,6 +25166,25 @@ class VulkanSPIRVCodeGen:
         target_is_precise = self.assignment_target_is_precise(target)
         operator = getattr(node, "operator", "=")
 
+        if (
+            isinstance(target, CooperativeMatrixOpNode)
+            and target.operation == "element"
+        ):
+            if not self.cooperative_matrix_khr_enabled:
+                self.process_expression(target)
+            if operator != "=":
+                raise self.cooperative_matrix_operation_error(
+                    target,
+                    "cooperative-matrix-element-compound-assignment",
+                    "SPIR-V cooperative-matrix element compound assignment is "
+                    f"not implemented for operator '{operator}'",
+                    "spirv.cooperative_matrix.element-compound-assignment",
+                )
+            self.process_cooperative_matrix_element_assignment(
+                target, node.value, target_is_precise
+            )
+            return
+
         if operator != "=":
             self.process_compound_assignment(node, target, operator, target_is_precise)
             return
@@ -26495,7 +26665,15 @@ class VulkanSPIRVCodeGen:
 
     def process_increment_expression(self, node: UnaryOpNode) -> SpirvId:
         """Process prefix/postfix ++ and -- as load/update/store operations."""
-        variable_id = self.variable_pointer_from_expression(node.operand)
+        if (
+            isinstance(node.operand, CooperativeMatrixOpNode)
+            and node.operand.operation == "element"
+        ):
+            if not self.cooperative_matrix_khr_enabled:
+                self.process_expression(node.operand)
+            variable_id, _ = self.cooperative_matrix_element_pointer(node.operand)
+        else:
+            variable_id = self.variable_pointer_from_expression(node.operand)
         if variable_id is None:
             self.emit("; WARNING: increment target is not assignable")
             int_type = self.register_primitive_type("int")

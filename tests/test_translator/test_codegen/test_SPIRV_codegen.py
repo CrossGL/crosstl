@@ -440,6 +440,21 @@ def assert_cooperative_matrix_multiply_rejected(
     assert "WARNING" not in emitted
 
 
+def assert_cooperative_matrix_element_rejected(
+    profile_source, message, feature, capability
+):
+    generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+
+    with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
+        generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+    assert message in str(exc_info.value)
+    assert exc_info.value.feature == feature
+    assert exc_info.value.missing_capabilities == (capability,)
+    emitted = "\n".join(generator.code_lines)
+    assert "WARNING" not in emitted
+
+
 def test_spirv_storage_pointer_reinterpret_reads_byte_lanes(tmp_path):
     source = """
     shader StoragePointerReinterpret {
@@ -32946,6 +32961,463 @@ class TestSpirvShaderValidation:
         assert "OpTypeMatrix" not in spv_code
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    @pytest.mark.parametrize(
+        ("component", "use"),
+        (("float", "matrix_a"), ("i32", "matrix_b"), ("u32", "accumulator")),
+    )
+    def test_opt_in_profile_lowers_lane_local_matrix_element_reads_and_writes(
+        self, tmp_path, component, use
+    ):
+        matrix_source = cooperative_matrix_type_source(component, 8, 8, use)
+        profile_source = f"""
+        shader CooperativeMatrixElementProfile {{
+            compute {{
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+                void main() {{
+                    {matrix_source} tile;
+                    {component} lane_value = cooperative_matrix_element(tile, 0);
+                    cooperative_matrix_element(tile, 1) = lane_value;
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        matrix_declaration = re.search(
+            r"(?P<type>%\d+) = OpTypeCooperativeMatrixKHR "
+            r"(?P<component>%\d+) %\d+ %\d+ %\d+ %\d+\b",
+            spv_code,
+        )
+        assert matrix_declaration is not None
+        matrix_variable = spirv_named_variable(
+            spv_code, "tile", storage_class="Function"
+        )
+        component_pointer = spirv_pointer_type(
+            spv_code, matrix_declaration.group("component"), "Function"
+        )
+        accesses = re.findall(
+            rf"(?P<access>%\d+) = OpAccessChain "
+            rf"{re.escape(component_pointer)} {re.escape(matrix_variable)} "
+            rf"(?P<index>%\d+)\b",
+            spv_code,
+        )
+
+        assert len(accesses) == 2
+        assert any(
+            re.search(
+                rf"%\d+ = OpLoad "
+                rf"{re.escape(matrix_declaration.group('component'))} "
+                rf"{re.escape(access)}\b",
+                spv_code,
+            )
+            for access, _ in accesses
+        )
+        assert any(
+            re.search(rf"OpStore {re.escape(access)} %\d+\b", spv_code)
+            for access, _ in accesses
+        )
+        assert not re.search(
+            rf"OpLoad {re.escape(matrix_declaration.group('type'))}\b", spv_code
+        )
+        assert "OpCompositeExtract" not in spv_code
+        assert "OpCompositeInsert" not in spv_code
+        assert "OpTypeArray" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_lowers_dynamic_lane_local_matrix_element_index(
+        self, tmp_path
+    ):
+        matrix_source = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixDynamicElementProfile {{
+            compute {{
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+                void main() {{
+                    {matrix_source} tile;
+                    int index = 1;
+                    float lane_value = cooperative_matrix_element(tile, index);
+                    cooperative_matrix_element(tile, index) = lane_value;
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        matrix_declaration = re.search(
+            r"(?P<type>%\d+) = OpTypeCooperativeMatrixKHR "
+            r"(?P<component>%\d+) %\d+ %\d+ %\d+ %\d+\b",
+            spv_code,
+        )
+        assert matrix_declaration is not None
+        matrix_variable = spirv_named_variable(
+            spv_code, "tile", storage_class="Function"
+        )
+        index_variable = spirv_named_variable(
+            spv_code, "index", storage_class="Function"
+        )
+        index_loads = re.findall(
+            rf"(?P<value>%\d+) = OpLoad %\d+ {re.escape(index_variable)}\b",
+            spv_code,
+        )
+        assert len(index_loads) == 2
+        component_pointer = spirv_pointer_type(
+            spv_code, matrix_declaration.group("component"), "Function"
+        )
+        for index_load in index_loads:
+            assert re.search(
+                rf"%\d+ = OpAccessChain {re.escape(component_pointer)} "
+                rf"{re.escape(matrix_variable)} "
+                rf"{re.escape(index_load)}\b",
+                spv_code,
+            )
+        assert "OpCooperativeMatrixLengthKHR" not in spv_code
+        assert "OpTypeArray" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_lowers_matrix_element_increment_and_decrement(
+        self, tmp_path
+    ):
+        matrix_source = cooperative_matrix_type_source("float", 8, 8, "accumulator")
+        profile_source = f"""
+        shader CooperativeMatrixElementIncrement {{
+            compute {{
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+                void main() {{
+                    {matrix_source} tile;
+                    float before = cooperative_matrix_element(tile, 0)++;
+                    float after = --cooperative_matrix_element(tile, 1);
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        assert spv_code.count("OpAccessChain") == 2
+        assert spv_code.count("OpLoad") >= 2
+        assert spv_code.count("OpStore") >= 2
+        assert "OpFAdd" in spv_code
+        assert "OpFSub" in spv_code
+        assert "increment target is not assignable" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_matrix_element_assignment_evaluates_rhs_before_dynamic_index(
+        self, tmp_path
+    ):
+        matrix_source = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixElementEvaluationOrder {{
+            compute {{
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+                float rhs_value() {{
+                    return 1.0;
+                }}
+
+                int next_index() {{
+                    return 0;
+                }}
+
+                void main() {{
+                    {matrix_source} tile;
+                    cooperative_matrix_element(tile, next_index()) = rhs_value();
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        float_type = re.search(r"(?P<type>%\d+) = OpTypeFloat 32\b", spv_code)
+        int_type = re.search(r"(?P<type>%\d+) = OpTypeInt 32 1\b", spv_code)
+        assert float_type is not None
+        assert int_type is not None
+        calls = list(
+            re.finditer(r"%\d+ = OpFunctionCall (?P<type>%\d+) %\d+\b", spv_code)
+        )
+        access = re.search(r"%\d+ = OpAccessChain %\d+ %\d+ %\d+\b", spv_code)
+
+        assert [call.group("type") for call in calls] == [
+            float_type.group("type"),
+            int_type.group("type"),
+        ]
+        assert access is not None
+        assert calls[0].start() < calls[1].start() < access.start()
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_preserves_private_matrix_element_storage(self, tmp_path):
+        matrix_source = cooperative_matrix_type_source("float", 8, 8, "accumulator")
+        profile_source = f"""
+        shader CooperativeMatrixPrivateElementProfile {{
+            {matrix_source} tile;
+
+            compute {{
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+                void main() {{
+                    float lane_value = cooperative_matrix_element(tile, 0);
+                    cooperative_matrix_element(tile, 1) = lane_value;
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        matrix_declaration = re.search(
+            r"(?P<type>%\d+) = OpTypeCooperativeMatrixKHR "
+            r"(?P<component>%\d+) %\d+ %\d+ %\d+ %\d+\b",
+            spv_code,
+        )
+        assert matrix_declaration is not None
+        matrix_variable = spirv_named_variable(
+            spv_code, "tile", storage_class="Private"
+        )
+        component_pointer = spirv_pointer_type(
+            spv_code, matrix_declaration.group("component"), "Private"
+        )
+        assert (
+            len(
+                re.findall(
+                    rf"%\d+ = OpAccessChain {re.escape(component_pointer)} "
+                    rf"{re.escape(matrix_variable)} %\d+\b",
+                    spv_code,
+                )
+            )
+            == 2
+        )
+        assert "OpTypeArray" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    @pytest.mark.parametrize(
+        ("expression", "count"),
+        (
+            ("cooperative_matrix_element(tile)", 1),
+            ("cooperative_matrix_element(tile, 0, 1)", 3),
+        ),
+    )
+    def test_opt_in_profile_rejects_matrix_element_argument_count(
+        self, expression, count
+    ):
+        matrix_source = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixElementArity {{
+            compute {{
+                void main() {{
+                    {matrix_source} tile;
+                    float lane_value = {expression};
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_element_rejected(
+            profile_source,
+            f"requires exactly two operands; got {count}",
+            "cooperative-matrix-element-arity",
+            "spirv.cooperative_matrix.element-arity",
+        )
+
+    def test_opt_in_profile_rejects_non_matrix_element_operand(self):
+        profile_source = """
+        shader CooperativeMatrixElementOperand {
+            compute {
+                void main() {
+                    float scalar = 1.0;
+                    float lane_value = cooperative_matrix_element(scalar, 0);
+                }
+            }
+        }
+        """
+
+        assert_cooperative_matrix_element_rejected(
+            profile_source,
+            "requires an addressable cooperative-matrix operand",
+            "cooperative-matrix-element-operand-type",
+            "spirv.cooperative_matrix.element-operand-type",
+        )
+
+    def test_opt_in_profile_rejects_non_addressable_matrix_element_operand(self):
+        matrix_source = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixTemporaryElement {{
+            compute {{
+                {matrix_source} make_tile() {{
+                    {matrix_source} tile;
+                    return tile;
+                }}
+
+                void main() {{
+                    float lane_value = cooperative_matrix_element(make_tile(), 0);
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_element_rejected(
+            profile_source,
+            "temporary matrix values are not yet addressable",
+            "cooperative-matrix-element-addressability",
+            "spirv.cooperative_matrix.element-addressability",
+        )
+
+    def test_opt_in_profile_rejects_value_matrix_parameter_element_access(self):
+        matrix_source = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixParameterElement {{
+            compute {{
+                float read_lane({matrix_source} tile) {{
+                    return cooperative_matrix_element(tile, 0);
+                }}
+
+                void main() {{
+                    {matrix_source} tile;
+                    float lane_value = read_lane(tile);
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_element_rejected(
+            profile_source,
+            "temporary matrix values are not yet addressable",
+            "cooperative-matrix-element-addressability",
+            "spirv.cooperative_matrix.element-addressability",
+        )
+
+    @pytest.mark.parametrize(
+        ("index", "type_name"), (("1.0", "float"), ("true", "bool"))
+    )
+    def test_opt_in_profile_rejects_non_integer_matrix_element_index(
+        self, index, type_name
+    ):
+        matrix_source = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixElementIndexType {{
+            compute {{
+                void main() {{
+                    {matrix_source} tile;
+                    float lane_value = cooperative_matrix_element(tile, {index});
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_element_rejected(
+            profile_source,
+            f"requires a scalar integer index; got {type_name}",
+            "cooperative-matrix-element-index-type",
+            "spirv.cooperative_matrix.element-index-type",
+        )
+
+    def test_opt_in_profile_rejects_negative_matrix_element_index(self):
+        matrix_source = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixElementIndexRange {{
+            compute {{
+                void main() {{
+                    {matrix_source} tile;
+                    float lane_value = cooperative_matrix_element(tile, -1);
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_element_rejected(
+            profile_source,
+            "lane-local element indices cannot be negative; got -1",
+            "cooperative-matrix-element-index-range",
+            "spirv.cooperative_matrix.element-index-range",
+        )
+
+    @pytest.mark.parametrize(
+        "value_expression",
+        (
+            "vec2(1.0, 2.0)",
+            "other",
+        ),
+    )
+    def test_opt_in_profile_rejects_non_scalar_matrix_element_assignment(
+        self, value_expression
+    ):
+        matrix_source = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixElementValueType {{
+            compute {{
+                void main() {{
+                    {matrix_source} tile;
+                    {matrix_source} other;
+                    cooperative_matrix_element(tile, 0) = {value_expression};
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_element_rejected(
+            profile_source,
+            "element assignment requires a scalar component value",
+            "cooperative-matrix-element-value-type",
+            "spirv.cooperative_matrix.element-value-type",
+        )
+
+    def test_opt_in_profile_rejects_matrix_element_compound_assignment(self):
+        matrix_source = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixElementCompoundAssignment {{
+            compute {{
+                void main() {{
+                    {matrix_source} tile;
+                    cooperative_matrix_element(tile, 0) += 1.0;
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_element_rejected(
+            profile_source,
+            "compound assignment is not implemented for operator '+='",
+            "cooperative-matrix-element-compound-assignment",
+            "spirv.cooperative_matrix.element-compound-assignment",
+        )
+
+    def test_default_profile_rejects_matrix_element_write_without_warning(self):
+        matrix_source = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixElementDefaultProfile {{
+            compute {{
+                void main() {{
+                    {matrix_source} tile;
+                    cooperative_matrix_element(tile, 0) = 1.0;
+                }}
+            }}
+        }}
+        """
+        generator = VulkanSPIRVCodeGen()
+
+        with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
+            generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        assert exc_info.value.feature == "cooperative-matrix-lowering"
+        assert exc_info.value.missing_capabilities == ("spirv.cooperative_matrix.khr",)
+        emitted = "\n".join(generator.code_lines)
+        assert "Unsupported LHS type" not in emitted
+        assert "WARNING" not in emitted
 
     def test_opt_in_profile_lowers_float_matrix_multiply_with_zero_accumulator(
         self, tmp_path
