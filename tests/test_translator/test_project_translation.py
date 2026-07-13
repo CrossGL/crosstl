@@ -8558,6 +8558,72 @@ def test_translate_project_reports_directx_private_pointer_contract(tmp_path):
     assert not (repo / artifact["path"]).exists()
 
 
+def test_translate_project_reports_opengl_private_pointer_contract(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "private_pointer.cgl").write_text(
+        textwrap.dedent("""
+            shader PrivatePointerContract {
+                void fill5(thread float* values) {
+                    values[4] = 1.0;
+                }
+
+                compute {
+                    void main() {
+                        float backing[5];
+                        fill5(backing + 1);
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="translated",
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.opengl-private-pointer-unsupported": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "opengl.private-pointer-parameter-lowering": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.opengl-private-pointer-unsupported"
+    assert diagnostic["target"] == "opengl"
+    assert diagnostic["sourceBackend"] == "cgl"
+    assert diagnostic["location"]["file"] == "private_pointer.cgl"
+    assert diagnostic["missingCapabilities"] == [
+        "opengl.private-pointer-parameter-lowering"
+    ]
+    assert diagnostic["details"] == {
+        "privatePointer": {
+            "function": "fill5",
+            "parameter": "values",
+            "reason": "view-out-of-bounds",
+        },
+        "sourcePath": "private_pointer.cgl",
+        "targetArtifact": "translated/opengl/private_pointer.glsl",
+    }
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["target"] == "opengl"
+    assert not (repo / artifact["path"]).exists()
+
+    report_path = repo / "translated" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert {diagnostic["code"] for diagnostic in validation["diagnostics"]}.isdisjoint(
+        {"project.validate.invalid-report"}
+    )
+
+
 def test_translate_project_reports_directx_dynamic_workgroup_pointer_backing(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
