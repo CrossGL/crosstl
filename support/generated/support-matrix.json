@@ -524,7 +524,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 532,
+        "unsupported_marker_count": 533,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
@@ -617,7 +617,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 1294
+        "test_count": 1301
       },
       "translator_codegen": {
         "exists": true,
@@ -650,7 +650,7 @@
         "path": "crosstl/backend/SPIRV"
       },
       "signals": {
-        "unsupported_marker_count": 108,
+        "unsupported_marker_count": 112,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
@@ -730,7 +730,7 @@
           },
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "raise self.unsupported_call_initializer_binding_error("
+            "text": "def unsupported_reference_argument_error("
           }
         ]
       },
@@ -745,7 +745,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 1226
+        "test_count": 1230
       },
       "translator_codegen": {
         "exists": true,
