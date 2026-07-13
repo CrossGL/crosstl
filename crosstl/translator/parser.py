@@ -293,10 +293,28 @@ class Parser:
     def __init__(self, tokens, strict_function_bodies=False):
         self.tokens = tokens
         self.strict_function_bodies = strict_function_bodies
+        self.active_generic_parameter_names = set()
+        self.declared_type_names = {
+            str(tokens[index + 1][1])
+            for index, token in enumerate(tokens[:-1])
+            if token[0] in {"STRUCT", "ENUM", "TRAIT"}
+            and tokens[index + 1][0] == "IDENTIFIER"
+        }
         self.pos = 0
         self.current_token = (
             self.tokens[self.pos] if self.pos < len(self.tokens) else ("EOF", None)
         )
+
+    def enter_generic_parameter_scope(self, generic_params):
+        """Expose generic parameter names while parsing their declaration body."""
+        previous = self.active_generic_parameter_names
+        self.active_generic_parameter_names = previous | {
+            parameter.name for parameter in generic_params
+        }
+        return previous
+
+    def restore_generic_parameter_scope(self, previous):
+        self.active_generic_parameter_names = previous
 
     def skip_comments(self):
         while self.current_token[0] in ["COMMENT_SINGLE", "COMMENT_MULTI"]:
@@ -1303,9 +1321,13 @@ class Parser:
         self.eat("LBRACE")
         members = []
 
-        while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
-            member = self.parse_struct_member()
-            self.append_parsed_nodes(members, member)
+        previous_scope = self.enter_generic_parameter_scope(generic_params)
+        try:
+            while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
+                member = self.parse_struct_member()
+                self.append_parsed_nodes(members, member)
+        finally:
+            self.restore_generic_parameter_scope(previous_scope)
 
         if self.current_token[0] == "EOF":
             return None
@@ -1581,36 +1603,40 @@ class Parser:
         if self.current_token[0] == "LESS_THAN":
             generic_params = self.parse_generic_parameters()
 
-        self.eat("LPAREN")
-        parameters = self.parse_parameter_list()
-        self.eat("RPAREN")
+        previous_scope = self.enter_generic_parameter_scope(generic_params)
+        try:
+            self.eat("LPAREN")
+            parameters = self.parse_parameter_list()
+            self.eat("RPAREN")
 
-        if self.is_arrow_token():
-            self.eat_arrow()
-            attributes.extend(self.parse_return_type_attributes())
-            return_type = self.parse_type()
+            if self.is_arrow_token():
+                self.eat_arrow()
+                attributes.extend(self.parse_return_type_attributes())
+                return_type = self.parse_type()
 
-        post_attributes = self.parse_post_declaration_attributes()
+            post_attributes = self.parse_post_declaration_attributes()
 
-        body = None
-        if self.current_token[0] == "LBRACE":
-            body_start_pos = self.pos
-            body_start_token = self.current_token
-            try:
-                body = self.parse_block()
-            except SyntaxError as exc:
-                if self.strict_function_bodies:
-                    raise CrossGLFunctionBodyParseError(
-                        name,
-                        exc,
-                        self.current_token,
-                    ) from exc
-                self.pos = body_start_pos
-                self.current_token = body_start_token
-                self.skip_balanced_declaration()
-                body = BlockNode([])
-        else:
-            self.eat("SEMICOLON")
+            body = None
+            if self.current_token[0] == "LBRACE":
+                body_start_pos = self.pos
+                body_start_token = self.current_token
+                try:
+                    body = self.parse_block()
+                except SyntaxError as exc:
+                    if self.strict_function_bodies:
+                        raise CrossGLFunctionBodyParseError(
+                            name,
+                            exc,
+                            self.current_token,
+                        ) from exc
+                    self.pos = body_start_pos
+                    self.current_token = body_start_token
+                    self.skip_balanced_declaration()
+                    body = BlockNode([])
+            else:
+                self.eat("SEMICOLON")
+        finally:
+            self.restore_generic_parameter_scope(previous_scope)
 
         return FunctionNode(
             name=name,
@@ -4285,14 +4311,27 @@ class Parser:
         saved_token = self.current_token
         saved_tokens = list(self.tokens)
         try:
-            self.parse_generic_arguments()
-            return self.current_token[0] == "LPAREN"
+            generic_args = self.parse_generic_arguments()
+            return self.current_token[0] == "LPAREN" and (
+                self.generic_member_arguments_are_unambiguous(generic_args)
+            )
         except SyntaxError:
             return False
         finally:
             self.tokens[:] = saved_tokens
             self.pos = saved_pos
             self.current_token = saved_token
+
+    def generic_member_arguments_are_unambiguous(self, generic_args):
+        """Distinguish a single symbolic generic from a relational chain."""
+        if len(generic_args) != 1:
+            return True
+        argument = generic_args[0]
+        if not isinstance(argument, NamedType) or argument.generic_args:
+            return True
+        return argument.name in (
+            self.active_generic_parameter_names | self.declared_type_names
+        )
 
     def format_expression_path(self, expression):
         if isinstance(expression, IdentifierNode):
@@ -5272,29 +5311,32 @@ class Parser:
 
         if self.current_token[0] == "EOF":
             return None
-        elif self.current_token[0] == "STRUCT":
-            struct_node = self.parse_struct()
-            if struct_node:
-                struct_node.generic_params = generic_params
-            return struct_node
-        elif self.current_token[0] == "ENUM":
-            enum_node = self.parse_enum()
-            if enum_node:
-                enum_node.generic_params = generic_params
-            return enum_node
-        elif self.current_token[0] == "FUNCTION" or self.is_function_declaration():
-            func_node = self.parse_function()
-            if func_node:
-                func_node.generic_params = generic_params
-            return func_node
-        elif self.current_token[0] == "TRAIT":
-            trait_node = self.parse_trait()
-            if trait_node:
-                trait_node.generic_params = generic_params
-            return trait_node
-        else:
+        previous_scope = self.enter_generic_parameter_scope(generic_params)
+        try:
+            if self.current_token[0] == "STRUCT":
+                struct_node = self.parse_struct()
+                if struct_node:
+                    struct_node.generic_params = generic_params
+                return struct_node
+            if self.current_token[0] == "ENUM":
+                enum_node = self.parse_enum()
+                if enum_node:
+                    enum_node.generic_params = generic_params
+                return enum_node
+            if self.current_token[0] == "FUNCTION" or self.is_function_declaration():
+                func_node = self.parse_function()
+                if func_node:
+                    func_node.generic_params = generic_params
+                return func_node
+            if self.current_token[0] == "TRAIT":
+                trait_node = self.parse_trait()
+                if trait_node:
+                    trait_node.generic_params = generic_params
+                return trait_node
             self.skip_balanced_declaration()
             return None
+        finally:
+            self.restore_generic_parameter_scope(previous_scope)
 
     def parse_trait(self):
         """Parse a trait-like declaration into the current AST shape."""
@@ -5319,13 +5361,17 @@ class Parser:
         self.eat("LBRACE")
 
         methods = []
-        while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
-            if self.is_function_declaration():
-                func = self.parse_function()
-                if func:
-                    methods.append(func)
-            else:
-                self.skip_unknown_token()
+        previous_scope = self.enter_generic_parameter_scope(generic_params)
+        try:
+            while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
+                if self.is_function_declaration():
+                    func = self.parse_function()
+                    if func:
+                        methods.append(func)
+                else:
+                    self.skip_unknown_token()
+        finally:
+            self.restore_generic_parameter_scope(previous_scope)
 
         if self.current_token[0] == "EOF":
             return None

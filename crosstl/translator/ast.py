@@ -1033,13 +1033,14 @@ class FunctionCallNode(ExpressionNode):
         self,
         function: ExpressionNode,
         arguments: List[ExpressionNode],
-        generic_args: List[Union[TypeNode, ExpressionNode]] = None,
+        generic_args: Optional[List[Union[TypeNode, ExpressionNode]]] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self.function = function
         self.arguments = arguments
-        self.generic_args = generic_args or []
+        self.generic_suffix_present = generic_args is not None
+        self.generic_args = list(generic_args) if generic_args is not None else []
 
         # These legacy aliases are read by old code generators.
         self.name = function

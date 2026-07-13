@@ -5,6 +5,7 @@ from crosstl.translator.ast import (
     IdentifierNode,
     LiteralNode,
     MemberAccessNode,
+    PointerAccessNode,
     PrimitiveType,
 )
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
@@ -13,6 +14,15 @@ from crosstl.translator.codegen.generic_function_utils import (
 )
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
+
+TARGET_GENERATORS = [
+    ("DirectX", lambda call: HLSLCodeGen().generate_expression(call)),
+    ("OpenGL", lambda call: GLSLCodeGen().generate_expression(call)),
+    (
+        "Vulkan SPIR-V",
+        lambda call: VulkanSPIRVCodeGen().process_expression(call),
+    ),
+]
 
 
 def mlx_shaped_generic_member_call():
@@ -31,16 +41,25 @@ def mlx_shaped_generic_member_call():
     )
 
 
+def empty_generic_member_call():
+    return FunctionCallNode(
+        MemberAccessNode(IdentifierNode("tile"), "reset"),
+        [],
+        generic_args=[],
+    )
+
+
+def generic_pointer_member_call():
+    return FunctionCallNode(
+        PointerAccessNode(IdentifierNode("tile_ptr"), "load"),
+        [IdentifierNode("source")],
+        generic_args=[PrimitiveType("float")],
+    )
+
+
 @pytest.mark.parametrize(
     ("target_name", "generate"),
-    [
-        ("DirectX", lambda call: HLSLCodeGen().generate_expression(call)),
-        ("OpenGL", lambda call: GLSLCodeGen().generate_expression(call)),
-        (
-            "Vulkan SPIR-V",
-            lambda call: VulkanSPIRVCodeGen().process_expression(call),
-        ),
-    ],
+    TARGET_GENERATORS,
 )
 def test_unmaterialized_generic_member_call_fails_with_structured_diagnostic(
     target_name, generate
@@ -63,11 +82,46 @@ def test_unmaterialized_generic_member_call_fails_with_structured_diagnostic(
     assert "self.Atile.load<float, 1, 1, 36, 1>" in str(error)
 
 
+@pytest.mark.parametrize(("target_name", "generate"), TARGET_GENERATORS)
+@pytest.mark.parametrize(
+    ("call_factory", "receiver", "method_name", "generic_arguments", "signature"),
+    [
+        (empty_generic_member_call, "tile", "reset", (), "tile.reset<>"),
+        (
+            generic_pointer_member_call,
+            "tile_ptr",
+            "load",
+            ("float",),
+            "tile_ptr->load<float>",
+        ),
+    ],
+)
+def test_generic_member_edge_cases_fail_closed(
+    target_name,
+    generate,
+    call_factory,
+    receiver,
+    method_name,
+    generic_arguments,
+    signature,
+):
+    with pytest.raises(GenericMemberCallSpecializationError) as exc_info:
+        generate(call_factory())
+
+    error = exc_info.value
+    assert error.target_name == target_name
+    assert error.receiver == receiver
+    assert error.method_name == method_name
+    assert error.generic_arguments == generic_arguments
+    assert signature in str(error)
+
+
 def test_nongeneric_member_calls_remain_ordinary_target_calls():
     call = FunctionCallNode(
         MemberAccessNode(IdentifierNode("tile"), "load"),
         [IdentifierNode("source")],
     )
 
+    assert call.generic_suffix_present is False
     assert HLSLCodeGen().generate_expression(call) == "tile.load(source)"
     assert GLSLCodeGen().generate_expression(call) == "tile.load(source)"

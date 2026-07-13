@@ -4744,7 +4744,6 @@ class MetalPreprocessor(HLSLPreprocessor):
 
         receiver_end = ident_end
         cursor = ident_end
-        field_depth = 0
         while True:
             while cursor < len(code) and code[cursor].isspace():
                 cursor += 1
@@ -4776,10 +4775,10 @@ class MetalPreprocessor(HLSLPreprocessor):
 
             call_suffix = self._member_template_call_suffix(code, cursor)
             if call_suffix is not None:
-                if field_depth == 0:
-                    return None
                 arg_open, explicit_template_arguments = call_suffix
                 receiver = code[ident_start:receiver_end].strip()
+                if access == "->":
+                    receiver = f"{receiver}[0]"
                 method = methods_by_struct.get(current_struct_name, {}).get(member)
                 if method is not None and explicit_template_arguments is None:
                     return self._build_instance_call_rewrite(
@@ -4825,7 +4824,6 @@ class MetalPreprocessor(HLSLPreprocessor):
                 return None
             current_struct_name, required_access = receiver_info
             receiver_end = cursor
-            field_depth += 1
 
     def _nested_member_receiver_info(
         self,
@@ -7187,8 +7185,6 @@ class MetalPreprocessor(HLSLPreprocessor):
                 )
                 if argument.strip()
             ]
-            if not explicit_template_arguments:
-                return None
             index = angle_end + 1
             while index < len(code) and code[index].isspace():
                 index += 1

@@ -49497,21 +49497,33 @@ def test_metal_nested_generic_member_calls_translate_and_validate_for_all_target
     assert_spirv_asm_validates_if_available(generated["vulkan"], tmp_path)
 
 
+@pytest.mark.parametrize(
+    ("call_expression", "generic_arguments"),
+    [
+        (
+            "self.Atile.load<float, 1, 1, 36, 1>(source)",
+            ["float", "1", "1", "36", "1"],
+        ),
+        ("self.Atile.load<>(source)", []),
+    ],
+)
 def test_unmaterialized_generic_member_call_reports_structured_project_details(
     tmp_path,
+    call_expression,
+    generic_arguments,
 ):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
     shader_dir.mkdir(parents=True)
     (shader_dir / "generic_member.cgl").write_text(
-        textwrap.dedent("""
-            shader GenericMemberDiagnostic {
-                compute {
-                    void main() {
-                        self.Atile.load<float, 1, 1, 36, 1>(source);
-                    }
-                }
-            }
+        textwrap.dedent(f"""
+            shader GenericMemberDiagnostic {{
+                compute {{
+                    void main() {{
+                        {call_expression};
+                    }}
+                }}
+            }}
             """).strip(),
         encoding="utf-8",
     )
@@ -49546,7 +49558,7 @@ def test_unmaterialized_generic_member_call_reports_structured_project_details(
             "DirectX generation"
         ),
         "targetBackend": "DirectX",
-        "unresolvedArguments": ["float", "1", "1", "36", "1"],
+        "genericArguments": generic_arguments,
     }
 
 

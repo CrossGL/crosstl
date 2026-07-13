@@ -16944,8 +16944,8 @@ def _generic_member_call_failure_details(
         if _is_non_empty_string(value):
             call[name] = value
     generic_arguments = getattr(exc, "generic_arguments", None)
-    if generic_arguments:
-        call["unresolvedArguments"] = [str(value) for value in generic_arguments]
+    if generic_arguments is not None:
+        call["genericArguments"] = [str(value) for value in generic_arguments]
     if call:
         details["genericMemberCall"] = dict(sorted(call.items()))
     return dict(sorted(details.items()))

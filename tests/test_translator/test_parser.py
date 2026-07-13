@@ -4544,12 +4544,71 @@ def test_generic_pointer_member_call_preserves_pointer_access():
     assert call.generic_args[2].value == 1
 
 
+def test_empty_generic_member_call_preserves_explicit_suffix():
+    code = """
+    shader EmptyGenericMemberCall {
+        void kernel() {
+            tile.reset<>();
+            tile.reset();
+        }
+    }
+    """
+
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    generic_call = ast.functions[0].body.statements[0].expression
+    ordinary_call = ast.functions[0].body.statements[1].expression
+
+    assert isinstance(generic_call, FunctionCallNode)
+    assert generic_call.generic_args == []
+    assert generic_call.generic_suffix_present is True
+    assert ordinary_call.generic_args == []
+    assert ordinary_call.generic_suffix_present is False
+
+
+def test_single_generic_parameter_member_call_uses_active_type_scope():
+    code = """
+    shader ScopedGenericMemberCall {
+        generic<T> fn convert(value: T) -> T {
+            return object.convert<T>(value);
+        }
+    }
+    """
+
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    call = ast.functions[0].body.statements[0].value
+
+    assert isinstance(call, FunctionCallNode)
+    assert isinstance(call.function, MemberAccessNode)
+    assert call.generic_suffix_present is True
+    assert [argument.name for argument in call.generic_args] == ["T"]
+
+
+def test_single_declared_type_member_call_uses_type_declaration_context():
+    code = """
+    shader DeclaredTypeGenericMemberCall {
+        struct Payload { float value; };
+
+        void kernel() {
+            receiver.load<Payload>(source);
+        }
+    }
+    """
+
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    call = ast.functions[0].body.statements[0].expression
+
+    assert isinstance(call, FunctionCallNode)
+    assert call.generic_suffix_present is True
+    assert [argument.name for argument in call.generic_args] == ["Payload"]
+
+
 def test_member_comparisons_are_not_parsed_as_generic_call_suffixes():
     code = """
     shader MemberComparisons {
         void kernel() {
             bool less = object.member < limit;
             bool ordered = object.member < upper > lower;
+            bool parenthesized = object.member < limit > (threshold);
         }
     }
     """
@@ -4557,6 +4616,7 @@ def test_member_comparisons_are_not_parsed_as_generic_call_suffixes():
     ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
     less = ast.functions[0].body.statements[0].initial_value
     ordered = ast.functions[0].body.statements[1].initial_value
+    parenthesized = ast.functions[0].body.statements[2].initial_value
 
     assert isinstance(less, BinaryOpNode)
     assert less.operator == "<"
@@ -4566,6 +4626,11 @@ def test_member_comparisons_are_not_parsed_as_generic_call_suffixes():
     assert isinstance(ordered.left, BinaryOpNode)
     assert ordered.left.operator == "<"
     assert isinstance(ordered.left.left, MemberAccessNode)
+    assert isinstance(parenthesized, BinaryOpNode)
+    assert parenthesized.operator == ">"
+    assert isinstance(parenthesized.left, BinaryOpNode)
+    assert parenthesized.left.operator == "<"
+    assert isinstance(parenthesized.left.left, MemberAccessNode)
 
 
 def test_matrix_type_keywords_parse():

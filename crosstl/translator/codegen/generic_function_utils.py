@@ -99,15 +99,20 @@ class GenericMemberCallSpecializationError(ValueError):
 def reject_unresolved_generic_member_call(expr, target_name):
     """Reject a structured generic member call that was not materialized."""
     generic_args = list(getattr(expr, "generic_args", []) or [])
-    if not generic_args:
+    generic_suffix_present = getattr(expr, "generic_suffix_present", None)
+    if generic_suffix_present is None:
+        generic_suffix_present = bool(generic_args)
+    if not generic_suffix_present:
         return
 
     function = getattr(expr, "function", getattr(expr, "name", None))
     if isinstance(function, MemberAccessNode):
+        access_operator = "."
         receiver_expr = getattr(
             function, "object_expr", getattr(function, "object", None)
         )
     elif isinstance(function, PointerAccessNode):
+        access_operator = "->"
         receiver_expr = getattr(function, "pointer_expr", None)
     else:
         return
@@ -117,7 +122,9 @@ def reject_unresolved_generic_member_call(expr, target_name):
     generic_arguments = [
         _generic_member_expression_text(argument) for argument in generic_args
     ]
-    signature = f"{receiver}.{method_name}<{', '.join(generic_arguments)}>"
+    signature = (
+        f"{receiver}{access_operator}{method_name}" f"<{', '.join(generic_arguments)}>"
+    )
     raise GenericMemberCallSpecializationError(
         f"{target_name} generation cannot lower generic member call "
         f"'{signature}' because no concrete member specialization was "

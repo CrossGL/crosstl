@@ -2984,6 +2984,76 @@ def test_preprocessor_instantiates_template_method_on_external_nested_field():
     assert "block.tile.template load" not in output
 
 
+def test_preprocessor_instantiates_template_method_on_pointer_receiver():
+    code = """
+    struct Tile {
+      template <typename T, int Width>
+      void load(threadgroup T* src) { src[Width] = T(1); }
+    };
+
+    kernel void k(device float* output [[buffer(0)]]) {
+      threadgroup float values[8];
+      Tile tile;
+      thread Tile* tile_ptr = &tile;
+      tile_ptr->template load<float, 4>(values);
+      output[0] = values[4];
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Tile__load__float_4(tile_ptr[0], values)" in output
+    assert "void Tile__load__float_4(" in output
+    assert "tile_ptr->template load" not in output
+
+
+def test_preprocessor_instantiates_template_method_on_nested_pointer_field():
+    code = """
+    struct Tile {
+      template <typename T, int Width>
+      void load(threadgroup T* src) { src[Width] = T(1); }
+    };
+
+    struct Holder { thread Tile* tile; };
+
+    kernel void k(device float* output [[buffer(0)]]) {
+      threadgroup float values[8];
+      Tile tile;
+      Holder holder{&tile};
+      holder.tile->template load<float, 4>(values);
+      output[0] = values[4];
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Tile__load__float_4(holder.tile[0], values)" in output
+    assert "void Tile__load__float_4(" in output
+    assert "holder.tile->template load" not in output
+
+
+def test_preprocessor_instantiates_member_template_with_default_arguments():
+    code = """
+    struct Tile {
+      template <typename T = float, int Width = 4>
+      void load(threadgroup T* src) { src[Width] = T(1); }
+    };
+
+    kernel void k(device float* output [[buffer(0)]]) {
+      threadgroup float values[8];
+      Tile tile;
+      tile.template load<>(values);
+      output[0] = values[4];
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Tile__load__float_4(tile, values)" in output
+    assert "void Tile__load__float_4(" in output
+    assert "tile.template load" not in output
+
+
 def test_preprocessor_resolves_local_constants_in_template_member_arguments():
     code = """
     template <typename T, T Value>
