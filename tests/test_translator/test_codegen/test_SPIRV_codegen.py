@@ -2974,6 +2974,187 @@ class TestVulkanSPIRVCodeGen:
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_inout_struct_parameter_aliases_caller_storage(self, tmp_path):
+        source_code = """
+        shader WritableStructParameter {
+            struct Counter {
+                int value;
+            }
+
+            void add(inout thread Counter self, const int amount) {
+                self.value += amount;
+            }
+
+            compute {
+                void main() {
+                    Counter counter;
+                    counter.value = 1;
+                    add(counter, 4);
+                    int observed = counter.value;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        counter = spirv_named_variable(spv_code, "counter", storage_class="Function")
+        counter_members = set(
+            re.findall(
+                rf"(%\d+) = OpAccessChain %\d+ {re.escape(counter)} %\d+",
+                spv_code,
+            )
+        )
+        add_results = set(spirv_result_ids_for_opcode(spv_code, "OpIAdd"))
+        stores = set(re.findall(r"OpStore (%\d+) (%\d+)", spv_code))
+
+        assert counter_members
+        caller_add_results = {
+            value
+            for pointer, value in stores
+            if pointer in counter_members and value in add_results
+        }
+        assert caller_add_results
+        assert "OpFunctionCall" not in spv_code
+
+        int_type = re.search(r"(%\d+) = OpTypeInt 32 1\b", spv_code)
+        assert int_type is not None
+        assert spirv_named_parameters(spv_code, "amount", int_type.group(1))
+        integer_constants = spirv_integer_constant_values(spv_code)
+        caller_add_operands = {
+            operand
+            for result in caller_add_results
+            for operand in re.findall(
+                rf"{re.escape(result)} = OpIAdd %\d+ (%\d+) (%\d+)",
+                spv_code,
+            )[0]
+        }
+        assert 4 in {integer_constants.get(operand) for operand in caller_add_operands}
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_out_scalar_parameter_aliases_caller_storage(self, tmp_path):
+        source_code = """
+        shader WritableScalarParameter {
+            void assign(out int value) {
+                value = 7;
+            }
+
+            compute {
+                void main() {
+                    int result = 1;
+                    assign(result);
+                    int observed = result;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        result = spirv_named_variable(spv_code, "result", storage_class="Function")
+        integer_constants = spirv_integer_constant_values(spv_code)
+        stored_values = [
+            stored_value
+            for pointer, stored_value in re.findall(r"OpStore (%\d+) (%\d+)", spv_code)
+            if pointer == result
+        ]
+
+        assert 7 in {integer_constants.get(stored) for stored in stored_values}
+        assert "OpFunctionCall" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_nested_inout_arguments_are_evaluated_before_parameter_binding(
+        self, tmp_path
+    ):
+        source_code = """
+        shader NestedWritableParameters {
+            struct State {
+                int value;
+            }
+
+            void leaf(inout float self, inout State target) {
+                self = 7.0;
+                target.value = 9;
+            }
+
+            void relay(inout State self, inout float value) {
+                leaf(value, self);
+            }
+
+            compute {
+                void main() {
+                    State state;
+                    state.value = 1;
+                    float scalar = 2.0;
+                    relay(state, scalar);
+                    int observed_state = state.value;
+                    float observed_scalar = scalar;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        state = spirv_named_variable(spv_code, "state", storage_class="Function")
+        scalar = spirv_named_variable(spv_code, "scalar", storage_class="Function")
+        state_members = set(
+            re.findall(
+                rf"(%\d+) = OpAccessChain %\d+ {re.escape(state)} %\d+",
+                spv_code,
+            )
+        )
+        integer_constants = spirv_integer_constant_values(spv_code)
+        stores = re.findall(r"OpStore (%\d+) (%\d+)", spv_code)
+        assert any(
+            pointer in state_members and integer_constants.get(value) == 9
+            for pointer, value in stores
+        )
+
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32\b", spv_code)
+        assert float_type is not None
+        seven = re.search(
+            rf"(%\d+) = OpConstant {re.escape(float_type.group(1))} 7(?:\.0)?\b",
+            spv_code,
+        )
+        assert seven is not None
+        assert (scalar, seven.group(1)) in stores
+        assert "OpFunctionCall" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_inout_parameter_rejects_non_addressable_argument(self):
+        source_code = """
+        shader NonAddressableReferenceArgument {
+            void increment(inout int value) {
+                value += 1;
+            }
+
+            compute {
+                void main() {
+                    increment(4);
+                }
+            }
+        }
+        """
+
+        with pytest.raises(UnsupportedSPIRVFeatureError) as excinfo:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        error = excinfo.value
+        assert error.feature == "non-addressable-reference-argument"
+        assert error.missing_capabilities == ("spirv.reference_parameter_aliasing",)
+        assert "argument 1" in str(error)
+        assert "not addressable" in str(error)
+
     def test_inlined_storage_buffer_helper_aliases_inout_fixed_array(self, tmp_path):
         source_code = """
         shader WritableArrayInline {

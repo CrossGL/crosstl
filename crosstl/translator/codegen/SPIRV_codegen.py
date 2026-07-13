@@ -7093,6 +7093,26 @@ class VulkanSPIRVCodeGen:
             source_location=source_location,
         )
 
+    def unsupported_reference_argument_error(
+        self,
+        function_name: str,
+        arg_index: int,
+        param_name: str,
+        arg,
+        *,
+        feature: str,
+        reason: str,
+    ):
+        return UnsupportedSPIRVFeatureError(
+            feature,
+            "SPIR-V pointer-preserving function inlining cannot bind "
+            f"argument {arg_index + 1} in call '{function_name}' to reference "
+            f"parameter '{param_name}': {reason}; preserve an addressable "
+            "source object with the parameter's declared type.",
+            missing_capabilities=("spirv.reference_parameter_aliasing",),
+            source_location=getattr(arg, "source_location", None),
+        )
+
     def process_call_argument(
         self,
         function_name,
@@ -14558,30 +14578,16 @@ class VulkanSPIRVCodeGen:
     def function_has_storage_buffer_parameters(self, function_node) -> bool:
         return bool(self.function_storage_buffer_parameters(function_node))
 
-    def function_has_aliasing_array_parameters(self, function_node) -> bool:
-        for param in self.function_parameters(function_node):
-            qualifiers = self.parameter_qualifier_names(param)
-            param_type = getattr(param, "param_type", getattr(param, "vtype", None))
-            type_name = self.type_name_from_value(param_type)
-            explicit_reference = bool(
-                type_name
-                and (
-                    str(type_name).strip().startswith("&")
-                    or str(type_name).strip().endswith("&")
-                )
-            )
-            if "inout" not in qualifiers and not explicit_reference:
-                continue
-            type_name = self.function_parameter_type_name(param)
-            type_name = self.normalize_reference_type_name(type_name)
-            if type_name is not None and self.split_outer_array_type(type_name):
-                return True
-        return False
+    def function_has_aliasing_parameters(self, function_node) -> bool:
+        return any(
+            self.function_parameter_requires_pointer_alias(param)
+            for param in self.function_parameters(function_node)
+        )
 
     def function_requires_pointer_preserving_inlining(self, function_node) -> bool:
         return self.function_has_storage_buffer_parameters(
             function_node
-        ) or self.function_has_aliasing_array_parameters(function_node)
+        ) or self.function_has_aliasing_parameters(function_node)
 
     def format_array_size(self, size, constants=None):
         if size is None:
@@ -20874,6 +20880,11 @@ class VulkanSPIRVCodeGen:
         type_name = str(type_name).strip()
         return type_name.startswith("&") or type_name.endswith("&")
 
+    def function_parameter_requires_pointer_alias(self, param) -> bool:
+        return self.function_parameter_is_reference_like(
+            param
+        ) and not self.is_mesh_output_parameter(param)
+
     def storage_buffer_argument_rejection_reason(
         self, param, arg, arg_index, substitutions=None
     ) -> str:
@@ -22601,15 +22612,26 @@ class VulkanSPIRVCodeGen:
                 missing_capabilities=("spirv.recursive_storage_buffer_function",),
             )
 
-        previous_declaration_state = self.local_declaration_scope_state()
-        previous_return_type = self.current_return_type
-        previous_return_type_source = self.current_return_type_source
-        previous_generic_type_substitutions = self.current_generic_type_substitutions
         generic_type_substitutions = self.generic_storage_function_type_bindings(
             function_node, call_args
         )
         if generic_type_substitutions is None:
             generic_type_substitutions = {}
+        prepared_bindings = self.prepare_pointer_preserving_inline_bindings(
+            function_node,
+            call_args,
+            generic_type_substitutions,
+        )
+        if prepared_bindings is None:
+            return self.default_value_for_function(function_node)
+
+        # Argument evaluation can materialize caller variables and pointer aliases.
+        # Preserve that post-evaluation state, then overlay every callee parameter
+        # together so an early parameter cannot shadow a later argument expression.
+        previous_declaration_state = self.local_declaration_scope_state()
+        previous_return_type = self.current_return_type
+        previous_return_type_source = self.current_return_type_source
+        previous_generic_type_substitutions = self.current_generic_type_substitutions
         self.current_generic_type_substitutions = generic_type_substitutions
         previous_generic_function_substitutions = (
             self.current_generic_function_substitutions
@@ -22636,128 +22658,17 @@ class VulkanSPIRVCodeGen:
         self.inline_storage_buffer_call_stack.append((function_key, func_name))
 
         try:
-            for index, param, arg in self.storage_buffer_effective_call_bindings(
-                function_node, call_args
-            ):
-                param_name = getattr(param, "name", f"param{index}")
-                if not self.function_parameter_has_reachable_use(
-                    function_node, param_name
-                ):
-                    if not self.side_effect_free_call_argument(arg):
-                        self.process_call_argument(func_name, arg, index)
-                    continue
-                storage_buffer_type_name = self.storage_buffer_parameter_type_name(
-                    param
-                )
-                if storage_buffer_type_name is not None:
-                    if self.expression_contains_empty_array_literal(arg):
-                        raise self.unsupported_call_initializer_binding_error(
-                            func_name, index, arg
-                        )
-                    if self.pointer_ternary_statically_selects_null(arg):
-                        if not self.function_parameter_has_reachable_use(
-                            function_node,
-                            param_name,
-                        ):
-                            continue
-                        raise self.unsupported_null_pointer_argument_error(arg)
-                    pointer_arg = self.variable_pointer_from_expression(arg)
-                    if pointer_arg is None:
-                        self.emit(
-                            f"; WARNING: function call '{func_name}' requires a "
-                            f"storage buffer argument for parameter {param_name}"
-                        )
-                        return self.default_value_for_function(function_node)
-                    actual_type_name = self.storage_buffer_expression_type_name(arg)
-                    if (
-                        actual_type_name is not None
-                        and not self.storage_buffer_parameter_type_is_compatible(
-                            storage_buffer_type_name, actual_type_name
-                        )
-                    ):
-                        self.emit(
-                            f"; WARNING: function call '{func_name}' requires "
-                            f"{storage_buffer_type_name} storage buffer type for "
-                            "argument "
-                            f"{self.expression_debug_name(arg)} "
-                            f"passed to parameter {param_name}: got {actual_type_name}"
-                        )
-                        return self.default_value_for_function(function_node)
-                    if self.function_parameter_is_reference_like(param):
-                        parameter_pointer = pointer_arg
-                    else:
-                        parameter_pointer = self.copy_storage_buffer_pointer_alias(
-                            pointer_arg,
+            for binding in prepared_bindings:
+                param_name = binding["name"]
+                parameter_value = binding["value"]
+                if binding["kind"] == "storage_buffer":
+                    if binding["copy_pointer"]:
+                        parameter_value = self.copy_storage_buffer_pointer_alias(
+                            parameter_value,
                             param_name,
                         )
-                    self.local_variables[param_name] = parameter_pointer
                     self.resource_alias_variables.add(param_name)
-                    continue
-
-                if self.function_parameter_is_reference_like(param):
-                    if self.expression_contains_empty_array_literal(arg):
-                        raise self.unsupported_call_initializer_binding_error(
-                            func_name, index, arg
-                        )
-                    param_type_name = self.function_parameter_type_name(param)
-                    param_value_type = (
-                        self.map_crossgl_type(param_type_name)
-                        if param_type_name is not None
-                        else None
-                    )
-                    if (
-                        param_value_type is not None
-                        and self.array_type_info_from_type(param_value_type) is not None
-                    ):
-                        pointer_arg = self.variable_pointer_from_expression(arg)
-                        source_value_type = (
-                            self.pointer_pointee_type(pointer_arg)
-                            if pointer_arg is not None
-                            else None
-                        )
-                        if pointer_arg is None or source_value_type is None:
-                            self.emit(
-                                f"; WARNING: function call '{func_name}' requires "
-                                f"an array storage argument for parameter {param_name}"
-                            )
-                            return self.default_value_for_function(function_node)
-                        if (
-                            source_value_type.id != param_value_type.id
-                            and not self.aggregate_types_are_layout_compatible(
-                                source_value_type, param_value_type
-                            )
-                        ):
-                            self.emit(
-                                f"; WARNING: function call '{func_name}' requires "
-                                f"{param_type_name} array storage for argument "
-                                f"{self.expression_debug_name(arg)} passed to "
-                                f"parameter {param_name}"
-                            )
-                            return self.default_value_for_function(function_node)
-                        self.local_variables[param_name] = pointer_arg
-                        continue
-
-                param_type_name = self.function_parameter_type_name(param)
-                expected_type = (
-                    self.map_crossgl_type(param_type_name)
-                    if param_type_name is not None
-                    else None
-                )
-                arg_value = self.process_call_argument(
-                    func_name,
-                    arg,
-                    index,
-                    expected_type=expected_type,
-                )
-                if arg_value is None:
-                    self.emit(f"; WARNING: Failed to evaluate argument for {func_name}")
-                    return self.default_value_for_function(function_node)
-                if param_type_name is not None:
-                    arg_value = self.convert_value_to_type(
-                        arg_value,
-                        self.map_crossgl_type(param_type_name),
-                    )
-                self.local_variables[param_name] = arg_value
+                self.local_variables[param_name] = parameter_value
 
             result = self.inline_function_body(function_node)
             if result is not None:
@@ -22777,6 +22688,152 @@ class VulkanSPIRVCodeGen:
             self.current_cooperative_matrix_role_overrides = (
                 previous_cooperative_matrix_role_overrides
             )
+
+    def prepare_pointer_preserving_inline_bindings(
+        self,
+        function_node,
+        call_args,
+        generic_type_substitutions,
+    ):
+        """Evaluate actual arguments under caller scope before binding parameters."""
+        func_name = getattr(function_node, "name", "unknown")
+        prepared = []
+        for index, param, arg in self.storage_buffer_effective_call_bindings(
+            function_node, call_args
+        ):
+            param_name = getattr(param, "name", f"param{index}")
+            if not self.function_parameter_has_reachable_use(function_node, param_name):
+                if not self.side_effect_free_call_argument(arg):
+                    self.process_call_argument(func_name, arg, index)
+                continue
+
+            storage_buffer_type_name = self.storage_buffer_parameter_type_name(param)
+            if storage_buffer_type_name is not None:
+                storage_buffer_type_name = self.substitute_generic_signature_type(
+                    storage_buffer_type_name,
+                    generic_type_substitutions,
+                )
+                if self.expression_contains_empty_array_literal(arg):
+                    raise self.unsupported_call_initializer_binding_error(
+                        func_name, index, arg
+                    )
+                if self.pointer_ternary_statically_selects_null(arg):
+                    raise self.unsupported_null_pointer_argument_error(arg)
+                pointer_arg = self.variable_pointer_from_expression(arg)
+                if pointer_arg is None:
+                    self.emit(
+                        f"; WARNING: function call '{func_name}' requires a "
+                        f"storage buffer argument for parameter {param_name}"
+                    )
+                    return None
+                actual_type_name = self.storage_buffer_expression_type_name(arg)
+                if (
+                    actual_type_name is not None
+                    and not self.storage_buffer_parameter_type_is_compatible(
+                        storage_buffer_type_name, actual_type_name
+                    )
+                ):
+                    self.emit(
+                        f"; WARNING: function call '{func_name}' requires "
+                        f"{storage_buffer_type_name} storage buffer type for "
+                        "argument "
+                        f"{self.expression_debug_name(arg)} "
+                        f"passed to parameter {param_name}: got {actual_type_name}"
+                    )
+                    return None
+                prepared.append(
+                    {
+                        "kind": "storage_buffer",
+                        "name": param_name,
+                        "value": pointer_arg,
+                        "copy_pointer": not self.function_parameter_is_reference_like(
+                            param
+                        ),
+                    }
+                )
+                continue
+
+            param_type_name = self.substitute_generic_signature_type(
+                self.function_parameter_type_name(param),
+                generic_type_substitutions,
+            )
+            if self.function_parameter_requires_pointer_alias(param):
+                if self.expression_contains_empty_array_literal(arg):
+                    raise self.unsupported_call_initializer_binding_error(
+                        func_name, index, arg
+                    )
+                param_value_type = (
+                    self.map_crossgl_type(param_type_name)
+                    if param_type_name is not None
+                    else None
+                )
+                pointer_arg = self.assignable_pointer_from_expression(arg)
+                source_value_type = (
+                    self.pointer_pointee_type(pointer_arg)
+                    if pointer_arg is not None
+                    else None
+                )
+                if pointer_arg is None or source_value_type is None:
+                    raise self.unsupported_reference_argument_error(
+                        func_name,
+                        index,
+                        param_name,
+                        arg,
+                        feature="non-addressable-reference-argument",
+                        reason="the argument is not addressable",
+                    )
+                if param_value_type is not None and (
+                    source_value_type.id != param_value_type.id
+                    and not self.aggregate_types_are_layout_compatible(
+                        source_value_type, param_value_type
+                    )
+                ):
+                    raise self.unsupported_reference_argument_error(
+                        func_name,
+                        index,
+                        param_name,
+                        arg,
+                        feature="incompatible-reference-argument",
+                        reason=(
+                            f"argument type {source_value_type.type.base_type} "
+                            f"is incompatible with {param_type_name}"
+                        ),
+                    )
+                prepared.append(
+                    {
+                        "kind": "reference",
+                        "name": param_name,
+                        "value": pointer_arg,
+                        "copy_pointer": False,
+                    }
+                )
+                continue
+
+            expected_type = (
+                self.map_crossgl_type(param_type_name)
+                if param_type_name is not None
+                else None
+            )
+            arg_value = self.process_call_argument(
+                func_name,
+                arg,
+                index,
+                expected_type=expected_type,
+            )
+            if arg_value is None:
+                self.emit(f"; WARNING: Failed to evaluate argument for {func_name}")
+                return None
+            if expected_type is not None:
+                arg_value = self.convert_value_to_type(arg_value, expected_type)
+            prepared.append(
+                {
+                    "kind": "value",
+                    "name": param_name,
+                    "value": arg_value,
+                    "copy_pointer": False,
+                }
+            )
+        return prepared
 
     def inline_function_body(self, function_node) -> Optional[SpirvId]:
         body = getattr(function_node, "body", [])
