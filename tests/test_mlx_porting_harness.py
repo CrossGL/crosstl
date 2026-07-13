@@ -652,6 +652,28 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         ],
     }
 
+    opengl_frontier = expected_gaps["opengl_frontier_status"]
+    assert opengl_frontier["status"] == "toolchain-validated"
+    assert opengl_frontier["sources"] == list(
+        module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES
+    )
+    assert opengl_frontier["source_count"] == len(
+        module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES
+    )
+    assert opengl_frontier["artifact_count"] == len(
+        module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES
+    )
+    assert opengl_frontier["project_diagnostic_count"] == 0
+    assert opengl_frontier["glslang_compiled_artifact_count"] == 4
+    assert opengl_frontier["spirv_validated_artifact_count"] == 4
+    assert opengl_frontier["glslang_target_environments"] == [
+        "opengl",
+        "spirv1.3",
+    ]
+    assert opengl_frontier["spirv_val_target_environment"] == "spv1.3"
+    assert opengl_frontier["runtime_integration_included"] is False
+    assert opengl_frontier["runtime_parity_claimed"] is False
+
     directx = expected_gaps["directx_toolchain_status"]
     assert directx["dxc_validated_sources"] == list(
         module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
@@ -1024,6 +1046,7 @@ def test_arg_reduce_advances_into_clean_toolchain_frontiers():
     )
     assert module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES == (
         module.MLX_ARG_REDUCE_SOURCE,
+        module.MLX_BINARY_TWO_SOURCE,
         "mlx/backend/metal/kernels/logsumexp.metal",
         "mlx/backend/metal/kernels/softmax.metal",
     )
@@ -1038,6 +1061,38 @@ def test_arg_reduce_advances_into_clean_toolchain_frontiers():
     assert "https://github.com/CrossGL/crosstl/issues/1551" in (
         module.RESOLVED_FRONTIER_ISSUES
     )
+
+
+def test_binary_two_advances_into_opengl_toolchain_frontier_without_source_growth():
+    module = _load_harness()
+    issue = "https://github.com/CrossGL/crosstl/issues/1661"
+    expected_gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert module.MLX_BINARY_TWO_SOURCE in module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
+    assert module.MLX_BINARY_TWO_SOURCE in (
+        module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES
+    )
+    assert len(module.MLX_CLEAN_REDUCED_FRONTIER_SOURCES) == 11
+    assert len(module.MLX_REDUCED_FRONTIER_SOURCES) == 12
+    assert module.MLX_CLEAN_REDUCED_FRONTIER_SOURCES.count(
+        module.MLX_BINARY_TWO_SOURCE
+    ) == 1
+    assert issue in module.RESOLVED_FRONTIER_ISSUES
+    assert issue not in module.FULL_CORPUS_TRACKED_ISSUES
+    assert issue in expected_gaps["resolved_issues"]
+    assert issue not in expected_gaps["tracked_issues"]
+    binary_two = expected_gaps["opengl_frontier_status"][
+        "binary_two_fixed_array_resource_status"
+    ]
+    assert binary_two == {
+        "status": "validated",
+        "resolved_issue": issue,
+        "resolved_by_commit": "db593d19bfa04b7a58ef9f4b6b224842d802173f",
+    }
 
 
 def test_fence_is_blocked_outside_clean_and_directx_toolchain_frontiers():
@@ -1515,8 +1570,10 @@ def _prepare_opengl_frontier_check(module, tmp_path):
             "artifactCount": frontier_count,
             "translatedCount": frontier_count,
             "failedCount": 0,
+            "diagnosticCounts": {"note": 0, "warning": 0, "error": 0},
         },
         "artifacts": artifacts,
+        "diagnostics": [],
     }
     (report_dir / "opengl-frontier.json").write_text(
         json.dumps(report),
@@ -1560,8 +1617,16 @@ def test_opengl_frontier_required_toolchain_compiles_and_validates_artifacts(
 
     assert result["status"] == "passed"
     assert result["sources"] == list(module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES)
+    assert result["sourceCount"] == len(module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES)
     assert result["artifactCount"] == len(module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES)
+    assert result["projectDiagnosticCount"] == 0
     assert result["toolchainRequired"] is True
+    assert result["toolchainValidatedSources"] == list(
+        module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES
+    )
+    assert result["toolchainValidatedArtifactCount"] == len(
+        module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES
+    )
     assert result["nativeValidationStatus"] == "validated"
     assert result["spirvValidator"] == "spirv-val"
     assert result["runtimeIntegrationIncluded"] is False
@@ -1569,6 +1634,8 @@ def test_opengl_frontier_required_toolchain_compiles_and_validates_artifacts(
         "translate-opengl-frontier",
         "validate-arg-reduce-opengl",
         "validate-arg-reduce-opengl-spirv",
+        "validate-binary-two-opengl",
+        "validate-binary-two-opengl-spirv",
         "validate-logsumexp-opengl",
         "validate-logsumexp-opengl-spirv",
         "validate-softmax-opengl",
@@ -1589,6 +1656,18 @@ def test_opengl_frontier_required_toolchain_compiles_and_validates_artifacts(
     assert set(result["nativeValidationOutputs"]) == set(
         module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES
     )
+    commands_by_name = dict(commands)
+    for source in module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES:
+        stem = Path(source).stem
+        command_name = stem.replace("_", "-")
+        generated_path = paths[1] / "out" / "opengl" / f"{stem}.glsl"
+        output_path = paths[0] / result["nativeValidationOutputs"][source]
+        assert str(generated_path) in commands_by_name[
+            f"validate-{command_name}-opengl"
+        ]
+        assert str(output_path) in commands_by_name[
+            f"validate-{command_name}-opengl-spirv"
+        ]
     config = (paths[2] / "opengl-frontier.toml").read_text(encoding="utf-8")
     for source in module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES:
         assert source in config
@@ -1625,6 +1704,8 @@ def test_opengl_frontier_skips_toolchain_when_not_required(tmp_path, monkeypatch
 
     assert commands == ["translate-opengl-frontier"]
     assert result["toolchainRequired"] is False
+    assert result["toolchainValidatedSources"] == []
+    assert result["toolchainValidatedArtifactCount"] == 0
     assert result["nativeValidationStatus"] == "not-required"
     assert result["nativeValidationOutputs"] == {}
 
@@ -1651,6 +1732,38 @@ def test_opengl_frontier_requires_every_clean_artifact(tmp_path, monkeypatch):
         module.PortingCheckError,
         match="every clean translated artifact",
     ):
+        module._check_opengl_frontier(
+            *paths,
+            "python",
+            require_toolchain=False,
+        )
+
+
+def test_opengl_frontier_requires_zero_project_diagnostics(tmp_path, monkeypatch):
+    module = _load_harness()
+    paths = _prepare_opengl_frontier_check(module, tmp_path)
+    report_path = paths[3] / "opengl-frontier.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["summary"]["diagnosticCounts"]["warning"] = 1
+    report["diagnostics"] = [
+        {
+            "severity": "warning",
+            "code": "project.translate.test-warning",
+            "message": "unexpected warning",
+        }
+    ]
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    def fake_run_command(name, command, *, log_dir, **_kwargs):
+        stdout_path = log_dir / f"{name}.stdout"
+        stderr_path = log_dir / f"{name}.stderr"
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text("", encoding="utf-8")
+        return module.CommandResult(name, list(command), 0, stdout_path, stderr_path)
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+
+    with pytest.raises(module.PortingCheckError, match="zero project diagnostics"):
         module._check_opengl_frontier(
             *paths,
             "python",

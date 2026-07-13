@@ -165,10 +165,17 @@ jobs:
         run: |
           python - <<'PY'
           import json
+          import os
           from pathlib import Path
 
           fence_source = "mlx/backend/metal/kernels/fence.metal"
           fence_issue = "https://github.com/CrossGL/crosstl/issues/1537"
+          opengl_frontier_sources = {
+              "mlx/backend/metal/kernels/arg_reduce.metal",
+              "mlx/backend/metal/kernels/binary_two.metal",
+              "mlx/backend/metal/kernels/logsumexp.metal",
+              "mlx/backend/metal/kernels/softmax.metal",
+          }
           payload = json.loads(
               Path("mlx-upstream/.crosstl-mlx-porting/summary.json").read_text(
                   encoding="utf-8"
@@ -185,6 +192,28 @@ jobs:
           fence = checks["atomic-fence-contract"]
           if fence["failedArtifactCount"] != 3 or fence["emittedArtifactCount"] != 0:
               raise SystemExit("fence contract accounting must be 3 failed, 0 emitted")
+          opengl = checks["opengl-frontier"]
+          if set(opengl["sources"]) != opengl_frontier_sources:
+              raise SystemExit("expected 4 OpenGL toolchain frontier sources")
+          if (
+              opengl["sourceCount"] != 4
+              or opengl["artifactCount"] != 4
+              or opengl["projectDiagnosticCount"] != 0
+          ):
+              raise SystemExit("OpenGL frontier accounting must be 4 sources, 4 artifacts, and 0 project diagnostics")
+          if os.environ["RUNNER_OS"] == "Linux":
+              validated_sources = set(opengl["toolchainValidatedSources"])
+              validation_outputs = set(opengl["nativeValidationOutputs"])
+              if (
+                  opengl["toolchainRequired"] is not True
+                  or opengl["nativeValidationStatus"] != "validated"
+                  or opengl["toolchainValidatedArtifactCount"] != 4
+                  or validated_sources != opengl_frontier_sources
+                  or validation_outputs != opengl_frontier_sources
+              ):
+                  raise SystemExit(
+                      "OpenGL frontier toolchain must validate all 4 source paths"
+                  )
           PY
 
       - name: Upload MLX project-porting reports

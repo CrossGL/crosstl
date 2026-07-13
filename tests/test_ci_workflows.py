@@ -2126,6 +2126,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "--mode reduced-frontier" in mlx_porting
     assert "--require-metal-toolchain" in mlx_porting
     assert "--require-directx-toolchain" in mlx_porting
+    assert "--require-opengl-frontier-toolchain" in mlx_porting
     assert "--require-opengl-gemv-toolchain" in mlx_porting
     assert "--require-vulkan-gemv-toolchain" in mlx_porting
     assert "--require-vulkan-native-runtime" in mlx_porting
@@ -2148,6 +2149,13 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "Verify MLX frontier accounting" in mlx_porting
     assert "expected 11 clean MLX frontier sources" in mlx_porting
     assert "fence contract accounting must be 3 failed, 0 emitted" in mlx_porting
+    assert "expected 4 OpenGL toolchain frontier sources" in mlx_porting
+    assert (
+        "OpenGL frontier accounting must be 4 sources, 4 artifacts, "
+        "and 0 project diagnostics"
+    ) in mlx_porting
+    assert "OpenGL frontier toolchain must validate all 4 source paths" in mlx_porting
+    assert "mlx/backend/metal/kernels/binary_two.metal" in mlx_porting
     assert "mesa-vulkan-drivers" in mlx_porting
     assert "python -m pip install vulkan==1.3.275.1" in mlx_porting
     assert "vulkaninfo --summary" in mlx_porting
@@ -2191,6 +2199,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
             harness
         )
     for resolved_issue_number in (
+        1661,
         1184,
         1203,
         1204,

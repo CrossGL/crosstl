@@ -49,9 +49,10 @@ The current harness verifies:
 - OpenGL artifact generation for `arange.metal`, including deterministic
   separation of the source `float` and `bfloat16_t` helper declarations after
   both map to GLSL `float` and source-typed call rewriting coverage;
-- OpenGL artifact generation for the clean `arg_reduce.metal`,
-  `logsumexp.metal`, and `softmax.metal` frontier. In the CI-required mode every
-  artifact compiles for OpenGL/SPIR-V 1.3 and passes `spirv-val`;
+- OpenGL artifact generation for the clean four-source `arg_reduce.metal`,
+  `binary_two.metal`, `logsumexp.metal`, and `softmax.metal` frontier. Project
+  translation must emit four artifacts with zero diagnostics. In the CI-required
+  mode every artifact compiles for OpenGL/SPIR-V 1.3 and passes `spirv-val`;
 - on Linux CI, full project materialization of `gemv.metal` to OpenGL followed
   by native GLSL compilation and SPIR-V 1.3 validation for all 225 source
   specializations represented by the generated artifact;
@@ -85,6 +86,8 @@ expected failed `fence.metal` records, one per target, with no fence target file
 emitted. Additional failures remain issue-backed scout results. CI uploads
 generated portability reports, validation summaries embedded in those reports,
 generated logs, available generated artifacts, and a concise JSON summary.
+Because `binary_two.metal` was already in the DirectX/Vulkan frontier, its OpenGL
+promotion does not change either reduced source count.
 
 The checked-in historical full-corpus scout snapshot against the same pinned MLX revision
 scanned 40 Metal kernels and attempted 120 target artifacts across DirectX,
@@ -244,6 +247,14 @@ cbuffer. The aggregate OpenGL module typechecks every generated kernel body but
 exposes only the first as `main`; entry-scoped packaging for the other 23 kernels
 remains tracked in
 [#1523](https://github.com/CrossGL/crosstl/issues/1523).
+`binary_two.metal` now also belongs to the required OpenGL toolchain frontier.
+CrossTL commit `db593d19b` specializes fixed-array helper views to their concrete
+runtime storage resources while retaining fixed extents and offsets. For the
+pinned source, project translation emits zero diagnostics, the generated GLSL
+compiles for OpenGL/SPIR-V 1.3, and the resulting SPIR-V passes `spirv-val`. This
+resolves [#1661](https://github.com/CrossGL/crosstl/issues/1661) for the pinned
+frontier. It is artifact and toolchain evidence only; it does not establish
+numerical or runtime parity.
 `rms_norm.metal` remains outside the OpenGL/SPIR-V gate until Metal function
 constants are preserved as specialization inputs under
 [#1538](https://github.com/CrossGL/crosstl/issues/1538).
@@ -381,7 +392,8 @@ rejected explicitly and tracked in CrossGL/crosstl#1562.
 ## Resolved Frontier Issues
 
 The current reduced frontier no longer depends on the previously tracked issues:
-CrossGL/crosstl#1573, CrossGL/crosstl#1555, CrossGL/crosstl#1561,
+CrossGL/crosstl#1661, CrossGL/crosstl#1573, CrossGL/crosstl#1555,
+CrossGL/crosstl#1561,
 CrossGL/crosstl#1551,
 CrossGL/crosstl#1498,
 CrossGL/crosstl#1394,
@@ -444,3 +456,6 @@ rewriting. CrossGL/crosstl#1502 is covered by contextual GLSL aggregate
 construction for struct, fixed-array, vector, and matrix values.
 CrossGL/crosstl#1503 is covered by explicit expected-type scalar coercion for
 numeric-to-Boolean returns and signed mixed-width `arange` arithmetic.
+CrossGL/crosstl#1661 is covered for pinned `binary_two.metal` by fixed-array
+resource helper specialization in CrossTL commit `db593d19b` and the required
+OpenGL/SPIR-V 1.3 compilation and validation gate.

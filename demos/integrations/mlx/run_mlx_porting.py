@@ -33,6 +33,7 @@ MLX_COMMIT = "968d264f2903d578e699c4452a4dbf48633921aa"
 MLX_METAL_KERNEL_ROOT = "mlx/backend/metal/kernels"
 MLX_ARANGE_SOURCE = "mlx/backend/metal/kernels/arange.metal"
 MLX_ARG_REDUCE_SOURCE = "mlx/backend/metal/kernels/arg_reduce.metal"
+MLX_BINARY_TWO_SOURCE = "mlx/backend/metal/kernels/binary_two.metal"
 MLX_FENCE_SOURCE = "mlx/backend/metal/kernels/fence.metal"
 MLX_FENCE_EXPECTED_ATOMIC_FENCE_COUNT = 3
 MLX_GEMV_SOURCE = "mlx/backend/metal/kernels/gemv.metal"
@@ -43,13 +44,14 @@ MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE = (
 )
 MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES = (
     MLX_ARG_REDUCE_SOURCE,
+    MLX_BINARY_TWO_SOURCE,
     "mlx/backend/metal/kernels/logsumexp.metal",
     "mlx/backend/metal/kernels/softmax.metal",
 )
 MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
     "mlx/backend/metal/kernels/arange.metal",
     MLX_ARG_REDUCE_SOURCE,
-    "mlx/backend/metal/kernels/binary_two.metal",
+    MLX_BINARY_TWO_SOURCE,
     "mlx/backend/metal/kernels/layer_norm.metal",
     "mlx/backend/metal/kernels/logsumexp.metal",
     "mlx/backend/metal/kernels/random.metal",
@@ -218,6 +220,7 @@ FULL_CORPUS_TRACKED_ISSUES = (
     *METAL_ROUNDTRIP_SEMANTIC_TRACKED_ISSUES,
 )
 RESOLVED_FRONTIER_ISSUES = (
+    "https://github.com/CrossGL/crosstl/issues/1661",
     "https://github.com/CrossGL/crosstl/issues/1573",
     "https://github.com/CrossGL/crosstl/issues/1555",
     "https://github.com/CrossGL/crosstl/issues/1561",
@@ -1796,6 +1799,12 @@ def _check_opengl_frontier(
         "OpenGL frontier artifacts must be a list",
     )
     frontier_count = len(MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES)
+    diagnostic_counts = summary.get("diagnosticCounts", {})
+    diagnostics = payload.get("diagnostics", [])
+    _require(
+        isinstance(diagnostic_counts, Mapping) and isinstance(diagnostics, list),
+        "OpenGL frontier diagnostics must be reported as structured collections",
+    )
     _require(
         summary.get("unitCount") == frontier_count
         and summary.get("artifactCount") == frontier_count
@@ -1803,6 +1812,14 @@ def _check_opengl_frontier(
         and summary.get("failedCount") == 0
         and len(artifacts) == frontier_count,
         "OpenGL frontier report did not contain every clean translated artifact",
+    )
+    _require(
+        not diagnostics
+        and all(
+            diagnostic_counts.get(severity) == 0
+            for severity in ("note", "warning", "error")
+        ),
+        "OpenGL frontier translation must complete with zero project diagnostics",
     )
     artifacts_by_source = {
         artifact.get("source"): artifact
@@ -1832,6 +1849,7 @@ def _check_opengl_frontier(
 
     validation_status = "not-required"
     validation_outputs: dict[str, str] = {}
+    toolchain_validated_sources: list[str] = []
     if require_toolchain:
         required_tools = {
             "glslangValidator": shutil.which("glslangValidator"),
@@ -1897,6 +1915,12 @@ def _check_opengl_frontier(
                 ),
             )
             validation_outputs[source] = _relpath(output_path, mlx_root)
+            toolchain_validated_sources.append(source)
+        _require(
+            toolchain_validated_sources
+            == list(MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES),
+            "OpenGL frontier toolchain did not validate every configured source",
+        )
         validation_status = "validated"
 
     return {
@@ -1904,9 +1928,13 @@ def _check_opengl_frontier(
         "status": "passed",
         "report": _relpath(report_path, mlx_root),
         "sources": list(MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES),
+        "sourceCount": frontier_count,
         "target": "opengl",
         "artifactCount": frontier_count,
+        "projectDiagnosticCount": 0,
         "toolchainRequired": require_toolchain,
+        "toolchainValidatedSources": toolchain_validated_sources,
+        "toolchainValidatedArtifactCount": len(toolchain_validated_sources),
         "nativeValidationStatus": validation_status,
         "nativeValidator": "glslangValidator",
         "spirvValidator": "spirv-val",

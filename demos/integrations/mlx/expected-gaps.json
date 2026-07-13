@@ -110,6 +110,33 @@
       "https://github.com/CrossGL/crosstl/issues/1523"
     ]
   },
+  "opengl_frontier_status": {
+    "status": "toolchain-validated",
+    "sources": [
+      "mlx/backend/metal/kernels/arg_reduce.metal",
+      "mlx/backend/metal/kernels/binary_two.metal",
+      "mlx/backend/metal/kernels/logsumexp.metal",
+      "mlx/backend/metal/kernels/softmax.metal"
+    ],
+    "source_count": 4,
+    "target": "opengl",
+    "artifact_count": 4,
+    "project_diagnostic_count": 0,
+    "glslang_compiled_artifact_count": 4,
+    "spirv_validated_artifact_count": 4,
+    "glslang_target_environments": [
+      "opengl",
+      "spirv1.3"
+    ],
+    "spirv_val_target_environment": "spv1.3",
+    "binary_two_fixed_array_resource_status": {
+      "status": "validated",
+      "resolved_issue": "https://github.com/CrossGL/crosstl/issues/1661",
+      "resolved_by_commit": "db593d19bfa04b7a58ef9f4b6b224842d802173f"
+    },
+    "runtime_integration_included": false,
+    "runtime_parity_claimed": false
+  },
   "pointer_reinterpretation_status": {
     "status": "partial",
     "source": "mlx/backend/metal/kernels/quantized_nax.metal",
@@ -549,6 +576,7 @@
     "https://github.com/CrossGL/crosstl/issues/1660"
   ],
   "resolved_issues": [
+    "https://github.com/CrossGL/crosstl/issues/1661",
     "https://github.com/CrossGL/crosstl/issues/1573",
     "https://github.com/CrossGL/crosstl/issues/1555",
     "https://github.com/CrossGL/crosstl/issues/1561",
