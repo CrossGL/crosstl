@@ -32,12 +32,14 @@ from crosstl.translator.codegen.GLSL_codegen import (
     GLSLCodeGen,
     OpenGLAggregateInitializerError,
     OpenGLBooleanCompoundAssignmentError,
+    OpenGLCompoundAssignmentError,
     OpenGLCooperativeMatrixError,
     OpenGLGlobalInitializerError,
     OpenGLIndexTypeError,
     OpenGLMappedOverloadError,
     OpenGLReferenceParameterError,
     OpenGLScalarConversionError,
+    OpenGLStructConstructionError,
     OpenGLWorkgroupPointerError,
 )
 from crosstl.translator.lexer import Lexer
@@ -2592,6 +2594,37 @@ def test_glsl_normalizes_64_bit_subscript_indices(tmp_path):
     assert "target[uint(offsets.y)] = values[int(int64_t(1))];" in generated
     assert_glsl_compute_validates_if_available(
         generated, tmp_path, "wide_subscript_indices"
+    )
+
+
+def test_glsl_generic_integer_vector_component_preserves_index_type(tmp_path):
+    shader = """
+    shader GenericVectorSubscriptIndex {
+        StructuredBuffer<uint> source @ binding(0);
+        RWStructuredBuffer<uint> target @ binding(1);
+
+        uint readValue(vec<int64, 2> location) {
+            return buffer_load(source, location.y);
+        }
+
+        compute {
+            [numthreads(1, 1, 1)]
+            void main() {
+                vec<int64, 2> location =
+                    vec<int64, 2>(int64_t(0), int64_t(1));
+                buffer_store(target, 0, readValue(location));
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "uint readValue(i64vec2 location)" in generated
+    assert "return source[int(location.y)];" in generated
+    assert "float(location.y)" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "generic_vector_subscript_index"
     )
 
 
@@ -8408,6 +8441,71 @@ def test_opengl_complex64_struct_operators_lower_to_helpers(tmp_path):
         )
     )
     assert "crossgl_complex64_" not in reused
+
+
+def test_opengl_contextual_scalar_to_complex_return_conversion(tmp_path):
+    shader = """
+    shader ContextualScalarToComplexReturn {
+        struct complex64_t {
+            float real;
+            float imag;
+        };
+
+        complex64_t quietNaN(uint payload) {
+            return asfloat(payload);
+        }
+
+        compute {
+            void main() {
+                complex64_t value = quietNaN(2143289344u);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "return complex64_t(float(uintBitsToFloat(payload)), 0.0);" in generated
+    )
+    assert "return uintBitsToFloat(payload);" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "contextual_scalar_to_complex_return",
+        spirv_target="spirv1.3",
+    )
+
+
+def test_opengl_preserves_fieldwise_complex_aggregate_return(tmp_path):
+    shader = """
+    shader FieldwiseComplexAggregateReturn {
+        struct complex64_t {
+            float real;
+            float imag;
+        };
+
+        complex64_t makeValue(float real, float imag) {
+            return {real, imag};
+        }
+
+        compute {
+            void main() {
+                complex64_t value = makeValue(1.0, 2.0);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "return complex64_t(real, imag);" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "fieldwise_complex_aggregate_return",
+        spirv_target="spirv1.3",
+    )
 
 
 def test_opengl_same_type_struct_constructor_lowers_to_copy(tmp_path):
@@ -29142,6 +29240,67 @@ def test_opengl_preserves_integer_bitwise_compound_assignments(tmp_path):
     )
 
 
+def test_opengl_lowers_mixed_signedness_compound_assignment(tmp_path):
+    shader = """
+    shader MixedSignednessCompoundAssignment {
+        compute {
+            void main() {
+                ivec2 location = ivec2(0, 0);
+                uint lane = 1u;
+                int stride = 2;
+                location.x += lane * uint(stride);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "location.x = int((uint(location.x) + (lane * uint(stride))));"
+        in generated_code
+    )
+    assert "location.x +=" not in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "mixed_signedness_compound_assignment",
+        spirv_target="spirv1.3",
+    )
+
+
+def test_opengl_rejects_mixed_compound_assignment_with_side_effecting_index():
+    shader = """
+    shader SideEffectingMixedCompoundAssignmentIndex {
+        uint nextIndex(inout uint calls) {
+            calls += 1u;
+            return 0u;
+        }
+
+        compute {
+            void main() {
+                uint calls = 0u;
+                int values[2] = {0, 0};
+                values[nextIndex(calls)] += 1u;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLCompoundAssignmentError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.opengl-compound-assignment-invalid"
+    )
+    assert diagnostic.operator == "+="
+    assert diagnostic.target_type == "int"
+    assert diagnostic.value_type == "uint"
+    assert diagnostic.common_type == "uint"
+    assert diagnostic.reason == "lvalue-side-effects"
+
+
 def test_opengl_converts_mixed_integer_conditional_to_expected_type(tmp_path):
     shader = """
     shader MixedIntegerConditional {
@@ -29703,6 +29862,153 @@ def test_opengl_empty_struct_emits_placeholder_member():
 
     assert "struct Marker {\n    int _crossgl_empty;\n};" in generated_code
     assert "struct Marker {}" not in generated_code
+
+
+def test_opengl_lowers_empty_struct_program_global_to_private_placeholder(tmp_path):
+    shader = """
+    shader EmptyLogHandleConstructor {
+        struct LogHandle {
+        };
+
+        LogHandle logger = LogHandle("mlx", "binary_ops");
+
+        compute {
+            void main() {
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "uniform LogHandle logger" not in generated_code
+    assert "LogHandle logger = LogHandle(0);" in generated_code
+    assert 'LogHandle("mlx", "binary_ops")' not in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "private_empty_struct_program_global",
+        spirv_target="spirv1.3",
+    )
+
+
+def test_opengl_preserves_live_empty_struct_program_global_references(tmp_path):
+    shader = """
+    shader LiveEmptyStructProgramGlobal {
+        struct Marker {
+        };
+
+        Marker marker = Marker();
+
+        Marker loadMarker() {
+            return marker;
+        }
+
+        compute {
+            void main() {
+                marker = loadMarker();
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "uniform Marker marker" not in generated_code
+    assert "Marker marker = Marker(0);" in generated_code
+    assert "return marker;" in generated_code
+    assert "marker = loadMarker();" in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "live_empty_struct_program_global",
+        spirv_target="spirv1.3",
+    )
+
+
+def test_opengl_rejects_omitting_side_effecting_empty_struct_program_global():
+    shader = """
+    shader SideEffectingEmptyStructProgramGlobal {
+        struct Marker {
+        };
+
+        int counter = 0;
+
+        int increment(inout int value) {
+            value += 1;
+            return value;
+        }
+
+        Marker marker = Marker(increment(counter));
+
+        compute {
+            void main() {
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLGlobalInitializerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.opengl-global-initializer-invalid"
+    )
+    assert diagnostic.variable_name == "marker"
+    assert diagnostic.dependencies == ("counter",)
+    assert diagnostic.reason == "empty-structure-global-initializer-side-effects"
+
+
+def test_opengl_local_empty_struct_constructor_validates_placeholder(tmp_path):
+    shader = """
+    shader LocalEmptyLogHandleConstructor {
+        struct LogHandle {
+        };
+
+        compute {
+            void main() {
+                LogHandle logger = LogHandle("mlx", "binary_ops");
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "LogHandle logger = LogHandle(0);" in generated_code
+    assert 'LogHandle("mlx", "binary_ops")' not in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "empty_log_handle_constructor",
+        spirv_target="spirv1.3",
+    )
+
+
+def test_opengl_empty_struct_constructor_rejects_side_effecting_arguments():
+    shader = """
+    shader EmptyStructConstructorSideEffect {
+        struct Marker {
+        };
+
+        int increment(inout int value) {
+            value += 1;
+            return value;
+        }
+
+        Marker makeMarker(inout int value) {
+            return Marker(increment(value));
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLStructConstructionError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert exc_info.value.destination_type == "Marker"
+    assert exc_info.value.conversion_kind == "empty-structure-construction"
+    assert exc_info.value.reason == "constructor-arguments-have-side-effects"
 
 
 def test_opengl_skips_uncalled_helpers_with_unresolved_template_types():

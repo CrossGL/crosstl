@@ -440,6 +440,34 @@ class OpenGLBooleanCompoundAssignmentError(ValueError):
         self.source_location = source_location
 
 
+class OpenGLCompoundAssignmentError(ValueError):
+    """Raised when a source compound assignment has no faithful GLSL form."""
+
+    project_diagnostic_code = "project.translate.opengl-compound-assignment-invalid"
+    missing_capabilities = ("opengl.compound-assignment-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        operator=None,
+        target=None,
+        target_type=None,
+        value_type=None,
+        common_type=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.operator = operator
+        self.target = target
+        self.target_type = target_type
+        self.value_type = value_type
+        self.common_type = common_type
+        self.reason = reason
+        self.source_location = source_location
+
+
 class OpenGLComplexArithmeticError(ValueError):
     """Raised when complex arithmetic has no faithful GLSL lowering."""
 
@@ -997,6 +1025,7 @@ class GLSLCodeGen:
         "|=": "|",
     }
     GLSL_BFLOAT16_ALIASES = {"bfloat", "bfloat16", "bfloat16_t"}
+    GLSL_REGISTERED_SCALAR_STRUCT_CONVERSIONS = {"complex64_t"}
     GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS = {
         "clamp",
         "floatBitsToInt",
@@ -3421,6 +3450,14 @@ class GLSLCodeGen:
             for node in list(getattr(ast, "global_variables", []) or [])
             if not self.is_elided_glsl_type_alias_global(node)
         ]
+        empty_struct_global_ids = self.collect_glsl_empty_struct_global_ids(
+            global_vars
+        )
+        runtime_initialized_global_vars = [
+            node
+            for node in global_vars
+            if id(node) not in empty_struct_global_ids
+        ]
         stage_local_resource_vars = collect_stage_local_variables(
             ast, target_stage, self.is_stage_local_resource_variable
         )
@@ -3528,7 +3565,7 @@ class GLSLCodeGen:
         }
         self.prepare_glsl_runtime_global_initializers(
             ast,
-            global_vars,
+            runtime_initialized_global_vars,
             functions,
             target_stage,
         )
@@ -3889,6 +3926,13 @@ class GLSLCodeGen:
             declaration = format_c_style_array_declaration(
                 f"{mapped_type}{array_suffix}", var_name
             )
+            if id(node) in empty_struct_global_ids:
+                code += self.generate_glsl_empty_struct_global_declaration(
+                    node,
+                    declaration,
+                    f"{mapped_type}{array_suffix}",
+                )
+                continue
             if self.is_opaque_resource_type(mapped_type):
                 binding_namespace = (
                     "image binding"
@@ -12412,6 +12456,70 @@ class GLSLCodeGen:
             return "const "
         return "uniform "
 
+    def glsl_empty_struct_type_name(self, vtype):
+        type_name = self.type_name_string(vtype)
+        if not type_name:
+            return None
+        base_type, _array_suffix = split_array_type_suffix(type_name)
+        resolved_type = self.resolve_glsl_type_alias(base_type.strip())
+        mapped_type = self.map_type(resolved_type)
+        candidates = (
+            mapped_type,
+            resolved_type,
+            base_type.strip(),
+            mapped_type.rsplit("::", 1)[-1],
+            resolved_type.rsplit("::", 1)[-1],
+        )
+        for candidate in candidates:
+            struct_node = self.structs_by_name.get(candidate)
+            if struct_node is not None and not list(
+                getattr(struct_node, "members", []) or []
+            ):
+                return candidate
+        return None
+
+    def collect_glsl_empty_struct_global_ids(self, global_vars):
+        global_names = {
+            self.resource_node_name(node)
+            for node in global_vars or []
+            if self.resource_node_name(node)
+        }
+        omitted = set()
+        for node in global_vars or []:
+            if self.glsl_empty_struct_type_name(self.resource_node_type(node)) is None:
+                continue
+            initializer = getattr(node, "initial_value", None)
+            if initializer is not None and not self.glsl_side_effect_free_expression(
+                initializer
+            ):
+                name = self.resource_node_name(node, "<unnamed>")
+                dependencies = self.glsl_global_initializer_dependencies(
+                    initializer, global_names
+                )
+                raise OpenGLGlobalInitializerError(
+                    "OpenGL cannot lower empty-structure global "
+                    f"'{name}' because discarding its initializer arguments may "
+                    "lose side effects",
+                    variable_name=name,
+                    dependencies=dependencies,
+                    reason="empty-structure-global-initializer-side-effects",
+                    source_location=getattr(initializer, "source_location", None)
+                    or getattr(node, "source_location", None),
+                )
+            omitted.add(id(node))
+        return omitted
+
+    def generate_glsl_empty_struct_global_declaration(
+        self, node, declaration, expected_type
+    ):
+        initializer = getattr(node, "initial_value", None)
+        if initializer is None:
+            return f"{declaration};\n"
+        rendered_initializer = self.generate_expression_with_expected(
+            initializer, expected_type
+        )
+        return f"{declaration} = {rendered_initializer};\n"
+
     def prepare_glsl_runtime_global_initializers(
         self, ast, global_vars, functions, target_stage
     ):
@@ -13280,6 +13388,16 @@ complex64_t crossgl_complex64_mod_assign(
             return None
         return f"complex64_t({real}, 0.0)"
 
+    def glsl_registered_scalar_to_struct_conversion(
+        self, rendered, source_type, destination_type
+    ):
+        destination_type = self.map_type(destination_type)
+        if destination_type not in self.GLSL_REGISTERED_SCALAR_STRUCT_CONVERSIONS:
+            return None
+        if destination_type == "complex64_t":
+            return self.glsl_complex64_operand(rendered, source_type)
+        return None
+
     def glsl_struct_construction_error(
         self,
         expr,
@@ -13303,6 +13421,20 @@ complex64_t crossgl_complex64_mod_assign(
     def glsl_struct_constructor_conversion(self, expr, constructor, arguments):
         if constructor not in self.structs_by_name:
             return None
+        struct_node = self.structs_by_name[constructor]
+        if not list(getattr(struct_node, "members", []) or []):
+            if all(
+                self.glsl_side_effect_free_expression(argument)
+                for argument in arguments
+            ):
+                return f"{constructor}(0)"
+            self.glsl_struct_construction_error(
+                expr,
+                constructor,
+                None,
+                "empty-structure-construction",
+                "constructor-arguments-have-side-effects",
+            )
         if not arguments:
             if constructor == "complex64_t":
                 return "complex64_t(0.0, 0.0)"
@@ -13316,10 +13448,11 @@ complex64_t crossgl_complex64_mod_assign(
         if source_type is not None and self.map_type(source_type) == constructor:
             return rendered
 
-        if constructor == "complex64_t":
-            promoted = self.glsl_complex64_operand(rendered, source_type)
-            if promoted is not None:
-                return promoted
+        promoted = self.glsl_registered_scalar_to_struct_conversion(
+            rendered, source_type, constructor
+        )
+        if promoted is not None:
+            return promoted
 
         constructor_fields = list(
             self.struct_member_types.get(constructor, {}).values()
@@ -13858,6 +13991,38 @@ complex64_t crossgl_complex64_mod_assign(
     def glsl_expected_type_conversion(self, expr, generated, expected_type):
         if expected_type is None or not isinstance(generated, str):
             return generated
+        mapped_expected_type = self.map_type(expected_type)
+        if (
+            mapped_expected_type
+            in self.GLSL_REGISTERED_SCALAR_STRUCT_CONVERSIONS
+        ):
+            actual_type = self.glsl_source_expression_type(expr)
+            actual = self.glsl_value_type_info(actual_type)
+            is_destination_type = (
+                actual_type is not None
+                and self.map_type(actual_type) == mapped_expected_type
+            )
+            if is_destination_type or (actual is not None and actual["width"] == 1):
+                converted = self.glsl_registered_scalar_to_struct_conversion(
+                    generated, actual_type, mapped_expected_type
+                )
+                if converted is not None:
+                    return converted
+                self.glsl_struct_construction_error(
+                    expr,
+                    mapped_expected_type,
+                    actual_type,
+                    "contextual-scalar-conversion",
+                    "source-shape-unsupported",
+                )
+            if actual is not None:
+                self.glsl_struct_construction_error(
+                    expr,
+                    mapped_expected_type,
+                    actual_type,
+                    "contextual-scalar-conversion",
+                    "source-shape-unsupported",
+                )
         expected = self.glsl_value_type_info(expected_type)
         if expected is None:
             return generated
@@ -15483,6 +15648,19 @@ complex64_t crossgl_complex64_mod_assign(
                     expression.false_expr,
                 )
             )
+        if isinstance(expression, FunctionCallNode):
+            constructor = self.glsl_constructor_type(
+                self.function_call_name(expression)
+            )
+            if constructor is None:
+                return False
+            return all(
+                self.glsl_side_effect_free_expression(argument)
+                for argument in (
+                    getattr(expression, "arguments", getattr(expression, "args", []))
+                    or []
+                )
+            )
         if isinstance(expression, ConstructorNode):
             return all(
                 self.glsl_side_effect_free_expression(argument)
@@ -15545,6 +15723,49 @@ complex64_t crossgl_complex64_mod_assign(
                 reason="lvalue-side-effects",
                 source_location=getattr(source_node, "source_location", None),
             )
+        operation = BinaryOpNode(
+            target,
+            binary_operator,
+            value,
+            source_location=getattr(source_node, "source_location", None),
+        )
+        return self.generate_expression_with_expected(operation, expected_type)
+
+    def glsl_converted_compound_assignment_value(
+        self, target, value, binary_operator, expected_type, source_node
+    ):
+        if binary_operator is None or expected_type is None:
+            return None
+        value_type = self.glsl_source_expression_type(value)
+        conversion_types = self.glsl_binary_operand_conversion_types(
+            expected_type, value_type, binary_operator
+        )
+        if conversion_types is None:
+            return None
+        target_operand_type, value_operand_type = conversion_types
+        if (
+            self.map_type(target_operand_type) == self.map_type(expected_type)
+            and self.map_type(value_operand_type) == self.map_type(value_type)
+        ):
+            return None
+
+        common_type = self.glsl_common_arithmetic_type(
+            expected_type, value_type, binary_operator
+        )
+        if not self.glsl_stable_update_target(target):
+            target_name = expression_debug_name(target)
+            raise OpenGLCompoundAssignmentError(
+                "OpenGL cannot safely lower mixed-type compound assignment "
+                f"'{binary_operator}=' for side-effecting lvalue '{target_name}'",
+                operator=f"{binary_operator}=",
+                target=target_name,
+                target_type=self.type_name_string(expected_type),
+                value_type=self.type_name_string(value_type),
+                common_type=self.type_name_string(common_type),
+                reason="lvalue-side-effects",
+                source_location=getattr(source_node, "source_location", None),
+            )
+
         operation = BinaryOpNode(
             target,
             binary_operator,
@@ -15628,6 +15849,15 @@ complex64_t crossgl_complex64_mod_assign(
         )
         if complex_assignment is not None:
             return complex_assignment
+        converted_assignment = self.glsl_converted_compound_assignment_value(
+            left_node,
+            right_node,
+            binary_operator,
+            expected_type,
+            node,
+        )
+        if converted_assignment is not None:
+            return f"{left} = {converted_assignment}"
         right = self.generate_expression_with_expected(
             right_node, expected_type if op == "=" else None
         )
@@ -23580,6 +23810,19 @@ complex64_t crossgl_complex64_mod_assign(
             substituted_type = substitute_generic_type_name(vtype_str, substitutions)
             if substituted_type != vtype_str:
                 return self.map_type(substituted_type)
+
+        vector_base, vector_args = generic_type_parts(vtype_str)
+        if (
+            len(vector_args) == 2
+            and vector_base.rsplit("::", 1)[-1] == "vec"
+            and vector_args[1].strip() in {"2", "3", "4"}
+        ):
+            component_type = self.map_type(vector_args[0])
+            vector_type = self.glsl_vector_type_for_component(
+                component_type, int(vector_args[1])
+            )
+            if vector_type is not None:
+                return vector_type
 
         if self.is_ray_query_type_name(vtype_str):
             return "rayQueryEXT"
