@@ -49,6 +49,7 @@ from ..ast import (
     WaveOpNode,
     WhileNode,
 )
+from ..standard_constants import render_standard_math_constant
 from ..validation import (
     IMAGE_RESOURCE_INTRINSIC_NAMES,
     INTEGER_COORDINATE_INTRINSIC_NAMES,
@@ -933,6 +934,7 @@ class HLSLCodeGen:
         self.directx_resource_register_overrides = {}
         self.literal_int_constants = {}
         self.literal_bool_constants = {}
+        self.standard_math_constant_shadow_names = set()
         self.current_identifier_aliases = {}
         self.current_identifier_reserved_names = set()
         self.current_function_name = None
@@ -1536,6 +1538,7 @@ class HLSLCodeGen:
         self.current_hlsl_resource_pointer_offsets = {}
         self.current_hlsl_resource_pointer_aliases = {}
         self.current_global_resource_declaration_nodes = None
+        self.standard_math_constant_shadow_names = set()
         self.hlsl_fixed_array_return_structs = {}
         self.hlsl_fixed_array_return_struct_nodes = {}
         self.hlsl_fixed_array_return_struct_metadata = {}
@@ -1649,6 +1652,26 @@ class HLSLCodeGen:
                 self.generic_enum_struct_definitions
             ),
         }
+        self.standard_math_constant_shadow_names = {
+            getattr(node, "name", None)
+            for node in getattr(ast, "constants", []) or []
+            if getattr(node, "name", None)
+        }
+        for import_node in getattr(ast, "imports", []) or []:
+            alias = getattr(import_node, "alias", None)
+            if alias:
+                self.standard_math_constant_shadow_names.add(alias)
+            self.standard_math_constant_shadow_names.update(
+                item
+                for item in getattr(import_node, "items", []) or []
+                if item
+            )
+        self.standard_math_constant_shadow_names.update(
+            getattr(variant, "name", None)
+            for enum in self.plain_enums + self.struct_payload_enums
+            for variant in getattr(enum, "variants", []) or []
+            if getattr(variant, "name", None)
+        )
         cbuffers = self.hlsl_cbuffer_nodes(ast, target_stage)
         global_vars = self.global_resource_declaration_nodes(ast, target_stage)
         cbuffers = cbuffers + self.hlsl_stage_entry_scalar_constant_cbuffers(
@@ -7948,6 +7971,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             enum_value = enum_value_expression(self, name)
             if enum_value != name:
                 return enum_value
+            standard_constant = self.hlsl_standard_math_constant_expression(name)
+            if standard_constant is not None:
+                return standard_constant
             self.hlsl_workgroup_pointer_bare_expression_error(expr)
             return self.hlsl_identifier_name(name)
         elif isinstance(expr, VariableNode):
@@ -7961,6 +7987,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             enum_value = enum_value_expression(self, expr.name)
             if enum_value != expr.name:
                 return enum_value
+            standard_constant = self.hlsl_standard_math_constant_expression(expr.name)
+            if standard_constant is not None:
+                return standard_constant
             self.hlsl_workgroup_pointer_bare_expression_error(expr)
             return self.hlsl_identifier_name(expr.name)
         elif hasattr(expr, "__class__") and "BinaryOp" in str(expr.__class__):
@@ -8669,6 +8698,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if name in self.current_identifier_aliases:
             return self.current_identifier_aliases[name]
         return name
+
+    def hlsl_standard_math_constant_expression(self, name):
+        literal = render_standard_math_constant(name, "directx")
+        if literal is None:
+            return None
+
+        if (
+            name in self.local_variable_types
+            or name in self.global_variable_types
+            or name in self.standard_math_constant_shadow_names
+            or name in self.current_identifier_aliases
+            or name in self.current_hlsl_resource_pointer_aliases
+        ):
+            return None
+        return literal
 
     def hlsl_type_constructor_name(self, name):
         if not isinstance(name, str):

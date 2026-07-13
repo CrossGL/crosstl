@@ -89,6 +89,174 @@ def generate_code(ast_node):
     return codegen.generate(ast_node)
 
 
+HLSL_M_PI_F_LITERAL = "3.14159265358979323846264338327950288f"
+HLSL_M_PI_LITERAL = "3.14159265358979323846264338327950288L"
+
+
+def test_hlsl_unresolved_standard_math_identifier_uses_exact_float_literal():
+    assert (
+        HLSLCodeGen().generate_expression(IdentifierNode("M_PI_F"))
+        == HLSL_M_PI_F_LITERAL
+    )
+
+
+def test_hlsl_unresolved_standard_math_variable_uses_exact_double_literal():
+    assert (
+        HLSLCodeGen().generate_expression(
+            VariableNode("M_PI", PrimitiveType("double"))
+        )
+        == HLSL_M_PI_LITERAL
+    )
+
+
+@pytest.mark.parametrize(
+    "node",
+    [
+        IdentifierNode("M_TAU"),
+        VariableNode("M_TAU_F", PrimitiveType("float")),
+    ],
+    ids=["identifier", "variable"],
+)
+def test_hlsl_unknown_math_identifier_is_preserved(node):
+    assert HLSLCodeGen().generate_expression(node) == node.name
+
+
+@pytest.mark.parametrize(
+    ("source", "declaration"),
+    [
+        (
+            """
+            shader StandardMathParameterShadow {
+                float read_pi(float M_PI_F) {
+                    return M_PI_F;
+                }
+            }
+            """,
+            "float read_pi(float M_PI_F)",
+        ),
+        (
+            """
+            shader StandardMathLocalShadow {
+                float read_pi() {
+                    float M_PI_F = 2.0;
+                    return M_PI_F;
+                }
+            }
+            """,
+            "float M_PI_F = 2.0;",
+        ),
+        (
+            """
+            shader StandardMathGlobalShadow {
+                float M_PI_F;
+
+                float read_pi() {
+                    return M_PI_F;
+                }
+            }
+            """,
+            "float M_PI_F;",
+        ),
+    ],
+    ids=["parameter", "local", "global"],
+)
+def test_hlsl_standard_math_constant_respects_variable_shadowing(
+    source, declaration
+):
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert declaration in generated
+    assert "return M_PI_F;" in generated
+    assert HLSL_M_PI_F_LITERAL not in generated
+
+
+def test_hlsl_standard_math_constant_respects_constant_enum_and_alias_shadows():
+    constant_source = """
+    shader StandardMathConstantShadow {
+        const float M_PI_F = 2.0;
+
+        float read_pi() {
+            return M_PI_F;
+        }
+    }
+    """
+    enum_source = """
+    shader StandardMathEnumShadow {
+        enum StandardValue { M_PI_F }
+
+        int read_pi() {
+            return M_PI_F;
+        }
+    }
+    """
+
+    constant_hlsl = HLSLCodeGen().generate(
+        crosstl.translator.parse(constant_source)
+    )
+    enum_hlsl = HLSLCodeGen().generate(crosstl.translator.parse(enum_source))
+    aliased_codegen = HLSLCodeGen()
+    aliased_codegen.current_identifier_aliases["M_PI_F"] = "source_pi"
+
+    assert "static const float M_PI_F = 2.0;" in constant_hlsl
+    assert "return M_PI_F;" in constant_hlsl
+    assert HLSL_M_PI_F_LITERAL not in constant_hlsl
+    assert "static const int StandardValue_M_PI_F = 0;" in enum_hlsl
+    assert "return M_PI_F;" in enum_hlsl
+    assert HLSL_M_PI_F_LITERAL not in enum_hlsl
+    assert (
+        aliased_codegen.generate_expression(IdentifierNode("M_PI_F"))
+        == "source_pi"
+    )
+
+
+def test_hlsl_standard_math_constant_native_compute_validates(tmp_path):
+    source = """
+    shader StandardMathNativeCompute {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float> output @ binding(0)) {
+                output[0] = M_PI_F;
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert f"output[0] = {HLSL_M_PI_F_LITERAL};" in generated
+    assert "M_PI_F" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_standard_math_constant_metal_proxy_compute_validates(tmp_path):
+    source = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void write_pi(
+        device float* output [[buffer(0)]],
+        uint index [[thread_position_in_grid]]) {
+        output[index] = M_PI_F;
+    }
+    """
+    shader_path = tmp_path / "standard_math_constant.metal"
+    shader_path.write_text(source, encoding="utf-8")
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert f"output[index] = {HLSL_M_PI_F_LITERAL};" in generated
+    assert "M_PI_F" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
 def test_hlsl_type_node_renders_expression_generic_arguments():
     type_node = NamedType(
         "LoopedElemToLoc",
