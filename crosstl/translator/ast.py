@@ -128,6 +128,39 @@ class MatrixType(TypeNode):
         return f"MatrixType(element_type={self.element_type}, rows={self.rows}, cols={self.cols})"
 
 
+class CooperativeMatrixType(TypeNode):
+    """A matrix value distributed across an execution scope."""
+
+    def __init__(
+        self,
+        element_type: TypeNode,
+        rows: Union[int, ASTNode],
+        cols: Union[int, ASTNode],
+        scope: str = "subgroup",
+        use: str = "unspecified",
+        layout: str = "unspecified",
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.element_type = element_type
+        self.rows = rows
+        self.cols = cols
+        self.scope = scope
+        self.use = use
+        self.layout = layout
+
+        # Generic aliases keep legacy generators able to preserve the contract.
+        self.name = "CooperativeMatrix"
+        self.generic_args = [element_type, rows, cols, scope, use, layout]
+
+    def __repr__(self):
+        return (
+            "CooperativeMatrixType("
+            f"element_type={self.element_type}, rows={self.rows}, cols={self.cols}, "
+            f"scope={self.scope!r}, use={self.use!r}, layout={self.layout!r})"
+        )
+
+
 class ArrayType(TypeNode):
     """Array types with static or dynamic sizing."""
 
@@ -1400,6 +1433,47 @@ class WaveOpNode(ExpressionNode):
 
     def __repr__(self):
         return f"WaveOpNode(operation={self.operation})"
+
+
+class CooperativeMatrixOpNode(ExpressionNode):
+    """An operation on a subgroup- or workgroup-distributed matrix value."""
+
+    SUPPORTED_OPERATIONS = frozenset(
+        {
+            "element",
+            "load",
+            "store",
+            "multiply",
+            "multiply_accumulate",
+            "elementwise_add",
+            "elementwise_subtract",
+            "elementwise_multiply",
+            "negate",
+        }
+    )
+
+    def __init__(
+        self,
+        operation: str,
+        arguments: List[ExpressionNode],
+        result_type: Optional[CooperativeMatrixType] = None,
+        **kwargs,
+    ):
+        if operation not in self.SUPPORTED_OPERATIONS:
+            raise ValueError(f"Unsupported cooperative matrix operation: {operation}")
+        super().__init__(expression_type=result_type, **kwargs)
+        self.operation = operation
+        self.arguments = arguments
+        self.result_type = result_type
+
+        # Keep the common call-node alias available to existing visitors.
+        self.args = arguments
+
+    def __repr__(self):
+        return (
+            "CooperativeMatrixOpNode("
+            f"operation={self.operation}, arguments={len(self.arguments)})"
+        )
 
 
 class RayTracingOpNode(ExpressionNode):

@@ -9,6 +9,8 @@ import crosstl.translator
 from crosstl.translator.ast import (
     AttributeNode,
     BlockNode,
+    CooperativeMatrixOpNode,
+    CooperativeMatrixType,
     ExecutionModel,
     FunctionNode,
     IdentifierNode,
@@ -30,6 +32,7 @@ from crosstl.translator.codegen.GLSL_codegen import (
     GLSLCodeGen,
     OpenGLAggregateInitializerError,
     OpenGLBooleanCompoundAssignmentError,
+    OpenGLCooperativeMatrixError,
     OpenGLGlobalInitializerError,
     OpenGLIndexTypeError,
     OpenGLMappedOverloadError,
@@ -136,6 +139,85 @@ def test_glsl_type_node_renders_expression_generic_arguments():
         GLSLCodeGen().convert_type_node_to_string(type_node)
         == "LoopedElemToLoc<DIM, (-1), OffsetT, General>"
     )
+
+
+def test_opengl_cooperative_matrix_type_reports_structured_error():
+    source_location = {"line": 4, "column": 9}
+    matrix_type = CooperativeMatrixType(
+        PrimitiveType("float"),
+        16,
+        8,
+        scope="subgroup",
+        use="accumulator",
+        layout="row_major",
+        source_location=source_location,
+    )
+
+    with pytest.raises(
+        OpenGLCooperativeMatrixError,
+        match="OpenGL cooperative-matrix lowering is not available for type",
+    ) as exc_info:
+        GLSLCodeGen().map_type(matrix_type)
+
+    error = exc_info.value
+    assert error.project_diagnostic_code == (
+        "project.translate.opengl-cooperative-matrix-unsupported"
+    )
+    assert error.missing_capabilities == ("opengl.cooperative-matrix-lowering",)
+    assert error.operation is None
+    assert error.matrix_type is matrix_type
+    assert error.reason == "unsupported-type"
+    assert error.source_location == source_location
+
+
+def test_opengl_cooperative_matrix_shader_fails_before_generic_type_emission():
+    source = """
+    shader CooperativeMatrixOpenGL {
+        compute {
+            void main() {
+                CooperativeMatrix<float, 8, 8> value;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLCooperativeMatrixError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert exc_info.value.reason == "unsupported-type"
+    assert exc_info.value.missing_capabilities == (
+        "opengl.cooperative-matrix-lowering",
+    )
+
+
+def test_opengl_cooperative_matrix_operation_reports_structured_error():
+    source_location = {"line": 12, "column": 17}
+    result_type = CooperativeMatrixType(PrimitiveType("float"), 16, 8)
+    operation = CooperativeMatrixOpNode(
+        "multiply_accumulate",
+        [],
+        result_type=result_type,
+        source_location=source_location,
+    )
+
+    with pytest.raises(
+        OpenGLCooperativeMatrixError,
+        match=(
+            "OpenGL cooperative-matrix lowering is not available for operation "
+            "'multiply_accumulate'"
+        ),
+    ) as exc_info:
+        GLSLCodeGen().generate_expression(operation)
+
+    error = exc_info.value
+    assert error.project_diagnostic_code == (
+        "project.translate.opengl-cooperative-matrix-unsupported"
+    )
+    assert error.missing_capabilities == ("opengl.cooperative-matrix-lowering",)
+    assert error.operation == "multiply_accumulate"
+    assert error.matrix_type is result_type
+    assert error.reason == "unsupported-operation"
+    assert error.source_location == source_location
 
 
 def glsl_image_atomic_parameter_diagnostic(operation, resource_type, zero_value):

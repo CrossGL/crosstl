@@ -3248,6 +3248,18 @@ class MetalToCrossGLConverter:
         elif isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr, is_main)
         elif isinstance(expr, BinaryOpNode):
+            cooperative_matrix_operation = {
+                "*": "cooperative_matrix_multiply",
+                "+": "cooperative_matrix_add",
+                "-": "cooperative_matrix_subtract",
+            }.get(expr.op)
+            if cooperative_matrix_operation is not None and all(
+                self.is_metal_cooperative_matrix_expression(operand)
+                for operand in (expr.left, expr.right)
+            ):
+                left = self.generate_expression(expr.left, is_main)
+                right = self.generate_expression(expr.right, is_main)
+                return f"{cooperative_matrix_operation}({left}, {right})"
             wide_vector_binary = self.generate_wide_vector_binary_expression(
                 expr, is_main
             )
@@ -3257,6 +3269,11 @@ class MetalToCrossGLConverter:
             right = self.generate_binary_operand(expr.right, expr.op, True, is_main)
             return f"{left} {expr.op} {right}"
         elif isinstance(expr, FunctionCallNode):
+            cooperative_matrix_call = self.generate_cooperative_matrix_function_call(
+                expr, is_main
+            )
+            if cooperative_matrix_call is not None:
+                return cooperative_matrix_call
             constructor_arguments = expr.args
             if (
                 getattr(expr, "is_braced_constructor", False)
@@ -3430,6 +3447,14 @@ class MetalToCrossGLConverter:
                 return f"{obj}.lanes[{lane}]"
             return f"{obj}.{expr.member}"
         elif isinstance(expr, ArrayAccessNode):
+            cooperative_matrix_element = self.metal_cooperative_matrix_element_access(
+                expr
+            )
+            if cooperative_matrix_element is not None:
+                matrix, element_index = cooperative_matrix_element
+                matrix_text = self.generate_expression(matrix, is_main)
+                index_text = self.generate_expression(element_index, is_main)
+                return f"cooperative_matrix_element({matrix_text}, {index_text})"
             if (
                 not self.suppress_structured_buffer_index_lowering
                 and self.is_structured_buffer_element_access(expr)
@@ -3442,6 +3467,11 @@ class MetalToCrossGLConverter:
                 return f"{array}.lanes[{index}]"
             return f"{array}[{index}]"
         elif isinstance(expr, UnaryOpNode):
+            if expr.op == "-" and self.is_metal_cooperative_matrix_expression(
+                expr.operand
+            ):
+                operand = self.generate_expression(expr.operand, is_main)
+                return f"cooperative_matrix_negate({operand})"
             wide_vector = self.wide_vector_expression_info(expr.operand)
             if wide_vector is not None and expr.op != "&":
                 raise MetalWideVectorLoweringError(
@@ -4093,6 +4123,10 @@ class MetalToCrossGLConverter:
         if base.startswith("raytracing::"):
             base = base.split("raytracing::", 1)[1]
 
+        cooperative_matrix = self.map_metal_cooperative_matrix_type(base)
+        if cooperative_matrix is not None:
+            return f"{cooperative_matrix}{suffix}"
+
         conditional_type = self.resolve_conditional_type(base)
         if conditional_type is not None:
             return f"{conditional_type}{suffix}"
@@ -4144,6 +4178,60 @@ class MetalToCrossGLConverter:
             return f"{mapped}{suffix}"
         mapped = self.map_scoped_type_name(base)
         return f"{mapped}{suffix}"
+
+    def metal_cooperative_matrix_type_parts(self, metal_type):
+        candidate = self.normalized_metal_type(self.resolve_type_alias(metal_type))
+        base_name, generic_args = self.generic_type_parts(candidate)
+        if not base_name or base_name.rsplit("::", 1)[-1] != "simdgroup_matrix":
+            return None
+        return generic_args if len(generic_args) == 3 else None
+
+    def map_metal_cooperative_matrix_type(self, metal_type):
+        generic_args = self.metal_cooperative_matrix_type_parts(metal_type)
+        if generic_args is None:
+            return None
+        element_type, rows, cols = generic_args
+        return (
+            f"CooperativeMatrix<{self.map_type(element_type)},"
+            f"{self.map_generic_type_argument(rows)},"
+            f"{self.map_generic_type_argument(cols)},"
+            "subgroup,unspecified,unspecified>"
+        )
+
+    def is_metal_cooperative_matrix_expression(self, expression):
+        return (
+            self.metal_cooperative_matrix_type_parts(
+                self.expression_metal_type(expression)
+            )
+            is not None
+        )
+
+    def metal_cooperative_matrix_element_access(self, expression):
+        if not isinstance(expression, ArrayAccessNode):
+            return None
+        thread_elements = expression.array
+        if not (
+            isinstance(thread_elements, MethodCallNode)
+            and thread_elements.method == "thread_elements"
+            and not thread_elements.args
+            and self.is_metal_cooperative_matrix_expression(thread_elements.object)
+        ):
+            return None
+        return thread_elements.object, expression.index
+
+    def generate_cooperative_matrix_function_call(self, expression, is_main):
+        function_name = str(expression.name).rsplit("::", 1)[-1]
+        operation = {
+            "simdgroup_load": "cooperative_matrix_load",
+            "simdgroup_store": "cooperative_matrix_store",
+            "simdgroup_multiply_accumulate": "cooperative_matrix_multiply_accumulate",
+        }.get(function_name)
+        if operation is None:
+            return None
+        arguments = ", ".join(
+            self.generate_expression(argument, is_main) for argument in expression.args
+        )
+        return f"{operation}({arguments})"
 
     def resolve_conditional_type(self, base):
         """Resolve ``conditional_t<C, A, B>`` / ``conditional<C, A, B>::type`` to

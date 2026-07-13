@@ -17,6 +17,8 @@ from .ast import (
     ConstructorNode,
     ConstructorPatternNode,
     ContinueNode,
+    CooperativeMatrixOpNode,
+    CooperativeMatrixType,
     DoWhileNode,
     EnumNode,
     EnumVariantNode,
@@ -62,6 +64,7 @@ from .ast import (
     StructPatternNode,
     SwitchNode,
     TernaryOpNode,
+    TypeNode,
     UnaryOpNode,
     VariableNode,
     VectorType,
@@ -113,6 +116,18 @@ WAVE_INTRINSICS = {
     "WaveMultiPrefixBitAnd",
     "WaveMultiPrefixBitOr",
     "WaveMultiPrefixBitXor",
+}
+
+COOPERATIVE_MATRIX_INTRINSICS = {
+    "cooperative_matrix_element": "element",
+    "cooperative_matrix_load": "load",
+    "cooperative_matrix_store": "store",
+    "cooperative_matrix_multiply": "multiply",
+    "cooperative_matrix_multiply_accumulate": "multiply_accumulate",
+    "cooperative_matrix_add": "elementwise_add",
+    "cooperative_matrix_subtract": "elementwise_subtract",
+    "cooperative_matrix_elementwise_multiply": "elementwise_multiply",
+    "cooperative_matrix_negate": "negate",
 }
 
 RAYTRACING_INTRINSICS = {
@@ -2468,7 +2483,10 @@ class Parser:
                     name = f"{name}{separator}{segment}"
                     generic_args = segment_generic_args
 
-            base_type = NamedType(name, generic_args)
+            if name.rsplit("::", 1)[-1] == "CooperativeMatrix":
+                base_type = self.cooperative_matrix_type(generic_args)
+            else:
+                base_type = NamedType(name, generic_args)
 
         elif self.current_token[0] == "LBRACKET":
             self.eat("LBRACKET")
@@ -2518,6 +2536,55 @@ class Parser:
                 base_type = NamedType(f"buffer_{base_type}", [])
 
         return base_type
+
+    def cooperative_matrix_type(self, generic_args):
+        """Build the canonical cooperative matrix type from generic arguments."""
+        if not 3 <= len(generic_args) <= 6:
+            raise SyntaxError(
+                "CooperativeMatrix expects 3 to 6 generic arguments: "
+                "element type, rows, columns, scope, use, and layout"
+            )
+
+        element_type = generic_args[0]
+        if not isinstance(element_type, TypeNode):
+            raise SyntaxError("CooperativeMatrix element argument must be a type")
+
+        rows = self.cooperative_matrix_dimension(generic_args[1])
+        cols = self.cooperative_matrix_dimension(generic_args[2])
+        scope = self.cooperative_matrix_contract_label(
+            generic_args[3] if len(generic_args) > 3 else None,
+            "subgroup",
+        )
+        use = self.cooperative_matrix_contract_label(
+            generic_args[4] if len(generic_args) > 4 else None,
+            "unspecified",
+        )
+        layout = self.cooperative_matrix_contract_label(
+            generic_args[5] if len(generic_args) > 5 else None,
+            "unspecified",
+        )
+        return CooperativeMatrixType(
+            element_type,
+            rows,
+            cols,
+            scope,
+            use,
+            layout,
+        )
+
+    def cooperative_matrix_dimension(self, argument):
+        if isinstance(argument, LiteralNode) and isinstance(argument.value, int):
+            return argument.value
+        return argument
+
+    def cooperative_matrix_contract_label(self, argument, default):
+        if argument is None:
+            return default
+        if isinstance(argument, (IdentifierNode, NamedType)):
+            return argument.name
+        if isinstance(argument, LiteralNode):
+            return str(argument.value)
+        return self.format_type_argument(argument)
 
     def parse_callable_type(self):
         """Parse Mojo-style function type syntax emitted by reverse codegen."""
@@ -4042,6 +4109,11 @@ class Parser:
                 if isinstance(left, IdentifierNode):
                     if left.name in WAVE_INTRINSICS:
                         left = WaveOpNode(left.name, arguments)
+                    elif left.name in COOPERATIVE_MATRIX_INTRINSICS:
+                        left = CooperativeMatrixOpNode(
+                            COOPERATIVE_MATRIX_INTRINSICS[left.name],
+                            arguments,
+                        )
                     elif left.name in RAYTRACING_INTRINSICS:
                         left = RayTracingOpNode(left.name, arguments)
                     elif left.name in MESH_INTRINSICS:
