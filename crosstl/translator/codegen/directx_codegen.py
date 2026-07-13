@@ -113,6 +113,7 @@ from .generic_function_utils import (
     generic_function_parameters,
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
+    reject_unresolved_generic_member_call,
 )
 from .generic_struct_utils import (
     build_generic_struct_specialization,
@@ -2442,7 +2443,13 @@ class HLSLCodeGen:
         }
         self.current_hlsl_available_functions = global_functions_by_name
         functions_code = ""
-        for func in functions:
+        ordered_functions = order_functions_by_dependencies(
+            functions,
+            self.walk_ast,
+            self.function_call_name,
+            FunctionCallNode,
+        )
+        for func in ordered_functions:
             qualifier_name = function_stage_name(func)
 
             if not should_emit_qualified_function(target_stage, qualifier_name):
@@ -7401,6 +7408,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return constructor
             return str(expr)
         elif hasattr(expr, "__class__") and "FunctionCall" in str(expr.__class__):
+            reject_unresolved_generic_member_call(expr, "DirectX")
             func_expr = getattr(expr, "function", getattr(expr, "name", "unknown"))
             args = getattr(expr, "arguments", getattr(expr, "args", []))
             numeric_trait_call = generate_numeric_trait_method_call(

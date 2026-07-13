@@ -302,6 +302,23 @@ shapes, and ABI-visible device or constant storage instead of changing the
 source contract. Direct generic-vector canonicalization outside the Metal
 frontend remains tracked in CrossGL/crosstl#1569.
 
+Generic member calls now retain their receiver, method, and ordered type and
+value arguments in the shared AST, including pointer-member calls and nested
+generic types. Metal materialization resolves concrete template methods on
+direct and nested struct-field receivers before target generation. Reduced
+fixtures containing the five-argument `Atile.load` and `Btile.load` forms from
+`fp_quantized.metal` pass the available DirectX, OpenGL, and Vulkan validators.
+Calls that reach a target without a concrete specialization fail with a
+structured diagnostic instead of losing the generic suffix or computation.
+
+Pinned Vulkan replays confirm that both affected kernels advance past this
+contract without producing a full artifact. `fp_quantized.metal` next stops at
+type inference for the reference-returning `frag_at(i, j)` argument tracked in
+CrossGL/crosstl#1557. `quantized_nax.metal` next stops at contextual typing for
+an empty `mma` initializer under CrossGL/crosstl#1573. These results establish
+translation-frontier progress only; they do not include runtime integration or
+numerical parity.
+
 The full pinned Vulkan run now advances beyond the generic-vector-width
 diagnostic. Its next empty `metal::bool_constant<...>{}` call argument loses the
 selected parameter type in the shared SPIR-V path. The backend fails closed with
@@ -315,11 +332,9 @@ CrossGL/crosstl#1557 and dependent static-owner materialization in
 CrossGL/crosstl#1574.
 Complete address-space, const, pointer-provenance, and
 unresolved-alias diagnostic transport remains tracked in CrossGL/crosstl#1566.
-Generic member calls with explicit type or value arguments in the shared parser
-remain tracked in CrossGL/crosstl#1555, pointer-bearing aggregate propagation
-remains tracked in CrossGL/crosstl#1544, and lowered receiver/reference semantics
-must satisfy CrossGL/crosstl#1557 before the kernel can be considered
-semantically ready.
+Pointer-bearing aggregate propagation remains tracked in CrossGL/crosstl#1544,
+and lowered receiver/reference semantics must satisfy CrossGL/crosstl#1557
+before the kernel can be considered semantically ready.
 Lazy logical and conditional evaluation in SPIR-V remains tracked in
 CrossGL/crosstl#1560 for full-corpus semantic coverage.
 Nested-return lowering in pointer-preserving SPIR-V inlining is covered by the
@@ -329,7 +344,8 @@ rejected explicitly and tracked in CrossGL/crosstl#1562.
 ## Resolved Frontier Issues
 
 The current reduced frontier no longer depends on the previously tracked issues:
-CrossGL/crosstl#1561, CrossGL/crosstl#1551, CrossGL/crosstl#1498,
+CrossGL/crosstl#1555, CrossGL/crosstl#1561, CrossGL/crosstl#1551,
+CrossGL/crosstl#1498,
 CrossGL/crosstl#1394,
 CrossGL/crosstl#1317,
 CrossGL/crosstl#939, CrossGL/crosstl#940,

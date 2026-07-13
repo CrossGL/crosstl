@@ -4086,6 +4086,20 @@ class Parser:
                 left = self.parse_struct_constructor_expression(left.name)
             elif (
                 self.current_token[0] == "LESS_THAN"
+                and isinstance(left, (MemberAccessNode, PointerAccessNode))
+                and self.generic_suffix_is_call_suffix()
+            ):
+                generic_args = self.parse_generic_arguments()
+                self.eat("LPAREN")
+                arguments = []
+                while self.current_token[0] != "RPAREN":
+                    arguments.append(self.parse_expression())
+                    if self.current_token[0] == "COMMA":
+                        self.eat("COMMA")
+                self.eat("RPAREN")
+                left = FunctionCallNode(left, arguments, generic_args=generic_args)
+            elif (
+                self.current_token[0] == "LESS_THAN"
                 and isinstance(left, IdentifierNode)
                 and (
                     left.name in {"vec2", "vec3", "vec4"}
@@ -4255,6 +4269,24 @@ class Parser:
                 "RPAREN",
                 "SEMICOLON",
             }
+        except SyntaxError:
+            return False
+        finally:
+            self.tokens[:] = saved_tokens
+            self.pos = saved_pos
+            self.current_token = saved_token
+
+    def generic_suffix_is_call_suffix(self):
+        """Return whether ``<...>`` is followed immediately by a call."""
+        if self.current_token[0] != "LESS_THAN":
+            return False
+
+        saved_pos = self.pos
+        saved_token = self.current_token
+        saved_tokens = list(self.tokens)
+        try:
+            self.parse_generic_arguments()
+            return self.current_token[0] == "LPAREN"
         except SyntaxError:
             return False
         finally:

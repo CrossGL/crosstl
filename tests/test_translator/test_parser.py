@@ -4434,6 +4434,140 @@ def test_method_calls_and_shorthand_path_constructors_parse():
     assert clear_constructor.named_arguments["color"].name == "color"
 
 
+def test_mlx_shaped_generic_member_call_preserves_call_structure():
+    code = """
+    shader GenericMemberCall {
+        void kernel() {
+            Btile.load<T, BK_padded, 1>(Ws + tn * BK_padded + kk1);
+        }
+    }
+    """
+
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    statement = ast.functions[0].body.statements[0]
+    call = statement.expression
+
+    assert isinstance(statement, ExpressionStatementNode)
+    assert isinstance(call, FunctionCallNode)
+    assert isinstance(call.function, MemberAccessNode)
+    assert call.function.object_expr.name == "Btile"
+    assert call.function.member == "load"
+    assert [argument.name for argument in call.generic_args[:2]] == [
+        "T",
+        "BK_padded",
+    ]
+    assert isinstance(call.generic_args[2], LiteralNode)
+    assert call.generic_args[2].value == 1
+    assert isinstance(call.arguments[0], BinaryOpNode)
+
+
+def test_fp_quantized_generic_member_calls_preserve_ordered_arguments():
+    code = """
+    shader FPQuantizedMemberCalls {
+        void kernel() {
+            self.Atile.load<float, 1, 1, (36), (1)>(As);
+            self.Btile.load<float, 1, 2, (1), (36)>(Bs);
+        }
+    }
+    """
+
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    calls = [statement.expression for statement in ast.functions[0].body.statements]
+
+    assert [call.function.member for call in calls] == ["load", "load"]
+    assert [call.function.object_expr.member for call in calls] == ["Atile", "Btile"]
+    assert [call.function.object_expr.object_expr.name for call in calls] == [
+        "self",
+        "self",
+    ]
+    assert [
+        [
+            (
+                argument.name
+                if getattr(argument, "name", None) is not None
+                else argument.value
+            )
+            for argument in call.generic_args
+        ]
+        for call in calls
+    ] == [
+        ["float", 1, 1, 36, 1],
+        ["float", 1, 2, 1, 36],
+    ]
+
+
+def test_generic_member_call_parses_nested_type_and_value_arguments():
+    code = """
+    shader NestedGenericMemberCall {
+        void kernel() {
+            receiver.transform<Outer<Inner<float>, 4>, Rows * Cols, 2 + 1>(source);
+        }
+    }
+    """
+
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    call = ast.functions[0].body.statements[0].expression
+    outer = call.generic_args[0]
+
+    assert isinstance(call, FunctionCallNode)
+    assert isinstance(call.function, MemberAccessNode)
+    assert isinstance(outer, NamedType)
+    assert outer.name == "Outer"
+    assert isinstance(outer.generic_args[0], NamedType)
+    assert outer.generic_args[0].name == "Inner"
+    assert outer.generic_args[0].generic_args[0].name == "float"
+    assert isinstance(outer.generic_args[1], LiteralNode)
+    assert outer.generic_args[1].value == 4
+    assert isinstance(call.generic_args[1], BinaryOpNode)
+    assert call.generic_args[1].operator == "*"
+    assert isinstance(call.generic_args[2], BinaryOpNode)
+    assert call.generic_args[2].operator == "+"
+
+
+def test_generic_pointer_member_call_preserves_pointer_access():
+    code = """
+    shader GenericPointerMemberCall {
+        void kernel() {
+            tile_ptr->load<T, Width, 1>(source);
+        }
+    }
+    """
+
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    call = ast.functions[0].body.statements[0].expression
+
+    assert isinstance(call, FunctionCallNode)
+    assert isinstance(call.function, PointerAccessNode)
+    assert call.function.pointer_expr.name == "tile_ptr"
+    assert call.function.member == "load"
+    assert [argument.name for argument in call.generic_args[:2]] == ["T", "Width"]
+    assert call.generic_args[2].value == 1
+
+
+def test_member_comparisons_are_not_parsed_as_generic_call_suffixes():
+    code = """
+    shader MemberComparisons {
+        void kernel() {
+            bool less = object.member < limit;
+            bool ordered = object.member < upper > lower;
+        }
+    }
+    """
+
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    less = ast.functions[0].body.statements[0].initial_value
+    ordered = ast.functions[0].body.statements[1].initial_value
+
+    assert isinstance(less, BinaryOpNode)
+    assert less.operator == "<"
+    assert isinstance(less.left, MemberAccessNode)
+    assert isinstance(ordered, BinaryOpNode)
+    assert ordered.operator == ">"
+    assert isinstance(ordered.left, BinaryOpNode)
+    assert ordered.left.operator == "<"
+    assert isinstance(ordered.left.left, MemberAccessNode)
+
+
 def test_matrix_type_keywords_parse():
     code = """
     shader Matrices {

@@ -49334,6 +49334,36 @@ METAL_ELEMENTWISE_COPY_KERNEL = textwrap.dedent("""
     """).strip()
 
 
+METAL_NESTED_GENERIC_MEMBER_KERNEL = textwrap.dedent("""
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct Tile {
+        template <typename T, int Rows, int Cols, int Leading, int Threads>
+        T load(T value) {
+            return value + T(Rows + Cols + Leading + Threads);
+        }
+    };
+
+    struct BlockMMA {
+        Tile Atile;
+        Tile Btile;
+
+        float mma(float value) {
+            float left = Atile.template load<float, 1, 1, (36), (1)>(value);
+            return Btile.template load<float, 1, 2, (1), (36)>(left);
+        }
+    };
+
+    kernel void generic_member_kernel(
+        device float* results [[buffer(0)]],
+        uint index [[thread_position_in_grid]]) {
+        BlockMMA block;
+        results[index] = block.mma(float(index));
+    }
+    """).strip()
+
+
 def _write_metal_directx_project(repo: Path, kernel_name: str, source: str) -> Path:
     kernel_dir = repo / "kernels"
     kernel_dir.mkdir(parents=True)
@@ -49418,6 +49448,106 @@ def test_metal_elementwise_copy_to_directx_is_not_flagged(tmp_path):
     assert artifact["status"] == "translated"
     assert artifact["target"] == "directx"
     assert (repo / artifact["path"]).exists()
+
+
+def test_metal_nested_generic_member_calls_translate_and_validate_for_all_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    kernel_dir = repo / "kernels"
+    kernel_dir.mkdir(parents=True)
+    (kernel_dir / "generic_member.metal").write_text(
+        METAL_NESTED_GENERIC_MEMBER_KERNEL,
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["kernels"]
+            include = ["kernels/*.metal"]
+            targets = ["directx", "opengl", "vulkan"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        load_project_config(repo), format_output=False
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
+    assert set(artifacts) == {"directx", "opengl", "vulkan"}
+
+    generated = {
+        target: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for target, artifact in artifacts.items()
+    }
+    for artifact in generated.values():
+        assert ".load<" not in artifact
+        assert ".template load" not in artifact
+    for target in ("directx", "opengl"):
+        artifact = generated[target]
+        assert "Tile__load__float_1_1_36_1" in artifact
+        assert "Tile__load__float_1_2_1_36" in artifact
+
+    assert_directx_compute_validates_if_available(generated["directx"], tmp_path)
+    assert_compute_glsl_validates_if_available(generated["opengl"], tmp_path)
+    assert_spirv_asm_validates_if_available(generated["vulkan"], tmp_path)
+
+
+def test_unmaterialized_generic_member_call_reports_structured_project_details(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "generic_member.cgl").write_text(
+        textwrap.dedent("""
+            shader GenericMemberDiagnostic {
+                compute {
+                    void main() {
+                        self.Atile.load<float, 1, 1, 36, 1>(source);
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            include = ["shaders/*.cgl"]
+            targets = ["directx"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        load_project_config(repo), format_output=False
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    diagnostic = next(
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == "project.translate.generic-member-call-unresolved"
+    )
+    assert diagnostic["missingCapabilities"] == ["generic.member-call-specialization"]
+    assert diagnostic["details"]["genericMemberCall"] == {
+        "method": "load",
+        "receiver": "self.Atile",
+        "suggestedAction": (
+            "materialize the concrete member-template specialization before "
+            "DirectX generation"
+        ),
+        "targetBackend": "DirectX",
+        "unresolvedArguments": ["float", "1", "1", "36", "1"],
+    }
 
 
 def test_metal_unresolved_construct_findings_skip_locally_defined_simd_helpers():

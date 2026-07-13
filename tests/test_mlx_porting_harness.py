@@ -504,6 +504,38 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         "https://github.com/CrossGL/crosstl/issues/1567",
     ]
 
+    generic_member_call = expected_gaps["generic_member_call_status"]
+    assert generic_member_call["status"] == "validated-reduced-fixture"
+    assert generic_member_call["sources"] == [
+        "mlx/backend/metal/kernels/fp_quantized.metal",
+        "mlx/backend/metal/kernels/quantized_nax.metal",
+    ]
+    assert generic_member_call["targets"] == list(module.FULL_CORPUS_TARGETS)
+    assert generic_member_call["native_validation"] == {
+        "directx": "validated-with-glslang-hlsl",
+        "opengl": "validated-with-glslang",
+        "vulkan": "validated-with-spirv-tools",
+    }
+    assert generic_member_call["pinned_vulkan_replay"] == {
+        "mlx/backend/metal/kernels/fp_quantized.metal": {
+            "status": "blocked-by-tracked-issue",
+            "diagnostic_code": "project.translate.metal-struct-method",
+            "missing_capability": "struct.template-method",
+            "first_unresolved_expression": "frag_at(i, j)",
+            "issue": "https://github.com/CrossGL/crosstl/issues/1557",
+            "artifact_status": "failed",
+        },
+        "mlx/backend/metal/kernels/quantized_nax.metal": {
+            "status": "blocked-by-tracked-issue",
+            "diagnostic_code": "project.translate.unsupported-feature",
+            "missing_capability": "spirv.empty_initializer_type_inference",
+            "first_unresolved_call": "mma",
+            "issue": "https://github.com/CrossGL/crosstl/issues/1573",
+            "artifact_status": "failed",
+        },
+    }
+    assert generic_member_call["runtime_integration_included"] is False
+
     gemv = expected_gaps["vulkan_gemv_toolchain_status"]
     assert gemv == {
         "status": "passed",
@@ -680,6 +712,23 @@ def test_nested_return_inlining_issue_is_resolved_for_mlx_gemv():
     assert issue in module.RESOLVED_FRONTIER_ISSUES
     assert issue not in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
     assert issue not in module.FULL_CORPUS_TRACKED_ISSUES
+
+
+def test_generic_member_call_issue_is_resolved_for_pinned_quantized_kernels():
+    module = _load_harness()
+    issue = "https://github.com/CrossGL/crosstl/issues/1555"
+    expected_gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert issue in module.RESOLVED_FRONTIER_ISSUES
+    assert issue not in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
+    assert issue not in module.FULL_CORPUS_TRACKED_ISSUES
+    assert issue in expected_gaps["resolved_issues"]
+    assert issue not in expected_gaps["tracked_issues"]
+    assert issue not in expected_gaps["full_corpus_scout"]["translation_blocked_by"]
 
 
 def test_scaled_dot_product_attention_tracks_opengl_function_constant_blocker():

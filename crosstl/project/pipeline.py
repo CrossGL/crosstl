@@ -16919,6 +16919,38 @@ def _pointer_reinterpret_failure_details(
     return dict(sorted(details.items()))
 
 
+def _generic_member_call_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.generic-member-call-unresolved"
+    ):
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    call = {}
+    fields = {
+        "receiver": getattr(exc, "receiver", None),
+        "method": getattr(exc, "method_name", None),
+        "targetBackend": getattr(exc, "target_name", None),
+        "suggestedAction": getattr(exc, "suggested_action", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            call[name] = value
+    generic_arguments = getattr(exc, "generic_arguments", None)
+    if generic_arguments:
+        call["unresolvedArguments"] = [str(value) for value in generic_arguments]
+    if call:
+        details["genericMemberCall"] = dict(sorted(call.items()))
+    return dict(sorted(details.items()))
+
+
 def _translation_failure_details(
     exc: Exception,
     target: str,
@@ -16940,6 +16972,7 @@ def _translation_failure_details(
         **_opengl_storage_pointer_failure_details(exc, unit, artifact_path),
         **_opengl_reference_parameter_failure_details(exc, unit, artifact_path),
         **_pointer_reinterpret_failure_details(exc, unit, artifact_path),
+        **_generic_member_call_failure_details(exc, unit, artifact_path),
         **_metal_static_constant_failure_details(exc, unit, artifact_path),
         **_metal_sizeof_failure_details(exc, unit, artifact_path),
         **_metal_callable_failure_details(exc, unit, artifact_path),

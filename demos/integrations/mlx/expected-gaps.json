@@ -238,6 +238,45 @@
       "https://github.com/CrossGL/crosstl/issues/1538"
     ]
   },
+  "generic_member_call_status": {
+    "status": "validated-reduced-fixture",
+    "sources": [
+      "mlx/backend/metal/kernels/fp_quantized.metal",
+      "mlx/backend/metal/kernels/quantized_nax.metal"
+    ],
+    "targets": [
+      "directx",
+      "opengl",
+      "vulkan"
+    ],
+    "supported_contract": "member and pointer-member calls with ordered type and value arguments, including nested generic types and parenthesized integral values",
+    "materialization_contract": "concrete template methods on direct or nested struct-field receivers are emitted as dependency-ordered target helpers",
+    "unresolved_call_contract": "unmaterialized generic member calls fail with receiver, method, target, and argument details",
+    "native_validation": {
+      "directx": "validated-with-glslang-hlsl",
+      "opengl": "validated-with-glslang",
+      "vulkan": "validated-with-spirv-tools"
+    },
+    "pinned_vulkan_replay": {
+      "mlx/backend/metal/kernels/fp_quantized.metal": {
+        "status": "blocked-by-tracked-issue",
+        "diagnostic_code": "project.translate.metal-struct-method",
+        "missing_capability": "struct.template-method",
+        "first_unresolved_expression": "frag_at(i, j)",
+        "issue": "https://github.com/CrossGL/crosstl/issues/1557",
+        "artifact_status": "failed"
+      },
+      "mlx/backend/metal/kernels/quantized_nax.metal": {
+        "status": "blocked-by-tracked-issue",
+        "diagnostic_code": "project.translate.unsupported-feature",
+        "missing_capability": "spirv.empty_initializer_type_inference",
+        "first_unresolved_call": "mma",
+        "issue": "https://github.com/CrossGL/crosstl/issues/1573",
+        "artifact_status": "failed"
+      }
+    },
+    "runtime_integration_included": false
+  },
   "directx_toolchain_status": {
     "status": "passing",
     "note": "Windows CI compiles every discovered entry in the generated DirectX HLSL for the verified subset below. Other clean frontier kernels translate to DirectX but remain outside the compile gate for the listed structural or semantic defects.",
@@ -361,7 +400,6 @@
       "https://github.com/CrossGL/crosstl/issues/1544",
       "https://github.com/CrossGL/crosstl/issues/1546",
       "https://github.com/CrossGL/crosstl/issues/1554",
-      "https://github.com/CrossGL/crosstl/issues/1555",
       "https://github.com/CrossGL/crosstl/issues/1559",
       "https://github.com/CrossGL/crosstl/issues/1562",
       "https://github.com/CrossGL/crosstl/issues/1566",
@@ -419,7 +457,6 @@
     "https://github.com/CrossGL/crosstl/issues/1544",
     "https://github.com/CrossGL/crosstl/issues/1546",
     "https://github.com/CrossGL/crosstl/issues/1554",
-    "https://github.com/CrossGL/crosstl/issues/1555",
     "https://github.com/CrossGL/crosstl/issues/1557",
     "https://github.com/CrossGL/crosstl/issues/1558",
     "https://github.com/CrossGL/crosstl/issues/1559",
@@ -433,6 +470,7 @@
     "https://github.com/CrossGL/crosstl/issues/1574"
   ],
   "resolved_issues": [
+    "https://github.com/CrossGL/crosstl/issues/1555",
     "https://github.com/CrossGL/crosstl/issues/1561",
     "https://github.com/CrossGL/crosstl/issues/1551",
     "https://github.com/CrossGL/crosstl/issues/1498",

@@ -2927,6 +2927,63 @@ def test_preprocessor_binds_float16_threadgroup_array_to_explicit_member_templat
     assert "tile.template load" not in output
 
 
+def test_preprocessor_instantiates_template_method_on_nested_struct_field():
+    code = """
+    struct Tile {
+      template <typename T, int Rows, int Cols, int Leading, int Threads>
+      void load(threadgroup T* src) {
+        src[Rows + Cols + Leading + Threads] = T(1);
+      }
+    };
+
+    struct BlockMMA {
+      Tile Atile;
+
+      void mma(threadgroup float* As) {
+        Atile.template load<float, 1, 1, (36), (1)>(As);
+      }
+    };
+
+    kernel void k(device float* output [[buffer(0)]]) {
+      threadgroup float As[64];
+      BlockMMA block;
+      block.mma(As);
+      output[0] = As[0];
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Tile__load__float_1_1_36_1(self.Atile, As)" in output
+    assert "void Tile__load__float_1_1_36_1(" in output
+    assert "self.Atile.template load" not in output
+    assert "self.Atile.load" not in output
+
+
+def test_preprocessor_instantiates_template_method_on_external_nested_field():
+    code = """
+    struct Tile {
+      template <typename T, int Width>
+      void load(threadgroup T* src) { src[Width] = T(1); }
+    };
+
+    struct Block { Tile tile; };
+
+    kernel void k(device float* output [[buffer(0)]]) {
+      threadgroup float values[8];
+      Block block;
+      block.tile.template load<float, 4>(values);
+      output[0] = values[0];
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Tile__load__float_4(block.tile, values)" in output
+    assert "void Tile__load__float_4(" in output
+    assert "block.tile.template load" not in output
+
+
 def test_preprocessor_resolves_local_constants_in_template_member_arguments():
     code = """
     template <typename T, T Value>

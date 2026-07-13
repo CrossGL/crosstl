@@ -1033,7 +1033,7 @@ class FunctionCallNode(ExpressionNode):
         self,
         function: ExpressionNode,
         arguments: List[ExpressionNode],
-        generic_args: List[TypeNode] = None,
+        generic_args: List[Union[TypeNode, ExpressionNode]] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)

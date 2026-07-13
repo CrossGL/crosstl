@@ -115,6 +115,7 @@ from .generic_function_utils import (
     generic_function_value_arguments,
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
+    reject_unresolved_generic_member_call,
 )
 from .generic_struct_utils import (
     collect_generic_struct_definitions,
@@ -16300,6 +16301,7 @@ complex64_t crossgl_complex64_mod_assign(
                 return constructor
             return str(expr)
         elif hasattr(expr, "__class__") and "FunctionCallNode" in str(type(expr)):
+            reject_unresolved_generic_member_call(expr, "OpenGL")
             func_expr = getattr(expr, "function", getattr(expr, "name", expr))
             numeric_trait_call = generate_numeric_trait_method_call(
                 self,

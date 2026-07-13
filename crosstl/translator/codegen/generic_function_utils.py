@@ -16,6 +16,7 @@ from ..ast import (
     LiteralNode,
     MatchNode,
     MemberAccessNode,
+    PointerAccessNode,
     ReturnNode,
     VariableNode,
 )
@@ -65,6 +66,99 @@ RESERVED_GENERIC_FUNCTION_BUILTIN_NAMES = (
     | frozenset(RESOURCE_QUERY_SIZE_INTRINSIC_NAMES)
     | frozenset(TEXTURE_RESOURCE_INTRINSIC_NAMES)
 )
+
+
+class GenericMemberCallSpecializationError(ValueError):
+    """A target call reached code generation before member specialization."""
+
+    project_diagnostic_code = "project.translate.generic-member-call-unresolved"
+    missing_capabilities = ("generic.member-call-specialization",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        target_name,
+        receiver,
+        method_name,
+        generic_arguments,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.target_name = target_name
+        self.receiver = receiver
+        self.method_name = method_name
+        self.generic_arguments = tuple(generic_arguments)
+        self.suggested_action = (
+            "materialize the concrete member-template specialization before "
+            f"{target_name} generation"
+        )
+        self.source_location = source_location
+
+
+def reject_unresolved_generic_member_call(expr, target_name):
+    """Reject a structured generic member call that was not materialized."""
+    generic_args = list(getattr(expr, "generic_args", []) or [])
+    if not generic_args:
+        return
+
+    function = getattr(expr, "function", getattr(expr, "name", None))
+    if isinstance(function, MemberAccessNode):
+        receiver_expr = getattr(
+            function, "object_expr", getattr(function, "object", None)
+        )
+    elif isinstance(function, PointerAccessNode):
+        receiver_expr = getattr(function, "pointer_expr", None)
+    else:
+        return
+
+    receiver = _generic_member_expression_text(receiver_expr)
+    method_name = str(getattr(function, "member", "") or "<unknown>")
+    generic_arguments = [
+        _generic_member_expression_text(argument) for argument in generic_args
+    ]
+    signature = f"{receiver}.{method_name}<{', '.join(generic_arguments)}>"
+    raise GenericMemberCallSpecializationError(
+        f"{target_name} generation cannot lower generic member call "
+        f"'{signature}' because no concrete member specialization was "
+        "materialized",
+        target_name=target_name,
+        receiver=receiver,
+        method_name=method_name,
+        generic_arguments=generic_arguments,
+        source_location=getattr(expr, "source_location", None)
+        or getattr(function, "source_location", None),
+    )
+
+
+def _generic_member_expression_text(value):
+    if value is None:
+        return "<unknown>"
+    if isinstance(value, str):
+        return value
+    if isinstance(value, MemberAccessNode):
+        owner = getattr(value, "object_expr", getattr(value, "object", None))
+        return f"{_generic_member_expression_text(owner)}.{value.member}"
+    if isinstance(value, PointerAccessNode):
+        return f"{_generic_member_expression_text(value.pointer_expr)}->{value.member}"
+    if isinstance(value, BinaryOpNode):
+        return (
+            f"{_generic_member_expression_text(value.left)} "
+            f"{value.operator} {_generic_member_expression_text(value.right)}"
+        )
+    name = getattr(value, "name", None)
+    if name is not None:
+        nested_args = list(getattr(value, "generic_args", []) or [])
+        if nested_args:
+            rendered = ", ".join(
+                _generic_member_expression_text(argument) for argument in nested_args
+            )
+            return f"{name}<{rendered}>"
+        return str(name)
+    literal = getattr(value, "value", None)
+    if literal is not None:
+        return str(literal)
+    return str(value)
 
 
 def prepare_generic_function_specializations(generator, functions):
