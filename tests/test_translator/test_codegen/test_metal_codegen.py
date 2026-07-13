@@ -12,6 +12,8 @@ import crosstl.translator
 from crosstl.translator.ast import (
     BlockNode,
     ConstructorNode,
+    CooperativeMatrixOpNode,
+    CooperativeMatrixType,
     ExecutionModel,
     FunctionNode,
     IdentifierNode,
@@ -26,7 +28,10 @@ from crosstl.translator.ast import (
     VectorType,
     WaveOpNode,
 )
-from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.codegen.metal_codegen import (
+    MetalCodeGen,
+    UnsupportedMetalFeatureError,
+)
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 
@@ -32442,6 +32447,90 @@ def test_metal_mixed_structured_buffer_and_cbuffer_address_spaces():
     assert "device float* outputs [[buffer(2)]]" in generated_code
     assert "float value = inputs[tid.x];" in generated_code
     assert "outputs[tid.x] = value * config.scale;" in generated_code
+
+
+def test_cooperative_matrix_contract_lowers_to_native_metal_operations():
+    code = """
+    shader CooperativeMatrixMetal {
+        compute {
+            void main() {
+                CooperativeMatrix<float, 8, 8> left;
+                CooperativeMatrix<float, 8, 8> right;
+                CooperativeMatrix<float, 8, 8> accumulator;
+                cooperative_matrix_element(left, 0) = 1.0;
+                CooperativeMatrix<float, 8, 8> product =
+                    cooperative_matrix_multiply(left, right);
+                CooperativeMatrix<float, 8, 8> sum =
+                    cooperative_matrix_add(left, right);
+                CooperativeMatrix<float, 8, 8> difference =
+                    cooperative_matrix_subtract(left, right);
+                CooperativeMatrix<float, 8, 8> negated =
+                    cooperative_matrix_negate(left);
+                cooperative_matrix_load(left, source, 8);
+                cooperative_matrix_multiply_accumulate(
+                    accumulator, left, right, accumulator);
+                cooperative_matrix_store(destination, product, 8);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(code), "compute"
+    )
+
+    assert "#include <metal_simdgroup_matrix>" in generated_code
+    assert "simdgroup_matrix<float, 8, 8> left;" in generated_code
+    assert "left.thread_elements()[0] = 1.0;" in generated_code
+    assert "simdgroup_matrix<float, 8, 8> product = (left * right);" in generated_code
+    assert "simdgroup_matrix<float, 8, 8> sum = (left + right);" in generated_code
+    assert (
+        "simdgroup_matrix<float, 8, 8> difference = (left - right);" in generated_code
+    )
+    assert "simdgroup_matrix<float, 8, 8> negated = (-left);" in generated_code
+    assert "simdgroup_load(left, source, 8);" in generated_code
+    assert (
+        "simdgroup_multiply_accumulate(accumulator, left, right, accumulator);"
+        in generated_code
+    )
+    assert "simdgroup_store(destination, product, 8);" in generated_code
+    assert "cooperative_matrix_" not in generated_code
+
+
+def test_metal_cooperative_matrix_rejects_unrepresentable_type_contract():
+    matrix_type = CooperativeMatrixType(
+        PrimitiveType("f16"),
+        16,
+        8,
+        use="accumulator",
+        layout="row_major",
+    )
+
+    with pytest.raises(UnsupportedMetalFeatureError) as exc_info:
+        MetalCodeGen().map_type(matrix_type)
+
+    error = exc_info.value
+    assert error.feature == "cooperative-matrix-type-contract"
+    assert error.reason == "unsupported-type-contract"
+    assert error.missing_capabilities == ("metal.cooperative-matrix-contract-mapping",)
+
+
+def test_metal_cooperative_matrix_rejects_unrepresentable_operation():
+    operation = CooperativeMatrixOpNode(
+        "elementwise_multiply",
+        [IdentifierNode("left"), IdentifierNode("right")],
+    )
+
+    with pytest.raises(UnsupportedMetalFeatureError) as exc_info:
+        MetalCodeGen().generate_expression(operation)
+
+    error = exc_info.value
+    assert error.feature == "cooperative-matrix-operation-lowering"
+    assert error.operation == "elementwise_multiply"
+    assert error.reason == "operation-not-representable"
+    assert error.missing_capabilities == (
+        "metal.cooperative-matrix-operation-lowering",
+    )
 
 
 if __name__ == "__main__":

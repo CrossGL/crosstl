@@ -17,6 +17,8 @@ from ..ast import (
     ConstructorNode,
     ConstructorPatternNode,
     ContinueNode,
+    CooperativeMatrixOpNode,
+    CooperativeMatrixType,
     DoWhileNode,
     EnumNode,
     ForInNode,
@@ -14618,6 +14620,10 @@ class VulkanSPIRVCodeGen:
 
     def map_crossgl_type(self, type_name) -> SpirvId:
         """Map a CrossGL type name to a SPIR-V type ID."""
+        if isinstance(type_name, CooperativeMatrixType):
+            type_str = self.type_name_from_value(type_name)
+            raise self.unsupported_cooperative_matrix_type_error(type_name, type_str)
+
         type_str = self.type_name_from_value(type_name)
         if type_str is None:
             type_str = "None"
@@ -14627,15 +14633,10 @@ class VulkanSPIRVCodeGen:
         type_str = self.normalize_hlsl_matrix_type(type_str)
         if type_str.startswith("&"):
             return self.map_crossgl_type(type_str[1:].strip())
-        if self.is_metal_simdgroup_matrix_type(type_str):
-            raise UnsupportedSPIRVFeatureError(
-                "cooperative-matrix-lowering",
-                "SPIR-V cooperative-matrix lowering is not available for "
-                f"'{type_str}'; scalar substitution would change "
-                "subgroup-distributed matrix semantics",
-                missing_capabilities=("spirv.cooperative_matrix.khr",),
-                source_location=getattr(type_name, "source_location", None),
-            )
+        if self.is_cooperative_matrix_type_name(
+            type_str
+        ) or self.is_metal_simdgroup_matrix_type(type_str):
+            raise self.unsupported_cooperative_matrix_type_error(type_name, type_str)
 
         array_type = self.split_outer_array_type(type_str)
         if array_type is not None:
@@ -14731,6 +14732,27 @@ class VulkanSPIRVCodeGen:
         else:
             self.emit(f"; WARNING: Unknown type {type_str}, using float as default")
             return self.register_primitive_type("float")
+
+    def unsupported_cooperative_matrix_type_error(
+        self, type_source, type_name: str
+    ) -> UnsupportedSPIRVFeatureError:
+        compact_type_name = re.sub(r"\s+", "", str(type_name))
+        return UnsupportedSPIRVFeatureError(
+            "cooperative-matrix-lowering",
+            "SPIR-V cooperative-matrix lowering is not available for "
+            f"'{compact_type_name}'; scalar substitution would change "
+            "subgroup-distributed matrix semantics",
+            missing_capabilities=("spirv.cooperative_matrix.khr",),
+            source_location=getattr(type_source, "source_location", None),
+        )
+
+    def is_cooperative_matrix_type_name(self, type_name: str) -> bool:
+        """Return whether a type uses the canonical cooperative-matrix spelling."""
+        compact = re.sub(r"\s+", "", str(type_name))
+        generic_base, generic_args = generic_type_parts(compact)
+        return bool(
+            generic_args and generic_base.rsplit("::", 1)[-1] == "CooperativeMatrix"
+        )
 
     def is_metal_simdgroup_matrix_type(self, type_name: str) -> bool:
         """Return whether a type names a Metal subgroup-distributed matrix."""
@@ -26493,6 +26515,16 @@ class VulkanSPIRVCodeGen:
             )
             return self.select_operation(
                 result_type, condition, true_value, false_value
+            )
+
+        elif isinstance(expr, CooperativeMatrixOpNode):
+            raise UnsupportedSPIRVFeatureError(
+                "cooperative-matrix-lowering",
+                "SPIR-V cooperative-matrix lowering is not available for "
+                f"operation '{expr.operation}'; scalar substitution would change "
+                "subgroup-distributed matrix semantics",
+                missing_capabilities=("spirv.cooperative_matrix.khr",),
+                source_location=getattr(expr, "source_location", None),
             )
 
         elif isinstance(expr, WaveOpNode):

@@ -12,6 +12,8 @@ from crosstl.translator.ast import (
     ConstantNode,
     ConstructorNode,
     ConstructorPatternNode,
+    CooperativeMatrixOpNode,
+    CooperativeMatrixType,
     DoWhileNode,
     ExpressionStatementNode,
     ForInNode,
@@ -5761,6 +5763,200 @@ def test_global_shader_attribute_values_do_not_require_stage_block_context():
 
     assert ast.functions[0].attributes[0].name == "shader"
     assert ast.functions[0].attributes[0].arguments[0].value == "fragment"
+
+
+def test_cooperative_matrix_type_three_argument_form_uses_canonical_defaults():
+    code = """
+    shader CooperativeMatrixDefaults {
+        void consume(CooperativeMatrix<float, 16, 8> matrix) {}
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    matrix_type = ast.functions[0].parameters[0].param_type
+
+    assert isinstance(matrix_type, CooperativeMatrixType)
+    assert isinstance(matrix_type.element_type, PrimitiveType)
+    assert matrix_type.element_type.name == "float"
+    assert (matrix_type.rows, matrix_type.cols) == (16, 8)
+    assert (matrix_type.scope, matrix_type.use, matrix_type.layout) == (
+        "subgroup",
+        "unspecified",
+        "unspecified",
+    )
+    assert matrix_type.name == "CooperativeMatrix"
+    assert matrix_type.generic_args == [
+        matrix_type.element_type,
+        16,
+        8,
+        "subgroup",
+        "unspecified",
+        "unspecified",
+    ]
+
+
+def test_cooperative_matrix_type_six_argument_form_preserves_metadata():
+    code = """
+    shader CooperativeMatrixMetadata {
+        void consume(
+            CooperativeMatrix<
+                f16, 32, 16, workgroup, accumulator, column_major
+            > matrix
+        ) {}
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    matrix_type = ast.functions[0].parameters[0].param_type
+
+    assert isinstance(matrix_type, CooperativeMatrixType)
+    assert matrix_type.element_type.name == "f16"
+    assert (matrix_type.rows, matrix_type.cols) == (32, 16)
+    assert (matrix_type.scope, matrix_type.use, matrix_type.layout) == (
+        "workgroup",
+        "accumulator",
+        "column_major",
+    )
+    assert matrix_type.generic_args[3:] == [
+        "workgroup",
+        "accumulator",
+        "column_major",
+    ]
+
+
+def test_cooperative_matrix_type_preserves_symbolic_dimensions():
+    code = """
+    shader CooperativeMatrixDimensions {
+        void consume(CooperativeMatrix<float, TILE_ROWS, TILE_COLS> matrix) {}
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    matrix_type = ast.functions[0].parameters[0].param_type
+
+    assert isinstance(matrix_type, CooperativeMatrixType)
+    assert isinstance(matrix_type.rows, NamedType)
+    assert isinstance(matrix_type.cols, NamedType)
+    assert (matrix_type.rows.name, matrix_type.cols.name) == (
+        "TILE_ROWS",
+        "TILE_COLS",
+    )
+    assert matrix_type.generic_args[1:3] == [matrix_type.rows, matrix_type.cols]
+
+
+@pytest.mark.parametrize(
+    ("intrinsic", "operation"),
+    [
+        ("cooperative_matrix_element", "element"),
+        ("cooperative_matrix_load", "load"),
+        ("cooperative_matrix_store", "store"),
+        ("cooperative_matrix_multiply", "multiply"),
+        ("cooperative_matrix_multiply_accumulate", "multiply_accumulate"),
+        ("cooperative_matrix_add", "elementwise_add"),
+        ("cooperative_matrix_subtract", "elementwise_subtract"),
+        (
+            "cooperative_matrix_elementwise_multiply",
+            "elementwise_multiply",
+        ),
+        ("cooperative_matrix_negate", "negate"),
+    ],
+)
+def test_cooperative_matrix_intrinsics_parse_to_canonical_operations(
+    intrinsic, operation
+):
+    code = f"""
+    shader CooperativeMatrixOperations {{
+        void main() {{
+            auto result = {intrinsic}(left, right, accumulator);
+        }}
+    }}
+    """
+
+    ast = parse_code(tokenize_code(code))
+    matrix_op = ast.functions[0].body.statements[0].initial_value
+
+    assert isinstance(matrix_op, CooperativeMatrixOpNode)
+    assert matrix_op.operation == operation
+    assert [argument.name for argument in matrix_op.arguments] == [
+        "left",
+        "right",
+        "accumulator",
+    ]
+    assert matrix_op.args is matrix_op.arguments
+
+
+def test_cooperative_matrix_nodes_participate_in_walk_and_parent_binding():
+    rows = IdentifierNode("ROWS")
+    cols = IdentifierNode("COLS")
+    result_type = CooperativeMatrixType(
+        PrimitiveType("f16"),
+        rows,
+        cols,
+        use="accumulator",
+        layout="row_major",
+    )
+    arguments = [IdentifierNode("left"), IdentifierNode("right")]
+    matrix_op = CooperativeMatrixOpNode(
+        "multiply",
+        arguments,
+        result_type=result_type,
+    )
+
+    matrix_op.bind_parent_links()
+
+    assert list(matrix_op.walk()) == [
+        matrix_op,
+        result_type,
+        result_type.element_type,
+        rows,
+        cols,
+        *arguments,
+    ]
+    assert matrix_op.expression_type is result_type
+    assert matrix_op.vtype is result_type
+    assert matrix_op.result_type is result_type
+    assert matrix_op.args is arguments
+    assert result_type.parent is matrix_op
+    assert result_type.element_type.parent is result_type
+    assert rows.parent is result_type
+    assert cols.parent is result_type
+    assert all(argument.parent is matrix_op for argument in arguments)
+
+
+@pytest.mark.parametrize(
+    "generic_arguments",
+    [
+        "float, 16",
+        "float, 16, 8, subgroup, matrix_a, row_major, extra",
+    ],
+)
+def test_cooperative_matrix_type_rejects_invalid_arity(generic_arguments):
+    code = f"""
+    shader InvalidCooperativeMatrixArity {{
+        void consume(CooperativeMatrix<{generic_arguments}> matrix) {{}}
+    }}
+    """
+
+    with pytest.raises(SyntaxError) as exc_info:
+        parse_code(tokenize_code(code))
+
+    assert str(exc_info.value) == (
+        "CooperativeMatrix expects 3 to 6 generic arguments: "
+        "element type, rows, columns, scope, use, and layout"
+    )
+
+
+def test_cooperative_matrix_type_rejects_non_type_element_argument():
+    code = """
+    shader InvalidCooperativeMatrixElement {
+        void consume(CooperativeMatrix<1, 16, 8> matrix) {}
+    }
+    """
+
+    with pytest.raises(SyntaxError) as exc_info:
+        parse_code(tokenize_code(code))
+
+    assert str(exc_info.value) == "CooperativeMatrix element argument must be a type"
 
 
 def test_wave_intrinsic_parses_to_node():

@@ -6632,3 +6632,58 @@ def test_const_for_loop_nonzero_indices_reach_vulkan_stores(tmp_path):
         capture_output=True,
         text=True,
     )
+
+
+def test_metal_cooperative_matrix_operations_round_trip_through_shared_ir():
+    source = """
+    #include <metal_stdlib>
+    #include <metal_simdgroup_matrix>
+    using namespace metal;
+
+    kernel void matrix_roundtrip(
+        device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+      simdgroup_matrix<float, 8, 8> left;
+      simdgroup_matrix<float, 8, 8> right;
+      simdgroup_matrix<float, 8, 8> accumulator;
+      simdgroup_load(left, input, 8);
+      left.thread_elements()[0] = 1.0f;
+      simdgroup_matrix<float, 8, 8> product = left * right;
+      simdgroup_matrix<float, 8, 8> sum = left + right;
+      simdgroup_matrix<float, 8, 8> difference = left - right;
+      simdgroup_matrix<float, 8, 8> negated = -left;
+      simdgroup_multiply_accumulate(accumulator, left, right, product);
+      simdgroup_store(output, accumulator, 8);
+    }
+    """
+
+    crossgl = convert(source)
+
+    assert "CooperativeMatrix<float,8,8,subgroup,unspecified,unspecified>" in crossgl
+    assert "cooperative_matrix_load(left, input, 8);" in crossgl
+    assert "cooperative_matrix_element(left, 0) = 1.0f;" in crossgl
+    assert "cooperative_matrix_multiply(left, right)" in crossgl
+    assert "cooperative_matrix_add(left, right)" in crossgl
+    assert "cooperative_matrix_subtract(left, right)" in crossgl
+    assert "cooperative_matrix_negate(left)" in crossgl
+    assert (
+        "cooperative_matrix_multiply_accumulate(accumulator, left, right, product);"
+        in crossgl
+    )
+    assert "cooperative_matrix_store(output, accumulator, 8);" in crossgl
+
+    regenerated = MetalCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "#include <metal_simdgroup_matrix>" in regenerated
+    assert "simdgroup_matrix<float, 8, 8> left;" in regenerated
+    assert "left.thread_elements()[0] = 1.0;" in regenerated
+    assert "simdgroup_matrix<float, 8, 8> product = (left * right);" in regenerated
+    assert "simdgroup_matrix<float, 8, 8> sum = (left + right);" in regenerated
+    assert "simdgroup_matrix<float, 8, 8> difference = (left - right);" in regenerated
+    assert "simdgroup_matrix<float, 8, 8> negated = (-left);" in regenerated
+    assert (
+        "simdgroup_multiply_accumulate(accumulator, left, right, product);"
+        in regenerated
+    )
+    assert "simdgroup_store(output, accumulator, 8);" in regenerated
+    assert "cooperative_matrix_" not in regenerated

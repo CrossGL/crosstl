@@ -15,6 +15,8 @@ from ..ast import (
     BreakNode,
     ConstructorNode,
     ContinueNode,
+    CooperativeMatrixOpNode,
+    CooperativeMatrixType,
     DoWhileNode,
     ExpressionStatementNode,
     ForInNode,
@@ -617,6 +619,28 @@ class OpenGLGlobalInitializerError(ValueError):
         self.variable_name = variable_name
         self.dependencies = tuple(sorted(dependencies or ()))
         self.cycle = tuple(cycle or ())
+        self.reason = reason
+        self.source_location = source_location
+
+
+class OpenGLCooperativeMatrixError(ValueError):
+    """Raised when a cooperative matrix has no faithful OpenGL lowering."""
+
+    project_diagnostic_code = "project.translate.opengl-cooperative-matrix-unsupported"
+    missing_capabilities = ("opengl.cooperative-matrix-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        operation=None,
+        matrix_type=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.operation = operation
+        self.matrix_type = matrix_type
         self.reason = reason
         self.source_location = source_location
 
@@ -15998,6 +16022,17 @@ complex64_t crossgl_complex64_mod_assign(
         """Render a CrossGL AST expression into GLSL expression syntax."""
         if expr is None:
             return ""
+        if isinstance(expr, CooperativeMatrixOpNode):
+            operation = getattr(expr, "operation", None)
+            raise OpenGLCooperativeMatrixError(
+                "OpenGL cooperative-matrix lowering is not available for "
+                f"operation '{operation}'; emitting an ordinary GLSL call would "
+                "change distributed matrix semantics",
+                operation=operation,
+                matrix_type=getattr(expr, "result_type", None),
+                reason="unsupported-operation",
+                source_location=getattr(expr, "source_location", None),
+            )
         if isinstance(expr, str):
             if self.is_glsl_builtin_option_none_expression(expr):
                 none_value = self.generate_glsl_builtin_option_none_value()
@@ -23496,6 +23531,17 @@ complex64_t crossgl_complex64_mod_assign(
         if vtype is None:
             return "float"
 
+        if isinstance(vtype, CooperativeMatrixType):
+            type_name = self.convert_type_node_to_string(vtype)
+            raise OpenGLCooperativeMatrixError(
+                "OpenGL cooperative-matrix lowering is not available for type "
+                f"'{type_name}'; substituting an ordinary GLSL matrix would change "
+                "distributed matrix semantics",
+                matrix_type=vtype,
+                reason="unsupported-type",
+                source_location=getattr(vtype, "source_location", None),
+            )
+
         if isinstance(vtype, PointerType):
             return f"{self.map_type(vtype.pointee_type)}*"
         if isinstance(vtype, ReferenceType):
@@ -23505,6 +23551,19 @@ complex64_t crossgl_complex64_mod_assign(
             vtype_str = self.convert_type_node_to_string(vtype)
         else:
             vtype_str = str(vtype)
+        cooperative_base, cooperative_args = generic_type_parts(vtype_str)
+        if (
+            cooperative_args
+            and cooperative_base.rsplit("::", 1)[-1] == "CooperativeMatrix"
+        ):
+            raise OpenGLCooperativeMatrixError(
+                "OpenGL cooperative-matrix lowering is not available for type "
+                f"'{vtype_str}'; substituting an ordinary GLSL matrix would change "
+                "distributed matrix semantics",
+                matrix_type=vtype,
+                reason="unsupported-type",
+                source_location=getattr(vtype, "source_location", None),
+            )
         if vtype_str.rstrip().endswith("&"):
             return self.map_type(vtype_str.rstrip()[:-1].rstrip())
 

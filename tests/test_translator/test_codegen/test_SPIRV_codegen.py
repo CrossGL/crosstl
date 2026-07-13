@@ -10,6 +10,8 @@ from crosstl.translator.ast import (
     AttributeNode,
     BinaryOpNode,
     BlockNode,
+    CooperativeMatrixOpNode,
+    CooperativeMatrixType,
     EnumNode,
     ExecutionModel,
     ExpressionStatementNode,
@@ -32798,7 +32800,8 @@ class TestSpirvShaderValidation:
             UnsupportedSPIRVFeatureError,
             match=(
                 "SPIR-V cooperative-matrix lowering is not available for "
-                "'simdgroup_matrix<float,8,8>'; scalar substitution would change "
+                "'CooperativeMatrix<float,8,8,subgroup,unspecified,unspecified>'; "
+                "scalar substitution would change "
                 "subgroup-distributed matrix semantics"
             ),
         ) as exc_info:
@@ -32810,6 +32813,68 @@ class TestSpirvShaderValidation:
 
         assert exc_info.value.feature == "cooperative-matrix-lowering"
         assert exc_info.value.missing_capabilities == ("spirv.cooperative_matrix.khr",)
+
+    def test_cooperative_matrix_ast_type_is_rejected_with_source_location(self):
+        source_location = {"line": 7, "column": 13}
+        matrix_type = CooperativeMatrixType(
+            PrimitiveType("float"),
+            16,
+            8,
+            scope="subgroup",
+            use="accumulator",
+            layout="row_major",
+            source_location=source_location,
+        )
+
+        with pytest.raises(
+            UnsupportedSPIRVFeatureError,
+            match=(
+                "SPIR-V cooperative-matrix lowering is not available for "
+                "'CooperativeMatrix<float,16,8,subgroup,accumulator,row_major>'; "
+                "scalar substitution would change subgroup-distributed matrix "
+                "semantics"
+            ),
+        ) as exc_info:
+            VulkanSPIRVCodeGen().map_crossgl_type(matrix_type)
+
+        assert exc_info.value.feature == "cooperative-matrix-lowering"
+        assert exc_info.value.missing_capabilities == ("spirv.cooperative_matrix.khr",)
+        assert exc_info.value.source_location is source_location
+
+    def test_canonical_cooperative_matrix_type_string_is_rejected(self):
+        type_name = (
+            "CooperativeMatrix<half, 16, 8, subgroup, multiplicand_a, row_major>"
+        )
+
+        with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
+            VulkanSPIRVCodeGen().map_crossgl_type(type_name)
+
+        assert type_name.replace(" ", "") in str(exc_info.value)
+        assert exc_info.value.feature == "cooperative-matrix-lowering"
+        assert exc_info.value.missing_capabilities == ("spirv.cooperative_matrix.khr",)
+        assert exc_info.value.source_location is None
+
+    def test_cooperative_matrix_operation_is_rejected_with_operation_context(self):
+        source_location = (21, 9)
+        operation = CooperativeMatrixOpNode(
+            "multiply_accumulate",
+            [IdentifierNode("left"), IdentifierNode("right")],
+            source_location=source_location,
+        )
+
+        with pytest.raises(
+            UnsupportedSPIRVFeatureError,
+            match=(
+                "SPIR-V cooperative-matrix lowering is not available for operation "
+                "'multiply_accumulate'; scalar substitution would change "
+                "subgroup-distributed matrix semantics"
+            ),
+        ) as exc_info:
+            VulkanSPIRVCodeGen().process_expression(operation)
+
+        assert exc_info.value.feature == "cooperative-matrix-lowering"
+        assert exc_info.value.missing_capabilities == ("spirv.cooperative_matrix.khr",)
+        assert exc_info.value.source_location is source_location
 
     @pytest.mark.parametrize(
         "type_name",
