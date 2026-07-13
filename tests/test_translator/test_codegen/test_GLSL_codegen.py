@@ -29,6 +29,7 @@ from crosstl.translator.ast import (
 from crosstl.translator.codegen.GLSL_codegen import (
     GLSLCodeGen,
     OpenGLAggregateInitializerError,
+    OpenGLBooleanCompoundAssignmentError,
     OpenGLGlobalInitializerError,
     OpenGLIndexTypeError,
     OpenGLMappedOverloadError,
@@ -28849,6 +28850,213 @@ def test_opengl_lowers_expected_scalar_and_vector_conversions(tmp_path):
         generated_code,
         tmp_path,
         "expected_scalar_conversions",
+    )
+
+
+def test_opengl_lowers_scalar_boolean_compound_assignments(tmp_path):
+    shader = """
+    shader ScalarBooleanCompoundAssignments {
+        compute {
+            void main() {
+                bool rhs = false;
+                bool andValue = true;
+                bool orValue = false;
+                bool xorValue = true;
+                andValue &= rhs;
+                orValue |= rhs;
+                xorValue ^= rhs;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "andValue = ((int(andValue) & int(rhs)) != 0);" in generated_code
+    assert "orValue = ((int(orValue) | int(rhs)) != 0);" in generated_code
+    assert "xorValue = ((int(xorValue) ^ int(rhs)) != 0);" in generated_code
+    assert "andValue &= rhs;" not in generated_code
+    assert "orValue |= rhs;" not in generated_code
+    assert "xorValue ^= rhs;" not in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "scalar_boolean_compound_assignments",
+    )
+
+
+def test_opengl_lowers_boolean_vector_compound_assignments_componentwise(tmp_path):
+    shader = """
+    shader VectorBooleanCompoundAssignments {
+        compute {
+            void main() {
+                bool3 mask = bool3(false, true, false);
+                bool3 andValue = bool3(true, true, false);
+                bool3 orValue = bool3(false, false, true);
+                bool3 xorValue = bool3(true, false, true);
+                andValue &= mask;
+                orValue |= mask;
+                xorValue ^= mask;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "andValue = notEqual((ivec3(andValue) & ivec3(mask)), ivec3(0));"
+        in generated_code
+    )
+    assert (
+        "orValue = notEqual((ivec3(orValue) | ivec3(mask)), ivec3(0));"
+        in generated_code
+    )
+    assert (
+        "xorValue = notEqual((ivec3(xorValue) ^ ivec3(mask)), ivec3(0));"
+        in generated_code
+    )
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "vector_boolean_compound_assignments",
+    )
+
+
+def test_opengl_lowers_stable_boolean_compound_assignment_lvalues(tmp_path):
+    shader = """
+    shader StableBooleanCompoundAssignmentLvalues {
+        struct Flags {
+            bool enabled;
+        };
+
+        compute {
+            void main() {
+                bool rhs = false;
+                Flags flags;
+                flags.enabled = true;
+                bool values[2] = {true, false};
+                flags.enabled &= rhs;
+                values[0] |= rhs;
+                values[1] ^= rhs;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "flags.enabled = ((int(flags.enabled) & int(rhs)) != 0);" in generated_code
+    assert "values[0] = ((int(values[0]) | int(rhs)) != 0);" in generated_code
+    assert "values[1] = ((int(values[1]) ^ int(rhs)) != 0);" in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "stable_boolean_compound_assignment_lvalues",
+    )
+
+
+@pytest.mark.parametrize(
+    ("operator", "binary_operator", "case_name"),
+    [
+        pytest.param("&=", "&", "and", id="and"),
+        pytest.param("|=", "|", "or", id="or"),
+        pytest.param("^=", "^", "xor", id="xor"),
+    ],
+)
+def test_opengl_boolean_compound_assignment_evaluates_rhs_call_once(
+    tmp_path,
+    operator,
+    binary_operator,
+    case_name,
+):
+    shader = f"""
+    shader BooleanCompoundAssignmentRhsCall {{
+        bool nextFlag(inout uint calls) {{
+            calls += 1u;
+            return true;
+        }}
+
+        compute {{
+            void main() {{
+                uint calls = 0u;
+                bool value = false;
+                value {operator} nextFlag(calls);
+            }}
+        }}
+    }}
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+    call = "nextFlag(calls)"
+
+    assert generated_code.count(call) == 1
+    assert (
+        f"value = ((int(value) {binary_operator} int({call})) != 0);" in generated_code
+    )
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        f"boolean_compound_assignment_rhs_{case_name}",
+    )
+
+
+def test_opengl_boolean_compound_assignment_rejects_side_effecting_index():
+    shader = """
+    shader SideEffectingBooleanCompoundAssignmentIndex {
+        uint nextIndex(inout uint calls) {
+            calls += 1u;
+            return 0u;
+        }
+
+        compute {
+            void main() {
+                uint calls = 0u;
+                bool values[2] = {true, false};
+                values[nextIndex(calls)] &= false;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLBooleanCompoundAssignmentError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.opengl-boolean-compound-assignment-invalid"
+    )
+    assert diagnostic.missing_capabilities == (
+        "opengl.boolean-compound-assignment-lowering",
+    )
+    assert diagnostic.operator == "&="
+    assert diagnostic.target_type == "bool"
+    assert diagnostic.reason == "lvalue-side-effects"
+
+
+def test_opengl_preserves_integer_bitwise_compound_assignments(tmp_path):
+    shader = """
+    shader IntegerBitwiseCompoundAssignments {
+        compute {
+            void main() {
+                int value = 7;
+                value &= 3;
+                value |= 8;
+                value ^= 1;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "value &= 3;" in generated_code
+    assert "value |= 8;" in generated_code
+    assert "value ^= 1;" in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "integer_bitwise_compound_assignments",
     )
 
 

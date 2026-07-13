@@ -411,6 +411,32 @@ class OpenGLScalarConversionError(ValueError):
         self.source_location = source_location
 
 
+class OpenGLBooleanCompoundAssignmentError(ValueError):
+    """Raised when a boolean compound assignment cannot be lowered safely."""
+
+    project_diagnostic_code = (
+        "project.translate.opengl-boolean-compound-assignment-invalid"
+    )
+    missing_capabilities = ("opengl.boolean-compound-assignment-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        operator=None,
+        target=None,
+        target_type=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.operator = operator
+        self.target = target
+        self.target_type = target_type
+        self.reason = reason
+        self.source_location = source_location
+
+
 class OpenGLComplexArithmeticError(ValueError):
     """Raised when complex arithmetic has no faithful GLSL lowering."""
 
@@ -15441,16 +15467,16 @@ complex64_t crossgl_complex64_mod_assign(
             )
         return False
 
-    def glsl_stable_narrow_update_target(self, expression):
+    def glsl_stable_update_target(self, expression):
         if isinstance(expression, VariableNode) or (
             hasattr(expression, "__class__")
             and "IdentifierNode" in str(expression.__class__)
         ):
             return True
         if isinstance(expression, MemberAccessNode):
-            return self.glsl_stable_narrow_update_target(expression.object)
+            return self.glsl_stable_update_target(expression.object)
         if isinstance(expression, ArrayAccessNode):
-            return self.glsl_stable_narrow_update_target(
+            return self.glsl_stable_update_target(
                 expression.array
             ) and self.glsl_side_effect_free_expression(expression.index)
         return False
@@ -15458,12 +15484,41 @@ complex64_t crossgl_complex64_mod_assign(
     def glsl_narrow_update_value(
         self, target, value, binary_operator, expected_type, source_node
     ):
-        if not self.glsl_stable_narrow_update_target(target):
+        if not self.glsl_stable_update_target(target):
             self.glsl_scalar_conversion_error(
                 source_node,
                 expected_type,
                 expected_type,
                 "narrow-update-lvalue-side-effects",
+            )
+        operation = BinaryOpNode(
+            target,
+            binary_operator,
+            value,
+            source_location=getattr(source_node, "source_location", None),
+        )
+        return self.generate_expression_with_expected(operation, expected_type)
+
+    def glsl_boolean_compound_assignment_value(
+        self, target, value, binary_operator, expected_type, source_node
+    ):
+        expected = self.glsl_value_type_info(expected_type)
+        if (
+            binary_operator not in {"&", "|", "^"}
+            or expected is None
+            or expected["family"] != "bool"
+        ):
+            return None
+        if not self.glsl_stable_update_target(target):
+            target_name = self.expression_name(target)
+            raise OpenGLBooleanCompoundAssignmentError(
+                "OpenGL cannot safely lower boolean compound assignment "
+                f"'{binary_operator}=' for a side-effecting lvalue",
+                operator=f"{binary_operator}=",
+                target=target_name,
+                target_type=expected["source"],
+                reason="lvalue-side-effects",
+                source_location=getattr(source_node, "source_location", None),
             )
         operation = BinaryOpNode(
             target,
@@ -15530,6 +15585,15 @@ complex64_t crossgl_complex64_mod_assign(
                 node,
             )
             return f"{left} = {right}"
+        boolean_assignment = self.glsl_boolean_compound_assignment_value(
+            left_node,
+            right_node,
+            binary_operator,
+            expected_type,
+            node,
+        )
+        if boolean_assignment is not None:
+            return f"{left} = {boolean_assignment}"
         complex_assignment = self.glsl_complex64_compound_assignment_expression(
             node,
             left,
