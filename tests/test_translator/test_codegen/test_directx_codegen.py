@@ -9423,6 +9423,44 @@ def test_generic_function_call_emits_concrete_specialization():
     assert "T::one" not in generated_code
 
 
+def test_hlsl_orders_late_array_helper_overloads_before_caller(tmp_path):
+    shader = """
+    shader LateArrayHelperOverloads {
+        void call_helper(inout float values[3]) {
+            update_u3c3_u3e(values);
+        }
+
+        void update_3(inout float values[3]) {
+            values[0] = 1.0;
+        }
+
+        void update_3(inout float values[5]) {
+            values[0] = 2.0;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                float values[3];
+                call_helper(values);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    caller_index = generated_code.index(
+        "void call_helper(inout float values[3])"
+    )
+    assert generated_code.index("void update_3(inout float values[3])") < caller_index
+    assert generated_code.index("void update_3(inout float values[5])") < caller_index
+    assert "update_3(values);" in generated_code
+    assert "update_u3c3_u3e" not in generated_code
+    assert_directx_compute_validates_if_available(generated_code, tmp_path)
+
+
 def test_generic_struct_concrete_constructor_and_member_access():
     shader = """
     shader GenericStructConcrete {

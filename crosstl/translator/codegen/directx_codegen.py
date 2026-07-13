@@ -2623,8 +2623,9 @@ class HLSLCodeGen:
         ordered_functions = order_functions_by_dependencies(
             functions,
             self.walk_ast,
-            self.function_call_name,
+            self.hlsl_dependency_function_call_name,
             FunctionCallNode,
+            include_overloads=True,
         )
         for func in ordered_functions:
             if getattr(func, "name", None) in self.hlsl_omitted_function_names:
@@ -2688,8 +2689,9 @@ class HLSLCodeGen:
                 for func in order_functions_by_dependencies(
                     local_functions,
                     self.walk_ast,
-                    self.function_call_name,
+                    self.hlsl_dependency_function_call_name,
                     FunctionCallNode,
+                    include_overloads=True,
                 ):
                     if getattr(func, "name", None) in self.hlsl_omitted_function_names:
                         continue
@@ -18388,6 +18390,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return "NonUniformResourceIndex"
         name = self.hlsl_materialized_function_name(name)
         return self.hlsl_function_name_aliases.get(name, name)
+
+    def hlsl_dependency_function_call_name(self, call):
+        return self.hlsl_function_call_name(self.function_call_name(call))
 
     def collect_function_parameters(self, functions):
         parameters = []
