@@ -392,6 +392,34 @@ class MetalCodeGen:
         "%": 10,
     }
     ASSOCIATIVE_BINARY_OPS = {"+", "*", "&&", "||", "&", "|", "^"}
+    METAL_ATOMIC_FENCE_MEMORY_FLAGS = frozenset(
+        {
+            "mem_none",
+            "mem_device",
+            "mem_threadgroup",
+            "mem_texture",
+            "mem_threadgroup_imageblock",
+            "mem_object_data",
+        }
+    )
+    METAL_ATOMIC_FENCE_MEMORY_ORDERS = frozenset(
+        {
+            "memory_order_relaxed",
+            "memory_order_acquire",
+            "memory_order_release",
+            "memory_order_acq_rel",
+            "memory_order_seq_cst",
+        }
+    )
+    METAL_ATOMIC_FENCE_THREAD_SCOPES = frozenset(
+        {
+            "thread_scope_thread",
+            "thread_scope_simdgroup",
+            "thread_scope_threadgroup",
+            "thread_scope_device",
+            "thread_scope_system",
+        }
+    )
     METAL_COOPERATIVE_MATRIX_FUNCTIONS = {
         "load": "simdgroup_load",
         "store": "simdgroup_store",
@@ -1359,6 +1387,13 @@ class MetalCodeGen:
         self.user_function_names = {
             func.name for func in all_functions if getattr(func, "name", None)
         }
+        self.metal_atomic_fence_calls = self.collect_metal_atomic_fence_calls(ast)
+        self.requires_metal_atomic_fence = bool(self.metal_atomic_fence_calls)
+        self.requires_metal_system_thread_scope = any(
+            self.atomic_fence_operand_identifier(call.args[2]) == "thread_scope_system"
+            for call in self.metal_atomic_fence_calls
+            if len(call.args) == 3
+        )
         self.functions_by_name = {
             func.name: func for func in all_functions if getattr(func, "name", None)
         }
@@ -1752,10 +1787,18 @@ class MetalCodeGen:
             line = self.generate_preprocessor_directive(directive)
             if line:
                 pre_lines.append(line)
+        if self.requires_metal_system_thread_scope and not any(
+            "#pragma metal internals" in line.lower() for line in pre_lines
+        ):
+            code += "#pragma METAL internals : enable\n"
         if pre_lines:
             code += "\n".join(pre_lines) + "\n"
         if not any("metal_stdlib" in line for line in pre_lines):
             code += "#include <metal_stdlib>\n"
+        if self.requires_metal_atomic_fence and not any(
+            "metal_atomic" in line for line in pre_lines
+        ):
+            code += "#include <metal_atomic>\n"
         if self.uses_cooperative_matrix(ast) and not any(
             "metal_simdgroup_matrix" in line for line in pre_lines
         ):
@@ -1764,6 +1807,8 @@ class MetalCodeGen:
         if self.uses_metal_raytracing_namespace(ast, global_vars, all_functions):
             code += "using namespace metal::raytracing;\n"
         code += "\n"
+        if self.requires_metal_system_thread_scope:
+            code += self.generate_metal_system_thread_scope_support()
         if self.has_geometry_stage(ast, target_stage):
             code += self.generate_metal_geometry_stream_helpers()
         if self.has_tessellation_stage(ast, target_stage):
@@ -2385,6 +2430,30 @@ class MetalCodeGen:
         code += self.generate_metal_inverse_helpers()
         code += functions_code
         return code
+
+    def collect_metal_atomic_fence_calls(self, ast):
+        if "atomicThreadFence" in self.user_function_names:
+            return []
+        walk = getattr(ast, "walk", None)
+        nodes = walk() if callable(walk) else self.iter_ast_nodes(ast)
+        return [
+            node
+            for node in nodes
+            if isinstance(node, FunctionCallNode)
+            and self.function_call_name(node) == "atomicThreadFence"
+        ]
+
+    @staticmethod
+    def generate_metal_system_thread_scope_support():
+        return (
+            "#ifndef __METAL_MEMORY_SCOPE_SYSTEM__\n"
+            "#define __METAL_MEMORY_SCOPE_SYSTEM__ 3\n"
+            "#endif\n"
+            "namespace metal {\n"
+            "constexpr constant thread_scope thread_scope_system =\n"
+            "    static_cast<thread_scope>(__METAL_MEMORY_SCOPE_SYSTEM__);\n"
+            "}\n\n"
+        )
 
     def uses_cooperative_matrix(self, ast):
         """Return whether a canonical cooperative-matrix node is present."""
@@ -9060,7 +9129,9 @@ class MetalCodeGen:
                 return buffer_atomic_call
 
             synchronization_call = self.synchronization_function_call(
-                func_name, expr.args
+                func_name,
+                expr.args,
+                source_location=getattr(expr, "source_location", None),
             )
             if synchronization_call is not None:
                 return synchronization_call
@@ -9674,8 +9745,102 @@ class MetalCodeGen:
             return f"({rendered})"
         return rendered
 
-    def synchronization_function_call(self, func_name, args):
-        if args or func_name in self.user_function_names:
+    def atomic_fence_operand_identifier(self, expr):
+        name = self.expression_name(expr)
+        if name is None:
+            return None
+        return str(name).lstrip(":").rsplit("::", 1)[-1]
+
+    def atomic_fence_operand_text(self, expr):
+        if isinstance(expr, BinaryOpNode) and expr.op == "|":
+            return (
+                f"{self.atomic_fence_operand_text(expr.left)} | "
+                f"{self.atomic_fence_operand_text(expr.right)}"
+            )
+        name = self.atomic_fence_operand_identifier(expr)
+        return name if name is not None else expression_debug_name(expr)
+
+    def collect_atomic_fence_memory_flags(self, expr):
+        if isinstance(expr, BinaryOpNode) and expr.op == "|":
+            left = self.collect_atomic_fence_memory_flags(expr.left)
+            right = self.collect_atomic_fence_memory_flags(expr.right)
+            if left is None or right is None:
+                return None
+            return left + right
+        name = self.atomic_fence_operand_identifier(expr)
+        if name in self.METAL_ATOMIC_FENCE_MEMORY_FLAGS:
+            return (name,)
+        return None
+
+    def metal_atomic_fence_contract_error(
+        self,
+        reason,
+        args,
+        *,
+        source_location=None,
+    ):
+        rendered = [self.atomic_fence_operand_text(arg) for arg in args]
+        requested_contract = ", ".join(rendered) or "<no operands>"
+        capability = {
+            "invalid-argument-count": "metal.atomic-thread-fence.contract",
+            "unsupported-memory-flags": "metal.atomic-thread-fence.memory-flags",
+            "unsupported-memory-order": "metal.atomic-thread-fence.memory-order",
+            "unsupported-thread-scope": "metal.atomic-thread-fence.thread-scope",
+        }[reason]
+        return UnsupportedMetalFeatureError(
+            "atomic-thread-fence-contract",
+            "Metal codegen cannot represent atomicThreadFence("
+            f"{requested_contract}) exactly: {reason.replace('-', ' ')}",
+            missing_capabilities=(capability,),
+            operation="atomicThreadFence",
+            reason=reason,
+            source_location=source_location,
+        )
+
+    def generate_metal_atomic_thread_fence(self, args, *, source_location=None):
+        if len(args) != 3:
+            raise self.metal_atomic_fence_contract_error(
+                "invalid-argument-count",
+                args,
+                source_location=source_location,
+            )
+
+        flags = self.collect_atomic_fence_memory_flags(args[0])
+        order = self.atomic_fence_operand_identifier(args[1])
+        scope = self.atomic_fence_operand_identifier(args[2])
+        if flags is None:
+            raise self.metal_atomic_fence_contract_error(
+                "unsupported-memory-flags",
+                args,
+                source_location=source_location,
+            )
+        if order not in self.METAL_ATOMIC_FENCE_MEMORY_ORDERS:
+            raise self.metal_atomic_fence_contract_error(
+                "unsupported-memory-order",
+                args,
+                source_location=source_location,
+            )
+        if scope not in self.METAL_ATOMIC_FENCE_THREAD_SCOPES:
+            raise self.metal_atomic_fence_contract_error(
+                "unsupported-thread-scope",
+                args,
+                source_location=source_location,
+            )
+
+        rendered_flags = " | ".join(f"metal::mem_flags::{flag}" for flag in flags)
+        return (
+            f"metal::atomic_thread_fence({rendered_flags}, "
+            f"metal::{order}, metal::{scope})"
+        )
+
+    def synchronization_function_call(self, func_name, args, *, source_location=None):
+        if func_name in self.user_function_names:
+            return None
+        if func_name == "atomicThreadFence":
+            return self.generate_metal_atomic_thread_fence(
+                args, source_location=source_location
+            )
+        if args:
             return None
         return {
             "barrier": "threadgroup_barrier(mem_flags::mem_threadgroup)",

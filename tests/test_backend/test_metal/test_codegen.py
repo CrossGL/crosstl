@@ -7,6 +7,7 @@ import pytest
 
 import crosstl
 from crosstl.backend.Metal.MetalCrossGLCodeGen import (
+    MetalAtomicFenceLoweringError,
     MetalBuiltinOverloadResolutionError,
     MetalCallableLoweringError,
     MetalSizeofResolutionError,
@@ -2754,11 +2755,20 @@ def test_codegen_lowers_static_cast_from_apple_compute_sample():
 def test_codegen_scoped_atomic_thread_fence_from_mlx_kernel_roundtrips():
     # Reduced from:
     # Repo: https://github.com/ml-explore/mlx
-    # Commit: 6ea7a00d05d548219864d10ff6c013b7544b13ea
+    # Commit: 968d264f2903d578e699c4452a4dbf48633921aa
     # Path: mlx/backend/metal/kernels/fence.metal
     code = """
-    #include <metal_stdlib>
-    using namespace metal;
+    #pragma METAL internals : enable
+
+    #ifndef __METAL_MEMORY_SCOPE_SYSTEM__
+    #define __METAL_MEMORY_SCOPE_SYSTEM__ 3
+    #endif
+    namespace metal {
+    constexpr constant metal::thread_scope thread_scope_system =
+        static_cast<thread_scope>(__METAL_MEMORY_SCOPE_SYSTEM__);
+    }
+
+    #include <metal_atomic>
 
     kernel void fence() {
         metal::atomic_thread_fence(metal::mem_flags::mem_device,
@@ -2768,11 +2778,95 @@ def test_codegen_scoped_atomic_thread_fence_from_mlx_kernel_roundtrips():
     """
     crossgl = convert(code)
 
-    assert "memoryBarrier();" in crossgl
+    assert (
+        "atomicThreadFence(mem_device, memory_order_seq_cst, " "thread_scope_system);"
+    ) in crossgl
+    assert "memoryBarrier();" not in crossgl
+    assert "constant thread_scope thread_scope_system" not in crossgl
     assert "metal_u3a_u3aatomic_thread_fence" not in crossgl
     assert "metal::atomic_thread_fence" not in crossgl
     metal = MetalCodeGen().generate(parse_crossgl(crossgl))
-    assert "threadgroup_barrier(mem_flags::mem_device);" in metal
+    assert (
+        "metal::atomic_thread_fence(metal::mem_flags::mem_device, "
+        "metal::memory_order_seq_cst, metal::thread_scope_system);"
+    ) in metal
+    assert "threadgroup_barrier(mem_flags::mem_device);" not in metal
+    assert "#pragma METAL internals : enable" in metal
+    assert "__METAL_MEMORY_SCOPE_SYSTEM__ 3" in metal
+
+
+def test_codegen_preserves_atomic_thread_fence_contract_matrix():
+    code = """
+    kernel void fence_contracts() {
+        metal::atomic_thread_fence(metal::mem_flags::mem_threadgroup,
+                                   metal::memory_order_relaxed,
+                                   metal::thread_scope_threadgroup);
+        metal::atomic_thread_fence(metal::mem_flags::mem_device,
+                                   metal::memory_order_acquire,
+                                   metal::thread_scope_device);
+        metal::atomic_thread_fence(metal::mem_flags::mem_texture,
+                                   metal::memory_order_release,
+                                   metal::thread_scope_threadgroup);
+        metal::atomic_thread_fence(
+            metal::mem_flags::mem_device | metal::mem_flags::mem_threadgroup,
+            metal::memory_order_acq_rel,
+            metal::thread_scope_device);
+        metal::atomic_thread_fence(metal::mem_flags::mem_device,
+                                   metal::memory_order_seq_cst,
+                                   metal::thread_scope_system);
+    }
+    """
+
+    crossgl = convert(code)
+    expected_contracts = (
+        "atomicThreadFence(mem_threadgroup, memory_order_relaxed, "
+        "thread_scope_threadgroup);",
+        "atomicThreadFence(mem_device, memory_order_acquire, " "thread_scope_device);",
+        "atomicThreadFence(mem_texture, memory_order_release, "
+        "thread_scope_threadgroup);",
+        "atomicThreadFence(mem_device | mem_threadgroup, "
+        "memory_order_acq_rel, thread_scope_device);",
+        "atomicThreadFence(mem_device, memory_order_seq_cst, " "thread_scope_system);",
+    )
+    for contract in expected_contracts:
+        assert contract in crossgl
+
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    assert metal.count("metal::atomic_thread_fence(") == len(expected_contracts)
+    assert "metal::memory_order_relaxed" in metal
+    assert "metal::memory_order_acquire" in metal
+    assert "metal::memory_order_release" in metal
+    assert "metal::memory_order_acq_rel" in metal
+    assert "metal::memory_order_seq_cst" in metal
+    assert "metal::thread_scope_threadgroup" in metal
+    assert "metal::thread_scope_device" in metal
+    assert "metal::thread_scope_system" in metal
+    assert "threadgroup_barrier(" not in metal
+
+
+def test_codegen_rejects_unknown_atomic_thread_fence_order():
+    code = """
+    kernel void fence() {
+        metal::atomic_thread_fence(metal::mem_flags::mem_device,
+                                   metal::memory_order_consume,
+                                   metal::thread_scope_device);
+    }
+    """
+
+    with pytest.raises(MetalAtomicFenceLoweringError) as exc_info:
+        convert(code)
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.metal-atomic-fence-unsupported"
+    )
+    assert diagnostic.missing_capabilities == (
+        "metal.atomic-thread-fence-contract-lowering",
+    )
+    assert diagnostic.reason == "unsupported-memory-order"
+    assert diagnostic.memory_flags == "mem_device"
+    assert diagnostic.memory_order == "memory_order_consume"
+    assert diagnostic.thread_scope == "thread_scope_device"
 
 
 def test_codegen_lowers_combined_threadgroup_barrier_flags_from_blender_builtin():

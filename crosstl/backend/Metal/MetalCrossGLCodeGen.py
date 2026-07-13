@@ -125,6 +125,37 @@ class MetalStageEntryArrayResourceError(ValueError):
         )
 
 
+class MetalAtomicFenceLoweringError(ValueError):
+    """Raised when a Metal fence contract cannot be preserved in CrossGL."""
+
+    project_diagnostic_code = "project.translate.metal-atomic-fence-unsupported"
+    missing_capabilities = ("metal.atomic-thread-fence-contract-lowering",)
+
+    def __init__(
+        self,
+        reason,
+        *,
+        memory_flags=None,
+        memory_order=None,
+        thread_scope=None,
+        source_location=None,
+    ):
+        self.reason = reason
+        self.memory_flags = memory_flags
+        self.memory_order = memory_order
+        self.thread_scope = thread_scope
+        self.source_location = source_location
+        contract = (
+            f"flags={memory_flags or '<missing>'}, "
+            f"order={memory_order or '<missing>'}, "
+            f"scope={thread_scope or '<missing>'}"
+        )
+        super().__init__(
+            "Cannot lower Metal atomic_thread_fence without changing its "
+            f"semantics ({contract}): {reason.replace('-', ' ')}"
+        )
+
+
 class MetalToCrossGLConverter:
     """Serialize Metal backend AST nodes back into CrossGL source."""
 
@@ -413,6 +444,35 @@ class MetalToCrossGLConverter:
         "atomic_exchange_explicit": "atomicExchange",
     }
 
+    metal_atomic_fence_memory_flags = frozenset(
+        {
+            "mem_none",
+            "mem_device",
+            "mem_threadgroup",
+            "mem_texture",
+            "mem_threadgroup_imageblock",
+            "mem_object_data",
+        }
+    )
+    metal_atomic_fence_memory_orders = frozenset(
+        {
+            "memory_order_relaxed",
+            "memory_order_acquire",
+            "memory_order_release",
+            "memory_order_acq_rel",
+            "memory_order_seq_cst",
+        }
+    )
+    metal_atomic_fence_thread_scopes = frozenset(
+        {
+            "thread_scope_thread",
+            "thread_scope_simdgroup",
+            "thread_scope_threadgroup",
+            "thread_scope_device",
+            "thread_scope_system",
+        }
+    )
+
     def __init__(self):
         self.rt_qualifiers = {
             "intersection",
@@ -684,6 +744,7 @@ class MetalToCrossGLConverter:
         self.current_struct_static_constant_owner = None
         self.local_struct_type_aliases = {}
         self.integral_constant_bindings = []
+        self.metal_atomic_fence_transport_declaration_ids = set()
         self.current_function_name = None
         self.current_function_return_type = None
         self.wide_vector_types = {}
@@ -1577,6 +1638,114 @@ class MetalToCrossGLConverter:
         lod = next(iter(lods), None)
         return self.resource_size_query_call(first, lod)
 
+    def prepare_metal_atomic_fence_transport_constants(self, ast):
+        """Identify enum constants that exist only to name a fence operand."""
+        self.metal_atomic_fence_transport_declaration_ids = set()
+        globals_list = getattr(ast, "global_variables", []) or getattr(
+            ast, "global_vars", []
+        )
+        values_by_type = {
+            "mem_flags": self.metal_atomic_fence_memory_flags,
+            "memory_order": self.metal_atomic_fence_memory_orders,
+            "thread_scope": self.metal_atomic_fence_thread_scopes,
+        }
+        candidates = {}
+        for declaration in globals_list:
+            if not isinstance(declaration, AssignmentNode) or not isinstance(
+                declaration.left, VariableNode
+            ):
+                continue
+            variable = declaration.left
+            enum_type = self.normalized_metal_type(variable.vtype)
+            name = self.metal_atomic_fence_operand_identifier(variable)
+            qualifiers = {
+                str(qualifier).lower()
+                for qualifier in getattr(variable, "qualifiers", []) or []
+            }
+            if (
+                enum_type not in values_by_type
+                or name not in values_by_type[enum_type]
+                or "constexpr" not in qualifiers
+            ):
+                continue
+            candidates.setdefault(name, []).append(declaration)
+
+        if not candidates:
+            return
+
+        uses = {name: set() for name in candidates}
+        candidate_names = set(candidates)
+        for function in getattr(ast, "functions", []) or []:
+            self.record_metal_atomic_fence_constant_uses(
+                getattr(function, "body", []), candidate_names, uses
+            )
+        for declaration in globals_list:
+            if isinstance(declaration, AssignmentNode):
+                self.record_metal_atomic_fence_constant_uses(
+                    declaration.right, candidate_names, uses
+                )
+            elif isinstance(declaration, VariableNode):
+                self.record_metal_atomic_fence_constant_uses(
+                    getattr(declaration, "value", None), candidate_names, uses
+                )
+        for declarations in (
+            getattr(ast, "structs", []) or [],
+            getattr(ast, "enums", []) or [],
+        ):
+            self.record_metal_atomic_fence_constant_uses(
+                declarations, candidate_names, uses
+            )
+
+        self.metal_atomic_fence_transport_declaration_ids = {
+            id(declarations[0])
+            for name, declarations in candidates.items()
+            if len(declarations) == 1 and uses[name] == {"fence"}
+        }
+
+    def record_metal_atomic_fence_constant_uses(
+        self, value, candidate_names, uses, fence_operand=False
+    ):
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return
+        if isinstance(value, dict):
+            for item in value.values():
+                self.record_metal_atomic_fence_constant_uses(
+                    item, candidate_names, uses, fence_operand
+                )
+            return
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                self.record_metal_atomic_fence_constant_uses(
+                    item, candidate_names, uses, fence_operand
+                )
+            return
+        if isinstance(value, FunctionCallNode) and self.is_metal_atomic_fence_call(
+            value.name
+        ):
+            for argument in value.args:
+                self.record_metal_atomic_fence_constant_uses(
+                    argument, candidate_names, uses, True
+                )
+            return
+        if isinstance(value, VariableNode):
+            name = self.metal_atomic_fence_operand_identifier(value)
+            if name in candidate_names:
+                use = (
+                    "fence"
+                    if fence_operand and not getattr(value, "vtype", None)
+                    else "other"
+                )
+                uses[name].add(use)
+            return
+        if not hasattr(value, "__dict__"):
+            return
+        for key, child in vars(value).items():
+            if key in {"parent", "annotations", "source_location"}:
+                continue
+            self.record_metal_atomic_fence_constant_uses(
+                child, candidate_names, uses, fence_operand
+            )
+
     def generate(self, ast):
         wide_vector_marker = "    // __crossgl_metal_wide_vector_support__\n"
         self.wide_vector_types = {}
@@ -1610,6 +1779,7 @@ class MetalToCrossGLConverter:
                 self.user_function_overloads_by_name.setdefault(
                     function.name, []
                 ).append(function)
+        self.prepare_metal_atomic_fence_transport_constants(ast)
         code = ""
         includes = getattr(ast, "includes", []) or []
         for inc in includes:
@@ -1739,9 +1909,13 @@ class MetalToCrossGLConverter:
                     code += f"        {decl};\n"
                 code += "    }\n\n"
 
-        globals_list = getattr(ast, "global_variables", []) or getattr(
-            ast, "global_vars", []
-        )
+        globals_list = [
+            glob
+            for glob in (
+                getattr(ast, "global_variables", []) or getattr(ast, "global_vars", [])
+            )
+            if id(glob) not in self.metal_atomic_fence_transport_declaration_ids
+        ]
         if globals_list:
             code += "    // Globals\n"
             for glob in globals_list:
@@ -3354,7 +3528,11 @@ class MetalToCrossGLConverter:
             )
             if uniform_value is not None:
                 return uniform_value
-            sync_call = self.metal_synchronization_function_call(expr.name, expr.args)
+            sync_call = self.metal_synchronization_function_call(
+                expr.name,
+                expr.args,
+                getattr(expr, "source_location", None),
+            )
             if sync_call is not None:
                 return sync_call
             atomic_call = self.metal_atomic_function_call(expr.name, expr.args, is_main)
@@ -3681,8 +3859,94 @@ class MetalToCrossGLConverter:
             ),
         )
 
-    def metal_synchronization_function_call(self, name, args):
+    def is_metal_atomic_fence_call(self, name):
+        function_name = str(name).lstrip(":")
+        if function_name == "metal::atomic_thread_fence":
+            return True
+        return (
+            function_name == "atomic_thread_fence"
+            and function_name not in self.user_function_names
+        )
+
+    @staticmethod
+    def metal_atomic_fence_operand_identifier(expr):
+        if isinstance(expr, VariableNode):
+            name = getattr(expr, "name", None)
+        elif isinstance(expr, str):
+            name = expr
+        else:
+            return None
+        return str(name).lstrip(":").rsplit("::", 1)[-1]
+
+    def metal_atomic_fence_operand_text(self, expr):
+        if isinstance(expr, BinaryOpNode) and expr.op == "|":
+            return (
+                f"{self.metal_atomic_fence_operand_text(expr.left)} | "
+                f"{self.metal_atomic_fence_operand_text(expr.right)}"
+            )
+        name = self.metal_atomic_fence_operand_identifier(expr)
+        return name if name is not None else type(expr).__name__
+
+    def collect_metal_atomic_fence_flags(self, expr):
+        if isinstance(expr, BinaryOpNode) and expr.op == "|":
+            left = self.collect_metal_atomic_fence_flags(expr.left)
+            right = self.collect_metal_atomic_fence_flags(expr.right)
+            if left is None or right is None:
+                return None
+            return left + right
+        name = self.metal_atomic_fence_operand_identifier(expr)
+        if name in self.metal_atomic_fence_memory_flags:
+            return (name,)
+        return None
+
+    def metal_atomic_thread_fence_call(self, args, source_location=None):
+        if len(args) not in {2, 3}:
+            raise MetalAtomicFenceLoweringError(
+                "invalid-argument-count",
+                memory_flags=(
+                    self.metal_atomic_fence_operand_text(args[0]) if args else None
+                ),
+                memory_order=(
+                    self.metal_atomic_fence_operand_text(args[1])
+                    if len(args) > 1
+                    else None
+                ),
+                thread_scope=(
+                    self.metal_atomic_fence_operand_text(args[2])
+                    if len(args) > 2
+                    else None
+                ),
+                source_location=source_location,
+            )
+
+        flags = self.collect_metal_atomic_fence_flags(args[0])
+        order = self.metal_atomic_fence_operand_identifier(args[1])
+        scope = (
+            self.metal_atomic_fence_operand_identifier(args[2])
+            if len(args) == 3
+            else "thread_scope_device"
+        )
+        contract = {
+            "memory_flags": self.metal_atomic_fence_operand_text(args[0]),
+            "memory_order": order,
+            "thread_scope": scope,
+            "source_location": source_location,
+        }
+        if flags is None:
+            raise MetalAtomicFenceLoweringError("unsupported-memory-flags", **contract)
+        if order not in self.metal_atomic_fence_memory_orders:
+            raise MetalAtomicFenceLoweringError("unsupported-memory-order", **contract)
+        if scope not in self.metal_atomic_fence_thread_scopes:
+            raise MetalAtomicFenceLoweringError("unsupported-thread-scope", **contract)
+
+        rendered_flags = " | ".join(flags)
+        return f"atomicThreadFence({rendered_flags}, {order}, {scope})"
+
+    def metal_synchronization_function_call(self, name, args, source_location=None):
         unscoped_name = str(name).split("::")[-1]
+
+        if self.is_metal_atomic_fence_call(name):
+            return self.metal_atomic_thread_fence_call(args, source_location)
 
         if unscoped_name in {"threadgroup_barrier", "simdgroup_barrier"}:
             flags = self.metal_mem_flag_names(args)
@@ -3698,16 +3962,6 @@ class MetalToCrossGLConverter:
                 return "memoryBarrierImage()"
             if flags == {"mem_device", "mem_threadgroup", "mem_texture"}:
                 return "allMemoryBarrier()"
-            return None
-
-        if unscoped_name == "atomic_thread_fence":
-            flags = self.metal_mem_flag_names(args[:1])
-            if flags == {"mem_device"}:
-                return "memoryBarrier()"
-            if flags == {"mem_threadgroup"}:
-                return "memoryBarrierShared()"
-            if flags == {"mem_texture"}:
-                return "memoryBarrierImage()"
             return None
 
         return None

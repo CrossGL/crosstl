@@ -1446,6 +1446,83 @@ def test_metal_synchronization_builtins_lower_to_threadgroup_barriers():
     assert "allMemoryBarrier();" not in generated_code
 
 
+def test_metal_atomic_thread_fence_preserves_seq_cst_system_contract():
+    shader = """
+    shader AtomicThreadFence {
+        compute {
+            void main() {
+                atomicThreadFence(mem_device, memory_order_seq_cst,
+                                  thread_scope_system);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "#pragma METAL internals : enable" in generated_code
+    assert "#include <metal_atomic>" in generated_code
+    assert "__METAL_MEMORY_SCOPE_SYSTEM__ 3" in generated_code
+    assert (
+        "metal::atomic_thread_fence(metal::mem_flags::mem_device, "
+        "metal::memory_order_seq_cst, metal::thread_scope_system);"
+    ) in generated_code
+    assert "threadgroup_barrier(mem_flags::mem_device);" not in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
+@pytest.mark.parametrize(
+    ("call", "reason", "capability"),
+    [
+        (
+            "atomicThreadFence(mem_global, memory_order_seq_cst, "
+            "thread_scope_device)",
+            "unsupported-memory-flags",
+            "metal.atomic-thread-fence.memory-flags",
+        ),
+        (
+            "atomicThreadFence(mem_device, memory_order_consume, "
+            "thread_scope_device)",
+            "unsupported-memory-order",
+            "metal.atomic-thread-fence.memory-order",
+        ),
+        (
+            "atomicThreadFence(mem_device, memory_order_seq_cst, "
+            "thread_scope_queue_family)",
+            "unsupported-thread-scope",
+            "metal.atomic-thread-fence.thread-scope",
+        ),
+        (
+            "atomicThreadFence(mem_device, memory_order_seq_cst)",
+            "invalid-argument-count",
+            "metal.atomic-thread-fence.contract",
+        ),
+    ],
+)
+def test_metal_atomic_thread_fence_rejects_unrepresentable_contracts(
+    call, reason, capability
+):
+    shader = f"""
+    shader UnsupportedAtomicThreadFence {{
+        compute {{
+            void main() {{
+                {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(UnsupportedMetalFeatureError) as exc_info:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    diagnostic = exc_info.value
+    assert diagnostic.feature == "atomic-thread-fence-contract"
+    assert diagnostic.operation == "atomicThreadFence"
+    assert diagnostic.reason == reason
+    assert diagnostic.missing_capabilities == (capability,)
+    assert "cannot represent" in str(diagnostic)
+
+
 def test_metal_workgroup_execution_barrier_lowers_without_intrinsic_leak():
     shader = """
     shader WorkgroupExecutionBarrier {
