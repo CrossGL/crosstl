@@ -89,7 +89,8 @@ def test_codegen_keeps_dependent_enable_if_return_type_from_tinygrad_metal():
     generated = convert(code)
 
     assert (
-        "type load(inout thread RT dst, threadgroup ST src, int threadIdx)" in generated
+        "type load(inout thread RT dst, threadgroup ST& src, int threadIdx)"
+        in generated
     )
     assert "return;" in generated
     assert parse_crossgl(generated) is not None
@@ -968,6 +969,8 @@ def test_codegen_struct_method_receiver_directions_reach_native_targets():
         TranslatorHLSLCodeGen().generate(ast),
         GLSLCodeGen().generate(ast),
     )
+
+    assert "int State__total(in thread State& self)" in normalize(crossgl)
 
     for generated in generated_targets:
         generated = normalize(generated)
@@ -4145,8 +4148,8 @@ def test_codegen_argument_buffer_reference_array_parameter_roundtrips():
     """
     crossgl = convert(code)
 
-    assert "constant sampler2D texturesAB1 @buffer(0)" in crossgl
-    assert "constant sampler2D texturesAB2[10] @buffer(1)" in crossgl
+    assert "constant sampler2D& texturesAB1 @buffer(0)" in crossgl
+    assert "constant sampler2D& texturesAB2[10] @buffer(1)" in crossgl
     assert "sampler2D[10] texturesArray @texture(0)" in crossgl
     assert "sampler2D&[10] texturesAB2" not in crossgl
     assert parse_crossgl(crossgl) is not None
@@ -4260,7 +4263,7 @@ def test_codegen_sanitizes_crossgl_keyword_identifiers_from_real_msl():
 
     assert "VertexOut in_" in crossgl
     assert "sampler2D texture_" in crossgl
-    assert "constant BrightnessUniform uniform_ @buffer(1)" in crossgl
+    assert "BrightnessUniform& uniform_" in crossgl
     assert "in.textureCoordinate" not in crossgl
     assert "uniform.brightness" not in crossgl
 
@@ -5768,7 +5771,7 @@ def test_codegen_preserves_native_address_space_qualifiers():
 
     assert "void update(inout threadgroup Payload scratch" in crossgl
     assert "inout device float[] values" in crossgl
-    assert "constant uint count" in crossgl
+    assert "constant uint& count" in crossgl
     assert "inout thread float localValue" in crossgl
     assert "threadgroup Payload scratch;" in crossgl
     assert "thread float localValue = buffer_load(inData, tid);" in crossgl

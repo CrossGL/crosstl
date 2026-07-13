@@ -15052,6 +15052,99 @@ def _metal_prune_unused_placeholder_concrete_structs(
     return preprocessor._apply_text_replacements(source, replacements)
 
 
+def _metal_coalesce_default_equivalent_struct_specializations(
+    preprocessor: Any,
+    source: str,
+) -> str:
+    """Unify materialized names that differ only by expanded defaults."""
+    provenance = getattr(
+        preprocessor,
+        "_materialized_struct_specializations",
+        {},
+    )
+    if len(provenance) < 2:
+        return source
+
+    declarations = {}
+    for declaration in preprocessor._find_template_structs(source):
+        if preprocessor._template_struct_specialization_arguments(declaration) is None:
+            declarations.setdefault(declaration.name, declaration)
+
+    aliases: dict[str, str] = {}
+    for short_name, (source_name, short_arguments) in provenance.items():
+        declaration = declarations.get(source_name)
+        if declaration is None:
+            continue
+        short_arguments = tuple(short_arguments)
+        candidates: list[tuple[str, tuple[str, ...]]] = []
+        for candidate_name, (
+            candidate_source,
+            candidate_arguments,
+        ) in provenance.items():
+            candidate_arguments = tuple(candidate_arguments)
+            if (
+                candidate_name == short_name
+                or candidate_source != source_name
+                or len(candidate_arguments) <= len(short_arguments)
+            ):
+                continue
+            if any(
+                _normalize_metal_type_text(
+                    _metal_expand_materialized_struct_type(preprocessor, left)
+                )
+                != _normalize_metal_type_text(
+                    _metal_expand_materialized_struct_type(preprocessor, right)
+                )
+                for left, right in zip(short_arguments, candidate_arguments)
+            ):
+                continue
+            if not _metal_trailing_struct_arguments_match_defaults(
+                preprocessor,
+                declaration=declaration,
+                actual_arguments=candidate_arguments,
+                explicit_argument_count=len(short_arguments),
+            ):
+                continue
+            candidates.append((candidate_name, candidate_arguments))
+
+        if not candidates:
+            continue
+        fullest_argument_count = max(len(arguments) for _name, arguments in candidates)
+        fullest = [
+            (name, arguments)
+            for name, arguments in candidates
+            if len(arguments) == fullest_argument_count
+        ]
+        expanded_signatures = {
+            tuple(
+                _normalize_metal_type_text(
+                    _metal_expand_materialized_struct_type(preprocessor, argument)
+                )
+                for argument in arguments
+            )
+            for _name, arguments in fullest
+        }
+        if len(expanded_signatures) != 1:
+            continue
+        aliases[short_name] = min(name for name, _arguments in fullest)
+
+    if not aliases:
+        return source
+
+    concrete_structs = {
+        struct.name: struct
+        for struct in preprocessor._find_concrete_struct_definitions(source)
+    }
+    removals = [
+        (int(concrete_structs[name].span[0]), int(concrete_structs[name].span[1]), "")
+        for name in aliases
+        if name in concrete_structs
+    ]
+    if removals:
+        source = preprocessor._apply_text_replacements(source, removals)
+    return preprocessor._replace_identifiers(source, aliases)
+
+
 def _unresolved_metal_standalone_template_type_records(
     *,
     preprocessor: Any,
@@ -16224,6 +16317,10 @@ def _project_template_materialization_for_artifact(
         preprocessor._find_template_declaration_spans(materialized),
     )
     materialized = _rewrite_metal_concrete_static_method_calls(
+        preprocessor,
+        materialized,
+    )
+    materialized = _metal_coalesce_default_equivalent_struct_specializations(
         preprocessor,
         materialized,
     )

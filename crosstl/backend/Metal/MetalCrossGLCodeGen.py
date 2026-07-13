@@ -2336,13 +2336,21 @@ class MetalToCrossGLConverter:
             str(qualifier).lower() for qualifier in getattr(var, "qualifiers", []) or []
         ]
         is_reference = self.reference_parameter(var)
-        if is_reference:
-            declaration = re.sub(r"(?<=\S)&(?=\s)", "", declaration, count=1)
         for qualifier in self.parameter_direction_qualifiers:
             if qualifier in qualifiers:
+                if is_reference:
+                    declaration = re.sub(r"(?<=\S)&(?=\s)", "", declaration, count=1)
                 return f"{qualifier} {declaration}"
         if is_reference and not self.readonly_parameter(var, qualifiers):
+            declaration = re.sub(r"(?<=\S)&(?=\s)", "", declaration, count=1)
             return f"inout {declaration}"
+        if (
+            is_reference
+            and self.readonly_parameter(var, qualifiers)
+            and getattr(var, "name", None) == "self"
+            and "thread" in qualifiers
+        ):
+            return f"in {declaration}"
         if self.writable_c_array_parameter(var, semantic_context):
             return f"inout {declaration}"
         return declaration

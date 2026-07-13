@@ -76,6 +76,7 @@ from .generic_function_utils import (
     prepare_generic_function_specializations,
     reject_unresolved_generic_member_call,
 )
+from .generic_struct_utils import generic_struct_specialization_name
 from .image_access_contracts import (
     collect_function_image_access_requirements,
     collect_function_parameter_names,
@@ -14798,6 +14799,11 @@ class VulkanSPIRVCodeGen:
 
         generic_base_name, generic_args = generic_type_parts(type_str)
         if generic_args:
+            specialized_struct_type = self.ensure_declared_struct_type(
+                generic_struct_specialization_name(type_str)
+            )
+            if specialized_struct_type is not None:
+                return specialized_struct_type
             declared_generic_struct_type = self.ensure_declared_struct_type(
                 generic_base_name
             )

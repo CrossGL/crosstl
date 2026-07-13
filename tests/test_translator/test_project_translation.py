@@ -15137,6 +15137,8 @@ def test_metal_project_materialization_deduces_tile_helper_from_struct_fields(
         materialized.text,
     )
     assert "D.value = A.value + B.value + C.value;" in materialized.text
+    assert "struct Tile_float_2_3 {" not in materialized.text
+    assert "thread Tile_float_2_3_BaseFragment_float_8_8& D" in materialized.text
     assert not re.search(r"\btile_matmad\s*\(", materialized.text)
 
     payload = translate_project(
@@ -15157,7 +15159,9 @@ def test_metal_project_materialization_deduces_tile_helper_from_struct_fields(
     assert artifact_tile_specializations == [tile_specialization]
     output = (repo / artifact["path"]).read_text(encoding="utf-8")
     if target == "vulkan":
-        assert "OpFunctionCall" in output
+        assert "OpFunctionCall" not in output
+        assert "OpAccessChain" in output
+        assert "OpStore" in output
     else:
         assert tile_specialization["materializedName"] in output
 
@@ -44232,7 +44236,7 @@ def test_translate_project_metal_template_member_infers_pointer_struct_field(
         artifact for artifact in payload["artifacts"] if artifact["target"] == "directx"
     )
     directx = (repo / directx_artifact["path"]).read_text(encoding="utf-8")
-    assert "int Identity__apply__int(Identity self, int value)" in directx
+    assert "int Identity__apply__int(inout Identity self, int value)" in directx
     assert "forward_value_int(Identity__apply__int(op, params.stride))" in directx
     assert "apply_Params" not in directx
 
