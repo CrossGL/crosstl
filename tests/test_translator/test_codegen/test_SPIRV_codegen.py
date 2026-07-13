@@ -30,6 +30,7 @@ from crosstl.translator.ast import (
     VariableNode,
 )
 from crosstl.translator.codegen.SPIRV_codegen import (
+    SPIRVAtomicFenceLoweringError,
     SpirvId,
     SpirvType,
     UnsupportedSPIRVFeatureError,
@@ -7426,6 +7427,144 @@ class TestVulkanSPIRVCodeGen:
         assert "OpFunctionCall" not in spv_code
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_atomic_thread_fence_rejects_seq_cst_system_contract(self):
+        source_code = """
+        shader AtomicThreadFenceSystemScope {
+            compute {
+                void main() {
+                    atomicThreadFence(
+                        mem_device,
+                        memory_order_seq_cst,
+                        thread_scope_system
+                    );
+                }
+            }
+        }
+        """
+        ast = Parser(Lexer(source_code).tokens).parse()
+        call = next(node for node in ast.walk() if isinstance(node, FunctionCallNode))
+        source_location = {"line": 5, "column": 21}
+        call.source_location = source_location
+
+        with pytest.raises(SPIRVAtomicFenceLoweringError) as exc_info:
+            VulkanSPIRVCodeGen().generate(ast)
+
+        diagnostic = exc_info.value
+        assert diagnostic.project_diagnostic_code == (
+            "project.translate.vulkan-atomic-fence-unsupported"
+        )
+        assert diagnostic.missing_capabilities == (
+            "spirv.atomic-thread-fence-contract-lowering",
+        )
+        assert diagnostic.reason == "unsupported-system-thread-scope"
+        assert diagnostic.memory_flags == "mem_device"
+        assert diagnostic.memory_order == "memory_order_seq_cst"
+        assert diagnostic.thread_scope == "thread_scope_system"
+        assert diagnostic.source_location is source_location
+        assert "flags=mem_device" in str(diagnostic)
+        assert "order=memory_order_seq_cst" in str(diagnostic)
+        assert "scope=thread_scope_system" in str(diagnostic)
+
+    @pytest.mark.parametrize(
+        ("memory_flags", "memory_order", "thread_scope", "reason"),
+        [
+            (
+                "mem_global",
+                "memory_order_acq_rel",
+                "thread_scope_threadgroup",
+                "unknown-memory-flags",
+            ),
+            (
+                "mem_threadgroup",
+                "memory_order_consume",
+                "thread_scope_threadgroup",
+                "unknown-memory-order",
+            ),
+            (
+                "mem_threadgroup",
+                "memory_order_acq_rel",
+                "thread_scope_queue_family",
+                "unknown-thread-scope",
+            ),
+        ],
+    )
+    def test_atomic_thread_fence_rejects_unknown_operands(
+        self, memory_flags, memory_order, thread_scope, reason
+    ):
+        source_code = f"""
+        shader UnknownAtomicThreadFenceOperand {{
+            compute {{
+                void main() {{
+                    atomicThreadFence(
+                        {memory_flags}, {memory_order}, {thread_scope}
+                    );
+                }}
+            }}
+        }}
+        """
+
+        with pytest.raises(SPIRVAtomicFenceLoweringError) as exc_info:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        diagnostic = exc_info.value
+        assert diagnostic.reason == reason
+        assert diagnostic.memory_flags == memory_flags
+        assert diagnostic.memory_order == memory_order
+        assert diagnostic.thread_scope == thread_scope
+        assert diagnostic.missing_capabilities == (
+            "spirv.atomic-thread-fence-contract-lowering",
+        )
+
+    def test_atomic_thread_fence_rejects_known_contract_while_lowering_is_deferred(
+        self,
+    ):
+        source_code = """
+        shader AtomicThreadFenceDeferred {
+            compute {
+                void main() {
+                    atomicThreadFence(
+                        mem_threadgroup | mem_texture,
+                        memory_order_acq_rel,
+                        thread_scope_threadgroup
+                    );
+                }
+            }
+        }
+        """
+
+        with pytest.raises(SPIRVAtomicFenceLoweringError) as exc_info:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        diagnostic = exc_info.value
+        assert diagnostic.reason == "atomic-fence-lowering-deferred"
+        assert diagnostic.memory_flags == "mem_threadgroup | mem_texture"
+        assert diagnostic.memory_order == "memory_order_acq_rel"
+        assert diagnostic.thread_scope == "thread_scope_threadgroup"
+
+    def test_user_defined_atomic_thread_fence_is_not_rejected_or_lowered(self):
+        source_code = """
+        shader AtomicThreadFenceShadowing {
+            compute {
+                void atomicThreadFence(int flags, int order, int scope) {
+                    return;
+                }
+
+                void main() {
+                    atomicThreadFence(1, 2, 3);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert spv_code.count("OpFunctionCall") == 1
+        assert "OpMemoryBarrier" not in spv_code
+        assert "OpControlBarrier" not in spv_code
+        assert "atomic-fence" not in spv_code
 
     def test_compute_execution_only_barrier_uses_no_memory_semantics(self, tmp_path):
         source_code = """
