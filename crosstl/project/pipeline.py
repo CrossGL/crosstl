@@ -16916,6 +16916,35 @@ def _opengl_fixed_array_resource_failure_details(
     return dict(sorted(details.items()))
 
 
+def _directx_private_pointer_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.directx-private-pointer-unsupported"
+    ):
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    contract = {}
+    function_name = getattr(exc, "function_name", None)
+    parameter_name = getattr(exc, "parameter_name", None)
+    reason = getattr(exc, "reason", None)
+    if _is_non_empty_string(function_name):
+        contract["function"] = function_name
+    if _is_non_empty_string(parameter_name):
+        contract["parameter"] = parameter_name
+    if _is_non_empty_string(reason):
+        contract["reason"] = reason
+    if contract:
+        details["privatePointer"] = dict(sorted(contract.items()))
+    return dict(sorted(details.items()))
+
+
 def _opengl_index_type_failure_details(
     exc: Exception,
     unit: ProjectTranslationUnit,
@@ -17154,6 +17183,7 @@ def _translation_failure_details(
         **_opengl_complex_arithmetic_failure_details(exc, unit, artifact_path),
         **_opengl_struct_construction_failure_details(exc, unit, artifact_path),
         **_opengl_fixed_array_resource_failure_details(exc, unit, artifact_path),
+        **_directx_private_pointer_failure_details(exc, unit, artifact_path),
         **_opengl_index_type_failure_details(exc, unit, artifact_path),
         **_opengl_workgroup_pointer_failure_details(exc, unit, artifact_path),
         **_opengl_storage_pointer_failure_details(exc, unit, artifact_path),
