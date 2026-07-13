@@ -8344,9 +8344,7 @@ class GLSLCodeGen:
                     )
                 continue
 
-            param_type = self.glsl_private_pointer_parameter_array_type(
-                p, function_key
-            )
+            param_type = self.glsl_private_pointer_parameter_array_type(p, function_key)
             if param_type is None:
                 param_type = self.map_resource_parameter_type_with_hint(
                     raw_param_type, p, getattr(func, "name", None)
@@ -9093,7 +9091,9 @@ class GLSLCodeGen:
             alias = getattr(import_node, "alias", None)
             if alias:
                 names.add(alias)
-            names.update(item for item in getattr(import_node, "items", []) or [] if item)
+            names.update(
+                item for item in getattr(import_node, "items", []) or [] if item
+            )
         cbuffers = list(getattr(ast, "cbuffers", []) or [])
         cbuffers += collect_stage_local_cbuffers(ast, target_stage)
         for cbuffer in cbuffers:
@@ -23381,9 +23381,8 @@ complex64_t crossgl_complex64_mod_assign(
                         self.glsl_private_pointer_backing_error(
                             call, parameter_name, binding
                         )
-                    if (
-                        binding.get("root_kind") == "local"
-                        and not isinstance(binding.get("extent"), int)
+                    if binding.get("root_kind") == "local" and not isinstance(
+                        binding.get("extent"), int
                     ):
                         self.glsl_private_pointer_backing_error(
                             call, parameter_name, binding
@@ -23553,9 +23552,7 @@ complex64_t crossgl_complex64_mod_assign(
                                     extent = 0
                                 else:
                                     root_name = binding["root"]
-                                    position = caller_parameter_positions.get(
-                                        root_name
-                                    )
+                                    position = caller_parameter_positions.get(root_name)
                                     if position is None:
                                         self.glsl_private_pointer_backing_error(
                                             call, parameter.name, binding
@@ -24120,9 +24117,7 @@ complex64_t crossgl_complex64_mod_assign(
             bound_expression = condition.right
         elif right_name == loop_name:
             bound_expression = condition.left
-            operator = {"<": ">", "<=": ">=", ">": "<", ">=": "<="}.get(
-                operator
-            )
+            operator = {"<": ">", "<=": ">=", ">": "<", ">=": "<="}.get(operator)
         else:
             return loop_name, None
         bound = self.glsl_private_pointer_interval(
@@ -24507,9 +24502,7 @@ complex64_t crossgl_complex64_mod_assign(
 
     def glsl_private_pointer_call_target_key(self, call, source_candidates):
         function_name = self.function_call_name(call)
-        arguments = list(
-            getattr(call, "arguments", getattr(call, "args", [])) or []
-        )
+        arguments = list(getattr(call, "arguments", getattr(call, "args", [])) or [])
         normalized_name = self.glsl_private_pointer_materialized_function_name(
             function_name
         )
@@ -24553,9 +24546,7 @@ complex64_t crossgl_complex64_mod_assign(
             decoded = decoded.replace(encoded, character)
         candidate = sanitize_type_name(decoded)
         return (
-            candidate
-            if candidate in self.function_private_pointer_parameters
-            else name
+            candidate if candidate in self.function_private_pointer_parameters else name
         )
 
     def glsl_private_pointer_display_name(self, function_name):
@@ -24563,9 +24554,7 @@ complex64_t crossgl_complex64_mod_assign(
             function_name, function_name
         )
 
-    def glsl_private_pointer_binding_offset(
-        self, call, parameter_name, binding
-    ):
+    def glsl_private_pointer_binding_offset(self, call, parameter_name, binding):
         if binding.get("side_effecting"):
             reason = "side-effecting-view-offset"
         elif not isinstance(binding.get("offset"), int):
@@ -24616,12 +24605,10 @@ complex64_t crossgl_complex64_mod_assign(
         binding,
         extent,
     ):
-        offset = self.glsl_private_pointer_binding_offset(
-            call, parameter_name, binding
-        )
-        required_span = self.function_private_pointer_required_spans[
-            call["callee"]
-        ][parameter_name]
+        offset = self.glsl_private_pointer_binding_offset(call, parameter_name, binding)
+        required_span = self.function_private_pointer_required_spans[call["callee"]][
+            parameter_name
+        ]
         if extent == 0:
             display_name = self.glsl_private_pointer_display_name(call["callee"])
             backing_name = binding.get("root") or "unknown"
@@ -24633,9 +24620,7 @@ complex64_t crossgl_complex64_mod_assign(
                     function_name=display_name,
                     parameter_name=parameter_name,
                     reason="nonzero-scalar-view-offset",
-                    source_location=getattr(
-                        call.get("node"), "source_location", None
-                    ),
+                    source_location=getattr(call.get("node"), "source_location", None),
                 )
             if parameter_name in (
                 self.function_private_pointer_scalar_access_violations.get(
@@ -24649,9 +24634,7 @@ complex64_t crossgl_complex64_mod_assign(
                     function_name=display_name,
                     parameter_name=parameter_name,
                     reason="nonzero-scalar-index",
-                    source_location=getattr(
-                        call.get("node"), "source_location", None
-                    ),
+                    source_location=getattr(call.get("node"), "source_location", None),
                 )
             if parameter_name in (
                 self.function_private_pointer_full_span_parameters.get(
@@ -24664,9 +24647,7 @@ complex64_t crossgl_complex64_mod_assign(
                     function_name=display_name,
                     parameter_name=parameter_name,
                     reason="unprovable-scalar-index",
-                    source_location=getattr(
-                        call.get("node"), "source_location", None
-                    ),
+                    source_location=getattr(call.get("node"), "source_location", None),
                 )
             if required_span != 1:
                 raise OpenGLPrivatePointerParameterError(
@@ -24676,9 +24657,7 @@ complex64_t crossgl_complex64_mod_assign(
                     function_name=display_name,
                     parameter_name=parameter_name,
                     reason="nonzero-scalar-index",
-                    source_location=getattr(
-                        call.get("node"), "source_location", None
-                    ),
+                    source_location=getattr(call.get("node"), "source_location", None),
                 )
             return
         if parameter_name in self.function_private_pointer_full_span_parameters.get(
@@ -24694,9 +24673,7 @@ complex64_t crossgl_complex64_mod_assign(
                     function_name=display_name,
                     parameter_name=parameter_name,
                     reason="full-span-view-offset",
-                    source_location=getattr(
-                        call.get("node"), "source_location", None
-                    ),
+                    source_location=getattr(call.get("node"), "source_location", None),
                 )
             required_span = extent
         upper = offset + required_span - 1
@@ -24734,9 +24711,7 @@ complex64_t crossgl_complex64_mod_assign(
 
     def glsl_private_pointer_view_binding(self, expression):
         function_name = self.current_glsl_private_pointer_function_name
-        local_arrays = self.function_private_pointer_local_arrays.get(
-            function_name, {}
-        )
+        local_arrays = self.function_private_pointer_local_arrays.get(function_name, {})
         if isinstance(expression, (str, IdentifierNode, VariableNode)):
             raw_name = (
                 expression
@@ -24861,9 +24836,7 @@ complex64_t crossgl_complex64_mod_assign(
                     f"'{display_name}'",
                     function_name=display_name,
                     reason="side-effecting-scalar-index",
-                    source_location=getattr(
-                        index_expression, "source_location", None
-                    ),
+                    source_location=getattr(index_expression, "source_location", None),
                 )
             proven_zero_access = (
                 access_expression is not None
@@ -24874,8 +24847,7 @@ complex64_t crossgl_complex64_mod_assign(
                 index_expression, self.literal_int_constants
             )
             if not proven_zero_access and not (
-                binding.get("offset")
-                in {None, "", "0", "0u", "int(0)", "int(0u)"}
+                binding.get("offset") in {None, "", "0", "0u", "int(0)", "int(0u)"}
                 and literal_index == 0
             ):
                 display_name = self.glsl_private_pointer_display_name(
@@ -24886,9 +24858,7 @@ complex64_t crossgl_complex64_mod_assign(
                     f"zero index in '{display_name}'",
                     function_name=display_name,
                     reason="unprovable-scalar-index",
-                    source_location=getattr(
-                        index_expression, "source_location", None
-                    ),
+                    source_location=getattr(index_expression, "source_location", None),
                 )
             return binding["backing"]
         rendered_index = (
@@ -24897,8 +24867,7 @@ complex64_t crossgl_complex64_mod_assign(
             else self.generate_expression(index_expression)
         )
         return (
-            f"{binding['backing']}[({binding['offset']} + "
-            f"int({rendered_index}))]"
+            f"{binding['backing']}[({binding['offset']} + " f"int({rendered_index}))]"
         )
 
     def glsl_private_pointer_call_argument_binding(
@@ -24907,9 +24876,7 @@ complex64_t crossgl_complex64_mod_assign(
         parameter_name,
         argument,
     ):
-        contract_name = self.glsl_private_pointer_contract_function_name(
-            function_name
-        )
+        contract_name = self.glsl_private_pointer_contract_function_name(function_name)
         if contract_name is None:
             return None
         parameter_names = {

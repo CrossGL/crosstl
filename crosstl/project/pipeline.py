@@ -17314,9 +17314,7 @@ def _translation_failure_details(
         **_opengl_complex_arithmetic_failure_details(exc, unit, artifact_path),
         **_opengl_struct_construction_failure_details(exc, unit, artifact_path),
         **_opengl_fixed_array_resource_failure_details(exc, unit, artifact_path),
-        **_opengl_resource_memory_qualifier_failure_details(
-            exc, unit, artifact_path
-        ),
+        **_opengl_resource_memory_qualifier_failure_details(exc, unit, artifact_path),
         **_directx_private_pointer_failure_details(exc, unit, artifact_path),
         **_opengl_private_pointer_failure_details(exc, unit, artifact_path),
         **_directx_workgroup_pointer_failure_details(exc, unit, artifact_path),

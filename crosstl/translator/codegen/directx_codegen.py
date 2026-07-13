@@ -1666,9 +1666,7 @@ class HLSLCodeGen:
             if alias:
                 self.standard_math_constant_shadow_names.add(alias)
             self.standard_math_constant_shadow_names.update(
-                item
-                for item in getattr(import_node, "items", []) or []
-                if item
+                item for item in getattr(import_node, "items", []) or [] if item
             )
         self.standard_math_constant_shadow_names.update(
             getattr(variant, "name", None)

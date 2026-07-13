@@ -1983,8 +1983,9 @@ class MetalToCrossGLConverter:
 
         globals_list = [
             glob
-            for glob in getattr(ast, "global_variables", [])
-            or getattr(ast, "global_vars", [])
+            for glob in getattr(ast, "global_variables", []) or getattr(
+                ast, "global_vars", []
+            )
             if id(glob) not in self.metal_atomic_fence_transport_declaration_ids
         ]
         if globals_list:

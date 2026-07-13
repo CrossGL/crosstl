@@ -102,9 +102,7 @@ def test_hlsl_unresolved_standard_math_identifier_uses_exact_float_literal():
 
 def test_hlsl_unresolved_standard_math_variable_uses_exact_double_literal():
     assert (
-        HLSLCodeGen().generate_expression(
-            VariableNode("M_PI", PrimitiveType("double"))
-        )
+        HLSLCodeGen().generate_expression(VariableNode("M_PI", PrimitiveType("double")))
         == HLSL_M_PI_LITERAL
     )
 
@@ -160,9 +158,7 @@ def test_hlsl_unknown_math_identifier_is_preserved(node):
     ],
     ids=["parameter", "local", "global"],
 )
-def test_hlsl_standard_math_constant_respects_variable_shadowing(
-    source, declaration
-):
+def test_hlsl_standard_math_constant_respects_variable_shadowing(source, declaration):
     generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
 
     assert declaration in generated
@@ -190,9 +186,7 @@ def test_hlsl_standard_math_constant_respects_constant_enum_and_alias_shadows():
     }
     """
 
-    constant_hlsl = HLSLCodeGen().generate(
-        crosstl.translator.parse(constant_source)
-    )
+    constant_hlsl = HLSLCodeGen().generate(crosstl.translator.parse(constant_source))
     enum_hlsl = HLSLCodeGen().generate(crosstl.translator.parse(enum_source))
     aliased_codegen = HLSLCodeGen()
     aliased_codegen.current_identifier_aliases["M_PI_F"] = "source_pi"
@@ -203,10 +197,7 @@ def test_hlsl_standard_math_constant_respects_constant_enum_and_alias_shadows():
     assert "static const int StandardValue_M_PI_F = 0;" in enum_hlsl
     assert "return M_PI_F;" in enum_hlsl
     assert HLSL_M_PI_F_LITERAL not in enum_hlsl
-    assert (
-        aliased_codegen.generate_expression(IdentifierNode("M_PI_F"))
-        == "source_pi"
-    )
+    assert aliased_codegen.generate_expression(IdentifierNode("M_PI_F")) == "source_pi"
 
 
 def test_hlsl_standard_math_constant_native_compute_validates(tmp_path):
@@ -9451,9 +9442,7 @@ def test_hlsl_orders_late_array_helper_overloads_before_caller(tmp_path):
 
     generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    caller_index = generated_code.index(
-        "void call_helper(inout float values[3])"
-    )
+    caller_index = generated_code.index("void call_helper(inout float values[3])")
     assert generated_code.index("void update_3(inout float values[3])") < caller_index
     assert generated_code.index("void update_3(inout float values[5])") < caller_index
     assert "update_3(values);" in generated_code

@@ -272,9 +272,7 @@ def test_glsl_standard_math_constant_respects_constant_enum_and_alias_shadows():
     assert "return M_PI_F;" in enum_glsl
     assert "3.14159265358979323846264338327950288f" not in constant_glsl
     assert "3.14159265358979323846264338327950288f" not in enum_glsl
-    assert (
-        aliased_codegen.generate_expression(IdentifierNode("M_PI_F")) == "source_pi"
-    )
+    assert aliased_codegen.generate_expression(IdentifierNode("M_PI_F")) == "source_pi"
 
 
 def test_glsl_unknown_identifier_is_preserved():
@@ -4043,9 +4041,7 @@ def test_glsl_private_scalar_pointer_nested_zero_forwarding_respects_shadowing(
 
     assert "void increment(inout int value)" in generated
     assert "void forward(inout int value)" in generated
-    assert re.search(
-        r"int value = 10;\s*increment\(value\);", generated
-    ), generated
+    assert re.search(r"int value = 10;\s*increment\(value\);", generated), generated
     assert generated.count("increment(value);") == 2
     assert "forward(value);" in generated
     assert "int observed = value;" in generated
@@ -4096,9 +4092,7 @@ def test_glsl_private_scalar_pointer_resolves_materialized_nested_call(tmp_path)
         ("value[index] += 1;", "unprovable-scalar-index"),
     ],
 )
-def test_glsl_private_scalar_pointer_rejects_nonzero_or_dynamic_index(
-    access, reason
-):
+def test_glsl_private_scalar_pointer_rejects_nonzero_or_dynamic_index(access, reason):
     code = f"""
     shader InvalidPrivateScalarIndex {{
         void increment(thread int* value, int index) {{
@@ -4169,8 +4163,7 @@ def test_glsl_private_scalar_pointer_rejects_same_scalar_aliasing():
     with pytest.raises(
         OpenGLPrivatePointerParameterError,
         match=(
-            "binds parameters 'left' and 'right' to the same backing object "
-            "'value'"
+            "binds parameters 'left' and 'right' to the same backing object " "'value'"
         ),
     ) as excinfo:
         GLSLCodeGen().generate(crosstl.translator.parse(code))
@@ -4461,9 +4454,7 @@ def test_glsl_private_pointer_view_respects_lexical_array_shadowing(tmp_path):
     generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
 
     assert "void forward(inout float values[6], int values_base)" in generated
-    assert re.search(
-        r"float values\[4\];\s*fill\(values, 0\);", generated
-    ), generated
+    assert re.search(r"float values\[4\];\s*fill\(values, 0\);", generated), generated
     assert "fill(values, (values_base + int(1)));" in generated
     assert "forward(backing, 0);" in generated
     assert "float observed = backing[1];" in generated
