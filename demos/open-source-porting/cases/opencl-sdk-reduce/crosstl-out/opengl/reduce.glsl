@@ -39,7 +39,7 @@ void main() {
         shared_[lid] = front[((wid * wg_stride) + lid)];
     }
     barrier();
-    for (uint i = lsi; (i != 0); i /= 2) {
+    for (uint i = lsi; (i != 0); i = (i / 2)) {
         if ((lid < i)) {
             shared_[lid] = op(read_local(shared_, valid_count, zero_elem, lid), read_local(shared_, valid_count, zero_elem, (lid + i)));
         }
