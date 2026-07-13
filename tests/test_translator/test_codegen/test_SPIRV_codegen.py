@@ -396,6 +396,50 @@ def assert_spirv_module_validates(spv_code, tmp_path, target_env=None):
     assert validate.returncode == 0, validate.stderr
 
 
+def cooperative_matrix_type_source(component, rows, cols, use):
+    return (
+        f"CooperativeMatrix<{component}, {rows}, {cols}, "
+        f"subgroup, {use}, unspecified>"
+    )
+
+
+def cooperative_matrix_multiply_profile_source(
+    left_type,
+    right_type,
+    result_type,
+    expression="cooperative_matrix_multiply(left, right)",
+):
+    return f"""
+    shader CooperativeMatrixMultiplyProfile {{
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {{
+                {left_type} left;
+                {right_type} right;
+                {result_type} product = {expression};
+            }}
+        }}
+    }}
+    """
+
+
+def assert_cooperative_matrix_multiply_rejected(
+    profile_source, message, feature, capability
+):
+    generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+
+    with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
+        generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+    assert message in str(exc_info.value)
+    assert exc_info.value.feature == feature
+    assert exc_info.value.missing_capabilities == (capability,)
+    emitted = "\n".join(generator.code_lines)
+    assert "OpCooperativeMatrixMulAddKHR" not in emitted
+    assert "WARNING" not in emitted
+
+
 def test_spirv_storage_pointer_reinterpret_reads_byte_lanes(tmp_path):
     source = """
     shader StoragePointerReinterpret {
@@ -32903,6 +32947,295 @@ class TestSpirvShaderValidation:
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
 
+    def test_opt_in_profile_lowers_float_matrix_multiply_with_zero_accumulator(
+        self, tmp_path
+    ):
+        left_type = cooperative_matrix_type_source("float", 8, 4, "matrix_a")
+        right_type = cooperative_matrix_type_source("float", 4, 8, "matrix_b")
+        result_type = cooperative_matrix_type_source("float", 8, 8, "accumulator")
+        profile_source = cooperative_matrix_multiply_profile_source(
+            left_type,
+            right_type,
+            result_type,
+        )
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        constant_values = spirv_integer_constant_values(spv_code)
+        matrix_types = {}
+        matrix_component_types = {}
+        for declaration in re.finditer(
+            r"(?P<type>%\d+) = OpTypeCooperativeMatrixKHR "
+            r"(?P<component>%\d+) (?P<scope>%\d+) (?P<rows>%\d+) "
+            r"(?P<columns>%\d+) (?P<use>%\d+)\b",
+            spv_code,
+        ):
+            contract = (
+                constant_values[declaration.group("rows")],
+                constant_values[declaration.group("columns")],
+                constant_values[declaration.group("use")],
+            )
+            matrix_types[contract] = declaration.group("type")
+            matrix_component_types[contract] = declaration.group("component")
+            assert re.search(
+                rf"{re.escape(declaration.group('component'))} = " r"OpTypeFloat 32\b",
+                spv_code,
+            )
+
+        matrix_a_type = matrix_types[(8, 4, 0)]
+        matrix_b_type = matrix_types[(4, 8, 1)]
+        accumulator_type = matrix_types[(8, 8, 2)]
+        accumulator_component_type = matrix_component_types[(8, 8, 2)]
+        left_variable = spirv_named_variable(spv_code, "left", storage_class="Function")
+        right_variable = spirv_named_variable(
+            spv_code, "right", storage_class="Function"
+        )
+        product_variable = spirv_named_variable(
+            spv_code, "product", storage_class="Function"
+        )
+        left_value = re.search(
+            rf"(?P<value>%\d+) = OpLoad {re.escape(matrix_a_type)} "
+            rf"{re.escape(left_variable)}\b",
+            spv_code,
+        )
+        right_value = re.search(
+            rf"(?P<value>%\d+) = OpLoad {re.escape(matrix_b_type)} "
+            rf"{re.escape(right_variable)}\b",
+            spv_code,
+        )
+        zero_scalar = re.search(
+            rf"(?P<value>%\d+) = OpConstant "
+            rf"{re.escape(accumulator_component_type)} 0\.0\b",
+            spv_code,
+        )
+
+        assert left_value is not None
+        assert right_value is not None
+        assert zero_scalar is not None
+        zero_accumulator = re.search(
+            rf"(?P<value>%\d+) = OpConstantComposite "
+            rf"{re.escape(accumulator_type)} "
+            rf"{re.escape(zero_scalar.group('value'))}\b",
+            spv_code,
+        )
+        assert zero_accumulator is not None
+        multiply = re.search(
+            rf"(?P<value>%\d+) = OpCooperativeMatrixMulAddKHR "
+            rf"{re.escape(accumulator_type)} "
+            rf"{re.escape(left_value.group('value'))} "
+            rf"{re.escape(right_value.group('value'))} "
+            rf"{re.escape(zero_accumulator.group('value'))}\b",
+            spv_code,
+        )
+        assert multiply is not None
+        assert re.search(
+            rf"OpStore {re.escape(product_variable)} "
+            rf"{re.escape(multiply.group('value'))}\b",
+            spv_code,
+        )
+        assert "OpMatrixTimesMatrix" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_propagates_matrix_multiply_assignment_result_contract(
+        self, tmp_path
+    ):
+        left_type = cooperative_matrix_type_source("float", 8, 4, "matrix_a")
+        right_type = cooperative_matrix_type_source("float", 4, 8, "matrix_b")
+        result_type = cooperative_matrix_type_source("float", 8, 8, "accumulator")
+        profile_source = f"""
+        shader CooperativeMatrixMultiplyAssignment {{
+            compute {{
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+                void main() {{
+                    {left_type} left;
+                    {right_type} right;
+                    {result_type} product;
+                    product = cooperative_matrix_multiply(left, right);
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        assert spv_code.count("OpCooperativeMatrixMulAddKHR") == 1
+        assert "OpConstantComposite" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    @pytest.mark.parametrize(
+        ("left_use", "right_use", "message"),
+        (
+            (
+                "accumulator",
+                "matrix_b",
+                "left value to use role matrix_a; got accumulator",
+            ),
+            (
+                "matrix_a",
+                "matrix_a",
+                "right value to use role matrix_b; got matrix_a",
+            ),
+        ),
+    )
+    def test_opt_in_profile_rejects_wrong_matrix_multiply_input_use_roles(
+        self, left_use, right_use, message
+    ):
+        profile_source = cooperative_matrix_multiply_profile_source(
+            cooperative_matrix_type_source("float", 8, 4, left_use),
+            cooperative_matrix_type_source("float", 4, 8, right_use),
+            cooperative_matrix_type_source("float", 8, 8, "accumulator"),
+        )
+
+        assert_cooperative_matrix_multiply_rejected(
+            profile_source,
+            message,
+            "cooperative-matrix-multiply-use-role",
+            "spirv.cooperative_matrix.multiply-use-role",
+        )
+
+    def test_opt_in_profile_rejects_non_accumulator_matrix_multiply_result(self):
+        profile_source = cooperative_matrix_multiply_profile_source(
+            cooperative_matrix_type_source("float", 8, 4, "matrix_a"),
+            cooperative_matrix_type_source("float", 4, 8, "matrix_b"),
+            cooperative_matrix_type_source("float", 8, 8, "matrix_a"),
+        )
+
+        assert_cooperative_matrix_multiply_rejected(
+            profile_source,
+            "result value to use role accumulator; got matrix_a",
+            "cooperative-matrix-multiply-use-role",
+            "spirv.cooperative_matrix.multiply-use-role",
+        )
+
+    def test_opt_in_profile_rejects_matrix_multiply_without_result_contract(self):
+        left_type = cooperative_matrix_type_source("float", 8, 4, "matrix_a")
+        right_type = cooperative_matrix_type_source("float", 4, 8, "matrix_b")
+        profile_source = f"""
+        shader CooperativeMatrixMultiplyProfile {{
+            compute {{
+                void main() {{
+                    {left_type} left;
+                    {right_type} right;
+                    auto product = cooperative_matrix_multiply(left, right);
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_multiply_rejected(
+            profile_source,
+            "require an explicit result type",
+            "cooperative-matrix-result-contract",
+            "spirv.cooperative_matrix.result-contract",
+        )
+
+    @pytest.mark.parametrize(
+        ("right_rows", "result_rows"),
+        (
+            (5, 8),
+            (4, 7),
+        ),
+    )
+    def test_opt_in_profile_rejects_matrix_multiply_shape_mismatch(
+        self, right_rows, result_rows
+    ):
+        profile_source = cooperative_matrix_multiply_profile_source(
+            cooperative_matrix_type_source("float", 8, 4, "matrix_a"),
+            cooperative_matrix_type_source("float", right_rows, 8, "matrix_b"),
+            cooperative_matrix_type_source("float", result_rows, 8, "accumulator"),
+        )
+
+        assert_cooperative_matrix_multiply_rejected(
+            profile_source,
+            "requires compatible MxK and KxN operands and an MxN result",
+            "cooperative-matrix-multiply-shape",
+            "spirv.cooperative_matrix.multiply-shape",
+        )
+
+    def test_opt_in_profile_rejects_matrix_multiply_component_mismatch(self):
+        profile_source = cooperative_matrix_multiply_profile_source(
+            cooperative_matrix_type_source("float", 8, 4, "matrix_a"),
+            cooperative_matrix_type_source("i32", 4, 8, "matrix_b"),
+            cooperative_matrix_type_source("float", 8, 8, "accumulator"),
+        )
+
+        assert_cooperative_matrix_multiply_rejected(
+            profile_source,
+            "currently requires matching 32-bit floating-point",
+            "cooperative-matrix-multiply-component-type",
+            "spirv.cooperative_matrix.multiply-component-type",
+        )
+
+    @pytest.mark.parametrize("component", ("i32", "u32"))
+    def test_opt_in_profile_rejects_integer_matrix_multiply_components(self, component):
+        profile_source = cooperative_matrix_multiply_profile_source(
+            cooperative_matrix_type_source(component, 8, 4, "matrix_a"),
+            cooperative_matrix_type_source(component, 4, 8, "matrix_b"),
+            cooperative_matrix_type_source(component, 8, 8, "accumulator"),
+        )
+
+        assert_cooperative_matrix_multiply_rejected(
+            profile_source,
+            "currently requires matching 32-bit floating-point",
+            "cooperative-matrix-multiply-component-type",
+            "spirv.cooperative_matrix.multiply-component-type",
+        )
+
+    @pytest.mark.parametrize(
+        ("expression", "message"),
+        (
+            (
+                "cooperative_matrix_multiply(left)",
+                "requires exactly two operands",
+            ),
+            (
+                "cooperative_matrix_multiply(left, right, right)",
+                "requires exactly two operands",
+            ),
+        ),
+    )
+    def test_opt_in_profile_rejects_matrix_multiply_argument_count(
+        self, expression, message
+    ):
+        profile_source = cooperative_matrix_multiply_profile_source(
+            cooperative_matrix_type_source("float", 8, 4, "matrix_a"),
+            cooperative_matrix_type_source("float", 4, 8, "matrix_b"),
+            cooperative_matrix_type_source("float", 8, 8, "accumulator"),
+            expression=expression,
+        )
+
+        assert_cooperative_matrix_multiply_rejected(
+            profile_source,
+            message,
+            "cooperative-matrix-multiply-arity",
+            "spirv.cooperative_matrix.multiply-arity",
+        )
+
+    def test_opt_in_profile_keeps_chained_matrix_multiply_role_conversion_closed(
+        self,
+    ):
+        profile_source = cooperative_matrix_multiply_profile_source(
+            cooperative_matrix_type_source("float", 8, 4, "matrix_a"),
+            cooperative_matrix_type_source("float", 4, 8, "matrix_b"),
+            cooperative_matrix_type_source("float", 8, 8, "accumulator"),
+            expression=(
+                "cooperative_matrix_multiply("
+                "cooperative_matrix_multiply(left, right), right)"
+            ),
+        )
+
+        assert_cooperative_matrix_multiply_rejected(
+            profile_source,
+            "cannot be consumed as the outer left matrix_a operand",
+            "cooperative-matrix-role-conversion",
+            "spirv.cooperative_matrix.role-conversion",
+        )
+
     @pytest.mark.parametrize(
         ("use", "expected_value"),
         (("matrix_a", 0), ("matrix_b", 1), ("accumulator", 2)),
@@ -33091,9 +33424,9 @@ class TestSpirvShaderValidation:
         assert exc_info.value.missing_capabilities == ("spirv.cooperative_matrix.khr",)
         assert exc_info.value.source_location is source_location
 
-    def test_opt_in_profile_keeps_operations_fail_closed(self):
+    def test_opt_in_profile_keeps_unimplemented_operations_fail_closed(self):
         operation = CooperativeMatrixOpNode(
-            "multiply",
+            "elementwise_multiply",
             [IdentifierNode("left"), IdentifierNode("right")],
         )
         generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
@@ -33102,7 +33435,7 @@ class TestSpirvShaderValidation:
             UnsupportedSPIRVFeatureError,
             match=(
                 "SPIR-V KHR cooperative-matrix type support is enabled, but "
-                "operation 'multiply' is not implemented"
+                "operation 'elementwise_multiply' is not implemented"
             ),
         ) as exc_info:
             generator.process_expression(operation)

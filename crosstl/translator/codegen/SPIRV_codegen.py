@@ -175,6 +175,11 @@ class VulkanSPIRVCodeGen:
         "result": 2,
         "matrix_result": 2,
     }
+    COOPERATIVE_MATRIX_USE_NAMES = {
+        0: "matrix_a",
+        1: "matrix_b",
+        2: "accumulator",
+    }
 
     SIGNED_INT32_MIN = -(1 << 31)
     SIGNED_INT32_MAX = (1 << 31) - 1
@@ -230,6 +235,7 @@ class VulkanSPIRVCodeGen:
         self.vector_types = {}
         self.matrix_types = {}
         self.cooperative_matrix_types = {}
+        self.cooperative_matrix_type_metadata = {}
         self.cooperative_matrix_containing_type_ids = set()
         self.struct_types = {}
         self.pointer_types = {}
@@ -14947,8 +14953,195 @@ class VulkanSPIRVCodeGen:
         canonical_name = re.sub(r"\s+", "", str(type_name))
         matrix_id = SpirvId(type_id, SpirvType(canonical_name), canonical_name)
         self.cooperative_matrix_types[key] = matrix_id
+        self.cooperative_matrix_type_metadata[matrix_id.id] = {
+            "component_type": component_type,
+            "component_name": component_name,
+            "scope": scope_name,
+            "scope_value": scope_value,
+            "rows": rows,
+            "cols": cols,
+            "use": self.COOPERATIVE_MATRIX_USE_NAMES[use_value],
+            "use_value": use_value,
+        }
         self.cooperative_matrix_containing_type_ids.add(matrix_id.id)
         return matrix_id
+
+    def cooperative_matrix_type_info(self, type_id: SpirvId):
+        """Return the registered KHR cooperative-matrix contract for a type."""
+        if type_id is None:
+            return None
+        registered_type = self.ensure_registered_type(type_id)
+        return self.cooperative_matrix_type_metadata.get(registered_type.id)
+
+    def cooperative_matrix_operation_error(
+        self, expr, feature: str, message: str, capability: str
+    ):
+        return UnsupportedSPIRVFeatureError(
+            feature,
+            message,
+            missing_capabilities=(capability,),
+            source_location=getattr(expr, "source_location", None),
+        )
+
+    def cooperative_matrix_operation_value(self, expr, operand, label: str):
+        value = self.process_expression(operand)
+        if value is None:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-operand-type",
+                f"SPIR-V cooperative-matrix {expr.operation} could not evaluate "
+                f"the {label} operand",
+                "spirv.cooperative_matrix.operand-type",
+            )
+        value_type = self.registered_value_type(value) or self.ensure_registered_type(
+            value.type
+        )
+        contract = self.cooperative_matrix_type_info(value_type)
+        if contract is None:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-operand-type",
+                f"SPIR-V cooperative-matrix {expr.operation} requires a "
+                f"cooperative-matrix {label} operand",
+                "spirv.cooperative_matrix.operand-type",
+            )
+        return value, contract
+
+    def cooperative_matrix_operation_result_type(self, expr):
+        result_source = getattr(expr, "result_type", None)
+        if result_source is None:
+            result_source = self.current_expression_expected_type
+        if result_source is None:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-result-contract",
+                "SPIR-V cooperative-matrix operations require an explicit result "
+                "type until shared result-contract inference is available",
+                "spirv.cooperative_matrix.result-contract",
+            )
+        result_type = self.map_crossgl_type(result_source)
+        contract = self.cooperative_matrix_type_info(result_type)
+        if contract is None:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-result-contract",
+                "SPIR-V cooperative-matrix operations require a cooperative-matrix "
+                "result type",
+                "spirv.cooperative_matrix.result-contract",
+            )
+        return result_type, contract
+
+    def process_cooperative_matrix_operation(self, expr):
+        if expr.operation != "multiply":
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-operation-lowering",
+                "SPIR-V KHR cooperative-matrix type support is enabled, but "
+                f"operation '{expr.operation}' is not implemented",
+                "spirv.cooperative_matrix.operation-lowering",
+            )
+        return self.process_cooperative_matrix_multiply(expr)
+
+    def process_cooperative_matrix_multiply(self, expr):
+        if len(expr.arguments) != 2:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-multiply-arity",
+                "SPIR-V cooperative-matrix multiply requires exactly two operands; "
+                f"got {len(expr.arguments)}",
+                "spirv.cooperative_matrix.multiply-arity",
+            )
+
+        for label, operand, required_use in (
+            ("left", expr.arguments[0], "matrix_a"),
+            ("right", expr.arguments[1], "matrix_b"),
+        ):
+            if (
+                isinstance(operand, CooperativeMatrixOpNode)
+                and operand.operation == "multiply"
+            ):
+                raise self.cooperative_matrix_operation_error(
+                    expr,
+                    "cooperative-matrix-role-conversion",
+                    "SPIR-V cooperative-matrix multiply produces an accumulator "
+                    f"result, which cannot be consumed as the outer {label} "
+                    f"{required_use} operand without a semantics-preserving role "
+                    "conversion",
+                    "spirv.cooperative_matrix.role-conversion",
+                )
+
+        left, left_contract = self.cooperative_matrix_operation_value(
+            expr, expr.arguments[0], "left"
+        )
+        right, right_contract = self.cooperative_matrix_operation_value(
+            expr, expr.arguments[1], "right"
+        )
+        result_type, result_contract = self.cooperative_matrix_operation_result_type(
+            expr
+        )
+
+        required_uses = (
+            ("left", left_contract, "matrix_a"),
+            ("right", right_contract, "matrix_b"),
+            ("result", result_contract, "accumulator"),
+        )
+        for label, contract, required_use in required_uses:
+            if contract["use"] != required_use:
+                raise self.cooperative_matrix_operation_error(
+                    expr,
+                    "cooperative-matrix-multiply-use-role",
+                    "SPIR-V cooperative-matrix multiply requires the "
+                    f"{label} value to use role {required_use}; got "
+                    f"{contract['use']}",
+                    "spirv.cooperative_matrix.multiply-use-role",
+                )
+
+        contracts = (left_contract, right_contract, result_contract)
+        if len({contract["scope_value"] for contract in contracts}) != 1:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-multiply-scope",
+                "SPIR-V cooperative-matrix multiply requires all operands and the "
+                "result to use the same execution scope",
+                "spirv.cooperative_matrix.multiply-scope",
+            )
+
+        expected_shape = (left_contract["rows"], right_contract["cols"])
+        if (
+            left_contract["cols"] != right_contract["rows"]
+            or (result_contract["rows"], result_contract["cols"]) != expected_shape
+        ):
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-multiply-shape",
+                "SPIR-V cooperative-matrix multiply requires compatible MxK and "
+                "KxN operands and an MxN result; got "
+                f"{left_contract['rows']}x{left_contract['cols']}, "
+                f"{right_contract['rows']}x{right_contract['cols']}, and "
+                f"{result_contract['rows']}x{result_contract['cols']}",
+                "spirv.cooperative_matrix.multiply-shape",
+            )
+
+        component_names = {contract["component_name"] for contract in contracts}
+        if component_names != {"float"}:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-multiply-component-type",
+                "SPIR-V cooperative-matrix multiply currently requires matching "
+                "32-bit floating-point A, B, accumulator, and result components",
+                "spirv.cooperative_matrix.multiply-component-type",
+            )
+
+        zero_scalar = self.register_constant(0.0, result_contract["component_type"])
+        zero_accumulator = self.register_composite_constant(result_type, [zero_scalar])
+        result_id = self.get_id()
+        self.emit(
+            f"%{result_id} = OpCooperativeMatrixMulAddKHR %{result_type.id} "
+            f"%{left.id} %{right.id} %{zero_accumulator.id}"
+        )
+        result = SpirvId(result_id, result_type.type)
+        self.value_types[result_id] = result_type
+        return result
 
     def is_cooperative_matrix_type_name(self, type_name: str) -> bool:
         """Return whether a type uses the canonical cooperative-matrix spelling."""
@@ -19500,10 +19693,17 @@ class VulkanSPIRVCodeGen:
         )
 
     def process_expression_with_expected_type(self, expr, expected_type):
+        return self.process_expression_with_expected_type_and_precision(
+            expr, expected_type, precise=False
+        )
+
+    def process_expression_with_expected_type_and_precision(
+        self, expr, expected_type, precise: bool
+    ):
         previous_expected_type = self.current_expression_expected_type
         self.current_expression_expected_type = self.type_name_string(expected_type)
         try:
-            return self.process_expression(expr)
+            return self.process_expression_with_precision(expr, precise)
         finally:
             self.current_expression_expected_type = previous_expected_type
 
@@ -24846,9 +25046,20 @@ class VulkanSPIRVCodeGen:
             )
             rhs_value = self.process_array_literal(node.value, target_type)
         else:
-            rhs_value = self.process_expression_with_precision(
-                node.value, target_is_precise
-            )
+            target_type = None
+            if isinstance(target, (IdentifierNode, VariableNode, str)):
+                target_name = target if isinstance(target, str) else target.name
+                target_pointer = self.ensure_assignable_pointer_for_name(target_name)
+                if target_pointer is not None:
+                    target_type = self.variable_value_types.get(target_pointer.id)
+            if target_type is not None:
+                rhs_value = self.process_expression_with_expected_type_and_precision(
+                    node.value, target_type, target_is_precise
+                )
+            else:
+                rhs_value = self.process_expression_with_precision(
+                    node.value, target_is_precise
+                )
 
         if rhs_value is None:
             return
@@ -26723,20 +26934,14 @@ class VulkanSPIRVCodeGen:
 
         elif isinstance(expr, CooperativeMatrixOpNode):
             if self.cooperative_matrix_khr_enabled:
-                feature = "cooperative-matrix-operation-lowering"
-                missing_capabilities = ("spirv.cooperative_matrix.operation-lowering",)
-                message = (
-                    "SPIR-V KHR cooperative-matrix type support is enabled, but "
-                    f"operation '{expr.operation}' is not implemented"
-                )
-            else:
-                feature = "cooperative-matrix-lowering"
-                missing_capabilities = ("spirv.cooperative_matrix.khr",)
-                message = (
-                    "SPIR-V cooperative-matrix lowering is not available for "
-                    f"operation '{expr.operation}'; scalar substitution would "
-                    "change subgroup-distributed matrix semantics"
-                )
+                return self.process_cooperative_matrix_operation(expr)
+            feature = "cooperative-matrix-lowering"
+            missing_capabilities = ("spirv.cooperative_matrix.khr",)
+            message = (
+                "SPIR-V cooperative-matrix lowering is not available for "
+                f"operation '{expr.operation}'; scalar substitution would "
+                "change subgroup-distributed matrix semantics"
+            )
             raise UnsupportedSPIRVFeatureError(
                 feature,
                 message,
