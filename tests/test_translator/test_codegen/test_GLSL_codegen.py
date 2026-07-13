@@ -21,6 +21,7 @@ from crosstl.translator.ast import (
     PointerType,
     PreprocessorNode,
     PrimitiveType,
+    ResourceMemoryQualifierNode,
     ReturnNode,
     ShaderNode,
     ShaderStage,
@@ -41,6 +42,7 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLIndexTypeError,
     OpenGLMappedOverloadError,
     OpenGLReferenceParameterError,
+    OpenGLResourceMemoryQualifierError,
     OpenGLScalarConversionError,
     OpenGLStructConstructionError,
     OpenGLWorkgroupPointerError,
@@ -599,6 +601,177 @@ def test_glsl_user_defined_atomic_thread_fence_is_not_lowered():
     assert "atomicThreadFence(1, 2, 3);" in generated_code
     assert "memoryBarrierShared();" not in generated_code
     assert "memoryBarrier();" not in generated_code
+
+
+def test_glsl_stage_resource_promotion_preserves_typed_pointer_qualifiers():
+    shader = """
+    shader TypedResourceQualifierPropagation {
+        compute {
+            void main(
+                volatile coherent(device) device uint* values @buffer(0)
+            ) {
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(shader))
+    function = next(node for node in ast.walk() if isinstance(node, FunctionNode))
+    parameter = function.parameters[0]
+    source_qualifiers = parameter.param_type.resource_qualifiers
+
+    codegen = GLSLCodeGen()
+    codegen.structs_by_name = {}
+    declaration = codegen.glsl_stage_entry_resource_parameter_declaration(parameter)
+
+    assert declaration.var_type == "RWStructuredBuffer<uint>"
+    assert all(
+        isinstance(qualifier, ResourceMemoryQualifierNode)
+        for qualifier in declaration.resource_qualifiers
+    )
+    assert [
+        (qualifier.kind, qualifier.scope)
+        for qualifier in declaration.resource_qualifiers
+    ] == [("volatile", None), ("coherent", "device")]
+    assert declaration.resource_qualifiers is not source_qualifiers
+    assert declaration.resource_qualifiers[0] is not source_qualifiers[0]
+
+
+def test_glsl_typed_resource_memory_qualifiers_emit_exact_storage_contract(
+    tmp_path,
+):
+    shader = """
+    #version 460 core
+    shader TypedResourceQualifierEmission {
+        compute {
+            void main(
+                volatile coherent(device) RWStructuredBuffer<uint> values
+                    @binding(0),
+                uint index @gl_GlobalInvocationID
+            ) {
+                values[index] = index;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    declaration = (
+        "layout(std430, binding = 0) coherent volatile buffer valuesBuffer "
+        "{ uint values[]; };"
+    )
+    assert generated_code.count(declaration) == 1
+    assert "coherent(device)" not in generated_code
+    assert "volatile coherent" not in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "typed-resource-memory-qualifiers",
+    )
+
+
+def test_glsl_legacy_resource_memory_qualifier_strings_still_emit():
+    shader = """
+    shader LegacyResourceQualifierEmission {
+        compute {
+            void main(
+                volatile coherent RWStructuredBuffer<uint> values @binding(0)
+            ) {
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(shader))
+    function = next(node for node in ast.walk() if isinstance(node, FunctionNode))
+    function.parameters[0].resource_qualifiers = []
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "layout(std430, binding = 0) coherent volatile buffer valuesBuffer "
+        "{ uint values[]; };" in generated_code
+    )
+
+
+@pytest.mark.parametrize(
+    ("scope", "reason"),
+    [
+        ("threadgroup", "unsupported-coherence-scope"),
+        ("system", "unsupported-system-coherence-scope"),
+        ("host", "unsupported-system-coherence-scope"),
+    ],
+)
+def test_glsl_typed_resource_memory_qualifier_rejects_unrepresentable_scope(
+    scope, reason
+):
+    shader = f"""
+    shader TypedResourceQualifierRejection {{
+        compute {{
+            void main(
+                coherent({scope}) RWStructuredBuffer<uint> values @binding(0)
+            ) {{
+            }}
+        }}
+    }}
+    """
+    ast = parse_code(tokenize_code(shader))
+    function = next(node for node in ast.walk() if isinstance(node, FunctionNode))
+    qualifier = function.parameters[0].resource_qualifiers[0]
+    source_location = {"line": 6, "column": 17}
+    qualifier.source_location = source_location
+
+    with pytest.raises(OpenGLResourceMemoryQualifierError) as exc_info:
+        generate_code(ast)
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.opengl-resource-memory-qualifier-unsupported"
+    )
+    assert diagnostic.missing_capabilities == (
+        "opengl.resource-memory-qualifier-lowering",
+    )
+    assert diagnostic.resource_name == "values"
+    assert diagnostic.qualifier_kind == "coherent"
+    assert diagnostic.requested_scope == scope
+    assert diagnostic.requested_contract == f"coherent({scope})"
+    assert diagnostic.target_qualifier == "coherent"
+    assert diagnostic.target_scope == "device"
+    assert diagnostic.target_mapping == "coherent(device)"
+    assert diagnostic.reason == reason
+    assert diagnostic.source_location == source_location
+    assert f"'coherent({scope})'" in str(diagnostic)
+    assert "OpenGL GLSL 4.60" in str(diagnostic)
+
+
+def test_glsl_atomic_fence_diagnostic_precedes_resource_qualifier_rejection():
+    shader = """
+    shader AtomicFenceQualifierPriority {
+        compute {
+            void main(
+                volatile coherent(system) RWStructuredBuffer<uint> values
+                    @binding(0)
+            ) {
+                atomicThreadFence(
+                    mem_device,
+                    memory_order_seq_cst,
+                    thread_scope_system
+                );
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(shader))
+    call = next(node for node in ast.walk() if isinstance(node, FunctionCallNode))
+    source_location = {"line": 9, "column": 17}
+    call.source_location = source_location
+
+    with pytest.raises(OpenGLAtomicFenceLoweringError) as exc_info:
+        generate_code(ast)
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == "unsupported-system-thread-scope"
+    assert diagnostic.thread_scope == "thread_scope_system"
+    assert diagnostic.source_location == source_location
 
 
 def test_glsl_threadgroup_local_array_hoists_to_global_shared():

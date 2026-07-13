@@ -39,6 +39,7 @@ from ..ast import (
     RayQueryOpNode,
     RayTracingOpNode,
     ReferenceType,
+    ResourceMemoryQualifierNode,
     ReturnNode,
     StructMemberNode,
     StructNode,
@@ -714,6 +715,48 @@ class OpenGLAtomicFenceLoweringError(ValueError):
             "Cannot lower CrossGL atomicThreadFence to OpenGL GLSL without "
             f"changing its semantics ({contract}): {reason.replace('-', ' ')}"
         )
+
+
+class OpenGLResourceMemoryQualifierError(ValueError):
+    """Raised when GLSL cannot preserve a typed resource-memory contract."""
+
+    project_diagnostic_code = (
+        "project.translate.opengl-resource-memory-qualifier-unsupported"
+    )
+    missing_capabilities = ("opengl.resource-memory-qualifier-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        resource_name=None,
+        qualifier_kind=None,
+        requested_scope=None,
+        target_qualifier=None,
+        target_scope=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.resource_name = resource_name
+        self.qualifier_kind = qualifier_kind
+        self.qualifier = qualifier_kind
+        self.requested_scope = requested_scope
+        self.scope = requested_scope
+        self.requested_contract = (
+            f"{qualifier_kind}({requested_scope})"
+            if qualifier_kind and requested_scope
+            else qualifier_kind
+        )
+        self.target_qualifier = target_qualifier
+        self.target_scope = target_scope
+        self.target_mapping = (
+            f"{target_qualifier}({target_scope})"
+            if target_qualifier and target_scope
+            else target_qualifier
+        )
+        self.reason = reason
+        self.source_location = source_location
 
 
 class OpenGLCooperativeMatrixError(ValueError):
@@ -3200,6 +3243,8 @@ class GLSLCodeGen:
         self.function_definitions = {
             func.name: func for func in functions if getattr(func, "name", None)
         }
+        self.validate_glsl_atomic_fences_before_resource_qualifiers(ast, target_stage)
+        self.validate_typed_resource_memory_qualifier_contracts(ast, target_stage)
         self.glsl_function_overloads_by_name = {}
         self.glsl_function_target_names = {}
         self.current_glsl_function_key = None
@@ -8851,6 +8896,23 @@ class GLSLCodeGen:
             )
 
         resource_type = self.stage_entry_resource_parameter_type(parameter)
+        resource_qualifiers = deepcopy(
+            list(getattr(parameter, "resource_qualifiers", []) or [])
+        )
+        existing_contracts = {
+            (qualifier.kind, qualifier.scope)
+            for qualifier in resource_qualifiers
+            if isinstance(qualifier, ResourceMemoryQualifierNode)
+        }
+        for qualifier in self.typed_resource_memory_qualifiers(
+            parameter,
+            raw_type=self.resource_node_type(parameter),
+        ):
+            contract = (qualifier.kind, qualifier.scope)
+            if contract in existing_contracts:
+                continue
+            resource_qualifiers.append(deepcopy(qualifier))
+            existing_contracts.add(contract)
         node = VariableNode(
             name=getattr(parameter, "name", None),
             var_type=(
@@ -8860,12 +8922,12 @@ class GLSLCodeGen:
             ),
             attributes=list(getattr(parameter, "attributes", []) or []),
             qualifiers=list(getattr(parameter, "qualifiers", []) or []),
+            resource_qualifiers=resource_qualifiers,
         )
         for attr_name in (
             "array_sizes",
             "declarator_type_suffix",
             "declarator_type_suffix_grouped",
-            "resource_qualifiers",
         ):
             if hasattr(parameter, attr_name):
                 setattr(node, attr_name, getattr(parameter, attr_name))
@@ -17375,7 +17437,13 @@ complex64_t crossgl_complex64_mod_assign(
             source_location=source_location,
         )
 
-    def generate_glsl_atomic_thread_fence(self, args, *, source_location=None):
+    def validate_glsl_atomic_thread_fence_contract(
+        self,
+        args,
+        *,
+        source_location=None,
+        validate_stage=True,
+    ):
         if len(args) != 3:
             raise self.opengl_atomic_fence_contract_error(
                 "invalid-argument-count",
@@ -17428,13 +17496,37 @@ complex64_t crossgl_complex64_mod_assign(
                 args,
                 source_location=source_location,
             )
-        if normalize_stage_name(self.current_stage_entry_type) != "compute":
+        if validate_stage and (
+            normalize_stage_name(self.current_stage_entry_type) != "compute"
+        ):
             raise self.opengl_atomic_fence_contract_error(
                 "unsupported-shader-stage",
                 args,
                 source_location=source_location,
             )
 
+    def validate_glsl_atomic_fences_before_resource_qualifiers(
+        self, ast, target_stage=None
+    ):
+        if "atomicThreadFence" in self.function_return_types:
+            return
+        for root in self.ray_query_search_roots(ast, target_stage):
+            for node in self.walk_ast(root):
+                if not isinstance(node, FunctionCallNode):
+                    continue
+                if self.function_call_name(node) != "atomicThreadFence":
+                    continue
+                self.validate_glsl_atomic_thread_fence_contract(
+                    node.args,
+                    source_location=getattr(node, "source_location", None),
+                    validate_stage=False,
+                )
+
+    def generate_glsl_atomic_thread_fence(self, args, *, source_location=None):
+        self.validate_glsl_atomic_thread_fence_contract(
+            args,
+            source_location=source_location,
+        )
         return "memoryBarrierShared()"
 
     def synchronization_function_call(self, func_name, args, *, source_location=None):
@@ -25489,6 +25581,164 @@ complex64_t crossgl_complex64_mod_assign(
         ]
         return " ".join(qualifiers)
 
+    def typed_resource_memory_qualifiers(self, node=None, raw_type=None):
+        """Return typed resource-memory contracts without flattening their scope."""
+        values = []
+        contract_type = (
+            raw_type if raw_type is not None else self.resource_node_type(node)
+        )
+        while isinstance(contract_type, ArrayType):
+            contract_type = contract_type.element_type
+        if isinstance(contract_type, (PointerType, ReferenceType)):
+            values.extend(getattr(contract_type, "resource_qualifiers", []) or [])
+        values.extend(getattr(node, "resource_qualifiers", []) or [])
+
+        qualifiers = []
+        seen = set()
+        for value in values:
+            if not isinstance(value, ResourceMemoryQualifierNode):
+                continue
+            contract = (value.kind, value.scope)
+            if contract in seen:
+                continue
+            seen.add(contract)
+            qualifiers.append(value)
+        return qualifiers
+
+    def opengl_resource_memory_qualifier_error(self, node, qualifier, reason):
+        qualifier_kind = str(getattr(qualifier, "kind", "")).lower() or None
+        requested_scope = getattr(qualifier, "scope", None)
+        if requested_scope is not None:
+            requested_scope = str(requested_scope).lower()
+        requested_contract = (
+            f"{qualifier_kind}({requested_scope})"
+            if qualifier_kind and requested_scope
+            else qualifier_kind or str(qualifier)
+        )
+        resource_name = self.resource_node_name(node, "<unnamed>")
+        target_qualifier = (
+            qualifier_kind if qualifier_kind in {"coherent", "volatile"} else None
+        )
+        target_scope = "device" if qualifier_kind == "coherent" else None
+
+        if reason == "unsupported-system-coherence-scope":
+            detail = (
+                "GLSL coherent memory only covers accesses by shader invocations "
+                "on the GPU and cannot provide system/host visibility"
+            )
+            action = (
+                "retain the Metal target, or request device scope only when that "
+                "weaker contract is valid"
+            )
+        elif reason == "unsupported-coherence-scope":
+            detail = (
+                "GLSL 4.60 has no resource qualifier for that exact coherence scope"
+            )
+            action = (
+                "retain the source target, or request device scope only when its "
+                "broader visibility is valid"
+            )
+        elif reason == "unsupported-volatile-scope":
+            detail = "GLSL volatile does not encode a separate visibility scope"
+            action = "remove the scope or retain the source target"
+        elif reason == "unsupported-resource-type":
+            detail = (
+                "GLSL memory qualifiers are representable only on shader-storage "
+                "buffers and storage images"
+            )
+            action = "use a storage resource or retain the source target"
+        else:
+            detail = "GLSL has no equivalent typed resource-memory qualifier"
+            action = "remove the qualifier or retain the source target"
+
+        return OpenGLResourceMemoryQualifierError(
+            "OpenGL GLSL 4.60 cannot preserve typed resource memory qualifier "
+            f"'{requested_contract}' for resource '{resource_name}': {detail}; "
+            f"{action}",
+            resource_name=resource_name,
+            qualifier_kind=qualifier_kind,
+            requested_scope=requested_scope,
+            target_qualifier=target_qualifier,
+            target_scope=target_scope,
+            reason=reason,
+            source_location=(
+                getattr(qualifier, "source_location", None)
+                or getattr(node, "source_location", None)
+            ),
+        )
+
+    def glsl_resource_supports_typed_memory_qualifiers(self, node):
+        vtype = self.resource_node_type(node)
+        contract_type = vtype
+        while isinstance(contract_type, ArrayType):
+            contract_type = contract_type.element_type
+        if isinstance(contract_type, (PointerType, ReferenceType)):
+            address_space = str(
+                getattr(contract_type, "address_space", "") or ""
+            ).lower()
+            return address_space in {"device", "global", "storage"}
+        if self.is_structured_buffer_type(vtype):
+            return True
+        if self.is_glsl_buffer_block_variable(node, vtype):
+            return True
+        mapped_type = self.map_resource_type_with_format(vtype, node)
+        return self.is_opaque_resource_type(mapped_type) and is_glsl_storage_image_type(
+            mapped_type
+        )
+
+    def glsl_typed_resource_memory_qualifier(
+        self,
+        node,
+        qualifier,
+        *,
+        require_storage_resource=False,
+    ):
+        kind = str(getattr(qualifier, "kind", "")).lower()
+        scope = getattr(qualifier, "scope", None)
+        scope = str(scope).lower() if scope is not None else None
+
+        if kind == "volatile":
+            if scope is not None:
+                raise self.opengl_resource_memory_qualifier_error(
+                    node, qualifier, "unsupported-volatile-scope"
+                )
+            mapped_qualifier = "volatile"
+        elif kind == "coherent":
+            if scope in {"system", "host"}:
+                raise self.opengl_resource_memory_qualifier_error(
+                    node, qualifier, "unsupported-system-coherence-scope"
+                )
+            if scope not in {None, "device"}:
+                raise self.opengl_resource_memory_qualifier_error(
+                    node, qualifier, "unsupported-coherence-scope"
+                )
+            mapped_qualifier = "coherent"
+        else:
+            raise self.opengl_resource_memory_qualifier_error(
+                node, qualifier, "unsupported-qualifier-kind"
+            )
+
+        if require_storage_resource and not (
+            self.glsl_resource_supports_typed_memory_qualifiers(node)
+        ):
+            raise self.opengl_resource_memory_qualifier_error(
+                node, qualifier, "unsupported-resource-type"
+            )
+        return mapped_qualifier
+
+    def validate_typed_resource_memory_qualifier_contracts(
+        self, ast, target_stage=None
+    ):
+        validated = set()
+        for root in self.ray_query_search_roots(ast, target_stage):
+            for node in self.walk_ast(root):
+                for qualifier in self.typed_resource_memory_qualifiers(node):
+                    qualifier_id = id(qualifier)
+                    if qualifier_id in validated:
+                        continue
+                    validated.add(qualifier_id)
+                    self.glsl_typed_resource_memory_qualifier(node, qualifier)
+
     def resource_memory_qualifiers(self, node):
         supported = {
             "coherent",
@@ -25501,6 +25751,15 @@ complex64_t crossgl_complex64_mod_assign(
         qualifiers = set()
         access_choices = self.resource_access_metadata_choices(node)
         self.validate_resource_access_metadata_consistency(node, access_choices)
+
+        for qualifier in self.typed_resource_memory_qualifiers(node):
+            qualifiers.add(
+                self.glsl_typed_resource_memory_qualifier(
+                    node,
+                    qualifier,
+                    require_storage_resource=True,
+                )
+            )
 
         for qualifier in getattr(node, "qualifiers", []) or []:
             qualifier = str(qualifier).lower()
