@@ -8428,6 +8428,78 @@ def test_translate_project_reports_opengl_fixed_array_resource_contract(tmp_path
     )
 
 
+def test_translate_project_reports_opengl_resource_memory_qualifier_contract(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "resource_memory_qualifier.cgl").write_text(
+        textwrap.dedent("""
+            shader ResourceMemoryQualifierContract {
+                compute {
+                    void main(
+                        coherent(system) RWStructuredBuffer<uint> values @binding(0)
+                    ) {
+                        values[0] = 1;
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="translated",
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.opengl-resource-memory-qualifier-unsupported": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "opengl.resource-memory-qualifier-lowering": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == (
+        "project.translate.opengl-resource-memory-qualifier-unsupported"
+    )
+    assert diagnostic["target"] == "opengl"
+    assert diagnostic["sourceBackend"] == "cgl"
+    assert diagnostic["location"]["file"] == "resource_memory_qualifier.cgl"
+    assert diagnostic["missingCapabilities"] == [
+        "opengl.resource-memory-qualifier-lowering"
+    ]
+    assert diagnostic["details"] == {
+        "resourceMemoryQualifier": {
+            "qualifierKind": "coherent",
+            "reason": "unsupported-system-coherence-scope",
+            "requestedContract": "coherent(system)",
+            "requestedScope": "system",
+            "resourceName": "values",
+            "targetMapping": "coherent(device)",
+            "targetQualifier": "coherent",
+            "targetScope": "device",
+        },
+        "sourcePath": "resource_memory_qualifier.cgl",
+        "targetArtifact": "translated/opengl/resource_memory_qualifier.glsl",
+    }
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["target"] == "opengl"
+    assert not (repo / artifact["path"]).exists()
+
+    report_path = repo / "translated" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert {diagnostic["code"] for diagnostic in validation["diagnostics"]}.isdisjoint(
+        {"project.validate.invalid-report"}
+    )
+
+
 def test_translate_project_reports_directx_private_pointer_contract(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

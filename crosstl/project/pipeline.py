@@ -16916,6 +16916,46 @@ def _opengl_fixed_array_resource_failure_details(
     return dict(sorted(details.items()))
 
 
+def _opengl_resource_memory_qualifier_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.opengl-resource-memory-qualifier-unsupported"
+    ):
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    contract = {}
+    resource_name = getattr(exc, "resource_name", None)
+    qualifier_kind = getattr(exc, "qualifier_kind", None)
+    if not _is_non_empty_string(qualifier_kind):
+        qualifier_kind = getattr(exc, "qualifier", None)
+    requested_scope = getattr(exc, "requested_scope", None)
+    if not _is_non_empty_string(requested_scope):
+        requested_scope = getattr(exc, "scope", None)
+    fields = {
+        "resourceName": resource_name,
+        "qualifierKind": qualifier_kind,
+        "requestedScope": requested_scope,
+        "requestedContract": getattr(exc, "requested_contract", None),
+        "targetQualifier": getattr(exc, "target_qualifier", None),
+        "targetScope": getattr(exc, "target_scope", None),
+        "targetMapping": getattr(exc, "target_mapping", None),
+        "reason": getattr(exc, "reason", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            contract[name] = value
+    if contract:
+        details["resourceMemoryQualifier"] = dict(sorted(contract.items()))
+    return dict(sorted(details.items()))
+
+
 def _directx_private_pointer_failure_details(
     exc: Exception,
     unit: ProjectTranslationUnit,
@@ -17183,6 +17223,9 @@ def _translation_failure_details(
         **_opengl_complex_arithmetic_failure_details(exc, unit, artifact_path),
         **_opengl_struct_construction_failure_details(exc, unit, artifact_path),
         **_opengl_fixed_array_resource_failure_details(exc, unit, artifact_path),
+        **_opengl_resource_memory_qualifier_failure_details(
+            exc, unit, artifact_path
+        ),
         **_directx_private_pointer_failure_details(exc, unit, artifact_path),
         **_opengl_index_type_failure_details(exc, unit, artifact_path),
         **_opengl_workgroup_pointer_failure_details(exc, unit, artifact_path),
