@@ -3120,6 +3120,7 @@ class GLSLCodeGen:
         self.struct_member_types = collect_struct_member_types(
             structs, self.type_name_string
         )
+        self.remove_glsl_static_struct_member_types(structs)
         self.struct_member_name_maps = {}
         self.generic_enum_struct_definitions = collect_generic_enum_struct_definitions(
             structs
@@ -3127,6 +3128,9 @@ class GLSLCodeGen:
         self.generic_struct_definitions = collect_generic_struct_definitions(
             structs,
             excluded_names=set(self.generic_enum_struct_definitions),
+        )
+        self.generic_struct_definitions = self.glsl_instance_generic_struct_definitions(
+            self.generic_struct_definitions
         )
         self.generic_enum_specializations = collect_generic_enum_specializations(
             ast,
@@ -24523,7 +24527,11 @@ complex64_t crossgl_complex64_mod_assign(
 
     def generate_struct(self, node):
         code = f"struct {node.name} {{\n"
-        members = list(getattr(node, "members", []) or [])
+        members = [
+            member
+            for member in getattr(node, "members", []) or []
+            if not self.glsl_static_struct_member(member)
+        ]
         if not members:
             code += "    int _crossgl_empty;\n"
         for member in members:
@@ -24532,6 +24540,39 @@ complex64_t crossgl_complex64_mod_assign(
             )
         code += "};\n"
         return code
+
+    def glsl_static_struct_member(self, member):
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(member, "qualifiers", []) or []
+        }
+        attributes = {
+            str(getattr(attribute, "name", attribute)).lower()
+            for attribute in getattr(member, "attributes", []) or []
+        }
+        return "static" in qualifiers or "static" in attributes
+
+    def remove_glsl_static_struct_member_types(self, structs):
+        for struct in structs or []:
+            members = self.struct_member_types.get(getattr(struct, "name", None))
+            if members is None:
+                continue
+            for member in getattr(struct, "members", []) or []:
+                if self.glsl_static_struct_member(member):
+                    members.pop(getattr(member, "name", None), None)
+
+    def glsl_instance_generic_struct_definitions(self, definitions):
+        filtered = {}
+        for name, definition in (definitions or {}).items():
+            filtered[name] = {
+                **definition,
+                "members": [
+                    member
+                    for member in definition.get("members", [])
+                    if not self.glsl_static_struct_member(member)
+                ],
+            }
+        return filtered
 
     def generate_expression_statement(self, stmt):
         """Generate code for expression statements."""
