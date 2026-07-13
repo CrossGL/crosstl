@@ -25047,7 +25047,9 @@ class VulkanSPIRVCodeGen:
             rhs_value = self.process_array_literal(node.value, target_type)
         else:
             target_type = None
-            if isinstance(target, (IdentifierNode, VariableNode, str)):
+            if isinstance(node.value, CooperativeMatrixOpNode) and isinstance(
+                target, (IdentifierNode, VariableNode, str)
+            ):
                 target_name = target if isinstance(target, str) else target.name
                 target_pointer = self.ensure_assignable_pointer_for_name(target_name)
                 if target_pointer is not None:
