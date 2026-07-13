@@ -32814,7 +32814,9 @@ class TestSpirvShaderValidation:
         assert exc_info.value.feature == "cooperative-matrix-lowering"
         assert exc_info.value.missing_capabilities == ("spirv.cooperative_matrix.khr",)
 
-    def test_cooperative_matrix_ast_type_is_rejected_with_source_location(self):
+    def test_default_profile_rejects_cooperative_matrix_ast_type_with_diagnostic(
+        self,
+    ):
         source_location = {"line": 7, "column": 13}
         matrix_type = CooperativeMatrixType(
             PrimitiveType("float"),
@@ -32825,6 +32827,9 @@ class TestSpirvShaderValidation:
             layout="row_major",
             source_location=source_location,
         )
+        generator = VulkanSPIRVCodeGen()
+
+        assert generator.cooperative_matrix_khr_enabled is False
 
         with pytest.raises(
             UnsupportedSPIRVFeatureError,
@@ -32835,11 +32840,221 @@ class TestSpirvShaderValidation:
                 "semantics"
             ),
         ) as exc_info:
-            VulkanSPIRVCodeGen().map_crossgl_type(matrix_type)
+            generator.map_crossgl_type(matrix_type)
 
         assert exc_info.value.feature == "cooperative-matrix-lowering"
         assert exc_info.value.missing_capabilities == ("spirv.cooperative_matrix.khr",)
         assert exc_info.value.source_location is source_location
+
+    def test_opt_in_profile_emits_valid_cooperative_matrix_type_module(self, tmp_path):
+        profile_source = """
+        shader CooperativeMatrixTypeProfile {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+                void main() {
+                    CooperativeMatrix<
+                        float, 8, 8, subgroup, matrix_a, unspecified
+                    > tile;
+                }
+            }
+        }
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        cooperative_type = re.search(
+            r"(?P<type>%\d+) = OpTypeCooperativeMatrixKHR "
+            r"(?P<component>%\d+) (?P<scope>%\d+) (?P<rows>%\d+) "
+            r"(?P<columns>%\d+) (?P<use>%\d+)\b",
+            spv_code,
+        )
+        assert cooperative_type is not None
+        assert re.search(
+            rf"{re.escape(cooperative_type.group('component'))} = OpTypeFloat 32\b",
+            spv_code,
+        )
+
+        constant_values = spirv_integer_constant_values(spv_code)
+        assert constant_values[cooperative_type.group("scope")] == 3
+        assert constant_values[cooperative_type.group("rows")] == 8
+        assert constant_values[cooperative_type.group("columns")] == 8
+        assert constant_values[cooperative_type.group("use")] == 0
+
+        pointer_type = spirv_pointer_type(
+            spv_code, cooperative_type.group("type"), "Function"
+        )
+        spirv_named_variable(
+            spv_code,
+            "tile",
+            pointer_type=pointer_type,
+            storage_class="Function",
+        )
+
+        assert "; Version: 1.3" in spv_code
+        assert "OpCapability CooperativeMatrixKHR" in spv_code
+        assert "OpCapability VulkanMemoryModel" in spv_code
+        assert 'OpExtension "SPV_KHR_cooperative_matrix"' in spv_code
+        assert 'OpExtension "SPV_KHR_vulkan_memory_model"' in spv_code
+        assert "OpMemoryModel Logical VulkanKHR" in spv_code
+        assert "OpMemoryModel Logical GLSL450" not in spv_code
+        assert "OpTypeMatrix" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    @pytest.mark.parametrize(
+        ("use", "expected_value"),
+        (("matrix_a", 0), ("matrix_b", 1), ("accumulator", 2)),
+    )
+    def test_opt_in_profile_preserves_cooperative_matrix_use(self, use, expected_value):
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        matrix_type = generator.map_crossgl_type(
+            CooperativeMatrixType(
+                PrimitiveType("float"), 8, 8, scope="subgroup", use=use
+            )
+        )
+        emitted = "\n".join(generator.code_lines)
+        declaration = re.search(
+            rf"%{matrix_type.id} = OpTypeCooperativeMatrixKHR "
+            r"%\d+ %\d+ %\d+ %\d+ (?P<use>%\d+)",
+            emitted,
+        )
+
+        assert declaration is not None
+        assert spirv_integer_constant_values(emitted)[declaration.group("use")] == (
+            expected_value
+        )
+
+    @pytest.mark.parametrize(
+        ("component", "expected_type"),
+        (
+            ("float", "OpTypeFloat 32"),
+            ("i32", "OpTypeInt 32 1"),
+            ("u32", "OpTypeInt 32 0"),
+        ),
+    )
+    def test_opt_in_profile_preserves_supported_component_types(
+        self, component, expected_type
+    ):
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        matrix_type = generator.map_crossgl_type(
+            CooperativeMatrixType(
+                PrimitiveType(component), 8, 8, scope="subgroup", use="matrix_a"
+            )
+        )
+        emitted = "\n".join(generator.code_lines)
+        declaration = re.search(
+            rf"%{matrix_type.id} = OpTypeCooperativeMatrixKHR " r"(?P<component>%\d+)",
+            emitted,
+        )
+
+        assert declaration is not None
+        assert f"{declaration.group('component')} = {expected_type}" in emitted
+
+    @pytest.mark.parametrize(
+        ("matrix_type", "feature", "capability", "message"),
+        (
+            pytest.param(
+                CooperativeMatrixType(
+                    PrimitiveType("float"),
+                    8,
+                    8,
+                    scope="subgroup",
+                    use="unspecified",
+                ),
+                "cooperative-matrix-use-role",
+                "spirv.cooperative_matrix.use-role",
+                "require an explicit matrix_a, matrix_b, or accumulator use role",
+                id="unspecified-use",
+            ),
+            pytest.param(
+                CooperativeMatrixType(
+                    PrimitiveType("float"),
+                    IdentifierNode("ROWS"),
+                    8,
+                    scope="subgroup",
+                    use="matrix_a",
+                ),
+                "cooperative-matrix-shape",
+                "spirv.cooperative_matrix.static-shape",
+                "requires positive literal row and column dimensions",
+                id="symbolic-shape",
+            ),
+            pytest.param(
+                CooperativeMatrixType(
+                    PrimitiveType("float"),
+                    8,
+                    8,
+                    scope="workgroup",
+                    use="matrix_a",
+                ),
+                "cooperative-matrix-scope",
+                "spirv.cooperative_matrix.subgroup-scope",
+                "supports only subgroup scope",
+                id="non-subgroup-scope",
+            ),
+            pytest.param(
+                CooperativeMatrixType(
+                    PrimitiveType("f16"),
+                    8,
+                    8,
+                    scope="subgroup",
+                    use="matrix_a",
+                ),
+                "cooperative-matrix-component-type",
+                "spirv.cooperative_matrix.component-type",
+                "require a 32-bit float, signed integer, or unsigned integer component",
+                id="f16-component",
+            ),
+        ),
+    )
+    def test_opt_in_profile_rejects_unsupported_cooperative_matrix_contracts(
+        self, matrix_type, feature, capability, message
+    ):
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+
+        with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
+            generator.map_crossgl_type(matrix_type)
+
+        assert message in str(exc_info.value)
+        assert exc_info.value.feature == feature
+        assert exc_info.value.missing_capabilities == (capability,)
+        emitted = "\n".join(generator.code_lines)
+        assert "OpTypeCooperativeMatrixKHR" not in emitted
+        assert "OpTypeMatrix" not in emitted
+        assert "WARNING" not in emitted
+
+    def test_opt_in_profile_rejects_invalid_cooperative_matrix_storage_classes(
+        self,
+    ):
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        matrix_type = generator.map_crossgl_type(
+            CooperativeMatrixType(
+                PrimitiveType("float"),
+                8,
+                8,
+                scope="subgroup",
+                use="matrix_a",
+            )
+        )
+        containing_types = (
+            matrix_type,
+            generator.register_array_type(matrix_type, 2),
+            generator.register_struct_type("MatrixContainer", [(matrix_type, "tile")]),
+        )
+
+        for containing_type in containing_types:
+            with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
+                generator.register_pointer_type(containing_type, "Workgroup")
+
+            assert exc_info.value.feature == "cooperative-matrix-storage-class"
+            assert exc_info.value.missing_capabilities == (
+                "spirv.cooperative_matrix.storage-class",
+            )
+
+        assert generator.register_pointer_type(matrix_type, "Function") is not None
+        assert generator.register_pointer_type(matrix_type, "Private") is not None
 
     def test_canonical_cooperative_matrix_type_string_is_rejected(self):
         type_name = (
@@ -32875,6 +33090,27 @@ class TestSpirvShaderValidation:
         assert exc_info.value.feature == "cooperative-matrix-lowering"
         assert exc_info.value.missing_capabilities == ("spirv.cooperative_matrix.khr",)
         assert exc_info.value.source_location is source_location
+
+    def test_opt_in_profile_keeps_operations_fail_closed(self):
+        operation = CooperativeMatrixOpNode(
+            "multiply",
+            [IdentifierNode("left"), IdentifierNode("right")],
+        )
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+
+        with pytest.raises(
+            UnsupportedSPIRVFeatureError,
+            match=(
+                "SPIR-V KHR cooperative-matrix type support is enabled, but "
+                "operation 'multiply' is not implemented"
+            ),
+        ) as exc_info:
+            generator.process_expression(operation)
+
+        assert exc_info.value.feature == "cooperative-matrix-operation-lowering"
+        assert exc_info.value.missing_capabilities == (
+            "spirv.cooperative_matrix.operation-lowering",
+        )
 
     @pytest.mark.parametrize(
         "type_name",

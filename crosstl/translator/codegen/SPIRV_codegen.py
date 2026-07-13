@@ -154,6 +154,27 @@ class VulkanSPIRVCodeGen:
     """Generates SPIR-V code from a CrossGL shader AST."""
 
     POINTER_OFFSET_RESET_MARKER_PREFIX = "; __crosstl_pointer_offset_reset_"
+    COOPERATIVE_MATRIX_KHR_PROFILE = "vulkan-khr-cooperative-matrix"
+    COOPERATIVE_MATRIX_SCOPE_VALUES = {"subgroup": 3}
+    COOPERATIVE_MATRIX_USE_VALUES = {
+        "matrix_a": 0,
+        "matrixa": 0,
+        "matrix_a_khr": 0,
+        "matrixakhr": 0,
+        "multiplicand_a": 0,
+        "matrix_b": 1,
+        "matrixb": 1,
+        "matrix_b_khr": 1,
+        "matrixbkhr": 1,
+        "multiplicand_b": 1,
+        "accumulator": 2,
+        "matrix_accumulator": 2,
+        "matrix_accumulator_khr": 2,
+        "matrixaccumulatorkhr": 2,
+        "matrix_c": 2,
+        "result": 2,
+        "matrix_result": 2,
+    }
 
     SIGNED_INT32_MIN = -(1 << 31)
     SIGNED_INT32_MAX = (1 << 31) - 1
@@ -172,10 +193,31 @@ class VulkanSPIRVCodeGen:
     INTEGER_TYPE_NAMES = SIGNED_INTEGER_TYPES | UNSIGNED_INTEGER_TYPES
     BFLOAT16_TYPE_NAME = "bfloat16"
 
-    def __init__(self, *, include_resource_interface_variables: bool = False):
+    def __init__(
+        self,
+        *,
+        include_resource_interface_variables: bool = False,
+        target_profile: Optional[str] = None,
+    ):
         """Initialize an empty SPIR-V module-generation state."""
         self.include_resource_interface_variables = include_resource_interface_variables
+        self.target_profile = self.normalize_target_profile(target_profile)
+        self.cooperative_matrix_khr_enabled = (
+            self.target_profile == self.COOPERATIVE_MATRIX_KHR_PROFILE
+        )
         self.reset_generation_state()
+
+    def normalize_target_profile(self, target_profile: Optional[str]) -> Optional[str]:
+        if target_profile is None:
+            return None
+        normalized = str(target_profile).strip().lower().replace("_", "-")
+        if normalized in {"", "vulkan", "spirv", "spv"}:
+            return None
+        if normalized == self.COOPERATIVE_MATRIX_KHR_PROFILE:
+            return normalized
+        raise ValueError(
+            "Vulkan target profile must be " f"'{self.COOPERATIVE_MATRIX_KHR_PROFILE}'"
+        )
 
     def reset_generation_state(self):
         """Reset per-module SPIR-V ids, declarations, and symbol caches."""
@@ -187,6 +229,8 @@ class VulkanSPIRVCodeGen:
         self.primitive_types = {}
         self.vector_types = {}
         self.matrix_types = {}
+        self.cooperative_matrix_types = {}
+        self.cooperative_matrix_containing_type_ids = set()
         self.struct_types = {}
         self.pointer_types = {}
         self.function_types = {}
@@ -474,6 +518,17 @@ class VulkanSPIRVCodeGen:
         self, pointed_type: SpirvId, storage_class: str
     ) -> SpirvId:
         """Create and register a pointer type."""
+        if (
+            pointed_type.id in self.cooperative_matrix_containing_type_ids
+            and storage_class not in {"Function", "Private"}
+        ):
+            raise UnsupportedSPIRVFeatureError(
+                "cooperative-matrix-storage-class",
+                "SPIR-V KHR cooperative-matrix values and containing types can "
+                "only be allocated in Function or Private storage; got "
+                f"{storage_class}",
+                missing_capabilities=("spirv.cooperative_matrix.storage-class",),
+            )
         key = (pointed_type.id, storage_class)
         if key in self.pointer_types:
             return self.pointer_types[key]
@@ -640,6 +695,11 @@ class VulkanSPIRVCodeGen:
         self.struct_types[name] = spirv_id
 
         self.current_struct_members[name] = members
+        if any(
+            member_type.id in self.cooperative_matrix_containing_type_ids
+            for member_type, _member_name in members
+        ):
+            self.cooperative_matrix_containing_type_ids.add(spirv_id.id)
 
         return spirv_id
 
@@ -697,6 +757,11 @@ class VulkanSPIRVCodeGen:
         self.layout_struct_types[key] = spirv_id
         self.layout_struct_source_types[id_value] = source_type
         self.current_struct_members[type_name] = members
+        if any(
+            member_type.id in self.cooperative_matrix_containing_type_ids
+            for member_type, _member_name in members
+        ):
+            self.cooperative_matrix_containing_type_ids.add(spirv_id.id)
         return spirv_id
 
     def register_function_type(
@@ -14571,6 +14636,7 @@ class VulkanSPIRVCodeGen:
             self.primitive_types,
             self.vector_types,
             self.matrix_types,
+            self.cooperative_matrix_types,
             self.struct_types,
             self.array_types,
             self.layout_struct_types,
@@ -14589,6 +14655,7 @@ class VulkanSPIRVCodeGen:
             self.primitive_types,
             self.vector_types,
             self.matrix_types,
+            self.cooperative_matrix_types,
             self.struct_types,
             self.array_types,
             self.layout_struct_types,
@@ -14622,6 +14689,8 @@ class VulkanSPIRVCodeGen:
         """Map a CrossGL type name to a SPIR-V type ID."""
         if isinstance(type_name, CooperativeMatrixType):
             type_str = self.type_name_from_value(type_name)
+            if self.cooperative_matrix_khr_enabled:
+                return self.register_cooperative_matrix_type(type_name, type_str)
             raise self.unsupported_cooperative_matrix_type_error(type_name, type_str)
 
         type_str = self.type_name_from_value(type_name)
@@ -14633,9 +14702,11 @@ class VulkanSPIRVCodeGen:
         type_str = self.normalize_hlsl_matrix_type(type_str)
         if type_str.startswith("&"):
             return self.map_crossgl_type(type_str[1:].strip())
-        if self.is_cooperative_matrix_type_name(
-            type_str
-        ) or self.is_metal_simdgroup_matrix_type(type_str):
+        if self.is_cooperative_matrix_type_name(type_str):
+            if self.cooperative_matrix_khr_enabled:
+                return self.register_cooperative_matrix_type(type_name, type_str)
+            raise self.unsupported_cooperative_matrix_type_error(type_name, type_str)
+        if self.is_metal_simdgroup_matrix_type(type_str):
             raise self.unsupported_cooperative_matrix_type_error(type_name, type_str)
 
         array_type = self.split_outer_array_type(type_str)
@@ -14745,6 +14816,139 @@ class VulkanSPIRVCodeGen:
             missing_capabilities=("spirv.cooperative_matrix.khr",),
             source_location=getattr(type_source, "source_location", None),
         )
+
+    def cooperative_matrix_contract(self, type_source, type_name):
+        if isinstance(type_source, CooperativeMatrixType):
+            return (
+                type_source.element_type,
+                type_source.rows,
+                type_source.cols,
+                type_source.scope,
+                type_source.use,
+                type_source.layout,
+            )
+
+        compact_type_name = re.sub(r"\s+", "", str(type_name))
+        generic_base, generic_args = generic_type_parts(compact_type_name)
+        if generic_base.rsplit("::", 1)[-1] != "CooperativeMatrix" or not (
+            3 <= len(generic_args) <= 6
+        ):
+            return None
+        defaults = ("subgroup", "unspecified", "unspecified")
+        generic_args = [*generic_args, *defaults[len(generic_args) - 3 :]]
+        return tuple(generic_args)
+
+    def cooperative_matrix_literal_dimension(self, value):
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value if value > 0 else None
+        if isinstance(value, LiteralNode):
+            return self.cooperative_matrix_literal_dimension(value.value)
+        text = self.type_name_from_value(value)
+        if text is not None and re.fullmatch(r"[1-9]\d*", text.strip()):
+            return int(text)
+        return None
+
+    def cooperative_matrix_component_name(self, component_type):
+        raw_name = self.type_name_from_value(component_type)
+        if raw_name is None:
+            return None
+        compact_name = re.sub(r"\s+", "", raw_name).lower()
+        if compact_name in {"float", "f32", "float32", "float32_t"}:
+            return "float"
+        if compact_name in {"int", "i32", "int32", "int32_t"}:
+            return "int"
+        if compact_name in {"uint", "u32", "uint32", "uint32_t"}:
+            return "uint"
+        return None
+
+    def cooperative_matrix_contract_error(
+        self, type_source, feature, message, capability
+    ):
+        return UnsupportedSPIRVFeatureError(
+            feature,
+            message,
+            missing_capabilities=(capability,),
+            source_location=getattr(type_source, "source_location", None),
+        )
+
+    def register_cooperative_matrix_type(self, type_source, type_name) -> SpirvId:
+        contract = self.cooperative_matrix_contract(type_source, type_name)
+        if contract is None:
+            raise self.unsupported_cooperative_matrix_type_error(type_source, type_name)
+
+        component_source, rows_source, cols_source, scope, use, _layout = contract
+        component_name = self.cooperative_matrix_component_name(component_source)
+        if component_name is None:
+            component_label = self.type_name_from_value(component_source)
+            raise self.cooperative_matrix_contract_error(
+                type_source,
+                "cooperative-matrix-component-type",
+                "SPIR-V KHR cooperative matrices currently require a 32-bit "
+                f"float, signed integer, or unsigned integer component; got "
+                f"'{component_label}'",
+                "spirv.cooperative_matrix.component-type",
+            )
+
+        rows = self.cooperative_matrix_literal_dimension(rows_source)
+        cols = self.cooperative_matrix_literal_dimension(cols_source)
+        if rows is None or cols is None:
+            raise self.cooperative_matrix_contract_error(
+                type_source,
+                "cooperative-matrix-shape",
+                "SPIR-V KHR cooperative-matrix type registration currently "
+                "requires positive literal row and column dimensions",
+                "spirv.cooperative_matrix.static-shape",
+            )
+
+        scope_name = str(scope).strip().lower().replace("-", "_")
+        scope_value = self.COOPERATIVE_MATRIX_SCOPE_VALUES.get(scope_name)
+        if scope_value is None:
+            raise self.cooperative_matrix_contract_error(
+                type_source,
+                "cooperative-matrix-scope",
+                "The Vulkan cooperative-matrix target profile currently supports "
+                f"only subgroup scope; got '{scope}'",
+                "spirv.cooperative_matrix.subgroup-scope",
+            )
+
+        use_name = str(use).strip().lower().replace("-", "_")
+        use_value = self.COOPERATIVE_MATRIX_USE_VALUES.get(use_name)
+        if use_value is None:
+            raise self.cooperative_matrix_contract_error(
+                type_source,
+                "cooperative-matrix-use-role",
+                "SPIR-V KHR cooperative-matrix types require an explicit "
+                "matrix_a, matrix_b, or accumulator use role; "
+                f"got '{use}'",
+                "spirv.cooperative_matrix.use-role",
+            )
+
+        component_type = self.register_primitive_type(component_name)
+        key = (component_type.id, scope_value, rows, cols, use_value)
+        existing = self.cooperative_matrix_types.get(key)
+        if existing is not None:
+            return existing
+
+        self.require_capability("CooperativeMatrixKHR")
+        self.require_capability("VulkanMemoryModel")
+        self.require_extension("SPV_KHR_cooperative_matrix")
+        self.require_extension("SPV_KHR_vulkan_memory_model")
+
+        uint_type = self.register_primitive_type("uint")
+        scope_id = self.register_constant(scope_value, uint_type)
+        rows_id = self.register_constant(rows, uint_type)
+        cols_id = self.register_constant(cols, uint_type)
+        use_id = self.register_constant(use_value, uint_type)
+        type_id = self.get_id()
+        self.emit(
+            f"%{type_id} = OpTypeCooperativeMatrixKHR %{component_type.id} "
+            f"%{scope_id.id} %{rows_id.id} %{cols_id.id} %{use_id.id}"
+        )
+        canonical_name = re.sub(r"\s+", "", str(type_name))
+        matrix_id = SpirvId(type_id, SpirvType(canonical_name), canonical_name)
+        self.cooperative_matrix_types[key] = matrix_id
+        self.cooperative_matrix_containing_type_ids.add(matrix_id.id)
+        return matrix_id
 
     def is_cooperative_matrix_type_name(self, type_name: str) -> bool:
         """Return whether a type uses the canonical cooperative-matrix spelling."""
@@ -26518,12 +26722,25 @@ class VulkanSPIRVCodeGen:
             )
 
         elif isinstance(expr, CooperativeMatrixOpNode):
+            if self.cooperative_matrix_khr_enabled:
+                feature = "cooperative-matrix-operation-lowering"
+                missing_capabilities = ("spirv.cooperative_matrix.operation-lowering",)
+                message = (
+                    "SPIR-V KHR cooperative-matrix type support is enabled, but "
+                    f"operation '{expr.operation}' is not implemented"
+                )
+            else:
+                feature = "cooperative-matrix-lowering"
+                missing_capabilities = ("spirv.cooperative_matrix.khr",)
+                message = (
+                    "SPIR-V cooperative-matrix lowering is not available for "
+                    f"operation '{expr.operation}'; scalar substitution would "
+                    "change subgroup-distributed matrix semantics"
+                )
             raise UnsupportedSPIRVFeatureError(
-                "cooperative-matrix-lowering",
-                "SPIR-V cooperative-matrix lowering is not available for "
-                f"operation '{expr.operation}'; scalar substitution would change "
-                "subgroup-distributed matrix semantics",
-                missing_capabilities=("spirv.cooperative_matrix.khr",),
+                feature,
+                message,
+                missing_capabilities=missing_capabilities,
                 source_location=getattr(expr, "source_location", None),
             )
 
@@ -27491,6 +27708,8 @@ class VulkanSPIRVCodeGen:
         spirv_type = SpirvType(type_name)
         spirv_id = SpirvId(id_value, spirv_type, type_name)
         self.array_types[key] = spirv_id
+        if element_type.id in self.cooperative_matrix_containing_type_ids:
+            self.cooperative_matrix_containing_type_ids.add(spirv_id.id)
         return spirv_id
 
     def register_layout_array_type(
@@ -27514,6 +27733,8 @@ class VulkanSPIRVCodeGen:
         )
         spirv_id = SpirvId(id_value, SpirvType(type_name), type_name)
         self.layout_array_types[key] = spirv_id
+        if element_type.id in self.cooperative_matrix_containing_type_ids:
+            self.cooperative_matrix_containing_type_ids.add(spirv_id.id)
         return spirv_id
 
     def reject_nonpositive_array_length(self, size) -> None:
@@ -28247,6 +28468,8 @@ class VulkanSPIRVCodeGen:
             return "1.4"
         if "RayTracingKHR" in self.required_capabilities:
             return "1.4"
+        if "CooperativeMatrixKHR" in self.required_capabilities:
+            return "1.3"
         if any(
             capability.startswith("GroupNonUniform")
             for capability in self.required_capabilities
@@ -28292,7 +28515,10 @@ class VulkanSPIRVCodeGen:
             elif " = OpExtInstImport " in line:
                 imports.append(line)
             elif line.startswith("OpMemoryModel "):
-                memory_model.append(line)
+                if "VulkanMemoryModel" in self.required_capabilities:
+                    memory_model.append("OpMemoryModel Logical VulkanKHR")
+                else:
+                    memory_model.append(line)
             elif line.startswith("OpEntryPoint "):
                 entry_points.append(line)
             elif line.startswith("OpExecutionMode"):
