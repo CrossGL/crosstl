@@ -6027,6 +6027,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             constructor_type = self.hlsl_type_constructor_name(func_name)
             if constructor_type is not None:
                 return constructor_type
+            if (
+                func_name not in getattr(self, "function_return_types", {})
+                and self.hlsl_struct_constructor_fields(func_name) is not None
+            ):
+                return self.map_type(func_name)
             if func_name == "dot" and args:
                 return (
                     self.vector_component_type(self.expression_result_type(args[0]))
