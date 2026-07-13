@@ -116,6 +116,17 @@ def spirv_integer_constant_values(spv_code):
     }
 
 
+def assert_spirv_has_no_zero_length_arrays(spv_code):
+    integer_constants = spirv_integer_constant_values(spv_code)
+    array_lengths = re.findall(r"OpTypeArray %\d+ (%\d+)\b", spv_code)
+
+    assert not {
+        length_id
+        for length_id in array_lengths
+        if integer_constants.get(length_id) == 0
+    }
+
+
 def spirv_storage_buffer_store_operands(spv_code, variable_name):
     variable = spirv_named_variable(spv_code, variable_name, storage_class="Uniform")
     integer_constants = spirv_integer_constant_values(spv_code)
@@ -23927,19 +23938,228 @@ class TestVulkanSPIRVCodeGen:
         assert re.search(r"OpConstant %\d+ 0\.0\b", spv_code)
         assert "WARNING" not in spv_code
 
-    def test_untyped_empty_initializer_fails_before_invalid_spirv(self):
+    def test_direct_empty_aggregate_call_arguments_use_parameter_types(self, tmp_path):
         source_code = """
-        void consume(float value) {}
+        struct Payload {
+            float weight;
+            int count;
+        };
 
-        void exercise() {
-            consume({});
+        struct NestedPayload {
+            Payload payload;
+            float values[2];
+        };
+
+        shader EmptyAggregateCalls {
+            float readScalar(float value) {
+                return value;
+            }
+
+            float readVector(vec4 value) {
+                return value.x;
+            }
+
+            float readMatrix(mat2 value) {
+                return value[0].x;
+            }
+
+            float readArray(float values[3]) {
+                return values[0];
+            }
+
+            float readPayload(Payload value) {
+                return value.weight;
+            }
+
+            float readNested(NestedPayload value) {
+                return value.payload.weight + value.values[1];
+            }
+
+            compute {
+                void main() {
+                    float scalar = readScalar({});
+                    float vectorValue = readVector({});
+                    float matrixValue = readMatrix({});
+                    float arrayValue = readArray({});
+                    float payloadValue = readPayload({});
+                    float nestedValue = readNested({});
+                    float nestedMembers = readNested({{}, {}});
+                    float partialNested = readNested({{}});
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert spv_code.count("OpFunctionCall") == 8
+        assert spv_code.count("OpTypeArray") >= 2
+        assert_spirv_function_calls_use_declared_parameter_types(spv_code)
+        assert_struct_constructs_have_matching_member_operands(spv_code)
+        assert_spirv_has_no_zero_length_arrays(spv_code)
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_inlined_storage_buffer_call_contextualizes_empty_aggregate(self, tmp_path):
+        source_code = """
+        struct Payload {
+            float weight;
+            int count;
+        };
+
+        shader InlinedEmptyAggregateCall {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                layout(set = 0, binding = 0) buffer float* values;
+
+                float readTagged(float* input, Payload tag) {
+                    return input[0] + tag.weight;
+                }
+
+                void main() {
+                    values[1] = readTagged(values, {});
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpFunctionCall" not in spv_code
+        assert_spirv_has_no_zero_length_arrays(spv_code)
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_overloaded_empty_aggregate_call_uses_selected_parameter_type(
+        self, tmp_path
+    ):
+        source_code = """
+        struct Payload {
+            float weight;
+            int count;
+        };
+
+        shader EmptyAggregateOverload {
+            float readEmpty(float selector, float value) {
+                return value;
+            }
+
+            float readEmpty(int selector, Payload value) {
+                return value.weight;
+            }
+
+            compute {
+                void main() {
+                    float selected = readEmpty(1, {});
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        payload_type = spirv_named_id(spv_code, "Payload")
+        int_type = re.search(r"(%\d+) = OpTypeInt 32 1\b", spv_code)
+        call = re.search(r"%\d+ = OpFunctionCall %\d+ (%\d+) (%\d+) (%\d+)", spv_code)
+
+        assert int_type is not None
+        assert call is not None
+        callee_id, selector_id, payload_id = call.groups()
+        result_types = {
+            result_id: result_type
+            for result_id, result_type in re.findall(
+                r"(%\d+) = Op\w+ (%\d+)\b", spv_code
+            )
+        }
+        function_type = re.search(
+            rf"{re.escape(callee_id)} = OpFunction %\d+ None (%\d+)\b", spv_code
+        )
+
+        assert function_type is not None
+        assert re.search(
+            rf"{re.escape(function_type.group(1))} = OpTypeFunction %\d+ "
+            rf"{re.escape(int_type.group(1))} {re.escape(payload_type)}\b",
+            spv_code,
+        )
+        assert result_types[selector_id] == int_type.group(1)
+        assert result_types[payload_id] == payload_type
+        assert_spirv_function_calls_use_declared_parameter_types(spv_code)
+        assert_spirv_has_no_zero_length_arrays(spv_code)
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_ambiguous_empty_aggregate_call_fails_before_invalid_spirv(self):
+        source_code = """
+        struct Payload {
+            float weight;
+        };
+
+        shader AmbiguousEmptyAggregateOverload {
+            float readEmpty(float selector, float value) {
+                return value;
+            }
+
+            float readEmpty(float selector, Payload value) {
+                return value.weight;
+            }
+
+            compute {
+                void main() {
+                    float selected = readEmpty(1.0, {});
+                }
+            }
         }
         """
 
         with pytest.raises(UnsupportedSPIRVFeatureError) as error:
             VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
-        assert error.value.feature == "untyped empty initializer"
+        assert error.value.feature == "contextual empty initializer"
+        assert error.value.missing_capabilities == (
+            "spirv.empty_initializer_type_inference",
+        )
+        assert "ambiguous call 'readEmpty', argument 2" in str(error.value)
+
+    def test_reference_array_rejects_empty_aggregate_temporary(self):
+        source_code = """
+        shader ReferenceEmptyAggregateCall {
+            void fill(inout float[2] values) {
+                values[0] = 1.0;
+            }
+
+            compute {
+                void main() {
+                    fill({});
+                }
+            }
+        }
+        """
+
+        with pytest.raises(UnsupportedSPIRVFeatureError) as error:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert error.value.feature == "reference-bound empty initializer"
+        assert error.value.missing_capabilities == (
+            "spirv.aggregate_initializer_reference_binding",
+        )
+
+    def test_unresolved_empty_initializer_fails_before_invalid_spirv(self):
+        source_code = """
+        void exercise() {
+            unresolved({});
+        }
+        """
+
+        with pytest.raises(UnsupportedSPIRVFeatureError) as error:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert error.value.feature == "contextual empty initializer"
         assert error.value.missing_capabilities == (
             "spirv.empty_initializer_type_inference",
         )
