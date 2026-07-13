@@ -2335,12 +2335,41 @@ class MetalToCrossGLConverter:
         qualifiers = [
             str(qualifier).lower() for qualifier in getattr(var, "qualifiers", []) or []
         ]
+        is_reference = self.reference_parameter(var)
         for qualifier in self.parameter_direction_qualifiers:
             if qualifier in qualifiers:
+                if is_reference:
+                    declaration = re.sub(r"(?<=\S)&(?=\s)", "", declaration, count=1)
                 return f"{qualifier} {declaration}"
+        if is_reference and not self.readonly_parameter(var, qualifiers):
+            declaration = re.sub(r"(?<=\S)&(?=\s)", "", declaration, count=1)
+            return f"inout {declaration}"
+        if (
+            is_reference
+            and self.readonly_parameter(var, qualifiers)
+            and getattr(var, "name", None) == "self"
+            and "thread" in qualifiers
+        ):
+            return f"in {declaration}"
         if self.writable_c_array_parameter(var, semantic_context):
             return f"inout {declaration}"
         return declaration
+
+    @staticmethod
+    def reference_parameter(var):
+        raw_type = str(getattr(var, "vtype", "")).strip()
+        return raw_type.endswith("&") or (
+            getattr(var, "declarator_type_suffix_grouped", False)
+            and getattr(var, "declarator_type_suffix", "") == "&"
+        )
+
+    @staticmethod
+    def readonly_parameter(var, qualifiers=None):
+        qualifier_set = set(qualifiers or ())
+        return bool(
+            qualifier_set & {"const", "constant", "readonly", "in"}
+            or getattr(var, "is_const", False)
+        )
 
     def lower_c_array_parameter_reference(self, var, declaration):
         if not getattr(var, "array_sizes", None):
@@ -2938,18 +2967,24 @@ class MetalToCrossGLConverter:
             self.type_aliases[name] = alias_type
             self.local_type_alias_names.add(name)
             return
-        # Only inline body-local aliases that resolve to a scalar/vector
-        # primitive (e.g. ``using OutType = conditional_t<...>;`` -> uint). Such
-        # aliases are otherwise dangling type names that default to float and
-        # break bitwise math. Struct / resource / user-template aliases (e.g.
-        # ``using rw_t = ReadWriter<...>;``) keep their historical handling and
-        # are neither recorded nor substituted, so their declarations and
-        # constructor calls are emitted unchanged.
+        # Inline body-local aliases that resolve to scalar/vector primitives or
+        # to a concrete struct emitted in this module. Both forms would otherwise
+        # become dangling CrossGL type names and default to float downstream.
+        # Unresolved user-template aliases remain untouched until their template
+        # arguments have been materialized by the Metal frontend.
+        mapped_alias_type = self.map_type(alias_type)
+        concrete_struct_alias = (
+            alias_type in self.struct_name_map
+            and mapped_alias_type in self.struct_name_map.values()
+        )
         if (
             getattr(alias, "qualifiers", None)
             or getattr(alias, "array_sizes", None)
             or getattr(alias, "declarator_type_suffix", "")
-            or self.map_type(alias_type) not in self.crossgl_typedef_source_types()
+            or (
+                mapped_alias_type not in self.crossgl_typedef_source_types()
+                and not concrete_struct_alias
+            )
         ):
             return
         self.type_aliases[name] = alias_type
@@ -4018,7 +4053,11 @@ class MetalToCrossGLConverter:
             return None
         normalized = self.normalized_metal_type(self.resolve_local_type_aliases(text))
         mapped = self.map_type(normalized)
-        if normalized in self.type_map or mapped != normalized:
+        if (
+            normalized in self.type_map
+            or normalized in self.struct_name_map
+            or mapped != normalized
+        ):
             return mapped
         return None
 

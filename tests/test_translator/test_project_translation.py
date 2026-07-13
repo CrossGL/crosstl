@@ -15137,6 +15137,8 @@ def test_metal_project_materialization_deduces_tile_helper_from_struct_fields(
         materialized.text,
     )
     assert "D.value = A.value + B.value + C.value;" in materialized.text
+    assert "struct Tile_float_2_3 {" not in materialized.text
+    assert "thread Tile_float_2_3_BaseFragment_float_8_8& D" in materialized.text
     assert not re.search(r"\btile_matmad\s*\(", materialized.text)
 
     payload = translate_project(
@@ -15157,7 +15159,9 @@ def test_metal_project_materialization_deduces_tile_helper_from_struct_fields(
     assert artifact_tile_specializations == [tile_specialization]
     output = (repo / artifact["path"]).read_text(encoding="utf-8")
     if target == "vulkan":
-        assert "OpFunctionCall" in output
+        assert "OpFunctionCall" not in output
+        assert "OpAccessChain" in output
+        assert "OpStore" in output
     else:
         assert tile_specialization["materializedName"] in output
 
@@ -44232,7 +44236,7 @@ def test_translate_project_metal_template_member_infers_pointer_struct_field(
         artifact for artifact in payload["artifacts"] if artifact["target"] == "directx"
     )
     directx = (repo / directx_artifact["path"]).read_text(encoding="utf-8")
-    assert "int Identity__apply__int(Identity self, int value)" in directx
+    assert "int Identity__apply__int(inout Identity self, int value)" in directx
     assert "forward_value_int(Identity__apply__int(op, params.stride))" in directx
     assert "apply_Params" not in directx
 
@@ -45023,6 +45027,68 @@ def test_translate_project_metal_struct_method_diagnostic_uses_call_location(
         diagnostic["details"]["templateMaterialization"]["requestedSignature"]
         == "op.simd_reduce(total)"
     )
+
+
+def test_translate_project_metal_reference_return_reports_struct_method_details(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source = textwrap.dedent("""
+        struct Counter {
+            int value;
+            thread int& value_ref() { return value; }
+        };
+
+        kernel void increment(device int* out [[buffer(0)]]) {
+            Counter counter;
+            counter.value = 1;
+            counter.value_ref() = 5;
+            out[0] = counter.value;
+        }
+        """).strip()
+    (repo / "reference_return.metal").write_text(source, encoding="utf-8")
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+    ).to_json()
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-struct-method": 1
+    }
+
+    diagnostic = payload["diagnostics"][0]
+    call_offset = source.index("value_ref()", source.index("kernel void"))
+    call_line_start = source.rfind("\n", 0, call_offset)
+    assert diagnostic["code"] == "project.translate.metal-struct-method"
+    assert diagnostic["target"] == "directx"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["location"]["file"] == "reference_return.metal"
+    assert diagnostic["location"]["line"] == source.count("\n", 0, call_offset) + 1
+    assert diagnostic["location"]["column"] == call_offset - call_line_start
+    assert diagnostic["missingCapabilities"] == ["struct.reference-return"]
+    assert diagnostic["details"] == {
+        "sourcePath": "reference_return.metal",
+        "structMethod": {
+            "methodName": "value_ref",
+            "reason": "reference-return-identity-unsupported",
+            "requestedSignature": "Counter::value_ref()",
+            "returnType": "thread int&",
+            "structName": "Counter",
+            "suggestedAction": (
+                "rewrite the accessor as a direct operation on the underlying "
+                "storage, or avoid binding or assigning through its returned "
+                "reference until reference identity lowering is available"
+            ),
+        },
+        "targetArtifact": "out/directx/reference_return.hlsl",
+    }
+    assert "templateMaterialization" not in diagnostic["details"]
 
 
 def test_translate_project_metal_implicit_type_environment_cache_bounds_repeated_work(

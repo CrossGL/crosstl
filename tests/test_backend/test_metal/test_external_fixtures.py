@@ -737,7 +737,7 @@ EXTERNAL_FIXTURES = [
         "source_path": "naga/tests/out/msl/wgsl-memory-decorations-coherent.metal",
         "roundtrip": True,
         "contains": [
-            "void main_(device Data& coherent_buf @user(fake0), "
+            "void main_(inout device Data coherent_buf @user(fake0), "
             "device Data& plain_buf @user(fake0))",
             "coherent_buf.values[0] = value;",
         ],

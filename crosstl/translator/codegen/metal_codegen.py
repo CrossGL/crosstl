@@ -13159,6 +13159,20 @@ class MetalCodeGen:
             declaration = format_c_style_array_declaration(mapped_type, name)
             return f"{address_space} {declaration}"
 
+        qualifiers = self.parameter_qualifier_names(node)
+        address_space = self.effective_parameter_address_space(
+            raw_param_type,
+            node,
+            shader_type,
+            default_for_stage_binding=bool(qualifiers & {"out", "inout"}),
+        )
+        if address_space is not None:
+            address_space = self.readonly_qualified_address_space(
+                address_space,
+                node,
+            )
+            return f"{address_space} {mapped_type}& {name}"
+
         return None
 
     def effective_parameter_address_space(

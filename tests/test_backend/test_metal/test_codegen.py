@@ -88,7 +88,10 @@ def test_codegen_keeps_dependent_enable_if_return_type_from_tinygrad_metal():
     """
     generated = convert(code)
 
-    assert "type load(thread RT& dst, threadgroup ST& src, int threadIdx)" in generated
+    assert (
+        "type load(inout thread RT dst, threadgroup ST& src, int threadIdx)"
+        in generated
+    )
     assert "return;" in generated
     assert parse_crossgl(generated) is not None
 
@@ -931,6 +934,56 @@ def test_codegen_writable_c_array_parameter_preserves_aliasing():
         "void fill(thread float values[4], thread float source[4])"
         in MetalCodeGen().generate(parse_crossgl(crossgl))
     )
+
+
+def test_codegen_struct_method_receiver_directions_reach_native_targets():
+    source = """
+    struct NestedState { int value; };
+
+    struct State {
+        int scalar;
+        int values[2];
+        NestedState nested;
+
+        void mutate(int amount) {
+            scalar += amount;
+            values[1] = amount;
+            nested.value += amount;
+        }
+
+        int total() const {
+            return scalar + values[1] + nested.value;
+        }
+    };
+
+    int apply(thread State& state) {
+        state.mutate(3);
+        return state.total();
+    }
+    """
+
+    crossgl = convert(MetalPreprocessor().preprocess(source))
+    ast = parse_crossgl(crossgl)
+    generated_targets = (
+        crossgl,
+        TranslatorHLSLCodeGen().generate(ast),
+        GLSLCodeGen().generate(ast),
+    )
+
+    assert "int State__total(in thread State& self)" in normalize(crossgl)
+
+    for generated in generated_targets:
+        generated = normalize(generated)
+        mutable_signature = re.search(r"\bvoid State__mutate\s*\(([^)]*)\)", generated)
+        const_signature = re.search(r"\bint State__total\s*\(([^)]*)\)", generated)
+
+        assert mutable_signature is not None
+        assert "inout" in mutable_signature.group(1).split(",", 1)[0].split()
+        assert const_signature is not None
+        assert "inout" not in const_signature.group(1).split(",", 1)[0].split()
+        assert "self.scalar += amount;" in generated
+        assert "self.values[1] = amount;" in generated
+        assert "self.nested.value += amount;" in generated
 
 
 def test_codegen_fragment_early_tests_attribute_becomes_stage_layout():
@@ -1820,7 +1873,7 @@ def test_codegen_class_helper_data_member_from_public_metal_shader():
     assert "TausStep" not in crossgl
     assert "thread Loki(" not in crossgl
     assert "float rand(" not in crossgl
-    assert "float read_seed(thread Loki& rng)" in crossgl
+    assert "float read_seed(inout thread Loki rng)" in crossgl
     assert parse_crossgl(crossgl) is not None
 
 
@@ -1851,7 +1904,7 @@ def test_codegen_gnu_inline_unsigned_helpers_from_strelka_random_shader():
     assert "uint pcg_hash(uint seed)" in crossgl
     assert "uint state = seed * 747796405u + 2891336453u;" in crossgl
     assert "uint tea(uint val0, uint val1)" in crossgl
-    assert "uint lcg(thread uint& prev)" in crossgl
+    assert "uint lcg(inout thread uint prev)" in crossgl
     assert "__inline__" not in crossgl
     assert "unsigned" not in crossgl
     assert parse_crossgl(crossgl) is not None
@@ -4227,7 +4280,7 @@ def test_codegen_sanitizes_crossgl_keyword_generic_type_argument_from_tinygrad()
     """
     crossgl = convert(code)
 
-    assert "rt_base<T,layout_>& src" in crossgl
+    assert "inout thread rt_base<T,layout_> src" in crossgl
     assert parse_crossgl(crossgl) is not None
 
 
@@ -4439,8 +4492,8 @@ def test_codegen_preserves_ray_and_object_address_space_payloads_from_msl_spec()
     """
     crossgl = convert(code)
 
-    assert "RayPayload& payload @ray_data @payload" in crossgl
-    assert "ObjectPayload& objectPayload @object_data @payload" in crossgl
+    assert "inout RayPayload payload @ray_data @payload" in crossgl
+    assert "inout ObjectPayload objectPayload @object_data @payload" in crossgl
 
     metal = MetalCodeGen().generate(parse_crossgl(crossgl))
     assert "ray_data RayPayload& payload [[payload]]" in metal
@@ -4964,7 +5017,7 @@ def test_codegen_lowers_concrete_wide_vectors_to_aggregate_helpers():
         "base + 7.0f);"
     ) in crossgl
     assert f"{aggregate} make_wide(float base)" in crossgl
-    assert f"void accumulate(thread {aggregate}& value, float delta)" in crossgl
+    assert f"void accumulate(inout thread {aggregate} value, float delta)" in crossgl
     assert (
         f"{aggregate}_add_assign_vector(value, {aggregate}_splat(delta));"
     ) in crossgl
@@ -5716,10 +5769,10 @@ def test_codegen_preserves_native_address_space_qualifiers():
     """
     crossgl = convert(code)
 
-    assert "void update(threadgroup Payload& scratch" in crossgl
-    assert "device float[] values" in crossgl
+    assert "void update(inout threadgroup Payload scratch" in crossgl
+    assert "inout device float[] values" in crossgl
     assert "constant uint& count" in crossgl
-    assert "thread float& localValue" in crossgl
+    assert "inout thread float localValue" in crossgl
     assert "threadgroup Payload scratch;" in crossgl
     assert "thread float localValue = buffer_load(inData, tid);" in crossgl
     assert "RWStructuredBuffer<float> outData @buffer(0)" in crossgl
@@ -6215,11 +6268,9 @@ def test_codegen_leaves_array_extent_value_template_parameter_undeclared():
     assert "int tg_mem_size = 0;" not in result
 
 
-def test_codegen_keeps_struct_local_using_alias_uninlined():
-    # A body-local `using` alias whose target is a struct/user template (as in
-    # mlx fft's `using read_writer_t = ReadWriter<...>;`) must keep its historical
-    # handling: only scalar-resolving aliases are inlined, so a struct alias is
-    # never rewritten to a scalar type.
+def test_codegen_keeps_unresolved_struct_template_local_alias_uninlined():
+    # A body-local alias whose target still contains a generic argument cannot
+    # be mapped to a concrete CrossGL struct and must not become a scalar.
     code = """
     #include <metal_stdlib>
     using namespace metal;
@@ -6241,6 +6292,27 @@ def test_codegen_keeps_struct_local_using_alias_uninlined():
     # primitive (which would otherwise misdeclare the variable as `uint r`).
     assert "uint r " not in result
     assert "float r " not in result
+
+
+def test_codegen_inlines_local_alias_to_materialized_struct():
+    code = """
+    struct ReadWriter_float {
+      int value;
+      ReadWriter_float(int value_) : value(value_) {}
+    };
+
+    kernel void rw(device int* out [[buffer(0)]]) {
+      using read_writer_t = ReadWriter_float;
+      read_writer_t writer = read_writer_t(3);
+      out[0] = writer.value;
+    }
+    """
+
+    result = convert(code)
+
+    assert "ReadWriter_float writer = ReadWriter_float(3);" in result
+    assert "read_writer_t" not in result
+    assert parse_crossgl(result) is not None
 
 
 def test_codegen_preserves_static_struct_integer_constants():
