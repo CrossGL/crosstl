@@ -48,6 +48,7 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXPrivatePointerParameterError,
     DirectXSemanticArraySizeError,
     DirectXUnresolvedSourceTypeError,
+    DirectXWorkgroupPointerError,
     HLSLCodeGen,
 )
 from crosstl.translator.lexer import Lexer
@@ -36970,6 +36971,175 @@ def test_hlsl_private_pointer_view_rejects_unprovable_offset(offset):
         "side-effecting-view-offset",
         "unprovable-view-offset",
     }
+
+
+def test_hlsl_workgroup_pointer_aliases_compose_offsets_and_forward_writes(tmp_path):
+    shader = """
+    shader WorkgroupPointerViews {
+        void update(threadgroup float2* values, uint index) {
+            values[index] = values[index] + float2(1.0, 2.0);
+        }
+
+        void forward(threadgroup float2* values, uint index) {
+            update(values + 2, index);
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint lid @ gl_LocalInvocationIndex) {
+                threadgroup float2 storage[64];
+                threadgroup float2* first = &storage[lid];
+                threadgroup float2* second = first + 5;
+                second = first + 7;
+                forward(second, lid);
+                second[1] = storage[0];
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "groupshared float2 main_storage[64];" in generated
+    assert (
+        "void update(inout float2 values[64], int values_offset, uint index)"
+        in generated
+    )
+    assert (
+        "void forward(inout float2 values[64], int values_offset, uint index)"
+        in generated
+    )
+    assert "values[uint((values_offset + index))] =" in generated
+    assert "update(values, int((values_offset + 2)), index);" in generated
+    assert "int first_offset = int(lid);" in generated
+    assert "int second_offset = int((first_offset + 5));" in generated
+    assert "second_offset = int((first_offset + 7));" in generated
+    assert "forward(main_storage, int(second_offset), lid);" in generated
+    assert "main_storage[uint((second_offset + 1))] = main_storage[0];" in generated
+    assert "groupshared float2*" not in generated
+    assert "float2*" not in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_workgroup_pointer_variants_preserve_lexical_shadowing(tmp_path):
+    shader = """
+    shader WorkgroupPointerShadowing {
+        void update(threadgroup float* values) {
+            values[0] += 1.0;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup float left[8];
+                threadgroup float right[16];
+                threadgroup float* selected = &left[1];
+                {
+                    threadgroup float* selected = &right[2];
+                    update(selected);
+                }
+                update(selected);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "void update(inout float values[8], int values_offset)" in generated
+    assert "void update(inout float values[16], int values_offset)" in generated
+    assert "int selected_offset = int(1);" in generated
+    assert "int selected_offset_ = int(2);" in generated
+    assert "update(main_right, int(selected_offset_));" in generated
+    assert "update(main_left, int(selected_offset));" in generated
+    assert "float*" not in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_workgroup_pointer_rejects_uncalled_dereferenced_parameter():
+    shader = """
+    shader UnresolvedWorkgroupPointerExtent {
+        void orphan(threadgroup float* values) {
+            values[2] = 1.0;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+            }
+        }
+    }
+    """
+
+    with pytest.raises(DirectXWorkgroupPointerError) as excinfo:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = excinfo.value
+    assert diagnostic.function_name == "orphan"
+    assert diagnostic.parameter_name == "values"
+    assert diagnostic.reason == "missing-concrete-size"
+
+
+def test_hlsl_workgroup_pointer_rejects_dynamic_backing_selection():
+    shader = """
+    shader DynamicWorkgroupPointerBacking {
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint lid @ gl_LocalInvocationIndex) {
+                threadgroup float left[8];
+                threadgroup float right[8];
+                threadgroup float* selected = (lid == 0u) ? left : right;
+                selected[0] = 1.0;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(DirectXWorkgroupPointerError) as excinfo:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = excinfo.value
+    assert (
+        diagnostic.project_diagnostic_code
+        == "project.translate.directx-workgroup-pointer-unsupported"
+    )
+    assert diagnostic.missing_capabilities == ("directx.workgroup-pointer-lowering",)
+    assert diagnostic.function_name == "main"
+    assert diagnostic.reason == "conditional-backing-unresolved"
+
+
+def test_hlsl_private_scalar_pointer_accepts_proven_zero_loop_index():
+    shader = """
+    shader PrivateScalarPointerLoop {
+        void threadgroup_sum_1(thread float* x) {
+            for (int i = 0; i < 1; ++i) {
+                x[i] += 1.0;
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                float mean = 0.0;
+                threadgroup_sum_1(&mean);
+                float observed = mean;
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "void threadgroup_sum_1(inout float x)" in generated
+    assert "x += 1.0;" in generated
+    assert "threadgroup_sum_1(mean);" in generated
+    assert "float observed = mean;" in generated
+    assert "x[i]" not in generated
+    assert "float*" not in generated
 
 
 if __name__ == "__main__":

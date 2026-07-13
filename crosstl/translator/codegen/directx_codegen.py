@@ -401,6 +401,28 @@ class DirectXPrivatePointerParameterError(ValueError):
         self.source_location = source_location
 
 
+class DirectXWorkgroupPointerError(ValueError):
+    """Raised when a workgroup pointer has no concrete HLSL array contract."""
+
+    project_diagnostic_code = "project.translate.directx-workgroup-pointer-unsupported"
+    missing_capabilities = ("directx.workgroup-pointer-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        function_name=None,
+        parameter_name=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.function_name = function_name
+        self.parameter_name = parameter_name
+        self.reason = reason
+        self.source_location = source_location
+
+
 class DirectXCooperativeMatrixUnsupportedError(ValueError):
     """Raised when cooperative matrix semantics cannot be preserved in HLSL."""
 
@@ -897,8 +919,17 @@ class HLSLCodeGen:
         self.function_private_pointer_base_names = {}
         self.function_private_pointer_full_span_parameters = {}
         self.function_private_pointer_scalar_parameters = {}
+        self.hlsl_private_pointer_zero_index_access_ids = set()
         self.current_hlsl_private_pointer_variant = {}
         self.current_hlsl_private_pointer_base_names = {}
+        self.function_hlsl_workgroup_pointer_parameters = {}
+        self.function_hlsl_workgroup_pointer_parameter_indices = {}
+        self.function_hlsl_workgroup_pointer_backing_variants = {}
+        self.function_hlsl_workgroup_pointer_base_names = {}
+        self.current_hlsl_workgroup_pointer_variant = {}
+        self.current_hlsl_workgroup_pointer_base_names = {}
+        self.hlsl_global_groupshared_pointer_aliases = {}
+        self.hlsl_groupshared_pointer_bindings_by_declaration = {}
         self.directx_resource_register_overrides = {}
         self.literal_int_constants = {}
         self.literal_bool_constants = {}
@@ -1469,8 +1500,17 @@ class HLSLCodeGen:
         self.function_private_pointer_base_names = {}
         self.function_private_pointer_full_span_parameters = {}
         self.function_private_pointer_scalar_parameters = {}
+        self.hlsl_private_pointer_zero_index_access_ids = set()
         self.current_hlsl_private_pointer_variant = {}
         self.current_hlsl_private_pointer_base_names = {}
+        self.function_hlsl_workgroup_pointer_parameters = {}
+        self.function_hlsl_workgroup_pointer_parameter_indices = {}
+        self.function_hlsl_workgroup_pointer_backing_variants = {}
+        self.function_hlsl_workgroup_pointer_base_names = {}
+        self.current_hlsl_workgroup_pointer_variant = {}
+        self.current_hlsl_workgroup_pointer_base_names = {}
+        self.hlsl_global_groupshared_pointer_aliases = {}
+        self.hlsl_groupshared_pointer_bindings_by_declaration = {}
         self.function_image_access_requirements = {}
         self.hlsl_pixel_only_feedback_function_names = {}
         self.hlsl_interpolation_function_names = {}
@@ -1837,6 +1877,7 @@ class HLSLCodeGen:
         self.function_private_pointer_array_size_hints = (
             self.collect_private_pointer_array_size_hints(ast)
         )
+        self.collect_hlsl_workgroup_pointer_variants(ast)
         _, _, parameter_struct_failures = (
             self.collect_lowered_glsl_buffer_block_parameters(
                 self.collect_function_parameters(functions)
@@ -4236,6 +4277,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         stage_output_lowering=None,
         stage_node=None,
         _private_pointer_variant=None,
+        _workgroup_pointer_variant=None,
     ):
         """Render a function or stage entry point with HLSL semantics."""
         function_name = getattr(func, "name", None)
@@ -4263,10 +4305,44 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         stage_output_lowering=stage_output_lowering,
                         stage_node=stage_node,
                         _private_pointer_variant=variant,
+                        _workgroup_pointer_variant=_workgroup_pointer_variant,
                     )
             finally:
                 self.current_hlsl_private_pointer_variant = previous_variant
                 self.current_hlsl_private_pointer_base_names = previous_base_names
+            return code
+
+        workgroup_variants = self.function_hlsl_workgroup_pointer_backing_variants.get(
+            function_name
+        )
+        if _workgroup_pointer_variant is None and workgroup_variants:
+            previous_variant = self.current_hlsl_workgroup_pointer_variant
+            previous_base_names = self.current_hlsl_workgroup_pointer_base_names
+            parameters = self.function_hlsl_workgroup_pointer_parameters[function_name]
+            code = ""
+            try:
+                for variant in workgroup_variants:
+                    self.current_hlsl_workgroup_pointer_variant = {
+                        parameter.name: variant[index]
+                        for index, parameter in enumerate(parameters)
+                    }
+                    self.current_hlsl_workgroup_pointer_base_names = dict(
+                        self.function_hlsl_workgroup_pointer_base_names[function_name]
+                    )
+                    code += self.generate_function(
+                        func,
+                        indent=indent,
+                        shader_type=shader_type,
+                        execution_config=execution_config,
+                        entry_name=entry_name,
+                        stage_output_lowering=stage_output_lowering,
+                        stage_node=stage_node,
+                        _private_pointer_variant=_private_pointer_variant,
+                        _workgroup_pointer_variant=variant,
+                    )
+            finally:
+                self.current_hlsl_workgroup_pointer_variant = previous_variant
+                self.current_hlsl_workgroup_pointer_base_names = previous_base_names
             return code
 
         code = ""
@@ -4334,7 +4410,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.local_variable_types = {}
         self.current_identifier_aliases = {}
         self.current_hlsl_resource_pointer_offsets = {}
-        self.current_hlsl_resource_pointer_aliases = {}
+        self.current_hlsl_resource_pointer_aliases = {
+            name: dict(binding)
+            for name, binding in self.hlsl_global_groupshared_pointer_aliases.items()
+        }
         # Name of the SV_GroupIndex parameter an explicit @gl_SubgroupID compute
         # parameter needs injected, populated lazily while emitting parameters and
         # consumed by the post-loop compute-builtin parameter pass.
@@ -4380,6 +4459,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         for p in param_list:
             if id(p) in promoted_entry_resource_parameter_ids:
                 continue
+            self.current_hlsl_resource_pointer_aliases.pop(p.name, None)
             if hasattr(p, "param_type"):
                 raw_param_type = (
                     self.type_name_string(p.param_type)
@@ -4393,9 +4473,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self.local_variable_types[p.name] = self.type_name_string(raw_param_type)
 
             param_decl_type = self.type_name_string(raw_param_type)
-            param_type = self.hlsl_private_pointer_parameter_array_type(
+            param_type = self.hlsl_workgroup_pointer_parameter_array_type(
                 p, getattr(func, "name", None)
             )
+            if param_type is None:
+                param_type = self.hlsl_private_pointer_parameter_array_type(
+                    p, getattr(func, "name", None)
+                )
             if param_type is None:
                 param_type = self.map_resource_parameter_type_with_hint(
                     param_decl_type, p, getattr(func, "name", None)
@@ -4515,6 +4599,34 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 emitted_param_names.add(base_name)
                 self.current_identifier_reserved_names.add(base_name)
                 self.local_variable_types[base_name] = "int"
+            if self.hlsl_workgroup_pointer_declaration(p):
+                base_name = self.current_hlsl_workgroup_pointer_base_names[p.name]
+                params.append(f"int {base_name}")
+                emitted_param_names.add(base_name)
+                self.current_identifier_reserved_names.add(base_name)
+                self.local_variable_types[base_name] = "int"
+                qualifiers = {
+                    str(qualifier).lower()
+                    for qualifier in getattr(p, "qualifiers", []) or []
+                }
+                access = (
+                    "read"
+                    if qualifiers.intersection({"const", "constant", "readonly", "in"})
+                    else "read_write"
+                )
+                element_type = self.hlsl_workgroup_pointer_element_type(p)
+                self.current_hlsl_resource_pointer_aliases[p.name] = {
+                    "kind": "workgroup-pointer",
+                    "root": self.hlsl_declaration_identifier_name(p.name),
+                    "root_kind": "parameter",
+                    "offset": base_name,
+                    "array_size": self.current_hlsl_workgroup_pointer_variant[p.name],
+                    "element_type": element_type,
+                    "source_element_type": element_type,
+                    "resource_type": "groupshared",
+                    "access": access,
+                    "is_pointer_alias": True,
+                }
             if p.name in implicit_texture_samplers:
                 sampler_info = implicit_texture_samplers[p.name]
                 if sampler_info["synthetic"]:
@@ -6446,7 +6558,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return binding
 
     def generate_hlsl_private_pointer_view_access(
-        self, pointer_expression, index_expression=0
+        self,
+        pointer_expression,
+        index_expression=0,
+        *,
+        access_expression=None,
     ):
         binding = self.hlsl_private_pointer_view_binding(pointer_expression)
         if binding is None or binding.get("root_kind") not in {
@@ -6462,10 +6578,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     reason="side-effecting-view-offset",
                     source_location=getattr(index_expression, "source_location", None),
                 )
+            proven_zero_access = (
+                access_expression is not None
+                and id(access_expression)
+                in self.hlsl_private_pointer_zero_index_access_ids
+            )
             literal_index = self.literal_int_value(
                 index_expression, self.literal_int_constants
             )
-            if literal_index != 0:
+            if not proven_zero_access and not (
+                binding.get("offset") in {None, "", "0", "0u"} and literal_index == 0
+            ):
                 raise DirectXPrivatePointerParameterError(
                     "DirectX scalar private pointer views support only index zero",
                     function_name=self.current_function_name,
@@ -6503,6 +6626,66 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         return binding
 
+    def hlsl_workgroup_pointer_call_argument_binding(
+        self, function_name, argument_index, argument
+    ):
+        parameter_name = self.function_hlsl_workgroup_pointer_parameter_indices.get(
+            function_name, {}
+        ).get(argument_index)
+        if parameter_name is None:
+            materialized_name = self.hlsl_materialized_function_name(function_name)
+            parameter_name = self.function_hlsl_workgroup_pointer_parameter_indices.get(
+                materialized_name, {}
+            ).get(argument_index)
+            function_name = materialized_name
+        if parameter_name is None:
+            return None
+
+        binding = self.hlsl_resource_pointer_binding(argument)
+        if binding is None or binding.get("kind") != "workgroup-pointer":
+            raise self.hlsl_workgroup_pointer_error(
+                "DirectX workgroup pointer argument for "
+                f"'{function_name}.{parameter_name}' has no concrete shared-array "
+                "backing object",
+                function_name=function_name,
+                parameter_name=parameter_name,
+                reason="call-backing-unresolved",
+                node=argument,
+            )
+        extent = binding.get("array_size")
+        if not isinstance(extent, int) or extent <= 0:
+            raise self.hlsl_workgroup_pointer_error(
+                "DirectX workgroup pointer argument for "
+                f"'{function_name}.{parameter_name}' has no concrete shared-array "
+                "extent",
+                function_name=function_name,
+                parameter_name=parameter_name,
+                reason="missing-concrete-size",
+                node=argument,
+            )
+        parameters = self.function_hlsl_workgroup_pointer_parameters.get(
+            function_name, []
+        )
+        parameter = next(
+            (parameter for parameter in parameters if parameter.name == parameter_name),
+            None,
+        )
+        expected_type = (
+            self.hlsl_workgroup_pointer_element_type(parameter)
+            if parameter is not None
+            else None
+        )
+        if expected_type and binding.get("element_type") != expected_type:
+            raise self.hlsl_workgroup_pointer_error(
+                "DirectX workgroup pointer argument for "
+                f"'{function_name}.{parameter_name}' changes element type",
+                function_name=function_name,
+                parameter_name=parameter_name,
+                reason="element-type-mismatch",
+                node=argument,
+            )
+        return binding
+
     def hlsl_resource_pointer_element_type(self, resource_type):
         resource_type = str(resource_type or "").strip()
         if "<" not in resource_type or not resource_type.endswith(">"):
@@ -6511,18 +6694,52 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def hlsl_resource_pointer_alias_expression(self, expression):
         if isinstance(expression, str):
-            return expression in self.current_hlsl_resource_pointer_aliases
+            binding = self.current_hlsl_resource_pointer_aliases.get(expression)
+            return bool(binding and binding.get("is_pointer_alias"))
         if isinstance(expression, (IdentifierNode, VariableNode)):
-            return expression.name in self.current_hlsl_resource_pointer_aliases
+            binding = self.current_hlsl_resource_pointer_aliases.get(expression.name)
+            return bool(binding and binding.get("is_pointer_alias"))
         if isinstance(expression, BinaryOpNode) and expression.op in {"+", "-"}:
             return self.hlsl_resource_pointer_alias_expression(
                 expression.left
             ) or self.hlsl_resource_pointer_alias_expression(expression.right)
         return False
 
+    def hlsl_workgroup_pointer_bare_expression_error(self, expression):
+        name = (
+            expression
+            if isinstance(expression, str)
+            else getattr(expression, "name", None) or self.expression_name(expression)
+        )
+        binding = self.current_hlsl_resource_pointer_aliases.get(name)
+        if (
+            binding is None
+            or binding.get("kind") != "workgroup-pointer"
+            or not binding.get("is_pointer_alias")
+        ):
+            return
+        raise self.hlsl_workgroup_pointer_error(
+            "DirectX cannot emit a workgroup pointer as a first-class value: "
+            f"{name}",
+            function_name=self.current_function_name,
+            parameter_name=name,
+            reason="bare-pointer-expression",
+            node=expression if not isinstance(expression, str) else None,
+        )
+
     def hlsl_resource_pointer_binding(self, expression):
         if expression is None:
             return None
+
+        if isinstance(expression, ArrayAccessNode):
+            binding = self.hlsl_resource_pointer_binding(expression.array)
+            if binding is None:
+                return None
+            index = self.generate_expression(expression.index)
+            binding["offset"] = self.hlsl_resource_pointer_offset_sum(
+                binding.get("offset"), index
+            )
+            return binding
 
         if isinstance(expression, PointerReinterpretNode):
             binding = self.hlsl_resource_pointer_binding(expression.expression)
@@ -6569,9 +6786,43 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "access": access,
             }
 
+        if isinstance(expression, TernaryOpNode):
+            condition = self.literal_int_value(
+                expression.condition,
+                self.current_hlsl_visible_int_constants or self.literal_int_constants,
+            )
+            if condition is not None:
+                selected = expression.true_expr if condition else expression.false_expr
+                return self.hlsl_resource_pointer_binding(selected)
+            true_binding = self.hlsl_resource_pointer_binding(expression.true_expr)
+            false_binding = self.hlsl_resource_pointer_binding(expression.false_expr)
+            if (
+                true_binding is not None
+                and true_binding.get("kind") == "workgroup-pointer"
+                or false_binding is not None
+                and false_binding.get("kind") == "workgroup-pointer"
+            ):
+                raise self.hlsl_workgroup_pointer_error(
+                    "DirectX cannot prove the backing object selected by a "
+                    "workgroup pointer conditional",
+                    function_name=self.current_function_name,
+                    reason="conditional-backing-unresolved",
+                    node=expression,
+                )
+            return None
+
         if isinstance(expression, UnaryOpNode) and expression.op == "&":
             operand = expression.operand
             if not isinstance(operand, ArrayAccessNode):
+                binding = self.hlsl_resource_pointer_binding(operand)
+                if binding is not None and binding.get("kind") == "workgroup-pointer":
+                    raise self.hlsl_workgroup_pointer_error(
+                        "DirectX cannot lower the address of a workgroup pointer",
+                        function_name=self.current_function_name,
+                        parameter_name=self.expression_name(operand),
+                        reason="address-of-pointer",
+                        node=expression,
+                    )
                 return None
             binding = self.hlsl_resource_pointer_binding(operand.array)
             if binding is None:
@@ -6585,6 +6836,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if isinstance(expression, BinaryOpNode) and expression.op in {"+", "-"}:
             binding = self.hlsl_resource_pointer_binding(expression.left)
             delta = expression.right
+            if (
+                expression.op == "-"
+                and binding is not None
+                and binding.get("kind") == "workgroup-pointer"
+                and self.hlsl_resource_pointer_binding(expression.right) is not None
+            ):
+                raise self.hlsl_workgroup_pointer_error(
+                    "DirectX workgroup pointer difference is unsupported",
+                    function_name=self.current_function_name,
+                    reason="pointer-difference-unsupported",
+                    node=expression,
+                )
             if binding is None and expression.op == "+":
                 binding = self.hlsl_resource_pointer_binding(expression.right)
                 delta = expression.left
@@ -6660,15 +6923,42 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def generate_hlsl_resource_pointer_alias_declaration(self, node, indent):
         vtype = getattr(node, "var_type", getattr(node, "vtype", None))
-        if not isinstance(vtype, PointerType):
+        workgroup_declaration = self.hlsl_workgroup_pointer_declaration(
+            node, self.current_hlsl_resource_pointer_aliases
+        )
+        if not isinstance(vtype, PointerType) and not workgroup_declaration:
             return None
         binding = self.hlsl_resource_pointer_binding(
             getattr(node, "initial_value", None)
         )
         if binding is None:
+            if workgroup_declaration:
+                raise self.hlsl_workgroup_pointer_error(
+                    "DirectX cannot lower workgroup pointer alias "
+                    f"'{node.name}' without a concrete shared-array backing object",
+                    function_name=self.current_function_name,
+                    parameter_name=node.name,
+                    reason="backing-unresolved",
+                    node=node,
+                )
             return None
 
-        declared_element_type = self.hlsl_buffer_pointer_pointee_type(vtype)
+        is_workgroup_pointer = binding.get("kind") == "workgroup-pointer"
+        if is_workgroup_pointer and binding.get("array_size") is None:
+            raise self.hlsl_workgroup_pointer_error(
+                "DirectX cannot lower workgroup pointer alias "
+                f"'{node.name}' because its backing array extent is unresolved",
+                function_name=self.current_function_name,
+                parameter_name=node.name,
+                reason="missing-concrete-size",
+                node=node,
+            )
+
+        declared_element_type = (
+            self.hlsl_workgroup_pointer_element_type(node)
+            if workgroup_declaration
+            else self.hlsl_buffer_pointer_pointee_type(vtype)
+        )
         backing_element_type = binding.get("element_type")
         if (
             declared_element_type is not None
@@ -6677,6 +6967,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             != self.map_type(backing_element_type)
             and binding.get("pointer_reinterpretation") is None
         ):
+            if is_workgroup_pointer:
+                raise self.hlsl_workgroup_pointer_error(
+                    "DirectX workgroup pointer alias "
+                    f"'{node.name}' changes element type from "
+                    f"{backing_element_type} to {declared_element_type}",
+                    function_name=self.current_function_name,
+                    parameter_name=node.name,
+                    reason="element-type-mismatch",
+                    node=node,
+                )
             raise ValueError(
                 "DirectX resource pointer alias "
                 f"'{node.name}' changes element type from {backing_element_type} "
@@ -6693,6 +6993,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             else "read_write"
         )
         if required_access == "read_write" and binding.get("access") != "read_write":
+            if is_workgroup_pointer:
+                raise self.hlsl_workgroup_pointer_error(
+                    "DirectX workgroup pointer alias "
+                    f"'{node.name}' requires writable shared storage",
+                    function_name=self.current_function_name,
+                    parameter_name=node.name,
+                    reason="access-mismatch",
+                    node=node,
+                )
             raise ValueError(
                 "DirectX resource pointer alias "
                 f"'{node.name}' requires writable storage"
@@ -6711,13 +7020,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "offset": offset_name,
                 "element_type": declared_element_type or backing_element_type,
                 "access": required_access,
+                "is_pointer_alias": True,
             }
         )
         self.current_hlsl_resource_pointer_aliases[node.name] = binding
-        self.local_variable_types[offset_name] = "int64_t"
+        offset_type = "int" if is_workgroup_pointer else "int64_t"
+        self.local_variable_types[offset_name] = offset_type
         return (
-            f"{'    ' * indent}int64_t {offset_name} = "
-            f"int64_t({rendered_offset});\n"
+            f"{'    ' * indent}{offset_type} {offset_name} = "
+            f"{offset_type}({rendered_offset});\n"
         )
 
     def generate_hlsl_resource_pointer_alias_assignment(self, target, value, op):
@@ -6731,10 +7042,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return None
 
         offset_name = current["offset"]
+        offset_type = "int" if current.get("kind") == "workgroup-pointer" else "int64_t"
         if op in {"+=", "-="}:
             delta = self.generate_expression(value)
-            return f"{offset_name} {op} int64_t({delta})"
+            return f"{offset_name} {op} {offset_type}({delta})"
         if op != "=":
+            if current.get("kind") == "workgroup-pointer":
+                raise self.hlsl_workgroup_pointer_error(
+                    "DirectX cannot lower workgroup pointer operator "
+                    f"'{op}' for '{target_name}'",
+                    function_name=self.current_function_name,
+                    parameter_name=target_name,
+                    reason="assignment-operator-unsupported",
+                    node=target,
+                )
             raise ValueError(
                 f"DirectX cannot lower resource pointer operator '{op}' for "
                 f"'{target_name}'"
@@ -6742,16 +7063,43 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         replacement = self.hlsl_resource_pointer_binding(value)
         if replacement is None:
+            if current.get("kind") == "workgroup-pointer":
+                raise self.hlsl_workgroup_pointer_error(
+                    "DirectX workgroup pointer assignment has no concrete "
+                    f"shared-array backing object: {target_name}",
+                    function_name=self.current_function_name,
+                    parameter_name=target_name,
+                    reason="assignment-backing-unresolved",
+                    node=value,
+                )
             raise ValueError(
                 "DirectX resource pointer assignment has no concrete buffer "
                 f"backing object: {target_name}"
             )
         if replacement.get("root") != current.get("root"):
+            if current.get("kind") == "workgroup-pointer":
+                raise self.hlsl_workgroup_pointer_error(
+                    "DirectX cannot dynamically change the backing array for "
+                    f"workgroup pointer '{target_name}'",
+                    function_name=self.current_function_name,
+                    parameter_name=target_name,
+                    reason="dynamic-backing-reassignment",
+                    node=value,
+                )
             raise ValueError(
                 "DirectX cannot dynamically change the backing buffer for resource "
                 f"pointer '{target_name}'"
             )
         if replacement.get("element_type") != current.get("element_type"):
+            if current.get("kind") == "workgroup-pointer":
+                raise self.hlsl_workgroup_pointer_error(
+                    "DirectX workgroup pointer assignment changes element type "
+                    f"for '{target_name}'",
+                    function_name=self.current_function_name,
+                    parameter_name=target_name,
+                    reason="element-type-mismatch",
+                    node=value,
+                )
             raise ValueError(
                 "DirectX resource pointer assignment changes element type for "
                 f"'{target_name}'"
@@ -6767,8 +7115,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             **replacement,
             "offset": offset_name,
             "access": current.get("access"),
+            "is_pointer_alias": current.get("is_pointer_alias", False),
         }
-        return f"{offset_name} = int64_t({replacement['offset']})"
+        return f"{offset_name} = {offset_type}({replacement['offset']})"
 
     def generate_hlsl_resource_pointer_access(
         self, pointer_expression, index_expression=0, *, require_write=False
@@ -6796,7 +7145,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
 
         resource_name = self.hlsl_resource_type_name(binding.get("resource_type"))
-        if resource_name not in {
+        if binding.get("kind") != "workgroup-pointer" and resource_name not in {
             "Buffer",
             "StructuredBuffer",
             "RWBuffer",
@@ -7535,6 +7884,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 none_value = self.generate_hlsl_builtin_option_none_value()
                 if none_value is not None:
                     return none_value
+            self.hlsl_workgroup_pointer_bare_expression_error(expr)
             return expr
         elif isinstance(expr, bool):
             return "true" if expr else "false"
@@ -7598,6 +7948,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             enum_value = enum_value_expression(self, name)
             if enum_value != name:
                 return enum_value
+            self.hlsl_workgroup_pointer_bare_expression_error(expr)
             return self.hlsl_identifier_name(name)
         elif isinstance(expr, VariableNode):
             if self.is_hlsl_builtin_option_none_expression(expr):
@@ -7610,6 +7961,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             enum_value = enum_value_expression(self, expr.name)
             if enum_value != expr.name:
                 return enum_value
+            self.hlsl_workgroup_pointer_bare_expression_error(expr)
             return self.hlsl_identifier_name(expr.name)
         elif hasattr(expr, "__class__") and "BinaryOp" in str(expr.__class__):
             op = getattr(expr, "operator", getattr(expr, "op", "+"))
@@ -7658,7 +8010,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             mapped_op = self.map_operator(op)
             if mapped_op == "*" and not getattr(expr, "is_postfix", False):
                 private_pointee = self.generate_hlsl_private_pointer_view_access(
-                    expr.operand
+                    expr.operand, access_expression=expr
                 )
                 if private_pointee is not None:
                     return private_pointee
@@ -7696,7 +8048,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             array_expr = getattr(expr, "array_expr", getattr(expr, "array", ""))
             index_expr = getattr(expr, "index_expr", getattr(expr, "index", ""))
             private_pointer_access = self.generate_hlsl_private_pointer_view_access(
-                array_expr, index_expr
+                array_expr, index_expr, access_expression=expr
             )
             if private_pointer_access is not None:
                 return private_pointer_access
@@ -9493,9 +9845,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return pointer_offset
         binding = self.current_hlsl_resource_pointer_aliases.get(resource_name)
         if binding is not None:
+            if binding.get("kind") == "workgroup-pointer" and not binding.get(
+                "is_pointer_alias"
+            ):
+                return None
             return binding.get("offset")
         for alias_binding in self.current_hlsl_resource_pointer_aliases.values():
             if alias_binding.get("root") == resource_name:
+                if alias_binding.get("kind") == "workgroup-pointer":
+                    continue
                 return alias_binding.get("offset")
         return None
 
@@ -12469,6 +12827,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             is_private_pointer_parameter(parameter)
             and getattr(parameter_type, "is_mutable", True)
             and not set(qualifiers).intersection({"const", "in", "out", "inout"})
+        ):
+            qualifiers.append("inout")
+        if (
+            self.hlsl_workgroup_pointer_declaration(parameter)
+            and getattr(parameter_type, "is_mutable", True)
+            and not set(qualifiers).intersection({"const", "in", "out", "inout"})
+            and not source_qualifiers.intersection(
+                {"const", "constant", "readonly", "in"}
+            )
         ):
             qualifiers.append("inout")
         if (
@@ -16067,6 +16434,94 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         qualifiers = {str(value).lower() for value in getattr(node, "qualifiers", [])}
         return bool(qualifiers & {"groupshared", "shared", "threadgroup", "workgroup"})
 
+    def hlsl_workgroup_pointer_pointee_type(self, node):
+        raw_type = getattr(
+            node,
+            "param_type",
+            getattr(node, "var_type", getattr(node, "vtype", None)),
+        )
+        qualifiers = {
+            str(value).lower() for value in getattr(node, "qualifiers", []) or []
+        }
+        for attribute in getattr(node, "attributes", []) or []:
+            name = getattr(attribute, "name", None)
+            if name:
+                qualifiers.add(str(name).lower())
+        address_space = str(getattr(raw_type, "address_space", "") or "").lower()
+        if not (
+            qualifiers & {"groupshared", "shared", "threadgroup", "workgroup"}
+            or address_space in {"groupshared", "shared", "threadgroup", "workgroup"}
+        ):
+            return None
+        if isinstance(raw_type, PointerType):
+            return raw_type.pointee_type
+        raw_type_name = self.type_name_string(raw_type)
+        if isinstance(raw_type_name, str) and raw_type_name.rstrip().endswith("*"):
+            return raw_type_name.rstrip()[:-1].strip()
+        return None
+
+    def hlsl_workgroup_pointer_element_type(self, node):
+        pointee_type = self.hlsl_workgroup_pointer_pointee_type(node)
+        if pointee_type is None:
+            return None
+        return self.map_type(self.type_name_string(pointee_type))
+
+    def hlsl_workgroup_pointer_declaration(self, node, aliases=None):
+        if self.hlsl_workgroup_pointer_pointee_type(node) is not None:
+            return True
+        if aliases is None:
+            return False
+
+        raw_type = getattr(
+            node,
+            "param_type",
+            getattr(node, "var_type", getattr(node, "vtype", None)),
+        )
+        raw_type_name = self.type_name_string(raw_type)
+        if not isinstance(raw_type_name, str) or raw_type_name.strip() != "auto":
+            return False
+        initial_value = getattr(node, "initial_value", None)
+        if isinstance(initial_value, ArrayAccessNode):
+            return False
+        binding = self.hlsl_static_workgroup_pointer_binding(initial_value, aliases)
+        return binding is not None
+
+    def hlsl_groupshared_storage_binding(self, node, root_name):
+        declared_type = self.hlsl_groupshared_declaration_type(node)
+        declared_type_name = self.type_name_string(declared_type)
+        element_type, array_suffix = split_array_type_suffix(
+            str(declared_type_name or "")
+        )
+        if not array_suffix or array_suffix.count("[") != 1:
+            return None
+
+        constants = {
+            **self.literal_int_constants,
+            **self.hlsl_hoisted_groupshared_constants_by_declaration.get(id(node), {}),
+        }
+        raw_type = getattr(node, "var_type", getattr(node, "vtype", None))
+        array_size = self.literal_int_value(getattr(raw_type, "size", None), constants)
+        if array_size is None:
+            _element_type, array_size = parse_array_type(declared_type_name)
+        if (
+            not isinstance(array_size, int)
+            or isinstance(array_size, bool)
+            or array_size <= 0
+        ):
+            array_size = None
+
+        return {
+            "kind": "workgroup-pointer",
+            "root": root_name,
+            "root_kind": "concrete",
+            "offset": "0",
+            "array_size": array_size,
+            "element_type": self.map_type(element_type),
+            "source_element_type": self.map_type(element_type),
+            "resource_type": "groupshared",
+            "access": "read_write",
+        }
+
     def hlsl_emitted_functions_for_groupshared_lowering(self, ast, target_stage=None):
         functions = []
         seen = set()
@@ -16127,12 +16582,31 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.hlsl_hoisted_groupshared_constants_by_declaration = (
             constants_by_declaration
         )
+        global_aliases = {}
+        for node in emitted_stage_groupshared:
+            name = getattr(node, "name", None)
+            if not name:
+                continue
+            if self.hlsl_workgroup_pointer_declaration(node):
+                raise DirectXWorkgroupPointerError(
+                    "DirectX cannot declare a module-scope workgroup pointer",
+                    parameter_name=name,
+                    reason="pointer-storage-declaration",
+                    source_location=getattr(node, "source_location", None),
+                )
+            binding = self.hlsl_groupshared_storage_binding(node, name)
+            if binding is not None:
+                global_aliases[name] = binding
+
+        bindings_by_declaration = {}
         for func in emitted_functions:
             func_name = getattr(func, "name", None) or "shader"
             for node in self.walk_ast(getattr(func, "body", [])):
                 if not isinstance(node, VariableNode):
                     continue
                 if not self.hlsl_declaration_has_groupshared_qualifier(node):
+                    continue
+                if self.hlsl_workgroup_pointer_declaration(node):
                     continue
 
                 name = getattr(node, "name", None)
@@ -16147,10 +16621,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 declarations.append((node, alias))
                 aliases_by_declaration[id(node)] = alias
                 declaration_ids.add(id(node))
+                binding = self.hlsl_groupshared_storage_binding(node, alias)
+                if binding is not None:
+                    bindings_by_declaration[id(node)] = binding
 
         self.hlsl_hoisted_groupshared_declarations = declarations
         self.hlsl_hoisted_groupshared_aliases_by_declaration = aliases_by_declaration
         self.hlsl_hoisted_groupshared_declaration_ids = declaration_ids
+        self.hlsl_groupshared_pointer_bindings_by_declaration = bindings_by_declaration
+        self.hlsl_global_groupshared_pointer_aliases = global_aliases
 
     def collect_hlsl_groupshared_declaration_constants(self, func):
         # A hoisted declaration must retain the constants visible at its original
@@ -16288,6 +16767,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if declared_type_text:
             self.local_variable_types[name] = declared_type_text
             self.local_variable_types[alias] = declared_type_text
+        binding = self.hlsl_groupshared_pointer_bindings_by_declaration.get(id(node))
+        if binding is not None:
+            self.current_hlsl_resource_pointer_aliases[name] = dict(binding)
+            self.current_hlsl_resource_pointer_aliases[alias] = dict(binding)
         return True
 
     def hlsl_groupshared_declarations_to_emit(self, stage_groupshared_vars):
@@ -16298,6 +16781,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return declarations
 
     def generate_hlsl_hoisted_groupshared_declaration(self, node, alias):
+        if self.hlsl_workgroup_pointer_declaration(node):
+            raise DirectXWorkgroupPointerError(
+                "DirectX workgroup pointer aliases cannot be emitted as "
+                "groupshared pointer declarations",
+                parameter_name=getattr(node, "name", None),
+                reason="pointer-storage-declaration",
+                source_location=getattr(node, "source_location", None),
+            )
         vtype = self.hlsl_groupshared_declaration_type(node)
         name = alias or getattr(node, "name", None)
         declaration = format_c_style_array_declaration(self.map_type(vtype), name)
@@ -16309,6 +16800,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if not isinstance(node, VariableNode):
                 continue
             if not self.hlsl_declaration_has_groupshared_qualifier(node):
+                continue
+            if self.hlsl_workgroup_pointer_declaration(node):
                 continue
             if id(node) in self.hlsl_hoisted_groupshared_declaration_ids:
                 continue
@@ -18584,6 +19077,539 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             initial_literal_int_constants=self.initial_literal_int_constants,
         )
 
+    def hlsl_static_workgroup_pointer_binding(
+        self, expression, aliases, constants=None
+    ):
+        if expression is None:
+            return None
+
+        if isinstance(expression, ArrayAccessNode):
+            binding = self.hlsl_static_workgroup_pointer_binding(
+                expression.array, aliases, constants
+            )
+            if binding is None:
+                return None
+            binding["offset"] = self.hlsl_static_workgroup_pointer_offset_sum(
+                binding.get("offset"), expression.index
+            )
+            return binding
+
+        if isinstance(expression, (str, IdentifierNode, VariableNode)):
+            raw_name = (
+                expression
+                if isinstance(expression, str)
+                else getattr(expression, "name", None)
+            )
+            binding = aliases.get(raw_name)
+            if binding is not None and binding.get("kind") == "workgroup-pointer":
+                return dict(binding)
+            return None
+
+        if isinstance(expression, TernaryOpNode):
+            condition = self.literal_int_value(expression.condition, constants or {})
+            if condition is None:
+                return None
+            selected = expression.true_expr if condition else expression.false_expr
+            return self.hlsl_static_workgroup_pointer_binding(
+                selected, aliases, constants
+            )
+
+        if isinstance(expression, UnaryOpNode) and expression.op == "&":
+            operand = expression.operand
+            if isinstance(operand, ArrayAccessNode):
+                return self.hlsl_static_workgroup_pointer_binding(
+                    operand, aliases, constants
+                )
+            return None
+
+        if isinstance(expression, BinaryOpNode) and expression.op in {"+", "-"}:
+            binding = self.hlsl_static_workgroup_pointer_binding(
+                expression.left, aliases, constants
+            )
+            delta = expression.right
+            if binding is None and expression.op == "+":
+                binding = self.hlsl_static_workgroup_pointer_binding(
+                    expression.right, aliases, constants
+                )
+                delta = expression.left
+            if binding is None:
+                return None
+            if expression.op == "-":
+                delta = UnaryOpNode("-", delta)
+            binding["offset"] = self.hlsl_static_workgroup_pointer_offset_sum(
+                binding.get("offset"), delta
+            )
+            return binding
+
+        return None
+
+    def hlsl_static_workgroup_pointer_offset_sum(self, base, delta):
+        if base in {None, 0, "0", "0u"}:
+            return delta
+        if delta in {None, 0, "0", "0u"}:
+            return base
+        return BinaryOpNode(base, "+", delta)
+
+    def hlsl_workgroup_pointer_error(
+        self,
+        message,
+        *,
+        function_name=None,
+        parameter_name=None,
+        reason=None,
+        node=None,
+    ):
+        return DirectXWorkgroupPointerError(
+            message,
+            function_name=function_name,
+            parameter_name=parameter_name,
+            reason=reason,
+            source_location=getattr(node, "source_location", None),
+        )
+
+    def collect_hlsl_workgroup_pointer_variants(self, ast):
+        functions = list(self.collect_functions(ast))
+        functions.extend(getattr(self, "generic_function_specializations", {}).values())
+        functions_by_name = {}
+        for function in functions:
+            function_name = getattr(function, "name", None)
+            if not function_name or generic_function_parameters(function):
+                continue
+            functions_by_name[function_name] = function
+
+        pointer_parameters = {}
+        pointer_parameter_indices = {}
+        pointer_base_names = {}
+        for function_name, function in functions_by_name.items():
+            parameters = list(
+                getattr(function, "parameters", getattr(function, "params", [])) or []
+            )
+            workgroup_parameters = [
+                parameter
+                for parameter in parameters
+                if self.hlsl_workgroup_pointer_declaration(parameter)
+            ]
+            if not workgroup_parameters:
+                continue
+            pointer_parameters[function_name] = workgroup_parameters
+            pointer_parameter_indices[function_name] = {
+                index: parameter.name
+                for index, parameter in enumerate(parameters)
+                if self.hlsl_workgroup_pointer_declaration(parameter)
+            }
+            used_names = {getattr(parameter, "name", None) for parameter in parameters}
+            used_names.update(self.collect_hlsl_function_identifier_names(function))
+            base_names = {}
+            for parameter in workgroup_parameters:
+                base_name = self.hlsl_unique_local_identifier(
+                    f"{parameter.name}_offset", used_names
+                )
+                used_names.add(base_name)
+                base_names[parameter.name] = base_name
+            pointer_base_names[function_name] = base_names
+
+        self.function_hlsl_workgroup_pointer_parameters = pointer_parameters
+        self.function_hlsl_workgroup_pointer_parameter_indices = (
+            pointer_parameter_indices
+        )
+        self.function_hlsl_workgroup_pointer_base_names = pointer_base_names
+        if not pointer_parameters:
+            return
+
+        calls_by_caller = {function_name: [] for function_name in functions_by_name}
+        for function_name, function in functions_by_name.items():
+            self.hlsl_analyze_workgroup_pointer_function(
+                function,
+                pointer_parameters,
+                pointer_parameter_indices,
+                calls_by_caller[function_name],
+            )
+
+        variants = {function_name: set() for function_name in pointer_parameters}
+        parameter_positions = {
+            function_name: {
+                parameter.name: index for index, parameter in enumerate(parameters)
+            }
+            for function_name, parameters in pointer_parameters.items()
+        }
+        changed = True
+        while changed:
+            changed = False
+            for caller_name, calls in calls_by_caller.items():
+                caller_parameters = pointer_parameters.get(caller_name, [])
+                caller_variants = variants.get(caller_name, {()})
+                if caller_parameters and not caller_variants:
+                    continue
+                for caller_variant in tuple(caller_variants):
+                    for call in calls:
+                        callee_variant = []
+                        for parameter in pointer_parameters[call["callee"]]:
+                            binding = call["bindings"][parameter.name]
+                            if binding.get("root_kind") == "concrete":
+                                extent = binding.get("array_size")
+                            elif binding.get("root_kind") == "parameter":
+                                position = parameter_positions.get(caller_name, {}).get(
+                                    binding.get("root")
+                                )
+                                extent = (
+                                    caller_variant[position]
+                                    if position is not None
+                                    and position < len(caller_variant)
+                                    else None
+                                )
+                            else:
+                                extent = None
+                            if not isinstance(extent, int) or extent <= 0:
+                                raise self.hlsl_workgroup_pointer_error(
+                                    "DirectX workgroup pointer argument for "
+                                    f"'{call['callee']}.{parameter.name}' has no "
+                                    "concrete shared-array extent",
+                                    function_name=call["callee"],
+                                    parameter_name=parameter.name,
+                                    reason="missing-concrete-size",
+                                    node=call["node"],
+                                )
+                            callee_variant.append(extent)
+                        callee_variant = tuple(callee_variant)
+                        if callee_variant not in variants[call["callee"]]:
+                            variants[call["callee"]].add(callee_variant)
+                            if len(variants[call["callee"]]) > 64:
+                                raise self.hlsl_workgroup_pointer_error(
+                                    "DirectX workgroup pointer specialization "
+                                    f"for '{call['callee']}' exceeds 64 concrete "
+                                    "array contracts",
+                                    function_name=call["callee"],
+                                    reason="variant-limit-exceeded",
+                                    node=call["node"],
+                                )
+                            changed = True
+
+        for function_name, parameters in pointer_parameters.items():
+            if variants[function_name]:
+                continue
+            function = functions_by_name[function_name]
+            referenced_names = {
+                getattr(node, "name", None)
+                for node in self.walk_ast(getattr(function, "body", []))
+                if isinstance(node, (IdentifierNode, VariableNode))
+            }
+            if all(parameter.name not in referenced_names for parameter in parameters):
+                variants[function_name].add(tuple(1 for _parameter in parameters))
+                continue
+            parameter = parameters[0]
+            raise self.hlsl_workgroup_pointer_error(
+                "DirectX workgroup pointer parameter "
+                f"'{function_name}.{parameter.name}' has no call with a concrete "
+                "shared-array backing object",
+                function_name=function_name,
+                parameter_name=parameter.name,
+                reason="missing-concrete-size",
+                node=parameter,
+            )
+
+        self.function_hlsl_workgroup_pointer_backing_variants = {
+            function_name: tuple(sorted(function_variants))
+            for function_name, function_variants in variants.items()
+        }
+
+    def hlsl_analyze_workgroup_pointer_function(
+        self,
+        function,
+        pointer_parameters,
+        pointer_parameter_indices,
+        calls,
+    ):
+        function_name = getattr(function, "name", None)
+        constants = self.visible_literal_int_constants(function)
+        initial_aliases = {
+            name: dict(binding)
+            for name, binding in self.hlsl_global_groupshared_pointer_aliases.items()
+        }
+        for parameter in (
+            getattr(function, "parameters", getattr(function, "params", [])) or []
+        ):
+            initial_aliases.pop(getattr(parameter, "name", None), None)
+        for parameter in pointer_parameters.get(function_name, []):
+            element_type = self.hlsl_workgroup_pointer_element_type(parameter)
+            initial_aliases[parameter.name] = {
+                "kind": "workgroup-pointer",
+                "root": parameter.name,
+                "root_kind": "parameter",
+                "offset": 0,
+                "array_size": None,
+                "element_type": element_type,
+                "source_element_type": element_type,
+                "resource_type": "groupshared",
+                "access": "read_write",
+            }
+
+        def call_name(node, arguments):
+            name = self.function_call_name(node)
+            specialized_name = generic_function_call_name(self, name, arguments)
+            candidates = [
+                specialized_name,
+                self.hlsl_materialized_function_name(specialized_name),
+                self.hlsl_materialized_function_name(name),
+                name,
+            ]
+            return next(
+                (
+                    candidate
+                    for candidate in candidates
+                    if candidate in pointer_parameters
+                ),
+                None,
+            )
+
+        def visit(value, aliases, control_depth=0):
+            if value is None or isinstance(value, (str, int, float, bool)):
+                return
+            if isinstance(value, (list, tuple)):
+                for item in value:
+                    visit(item, aliases, control_depth)
+                return
+            if isinstance(value, BlockNode):
+                block_aliases = dict(aliases)
+                for statement in getattr(value, "statements", []) or []:
+                    visit(statement, block_aliases, control_depth)
+                return
+            if isinstance(value, VariableNode):
+                initial_value = getattr(value, "initial_value", None)
+                visit(initial_value, aliases, control_depth)
+                initial_binding = self.hlsl_static_workgroup_pointer_binding(
+                    initial_value, aliases, constants
+                )
+                aliases.pop(value.name, None)
+                storage_binding = (
+                    self.hlsl_groupshared_pointer_bindings_by_declaration.get(id(value))
+                )
+                if storage_binding is not None:
+                    aliases[value.name] = dict(storage_binding)
+                    return
+                if not self.hlsl_workgroup_pointer_declaration(value, aliases):
+                    return
+                if initial_binding is None:
+                    raise self.hlsl_workgroup_pointer_error(
+                        "DirectX cannot lower workgroup pointer alias "
+                        f"'{value.name}' without a concrete shared-array backing "
+                        "object",
+                        function_name=function_name,
+                        parameter_name=value.name,
+                        reason="backing-unresolved",
+                        node=value,
+                    )
+                if (
+                    initial_binding.get("root_kind") == "concrete"
+                    and initial_binding.get("array_size") is None
+                ):
+                    raise self.hlsl_workgroup_pointer_error(
+                        "DirectX cannot lower workgroup pointer alias "
+                        f"'{value.name}' because its backing array extent is "
+                        "unresolved",
+                        function_name=function_name,
+                        parameter_name=value.name,
+                        reason="missing-concrete-size",
+                        node=value,
+                    )
+                declared_type = self.hlsl_workgroup_pointer_element_type(value)
+                if declared_type and declared_type != initial_binding.get(
+                    "element_type"
+                ):
+                    raise self.hlsl_workgroup_pointer_error(
+                        "DirectX workgroup pointer alias "
+                        f"'{value.name}' changes element type",
+                        function_name=function_name,
+                        parameter_name=value.name,
+                        reason="element-type-mismatch",
+                        node=value,
+                    )
+                aliases[value.name] = {
+                    **initial_binding,
+                    "element_type": (
+                        declared_type or initial_binding.get("element_type")
+                    ),
+                }
+                return
+            if isinstance(value, AssignmentNode):
+                target = getattr(value, "target", getattr(value, "left", None))
+                assigned = getattr(value, "value", getattr(value, "right", None))
+                visit(assigned, aliases, control_depth)
+                if not isinstance(target, (str, IdentifierNode, VariableNode)):
+                    visit(target, aliases, control_depth)
+                    return
+                target_name = self.expression_name(target)
+                current = aliases.get(target_name)
+                if current is None or current.get("kind") != "workgroup-pointer":
+                    visit(target, aliases, control_depth)
+                    return
+                operator = self.map_operator(
+                    getattr(value, "operator", getattr(value, "op", "="))
+                )
+                if control_depth > 0:
+                    raise self.hlsl_workgroup_pointer_error(
+                        "DirectX cannot preserve workgroup pointer reassignment "
+                        f"for '{target_name}' across nested control flow",
+                        function_name=function_name,
+                        parameter_name=target_name,
+                        reason="dynamic-control-flow-reassignment",
+                        node=value,
+                    )
+                if operator in {"+=", "-="}:
+                    return
+                if operator != "=":
+                    raise self.hlsl_workgroup_pointer_error(
+                        "DirectX cannot lower workgroup pointer operator "
+                        f"'{operator}' for '{target_name}'",
+                        function_name=function_name,
+                        parameter_name=target_name,
+                        reason="assignment-operator-unsupported",
+                        node=value,
+                    )
+                replacement = self.hlsl_static_workgroup_pointer_binding(
+                    assigned, aliases, constants
+                )
+                if replacement is None:
+                    raise self.hlsl_workgroup_pointer_error(
+                        "DirectX workgroup pointer assignment has no concrete "
+                        f"shared-array backing object: {target_name}",
+                        function_name=function_name,
+                        parameter_name=target_name,
+                        reason="assignment-backing-unresolved",
+                        node=value,
+                    )
+                if replacement.get("root") != current.get("root"):
+                    raise self.hlsl_workgroup_pointer_error(
+                        "DirectX cannot dynamically change the backing array for "
+                        f"workgroup pointer '{target_name}'",
+                        function_name=function_name,
+                        parameter_name=target_name,
+                        reason="dynamic-backing-reassignment",
+                        node=value,
+                    )
+                if replacement.get("element_type") != current.get("element_type"):
+                    raise self.hlsl_workgroup_pointer_error(
+                        "DirectX workgroup pointer assignment changes element type "
+                        f"for '{target_name}'",
+                        function_name=function_name,
+                        parameter_name=target_name,
+                        reason="element-type-mismatch",
+                        node=value,
+                    )
+                aliases[target_name] = replacement
+                return
+            if isinstance(value, FunctionCallNode):
+                arguments = list(
+                    getattr(value, "arguments", getattr(value, "args", [])) or []
+                )
+                callee_name = call_name(value, arguments)
+                if callee_name is not None:
+                    bindings = {}
+                    for index, parameter_name in pointer_parameter_indices[
+                        callee_name
+                    ].items():
+                        argument = arguments[index] if index < len(arguments) else None
+                        binding = self.hlsl_static_workgroup_pointer_binding(
+                            argument, aliases, constants
+                        )
+                        if binding is None:
+                            raise self.hlsl_workgroup_pointer_error(
+                                "DirectX workgroup pointer argument for "
+                                f"'{callee_name}.{parameter_name}' has no concrete "
+                                "shared-array backing object",
+                                function_name=callee_name,
+                                parameter_name=parameter_name,
+                                reason="call-backing-unresolved",
+                                node=argument or value,
+                            )
+                        parameter = next(
+                            parameter
+                            for parameter in pointer_parameters[callee_name]
+                            if parameter.name == parameter_name
+                        )
+                        expected_type = self.hlsl_workgroup_pointer_element_type(
+                            parameter
+                        )
+                        if binding.get("element_type") != expected_type:
+                            raise self.hlsl_workgroup_pointer_error(
+                                "DirectX workgroup pointer argument for "
+                                f"'{callee_name}.{parameter_name}' changes element "
+                                "type",
+                                function_name=callee_name,
+                                parameter_name=parameter_name,
+                                reason="element-type-mismatch",
+                                node=argument or value,
+                            )
+                        bindings[parameter_name] = binding
+                    calls.append(
+                        {
+                            "caller": function_name,
+                            "callee": callee_name,
+                            "node": value,
+                            "bindings": bindings,
+                        }
+                    )
+                for argument in arguments:
+                    visit(argument, aliases, control_depth)
+                return
+            if isinstance(value, IfNode):
+                visit(getattr(value, "condition", None), aliases, control_depth)
+                visit(
+                    getattr(value, "then_branch", None),
+                    dict(aliases),
+                    control_depth + 1,
+                )
+                visit(
+                    getattr(value, "else_branch", None),
+                    dict(aliases),
+                    control_depth + 1,
+                )
+                return
+            if isinstance(value, ForNode):
+                loop_aliases = dict(aliases)
+                visit(getattr(value, "init", None), loop_aliases, control_depth + 1)
+                visit(
+                    getattr(value, "condition", None),
+                    loop_aliases,
+                    control_depth + 1,
+                )
+                visit(getattr(value, "body", None), loop_aliases, control_depth + 1)
+                visit(getattr(value, "update", None), loop_aliases, control_depth + 1)
+                return
+            if isinstance(value, (ForInNode, WhileNode, DoWhileNode, LoopNode)):
+                loop_aliases = dict(aliases)
+                visit(
+                    getattr(value, "iterable", None),
+                    loop_aliases,
+                    control_depth + 1,
+                )
+                visit(
+                    getattr(value, "condition", None),
+                    loop_aliases,
+                    control_depth + 1,
+                )
+                visit(getattr(value, "body", None), loop_aliases, control_depth + 1)
+                return
+            if isinstance(value, UnaryOpNode) and value.op in {"++", "--"}:
+                operand_name = self.expression_name(value.operand)
+                binding = aliases.get(operand_name)
+                if binding is not None and binding.get("kind") == "workgroup-pointer":
+                    raise self.hlsl_workgroup_pointer_error(
+                        "DirectX cannot lower workgroup pointer operator "
+                        f"'{value.op}' for '{operand_name}'",
+                        function_name=function_name,
+                        parameter_name=operand_name,
+                        reason="assignment-operator-unsupported",
+                        node=value,
+                    )
+            if not hasattr(value, "__dict__"):
+                return
+            for key, child in vars(value).items():
+                if key in {"parent", "annotations", "name", "args"}:
+                    continue
+                visit(child, aliases, control_depth)
+
+        visit(getattr(function, "body", []), initial_aliases)
+
     def collect_private_pointer_array_size_hints(self, ast):
         functions = self.collect_functions(ast)
         functions_by_name = {
@@ -19158,6 +20184,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     reason="negative-view-access",
                     source_location=getattr(source, "source_location", None),
                 )
+            if lower == 0 and upper == 0:
+                self.hlsl_private_pointer_zero_index_access_ids.add(id(source))
             direct_spans[binding["root"]] = max(
                 direct_spans[binding["root"]], upper + 1
             )
@@ -20319,6 +21347,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if not parameter_types and type_func_name != func_name:
             parameter_types = self.function_parameter_types.get(func_name)
         parameter_types = parameter_types or []
+        workgroup_pointer_func_name = type_func_name or func_name
+        workgroup_pointer_indices = (
+            self.function_hlsl_workgroup_pointer_parameter_indices.get(
+                workgroup_pointer_func_name, {}
+            )
+        )
         rendered_args = []
         for index, arg in enumerate(args):
             expected_type = (
@@ -20337,14 +21371,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         "argument; a materialized array temporary is required"
                     ),
                 )
-            rendered_args.append(
-                self.generate_expression_with_expected(arg, expected_type)
-            )
+            if index in workgroup_pointer_indices:
+                rendered_args.append("")
+            else:
+                rendered_args.append(
+                    self.generate_expression_with_expected(arg, expected_type)
+                )
         return self.generate_call_arguments_from_rendered(
             func_name,
             args,
             rendered_args,
             private_pointer_func_name=type_func_name or func_name,
+            workgroup_pointer_func_name=workgroup_pointer_func_name,
         )
 
     def generate_call_arguments_from_rendered(
@@ -20353,24 +21391,37 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         args,
         rendered_args,
         private_pointer_func_name=None,
+        workgroup_pointer_func_name=None,
     ):
         generated_args = []
         implicit_samplers = self.implicit_texture_sampler_parameters.get(func_name, {})
         param_names = self.function_parameter_names.get(func_name, [])
         private_pointer_func_name = private_pointer_func_name or func_name
+        workgroup_pointer_func_name = workgroup_pointer_func_name or func_name
 
         for index, arg in enumerate(args):
-            private_binding = self.hlsl_private_pointer_call_argument_binding(
-                private_pointer_func_name, index, arg
+            workgroup_binding = self.hlsl_workgroup_pointer_call_argument_binding(
+                workgroup_pointer_func_name, index, arg
             )
-            if private_binding is None:
-                generated_args.append(rendered_args[index])
-            elif private_binding.get("scalar"):
-                generated_args.append(private_binding["backing"])
-            else:
+            if workgroup_binding is not None:
                 generated_args.extend(
-                    [private_binding["backing"], private_binding["offset"]]
+                    [
+                        workgroup_binding["root"],
+                        f"int({workgroup_binding.get('offset', '0')})",
+                    ]
                 )
+            else:
+                private_binding = self.hlsl_private_pointer_call_argument_binding(
+                    private_pointer_func_name, index, arg
+                )
+                if private_binding is None:
+                    generated_args.append(rendered_args[index])
+                elif private_binding.get("scalar"):
+                    generated_args.append(private_binding["backing"])
+                else:
+                    generated_args.extend(
+                        [private_binding["backing"], private_binding["offset"]]
+                    )
             if index >= len(param_names):
                 continue
             texture_param = param_names[index]
@@ -25149,6 +26200,34 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         ):
             return self.map_type(pointee_type)
         return f"{self.map_type(pointee_type)}[{size}]"
+
+    def hlsl_workgroup_pointer_parameter_array_type(self, parameter, function_name):
+        if not self.hlsl_workgroup_pointer_declaration(parameter):
+            return None
+        parameter_name = getattr(parameter, "name", None)
+        size = self.current_hlsl_workgroup_pointer_variant.get(parameter_name)
+        if not isinstance(size, int) or size <= 0:
+            raise DirectXWorkgroupPointerError(
+                "DirectX workgroup pointer parameter "
+                f"'{function_name}.{parameter_name}' requires a concrete "
+                "shared-array extent",
+                function_name=function_name,
+                parameter_name=parameter_name,
+                reason="missing-concrete-size",
+                source_location=getattr(parameter, "source_location", None),
+            )
+        element_type = self.hlsl_workgroup_pointer_element_type(parameter)
+        if element_type is None or element_type.endswith("*"):
+            raise DirectXWorkgroupPointerError(
+                "DirectX workgroup pointer parameter "
+                f"'{function_name}.{parameter_name}' has an unsupported pointee "
+                "type",
+                function_name=function_name,
+                parameter_name=parameter_name,
+                reason="unsupported-pointee-type",
+                source_location=getattr(parameter, "source_location", None),
+            )
+        return f"{element_type}[{size}]"
 
     def hlsl_metal_buffer_pointer_resource_type(self, vtype, node=None):
         if node is None:
