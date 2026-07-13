@@ -3891,6 +3891,164 @@ def test_glsl_repeated_struct_uniform_resources_use_distinct_block_names(tmp_pat
     )
 
 
+def test_glsl_uniform_backed_struct_used_as_value_emits_standalone_type(tmp_path):
+    code = """
+    shader UniformBackedValueStruct {
+        struct ValueParams {
+            uint count;
+            vec2 offset;
+        };
+
+        layout(binding = 2) uniform ValueParams valueParams;
+
+        ValueParams roundTrip(ValueParams value) {
+            ValueParams localValue = value;
+            return localValue;
+        }
+
+        compute {
+            void main() {
+                ValueParams localValue = ValueParams(
+                    valueParams.count, valueParams.offset);
+                ValueParams copied = roundTrip(localValue);
+                float selected = float(copied.count) + copied.offset.x;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "compute")
+
+    assert "struct ValueParams {" in generated
+    assert "layout(std140, binding = 2) uniform ValueParams_valueParams {" in generated
+    assert "} valueParams;" in generated
+    assert "ValueParams roundTrip(ValueParams value)" in generated
+    assert "ValueParams localValue = value;" in generated
+    assert "return localValue;" in generated
+    assert "ValueParams copied = roundTrip(localValue);" in generated
+
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "uniform_backed_value_struct"
+    )
+
+
+def test_glsl_uniform_block_instance_passed_by_value_lowers_to_constructor(tmp_path):
+    code = """
+    shader UniformBlockValueArgument {
+        struct NestedParams {
+            vec2 offset;
+        };
+
+        struct CopyParams {
+            NestedParams nested;
+            float weights[2];
+            uint count;
+        };
+
+        layout(binding = 4) uniform CopyParams sourceParams;
+
+        float score(CopyParams value) {
+            return value.nested.offset.x + value.weights[1] + float(value.count);
+        }
+
+        compute {
+            void main() {
+                float selected = score(sourceParams);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "compute")
+
+    assert "struct NestedParams {" in generated
+    assert "struct CopyParams {" in generated
+    assert "layout(std140, binding = 4) uniform CopyParams_sourceParams {" in generated
+    assert "} sourceParams;" in generated
+    assert "value.nested.offset.x" in generated
+    assert "value.weights[1]" in generated
+    assert "float(value.count)" in generated
+    assert (
+        "score(CopyParams(sourceParams.nested, sourceParams.weights, "
+        "sourceParams.count))" in generated
+    )
+    assert "score(sourceParams)" not in generated
+
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "uniform_block_value_argument"
+    )
+
+
+def test_glsl_uniform_block_array_element_passed_by_value_lowers_to_constructor(
+    tmp_path,
+):
+    code = """
+    shader UniformBlockArrayValueArgument {
+        struct ArrayParams {
+            vec2 offset;
+            uint count;
+        };
+
+        layout(binding = 6) uniform ArrayParams params[2];
+
+        float score(ArrayParams value) {
+            return value.offset.y + float(value.count);
+        }
+
+        compute {
+            void main() {
+                float selected = score(params[1]);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "compute")
+
+    assert "struct ArrayParams {" in generated
+    assert "layout(std140, binding = 6) uniform ArrayParams_params {" in generated
+    assert "} params[2];" in generated
+    assert "value.offset.y" in generated
+    assert "float(value.count)" in generated
+    assert "score(ArrayParams(params[1].offset, params[1].count))" in generated
+    assert "score(params[1])" not in generated
+
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "uniform_block_array_value_argument"
+    )
+
+
+def test_glsl_resource_only_struct_remains_interface_block_only(tmp_path):
+    code = """
+    shader ResourceOnlyStruct {
+        struct ResourceLayout {
+            vec4 color;
+            uint count;
+        };
+
+        layout(binding = 9) uniform ResourceLayout params;
+
+        compute {
+            void main() {
+                float selected = params.color.x + float(params.count);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "compute")
+
+    assert "struct ResourceLayout {" not in generated
+    assert "layout(std140, binding = 9) uniform ResourceLayout {" in generated
+    assert "} params;" in generated
+    assert "params.color.x" in generated
+    assert "float(params.count)" in generated
+
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "resource_only_struct_block"
+    )
+
+
 def test_glsl_repeated_struct_storage_resources_use_distinct_block_names(tmp_path):
     code = """
     shader RepeatedStructStorageBlocks {
