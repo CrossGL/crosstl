@@ -3,18 +3,62 @@
   "repository": "https://github.com/ml-explore/mlx",
   "commit": "968d264f2903d578e699c4452a4dbf48633921aa",
   "frontier_status": {
-    "status": "blocked-by-semantic-contract",
-    "sources": 12,
+    "status": "structurally-validated",
+    "scope": "clean-frontier",
+    "sources": 11,
     "targets": [
       "directx",
       "vulkan"
     ],
-    "artifacts": 24,
+    "artifacts": 22,
     "structural_validation_status": "validated",
+    "semantic_readiness_status": "not-established",
+    "blocked_by": [],
+    "excluded_blocked_sources": [
+      "mlx/backend/metal/kernels/fence.metal"
+    ],
+    "runtime_integration_included": false,
+    "runtime_parity_claimed": false
+  },
+  "fence_contract_status": {
+    "status": "blocked-as-expected",
+    "source": "mlx/backend/metal/kernels/fence.metal",
+    "targets": [
+      "directx",
+      "opengl",
+      "vulkan"
+    ],
+    "artifact_records": 3,
+    "translated_artifacts": 0,
+    "failed_artifacts": 3,
+    "emitted_artifacts": 0,
+    "requested_contract": {
+      "memory_flags": [
+        "mem_device"
+      ],
+      "memory_order": "memory_order_seq_cst",
+      "thread_scope": "thread_scope_system"
+    },
+    "diagnostics": {
+      "directx": {
+        "code": "project.translate.directx-atomic-fence-unsupported",
+        "missing_capability": "directx.atomic-thread-fence-contract-lowering"
+      },
+      "opengl": {
+        "code": "project.translate.opengl-atomic-fence-unsupported",
+        "missing_capability": "opengl.atomic-thread-fence-contract-lowering"
+      },
+      "vulkan": {
+        "code": "project.translate.vulkan-atomic-fence-unsupported",
+        "missing_capability": "spirv.atomic-thread-fence-contract-lowering"
+      }
+    },
     "semantic_readiness_status": "blocked",
     "blocked_by": [
       "https://github.com/CrossGL/crosstl/issues/1537"
-    ]
+    ],
+    "runtime_integration_included": false,
+    "runtime_parity_claimed": false
   },
   "metal_roundtrip_status": {
     "status": "native-compilation-validated",
@@ -301,20 +345,20 @@
   },
   "directx_toolchain_status": {
     "status": "passing",
-    "note": "Windows CI compiles every discovered entry in the generated DirectX HLSL for the verified subset below. Other clean frontier kernels translate to DirectX but remain outside the compile gate for the listed structural or semantic defects.",
+    "note": "Windows CI compiles every discovered entry in the generated DirectX HLSL for the verified subset below. Other clean frontier kernels translate to DirectX but remain outside the compile gate for the listed structural or semantic defects. fence.metal is a separate blocked source and emits no DirectX artifact under its atomic-fence contract diagnostic.",
     "dxc_validated_sources": [
       "mlx/backend/metal/kernels/arange.metal",
       "mlx/backend/metal/kernels/arg_reduce.metal",
-      "mlx/backend/metal/kernels/fence.metal",
       "mlx/backend/metal/kernels/rope.metal"
     ],
     "directx_toolchain_gaps": {
+      "mlx/backend/metal/kernels/fence.metal": "the requested mem_device, memory_order_seq_cst, thread_scope_system atomic-fence contract is not representable in HLSL and fails with project.translate.directx-atomic-fence-unsupported (https://github.com/CrossGL/crosstl/issues/1537)",
       "mlx/backend/metal/kernels/random.metal": "the generated dispatch-info cbuffer still requires reflected runtime binding and dispatch-plan coverage before it enters the DXC/runtime gate (https://github.com/CrossGL/crosstl/issues/1542)",
       "mlx/backend/metal/kernels/binary_two.metal": "operator-functor call lowering emits duplicated/temporary helper names and a conditional operator over a non-numeric result (https://github.com/CrossGL/crosstl/issues/1536)",
-      "mlx/backend/metal/kernels/layer_norm.metal": "pointer-style helpers and resource rebasing remain, and partial fixed-array initialization is invalid HLSL (https://github.com/CrossGL/crosstl/issues/1518, https://github.com/CrossGL/crosstl/issues/1519)",
+      "mlx/backend/metal/kernels/layer_norm.metal": "pointer-style helpers and resource rebasing remain outside the DXC gate (https://github.com/CrossGL/crosstl/issues/1518)",
       "mlx/backend/metal/kernels/logsumexp.metal": "storage-resource cursor arithmetic remains invalid HLSL (https://github.com/CrossGL/crosstl/issues/1518)",
       "mlx/backend/metal/kernels/rms_norm.metal": "storage-resource cursor arithmetic remains invalid HLSL (https://github.com/CrossGL/crosstl/issues/1518)",
-      "mlx/backend/metal/kernels/scaled_dot_product_attention.metal": "storage-resource cursor arithmetic remains, and partial fixed-array initialization is invalid HLSL (https://github.com/CrossGL/crosstl/issues/1518, https://github.com/CrossGL/crosstl/issues/1519)",
+      "mlx/backend/metal/kernels/scaled_dot_product_attention.metal": "storage-resource cursor arithmetic remains outside the DXC gate (https://github.com/CrossGL/crosstl/issues/1518)",
       "mlx/backend/metal/kernels/softmax.metal": "storage-resource cursor arithmetic remains invalid HLSL (https://github.com/CrossGL/crosstl/issues/1518)",
       "mlx/backend/metal/kernels/ternary.metal": "static template-trait member WorkPerThread<T>::n is emitted as an undeclared identifier and a conditional operator returns a non-numeric type (https://github.com/CrossGL/crosstl/issues/1491, https://github.com/CrossGL/crosstl/issues/1524)"
     }
@@ -408,6 +452,13 @@
       "vulkan"
     ],
     "artifacts": 120,
+    "expected_translated_artifacts": 117,
+    "expected_fence_failures": 3,
+    "expected_fence_diagnostics": {
+      "project.translate.directx-atomic-fence-unsupported": 1,
+      "project.translate.opengl-atomic-fence-unsupported": 1,
+      "project.translate.vulkan-atomic-fence-unsupported": 1
+    },
     "validation_blocked_by": [
       "https://github.com/CrossGL/crosstl/issues/1312"
     ],
@@ -430,12 +481,16 @@
     ],
     "semantic_blocked_by": [
       "https://github.com/CrossGL/crosstl/issues/1491",
+      "https://github.com/CrossGL/crosstl/issues/1537",
       "https://github.com/CrossGL/crosstl/issues/1557",
       "https://github.com/CrossGL/crosstl/issues/1560",
       "https://github.com/CrossGL/crosstl/issues/1568",
       "https://github.com/CrossGL/crosstl/issues/1569"
     ],
+    "runtime_integration_included": false,
+    "runtime_parity_claimed": false,
     "last_completed": {
+      "snapshot_scope": "pre-canonical-fence-contract",
       "translated_artifacts": 24,
       "failed_artifacts": 96,
       "translated_by_target": {

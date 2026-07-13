@@ -19,25 +19,33 @@ The current harness verifies:
   preservation remain blocked by
   [#1660](https://github.com/CrossGL/crosstl/issues/1660), so this is not yet a
   complete semantic-equivalence claim;
-- DirectX and Vulkan artifact generation for the 12-source clean reduced
-  frontier: `arange.metal`, `arg_reduce.metal`, `binary_two.metal`, `fence.metal`,
+- DirectX and Vulkan artifact generation for the 11-source clean reduced
+  frontier: `arange.metal`, `arg_reduce.metal`, `binary_two.metal`,
   `layer_norm.metal`, `logsumexp.metal`, `random.metal`, `rms_norm.metal`,
   `rope.metal`, `scaled_dot_product_attention.metal`, `softmax.metal`, and
-  `ternary.metal`;
+  `ternary.metal`. This establishes structural and configured toolchain
+  coverage, not semantic readiness or runtime parity;
+- a separate project-level expected-failure check for pinned `fence.metal`
+  across DirectX, OpenGL, and Vulkan. Each target must report its exact
+  `project.translate.*-atomic-fence-unsupported` diagnostic, target-specific
+  `*.atomic-thread-fence-contract-lowering` missing capability, and requested
+  `mem_device`, `memory_order_seq_cst`, `thread_scope_system` contract without
+  emitting a target file. The blocked contract is tracked by
+  [#1537](https://github.com/CrossGL/crosstl/issues/1537);
 - materialization of all 51 concrete `arg_reduce.metal` specializations and
   clean artifact generation for DirectX, OpenGL, and Vulkan. OpenGL compilation
   and both OpenGL-derived and native SPIR-V validation run in the required Linux
   toolchain gate;
 - DirectX HLSL smoke checks with DXC on Windows CI for the verified subset
-  (`arange.metal`, `arg_reduce.metal`, `fence.metal`, and `rope.metal`). The gate
+  (`arange.metal`, `arg_reduce.metal`, and `rope.metal`). The gate
   compiles every discovered entry, including the unsuffixed `CSMain`. Other
   clean frontier kernels translate to DirectX but are excluded for structural
-  and semantic gaps recorded in `expected-gaps.json`;
-- Vulkan assembly and validator checks when SPIR-V tools are available. The
-  reduced frontier remains semantically blocked on the Metal atomic-fence order
-  and scope contract tracked in
-  [#1537](https://github.com/CrossGL/crosstl/issues/1537), even when every module
-  passes structural validation;
+  and semantic gaps recorded in `expected-gaps.json`; `fence.metal` is excluded
+  because its DirectX translation intentionally fails before DXC;
+- Vulkan assembly and validator checks for the existing non-fence regression
+  frontier when SPIR-V tools are available. Vulkan atomic-fence feature work is
+  deferred; the separate `fence.metal` contract check prevents generated
+  barriers from being mistaken for semantic support;
 - OpenGL artifact generation for `arange.metal`, including deterministic
   separation of the source `float` and `bfloat16_t` helper declarations after
   both map to GLSL `float` and source-typed call rewriting coverage;
@@ -65,23 +73,26 @@ The current harness verifies:
   `arange.metal` unsigned 32-bit, signed 32-bit, and floating-point entry points
   through the optional Vulkan compute runtime and Mesa Vulkan software driver.
 
-Pull requests run the clean reduced frontier above. Scheduled and manually
+Pull requests run the 12-source reduced scope: 11 clean frontier sources and
+the explicitly blocked `fence.metal` contract source. Scheduled and manually
 triggered CI also run the full-corpus artifact scout with finite Metal template
 materialization budgets. The generated full-corpus project config caps
 `max_template_specializations` at 4096 and
 `max_template_materialization_work` at 131072. The full scout translates all 40
-pinned MLX Metal kernel units to DirectX, OpenGL, and Vulkan and requires 120
-clean generated artifacts: 40 DirectX, 40 OpenGL, and 40 Vulkan. It uploads
+pinned MLX Metal kernel units to DirectX, OpenGL, and Vulkan and records 120
+target attempts. Its fence-aware baseline is 117 translated artifacts and three
+expected failed `fence.metal` records, one per target, with no fence target files
+emitted. Additional failures remain issue-backed scout results. CI uploads
 generated portability reports, validation summaries embedded in those reports,
-generated logs, generated artifacts, and a concise JSON summary.
+generated logs, available generated artifacts, and a concise JSON summary.
 
-The last completed full-corpus scout against the same pinned MLX revision
+The checked-in historical full-corpus scout snapshot against the same pinned MLX revision
 scanned 40 Metal kernels and attempted 120 target artifacts across DirectX,
 OpenGL, and Vulkan. It translated 24 artifacts and reported 96 structured
 artifact failures behind tracked issues. The current materialization pass
 rejects template-hostile targets when concrete variants are missing instead of
 emitting generic artifacts, so full-corpus counts should not be treated as
-runtime-complete coverage.
+runtime-complete coverage or as the current fence-aware expected baseline.
 
 This is shader/kernel artifact coverage. It does not claim that the MLX host
 runtime has been ported to Direct3D, OpenGL, or Vulkan. Running the upstream MLX
@@ -218,7 +229,7 @@ source this resolves 444 concrete uses across all 36 entries, including the
 float accumulation type used by the half and bfloat input families. The full
 source translates to DirectX, OpenGL, and Vulkan; local OpenGL and Vulkan native
 validation passes. DirectX remains outside the DXC gate for the independent
-resource-cursor and fixed-array issues listed in `expected-gaps.json`.
+resource-cursor issue listed in `expected-gaps.json`.
 The project Vulkan artifact is warning-free because project preparation removes
 unreachable generic declarations. Direct single-file translation still emits
 five such warnings under
@@ -236,9 +247,10 @@ remains tracked in
 `rms_norm.metal` remains outside the OpenGL/SPIR-V gate until Metal function
 constants are preserved as specialization inputs under
 [#1538](https://github.com/CrossGL/crosstl/issues/1538).
-The Vulkan `fence.metal` artifact retains deterministic evidence of the
-unconsumed system-scope constant and is reported as structurally validated but
-not semantically ready under #1537.
+`fence.metal` emits no DirectX, OpenGL, or Vulkan target artifact. The harness
+requires the target-specific structured diagnostics and the exact requested
+atomic-fence operands under #1537 instead of accepting generated barrier text as
+semantic evidence.
 Future scouts should add issue-backed blockers only when there are
 concrete repros. Host runtime integration gaps should be handled in repository
 integration code or downstream runtime adapters, not hidden as shader
