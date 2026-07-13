@@ -652,6 +652,37 @@ class OpenGLGlobalInitializerError(ValueError):
         self.source_location = source_location
 
 
+class OpenGLAtomicFenceLoweringError(ValueError):
+    """Raised when OpenGL GLSL cannot preserve an atomic fence contract."""
+
+    project_diagnostic_code = "project.translate.opengl-atomic-fence-unsupported"
+    missing_capabilities = ("opengl.atomic-thread-fence-contract-lowering",)
+
+    def __init__(
+        self,
+        reason,
+        *,
+        memory_flags=None,
+        memory_order=None,
+        thread_scope=None,
+        source_location=None,
+    ):
+        self.reason = reason
+        self.memory_flags = memory_flags
+        self.memory_order = memory_order
+        self.thread_scope = thread_scope
+        self.source_location = source_location
+        contract = (
+            f"flags={memory_flags or '<missing>'}, "
+            f"order={memory_order or '<missing>'}, "
+            f"scope={thread_scope or '<missing>'}"
+        )
+        super().__init__(
+            "Cannot lower CrossGL atomicThreadFence to OpenGL GLSL without "
+            f"changing its semantics ({contract}): {reason.replace('-', ' ')}"
+        )
+
+
 class OpenGLCooperativeMatrixError(ValueError):
     """Raised when a cooperative matrix has no faithful OpenGL lowering."""
 
@@ -1447,6 +1478,34 @@ class GLSLCodeGen:
         "atomicExchange",
         "atomicCompSwap",
     }
+    GLSL_ATOMIC_FENCE_MEMORY_FLAGS = frozenset(
+        {
+            "mem_none",
+            "mem_device",
+            "mem_threadgroup",
+            "mem_texture",
+            "mem_threadgroup_imageblock",
+            "mem_object_data",
+        }
+    )
+    GLSL_ATOMIC_FENCE_MEMORY_ORDERS = frozenset(
+        {
+            "memory_order_relaxed",
+            "memory_order_acquire",
+            "memory_order_release",
+            "memory_order_acq_rel",
+            "memory_order_seq_cst",
+        }
+    )
+    GLSL_ATOMIC_FENCE_THREAD_SCOPES = frozenset(
+        {
+            "thread_scope_thread",
+            "thread_scope_simdgroup",
+            "thread_scope_threadgroup",
+            "thread_scope_device",
+            "thread_scope_system",
+        }
+    )
     GLSL_THREADS_PER_GRID_EXPRESSION = "(gl_NumWorkGroups * gl_WorkGroupSize)"
 
     def __init__(self):
@@ -13991,11 +14050,21 @@ complex64_t crossgl_complex64_mod_assign(
     def glsl_expected_type_conversion(self, expr, generated, expected_type):
         if expected_type is None or not isinstance(generated, str):
             return generated
-        mapped_expected_type = self.map_type(expected_type)
-        if (
-            mapped_expected_type
-            in self.GLSL_REGISTERED_SCALAR_STRUCT_CONVERSIONS
-        ):
+        expected_type_name = self.type_name_string(expected_type)
+        resolved_expected_type = self.resolve_glsl_type_alias(expected_type_name)
+        registered_expected_type = next(
+            (
+                candidate
+                for candidate in (
+                    resolved_expected_type,
+                    resolved_expected_type.rsplit("::", 1)[-1],
+                )
+                if candidate in self.GLSL_REGISTERED_SCALAR_STRUCT_CONVERSIONS
+            ),
+            None,
+        )
+        if registered_expected_type is not None:
+            mapped_expected_type = self.map_type(registered_expected_type)
             actual_type = self.glsl_source_expression_type(expr)
             actual = self.glsl_value_type_info(actual_type)
             is_destination_type = (
@@ -16574,7 +16643,9 @@ complex64_t crossgl_complex64_mod_assign(
                 return ray_query_member_call
 
             synchronization_call = self.synchronization_function_call(
-                original_func_name, expr.args
+                original_func_name,
+                expr.args,
+                source_location=getattr(expr, "source_location", None),
             )
             if synchronization_call is not None:
                 return synchronization_call
@@ -16898,8 +16969,122 @@ complex64_t crossgl_complex64_mod_assign(
         else:
             return str(expr)
 
-    def synchronization_function_call(self, func_name, args):
-        if args or func_name in self.function_return_types:
+    def atomic_fence_operand_identifier(self, expr):
+        name = self.expression_name(expr)
+        if name is None:
+            return None
+        return str(name).lstrip(":").rsplit("::", 1)[-1]
+
+    def atomic_fence_operand_text(self, expr):
+        if isinstance(expr, BinaryOpNode) and expr.op == "|":
+            return (
+                f"{self.atomic_fence_operand_text(expr.left)} | "
+                f"{self.atomic_fence_operand_text(expr.right)}"
+            )
+        name = self.atomic_fence_operand_identifier(expr)
+        return name if name is not None else expression_debug_name(expr)
+
+    def collect_atomic_fence_memory_flags(self, expr):
+        if isinstance(expr, BinaryOpNode) and expr.op == "|":
+            left = self.collect_atomic_fence_memory_flags(expr.left)
+            right = self.collect_atomic_fence_memory_flags(expr.right)
+            if left is None or right is None:
+                return None
+            return left | right
+        name = self.atomic_fence_operand_identifier(expr)
+        if name in self.GLSL_ATOMIC_FENCE_MEMORY_FLAGS:
+            return frozenset({name})
+        return None
+
+    def opengl_atomic_fence_contract_error(
+        self,
+        reason,
+        args,
+        *,
+        source_location=None,
+    ):
+        rendered = [self.atomic_fence_operand_text(arg) for arg in args]
+        return OpenGLAtomicFenceLoweringError(
+            reason,
+            memory_flags=rendered[0] if rendered else None,
+            memory_order=rendered[1] if len(rendered) > 1 else None,
+            thread_scope=rendered[2] if len(rendered) > 2 else None,
+            source_location=source_location,
+        )
+
+    def generate_glsl_atomic_thread_fence(self, args, *, source_location=None):
+        if len(args) != 3:
+            raise self.opengl_atomic_fence_contract_error(
+                "invalid-argument-count",
+                args,
+                source_location=source_location,
+            )
+
+        flags = self.collect_atomic_fence_memory_flags(args[0])
+        order = self.atomic_fence_operand_identifier(args[1])
+        scope = self.atomic_fence_operand_identifier(args[2])
+        if flags is None:
+            raise self.opengl_atomic_fence_contract_error(
+                "unknown-memory-flags",
+                args,
+                source_location=source_location,
+            )
+        if order not in self.GLSL_ATOMIC_FENCE_MEMORY_ORDERS:
+            raise self.opengl_atomic_fence_contract_error(
+                "unknown-memory-order",
+                args,
+                source_location=source_location,
+            )
+        if scope not in self.GLSL_ATOMIC_FENCE_THREAD_SCOPES:
+            raise self.opengl_atomic_fence_contract_error(
+                "unknown-thread-scope",
+                args,
+                source_location=source_location,
+            )
+
+        if scope != "thread_scope_threadgroup":
+            reason = (
+                "unsupported-system-thread-scope"
+                if scope == "thread_scope_system"
+                else "unsupported-thread-scope"
+            )
+            raise self.opengl_atomic_fence_contract_error(
+                reason,
+                args,
+                source_location=source_location,
+            )
+        if order != "memory_order_acq_rel":
+            raise self.opengl_atomic_fence_contract_error(
+                "unsupported-memory-order",
+                args,
+                source_location=source_location,
+            )
+        if flags != frozenset({"mem_threadgroup"}):
+            raise self.opengl_atomic_fence_contract_error(
+                "unsupported-memory-flags",
+                args,
+                source_location=source_location,
+            )
+        if normalize_stage_name(self.current_stage_entry_type) != "compute":
+            raise self.opengl_atomic_fence_contract_error(
+                "unsupported-shader-stage",
+                args,
+                source_location=source_location,
+            )
+
+        return "memoryBarrierShared()"
+
+    def synchronization_function_call(
+        self, func_name, args, *, source_location=None
+    ):
+        if not func_name or func_name in self.function_return_types:
+            return None
+        if func_name == "atomicThreadFence":
+            return self.generate_glsl_atomic_thread_fence(
+                args,
+                source_location=source_location,
+            )
+        if args:
             return None
         if func_name in {"workgroupBarrier", "workgroupExecutionBarrier"}:
             return "barrier()"

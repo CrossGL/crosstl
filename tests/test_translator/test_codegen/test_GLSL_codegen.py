@@ -12,6 +12,7 @@ from crosstl.translator.ast import (
     CooperativeMatrixOpNode,
     CooperativeMatrixType,
     ExecutionModel,
+    FunctionCallNode,
     FunctionNode,
     IdentifierNode,
     LiteralNode,
@@ -31,6 +32,7 @@ from crosstl.translator.ast import (
 from crosstl.translator.codegen.GLSL_codegen import (
     GLSLCodeGen,
     OpenGLAggregateInitializerError,
+    OpenGLAtomicFenceLoweringError,
     OpenGLBooleanCompoundAssignmentError,
     OpenGLCompoundAssignmentError,
     OpenGLCooperativeMatrixError,
@@ -419,6 +421,164 @@ def test_glsl_user_defined_workgroup_barrier_is_not_lowered():
     assert "void workgroupBarrier()" in generated_code
     assert "workgroupBarrier();" in generated_code
     assert "barrier();" not in generated_code
+
+
+def test_glsl_atomic_thread_fence_rejects_seq_cst_system_contract():
+    shader = """
+    shader AtomicThreadFenceSystemScope {
+        compute {
+            void main() {
+                atomicThreadFence(mem_device, memory_order_seq_cst,
+                                  thread_scope_system);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(shader))
+    call = next(node for node in ast.walk() if isinstance(node, FunctionCallNode))
+    source_location = {"line": 6, "column": 17}
+    call.source_location = source_location
+
+    with pytest.raises(OpenGLAtomicFenceLoweringError) as exc_info:
+        generate_code(ast)
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.opengl-atomic-fence-unsupported"
+    )
+    assert diagnostic.missing_capabilities == (
+        "opengl.atomic-thread-fence-contract-lowering",
+    )
+    assert diagnostic.reason == "unsupported-system-thread-scope"
+    assert diagnostic.memory_flags == "mem_device"
+    assert diagnostic.memory_order == "memory_order_seq_cst"
+    assert diagnostic.thread_scope == "thread_scope_system"
+    assert diagnostic.source_location == source_location
+    assert "flags=mem_device" in str(diagnostic)
+    assert "order=memory_order_seq_cst" in str(diagnostic)
+    assert "scope=thread_scope_system" in str(diagnostic)
+
+
+@pytest.mark.parametrize(
+    ("memory_flags", "memory_order", "thread_scope", "reason"),
+    [
+        (
+            "mem_global",
+            "memory_order_acq_rel",
+            "thread_scope_threadgroup",
+            "unknown-memory-flags",
+        ),
+        (
+            "mem_threadgroup",
+            "memory_order_consume",
+            "thread_scope_threadgroup",
+            "unknown-memory-order",
+        ),
+        (
+            "mem_threadgroup",
+            "memory_order_acq_rel",
+            "thread_scope_queue_family",
+            "unknown-thread-scope",
+        ),
+    ],
+)
+def test_glsl_atomic_thread_fence_rejects_unknown_operands(
+    memory_flags, memory_order, thread_scope, reason
+):
+    shader = f"""
+    shader UnknownAtomicThreadFenceOperand {{
+        compute {{
+            void main() {{
+                atomicThreadFence(
+                    {memory_flags}, {memory_order}, {thread_scope}
+                );
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLAtomicFenceLoweringError) as exc_info:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == reason
+    assert diagnostic.memory_flags == memory_flags
+    assert diagnostic.memory_order == memory_order
+    assert diagnostic.thread_scope == thread_scope
+    assert diagnostic.missing_capabilities == (
+        "opengl.atomic-thread-fence-contract-lowering",
+    )
+
+
+def test_glsl_atomic_thread_fence_rejects_invalid_arity():
+    shader = """
+    shader InvalidAtomicThreadFenceArity {
+        compute {
+            void main() {
+                atomicThreadFence(mem_device, memory_order_seq_cst);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLAtomicFenceLoweringError) as exc_info:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == "invalid-argument-count"
+    assert diagnostic.memory_flags == "mem_device"
+    assert diagnostic.memory_order == "memory_order_seq_cst"
+    assert diagnostic.thread_scope is None
+
+
+def test_glsl_atomic_thread_fence_lowers_exact_threadgroup_acq_rel_subset(tmp_path):
+    shader = """
+    shader AtomicThreadFenceThreadgroup {
+        compute {
+            void main() {
+                atomicThreadFence(
+                    mem_threadgroup,
+                    memory_order_acq_rel,
+                    thread_scope_threadgroup
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert generated_code.count("memoryBarrierShared();") == 1
+    assert "memoryBarrier();" not in generated_code
+    assert "atomicThreadFence" not in generated_code
+    assert "memory_order_acq_rel" not in generated_code
+    assert "thread_scope_threadgroup" not in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code, tmp_path, "atomic-thread-fence-threadgroup"
+    )
+
+
+def test_glsl_user_defined_atomic_thread_fence_is_not_lowered():
+    shader = """
+    shader AtomicThreadFenceShadowing {
+        compute {
+            void atomicThreadFence(int flags, int order, int scope) {
+                return;
+            }
+
+            void main() {
+                atomicThreadFence(1, 2, 3);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "void atomicThreadFence(int flags, int order, int scope)" in generated_code
+    assert "atomicThreadFence(1, 2, 3);" in generated_code
+    assert "memoryBarrierShared();" not in generated_code
+    assert "memoryBarrier();" not in generated_code
 
 
 def test_glsl_threadgroup_local_array_hoists_to_global_shared():
