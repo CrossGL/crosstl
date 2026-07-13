@@ -646,7 +646,7 @@
         "path": "crosstl/backend/SPIRV"
       },
       "signals": {
-        "unsupported_marker_count": 84,
+        "unsupported_marker_count": 95,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
@@ -706,27 +706,27 @@
           },
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
+            "text": "def unsupported_call_initializer_type_error("
+          },
+          {
+            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
+            "text": "return UnsupportedSPIRVFeatureError("
+          },
+          {
+            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
+            "text": "def unsupported_call_initializer_binding_error("
+          },
+          {
+            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
+            "text": "return UnsupportedSPIRVFeatureError("
+          },
+          {
+            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
+            "text": "raise self.unsupported_call_initializer_binding_error("
+          },
+          {
+            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
             "text": "def unsupported_lambda_default_value("
-          },
-          {
-            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "\"; WARNING: SPIR-V backend does not support CrossGL \""
-          },
-          {
-            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "self.emit(f\"; WARNING: {operation} is not supported by the SPIR-V backend yet\")"
-          },
-          {
-            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "raise UnsupportedSPIRVFeatureError("
-          },
-          {
-            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "raise UnsupportedSPIRVFeatureError("
-          },
-          {
-            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "raise UnsupportedSPIRVFeatureError("
           }
         ]
       },
@@ -739,7 +739,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 1133
+        "test_count": 1138
       },
       "translator_codegen": {
         "exists": true,

@@ -46698,16 +46698,14 @@ def test_translate_project_rejects_unsupported_wide_vector_operation(tmp_path):
     assert not (repo / payload["artifacts"][0]["path"]).exists()
 
 
-def test_translate_project_rejects_untyped_empty_spirv_initializer(tmp_path):
+def test_translate_project_rejects_unresolved_empty_spirv_initializer(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "empty_initializer.cgl").write_text(
         textwrap.dedent("""
             shader EmptyInitializer {
-                void consume(float value) {}
-
                 void exercise() {
-                    consume({});
+                    unresolved({});
                 }
             }
             """).strip(),
@@ -46731,10 +46729,47 @@ def test_translate_project_rejects_untyped_empty_spirv_initializer(tmp_path):
     assert diagnostic["missingCapabilities"] == [
         "spirv.empty_initializer_type_inference"
     ]
-    assert "cannot infer a value type" in diagnostic["message"]
+    assert "cannot infer the destination type" in diagnostic["message"]
     artifact = payload["artifacts"][0]
     assert artifact["status"] == "failed"
     assert not (repo / artifact["path"]).exists()
+
+
+def test_translate_project_contextualizes_empty_spirv_initializer(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "empty_initializer.cgl").write_text(
+        textwrap.dedent("""
+            shader EmptyInitializer {
+                float consume(float value) {
+                    return value;
+                }
+
+                compute {
+                    void main() {
+                        float value = consume({});
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["vulkan"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["missingCapabilityCounts"] == {}
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "OpFunctionCall" in generated
+    assert "OpTypeArray" not in generated
 
 
 def test_metal_project_materialization_concretizes_dispatch_bool_functor_helper(

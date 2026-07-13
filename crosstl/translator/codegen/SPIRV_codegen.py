@@ -276,6 +276,7 @@ class VulkanSPIRVCodeGen:
         self.function_stage_output_dependencies = {}
         self.function_resource_array_params = {}
         self.stage_local_function_resource_array_params = {}
+        self.function_value_array_parameter_indices_by_id = {}
         self.function_resource_array_type_hints = {}
         self.stage_local_function_resource_array_type_hints = {}
         self.function_storage_image_pointer_params = {}
@@ -4365,10 +4366,14 @@ class VulkanSPIRVCodeGen:
         return self.load_from_variable(result_variable, result_type)
 
     def call_function(
-        self, function_name: str, args: List[SpirvId]
+        self,
+        function_name: str,
+        args: List[SpirvId],
+        function_reference=None,
     ) -> Optional[SpirvId]:
         """Call a function with arguments."""
-        function_reference = self.resolve_function_reference(function_name, args)
+        if function_reference is None:
+            function_reference = self.resolve_function_reference(function_name, args)
         if function_reference is None:
             return self.call_builtin_function(function_name, args)
 
@@ -6878,7 +6883,133 @@ class VulkanSPIRVCodeGen:
             return None
         return value
 
-    def process_call_argument(self, function_name, arg, arg_index):
+    def expression_contains_empty_array_literal(self, expr) -> bool:
+        if not isinstance(expr, ArrayLiteralNode):
+            return False
+        if not expr.elements:
+            return True
+        return any(
+            self.expression_contains_empty_array_literal(element)
+            for element in expr.elements
+        )
+
+    def static_function_argument_match_score(
+        self, expected_type: SpirvId, arg
+    ) -> Optional[int]:
+        actual_type = self.infer_expression_result_type(arg)
+        score = self.function_argument_type_match_score(expected_type, actual_type)
+        if score is not None or actual_type is None:
+            return score
+
+        expected_pointee = self.pointer_type_pointee_type(expected_type)
+        if expected_pointee is None:
+            return None
+        return self.function_argument_type_match_score(expected_pointee, actual_type)
+
+    def contextual_call_parameter_types(
+        self,
+        function_name: str,
+        call_args,
+        skipped_arg_indices,
+        mesh_output_arg_indices,
+    ):
+        emitted_arguments = [
+            (arg_index, arg)
+            for arg_index, arg in enumerate(call_args)
+            if arg_index not in skipped_arg_indices
+            and arg_index not in mesh_output_arg_indices
+        ]
+        implicit_parameter_count = len(
+            self.required_function_stage_object_argument_names(function_name)
+        )
+        scored_candidates = []
+        for function_reference in self.function_reference_candidates(function_name):
+            _function_id, (_return_type, param_types) = function_reference
+            if len(param_types) != len(emitted_arguments) + implicit_parameter_count:
+                continue
+
+            score = 0
+            compatible = True
+            for parameter_index, (_arg_index, arg) in enumerate(emitted_arguments):
+                argument_score = self.static_function_argument_match_score(
+                    param_types[parameter_index], arg
+                )
+                if argument_score is None:
+                    compatible = False
+                    break
+                score += argument_score
+            if compatible:
+                scored_candidates.append((score, function_reference))
+
+        if not scored_candidates:
+            return {}, set(), None, set()
+
+        best_score = max(score for score, _candidate in scored_candidates)
+        best_candidates = [
+            candidate for score, candidate in scored_candidates if score == best_score
+        ]
+        if len(best_candidates) != 1:
+            return (
+                {},
+                {arg_index for arg_index, _arg in emitted_arguments},
+                None,
+                set(),
+            )
+
+        selected_reference = best_candidates[0]
+        function_id, (_return_type, selected_parameter_types) = selected_reference
+        value_array_parameter_indices = (
+            self.function_value_array_parameter_indices_by_id.get(function_id.id, set())
+        )
+        contextual_types = {}
+        temporary_array_arguments = set()
+        for parameter_index, (arg_index, _arg) in enumerate(emitted_arguments):
+            contextual_types[arg_index] = selected_parameter_types[parameter_index]
+            if parameter_index in value_array_parameter_indices:
+                temporary_array_arguments.add(arg_index)
+        return (
+            contextual_types,
+            set(),
+            selected_reference,
+            temporary_array_arguments,
+        )
+
+    def unsupported_call_initializer_type_error(
+        self, function_name: str, arg_index: int, arg, ambiguous: bool
+    ):
+        source_location = getattr(arg, "source_location", None)
+        reason = "ambiguous" if ambiguous else "unresolved"
+        return UnsupportedSPIRVFeatureError(
+            "contextual empty initializer",
+            "SPIR-V cannot infer the destination type for an empty aggregate "
+            f"initializer in {reason} call '{function_name}', argument "
+            f"{arg_index + 1}; resolve the callee overload and preserve its "
+            "concrete parameter type before code generation.",
+            missing_capabilities=("spirv.empty_initializer_type_inference",),
+            source_location=source_location,
+        )
+
+    def unsupported_call_initializer_binding_error(
+        self, function_name: str, arg_index: int, arg
+    ):
+        source_location = getattr(arg, "source_location", None)
+        return UnsupportedSPIRVFeatureError(
+            "reference-bound empty initializer",
+            "SPIR-V cannot bind an empty aggregate temporary to reference or "
+            f"resource parameter {arg_index + 1} in call '{function_name}'; "
+            "preserve an addressable source object before code generation.",
+            missing_capabilities=("spirv.aggregate_initializer_reference_binding",),
+            source_location=source_location,
+        )
+
+    def process_call_argument(
+        self,
+        function_name,
+        arg,
+        arg_index,
+        expected_type=None,
+        allow_array_temporary=False,
+    ):
         if arg_index in self.resource_offset_argument_indices(function_name):
             offset_constant = self.literal_integer_vector_constant(arg)
             if offset_constant is not None:
@@ -6913,6 +7044,27 @@ class VulkanSPIRVCodeGen:
             pointer_arg = self.variable_pointer_from_expression(arg)
             if pointer_arg is not None:
                 return pointer_arg
+
+        if isinstance(arg, ArrayLiteralNode) and expected_type is not None:
+            target_type = expected_type
+            expected_pointee = self.pointer_type_pointee_type(expected_type)
+            if expected_pointee is not None:
+                if (
+                    not allow_array_temporary
+                    or expected_type.type.storage_class != "Function"
+                    or self.array_type_info_from_type(expected_pointee) is None
+                ):
+                    raise self.unsupported_call_initializer_binding_error(
+                        function_name, arg_index, arg
+                    )
+                value = self.process_array_literal(arg, expected_pointee)
+                if value is None:
+                    return None
+                temporary = self.create_variable(expected_pointee, "Function")
+                self.store_to_variable(temporary, value)
+                return temporary
+
+            return self.process_array_literal(arg, target_type)
 
         return self.process_expression(arg)
 
@@ -16623,6 +16775,7 @@ class VulkanSPIRVCodeGen:
                     self.is_resource_array_type(param_type)
                     or is_storage_image_param
                     or is_stage_object_pointer_param
+                    or self.function_parameter_is_reference_like(param)
                 ):
                     value_array_param_indices.add(len(param_types))
                 storage_class = (
@@ -16673,6 +16826,9 @@ class VulkanSPIRVCodeGen:
             self.stage_local_function_mesh_output_parameter_indices[key] = (
                 mesh_output_parameter_indices
             )
+        self.function_value_array_parameter_indices_by_id[function_id.id] = set(
+            value_array_param_indices
+        )
 
         for i, (param, param_type, param_value_type) in enumerate(runtime_parameters):
             if entry_point_uses_void_signature:
@@ -21019,6 +21175,10 @@ class VulkanSPIRVCodeGen:
                     param
                 )
                 if storage_buffer_type_name is not None:
+                    if self.expression_contains_empty_array_literal(arg):
+                        raise self.unsupported_call_initializer_binding_error(
+                            func_name, index, arg
+                        )
                     if self.pointer_ternary_statically_selects_null(arg):
                         if not self.function_parameter_has_reachable_use(
                             function_node,
@@ -21060,6 +21220,10 @@ class VulkanSPIRVCodeGen:
                     continue
 
                 if self.function_parameter_is_reference_like(param):
+                    if self.expression_contains_empty_array_literal(arg):
+                        raise self.unsupported_call_initializer_binding_error(
+                            func_name, index, arg
+                        )
                     param_type_name = self.function_parameter_type_name(param)
                     param_value_type = (
                         self.map_crossgl_type(param_type_name)
@@ -21098,11 +21262,21 @@ class VulkanSPIRVCodeGen:
                         self.local_variables[param_name] = pointer_arg
                         continue
 
-                arg_value = self.process_call_argument(func_name, arg, index)
+                param_type_name = self.function_parameter_type_name(param)
+                expected_type = (
+                    self.map_crossgl_type(param_type_name)
+                    if param_type_name is not None
+                    else None
+                )
+                arg_value = self.process_call_argument(
+                    func_name,
+                    arg,
+                    index,
+                    expected_type=expected_type,
+                )
                 if arg_value is None:
                     self.emit(f"; WARNING: Failed to evaluate argument for {func_name}")
                     return self.default_value_for_function(function_node)
-                param_type_name = self.function_parameter_type_name(param)
                 if param_type_name is not None:
                     arg_value = self.convert_value_to_type(
                         arg_value,
@@ -23725,11 +23899,29 @@ class VulkanSPIRVCodeGen:
                     missing_capabilities=("spirv.empty_initializer_type_inference",),
                     source_location=getattr(expr, "source_location", None),
                 )
-            return self.default_value_for_type(self.ensure_registered_type(target_type))
+            target_type = self.ensure_registered_type(target_type)
+            if self.type_contains_runtime_array(target_type):
+                raise UnsupportedSPIRVFeatureError(
+                    "runtime-sized empty initializer",
+                    "SPIR-V cannot materialize an empty aggregate value for a "
+                    "type containing a runtime-sized array.",
+                    missing_capabilities=("spirv.runtime_array_aggregate_initializer",),
+                    source_location=getattr(expr, "source_location", None),
+                )
+            if self.type_contains_specialization_sized_array(target_type):
+                raise UnsupportedSPIRVFeatureError(
+                    "specialization-sized array initializer",
+                    "SPIR-V aggregate initializers require a fixed constituent "
+                    "count; the destination contains a specialization-sized array.",
+                    missing_capabilities=("spirv.specialization_array_initializer",),
+                    source_location=getattr(expr, "source_location", None),
+                )
+            return self.default_value_for_type(target_type)
 
         array_type = target_type
         element_type = None
         target_size = None
+        constituent_types = None
 
         if array_type is not None:
             array_type = self.ensure_registered_type(array_type)
@@ -23745,10 +23937,16 @@ class VulkanSPIRVCodeGen:
                             "spirv.specialization_array_initializer",
                         ),
                     )
+            constituent_types = self.composite_member_types(array_type)
 
         values = []
-        for element in expr.elements:
-            value = self.process_array_literal_element(element, element_type, constant)
+        for element_index, element in enumerate(expr.elements):
+            constituent_type = element_type
+            if constituent_types is not None and element_index < len(constituent_types):
+                constituent_type = constituent_types[element_index]
+            value = self.process_array_literal_element(
+                element, constituent_type, constant
+            )
             if value is None:
                 return None
             values.append(value)
@@ -23766,7 +23964,13 @@ class VulkanSPIRVCodeGen:
                 self.convert_value_to_type(value, element_type) for value in values
             ]
 
-        if target_size is not None:
+        if constituent_types is not None:
+            values = values[: len(constituent_types)]
+            while len(values) < len(constituent_types):
+                values.append(
+                    self.default_value_for_type(constituent_types[len(values)])
+                )
+        elif target_size is not None:
             values = values[:target_size]
             if element_type is not None:
                 while len(values) < target_size:
@@ -26395,12 +26599,43 @@ class VulkanSPIRVCodeGen:
             mesh_output_arg_indices = (
                 self.resolve_function_mesh_output_parameter_indices(callee_name)
             )
+            contextual_parameter_types = {}
+            ambiguous_contextual_arguments = set()
+            selected_function_reference = None
+            temporary_array_arguments = set()
+            if any(isinstance(arg, ArrayLiteralNode) for arg in call_args):
+                (
+                    contextual_parameter_types,
+                    ambiguous_contextual_arguments,
+                    selected_function_reference,
+                    temporary_array_arguments,
+                ) = self.contextual_call_parameter_types(
+                    callee_name,
+                    call_args,
+                    skipped_arg_indices,
+                    mesh_output_arg_indices,
+                )
             for arg_index, arg in enumerate(call_args):
                 if arg_index in skipped_arg_indices:
                     continue
                 if arg_index in mesh_output_arg_indices:
                     continue
-                arg_value = self.process_call_argument(callee_name, arg, arg_index)
+                if self.expression_contains_empty_array_literal(arg):
+                    if arg_index in ambiguous_contextual_arguments:
+                        raise self.unsupported_call_initializer_type_error(
+                            callee_name, arg_index, arg, ambiguous=True
+                        )
+                    if arg_index not in contextual_parameter_types:
+                        raise self.unsupported_call_initializer_type_error(
+                            callee_name, arg_index, arg, ambiguous=False
+                        )
+                arg_value = self.process_call_argument(
+                    callee_name,
+                    arg,
+                    arg_index,
+                    expected_type=contextual_parameter_types.get(arg_index),
+                    allow_array_temporary=arg_index in temporary_array_arguments,
+                )
                 if arg_value is None:
                     self.emit(
                         f"; WARNING: Failed to evaluate argument for {callee_name or callee_expr}"
@@ -26465,7 +26700,11 @@ class VulkanSPIRVCodeGen:
             ):
                 return self.call_resource_function(callee_name, args)
 
-            return self.call_function(callee_name, args)
+            return self.call_function(
+                callee_name,
+                args,
+                function_reference=selected_function_reference,
+            )
 
         elif isinstance(expr, MemberAccessNode):
             member_name = expr.member
