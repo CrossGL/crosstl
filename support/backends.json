@@ -147,6 +147,9 @@
         "spirv",
         "spv"
       ],
+      "target_profiles": [
+        "vulkan-khr-cooperative-matrix"
+      ],
       "target_extension": ".spvasm",
       "translator_codegen": "crosstl/translator/codegen/SPIRV_codegen.py",
       "native_backend": "crosstl/backend/SPIRV",
@@ -162,6 +165,10 @@
         {
           "name": "Khronos SPIR-V headers",
           "url": "https://github.com/KhronosGroup/SPIRV-Headers"
+        },
+        {
+          "name": "SPV_KHR_cooperative_matrix specification",
+          "url": "https://github.khronos.org/SPIRV-Registry/extensions/KHR/SPV_KHR_cooperative_matrix.html"
         }
       ]
     },
