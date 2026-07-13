@@ -4228,8 +4228,15 @@ class MetalToCrossGLConverter:
         }.get(function_name)
         if operation is None:
             return None
+        source_arguments = list(expression.args)
+        if function_name == "simdgroup_store" and len(source_arguments) >= 2:
+            source_arguments = [
+                source_arguments[1],
+                source_arguments[0],
+                *source_arguments[2:],
+            ]
         arguments = ", ".join(
-            self.generate_expression(argument, is_main) for argument in expression.args
+            self.generate_expression(argument, is_main) for argument in source_arguments
         )
         return f"{operation}({arguments})"
 

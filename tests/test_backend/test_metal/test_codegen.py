@@ -6652,8 +6652,9 @@ def test_metal_cooperative_matrix_operations_round_trip_through_shared_ir():
       simdgroup_matrix<float, 8, 8> sum = left + right;
       simdgroup_matrix<float, 8, 8> difference = left - right;
       simdgroup_matrix<float, 8, 8> negated = -left;
+      simdgroup_load(left, input, 8, 0, true);
       simdgroup_multiply_accumulate(accumulator, left, right, product);
-      simdgroup_store(output, accumulator, 8);
+      simdgroup_store(accumulator, output, 8, 0, true);
     }
     """
 
@@ -6670,7 +6671,7 @@ def test_metal_cooperative_matrix_operations_round_trip_through_shared_ir():
         "cooperative_matrix_multiply_accumulate(accumulator, left, right, product);"
         in crossgl
     )
-    assert "cooperative_matrix_store(output, accumulator, 8);" in crossgl
+    assert "cooperative_matrix_store(output, accumulator, 8, 0, true);" in crossgl
 
     regenerated = MetalCodeGen().generate(parse_crossgl(crossgl))
 
@@ -6681,9 +6682,12 @@ def test_metal_cooperative_matrix_operations_round_trip_through_shared_ir():
     assert "simdgroup_matrix<float, 8, 8> sum = (left + right);" in regenerated
     assert "simdgroup_matrix<float, 8, 8> difference = (left - right);" in regenerated
     assert "simdgroup_matrix<float, 8, 8> negated = (-left);" in regenerated
+    assert "cooperative_matrix_load(left, input, 8, 0, true);" in crossgl
+    assert "cooperative_matrix_store(output, accumulator, 8, 0, true);" in crossgl
+    assert "simdgroup_load(left, input, 8, 0, true);" in regenerated
     assert (
         "simdgroup_multiply_accumulate(accumulator, left, right, product);"
         in regenerated
     )
-    assert "simdgroup_store(output, accumulator, 8);" in regenerated
+    assert "simdgroup_store(accumulator, output, 8, 0, true);" in regenerated
     assert "cooperative_matrix_" not in regenerated

@@ -9736,6 +9736,8 @@ class MetalCodeGen:
             return f"({rendered[0]} - {rendered[1]})"
         if operation == "negate":
             return f"(-{rendered[0]})"
+        if operation == "store":
+            rendered = [rendered[1], rendered[0], *rendered[2:]]
         intrinsic = self.METAL_COOPERATIVE_MATRIX_FUNCTIONS.get(operation)
         if intrinsic is not None:
             return f"{intrinsic}({', '.join(rendered)})"
