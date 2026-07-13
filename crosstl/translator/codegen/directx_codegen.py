@@ -414,6 +414,37 @@ class DirectXCooperativeMatrixUnsupportedError(ValueError):
         self.source_location = source_location
 
 
+class DirectXAtomicFenceLoweringError(ValueError):
+    """Raised when a CrossGL atomic fence has no equivalent HLSL contract."""
+
+    project_diagnostic_code = "project.translate.directx-atomic-fence-unsupported"
+    missing_capabilities = ("directx.atomic-thread-fence-contract-lowering",)
+
+    def __init__(
+        self,
+        reason,
+        *,
+        memory_flags=None,
+        memory_order=None,
+        thread_scope=None,
+        source_location=None,
+    ):
+        self.reason = reason
+        self.memory_flags = memory_flags
+        self.memory_order = memory_order
+        self.thread_scope = thread_scope
+        self.source_location = source_location
+        contract = (
+            f"flags={memory_flags or '<missing>'}, "
+            f"order={memory_order or '<missing>'}, "
+            f"scope={thread_scope or '<missing>'}"
+        )
+        super().__init__(
+            "Cannot lower CrossGL atomicThreadFence to HLSL without changing "
+            f"its semantics ({contract}): {reason.replace('-', ' ')}"
+        )
+
+
 class HLSLCodeGen:
     """Emit HLSL source from the shared CrossGL translator AST."""
 
@@ -484,6 +515,7 @@ class HLSLCodeGen:
         "interpolateAtCentroid": "EvaluateAttributeCentroid",
     }
     HLSL_SYNCHRONIZATION_INTRINSICS = {
+        "atomicThreadFence": "GroupMemoryBarrier",
         "barrier": "GroupMemoryBarrierWithGroupSync",
         "workgroupBarrier": "GroupMemoryBarrierWithGroupSync",
         "workgroupExecutionBarrier": "GroupMemoryBarrierWithGroupSync",
@@ -495,6 +527,34 @@ class HLSLCodeGen:
         "memoryBarrier": "AllMemoryBarrier",
         "allMemoryBarrier": "AllMemoryBarrier",
     }
+    HLSL_ATOMIC_FENCE_MEMORY_FLAGS = frozenset(
+        {
+            "mem_none",
+            "mem_device",
+            "mem_threadgroup",
+            "mem_texture",
+            "mem_threadgroup_imageblock",
+            "mem_object_data",
+        }
+    )
+    HLSL_ATOMIC_FENCE_MEMORY_ORDERS = frozenset(
+        {
+            "memory_order_relaxed",
+            "memory_order_acquire",
+            "memory_order_release",
+            "memory_order_acq_rel",
+            "memory_order_seq_cst",
+        }
+    )
+    HLSL_ATOMIC_FENCE_THREAD_SCOPES = frozenset(
+        {
+            "thread_scope_thread",
+            "thread_scope_simdgroup",
+            "thread_scope_threadgroup",
+            "thread_scope_device",
+            "thread_scope_system",
+        }
+    )
     HLSL_DERIVATIVE_INTRINSICS = {
         "dFdx": "ddx",
         "dFdy": "ddy",
@@ -7540,7 +7600,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if input_attachment_call is not None:
                 return input_attachment_call
 
-            synchronization_call = self.synchronization_function_call(func_name, args)
+            synchronization_call = self.synchronization_function_call(
+                func_name,
+                args,
+                source_location=getattr(expr, "source_location", None),
+            )
             if synchronization_call is not None:
                 return synchronization_call
 
@@ -7866,9 +7930,114 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         else:
             return str(expr)
 
-    def synchronization_function_call(self, func_name, args):
+    def atomic_fence_operand_identifier(self, expr):
+        name = self.expression_name(expr)
+        if name is None:
+            return None
+        return str(name).lstrip(":").rsplit("::", 1)[-1]
+
+    def atomic_fence_operand_text(self, expr):
+        if isinstance(expr, BinaryOpNode) and expr.op == "|":
+            return (
+                f"{self.atomic_fence_operand_text(expr.left)} | "
+                f"{self.atomic_fence_operand_text(expr.right)}"
+            )
+        name = self.atomic_fence_operand_identifier(expr)
+        return name if name is not None else expression_debug_name(expr)
+
+    def collect_atomic_fence_memory_flags(self, expr):
+        if isinstance(expr, BinaryOpNode) and expr.op == "|":
+            left = self.collect_atomic_fence_memory_flags(expr.left)
+            right = self.collect_atomic_fence_memory_flags(expr.right)
+            if left is None or right is None:
+                return None
+            return left | right
+        name = self.atomic_fence_operand_identifier(expr)
+        if name in self.HLSL_ATOMIC_FENCE_MEMORY_FLAGS:
+            return frozenset({name})
+        return None
+
+    def directx_atomic_fence_contract_error(
+        self,
+        reason,
+        args,
+        *,
+        source_location=None,
+    ):
+        rendered = [self.atomic_fence_operand_text(arg) for arg in args]
+        return DirectXAtomicFenceLoweringError(
+            reason,
+            memory_flags=rendered[0] if rendered else None,
+            memory_order=rendered[1] if len(rendered) > 1 else None,
+            thread_scope=rendered[2] if len(rendered) > 2 else None,
+            source_location=source_location,
+        )
+
+    def generate_hlsl_atomic_thread_fence(self, args, *, source_location=None):
+        if len(args) != 3:
+            raise self.directx_atomic_fence_contract_error(
+                "invalid-argument-count",
+                args,
+                source_location=source_location,
+            )
+
+        flags = self.collect_atomic_fence_memory_flags(args[0])
+        order = self.atomic_fence_operand_identifier(args[1])
+        scope = self.atomic_fence_operand_identifier(args[2])
+        if flags is None:
+            raise self.directx_atomic_fence_contract_error(
+                "unknown-memory-flags",
+                args,
+                source_location=source_location,
+            )
+        if order not in self.HLSL_ATOMIC_FENCE_MEMORY_ORDERS:
+            raise self.directx_atomic_fence_contract_error(
+                "unknown-memory-order",
+                args,
+                source_location=source_location,
+            )
+        if scope not in self.HLSL_ATOMIC_FENCE_THREAD_SCOPES:
+            raise self.directx_atomic_fence_contract_error(
+                "unknown-thread-scope",
+                args,
+                source_location=source_location,
+            )
+
+        if scope != "thread_scope_threadgroup":
+            reason = (
+                "unsupported-system-thread-scope"
+                if scope == "thread_scope_system"
+                else "unsupported-thread-scope"
+            )
+            raise self.directx_atomic_fence_contract_error(
+                reason,
+                args,
+                source_location=source_location,
+            )
+        if order != "memory_order_acq_rel":
+            raise self.directx_atomic_fence_contract_error(
+                "unsupported-memory-order",
+                args,
+                source_location=source_location,
+            )
+        if flags != frozenset({"mem_threadgroup"}):
+            raise self.directx_atomic_fence_contract_error(
+                "unsupported-memory-flags",
+                args,
+                source_location=source_location,
+            )
+
+        return "GroupMemoryBarrier()"
+
+    def synchronization_function_call(self, func_name, args, *, source_location=None):
         if not func_name or func_name in getattr(self, "function_return_types", {}):
             return None
+
+        if func_name == "atomicThreadFence":
+            return self.generate_hlsl_atomic_thread_fence(
+                args,
+                source_location=source_location,
+            )
 
         intrinsic = self.synchronization_intrinsic_name(func_name)
         if intrinsic is None:

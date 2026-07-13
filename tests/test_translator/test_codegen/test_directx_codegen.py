@@ -43,6 +43,7 @@ from crosstl.translator.ast import (
     create_legacy_shader_node,
 )
 from crosstl.translator.codegen.directx_codegen import (
+    DirectXAtomicFenceLoweringError,
     DirectXCooperativeMatrixUnsupportedError,
     DirectXSemanticArraySizeError,
     DirectXUnresolvedSourceTypeError,
@@ -52,6 +53,9 @@ from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 from tests.test_backend.test_SPIRV.test_codegen import (
     SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY,
+)
+from tests.test_translator.test_project_translation import (
+    assert_directx_compute_validates_if_available,
 )
 
 
@@ -1578,6 +1582,145 @@ def test_directx_synchronization_builtins_lower_to_hlsl_intrinsics():
     assert "memoryBarrierShared();" not in generated_code
     assert "deviceMemoryBarrier();" not in generated_code
     assert "memoryBarrierBuffer();" not in generated_code
+
+
+def test_directx_atomic_thread_fence_rejects_seq_cst_system_contract():
+    shader = """
+    shader AtomicThreadFenceSystemScope {
+        compute {
+            void main() {
+                atomicThreadFence(mem_device, memory_order_seq_cst,
+                                  thread_scope_system);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(shader))
+    call = next(node for node in ast.walk() if isinstance(node, FunctionCallNode))
+    source_location = {"line": 6, "column": 17}
+    call.source_location = source_location
+
+    with pytest.raises(DirectXAtomicFenceLoweringError) as exc_info:
+        generate_code(ast)
+
+    diagnostic = exc_info.value
+    assert (
+        diagnostic.project_diagnostic_code
+        == "project.translate.directx-atomic-fence-unsupported"
+    )
+    assert diagnostic.missing_capabilities == (
+        "directx.atomic-thread-fence-contract-lowering",
+    )
+    assert diagnostic.reason == "unsupported-system-thread-scope"
+    assert diagnostic.memory_flags == "mem_device"
+    assert diagnostic.memory_order == "memory_order_seq_cst"
+    assert diagnostic.thread_scope == "thread_scope_system"
+    assert diagnostic.source_location == source_location
+    assert "flags=mem_device" in str(diagnostic)
+    assert "order=memory_order_seq_cst" in str(diagnostic)
+    assert "scope=thread_scope_system" in str(diagnostic)
+
+
+@pytest.mark.parametrize(
+    ("memory_flags", "memory_order", "thread_scope", "reason"),
+    [
+        (
+            "mem_global",
+            "memory_order_acq_rel",
+            "thread_scope_threadgroup",
+            "unknown-memory-flags",
+        ),
+        (
+            "mem_threadgroup",
+            "memory_order_consume",
+            "thread_scope_threadgroup",
+            "unknown-memory-order",
+        ),
+        (
+            "mem_threadgroup",
+            "memory_order_acq_rel",
+            "thread_scope_queue_family",
+            "unknown-thread-scope",
+        ),
+    ],
+)
+def test_directx_atomic_thread_fence_rejects_unknown_operands(
+    memory_flags, memory_order, thread_scope, reason
+):
+    shader = f"""
+    shader UnknownAtomicThreadFenceOperand {{
+        compute {{
+            void main() {{
+                atomicThreadFence(
+                    {memory_flags}, {memory_order}, {thread_scope}
+                );
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(DirectXAtomicFenceLoweringError) as exc_info:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == reason
+    assert diagnostic.memory_flags == memory_flags
+    assert diagnostic.memory_order == memory_order
+    assert diagnostic.thread_scope == thread_scope
+    assert diagnostic.missing_capabilities == (
+        "directx.atomic-thread-fence-contract-lowering",
+    )
+
+
+def test_directx_atomic_thread_fence_lowers_exact_threadgroup_acq_rel_subset(tmp_path):
+    shader = """
+    shader AtomicThreadFenceThreadgroup {
+        compute {
+            void main() {
+                atomicThreadFence(
+                    mem_threadgroup,
+                    memory_order_acq_rel,
+                    thread_scope_threadgroup
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert generated_code.count("GroupMemoryBarrier();") == 1
+    assert "DeviceMemoryBarrier();" not in generated_code
+    assert "AllMemoryBarrier();" not in generated_code
+    assert "atomicThreadFence" not in generated_code
+    assert "memory_order_acq_rel" not in generated_code
+    assert "thread_scope_threadgroup" not in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated_code, tmp_path)
+
+
+def test_directx_user_defined_atomic_thread_fence_is_not_lowered():
+    shader = """
+    shader AtomicThreadFenceShadowing {
+        compute {
+            void atomicThreadFence(int flags, int order, int scope) {
+                return;
+            }
+
+            void main() {
+                atomicThreadFence(1, 2, 3);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "void atomicThreadFence(int flags, int order, int scope)" in generated_code
+    assert "atomicThreadFence(1, 2, 3);" in generated_code
+    assert "GroupMemoryBarrier();" not in generated_code
+    assert "DeviceMemoryBarrier();" not in generated_code
+    assert "AllMemoryBarrier();" not in generated_code
 
 
 def test_directx_workgroup_execution_barrier_lowers_without_intrinsic_leak():
