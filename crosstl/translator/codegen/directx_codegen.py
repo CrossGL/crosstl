@@ -313,7 +313,6 @@ from .pointer_reinterpret import (
     scalar_storage_layout,
 )
 from .resource_arrays import (
-    collect_private_pointer_array_size_hints,
     collect_resource_array_size_hints,
     is_private_pointer_parameter,
 )
@@ -889,6 +888,17 @@ class HLSLCodeGen:
         self.resource_array_size_hints = {}
         self.function_resource_array_size_hints = {}
         self.function_private_pointer_array_size_hints = {}
+        self.function_private_pointer_required_spans = {}
+        self.function_private_pointer_parameters = {}
+        self.function_private_pointer_parameter_indices = {}
+        self.function_private_pointer_backing_variants = {}
+        self.function_private_pointer_local_array_extents = {}
+        self.function_private_pointer_view_calls = {}
+        self.function_private_pointer_base_names = {}
+        self.function_private_pointer_full_span_parameters = {}
+        self.function_private_pointer_scalar_parameters = {}
+        self.current_hlsl_private_pointer_variant = {}
+        self.current_hlsl_private_pointer_base_names = {}
         self.directx_resource_register_overrides = {}
         self.literal_int_constants = {}
         self.literal_bool_constants = {}
@@ -1449,6 +1459,18 @@ class HLSLCodeGen:
         self.implicit_texture_sampler_parameters = {}
         self.function_parameter_types = {}
         self.hlsl_function_name_aliases = {}
+        self.function_private_pointer_array_size_hints = {}
+        self.function_private_pointer_required_spans = {}
+        self.function_private_pointer_parameters = {}
+        self.function_private_pointer_parameter_indices = {}
+        self.function_private_pointer_backing_variants = {}
+        self.function_private_pointer_local_array_extents = {}
+        self.function_private_pointer_view_calls = {}
+        self.function_private_pointer_base_names = {}
+        self.function_private_pointer_full_span_parameters = {}
+        self.function_private_pointer_scalar_parameters = {}
+        self.current_hlsl_private_pointer_variant = {}
+        self.current_hlsl_private_pointer_base_names = {}
         self.function_image_access_requirements = {}
         self.hlsl_pixel_only_feedback_function_names = {}
         self.hlsl_interpolation_function_names = {}
@@ -4213,8 +4235,40 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         entry_name=None,
         stage_output_lowering=None,
         stage_node=None,
+        _private_pointer_variant=None,
     ):
         """Render a function or stage entry point with HLSL semantics."""
+        function_name = getattr(func, "name", None)
+        variants = self.function_private_pointer_backing_variants.get(function_name)
+        if _private_pointer_variant is None and variants:
+            previous_variant = self.current_hlsl_private_pointer_variant
+            previous_base_names = self.current_hlsl_private_pointer_base_names
+            parameters = self.function_private_pointer_parameters[function_name]
+            code = ""
+            try:
+                for variant in variants:
+                    self.current_hlsl_private_pointer_variant = {
+                        parameter.name: variant[index]
+                        for index, parameter in enumerate(parameters)
+                    }
+                    self.current_hlsl_private_pointer_base_names = dict(
+                        self.function_private_pointer_base_names[function_name]
+                    )
+                    code += self.generate_function(
+                        func,
+                        indent=indent,
+                        shader_type=shader_type,
+                        execution_config=execution_config,
+                        entry_name=entry_name,
+                        stage_output_lowering=stage_output_lowering,
+                        stage_node=stage_node,
+                        _private_pointer_variant=variant,
+                    )
+            finally:
+                self.current_hlsl_private_pointer_variant = previous_variant
+                self.current_hlsl_private_pointer_base_names = previous_base_names
+            return code
+
         code = ""
         code += "  " * indent
 
@@ -4451,6 +4505,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             params.append(
                 f"{declaration} {semantic_attr}" if semantic_attr else declaration
             )
+            if (
+                is_private_pointer_parameter(p)
+                and p.name
+                not in self.function_private_pointer_scalar_parameters.get(
+                    function_name, set()
+                )
+            ):
+                base_name = self.current_hlsl_private_pointer_base_names[p.name]
+                params.append(f"int {base_name}")
+                emitted_param_names.add(base_name)
+                self.current_identifier_reserved_names.add(base_name)
+                self.local_variable_types[base_name] = "int"
             if p.name in implicit_texture_samplers:
                 sampler_info = implicit_texture_samplers[p.name]
                 if sampler_info["synthetic"]:
@@ -6301,6 +6367,139 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return base
         return f"({base} + {delta})"
 
+    def hlsl_private_pointer_view_binding(self, expression):
+        local_extents = self.function_private_pointer_local_array_extents.get(
+            self.current_function_name, {}
+        )
+        scalar_parameters = self.function_private_pointer_scalar_parameters.get(
+            self.current_function_name, set()
+        )
+        if isinstance(expression, (str, IdentifierNode, VariableNode)):
+            raw_name = (
+                expression
+                if isinstance(expression, str)
+                else getattr(expression, "name", None)
+            )
+            if raw_name in self.current_hlsl_private_pointer_base_names:
+                if raw_name in scalar_parameters:
+                    return {
+                        "backing": self.hlsl_identifier_name(raw_name),
+                        "offset": "0",
+                        "root_kind": "scalar_parameter",
+                    }
+                return {
+                    "backing": self.hlsl_identifier_name(raw_name),
+                    "offset": self.current_hlsl_private_pointer_base_names[raw_name],
+                    "root_kind": "parameter",
+                }
+            if raw_name in local_extents:
+                return {
+                    "backing": self.hlsl_identifier_name(raw_name),
+                    "offset": "0",
+                    "root_kind": "local",
+                }
+            return None
+
+        if isinstance(expression, UnaryOpNode) and expression.op == "&":
+            operand = expression.operand
+            if isinstance(operand, (IdentifierNode, VariableNode)):
+                name = getattr(operand, "name", None)
+                if name not in local_extents and name not in scalar_parameters:
+                    return {
+                        "backing": self.hlsl_identifier_name(name),
+                        "offset": "0",
+                        "root_kind": "scalar",
+                    }
+            if not isinstance(operand, ArrayAccessNode):
+                return None
+            binding = self.hlsl_private_pointer_view_binding(operand.array)
+            delta_expression = operand.index
+            operator = "+"
+        elif isinstance(expression, BinaryOpNode) and expression.op in {"+", "-"}:
+            binding = self.hlsl_private_pointer_view_binding(expression.left)
+            delta_expression = expression.right
+            operator = expression.op
+            if binding is None and expression.op == "+":
+                binding = self.hlsl_private_pointer_view_binding(expression.right)
+                delta_expression = expression.left
+            if binding is None:
+                return None
+        else:
+            return None
+
+        if self.hlsl_private_pointer_expression_has_side_effects(delta_expression):
+            raise DirectXPrivatePointerParameterError(
+                "DirectX cannot emit a side-effecting private pointer view offset",
+                function_name=self.current_function_name,
+                reason="side-effecting-view-offset",
+                source_location=getattr(expression, "source_location", None),
+            )
+        rendered_delta = self.generate_expression(delta_expression)
+        if operator == "-":
+            rendered_delta = f"-({rendered_delta})"
+        binding["offset"] = self.hlsl_resource_pointer_offset_sum(
+            binding["offset"], rendered_delta
+        )
+        return binding
+
+    def generate_hlsl_private_pointer_view_access(
+        self, pointer_expression, index_expression=0
+    ):
+        binding = self.hlsl_private_pointer_view_binding(pointer_expression)
+        if binding is None or binding.get("root_kind") not in {
+            "parameter",
+            "scalar_parameter",
+        }:
+            return None
+        if binding["root_kind"] == "scalar_parameter":
+            if self.hlsl_private_pointer_expression_has_side_effects(index_expression):
+                raise DirectXPrivatePointerParameterError(
+                    "DirectX cannot emit a side-effecting scalar pointer index",
+                    function_name=self.current_function_name,
+                    reason="side-effecting-view-offset",
+                    source_location=getattr(index_expression, "source_location", None),
+                )
+            literal_index = self.literal_int_value(
+                index_expression, self.literal_int_constants
+            )
+            if literal_index != 0:
+                raise DirectXPrivatePointerParameterError(
+                    "DirectX scalar private pointer views support only index zero",
+                    function_name=self.current_function_name,
+                    reason="unprovable-view-offset",
+                    source_location=getattr(index_expression, "source_location", None),
+                )
+            return binding["backing"]
+        rendered_index = (
+            str(index_expression)
+            if isinstance(index_expression, (int, float))
+            else self.generate_expression(index_expression)
+        )
+        return f"{binding['backing']}[({binding['offset']} + {rendered_index})]"
+
+    def hlsl_private_pointer_call_argument_binding(
+        self, function_name, argument_index, argument
+    ):
+        parameter_name = self.function_private_pointer_parameter_indices.get(
+            function_name, {}
+        ).get(argument_index)
+        if parameter_name is None:
+            return None
+        binding = self.hlsl_private_pointer_view_binding(argument)
+        if binding is None:
+            raise DirectXPrivatePointerParameterError(
+                "DirectX private pointer argument for "
+                f"'{function_name}.{parameter_name}' has no concrete backing array",
+                function_name=function_name,
+                parameter_name=parameter_name,
+                reason="missing-view-backing",
+                source_location=getattr(argument, "source_location", None),
+            )
+        binding["scalar"] = parameter_name in (
+            self.function_private_pointer_scalar_parameters.get(function_name, set())
+        )
+        return binding
+
     def hlsl_resource_pointer_element_type(self, resource_type):
         resource_type = str(resource_type or "").strip()
         if "<" not in resource_type or not resource_type.endswith(">"):
@@ -7455,6 +7654,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             op = getattr(expr, "operator", getattr(expr, "op", "+"))
             mapped_op = self.map_operator(op)
             if mapped_op == "*" and not getattr(expr, "is_postfix", False):
+                private_pointee = self.generate_hlsl_private_pointer_view_access(
+                    expr.operand
+                )
+                if private_pointee is not None:
+                    return private_pointee
                 pointee = self.generate_hlsl_resource_pointer_access(expr.operand)
                 if pointee is not None:
                     return pointee
@@ -7488,6 +7692,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         elif hasattr(expr, "__class__") and "ArrayAccess" in str(expr.__class__):
             array_expr = getattr(expr, "array_expr", getattr(expr, "array", ""))
             index_expr = getattr(expr, "index_expr", getattr(expr, "index", ""))
+            private_pointer_access = self.generate_hlsl_private_pointer_view_access(
+                array_expr, index_expr
+            )
+            if private_pointer_access is not None:
+                return private_pointer_access
             pointer_access = None
             if self.hlsl_resource_pointer_alias_expression(array_expr):
                 pointer_access = self.generate_hlsl_resource_pointer_access(
@@ -7653,8 +7862,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if inverse_call is not None:
                 return inverse_call
 
-            call_argument_func_name = func_name
-            specialized_func_name = generic_function_call_name(self, func_name, args)
+            call_argument_func_name = self.hlsl_materialized_function_name(func_name)
+            specialized_func_name = generic_function_call_name(
+                self, call_argument_func_name, args
+            )
             if specialized_func_name is not None:
                 callee = specialized_func_name
                 func_name = specialized_func_name
@@ -7887,7 +8098,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if builtin_callee is not None:
                 callee = builtin_callee
             self.validate_function_image_access_arguments(func_name, args)
-            argument_type_func_name = func_name
+            argument_type_func_name = self.hlsl_materialized_function_name(func_name)
             args_str = ", ".join(
                 self.generate_call_arguments(
                     call_argument_func_name, args, argument_type_func_name
@@ -17584,9 +17795,26 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         name = getattr(func, "name", None)
         return self.hlsl_function_name_aliases.get(name, name)
 
+    def hlsl_materialized_function_name(self, name):
+        if not isinstance(name, str) or "_u" not in name:
+            return name
+        decoded = name
+        for encoded, character in (
+            ("_u3c", "<"),
+            ("_u2c", ","),
+            ("_u3e", ">"),
+            ("_u20", " "),
+        ):
+            decoded = decoded.replace(encoded, character)
+        candidate = sanitize_type_name(decoded)
+        available_names = set(self.function_parameter_names)
+        available_names.update(self.function_private_pointer_parameters)
+        return candidate if candidate in available_names else name
+
     def hlsl_function_call_name(self, name):
         if name in self.HLSL_NONUNIFORM_RESOURCE_INDEX_NAMES:
             return "NonUniformResourceIndex"
+        name = self.hlsl_materialized_function_name(name)
         return self.hlsl_function_name_aliases.get(name, name)
 
     def collect_function_parameters(self, functions):
@@ -18355,14 +18583,889 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def collect_private_pointer_array_size_hints(self, ast):
         functions = self.collect_functions(ast)
-        return collect_private_pointer_array_size_hints(
-            functions=functions,
-            walk_nodes=self.walk_ast,
-            expression_name=self.expression_name,
-            literal_int_value=self.literal_int_value,
-            visible_literal_int_constants=self.visible_literal_int_constants,
-            function_call_name=self.function_call_name,
-            initial_literal_int_constants=self.initial_literal_int_constants,
+        functions_by_name = {
+            getattr(function, "name", None): function
+            for function in functions
+            if not generic_function_parameters(function)
+        }
+        functions_by_name.pop(None, None)
+
+        pointer_parameters = {}
+        pointer_parameter_indices = {}
+        pointer_base_names = {}
+        for function_name, function in functions_by_name.items():
+            parameters = list(getattr(function, "parameters", []) or [])
+            private_parameters = [
+                parameter
+                for parameter in parameters
+                if is_private_pointer_parameter(parameter)
+                and self.hlsl_entry_resource_parameter_global_type(
+                    parameter, function
+                )
+                is None
+            ]
+            if not private_parameters:
+                continue
+            pointer_parameters[function_name] = private_parameters
+            pointer_parameter_indices[function_name] = {
+                index: parameter.name
+                for index, parameter in enumerate(parameters)
+                if is_private_pointer_parameter(parameter)
+                and self.hlsl_entry_resource_parameter_global_type(
+                    parameter, function
+                )
+                is None
+            }
+            used_names = {
+                getattr(parameter, "name", None) for parameter in parameters
+            }
+            used_names.update(self.collect_hlsl_function_identifier_names(function))
+            base_names = {}
+            for parameter in private_parameters:
+                base_name = self.hlsl_unique_local_identifier(
+                    f"{parameter.name}_base", used_names
+                )
+                used_names.add(base_name)
+                base_names[parameter.name] = base_name
+            pointer_base_names[function_name] = base_names
+
+        self.function_private_pointer_parameters = pointer_parameters
+        self.function_private_pointer_parameter_indices = pointer_parameter_indices
+        self.function_private_pointer_base_names = pointer_base_names
+        if not pointer_parameters:
+            return {}
+
+        local_array_extents = {
+            function_name: self.hlsl_private_pointer_local_array_extents(function)
+            for function_name, function in functions_by_name.items()
+        }
+        self.function_private_pointer_local_array_extents = local_array_extents
+
+        direct_spans = {
+            function_name: {parameter.name: 0 for parameter in parameters}
+            for function_name, parameters in pointer_parameters.items()
+        }
+        self.function_private_pointer_full_span_parameters = {
+            function_name: set() for function_name in pointer_parameters
+        }
+        view_calls = {function_name: [] for function_name in functions_by_name}
+        for function_name, function in functions_by_name.items():
+            self.hlsl_analyze_private_pointer_function(
+                function,
+                functions_by_name,
+                direct_spans.get(function_name, {}),
+                view_calls[function_name],
+            )
+
+        scalar_parameters = {
+            function_name: set() for function_name in pointer_parameters
+        }
+        changed = True
+        while changed:
+            changed = False
+            for caller_name, calls in view_calls.items():
+                caller_scalar_parameters = scalar_parameters.get(caller_name, set())
+                for call in calls:
+                    for parameter_name, binding in call["bindings"].items():
+                        is_scalar = binding.get("root_kind") == "scalar"
+                        if binding.get("root_kind") == "parameter":
+                            is_scalar = binding.get("root") in caller_scalar_parameters
+                        if (
+                            is_scalar
+                            and parameter_name
+                            not in scalar_parameters.get(call["callee"], set())
+                        ):
+                            scalar_parameters[call["callee"]].add(parameter_name)
+                            changed = True
+        self.function_private_pointer_scalar_parameters = scalar_parameters
+
+        for calls in view_calls.values():
+            for call in calls:
+                for parameter_name, binding in call["bindings"].items():
+                    if parameter_name not in scalar_parameters.get(
+                        call["callee"], set()
+                    ):
+                        continue
+                    binding_is_scalar = binding.get("root_kind") == "scalar"
+                    if binding.get("root_kind") == "parameter":
+                        binding_is_scalar = binding.get("root") in scalar_parameters.get(
+                            call["caller"], set()
+                        )
+                    if binding_is_scalar:
+                        continue
+                    raise DirectXPrivatePointerParameterError(
+                        "DirectX private pointer parameter "
+                        f"'{call['callee']}.{parameter_name}' is called with both "
+                        "scalar and array backing objects",
+                        function_name=call["callee"],
+                        parameter_name=parameter_name,
+                        reason="mixed-scalar-array-backing",
+                        source_location=getattr(call.get("node"), "source_location", None),
+                    )
+
+        for calls in view_calls.values():
+            for call in calls:
+                full_span_parameters = (
+                    self.function_private_pointer_full_span_parameters.get(
+                        call["callee"], set()
+                    )
+                )
+                for parameter_name in full_span_parameters:
+                    binding = call["bindings"].get(parameter_name, {})
+                    if (
+                        binding.get("root_kind") == "local"
+                        and binding.get("offset") == (0, 0)
+                    ):
+                        direct_spans[call["callee"]][parameter_name] = max(
+                            direct_spans[call["callee"]][parameter_name],
+                            binding["extent"],
+                        )
+
+        required_spans = {
+            function_name: dict(spans)
+            for function_name, spans in direct_spans.items()
+        }
+        self.function_private_pointer_required_spans = required_spans
+        max_iterations = max(
+            1,
+            sum(len(parameters) for parameters in pointer_parameters.values())
+            * max(len(functions_by_name), 1),
+        )
+        for _iteration in range(max_iterations):
+            changed = False
+            for caller_name, calls in view_calls.items():
+                caller_spans = required_spans.get(caller_name, {})
+                for call in calls:
+                    callee_spans = required_spans.get(call["callee"], {})
+                    for parameter_name, binding in call["bindings"].items():
+                        span = callee_spans.get(parameter_name, 0)
+                        if span <= 0 or binding.get("root_kind") != "parameter":
+                            continue
+                        offset = self.hlsl_private_pointer_binding_interval(
+                            call,
+                            parameter_name,
+                            binding,
+                            required_span=span,
+                        )
+                        needed = offset[1] + span
+                        root_name = binding["root"]
+                        if needed > caller_spans.get(root_name, 0):
+                            caller_spans[root_name] = needed
+                            changed = True
+            if not changed:
+                break
+        else:
+            raise DirectXPrivatePointerParameterError(
+                "DirectX private pointer view requirements do not converge",
+                reason="recursive-view-span",
+            )
+
+        for function_name, parameters in pointer_parameters.items():
+            for parameter in parameters:
+                if required_spans[function_name].get(parameter.name, 0) > 0:
+                    continue
+                raise DirectXPrivatePointerParameterError(
+                    "DirectX private pointer parameter "
+                    f"'{function_name}.{parameter.name}' has no provable bounded span",
+                    function_name=function_name,
+                    parameter_name=parameter.name,
+                    reason="missing-fixed-array-extent",
+                    source_location=getattr(parameter, "source_location", None),
+                )
+
+        self.function_private_pointer_required_spans = required_spans
+        self.function_private_pointer_view_calls = view_calls
+        variants = {
+            function_name: {
+                tuple(
+                    required_spans[function_name][parameter.name]
+                    for parameter in parameters
+                )
+            }
+            for function_name, parameters in pointer_parameters.items()
+        }
+
+        for calls in view_calls.values():
+            for call in calls:
+                callee_scalar_parameters = scalar_parameters.get(
+                    call["callee"], set()
+                )
+                if not all(
+                    binding.get("root_kind") == "local"
+                    or binding.get("root_kind") == "scalar"
+                    and parameter_name in callee_scalar_parameters
+                    for parameter_name, binding in call["bindings"].items()
+                ):
+                    continue
+                variants[call["callee"]].add(
+                    tuple(
+                        call["bindings"][parameter.name]["extent"]
+                        for parameter in pointer_parameters[call["callee"]]
+                    )
+                )
+
+        changed = True
+        while changed:
+            changed = False
+            for caller_name, calls in view_calls.items():
+                caller_parameters = pointer_parameters.get(caller_name, [])
+                caller_parameter_positions = {
+                    parameter.name: index
+                    for index, parameter in enumerate(caller_parameters)
+                }
+                caller_variants = variants.get(caller_name, {()})
+                for caller_variant in tuple(caller_variants):
+                    for call in calls:
+                        callee_variant = []
+                        for parameter in pointer_parameters[call["callee"]]:
+                            binding = call["bindings"][parameter.name]
+                            if binding.get("root_kind") == "local":
+                                extent = binding["extent"]
+                            elif (
+                                binding.get("root_kind") == "scalar"
+                                and parameter.name
+                                in scalar_parameters.get(call["callee"], set())
+                            ):
+                                extent = 1
+                            elif binding.get("root_kind") == "parameter":
+                                position = caller_parameter_positions[binding["root"]]
+                                extent = caller_variant[position]
+                            else:
+                                self.hlsl_private_pointer_backing_error(
+                                    call, parameter.name, binding
+                                )
+                            self.hlsl_validate_private_pointer_call_binding(
+                                caller_name,
+                                caller_variant,
+                                call,
+                                parameter.name,
+                                binding,
+                                extent,
+                                caller_parameter_positions,
+                            )
+                            callee_variant.append(extent)
+                        callee_variant = tuple(callee_variant)
+                        if callee_variant not in variants[call["callee"]]:
+                            variants[call["callee"]].add(callee_variant)
+                            changed = True
+
+        self.function_private_pointer_backing_variants = {
+            function_name: tuple(sorted(function_variants))
+            for function_name, function_variants in variants.items()
+        }
+        return {
+            function_name: {
+                parameter.name: str(
+                    self.function_private_pointer_backing_variants[function_name][0][
+                        index
+                    ]
+                )
+                for index, parameter in enumerate(parameters)
+            }
+            for function_name, parameters in pointer_parameters.items()
+        }
+
+    def hlsl_private_pointer_local_array_extents(self, function):
+        constants = self.visible_literal_int_constants(function)
+        extents = {}
+        ambiguous = set()
+        for node in self.walk_ast(getattr(function, "body", [])):
+            if not isinstance(node, (VariableNode, ArrayNode)):
+                continue
+            name = getattr(node, "name", None)
+            if not name:
+                continue
+            node_type = getattr(node, "var_type", getattr(node, "vtype", None))
+            if isinstance(node, ArrayNode):
+                size_expression = get_array_size_from_node(node)
+            elif "ArrayType" in node_type.__class__.__name__:
+                size_expression = getattr(node_type, "size", None)
+            else:
+                continue
+            extent = self.literal_int_value(size_expression, constants)
+            if extent is None or extent <= 0:
+                ambiguous.add(name)
+                continue
+            if name in extents and extents[name] != extent:
+                ambiguous.add(name)
+                continue
+            extents[name] = extent
+        for name in ambiguous:
+            extents.pop(name, None)
+        return extents
+
+    def hlsl_private_pointer_expression_has_side_effects(self, expression):
+        if expression is None or isinstance(expression, (str, int, float, bool)):
+            return False
+        if isinstance(expression, AssignmentNode):
+            return True
+        if isinstance(expression, UnaryOpNode) and expression.op in {"++", "--"}:
+            return True
+        if isinstance(expression, FunctionCallNode):
+            function_name = self.function_call_name(expression)
+            if function_name not in {
+                "int",
+                "uint",
+                "short",
+                "ushort",
+                "int16",
+                "uint16",
+                "int32_t",
+                "uint32_t",
+                "size_t",
+                "ptrdiff_t",
+            }:
+                return True
+        if not hasattr(expression, "__dict__"):
+            return False
+        return any(
+            self.hlsl_private_pointer_expression_has_side_effects(child)
+            for key, child in vars(expression).items()
+            if key not in {"parent", "annotations", "array", "index", "args", "name"}
+        )
+
+    def hlsl_private_pointer_interval(self, expression, intervals, constants):
+        value = self.literal_int_value(expression, constants)
+        if value is not None:
+            return value, value
+        if expression is None:
+            return None
+        name = self.expression_name(expression)
+        if name in intervals:
+            return intervals[name]
+        if isinstance(expression, UnaryOpNode):
+            if expression.op in {"++", "--"}:
+                return None
+            operand = self.hlsl_private_pointer_interval(
+                expression.operand, intervals, constants
+            )
+            if operand is None:
+                return None
+            if expression.op == "+":
+                return operand
+            if expression.op == "-":
+                return -operand[1], -operand[0]
+            return None
+        if isinstance(expression, BinaryOpNode):
+            left = self.hlsl_private_pointer_interval(
+                expression.left, intervals, constants
+            )
+            right = self.hlsl_private_pointer_interval(
+                expression.right, intervals, constants
+            )
+            if left is None or right is None:
+                return None
+            if expression.op == "+":
+                return left[0] + right[0], left[1] + right[1]
+            if expression.op == "-":
+                return left[0] - right[1], left[1] - right[0]
+            if expression.op == "*":
+                products = (
+                    left[0] * right[0],
+                    left[0] * right[1],
+                    left[1] * right[0],
+                    left[1] * right[1],
+                )
+                return min(products), max(products)
+            if expression.op == "/" and right[0] == right[1] and right[0] > 0:
+                divisor = right[0]
+                return int(left[0] / divisor), int(left[1] / divisor)
+            return None
+        if isinstance(expression, TernaryOpNode):
+            true_interval = self.hlsl_private_pointer_interval(
+                expression.true_expr, intervals, constants
+            )
+            false_interval = self.hlsl_private_pointer_interval(
+                expression.false_expr, intervals, constants
+            )
+            if true_interval is None or false_interval is None:
+                return None
+            return (
+                min(true_interval[0], false_interval[0]),
+                max(true_interval[1], false_interval[1]),
+            )
+        if isinstance(expression, FunctionCallNode):
+            function_name = self.function_call_name(expression)
+            arguments = list(getattr(expression, "arguments", []) or [])
+            if function_name in {
+                "int",
+                "uint",
+                "short",
+                "ushort",
+                "int16",
+                "uint16",
+                "int32_t",
+                "uint32_t",
+                "size_t",
+                "ptrdiff_t",
+            } and len(arguments) == 1:
+                return self.hlsl_private_pointer_interval(
+                    arguments[0], intervals, constants
+                )
+        return None
+
+    def hlsl_private_pointer_static_binding(
+        self, expression, parameter_names, local_extents, intervals, constants
+    ):
+        if isinstance(expression, (str, IdentifierNode, VariableNode)):
+            name = (
+                expression
+                if isinstance(expression, str)
+                else getattr(expression, "name", None)
+            )
+            if name in parameter_names:
+                return {
+                    "root_kind": "parameter",
+                    "root": name,
+                    "offset": (0, 0),
+                    "side_effecting": False,
+                }
+            if name in local_extents:
+                return {
+                    "root_kind": "local",
+                    "root": name,
+                    "extent": local_extents[name],
+                    "offset": (0, 0),
+                    "side_effecting": False,
+                }
+            return None
+        if isinstance(expression, UnaryOpNode) and expression.op == "&":
+            operand = expression.operand
+            if isinstance(operand, (IdentifierNode, VariableNode)):
+                name = getattr(operand, "name", None)
+                if name not in parameter_names and name not in local_extents:
+                    return {
+                        "root_kind": "scalar",
+                        "root": name,
+                        "extent": 1,
+                        "offset": (0, 0),
+                        "side_effecting": False,
+                    }
+            if not isinstance(operand, ArrayAccessNode):
+                return None
+            binding = self.hlsl_private_pointer_static_binding(
+                operand.array, parameter_names, local_extents, intervals, constants
+            )
+            delta_expression = operand.index
+        elif isinstance(expression, BinaryOpNode) and expression.op in {"+", "-"}:
+            binding = self.hlsl_private_pointer_static_binding(
+                expression.left, parameter_names, local_extents, intervals, constants
+            )
+            delta_expression = expression.right
+            if binding is None and expression.op == "+":
+                binding = self.hlsl_private_pointer_static_binding(
+                    expression.right,
+                    parameter_names,
+                    local_extents,
+                    intervals,
+                    constants,
+                )
+                delta_expression = expression.left
+            if binding is None:
+                return None
+        else:
+            return None
+        delta = self.hlsl_private_pointer_interval(
+            delta_expression, intervals, constants
+        )
+        if delta is not None and isinstance(expression, BinaryOpNode):
+            if expression.op == "-":
+                delta = -delta[1], -delta[0]
+        current = binding.get("offset")
+        binding["offset"] = (
+            None
+            if current is None or delta is None
+            else (current[0] + delta[0], current[1] + delta[1])
+        )
+        binding["side_effecting"] = binding.get(
+            "side_effecting", False
+        ) or self.hlsl_private_pointer_expression_has_side_effects(delta_expression)
+        return binding
+
+    def hlsl_private_pointer_loop_interval(self, node, intervals, constants):
+        init = getattr(node, "init", None)
+        loop_name = getattr(init, "name", None)
+        if not loop_name or loop_name not in intervals:
+            return None, None
+        start = intervals[loop_name]
+        if start[0] != start[1]:
+            return loop_name, None
+        condition = getattr(node, "condition", None)
+        if not isinstance(condition, BinaryOpNode):
+            return loop_name, None
+        left_name = self.expression_name(condition.left)
+        right_name = self.expression_name(condition.right)
+        operator = condition.op
+        if left_name == loop_name:
+            bound_expression = condition.right
+        elif right_name == loop_name:
+            bound_expression = condition.left
+            operator = {"<": ">", "<=": ">=", ">": "<", ">=": "<="}.get(
+                operator
+            )
+        else:
+            return loop_name, None
+        bound = self.hlsl_private_pointer_interval(
+            bound_expression, intervals, constants
+        )
+        update = getattr(node, "update", None)
+        step = None
+        if isinstance(update, UnaryOpNode):
+            update_name = self.expression_name(update.operand)
+            if update_name == loop_name and update.op in {"++", "--"}:
+                step = 1 if update.op == "++" else -1
+        if bound is None or step is None:
+            return loop_name, None
+        if step > 0 and operator in {"<", "<="}:
+            maximum = bound[1] - (1 if operator == "<" else 0)
+            return loop_name, (start[0], max(start[0], maximum))
+        if step < 0 and operator in {">", ">="}:
+            minimum = bound[0] + (1 if operator == ">" else 0)
+            return loop_name, (min(start[0], minimum), start[0])
+        return loop_name, None
+
+    def hlsl_analyze_private_pointer_function(
+        self, function, functions_by_name, direct_spans, calls
+    ):
+        function_name = getattr(function, "name", None)
+        parameter_names = set(direct_spans)
+        local_extents = self.function_private_pointer_local_array_extents.get(
+            function_name, {}
+        )
+        constants = self.initial_literal_int_constants(function)
+        intervals = {}
+        for name, value in constants.items():
+            literal = self.literal_int_value(value, constants)
+            if literal is not None:
+                intervals[name] = (literal, literal)
+
+        def record_access(binding, index_expression, active_intervals, source):
+            if binding is None or binding.get("root_kind") != "parameter":
+                return
+            index = self.hlsl_private_pointer_interval(
+                index_expression, active_intervals, constants
+            )
+            offset = binding.get("offset")
+            if index is None or offset is None:
+                self.function_private_pointer_full_span_parameters.setdefault(
+                    function_name, set()
+                ).add(binding["root"])
+                return
+            lower = offset[0] + index[0]
+            upper = offset[1] + index[1]
+            if lower < 0:
+                raise DirectXPrivatePointerParameterError(
+                    "DirectX private pointer access "
+                    f"'{function_name}.{binding['root']}' may use negative index "
+                    f"{lower}",
+                    function_name=function_name,
+                    parameter_name=binding["root"],
+                    reason="negative-view-access",
+                    source_location=getattr(source, "source_location", None),
+                )
+            direct_spans[binding["root"]] = max(
+                direct_spans[binding["root"]], upper + 1
+            )
+
+        def merge_intervals(left, right):
+            return {
+                name: (
+                    min(left[name][0], right[name][0]),
+                    max(left[name][1], right[name][1]),
+                )
+                for name in left.keys() & right.keys()
+            }
+
+        def visit(value, active_intervals):
+            if value is None or isinstance(value, (str, int, float, bool)):
+                return
+            if isinstance(value, (list, tuple)):
+                for item in value:
+                    visit(item, active_intervals)
+                return
+            if isinstance(value, BlockNode):
+                for statement in getattr(value, "statements", []) or []:
+                    visit(statement, active_intervals)
+                return
+            if isinstance(value, VariableNode):
+                initial_value = getattr(value, "initial_value", None)
+                visit(initial_value, active_intervals)
+                interval = self.hlsl_private_pointer_interval(
+                    initial_value, active_intervals, constants
+                )
+                if interval is None:
+                    active_intervals.pop(value.name, None)
+                else:
+                    active_intervals[value.name] = interval
+                return
+            if isinstance(value, AssignmentNode):
+                target = getattr(value, "target", getattr(value, "left", None))
+                assigned = getattr(value, "value", getattr(value, "right", None))
+                visit(target, active_intervals)
+                visit(assigned, active_intervals)
+                target_name = self.expression_name(target)
+                if target_name and isinstance(
+                    target, (str, IdentifierNode, VariableNode)
+                ):
+                    assigned_interval = self.hlsl_private_pointer_interval(
+                        assigned, active_intervals, constants
+                    )
+                    operator = getattr(value, "operator", "=")
+                    current = active_intervals.get(target_name)
+                    if operator == "=":
+                        replacement = assigned_interval
+                    elif operator == "+=" and current and assigned_interval:
+                        replacement = (
+                            current[0] + assigned_interval[0],
+                            current[1] + assigned_interval[1],
+                        )
+                    elif operator == "-=" and current and assigned_interval:
+                        replacement = (
+                            current[0] - assigned_interval[1],
+                            current[1] - assigned_interval[0],
+                        )
+                    else:
+                        replacement = None
+                    if replacement is None:
+                        active_intervals.pop(target_name, None)
+                    else:
+                        active_intervals[target_name] = replacement
+                return
+            if isinstance(value, ArrayAccessNode):
+                binding = self.hlsl_private_pointer_static_binding(
+                    value.array,
+                    parameter_names,
+                    local_extents,
+                    active_intervals,
+                    constants,
+                )
+                record_access(binding, value.index, active_intervals, value)
+                visit(value.array, active_intervals)
+                visit(value.index, active_intervals)
+                return
+            if isinstance(value, UnaryOpNode):
+                if value.op == "*":
+                    binding = self.hlsl_private_pointer_static_binding(
+                        value.operand,
+                        parameter_names,
+                        local_extents,
+                        active_intervals,
+                        constants,
+                    )
+                    record_access(binding, 0, active_intervals, value)
+                visit(value.operand, active_intervals)
+                return
+            if isinstance(value, FunctionCallNode):
+                callee_name = self.function_call_name(value)
+                arguments = list(getattr(value, "arguments", []) or [])
+                specialized_name = generic_function_call_name(
+                    self, callee_name, arguments
+                )
+                if specialized_name in self.function_private_pointer_parameters:
+                    callee_name = specialized_name
+                else:
+                    callee_name = self.hlsl_materialized_function_name(callee_name)
+                parameter_indices = self.function_private_pointer_parameter_indices.get(
+                    callee_name, {}
+                )
+                if parameter_indices:
+                    bindings = {}
+                    for index, parameter_name in parameter_indices.items():
+                        argument = arguments[index] if index < len(arguments) else None
+                        binding = self.hlsl_private_pointer_static_binding(
+                            argument,
+                            parameter_names,
+                            local_extents,
+                            active_intervals,
+                            constants,
+                        )
+                        if binding is None:
+                            binding = {
+                                "root_kind": None,
+                                "root": self.expression_name(argument),
+                                "offset": None,
+                                "side_effecting": (
+                                    self.hlsl_private_pointer_expression_has_side_effects(
+                                        argument
+                                    )
+                                ),
+                            }
+                        bindings[parameter_name] = binding
+                    calls.append(
+                        {
+                            "caller": function_name,
+                            "callee": callee_name,
+                            "node": value,
+                            "bindings": bindings,
+                        }
+                    )
+                for argument in arguments:
+                    visit(argument, active_intervals)
+                return
+            if isinstance(value, IfNode):
+                visit(getattr(value, "condition", None), active_intervals)
+                then_intervals = dict(active_intervals)
+                else_intervals = dict(active_intervals)
+                visit(getattr(value, "then_branch", None), then_intervals)
+                visit(getattr(value, "else_branch", None), else_intervals)
+                active_intervals.clear()
+                active_intervals.update(merge_intervals(then_intervals, else_intervals))
+                return
+            if isinstance(value, ForNode):
+                loop_intervals = dict(active_intervals)
+                visit(getattr(value, "init", None), loop_intervals)
+                loop_name, loop_interval = self.hlsl_private_pointer_loop_interval(
+                    value, loop_intervals, constants
+                )
+                if loop_name:
+                    if loop_interval is None:
+                        loop_intervals.pop(loop_name, None)
+                    else:
+                        loop_intervals[loop_name] = loop_interval
+                visit(getattr(value, "condition", None), loop_intervals)
+                visit(getattr(value, "body", None), loop_intervals)
+                return
+            if isinstance(value, ForInNode):
+                loop_intervals = dict(active_intervals)
+                iterable = getattr(value, "iterable", None)
+                start = self.hlsl_private_pointer_interval(
+                    getattr(iterable, "start", None), loop_intervals, constants
+                )
+                end = self.hlsl_private_pointer_interval(
+                    getattr(iterable, "end", None), loop_intervals, constants
+                )
+                pattern = getattr(value, "pattern", None)
+                if pattern and start and end:
+                    maximum = end[1] - (
+                        0 if getattr(iterable, "inclusive", False) else 1
+                    )
+                    loop_intervals[pattern] = (start[0], maximum)
+                elif pattern:
+                    loop_intervals.pop(pattern, None)
+                visit(getattr(value, "body", None), loop_intervals)
+                return
+            if isinstance(value, (WhileNode, DoWhileNode, LoopNode)):
+                loop_intervals = dict(active_intervals)
+                visit(getattr(value, "condition", None), loop_intervals)
+                visit(getattr(value, "body", None), loop_intervals)
+                return
+            if not hasattr(value, "__dict__"):
+                return
+            for key, child in vars(value).items():
+                if key in {
+                    "parent",
+                    "annotations",
+                    "array",
+                    "index",
+                    "args",
+                    "name",
+                }:
+                    continue
+                visit(child, active_intervals)
+
+        visit(getattr(function, "body", []), intervals)
+
+    def hlsl_private_pointer_binding_interval(
+        self, call, parameter_name, binding, required_span=None
+    ):
+        if binding.get("side_effecting"):
+            reason = "side-effecting-view-offset"
+        elif binding.get("offset") is None:
+            caller_name = call.get("caller")
+            root_name = binding.get("root")
+            full_span_parameters = (
+                self.function_private_pointer_full_span_parameters.get(
+                    caller_name, set()
+                )
+            )
+            caller_span = self.function_private_pointer_required_spans.get(
+                caller_name, {}
+            ).get(root_name)
+            if (
+                binding.get("root_kind") == "parameter"
+                and root_name in full_span_parameters
+                and required_span is not None
+                and caller_span is not None
+                and caller_span >= required_span
+            ):
+                return 0, caller_span - required_span
+            reason = "unprovable-view-offset"
+        else:
+            offset = binding["offset"]
+            if offset[0] >= 0:
+                return offset
+            reason = "negative-view-offset"
+        backing_name = binding.get("root") or "unknown"
+        raise DirectXPrivatePointerParameterError(
+            "DirectX cannot prove the private pointer view offset for "
+            f"'{call['callee']}.{parameter_name}' into backing array "
+            f"'{backing_name}'",
+            function_name=call["callee"],
+            parameter_name=parameter_name,
+            reason=reason,
+            source_location=getattr(call.get("node"), "source_location", None),
+        )
+
+    def hlsl_private_pointer_backing_error(self, call, parameter_name, binding):
+        backing_name = binding.get("root") or "unknown"
+        raise DirectXPrivatePointerParameterError(
+            "DirectX private pointer view "
+            f"'{call['callee']}.{parameter_name}' has no concrete fixed backing "
+            f"array for '{backing_name}'",
+            function_name=call["callee"],
+            parameter_name=parameter_name,
+            reason="missing-view-backing",
+            source_location=getattr(call.get("node"), "source_location", None),
+        )
+
+    def hlsl_validate_private_pointer_call_binding(
+        self,
+        caller_name,
+        caller_variant,
+        call,
+        parameter_name,
+        binding,
+        extent,
+        caller_parameter_positions,
+    ):
+        if binding.get("root_kind") not in {"local", "parameter", "scalar"}:
+            self.hlsl_private_pointer_backing_error(call, parameter_name, binding)
+        required_span = self.function_private_pointer_required_spans[call["callee"]][
+            parameter_name
+        ]
+        if parameter_name in self.function_private_pointer_full_span_parameters.get(
+            call["callee"], set()
+        ):
+            required_span = extent
+        offset = self.hlsl_private_pointer_binding_interval(
+            call,
+            parameter_name,
+            binding,
+            required_span=required_span,
+        )
+        upper = offset[1] + required_span - 1
+        if binding["root_kind"] in {"local", "scalar"}:
+            available = extent
+        else:
+            root_name = binding["root"]
+            available = self.function_private_pointer_required_spans[caller_name][
+                root_name
+            ]
+            variant_extent = caller_variant[caller_parameter_positions[root_name]]
+            if available > variant_extent:
+                available = variant_extent
+        if upper < available:
+            return
+        backing_name = binding.get("root") or "unknown"
+        raise DirectXPrivatePointerParameterError(
+            "DirectX private pointer view "
+            f"'{call['callee']}.{parameter_name}' requires elements "
+            f"{offset[0]} through {upper}, but backing array '{backing_name}' "
+            f"has extent {available}",
+            function_name=call["callee"],
+            parameter_name=parameter_name,
+            reason="view-out-of-bounds",
+            source_location=getattr(call.get("node"), "source_location", None),
         )
 
     def hlsl_resource_array_size_expression(self, node, vtype=None):
@@ -19245,16 +20348,36 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 self.generate_expression_with_expected(arg, expected_type)
             )
         return self.generate_call_arguments_from_rendered(
-            func_name, args, rendered_args
+            func_name,
+            args,
+            rendered_args,
+            private_pointer_func_name=type_func_name or func_name,
         )
 
-    def generate_call_arguments_from_rendered(self, func_name, args, rendered_args):
+    def generate_call_arguments_from_rendered(
+        self,
+        func_name,
+        args,
+        rendered_args,
+        private_pointer_func_name=None,
+    ):
         generated_args = []
         implicit_samplers = self.implicit_texture_sampler_parameters.get(func_name, {})
         param_names = self.function_parameter_names.get(func_name, [])
+        private_pointer_func_name = private_pointer_func_name or func_name
 
         for index, arg in enumerate(args):
-            generated_args.append(rendered_args[index])
+            private_binding = self.hlsl_private_pointer_call_argument_binding(
+                private_pointer_func_name, index, arg
+            )
+            if private_binding is None:
+                generated_args.append(rendered_args[index])
+            elif private_binding.get("scalar"):
+                generated_args.append(private_binding["backing"])
+            else:
+                generated_args.extend(
+                    [private_binding["backing"], private_binding["offset"]]
+                )
             if index >= len(param_names):
                 continue
             texture_param = param_names[index]
@@ -24003,9 +25126,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if not is_private_pointer_parameter(parameter):
             return None
         parameter_name = getattr(parameter, "name", None)
-        size = self.function_private_pointer_array_size_hints.get(
-            function_name, {}
-        ).get(parameter_name)
+        size = self.current_hlsl_private_pointer_variant.get(parameter_name)
+        if size is None:
+            size = self.function_private_pointer_array_size_hints.get(
+                function_name, {}
+            ).get(parameter_name)
         if not size:
             raise DirectXPrivatePointerParameterError(
                 "DirectX private pointer parameter "
@@ -24029,6 +25154,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 reason="unsupported-pointee-type",
                 source_location=getattr(parameter, "source_location", None),
             )
+        if parameter_name in self.function_private_pointer_scalar_parameters.get(
+            function_name, set()
+        ):
+            return self.map_type(pointee_type)
         return f"{self.map_type(pointee_type)}[{size}]"
 
     def hlsl_metal_buffer_pointer_resource_type(self, vtype, node=None):

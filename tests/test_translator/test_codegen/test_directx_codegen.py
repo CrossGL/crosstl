@@ -45,6 +45,7 @@ from crosstl.translator.ast import (
 from crosstl.translator.codegen.directx_codegen import (
     DirectXAtomicFenceLoweringError,
     DirectXCooperativeMatrixUnsupportedError,
+    DirectXPrivatePointerParameterError,
     DirectXSemanticArraySizeError,
     DirectXUnresolvedSourceTypeError,
     HLSLCodeGen,
@@ -17505,8 +17506,15 @@ def test_directx_wave_intrinsic_infers_pointer_index_element_type():
 
     generated = generate_code(parse_code(tokenize_code(code)))
 
-    assert "void reduceValues(inout float values[4], uint index)" in generated
-    assert "values[index] = WaveActiveSum(values[index]);" in generated
+    assert (
+        "void reduceValues(inout float values[4], int values_base, uint index)"
+        in generated
+    )
+    assert (
+        "values[(values_base + index)] = "
+        "WaveActiveSum(values[(values_base + index)]);" in generated
+    )
+    assert "reduceValues(values, 0, 0);" in generated
 
 
 def test_directx_wave_intrinsics_infer_let_result_types():
@@ -36792,10 +36800,176 @@ def test_hlsl_private_pointer_helper_uses_fixed_local_array_extent():
 
     generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "uint sum4(inout uint values[4])" in generated
-    assert "total += values[i];" in generated
+    assert "uint sum4(inout uint values[4], int values_base)" in generated
+    assert "total += values[(values_base + i)];" in generated
+    assert "sum4(values, 0)" in generated
     assert "uint8_t*" not in generated
     assert "uint8 *" not in generated
+
+
+def test_hlsl_private_pointer_view_overloads_exact_and_offset_backings(tmp_path):
+    shader = """
+    shader PrivatePointerViewOverloads {
+        void fill5(thread float* values) {
+            values[0] = 3.0;
+            values[4] = 7.0;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                float exact[5];
+                float backing[10];
+                fill5(exact);
+                fill5(backing + 5);
+                float observed = exact[0] + backing[5] + backing[9];
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert generated.count("void fill5(") == 2
+    assert "void fill5(inout float values[5], int values_base)" in generated
+    assert "void fill5(inout float values[10], int values_base)" in generated
+    assert "values[(values_base + 0)] = 3.0;" in generated
+    assert "values[(values_base + 4)] = 7.0;" in generated
+    assert "fill5(exact, 0);" in generated
+    assert "fill5(backing, 5);" in generated
+    assert "float observed = ((exact[0] + backing[5]) + backing[9]);" in generated
+    assert "backing + 5" not in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_private_scalar_pointer_forwards_caller_visible_write():
+    shader = """
+    shader PrivateScalarPointer {
+        void increment(thread int* value) {
+            (*value) += 1;
+        }
+
+        void forward(thread int* value) {
+            increment(value);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                int value = 4;
+                forward(&value);
+                int observed = value;
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "void increment(inout int value)" in generated
+    assert "void forward(inout int value)" in generated
+    assert "value += 1;" in generated
+    assert "increment(value);" in generated
+    assert "forward(value);" in generated
+    assert "int observed = value;" in generated
+    assert "int*" not in generated
+    assert "&value" not in generated
+
+
+def test_hlsl_private_pointer_view_forwards_backing_and_composes_offset():
+    shader = """
+    shader ForwardedPrivatePointerView {
+        void write_pair(thread uint* values) {
+            values[0] = 11;
+            values[1] = 13;
+        }
+
+        void forward(thread uint* values) {
+            write_pair(values + 2);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                uint backing[8];
+                forward(backing + 3);
+                uint observed = backing[5] + backing[6];
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "void forward(inout uint values[8], int values_base)" in generated
+    assert "void write_pair(inout uint values[8], int values_base)" in generated
+    assert "forward(backing, 3);" in generated
+    assert "write_pair(values, (values_base + 2));" in generated
+    assert "values[(values_base + 0)] = 11;" in generated
+    assert "values[(values_base + 1)] = 13;" in generated
+    assert "uint observed = (backing[5] + backing[6]);" in generated
+    assert "values + 2" not in generated
+    assert "backing + 3" not in generated
+
+
+def test_hlsl_private_pointer_view_rejects_constant_out_of_bounds_slice():
+    shader = """
+    shader OutOfBoundsPrivatePointerView {
+        void fill5(thread float* values) {
+            values[4] = 1.0;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                float backing[5];
+                fill5(backing + 1);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        DirectXPrivatePointerParameterError,
+        match=(
+            "private pointer view 'fill5.values' requires elements 1 through 5, "
+            "but backing array 'backing' has extent 5"
+        ),
+    ) as excinfo:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert excinfo.value.reason == "view-out-of-bounds"
+
+
+@pytest.mark.parametrize("offset", ["offset", "offset++"])
+def test_hlsl_private_pointer_view_rejects_unprovable_offset(offset):
+    shader = f"""
+    shader UnprovablePrivatePointerView {{
+        void fill(thread float* values) {{
+            values[0] = 1.0;
+        }}
+
+        void dispatch(int offset) {{
+            float backing[5];
+            fill(backing + {offset});
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        DirectXPrivatePointerParameterError,
+        match="cannot prove the private pointer view offset",
+    ) as excinfo:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert excinfo.value.reason in {
+        "side-effecting-view-offset",
+        "unprovable-view-offset",
+    }
 
 
 if __name__ == "__main__":
