@@ -345,6 +345,7 @@ class VulkanSPIRVCodeGen:
         self.current_entry_point_return_outputs = None
         self.current_expression_expected_type = None
         self.current_generic_type_substitutions = {}
+        self.current_cooperative_matrix_role_overrides = {}
         self.mesh_output_counts_by_function = {}
         self.mesh_vertex_output_variable = None
         self.mesh_vertex_output_limit = None
@@ -14983,6 +14984,301 @@ class VulkanSPIRVCodeGen:
             source_location=getattr(expr, "source_location", None),
         )
 
+    def cooperative_matrix_role_specialization_error(
+        self, node, reason: str, message: str
+    ):
+        return UnsupportedSPIRVFeatureError(
+            f"cooperative-matrix-role-specialization-{reason}",
+            message,
+            missing_capabilities=(
+                f"spirv.cooperative_matrix.role-specialization-{reason}",
+            ),
+            source_location=getattr(node, "source_location", None),
+        )
+
+    def neutral_cooperative_matrix_type(self, type_source):
+        if not isinstance(type_source, CooperativeMatrixType):
+            return None
+        use = str(getattr(type_source, "use", "unspecified"))
+        normalized_use = use.strip().lower().replace("-", "_")
+        return type_source if normalized_use == "unspecified" else None
+
+    def cooperative_matrix_type_with_use(self, type_source, use: str):
+        return CooperativeMatrixType(
+            type_source.element_type,
+            type_source.rows,
+            type_source.cols,
+            scope=type_source.scope,
+            use=use,
+            layout=type_source.layout,
+            source_location=getattr(type_source, "source_location", None),
+            annotations=dict(getattr(type_source, "annotations", {}) or {}),
+        )
+
+    def cooperative_matrix_direct_identifier_name(self, expr):
+        if isinstance(expr, (IdentifierNode, VariableNode)):
+            return expr.name
+        if isinstance(expr, str):
+            return expr
+        return None
+
+    def cooperative_matrix_role_binding(self, expr, scopes):
+        name = self.cooperative_matrix_direct_identifier_name(expr)
+        if name is None:
+            return None
+        for scope in reversed(scopes):
+            if name in scope:
+                return scope[name]
+        return None
+
+    def record_cooperative_matrix_role_demand(
+        self, binding, role: str, source, analysis
+    ):
+        if binding is None or binding[0] != "neutral":
+            return
+        declaration = binding[1]
+        analysis["demands"][id(declaration)].setdefault(role, []).append(source)
+
+    def scan_cooperative_matrix_direct_role_operand(
+        self, value, scopes, analysis, role: str
+    ):
+        if self.cooperative_matrix_direct_identifier_name(value) is not None:
+            binding = self.cooperative_matrix_role_binding(value, scopes)
+            if role != "element":
+                self.record_cooperative_matrix_role_demand(
+                    binding, role, value, analysis
+                )
+            return
+        self.scan_cooperative_matrix_role_expression(value, scopes, analysis)
+
+    def scan_cooperative_matrix_role_expression(self, value, scopes, analysis):
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return
+        if isinstance(value, dict):
+            for item in value.values():
+                self.scan_cooperative_matrix_role_expression(item, scopes, analysis)
+            return
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                self.scan_cooperative_matrix_role_expression(item, scopes, analysis)
+            return
+        if isinstance(value, BlockNode):
+            self.scan_cooperative_matrix_role_block(value, scopes, analysis)
+            return
+        if isinstance(value, VariableNode):
+            self.scan_cooperative_matrix_role_declaration(value, scopes, analysis)
+            return
+        if isinstance(value, AssignmentNode):
+            self.scan_cooperative_matrix_role_assignment(value, scopes, analysis)
+            return
+        if isinstance(value, IdentifierNode):
+            binding = self.cooperative_matrix_role_binding(value, scopes)
+            if binding is None or binding[0] != "neutral":
+                return
+            declaration = binding[1]
+            raise self.cooperative_matrix_role_specialization_error(
+                declaration,
+                "escape",
+                "SPIR-V cooperative-matrix role specialization cannot prove the "
+                f"role of local '{declaration.name}' because it escapes direct "
+                "matrix multiply and lane-element operations",
+            )
+        if isinstance(value, CooperativeMatrixOpNode):
+            if value.operation == "multiply":
+                for index, role in ((0, "matrix_a"), (1, "matrix_b")):
+                    if index >= len(value.arguments):
+                        continue
+                    self.scan_cooperative_matrix_direct_role_operand(
+                        value.arguments[index], scopes, analysis, role
+                    )
+                for argument in value.arguments[2:]:
+                    self.scan_cooperative_matrix_role_expression(
+                        argument, scopes, analysis
+                    )
+                return
+            if value.operation == "element":
+                if value.arguments:
+                    self.scan_cooperative_matrix_direct_role_operand(
+                        value.arguments[0], scopes, analysis, "element"
+                    )
+                for argument in value.arguments[1:]:
+                    self.scan_cooperative_matrix_role_expression(
+                        argument, scopes, analysis
+                    )
+                return
+
+        if isinstance(value, ForNode):
+            scopes.append({})
+            try:
+                self.scan_cooperative_matrix_role_expression(
+                    value.init, scopes, analysis
+                )
+                self.scan_cooperative_matrix_role_expression(
+                    value.condition, scopes, analysis
+                )
+                self.scan_cooperative_matrix_role_expression(
+                    value.update, scopes, analysis
+                )
+                self.scan_cooperative_matrix_role_expression(
+                    value.body, scopes, analysis
+                )
+            finally:
+                scopes.pop()
+            return
+
+        if hasattr(value, "child_nodes"):
+            visited_children = set()
+            for child in value.child_nodes():
+                child_id = id(child)
+                if child_id in visited_children:
+                    continue
+                visited_children.add(child_id)
+                self.scan_cooperative_matrix_role_expression(child, scopes, analysis)
+
+    def scan_cooperative_matrix_role_declaration(self, node, scopes, analysis):
+        source_type = getattr(node, "var_type", getattr(node, "vtype", None))
+        neutral_type = self.neutral_cooperative_matrix_type(source_type)
+        existing_binding = self.cooperative_matrix_role_binding(node.name, scopes)
+        if existing_binding is not None and (
+            neutral_type is not None or existing_binding[0] == "neutral"
+        ):
+            raise self.cooperative_matrix_role_specialization_error(
+                node,
+                "shadowing",
+                "SPIR-V cooperative-matrix role specialization requires a "
+                f"unique unshadowed local declaration for '{node.name}'",
+            )
+        if neutral_type is not None and getattr(node, "is_type_alias", False):
+            raise self.cooperative_matrix_role_specialization_error(
+                node,
+                "alias",
+                "SPIR-V cooperative-matrix role specialization does not support "
+                f"role-neutral type alias '{node.name}'",
+            )
+
+        binding_kind = "neutral" if neutral_type is not None else "other"
+        binding = (binding_kind, node)
+        scopes[-1][node.name] = binding
+        if neutral_type is not None:
+            analysis["declarations"][id(node)] = node
+            analysis["demands"][id(node)] = {}
+
+        initial_value = getattr(node, "initial_value", None)
+        if (
+            neutral_type is not None
+            and initial_value is not None
+            and not (
+                isinstance(initial_value, CooperativeMatrixOpNode)
+                and initial_value.operation == "multiply"
+            )
+        ):
+            raise self.cooperative_matrix_role_specialization_error(
+                node,
+                "alias",
+                "SPIR-V cooperative-matrix role specialization does not support "
+                f"value aliases or non-multiply initializers for local '{node.name}'",
+            )
+        if (
+            neutral_type is not None
+            and isinstance(initial_value, CooperativeMatrixOpNode)
+            and initial_value.operation == "multiply"
+        ):
+            self.record_cooperative_matrix_role_demand(
+                binding, "accumulator", initial_value, analysis
+            )
+        self.scan_cooperative_matrix_role_expression(initial_value, scopes, analysis)
+
+    def scan_cooperative_matrix_role_assignment(self, node, scopes, analysis):
+        value = getattr(node, "value", None)
+        target = getattr(node, "target", None)
+        if (
+            getattr(node, "operator", "=") == "="
+            and isinstance(value, CooperativeMatrixOpNode)
+            and value.operation == "multiply"
+        ):
+            binding = self.cooperative_matrix_role_binding(target, scopes)
+            if binding is not None and binding[0] == "neutral":
+                self.record_cooperative_matrix_role_demand(
+                    binding, "accumulator", value, analysis
+                )
+            else:
+                self.scan_cooperative_matrix_role_expression(target, scopes, analysis)
+            self.scan_cooperative_matrix_role_expression(value, scopes, analysis)
+            return
+
+        self.scan_cooperative_matrix_role_expression(target, scopes, analysis)
+        self.scan_cooperative_matrix_role_expression(value, scopes, analysis)
+
+    def scan_cooperative_matrix_role_block(self, block, scopes, analysis):
+        scopes.append({})
+        try:
+            statements = getattr(block, "statements", block)
+            for statement in statements or []:
+                self.scan_cooperative_matrix_role_expression(
+                    statement, scopes, analysis
+                )
+        finally:
+            scopes.pop()
+
+    def cooperative_matrix_role_overrides_for_function(self, function_node):
+        if not self.cooperative_matrix_khr_enabled:
+            return {}
+
+        body = getattr(function_node, "body", None)
+        if body is None:
+            return {}
+        neutral_parameters = [
+            parameter
+            for parameter in self.function_parameters(function_node)
+            if self.neutral_cooperative_matrix_type(
+                getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+            )
+            is not None
+        ]
+        if neutral_parameters:
+            parameter = neutral_parameters[0]
+            raise self.cooperative_matrix_role_specialization_error(
+                parameter,
+                "parameter",
+                "SPIR-V cooperative-matrix role specialization currently "
+                "supports only local declarations; role-neutral parameter "
+                f"'{parameter.name}' requires an explicit role",
+            )
+        parameter_scope = {
+            getattr(parameter, "name", f"param{index}"): ("parameter", parameter)
+            for index, parameter in enumerate(self.function_parameters(function_node))
+        }
+        analysis = {"declarations": {}, "demands": {}}
+        self.scan_cooperative_matrix_role_block(body, [parameter_scope], analysis)
+
+        overrides = {}
+        for declaration_id, declaration in analysis["declarations"].items():
+            roles = analysis["demands"][declaration_id]
+            if not roles:
+                raise self.cooperative_matrix_role_specialization_error(
+                    declaration,
+                    "unresolved",
+                    "SPIR-V cooperative-matrix role specialization could not "
+                    "infer a MatrixA, MatrixB, or accumulator role for local "
+                    f"'{declaration.name}'",
+                )
+            if len(roles) != 1:
+                role_names = ", ".join(sorted(roles))
+                raise self.cooperative_matrix_role_specialization_error(
+                    declaration,
+                    "conflict",
+                    "SPIR-V cooperative-matrix role specialization found "
+                    f"conflicting roles for local '{declaration.name}': {role_names}",
+                )
+            role = next(iter(roles))
+            source_type = getattr(
+                declaration, "var_type", getattr(declaration, "vtype", None)
+            )
+            overrides[declaration_id] = self.cooperative_matrix_type_with_use(
+                source_type, role
+            )
+        return overrides
+
     def cooperative_matrix_operation_value(self, expr, operand, label: str):
         value = self.process_expression(operand)
         if value is None:
@@ -15158,6 +15454,11 @@ class VulkanSPIRVCodeGen:
 
     def cooperative_matrix_operation_result_type(self, expr):
         result_source = getattr(expr, "result_type", None)
+        if (
+            self.neutral_cooperative_matrix_type(result_source) is not None
+            and self.current_expression_expected_type is not None
+        ):
+            result_source = self.current_expression_expected_type
         if result_source is None:
             result_source = self.current_expression_expected_type
         if result_source is None:
@@ -17155,6 +17456,9 @@ class VulkanSPIRVCodeGen:
 
     def process_function_node(self, function_node, stage=None):
         """Process a CrossGL function definition."""
+        previous_cooperative_matrix_role_overrides = (
+            self.current_cooperative_matrix_role_overrides
+        )
         previous_storage_buffer_pointer_offset_aliases = (
             self.storage_buffer_pointer_offset_aliases
         )
@@ -17168,6 +17472,9 @@ class VulkanSPIRVCodeGen:
         )
         self.current_generic_function_substitutions = (
             getattr(function_node, "_generic_substitutions", {}) or {}
+        )
+        self.current_cooperative_matrix_role_overrides = (
+            self.cooperative_matrix_role_overrides_for_function(function_node)
         )
         previous_function_literal_int_constant_shadows = (
             self.current_function_literal_int_constant_shadows
@@ -17515,6 +17822,9 @@ class VulkanSPIRVCodeGen:
         )
         self.current_function_literal_int_constant_shadows = (
             previous_function_literal_int_constant_shadows
+        )
+        self.current_cooperative_matrix_role_overrides = (
+            previous_cooperative_matrix_role_overrides
         )
         if previous_entry_resource_binding_state is not None:
             self.restore_resource_binding_state(previous_entry_resource_binding_state)
@@ -17992,7 +18302,9 @@ class VulkanSPIRVCodeGen:
 
     def process_variable_declaration(self, node: VariableNode):
         """Process a local CrossGL variable declaration."""
-        var_type_source = getattr(node, "var_type", getattr(node, "vtype", "float"))
+        var_type_source = self.current_cooperative_matrix_role_overrides.get(
+            id(node), getattr(node, "var_type", getattr(node, "vtype", "float"))
+        )
         storage_class = self.local_variable_storage_class(node)
         self.current_function_literal_int_constant_shadows.add(node.name)
         self.current_function_literal_int_constants.pop(node.name, None)
@@ -21768,10 +22080,16 @@ class VulkanSPIRVCodeGen:
         previous_generic_function_substitutions = (
             self.current_generic_function_substitutions
         )
-        self.current_return_type = self.map_crossgl_type(function_node.return_type)
         self.current_generic_function_substitutions = (
             getattr(function_node, "_generic_substitutions", {}) or {}
         )
+        previous_cooperative_matrix_role_overrides = (
+            self.current_cooperative_matrix_role_overrides
+        )
+        self.current_cooperative_matrix_role_overrides = (
+            self.cooperative_matrix_role_overrides_for_function(function_node)
+        )
+        self.current_return_type = self.map_crossgl_type(function_node.return_type)
         self.current_function_literal_int_constant_shadows = {
             param.name
             for param in self.function_parameters(function_node)
@@ -21917,6 +22235,9 @@ class VulkanSPIRVCodeGen:
             )
             self.current_generic_function_substitutions = (
                 previous_generic_function_substitutions
+            )
+            self.current_cooperative_matrix_role_overrides = (
+                previous_cooperative_matrix_role_overrides
             )
 
     def inline_function_body(self, function_node) -> Optional[SpirvId]:

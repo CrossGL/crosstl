@@ -455,6 +455,26 @@ def assert_cooperative_matrix_element_rejected(
     assert "WARNING" not in emitted
 
 
+def assert_cooperative_matrix_role_specialization_rejected(
+    profile_source, message, reason
+):
+    generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+
+    with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
+        generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+    assert message in str(exc_info.value)
+    assert exc_info.value.feature == (
+        f"cooperative-matrix-role-specialization-{reason}"
+    )
+    assert exc_info.value.missing_capabilities == (
+        f"spirv.cooperative_matrix.role-specialization-{reason}",
+    )
+    emitted = "\n".join(generator.code_lines)
+    assert "OpCooperativeMatrixMulAddKHR" not in emitted
+    assert "WARNING" not in emitted
+
+
 def test_spirv_storage_pointer_reinterpret_reads_byte_lanes(tmp_path):
     source = """
     shader StoragePointerReinterpret {
@@ -33509,6 +33529,406 @@ class TestSpirvShaderValidation:
         assert "OpMatrixTimesMatrix" not in spv_code
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_specializes_unique_neutral_local_matrix_roles(
+        self, tmp_path
+    ):
+        neutral_type = cooperative_matrix_type_source("float", 8, 8, "unspecified")
+        profile_source = f"""
+        shader CooperativeMatrixRoleSpecialization {{
+            compute {{
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+                void main() {{
+                    {neutral_type} left;
+                    {neutral_type} right;
+                    {neutral_type} result =
+                        cooperative_matrix_multiply(left, right);
+                    cooperative_matrix_element(result, 0) =
+                        cooperative_matrix_element(left, 0);
+                }}
+            }}
+        }}
+        """
+        ast = Parser(Lexer(profile_source).tokens).parse()
+        source_types = [
+            node
+            for node in ast.walk()
+            if isinstance(node, CooperativeMatrixType) and node.use == "unspecified"
+        ]
+        multiply = next(
+            node
+            for node in ast.walk()
+            if isinstance(node, CooperativeMatrixOpNode)
+            and node.operation == "multiply"
+        )
+        multiply.result_type = source_types[0]
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(ast)
+
+        constant_values = spirv_integer_constant_values(spv_code)
+        roles = {
+            constant_values[declaration.group("use")]
+            for declaration in re.finditer(
+                r"%\d+ = OpTypeCooperativeMatrixKHR "
+                r"%\d+ %\d+ %\d+ %\d+ (?P<use>%\d+)\b",
+                spv_code,
+            )
+        }
+        assert roles == {0, 1, 2}
+        assert spv_code.count("OpCooperativeMatrixMulAddKHR") == 1
+        assert spv_code.count("OpAccessChain") == 2
+        assert all(matrix_type.use == "unspecified" for matrix_type in source_types)
+        assert multiply.result_type.use == "unspecified"
+        assert all(
+            matrix_type.generic_args[4] == "unspecified" for matrix_type in source_types
+        )
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_specializes_neutral_assignment_result_role(self, tmp_path):
+        neutral_type = cooperative_matrix_type_source("float", 8, 8, "unspecified")
+        profile_source = f"""
+        shader CooperativeMatrixAssignmentRoleSpecialization {{
+            compute {{
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+                void main() {{
+                    {neutral_type} left;
+                    {neutral_type} right;
+                    {neutral_type} result;
+                    result = cooperative_matrix_multiply(left, right);
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        assert spv_code.count("OpCooperativeMatrixMulAddKHR") == 1
+        assert "cooperative-matrix-use-role" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_specializes_sibling_scope_roles_by_declaration(
+        self, tmp_path
+    ):
+        neutral_type = cooperative_matrix_type_source("float", 8, 8, "unspecified")
+        profile_source = f"""
+        shader CooperativeMatrixSiblingRoleScopes {{
+            compute {{
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+                void main() {{
+                    if (true) {{
+                        {neutral_type} left;
+                        {neutral_type} right;
+                        {neutral_type} result =
+                            cooperative_matrix_multiply(left, right);
+                    }}
+                    if (true) {{
+                        {neutral_type} left;
+                        {neutral_type} right;
+                        {neutral_type} result =
+                            cooperative_matrix_multiply(left, right);
+                    }}
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        assert spv_code.count("OpCooperativeMatrixMulAddKHR") == 2
+        assert "cooperative-matrix-role-specialization-shadowing" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_specializes_roles_in_inlined_buffer_helper(self, tmp_path):
+        neutral_type = cooperative_matrix_type_source("float", 8, 8, "unspecified")
+        profile_source = f"""
+        shader CooperativeMatrixInlineRoleSpecialization {{
+            compute {{
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                layout(set = 0, binding = 0) buffer float* output;
+
+                void write_product(float* values) {{
+                    {neutral_type} left;
+                    {neutral_type} right;
+                    {neutral_type} result =
+                        cooperative_matrix_multiply(left, right);
+                    values[0] = cooperative_matrix_element(result, 0);
+                }}
+
+                void main() {{
+                    write_product(output);
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        assert spv_code.count("OpCooperativeMatrixMulAddKHR") == 1
+        assert "OpFunctionCall" not in spv_code
+        assert "cooperative-matrix-use-role" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_rejects_conflicting_neutral_local_matrix_roles(self):
+        neutral_type = cooperative_matrix_type_source("float", 8, 8, "unspecified")
+        profile_source = f"""
+        shader CooperativeMatrixRoleConflict {{
+            compute {{
+                void main() {{
+                    {neutral_type} value;
+                    {neutral_type} left;
+                    {neutral_type} right;
+                    {neutral_type} first =
+                        cooperative_matrix_multiply(value, right);
+                    {neutral_type} second =
+                        cooperative_matrix_multiply(left, value);
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_role_specialization_rejected(
+            profile_source,
+            "conflicting roles for local 'value': matrix_a, matrix_b",
+            "conflict",
+        )
+
+    def test_opt_in_profile_rejects_unresolved_neutral_local_matrix_role(self):
+        neutral_type = cooperative_matrix_type_source("float", 8, 8, "unspecified")
+        profile_source = f"""
+        shader CooperativeMatrixRoleUnresolved {{
+            compute {{
+                void main() {{
+                    {neutral_type} value;
+                    cooperative_matrix_element(value, 0) = 1.0;
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_role_specialization_rejected(
+            profile_source,
+            "could not infer a MatrixA, MatrixB, or accumulator role for local 'value'",
+            "unresolved",
+        )
+
+    def test_opt_in_profile_rejects_neutral_matrix_value_alias(self):
+        neutral_type = cooperative_matrix_type_source("float", 8, 8, "unspecified")
+        profile_source = f"""
+        shader CooperativeMatrixRoleEscape {{
+            compute {{
+                void main() {{
+                    {neutral_type} left;
+                    {neutral_type} right;
+                    {neutral_type} alias = left;
+                    {neutral_type} result =
+                        cooperative_matrix_multiply(left, right);
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_role_specialization_rejected(
+            profile_source,
+            "value aliases or non-multiply initializers for local 'alias'",
+            "alias",
+        )
+
+    def test_opt_in_profile_rejects_escaping_neutral_local_matrix_role(self):
+        neutral_type = cooperative_matrix_type_source("float", 8, 8, "unspecified")
+        explicit_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixRoleEscape {{
+            compute {{
+                void consume({explicit_type} value) {{}}
+
+                void main() {{
+                    {neutral_type} left;
+                    {neutral_type} right;
+                    {neutral_type} result =
+                        cooperative_matrix_multiply(left, right);
+                    consume(left);
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_role_specialization_rejected(
+            profile_source,
+            "local 'left' because it escapes direct matrix multiply",
+            "escape",
+        )
+
+    def test_opt_in_profile_rejects_wrapped_neutral_multiply_operand(self):
+        neutral_type = cooperative_matrix_type_source("float", 8, 8, "unspecified")
+        explicit_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixWrappedRoleEscape {{
+            compute {{
+                {explicit_type} passthrough({explicit_type} value) {{
+                    return value;
+                }}
+
+                void main() {{
+                    {neutral_type} left;
+                    {neutral_type} right;
+                    {neutral_type} result = cooperative_matrix_multiply(
+                        passthrough(left), right);
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_role_specialization_rejected(
+            profile_source,
+            "local 'left' because it escapes direct matrix multiply",
+            "escape",
+        )
+
+    def test_opt_in_profile_rejects_shadowed_neutral_local_matrix_role(self):
+        neutral_type = cooperative_matrix_type_source("float", 8, 8, "unspecified")
+        profile_source = f"""
+        shader CooperativeMatrixRoleShadowing {{
+            compute {{
+                void main() {{
+                    {neutral_type} value;
+                    {{
+                        {neutral_type} value;
+                    }}
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_role_specialization_rejected(
+            profile_source,
+            "unique unshadowed local declaration for 'value'",
+            "shadowing",
+        )
+
+    def test_opt_in_profile_rejects_neutral_matrix_parameter_role(self):
+        neutral_type = cooperative_matrix_type_source("float", 8, 8, "unspecified")
+        profile_source = f"""
+        shader CooperativeMatrixParameterRole {{
+            compute {{
+                float read_value({neutral_type} value) {{
+                    return cooperative_matrix_element(value, 0);
+                }}
+
+                void main() {{}}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_role_specialization_rejected(
+            profile_source,
+            "role-neutral parameter 'value' requires an explicit role",
+            "parameter",
+        )
+
+    def test_opt_in_profile_keeps_neutral_chained_result_conversion_closed(self):
+        neutral_type = cooperative_matrix_type_source("float", 8, 8, "unspecified")
+        profile_source = f"""
+        shader CooperativeMatrixNeutralRoleChain {{
+            compute {{
+                void main() {{
+                    {neutral_type} left;
+                    {neutral_type} middle;
+                    {neutral_type} right;
+                    {neutral_type} result = cooperative_matrix_multiply(
+                        cooperative_matrix_multiply(left, middle), right);
+                }}
+            }}
+        }}
+        """
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+
+        with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
+            generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        assert exc_info.value.feature == "cooperative-matrix-role-conversion"
+        assert exc_info.value.missing_capabilities == (
+            "spirv.cooperative_matrix.role-conversion",
+        )
+        emitted = "\n".join(generator.code_lines)
+        assert "cooperative-matrix-use-role" not in emitted
+        assert "OpTypeCooperativeMatrixKHR" in emitted
+        assert "OpCooperativeMatrixMulAddKHR" not in emitted
+        assert "WARNING" not in emitted
+
+    def test_metal_neutral_matrix_roles_translate_to_valid_spirv(self, tmp_path):
+        source_path = tmp_path / "role_single.metal"
+        source_path.write_text(
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            kernel void role_single(device float* output [[buffer(0)]]) {
+              simdgroup_matrix<float, 8, 8> left;
+              simdgroup_matrix<float, 8, 8> right;
+              left.thread_elements()[0] = 1.0f;
+              right.thread_elements()[0] = 2.0f;
+              simdgroup_matrix<float, 8, 8> result = left * right;
+              output[0] = result.thread_elements()[0];
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        spv_code = crosstl.translate(
+            str(source_path),
+            backend="vulkan-khr-cooperative-matrix",
+            format_output=False,
+        )
+
+        assert spv_code.count("OpTypeCooperativeMatrixKHR") == 3
+        assert spv_code.count("OpCooperativeMatrixMulAddKHR") == 1
+        assert spv_code.count("OpAccessChain") >= 4
+        assert "cooperative-matrix-use-role" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_metal_neutral_matrix_chain_reaches_role_conversion_diagnostic(
+        self, tmp_path
+    ):
+        source_path = tmp_path / "role_chain.metal"
+        source_path.write_text(
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            kernel void role_chain(device float* output [[buffer(0)]]) {
+              simdgroup_matrix<float, 8, 8> left;
+              simdgroup_matrix<float, 8, 8> middle;
+              simdgroup_matrix<float, 8, 8> right;
+              simdgroup_matrix<float, 8, 8> result = (left * middle) * right;
+              output[0] = result.thread_elements()[0];
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
+            crosstl.translate(
+                str(source_path),
+                backend="vulkan-khr-cooperative-matrix",
+                format_output=False,
+            )
+
+        assert exc_info.value.feature == "cooperative-matrix-role-conversion"
+        assert exc_info.value.missing_capabilities == (
+            "spirv.cooperative_matrix.role-conversion",
+        )
 
     def test_opt_in_profile_propagates_matrix_multiply_assignment_result_contract(
         self, tmp_path
