@@ -927,6 +927,7 @@ class HLSLCodeGen:
         self.function_hlsl_workgroup_pointer_parameter_indices = {}
         self.function_hlsl_workgroup_pointer_backing_variants = {}
         self.function_hlsl_workgroup_pointer_base_names = {}
+        self.hlsl_omitted_function_names = set()
         self.current_hlsl_workgroup_pointer_variant = {}
         self.current_hlsl_workgroup_pointer_base_names = {}
         self.hlsl_global_groupshared_pointer_aliases = {}
@@ -976,6 +977,7 @@ class HLSLCodeGen:
         self.hlsl_hoisted_groupshared_declarations = []
         self.hlsl_hoisted_groupshared_aliases_by_declaration = {}
         self.hlsl_hoisted_groupshared_constants_by_declaration = {}
+        self.hlsl_hoisted_groupshared_function_names_by_declaration = {}
         self.hlsl_hoisted_groupshared_declaration_ids = set()
         self.hlsl_compute_num_workgroups_uniform = None
         self.vertex_entry_input_struct_names = set()
@@ -1509,6 +1511,7 @@ class HLSLCodeGen:
         self.function_hlsl_workgroup_pointer_parameter_indices = {}
         self.function_hlsl_workgroup_pointer_backing_variants = {}
         self.function_hlsl_workgroup_pointer_base_names = {}
+        self.hlsl_omitted_function_names = set()
         self.current_hlsl_workgroup_pointer_variant = {}
         self.current_hlsl_workgroup_pointer_base_names = {}
         self.hlsl_global_groupshared_pointer_aliases = {}
@@ -1556,6 +1559,7 @@ class HLSLCodeGen:
         self.hlsl_hoisted_groupshared_declarations = []
         self.hlsl_hoisted_groupshared_aliases_by_declaration = {}
         self.hlsl_hoisted_groupshared_constants_by_declaration = {}
+        self.hlsl_hoisted_groupshared_function_names_by_declaration = {}
         self.hlsl_hoisted_groupshared_declaration_ids = set()
         self.hlsl_compute_num_workgroups_uniform = None
         self.vertex_entry_output_struct_names = set()
@@ -1900,7 +1904,7 @@ class HLSLCodeGen:
         self.function_private_pointer_array_size_hints = (
             self.collect_private_pointer_array_size_hints(ast)
         )
-        self.collect_hlsl_workgroup_pointer_variants(ast)
+        self.collect_hlsl_workgroup_pointer_variants(ast, target_stage)
         _, _, parameter_struct_failures = (
             self.collect_lowered_glsl_buffer_block_parameters(
                 self.collect_function_parameters(functions)
@@ -2609,7 +2613,10 @@ class HLSLCodeGen:
 
         functions = getattr(ast, "functions", [])
         global_functions_by_name = {
-            func.name: func for func in functions if getattr(func, "name", None)
+            func.name: func
+            for func in functions
+            if getattr(func, "name", None)
+            and func.name not in self.hlsl_omitted_function_names
         }
         self.current_hlsl_available_functions = global_functions_by_name
         functions_code = ""
@@ -2620,6 +2627,8 @@ class HLSLCodeGen:
             FunctionCallNode,
         )
         for func in ordered_functions:
+            if getattr(func, "name", None) in self.hlsl_omitted_function_names:
+                continue
             qualifier_name = function_stage_name(func)
 
             if not should_emit_qualified_function(target_stage, qualifier_name):
@@ -2627,6 +2636,11 @@ class HLSLCodeGen:
 
             if generic_function_parameters(func):
                 for specialized_func in generic_function_emission_list(self, func):
+                    if (
+                        getattr(specialized_func, "name", None)
+                        in self.hlsl_omitted_function_names
+                    ):
+                        continue
                     functions_code += self.generate_function(specialized_func)
                 continue
 
@@ -2667,6 +2681,7 @@ class HLSLCodeGen:
                         func.name: func
                         for func in local_functions
                         if getattr(func, "name", None)
+                        and func.name not in self.hlsl_omitted_function_names
                     }
                 )
 
@@ -2676,11 +2691,18 @@ class HLSLCodeGen:
                     self.function_call_name,
                     FunctionCallNode,
                 ):
+                    if getattr(func, "name", None) in self.hlsl_omitted_function_names:
+                        continue
                     if generic_function_parameters(func):
                         for specialized_func in generic_function_emission_list(
                             self,
                             func,
                         ):
+                            if (
+                                getattr(specialized_func, "name", None)
+                                in self.hlsl_omitted_function_names
+                            ):
+                                continue
                             functions_code += self.generate_function(specialized_func)
                     else:
                         functions_code += self.generate_function(func)
@@ -16612,6 +16634,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         used_names.update(self.HLSL_RESERVED_LOCAL_IDENTIFIER_NAMES)
         declarations = []
         aliases_by_declaration = {}
+        function_names_by_declaration = {}
         constants_by_declaration = {}
         declaration_ids = set()
         emitted_functions = self.hlsl_emitted_functions_for_groupshared_lowering(
@@ -16664,6 +16687,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 self.global_variable_types[alias] = declared_type_text
                 declarations.append((node, alias))
                 aliases_by_declaration[id(node)] = alias
+                function_names_by_declaration[id(node)] = getattr(func, "name", None)
                 declaration_ids.add(id(node))
                 binding = self.hlsl_groupshared_storage_binding(node, alias)
                 if binding is not None:
@@ -16671,6 +16695,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         self.hlsl_hoisted_groupshared_declarations = declarations
         self.hlsl_hoisted_groupshared_aliases_by_declaration = aliases_by_declaration
+        self.hlsl_hoisted_groupshared_function_names_by_declaration = (
+            function_names_by_declaration
+        )
         self.hlsl_hoisted_groupshared_declaration_ids = declaration_ids
         self.hlsl_groupshared_pointer_bindings_by_declaration = bindings_by_declaration
         self.hlsl_global_groupshared_pointer_aliases = global_aliases
@@ -16821,7 +16848,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         declarations = [
             (node, getattr(node, "name", None)) for node in stage_groupshared_vars
         ]
-        declarations.extend(self.hlsl_hoisted_groupshared_declarations)
+        declarations.extend(
+            (node, alias)
+            for node, alias in self.hlsl_hoisted_groupshared_declarations
+            if self.hlsl_hoisted_groupshared_function_names_by_declaration.get(id(node))
+            not in self.hlsl_omitted_function_names
+        )
         return declarations
 
     def generate_hlsl_hoisted_groupshared_declaration(self, node, alias):
@@ -19211,15 +19243,166 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             source_location=getattr(node, "source_location", None),
         )
 
-    def collect_hlsl_workgroup_pointer_variants(self, ast):
+    def hlsl_resolved_function_call_name(self, node, available_names):
+        if not isinstance(node, FunctionCallNode):
+            return None
+        name = self.function_call_name(node)
+        if not name:
+            return None
+        arguments = list(getattr(node, "arguments", getattr(node, "args", [])) or [])
+        specialized_name = generic_function_call_name(self, name, arguments)
+        candidates = [
+            specialized_name,
+            self.hlsl_materialized_function_name(specialized_name),
+            self.hlsl_materialized_function_name(name),
+            name,
+        ]
+        return next(
+            (candidate for candidate in candidates if candidate in available_names),
+            None,
+        )
+
+    def hlsl_resolved_called_function_names(self, function, available_names):
+        return {
+            called_name
+            for node in self.walk_ast(getattr(function, "body", []))
+            if (
+                called_name := self.hlsl_resolved_function_call_name(
+                    node, available_names
+                )
+            )
+            is not None
+        }
+
+    def hlsl_reachable_function_names(self, ast, functions_by_name, target_stage=None):
+        all_entry_functions = []
+        selected_entry_functions = []
+        stage_entry_types = self.stage_entry_types()
+
+        for function in getattr(ast, "functions", []) or []:
+            stage_name = function_stage_name(function)
+            if stage_name not in stage_entry_types:
+                continue
+            all_entry_functions.append(function)
+            if stage_matches(target_stage, stage_name):
+                selected_entry_functions.append(function)
+
+        for stage_type, stage in (getattr(ast, "stages", {}) or {}).items():
+            entry_point = getattr(stage, "entry_point", None)
+            if entry_point is None:
+                continue
+            all_entry_functions.append(entry_point)
+            if stage_matches(target_stage, normalize_stage_name(stage_type)):
+                selected_entry_functions.append(entry_point)
+
+        if not all_entry_functions:
+            return set(functions_by_name)
+
+        available_names = set(functions_by_name)
+        reachable_names = set()
+        visited_ids = set()
+        pending = list(selected_entry_functions)
+        while pending:
+            function = pending.pop()
+            if function is None or id(function) in visited_ids:
+                continue
+            visited_ids.add(id(function))
+            function_name = getattr(function, "name", None)
+            if function_name:
+                reachable_names.add(function_name)
+            for called_name in self.hlsl_resolved_called_function_names(
+                function, available_names
+            ):
+                reachable_names.add(called_name)
+                callee = functions_by_name.get(called_name)
+                if callee is not None:
+                    pending.append(callee)
+
+        return reachable_names
+
+    def hlsl_function_has_workgroup_pointer_declaration(self, function):
+        parameters = (
+            getattr(function, "parameters", getattr(function, "params", [])) or []
+        )
+        if any(
+            self.hlsl_workgroup_pointer_declaration(parameter)
+            for parameter in parameters
+        ):
+            return True
+        return any(
+            isinstance(node, VariableNode)
+            and self.hlsl_workgroup_pointer_declaration(node)
+            for node in self.walk_ast(getattr(function, "body", []))
+        )
+
+    def hlsl_unreachable_workgroup_pointer_function_names(
+        self, functions_by_name, reachable_names
+    ):
+        available_names = set(functions_by_name)
+        calls_by_caller = {
+            function_name: self.hlsl_resolved_called_function_names(
+                function, available_names
+            )
+            for function_name, function in functions_by_name.items()
+        }
+        pointer_parameter_function_names = {
+            function_name
+            for function_name, function in functions_by_name.items()
+            if any(
+                self.hlsl_workgroup_pointer_declaration(parameter)
+                for parameter in (
+                    getattr(
+                        function,
+                        "parameters",
+                        getattr(function, "params", []),
+                    )
+                    or []
+                )
+            )
+        }
+        pointer_sensitive_names = {
+            function_name
+            for function_name, function in functions_by_name.items()
+            if self.hlsl_function_has_workgroup_pointer_declaration(function)
+            or calls_by_caller[function_name] & pointer_parameter_function_names
+        }
+        omitted_names = pointer_sensitive_names - reachable_names
+
+        changed = True
+        while changed:
+            changed = False
+            for function_name, called_names in calls_by_caller.items():
+                if function_name in reachable_names or function_name in omitted_names:
+                    continue
+                if called_names & omitted_names:
+                    omitted_names.add(function_name)
+                    changed = True
+
+        return omitted_names
+
+    def collect_hlsl_workgroup_pointer_variants(self, ast, target_stage=None):
         functions = list(self.collect_functions(ast))
         functions.extend(getattr(self, "generic_function_specializations", {}).values())
-        functions_by_name = {}
+        all_functions_by_name = {}
         for function in functions:
             function_name = getattr(function, "name", None)
             if not function_name or generic_function_parameters(function):
                 continue
-            functions_by_name[function_name] = function
+            all_functions_by_name[function_name] = function
+
+        reachable_names = self.hlsl_reachable_function_names(
+            ast, all_functions_by_name, target_stage
+        )
+        self.hlsl_omitted_function_names = (
+            self.hlsl_unreachable_workgroup_pointer_function_names(
+                all_functions_by_name, reachable_names
+            )
+        )
+        functions_by_name = {
+            function_name: function
+            for function_name, function in all_functions_by_name.items()
+            if function_name in reachable_names
+        }
 
         pointer_parameters = {}
         pointer_parameter_indices = {}
@@ -19331,15 +19514,6 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         for function_name, parameters in pointer_parameters.items():
             if variants[function_name]:
                 continue
-            function = functions_by_name[function_name]
-            referenced_names = {
-                getattr(node, "name", None)
-                for node in self.walk_ast(getattr(function, "body", []))
-                if isinstance(node, (IdentifierNode, VariableNode))
-            }
-            if all(parameter.name not in referenced_names for parameter in parameters):
-                variants[function_name].add(tuple(1 for _parameter in parameters))
-                continue
             parameter = parameters[0]
             raise self.hlsl_workgroup_pointer_error(
                 "DirectX workgroup pointer parameter "
@@ -19386,24 +19560,6 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "resource_type": "groupshared",
                 "access": "read_write",
             }
-
-        def call_name(node, arguments):
-            name = self.function_call_name(node)
-            specialized_name = generic_function_call_name(self, name, arguments)
-            candidates = [
-                specialized_name,
-                self.hlsl_materialized_function_name(specialized_name),
-                self.hlsl_materialized_function_name(name),
-                name,
-            ]
-            return next(
-                (
-                    candidate
-                    for candidate in candidates
-                    if candidate in pointer_parameters
-                ),
-                None,
-            )
 
         def visit(value, aliases, control_depth=0):
             if value is None or isinstance(value, (str, int, float, bool)):
@@ -19545,7 +19701,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 arguments = list(
                     getattr(value, "arguments", getattr(value, "args", [])) or []
                 )
-                callee_name = call_name(value, arguments)
+                callee_name = self.hlsl_resolved_function_call_name(
+                    value, pointer_parameters
+                )
                 if callee_name is not None:
                     bindings = {}
                     for index, parameter_name in pointer_parameter_indices[

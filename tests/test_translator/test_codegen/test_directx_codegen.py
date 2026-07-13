@@ -37226,7 +37226,7 @@ def test_hlsl_workgroup_pointer_variants_preserve_lexical_shadowing(tmp_path):
     assert_directx_compute_validates_if_available(generated, tmp_path)
 
 
-def test_hlsl_workgroup_pointer_rejects_uncalled_dereferenced_parameter():
+def test_hlsl_workgroup_pointer_omits_unreachable_unresolved_helper():
     shader = """
     shader UnresolvedWorkgroupPointerExtent {
         void orphan(threadgroup float* values) {
@@ -37241,13 +37241,99 @@ def test_hlsl_workgroup_pointer_rejects_uncalled_dereferenced_parameter():
     }
     """
 
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "orphan" not in generated
+    assert "void CSMain()" in generated
+    assert "float*" not in generated
+
+
+def test_hlsl_workgroup_pointer_omits_unreachable_wrapper_and_hoisted_state():
+    shader = """
+    shader UnreachableWorkgroupPointerWrapper {
+        void update(threadgroup float* values) {
+            values[0] = 1.0;
+        }
+
+        void dead_wrapper() {
+            threadgroup float dead_values[];
+            update(dead_values);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "void update(" not in generated
+    assert "void dead_wrapper(" not in generated
+    assert "dead_wrapper_dead_values" not in generated
+    assert "groupshared float" not in generated
+    assert "void CSMain()" in generated
+
+
+def test_hlsl_workgroup_pointer_rejects_reachable_unresolved_helper():
+    shader = """
+    shader ReachableUnresolvedWorkgroupPointerExtent {
+        void update(threadgroup float* values) {
+            values[0] = 1.0;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                threadgroup float values[];
+                update(values);
+            }
+        }
+    }
+    """
+
     with pytest.raises(DirectXWorkgroupPointerError) as excinfo:
         HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     diagnostic = excinfo.value
-    assert diagnostic.function_name == "orphan"
+    assert diagnostic.function_name == "update"
     assert diagnostic.parameter_name == "values"
     assert diagnostic.reason == "missing-concrete-size"
+
+
+def test_hlsl_workgroup_pointer_keeps_helper_reachable_from_selected_stage(tmp_path):
+    shader = """
+    shader SelectedStageWorkgroupPointerHelper {
+        void update(threadgroup float* values) {
+            values[0] += 1.0;
+        }
+
+        vertex {
+            void main() {
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                threadgroup float values[8];
+                update(values);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "groupshared float main_values[8];" in generated
+    assert "void update(inout float values[8], int values_offset)" in generated
+    assert "update(main_values, int(0));" in generated
+    assert "float*" not in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
 
 
 def test_hlsl_workgroup_pointer_rejects_dynamic_backing_selection():
