@@ -225,7 +225,14 @@ def _runtime_arange_artifact_manifest(module, target, output_name="out"):
     }
 
 
-def _write_metal_roundtrip_report(module, mlx_root, work_dir, report_path):
+def _write_metal_roundtrip_report(
+    module,
+    mlx_root,
+    work_dir,
+    report_path,
+    *,
+    toolchain_unavailable=False,
+):
     source_path = mlx_root / module.MLX_METAL_ROUNDTRIP_SOURCE
     source_path.parent.mkdir(parents=True, exist_ok=True)
     source_path.write_text(
@@ -281,6 +288,18 @@ def _write_metal_roundtrip_report(module, mlx_root, work_dir, report_path):
         "sourceSizeBytes": source_path.stat().st_size,
         "generatedSizeBytes": generated_path.stat().st_size,
     }
+    warning_count = 1 if toolchain_unavailable else 0
+    diagnostics = []
+    if toolchain_unavailable:
+        diagnostics.append(
+            {
+                "code": "project.validate.toolchain-unavailable",
+                "message": "No validation toolchain is available for target metal",
+                "missingCapabilities": ["toolchain.validation"],
+                "severity": "warning",
+                "target": "metal",
+            }
+        )
     report_path.write_text(
         json.dumps(
             {
@@ -289,8 +308,13 @@ def _write_metal_roundtrip_report(module, mlx_root, work_dir, report_path):
                     "artifactCount": 1,
                     "translatedCount": 1,
                     "failedCount": 0,
-                    "diagnosticCounts": {"error": 0, "note": 0, "warning": 0},
+                    "diagnosticCounts": {
+                        "error": 0,
+                        "note": 0,
+                        "warning": warning_count,
+                    },
                 },
+                "diagnostics": diagnostics,
                 "artifacts": [artifact],
                 "validation": {
                     "summary": {
@@ -403,6 +427,60 @@ def test_metal_roundtrip_validates_generated_artifact_natively(tmp_path, monkeyp
     ]
     assert Path(native_command[5]) == mlx_root / result["artifact"]
     assert (mlx_root / result["nativeMetalValidation"]["compiledArtifact"]).is_file()
+
+
+def test_metal_roundtrip_allows_unavailable_toolchain_when_not_required(
+    tmp_path, monkeypatch
+):
+    module = _load_harness()
+    mlx_root = tmp_path / "mlx"
+    work_dir = mlx_root / ".crosstl-mlx-porting"
+    config_dir = work_dir / "configs"
+    report_dir = work_dir / "reports"
+    log_dir = work_dir / "logs"
+    for directory in (config_dir, report_dir, log_dir):
+        directory.mkdir(parents=True)
+
+    def fake_run_command(name, command, *, log_dir, check=True, timeout_seconds=None):
+        if name == "translate-metal-roundtrip":
+            _write_metal_roundtrip_report(
+                module,
+                mlx_root,
+                work_dir,
+                report_dir / "metal-roundtrip.json",
+                toolchain_unavailable=True,
+            )
+        stdout_path = log_dir / f"{name}.stdout"
+        stderr_path = log_dir / f"{name}.stderr"
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text("", encoding="utf-8")
+        return module.CommandResult(name, list(command), 0, stdout_path, stderr_path)
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+    monkeypatch.setattr(
+        module,
+        "_probe_native_metal_toolchain",
+        lambda *args: {
+            "status": "toolchain-unavailable",
+            "platform": "linux",
+            "reason": "native Metal validation requires macOS",
+        },
+    )
+
+    result = module._check_metal_roundtrip(
+        mlx_root,
+        work_dir,
+        config_dir,
+        report_dir,
+        log_dir,
+        "python",
+        require_metal_toolchain=False,
+    )
+
+    assert result["diagnosticCounts"] == {"error": 0, "note": 0, "warning": 1}
+    assert result["nativeMetalValidation"]["status"] == "toolchain-unavailable"
+    assert result["nativeMetalValidation"]["required"] is False
+    assert result["nativeMetalValidation"]["artifactCompiled"] is False
 
 
 def test_runtime_readiness_uses_runtime_artifact_manifest_metadata(

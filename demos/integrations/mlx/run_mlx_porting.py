@@ -746,11 +746,32 @@ def _check_metal_roundtrip(
         "Metal round-trip translation must emit one clean artifact",
     )
     diagnostic_counts = summary.get("diagnosticCounts", {})
+    diagnostics = payload.get("diagnostics", [])
+    _require(
+        isinstance(diagnostics, list), "Metal round-trip diagnostics must be a list"
+    )
+    allowed_unavailable = [
+        diagnostic
+        for diagnostic in diagnostics
+        if isinstance(diagnostic, dict)
+        and diagnostic.get("severity") == "warning"
+        and diagnostic.get("code") == "project.validate.toolchain-unavailable"
+        and diagnostic.get("target") == "metal"
+        and not require_metal_toolchain
+    ]
+    unexpected_diagnostics = [
+        diagnostic
+        for diagnostic in diagnostics
+        if isinstance(diagnostic, dict)
+        and diagnostic.get("severity") in {"error", "warning"}
+        and diagnostic not in allowed_unavailable
+    ]
     _require(
         isinstance(diagnostic_counts, dict)
         and diagnostic_counts.get("error", 0) == 0
-        and diagnostic_counts.get("warning", 0) == 0,
-        "Metal round-trip translation reported diagnostics",
+        and diagnostic_counts.get("warning", 0) == len(allowed_unavailable)
+        and not unexpected_diagnostics,
+        "Metal round-trip translation reported unexpected diagnostics",
     )
 
     artifacts = payload.get("artifacts", [])
