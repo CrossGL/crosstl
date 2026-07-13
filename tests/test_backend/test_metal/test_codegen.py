@@ -10,6 +10,7 @@ from crosstl.backend.Metal.MetalCrossGLCodeGen import (
     MetalBuiltinOverloadResolutionError,
     MetalCallableLoweringError,
     MetalSizeofResolutionError,
+    MetalStageEntryArrayResourceError,
     MetalStaticConstantResolutionError,
     MetalToCrossGLConverter,
     MetalWideVectorLoweringError,
@@ -1942,6 +1943,179 @@ def test_codegen_device_buffer_parameters_use_structured_buffer_contract():
     assert "const device float* input" in metal
     assert "float value = input[tid.x];" in metal
     assert "data[tid.x] = value * 2.0;" in metal
+
+
+def test_codegen_stage_entry_arrays_lower_to_non_conflicting_resources(tmp_path):
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void copy_pair(constant const int offsets[2], device float scratch[2]) {
+        scratch[offsets[0]] = scratch[offsets[1]];
+    }
+
+    kernel void array_resources(
+        constant const int strides[3],
+        device float values[],
+        device const float* source [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {
+        uint index = uint(strides[gid % 3]);
+        values[gid] = source[index] + values[gid];
+    }
+    """
+    crossgl = convert(code)
+
+    assert "StructuredBuffer<int> strides @buffer(1)" in crossgl
+    assert "RWStructuredBuffer<float> values @buffer(2)" in crossgl
+    assert "StructuredBuffer<float> source @buffer(0)" in crossgl
+    assert "uint index = uint(buffer_load(strides, gid % 3));" in crossgl
+    assert (
+        "buffer_store(values, gid, buffer_load(source, index) + "
+        "buffer_load(values, gid));"
+    ) in crossgl
+    assert (
+        "void copy_pair(constant int[2] offsets, " "inout device float[2] scratch)"
+    ) in crossgl
+    assert "scratch[offsets[0]] = scratch[offsets[1]];" in crossgl
+    assert "StructuredBuffer<int> offsets" not in crossgl
+    assert "RWStructuredBuffer<float> scratch" not in crossgl
+
+    ast = parse_crossgl(crossgl)
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+    glsl = GLSLCodeGen().generate(ast)
+    spirv = VulkanSPIRVCodeGen().generate(ast)
+
+    assert "StructuredBuffer<int> strides : register(t1);" in hlsl
+    assert "RWStructuredBuffer<float> values : register(u2);" in hlsl
+    assert "StructuredBuffer<float> source : register(t0);" in hlsl
+    assert "void copy_pair(int offsets[2], inout float scratch[2])" in hlsl
+    assert "uint index = uint(strides.Load((gid % 3)));" in hlsl
+    assert "values[gid] = (source.Load(index) + values.Load(gid));" in hlsl
+
+    assert (
+        "layout(std430, binding = 1) readonly buffer stridesBuffer "
+        "{ int strides[]; };"
+    ) in glsl
+    assert (
+        "layout(std430, binding = 2) buffer valuesBuffer { float values[]; };" in glsl
+    )
+    assert (
+        "layout(std430, binding = 0) readonly buffer sourceBuffer "
+        "{ float source[]; };"
+    ) in glsl
+    assert "void copy_pair(int offsets[2], inout float scratch[2])" in glsl
+    assert "uint index = uint(strides[(gid % 3)]);" in glsl
+    assert "values[gid] = (source[index] + values[gid]);" in glsl
+
+    for resource_name, binding in (("source", 0), ("strides", 1), ("values", 2)):
+        resource_id_match = re.search(rf'OpName (%\d+) "{resource_name}"', spirv)
+        assert resource_id_match is not None
+        resource_id = resource_id_match.group(1)
+        assert f"OpDecorate {resource_id} DescriptorSet 0" in spirv
+        assert f"OpDecorate {resource_id} Binding {binding}" in spirv
+    assert spirv.count(" BufferBlock") == 3
+    assert spirv.count(" NonWritable") == 2
+    assert "OpTypeArray" in spirv
+    assert "WARNING" not in spirv
+
+    glslang = shutil.which("glslangValidator")
+    dxc = shutil.which("dxc")
+    hlsl_path = tmp_path / "stage-entry-arrays.hlsl"
+    hlsl_path.write_text(hlsl, encoding="utf-8")
+    if dxc is not None:
+        subprocess.run(
+            [
+                dxc,
+                "-T",
+                "cs_6_0",
+                "-E",
+                "CSMain",
+                str(hlsl_path),
+                "-Fo",
+                str(tmp_path / "stage-entry-arrays.dxil"),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    elif glslang is not None:
+        subprocess.run(
+            [
+                glslang,
+                "-D",
+                "-V",
+                "-S",
+                "comp",
+                "-e",
+                "CSMain",
+                str(hlsl_path),
+                "-o",
+                str(tmp_path / "stage-entry-arrays-hlsl.spv"),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    if glslang is not None:
+        glsl_path = tmp_path / "stage-entry-arrays.comp"
+        glsl_path.write_text(glsl, encoding="utf-8")
+        subprocess.run(
+            [glslang, "-S", "comp", str(glsl_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    spirv_as = shutil.which("spirv-as")
+    spirv_val = shutil.which("spirv-val")
+    if spirv_as is not None and spirv_val is not None:
+        assembly_path = tmp_path / "stage-entry-arrays.spvasm"
+        binary_path = tmp_path / "stage-entry-arrays.spv"
+        assembly_path.write_text(spirv, encoding="utf-8")
+        subprocess.run(
+            [
+                spirv_as,
+                "--target-env",
+                "vulkan1.1",
+                str(assembly_path),
+                "-o",
+                str(binary_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            [spirv_val, "--target-env", "vulkan1.1", str(binary_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+
+def test_codegen_reports_multidimensional_stage_entry_array_resource():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void invalid_array_resource(constant int values[2][3]) {
+    }
+    """
+
+    with pytest.raises(MetalStageEntryArrayResourceError) as exc_info:
+        convert(code)
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.metal-entry-array-resource-invalid"
+    )
+    assert diagnostic.missing_capabilities == (
+        "metal.stage-entry-array-resource-lowering",
+    )
+    assert diagnostic.parameter_name == "values"
+    assert diagnostic.array_dimensions == ("2", "3")
+    assert diagnostic.reason == "multidimensional-parameter-array"
 
 
 def test_codegen_address_of_device_buffer_element_preserves_lvalue():
