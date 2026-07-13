@@ -8358,6 +8358,76 @@ def test_translate_project_reports_unsupported_opengl_struct_construction(tmp_pa
     )
 
 
+def test_translate_project_reports_opengl_fixed_array_resource_contract(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "fixed_array_resource.cgl").write_text(
+        textwrap.dedent("""
+            shader FixedArrayResourceContract {
+                int first(constant int[COUNT] values) {
+                    return values[0];
+                }
+
+                StructuredBuffer<int> sourceValues @ binding(0);
+                RWStructuredBuffer<int> result @ binding(1);
+
+                compute {
+                    void main() {
+                        result[0] = first(sourceValues);
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="translated",
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.opengl-fixed-array-resource-unsupported": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "opengl.fixed-array-resource-specialization": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["target"] == "opengl"
+    assert diagnostic["sourceBackend"] == "cgl"
+    assert diagnostic["location"]["file"] == "fixed_array_resource.cgl"
+    assert diagnostic["missingCapabilities"] == [
+        "opengl.fixed-array-resource-specialization"
+    ]
+    assert diagnostic["details"] == {
+        "fixedArrayResource": {
+            "actualAccess": "read",
+            "fixedExtent": "COUNT",
+            "function": "first",
+            "parameter": "values",
+            "reason": "unknown-fixed-extent",
+            "requiredAccess": "read",
+            "resources": ["sourceValues"],
+        },
+        "sourcePath": "fixed_array_resource.cgl",
+        "targetArtifact": "translated/opengl/fixed_array_resource.glsl",
+    }
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+
+    report_path = repo / "translated" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert {diagnostic["code"] for diagnostic in validation["diagnostics"]}.isdisjoint(
+        {"project.validate.invalid-report"}
+    )
+
+
 def test_translate_project_reports_unsupported_opengl_index_type(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"

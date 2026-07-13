@@ -16875,6 +16875,47 @@ def _opengl_struct_construction_failure_details(
     return dict(sorted(details.items()))
 
 
+def _opengl_fixed_array_resource_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.opengl-fixed-array-resource-unsupported"
+    ):
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    contract = {}
+    function_name = getattr(exc, "function_name", None)
+    parameter_name = getattr(exc, "parameter_name", None)
+    resource_names = getattr(exc, "resource_names", None)
+    fixed_extent = getattr(exc, "fixed_extent", None)
+    required_access = getattr(exc, "required_access", None)
+    actual_access = getattr(exc, "actual_access", None)
+    reason = getattr(exc, "reason", None)
+    if _is_non_empty_string(function_name):
+        contract["function"] = function_name
+    if _is_non_empty_string(parameter_name):
+        contract["parameter"] = parameter_name
+    if resource_names:
+        contract["resources"] = [str(name) for name in resource_names]
+    if fixed_extent is not None:
+        contract["fixedExtent"] = fixed_extent
+    if _is_non_empty_string(required_access):
+        contract["requiredAccess"] = required_access
+    if _is_non_empty_string(actual_access):
+        contract["actualAccess"] = actual_access
+    if _is_non_empty_string(reason):
+        contract["reason"] = reason
+    if contract:
+        details["fixedArrayResource"] = dict(sorted(contract.items()))
+    return dict(sorted(details.items()))
+
+
 def _opengl_index_type_failure_details(
     exc: Exception,
     unit: ProjectTranslationUnit,
@@ -17112,6 +17153,7 @@ def _translation_failure_details(
         **_opengl_scalar_conversion_failure_details(exc, unit, artifact_path),
         **_opengl_complex_arithmetic_failure_details(exc, unit, artifact_path),
         **_opengl_struct_construction_failure_details(exc, unit, artifact_path),
+        **_opengl_fixed_array_resource_failure_details(exc, unit, artifact_path),
         **_opengl_index_type_failure_details(exc, unit, artifact_path),
         **_opengl_workgroup_pointer_failure_details(exc, unit, artifact_path),
         **_opengl_storage_pointer_failure_details(exc, unit, artifact_path),
