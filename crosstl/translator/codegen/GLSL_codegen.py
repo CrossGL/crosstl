@@ -50,6 +50,7 @@ from ..ast import (
     WaveOpNode,
     WhileNode,
 )
+from ..standard_constants import render_standard_math_constant
 from ..validation import (
     IMAGE_RESOURCE_INTRINSIC_NAMES,
     INTEGER_COORDINATE_INTRINSIC_NAMES,
@@ -1613,6 +1614,7 @@ class GLSLCodeGen:
         self.glsl_interface_value_struct_names = set()
         self.glsl_interface_block_names_by_qualifier = {}
         self.global_variable_types = {}
+        self.glsl_global_identifier_names = set()
         self.glsl_runtime_global_initializer_node_ids = set()
         self.glsl_stage_runtime_global_initializers = {}
         self.global_type_aliases = {}
@@ -3221,6 +3223,9 @@ class GLSLCodeGen:
         self.glsl_interface_value_struct_names = set()
         self.glsl_interface_block_names_by_qualifier = {}
         self.global_variable_types = {}
+        self.glsl_global_identifier_names = self.collect_glsl_global_identifier_names(
+            ast, target_stage
+        )
         self.glsl_runtime_global_initializer_node_ids = set()
         self.glsl_stage_runtime_global_initializers = {}
         self.function_sampler_parameter_indices = (
@@ -8984,6 +8989,35 @@ class GLSLCodeGen:
             )
             variable_types[name] = f"{self.type_name_string(vtype)}{array_suffix}"
         return variable_types
+
+    def collect_glsl_global_identifier_names(self, ast, target_stage=None):
+        declarations = (
+            list(getattr(ast, "global_variables", []) or [])
+            + list(getattr(ast, "constants", []) or [])
+            + collect_stage_local_variables(ast, target_stage)
+        )
+        names = set()
+        for node in declarations:
+            name = self.resource_node_name(node)
+            if name:
+                names.add(name)
+        for import_node in getattr(ast, "imports", []) or []:
+            alias = getattr(import_node, "alias", None)
+            if alias:
+                names.add(alias)
+            names.update(item for item in getattr(import_node, "items", []) or [] if item)
+        cbuffers = list(getattr(ast, "cbuffers", []) or [])
+        cbuffers += collect_stage_local_cbuffers(ast, target_stage)
+        for cbuffer in cbuffers:
+            name = getattr(cbuffer, "name", None)
+            if name:
+                names.add(name)
+            names.update(
+                member_name
+                for member in getattr(cbuffer, "members", []) or []
+                if (member_name := getattr(member, "name", None))
+            )
+        return names
 
     def is_stage_local_resource_variable(self, node):
         vtype = self.type_name_string(
@@ -16709,6 +16743,61 @@ complex64_t crossgl_complex64_mod_assign(
             return "gl_VertexID"
         return name
 
+    def glsl_identifier_is_resolved(self, name):
+        symbol_tables = (
+            self.local_variable_types,
+            self.local_variable_source_types,
+            self.global_variable_types,
+            self.glsl_global_identifier_names,
+            self.global_type_aliases,
+            self.current_type_aliases,
+            self.function_return_types,
+            self.structs_by_name,
+            getattr(self, "enum_variant_constants", {}),
+            self.current_resource_aliases,
+            self.current_identifier_aliases,
+            self.current_stage_parameter_aliases,
+            self.current_texture_parameters,
+            self.texture_variable_types,
+            self.current_glsl_workgroup_pointer_aliases,
+            self.current_glsl_storage_pointer_aliases,
+            self.glsl_global_workgroup_pointer_aliases,
+            self.glsl_global_storage_pointer_aliases,
+            self.current_stage_inputs,
+            self.current_stage_outputs,
+            self.glsl_uniform_block_variable_types,
+        )
+        if any(name in symbols for symbols in symbol_tables):
+            return True
+        if any(
+            str(path).rsplit("::", 1)[-1] == name
+            for path in getattr(self, "enum_variant_constants", {})
+        ):
+            return True
+        symbol_sets = (
+            self.current_sampler_parameters,
+            self.sampler_variables,
+            self.stage_entry_resource_declaration_names,
+            self.glsl_buffer_block_variable_names,
+            self.glsl_hoisted_shared_alias_names,
+            self.flattened_stage_variables,
+            getattr(self, "enum_type_names", set()),
+            getattr(self, "enum_struct_type_names", set()),
+        )
+        return any(name in symbols for symbols in symbol_sets)
+
+    def generate_glsl_identifier_expression(self, name):
+        stage_alias = self.current_stage_parameter_aliases.get(name)
+        if stage_alias is not None:
+            return stage_alias
+
+        target_name = self.glsl_target_builtin_identifier(name)
+        if target_name != name or self.glsl_identifier_is_resolved(name):
+            return target_name
+
+        standard_constant = render_standard_math_constant(name, "opengl")
+        return standard_constant if standard_constant is not None else target_name
+
     def is_glsl_builtin_option_none_expression(self, expr):
         if not getattr(self, "glsl_builtin_option_available", False):
             return False
@@ -16802,9 +16891,7 @@ complex64_t crossgl_complex64_mod_assign(
                     return enum_value_expression(self, expr.name)
                 if expr.name in self.current_identifier_aliases:
                     return self.current_identifier_aliases[expr.name]
-                return self.current_stage_parameter_aliases.get(
-                    expr.name, self.glsl_target_builtin_identifier(expr.name)
-                )
+                return self.generate_glsl_identifier_expression(expr.name)
             else:
                 return str(expr)
         elif hasattr(expr, "__class__") and "IdentifierNode" in str(type(expr)):
@@ -16820,9 +16907,7 @@ complex64_t crossgl_complex64_mod_assign(
                 return enum_value_expression(self, expr.name)
             if expr.name in self.current_identifier_aliases:
                 return self.current_identifier_aliases[expr.name]
-            return self.current_stage_parameter_aliases.get(
-                expr.name, self.glsl_target_builtin_identifier(expr.name)
-            )
+            return self.generate_glsl_identifier_expression(expr.name)
         elif isinstance(expr, ArrayLiteralNode):
             return self.generate_glsl_aggregate_initializer(expr)
         elif hasattr(expr, "__class__") and "LiteralNode" in str(type(expr)):

@@ -28,6 +28,7 @@ from crosstl.translator.ast import (
     StructMemberNode,
     StructNode,
     UnaryOpNode,
+    VariableNode,
     VectorType,
 )
 from crosstl.translator.codegen.GLSL_codegen import (
@@ -148,6 +149,170 @@ def glsl_expression_depends_on(generated_code, expression, expected_token):
         for identifier in re.findall(r"\b[A-Za-z_]\w*\b", candidate):
             pending.extend(initializers.get(identifier, ()))
     return False
+
+
+def test_glsl_unresolved_m_pi_f_uses_exact_standard_float_literal():
+    literal = "3.14159265358979323846264338327950288f"
+    shader = """
+    shader StandardFloatMathConstant {
+        float pi_value() {
+            return M_PI_F;
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert f"return {literal};" in generated
+    assert "M_PI_F" not in generated
+    assert GLSLCodeGen().generate_expression(IdentifierNode("M_PI_F")) == literal
+    assert (
+        GLSLCodeGen().generate_expression(
+            VariableNode("M_PI_F", PrimitiveType("float"))
+        )
+        == literal
+    )
+
+
+def test_glsl_unresolved_m_pi_uses_exact_standard_double_literal():
+    shader = """
+    shader StandardDoubleMathConstant {
+        double pi_value() {
+            return M_PI;
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "return 3.14159265358979323846264338327950288LF;" in generated
+    assert re.search(r"\bM_PI\b", generated) is None
+
+
+@pytest.mark.parametrize(
+    ("shader", "expected_declaration"),
+    [
+        pytest.param(
+            """
+            shader ParameterMathConstantShadow {
+                float use_pi(float M_PI_F) {
+                    return M_PI_F;
+                }
+            }
+            """,
+            "float use_pi(float M_PI_F)",
+            id="parameter",
+        ),
+        pytest.param(
+            """
+            shader LocalMathConstantShadow {
+                float use_pi() {
+                    float M_PI_F = 1.0;
+                    return M_PI_F;
+                }
+            }
+            """,
+            "float M_PI_F = 1.0;",
+            id="local",
+        ),
+        pytest.param(
+            """
+            shader GlobalMathConstantShadow {
+                float M_PI_F = 2.0;
+
+                float use_pi() {
+                    return M_PI_F;
+                }
+            }
+            """,
+            "uniform float M_PI_F = 2.0;",
+            id="global",
+        ),
+    ],
+)
+def test_glsl_standard_math_constant_name_shadowing_is_preserved(
+    shader, expected_declaration
+):
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert expected_declaration in generated
+    assert "return M_PI_F;" in generated
+    assert "3.14159265358979323846264338327950288f" not in generated
+
+
+def test_glsl_standard_math_constant_respects_constant_enum_and_alias_shadows():
+    constant_shader = """
+    shader ConstantMathConstantShadow {
+        const float M_PI_F = 2.0;
+
+        float use_pi() {
+            return M_PI_F;
+        }
+    }
+    """
+    enum_shader = """
+    shader EnumMathConstantShadow {
+        enum StandardValue { M_PI_F = 1 }
+
+        int use_pi() {
+            return M_PI_F;
+        }
+    }
+    """
+
+    constant_glsl = generate_code(parse_code(tokenize_code(constant_shader)))
+    enum_glsl = generate_code(parse_code(tokenize_code(enum_shader)))
+    aliased_codegen = GLSLCodeGen()
+    aliased_codegen.current_identifier_aliases["M_PI_F"] = "source_pi"
+
+    assert "const float M_PI_F = 2.0;" in constant_glsl
+    assert "return M_PI_F;" in constant_glsl
+    assert "const int StandardValue_M_PI_F = 1;" in enum_glsl
+    assert "return M_PI_F;" in enum_glsl
+    assert "3.14159265358979323846264338327950288f" not in constant_glsl
+    assert "3.14159265358979323846264338327950288f" not in enum_glsl
+    assert (
+        aliased_codegen.generate_expression(IdentifierNode("M_PI_F")) == "source_pi"
+    )
+
+
+def test_glsl_unknown_identifier_is_preserved():
+    shader = """
+    shader UnknownMathConstantName {
+        float unresolved_value() {
+            return M_NOT_A_STANDARD_CONSTANT;
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "return M_NOT_A_STANDARD_CONSTANT;" in generated
+
+
+def test_glsl_standard_math_constant_literals_validate_if_glslang_available(tmp_path):
+    shader = """
+    shader StandardMathConstantValidation {
+        compute {
+            layout(local_size_x = 1) in;
+
+            void main() {
+                float single_precision = M_PI_F;
+                double double_precision = M_PI;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(
+        parse_code(tokenize_code(shader)), "compute"
+    )
+
+    assert "3.14159265358979323846264338327950288f" in generated
+    assert "3.14159265358979323846264338327950288LF" in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "standard_math_constants"
+    )
 
 
 def test_glsl_type_node_renders_expression_generic_arguments():
