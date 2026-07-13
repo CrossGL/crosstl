@@ -3925,6 +3925,309 @@ def test_glsl_private_pointer_helper_uses_fixed_local_array_extent():
     assert "uint8*" not in generated
 
 
+def test_glsl_private_scalar_pointer_preserves_zero_access_writeback(tmp_path):
+    code = """
+    shader PrivateScalarPointer {
+        struct Counter {
+            int value;
+            int other;
+        };
+
+        void update(thread Counter* counter) {
+            counter->value += 1;
+            (*counter).other += 2;
+            counter[0].value += 3;
+            for (int i = 0; i < 1; ++i) {
+                counter[i].other += 4;
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                Counter counter;
+                update(&counter);
+                int observed = counter.value + counter.other;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "void update(inout Counter counter)" in generated
+    assert "counter.value += 1;" in generated
+    assert "counter.other += 2;" in generated
+    assert "counter.value += 3;" in generated
+    assert "counter.other += 4;" in generated
+    assert "update(counter);" in generated
+    assert "int observed = (counter.value + counter.other);" in generated
+    assert "*" not in generated
+    assert "&" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "private_scalar_pointer_writeback"
+    )
+
+
+def test_glsl_private_pointer_emits_distinct_scalar_and_array_forms(tmp_path):
+    code = """
+    shader MixedPrivatePointerShapes {
+        void increment(thread int* value) {
+            value[0] += 1;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                int scalar = 4;
+                int values[4];
+                increment(&scalar);
+                increment(values);
+                int observed = scalar + values[0];
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    scalar_form = "void increment(inout int value)"
+    array_form = "void increment(inout int value[4], int value_base)"
+    assert scalar_form in generated
+    assert array_form in generated
+    assert generated.index(scalar_form) < generated.index(array_form)
+    assert "value += 1;" in generated
+    assert "value[(value_base + int(0))] += 1;" in generated
+    assert "increment(scalar);" in generated
+    assert "increment(values, 0);" in generated
+    assert "int observed = (scalar + values[0]);" in generated
+    assert "int*" not in generated
+    assert "&scalar" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "private_pointer_mixed_scalar_array"
+    )
+
+
+def test_glsl_private_scalar_pointer_nested_zero_forwarding_respects_shadowing(
+    tmp_path,
+):
+    code = """
+    shader ForwardedPrivateScalarPointer {
+        void increment(thread int* value) {
+            (*value) += 1;
+        }
+
+        void forward(thread int* value) {
+            {
+                int value = 10;
+                increment(&value + 0);
+            }
+            increment(value + 0);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                int value = 4;
+                forward(&value + 0);
+                int observed = value;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "void increment(inout int value)" in generated
+    assert "void forward(inout int value)" in generated
+    assert re.search(
+        r"int value = 10;\s*increment\(value\);", generated
+    ), generated
+    assert generated.count("increment(value);") == 2
+    assert "forward(value);" in generated
+    assert "int observed = value;" in generated
+    assert "int*" not in generated
+    assert "&value" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "private_scalar_pointer_nested"
+    )
+
+
+def test_glsl_private_scalar_pointer_resolves_materialized_nested_call(tmp_path):
+    code = """
+    shader MaterializedPrivateScalarPointer {
+        void radix_n_steps_2_radix2(thread int* value) {
+            value[0] += 1;
+        }
+
+        void forward(thread int* value) {
+            radix_n_steps_u3c2_u2cradix2_u3e(value);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                int value = 0;
+                forward(&value);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "void radix_n_steps_2_radix2(inout int value)" in generated
+    assert "radix_n_steps_2_radix2(value);" in generated
+    assert "radix_n_steps_u3c2_u2cradix2_u3e" not in generated
+    assert "forward(value);" in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "private_scalar_pointer_materialized_nested"
+    )
+
+
+@pytest.mark.parametrize(
+    ("access", "reason"),
+    [
+        ("value[1] += 1;", "nonzero-scalar-index"),
+        ("value[index] += 1;", "unprovable-scalar-index"),
+    ],
+)
+def test_glsl_private_scalar_pointer_rejects_nonzero_or_dynamic_index(
+    access, reason
+):
+    code = f"""
+    shader InvalidPrivateScalarIndex {{
+        void increment(thread int* value, int index) {{
+            value[0] += 1;
+            {access}
+        }}
+
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {{
+                int value = 4;
+                increment(&value, 0);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLPrivatePointerParameterError) as excinfo:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert excinfo.value.reason == reason
+
+
+def test_glsl_private_scalar_pointer_rejects_nonzero_address_composition():
+    code = """
+    shader InvalidPrivateScalarOffset {
+        void increment(thread int* value) {
+            value[0] += 1;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                int value = 4;
+                increment(&value + 1);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLPrivatePointerParameterError) as excinfo:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert excinfo.value.reason == "nonzero-scalar-view-offset"
+
+
+def test_glsl_private_scalar_pointer_rejects_same_scalar_aliasing():
+    code = """
+    shader AliasedPrivateScalarPointer {
+        void update(thread int* left, thread int* right) {
+            left[0] += 1;
+            right[0] += 2;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                int value = 4;
+                update(&value, &value);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        OpenGLPrivatePointerParameterError,
+        match=(
+            "binds parameters 'left' and 'right' to the same backing object "
+            "'value'"
+        ),
+    ) as excinfo:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert excinfo.value.reason == "aliased-view-backing"
+
+
+def test_glsl_private_scalar_pointer_rejects_pointer_escape():
+    code = """
+    shader EscapedPrivateScalarPointer {
+        void update(thread int* value) {
+            thread int* alias = value;
+            value[0] += 1;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                int value = 4;
+                update(&value);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLPrivatePointerParameterError) as excinfo:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert excinfo.value.reason == "pointer-escape"
+
+
+def test_glsl_private_pointer_rejects_ambiguous_scalar_array_selection():
+    code = """
+    shader AmbiguousPrivatePointerShape {
+        void increment(thread int* value) {
+            value[0] += 1;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(bool choose) {
+                int scalar = 4;
+                int values[4];
+                increment(choose ? &scalar : values);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLPrivatePointerParameterError) as excinfo:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert excinfo.value.reason == "ambiguous-scalar-array-backing"
+
+
 def test_glsl_private_pointer_view_accepts_exact_and_constant_slice_backings(tmp_path):
     code = """
     shader PrivatePointerViews {
@@ -4087,7 +4390,7 @@ def test_glsl_private_pointer_view_rejects_aliased_inout_backing():
     with pytest.raises(
         OpenGLPrivatePointerParameterError,
         match=(
-            "binds parameters 'left' and 'right' to the same backing array "
+            "binds parameters 'left' and 'right' to the same backing object "
             "'backing'"
         ),
     ) as excinfo:
@@ -4120,7 +4423,7 @@ def test_glsl_private_pointer_view_rejects_pointer_parameter_rebinding(assignmen
         OpenGLPrivatePointerParameterError,
         match=(
             "cannot rebase private pointer parameter 'write_value.values' because "
-            "GLSL array parameters are not assignable"
+            "GLSL inout parameters cannot model pointer reassignment"
         ),
     ) as excinfo:
         GLSLCodeGen().generate(crosstl.translator.parse(code))
