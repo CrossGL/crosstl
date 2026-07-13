@@ -29,6 +29,7 @@ from crosstl.translator.ast import (
 from crosstl.translator.codegen.GLSL_codegen import (
     GLSLCodeGen,
     OpenGLAggregateInitializerError,
+    OpenGLGlobalInitializerError,
     OpenGLIndexTypeError,
     OpenGLMappedOverloadError,
     OpenGLReferenceParameterError,
@@ -7588,6 +7589,233 @@ def test_glsl_reserved_global_uniform_names_are_aliased():
     assert "uniform float input;" not in generated_code
     assert "float value = (input_2 + input_);" in generated_code
     assert "fragColor = vec4(value, input_2, input_, 1.0);" in generated_code
+
+
+def test_opengl_lowers_uniform_derived_global_before_helper_use(tmp_path):
+    shader = """
+    shader DerivedGlobalHelper {
+        uniform float scale @location(0);
+        uniform float bias @location(1);
+        float derived = scale * 2.0 + bias;
+
+        float readDerived() {
+            return derived;
+        }
+
+        compute {
+            void main(RWStructuredBuffer<float> outputValues @buffer(0)) {
+                outputValues[0] = readDerived();
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert re.search(r"^float derived;$", generated_code, re.MULTILINE), generated_code
+    assert "uniform float derived" not in generated_code
+    main_start = generated_code.index("void main() {")
+    initializer = "derived = ((scale * 2.0) + bias);"
+    initializer_start = generated_code.index(initializer, main_start)
+    helper_use_start = generated_code.index("readDerived()", main_start)
+    assert initializer_start < helper_use_start
+    assert generated_code.count(initializer) == 1
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "uniform_derived_global_helper",
+    )
+
+
+def test_opengl_lowers_chained_derived_globals_in_dependency_order(tmp_path):
+    shader = """
+    shader ChainedDerivedGlobals {
+        uniform int tileCount @location(0);
+        uniform int stride @location(1);
+        uniform int kernelSize @location(2);
+        int span = tileCount * stride + kernelSize - 1;
+        int area = span * span;
+
+        compute {
+            void main(RWStructuredBuffer<int> outputValues @buffer(0)) {
+                outputValues[0] = area;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert re.search(r"^int span;$", generated_code, re.MULTILINE), generated_code
+    assert re.search(r"^int area;$", generated_code, re.MULTILINE), generated_code
+    assert "uniform int span" not in generated_code
+    assert "uniform int area" not in generated_code
+    main_start = generated_code.index("void main() {")
+    span_start = generated_code.index(
+        "span = (((tileCount * stride) + kernelSize) - 1);",
+        main_start,
+    )
+    area_start = generated_code.index("area = (span * span);", main_start)
+    use_start = generated_code.index("outputValues[0] = area;", main_start)
+    assert span_start < area_start < use_start
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "chained_derived_globals",
+    )
+
+
+def test_opengl_does_not_initialize_unused_derived_global_in_entry(tmp_path):
+    shader = """
+    shader UnusedDerivedGlobal {
+        uniform float scale @location(0);
+        float usedValue = scale + 1.0;
+        float unusedValue = scale + 99.0;
+
+        compute {
+            void main(RWStructuredBuffer<float> outputValues @buffer(0)) {
+                outputValues[0] = usedValue;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    main_start = generated_code.index("void main() {")
+    main_body = generated_code[main_start:]
+    assert "usedValue = (scale + 1.0);" in main_body
+    assert "unusedValue =" not in main_body
+    assert "uniform float unusedValue" not in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "unused_derived_global",
+    )
+
+
+def test_opengl_initializes_only_globals_reachable_from_selected_stage():
+    shader = """
+    shader StageScopedDerivedGlobals {
+        uniform float scale @location(0);
+        float vertexValue = scale + 1.0;
+        float fragmentValue = scale + 2.0;
+
+        vertex {
+            void main() {
+                gl_Position = vec4(vertexValue, 0.0, 0.0, 1.0);
+            }
+        }
+
+        fragment {
+            void main() {
+                float value = fragmentValue;
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    vertex_code = GLSLCodeGen().generate_stage(ast, "vertex")
+    fragment_code = GLSLCodeGen().generate_stage(ast, "fragment")
+
+    vertex_main = vertex_code[vertex_code.index("void main() {") :]
+    fragment_main = fragment_code[fragment_code.index("void main() {") :]
+    assert "vertexValue = (scale + 1.0);" in vertex_main
+    assert "fragmentValue =" not in vertex_main
+    assert "fragmentValue = (scale + 2.0);" in fragment_main
+    assert "vertexValue =" not in fragment_main
+
+
+@pytest.mark.parametrize(
+    ("shader", "variable_name", "detail_names", "reason_keyword"),
+    [
+        pytest.param(
+            """
+            shader CyclicDerivedGlobals {
+                float first = second + 1.0;
+                float second = first + 1.0;
+
+                compute {
+                    void main(RWStructuredBuffer<float> outputValues @buffer(0)) {
+                        outputValues[0] = first;
+                    }
+                }
+            }
+            """,
+            "first",
+            ("first", "second"),
+            "cycle",
+            id="dependency-cycle",
+        ),
+        pytest.param(
+            """
+            shader UnsupportedDerivedGlobalCall {
+                uniform float seed @location(0);
+
+                float expand(float value) {
+                    return value * 2.0;
+                }
+
+                float derived = expand(seed);
+
+                compute {
+                    void main(RWStructuredBuffer<float> outputValues @buffer(0)) {
+                        outputValues[0] = derived;
+                    }
+                }
+            }
+            """,
+            "derived",
+            ("derived", "expand"),
+            "call",
+            id="unsupported-call",
+        ),
+        pytest.param(
+            """
+            shader SideEffectingDerivedGlobalCall {
+                uniform float seed @location(0);
+
+                float bump(inout float value) {
+                    value += 1.0;
+                    return value;
+                }
+
+                float derived = bump(seed);
+
+                compute {
+                    void main(RWStructuredBuffer<float> outputValues @buffer(0)) {
+                        outputValues[0] = derived;
+                    }
+                }
+            }
+            """,
+            "derived",
+            ("derived", "bump"),
+            "call",
+            id="side-effecting-call",
+        ),
+    ],
+)
+def test_opengl_rejects_unsupported_derived_global_initializers(
+    shader,
+    variable_name,
+    detail_names,
+    reason_keyword,
+):
+    with pytest.raises(OpenGLGlobalInitializerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.opengl-global-initializer-invalid"
+    )
+    assert diagnostic.missing_capabilities == ("opengl.global-initializer-lowering",)
+    assert diagnostic.variable_name == variable_name
+    assert reason_keyword in diagnostic.reason
+    message = str(diagnostic)
+    for detail_name in detail_names:
+        assert detail_name in message
 
 
 def test_glsl_cbuffer_binding_attributes_drive_layout_bindings():
