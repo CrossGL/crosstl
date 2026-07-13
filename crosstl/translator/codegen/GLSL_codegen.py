@@ -1644,6 +1644,19 @@ class GLSLCodeGen:
         self.resource_array_size_hints = {}
         self.function_resource_array_size_hints = {}
         self.function_private_pointer_array_size_hints = {}
+        self.function_private_pointer_required_spans = {}
+        self.function_private_pointer_parameters = {}
+        self.function_private_pointer_parameter_indices = {}
+        self.function_private_pointer_element_types = {}
+        self.function_private_pointer_backing_variants = {}
+        self.function_private_pointer_local_arrays = {}
+        self.function_private_pointer_view_calls = {}
+        self.function_private_pointer_base_names = {}
+        self.function_private_pointer_source_names = {}
+        self.function_private_pointer_full_span_parameters = {}
+        self.current_glsl_private_pointer_variant = {}
+        self.current_glsl_private_pointer_base_names = {}
+        self.current_glsl_private_pointer_function_name = None
         self.literal_int_constants = {}
         self.glsl_specialization_constant_names = set()
         self.literal_int_vector_constants = {}
@@ -3264,6 +3277,20 @@ class GLSLCodeGen:
         self.glsl_resource_function_call_names = {}
         self.glsl_resource_specialized_source_names = set()
         self.emitted_glsl_resource_specialization_names = set()
+        self.function_private_pointer_array_size_hints = {}
+        self.function_private_pointer_required_spans = {}
+        self.function_private_pointer_parameters = {}
+        self.function_private_pointer_parameter_indices = {}
+        self.function_private_pointer_element_types = {}
+        self.function_private_pointer_backing_variants = {}
+        self.function_private_pointer_local_arrays = {}
+        self.function_private_pointer_view_calls = {}
+        self.function_private_pointer_base_names = {}
+        self.function_private_pointer_source_names = {}
+        self.function_private_pointer_full_span_parameters = {}
+        self.current_glsl_private_pointer_variant = {}
+        self.current_glsl_private_pointer_base_names = {}
+        self.current_glsl_private_pointer_function_name = None
         self.function_image_access_requirements = (
             collect_function_image_access_requirements(
                 functions,
@@ -3510,9 +3537,6 @@ class GLSLCodeGen:
             self.resource_array_size_hints,
             self.function_resource_array_size_hints,
         ) = self.collect_resource_array_size_hints(ast)
-        self.function_private_pointer_array_size_hints = (
-            self.collect_private_pointer_array_size_hints(ast)
-        )
         self.unsupported_structured_buffer_array_functions = (
             self.collect_unsupported_structured_buffer_array_functions(functions)
         )
@@ -3532,6 +3556,9 @@ class GLSLCodeGen:
             ]
             + list(generic_function_specializations.values()),
             reserved_names=self.glsl_overload_reserved_names(ast),
+        )
+        self.function_private_pointer_array_size_hints = (
+            self.collect_private_pointer_array_size_hints(ast)
         )
         self.validate_global_resource_shadows(ast)
         self.enforce_concrete_glsl_types = True
@@ -8082,8 +8109,44 @@ class GLSLCodeGen:
         entry_name=None,
         stage_layout_qualifiers=None,
         stage_context=None,
+        _private_pointer_variant=None,
     ):
         """Render a function or GLSL ``main`` stage entry point."""
+        function_key = self.glsl_function_declaration_name(func)
+        variants = self.function_private_pointer_backing_variants.get(function_key)
+        if _private_pointer_variant is None and variants and shader_type is None:
+            previous_variant = self.current_glsl_private_pointer_variant
+            previous_base_names = self.current_glsl_private_pointer_base_names
+            parameters = self.function_private_pointer_parameters[function_key]
+            code = ""
+            try:
+                for variant in variants:
+                    self.current_glsl_private_pointer_variant = {
+                        parameter.name: variant[index]
+                        for index, parameter in enumerate(parameters)
+                    }
+                    self.current_glsl_private_pointer_base_names = dict(
+                        self.function_private_pointer_base_names[function_key]
+                    )
+                    code += self.generate_function(
+                        func,
+                        indent=indent,
+                        shader_type=shader_type,
+                        execution_config=execution_config,
+                        entry_name=entry_name,
+                        stage_layout_qualifiers=stage_layout_qualifiers,
+                        stage_context=stage_context,
+                        _private_pointer_variant=variant,
+                    )
+            finally:
+                self.current_glsl_private_pointer_variant = previous_variant
+                self.current_glsl_private_pointer_base_names = previous_base_names
+            return code
+
+        previous_private_pointer_function_name = (
+            self.current_glsl_private_pointer_function_name
+        )
+        self.current_glsl_private_pointer_function_name = function_key
         code = ""
         code += "  " * indent
 
@@ -8278,7 +8341,7 @@ class GLSLCodeGen:
                 continue
 
             param_type = self.glsl_private_pointer_parameter_array_type(
-                p, getattr(func, "name", None)
+                p, function_key
             )
             if param_type is None:
                 param_type = self.map_resource_parameter_type_with_hint(
@@ -8316,6 +8379,16 @@ class GLSLCodeGen:
             if parameter_qualifiers:
                 declaration = f"{' '.join(parameter_qualifiers)} {declaration}"
             params.append(declaration)
+            if is_private_pointer_parameter(p):
+                base_name = self.current_glsl_private_pointer_base_names.get(p.name)
+                if base_name is None:
+                    base_name = self.function_private_pointer_base_names.get(
+                        function_key, {}
+                    ).get(p.name)
+                if base_name is not None:
+                    params.append(f"int {base_name}")
+                    self.local_variable_types[base_name] = "int"
+                    self.local_variable_source_types[base_name] = "int"
             if self.structured_buffer_requires_counter(raw_param_type):
                 counter_name = self.structured_buffer_counter_parameter_name(p.name)
                 self.current_structured_buffer_counter_parameters[p.name] = counter_name
@@ -8348,6 +8421,9 @@ class GLSLCodeGen:
             )
             self.current_structured_buffer_access_parameters = (
                 previous_structured_buffer_access_parameters
+            )
+            self.current_glsl_private_pointer_function_name = (
+                previous_private_pointer_function_name
             )
             return f"{code}{return_type} {declaration_name}({params_str});\n\n"
 
@@ -8618,6 +8694,9 @@ class GLSLCodeGen:
         )
         self.current_glsl_function_key = previous_glsl_function_key
         self.current_glsl_source_function_name = previous_glsl_source_function_name
+        self.current_glsl_private_pointer_function_name = (
+            previous_private_pointer_function_name
+        )
 
         code += "}\n\n"
         return code
@@ -16999,6 +17078,9 @@ complex64_t crossgl_complex64_mod_assign(
         elif hasattr(expr, "__class__") and "UnaryOpNode" in str(type(expr)):
             op = self.map_operator(expr.op)
             if op == "*":
+                pointee = self.generate_glsl_private_pointer_view_access(expr.operand)
+                if pointee is not None:
+                    return pointee
                 pointee = self.glsl_workgroup_pointer_element_expression(expr.operand)
                 if pointee is not None:
                     return pointee
@@ -17087,6 +17169,11 @@ complex64_t crossgl_complex64_mod_assign(
             )
         elif hasattr(expr, "__class__") and "ArrayAccessNode" in str(type(expr)):
             if hasattr(expr, "array") and hasattr(expr, "index"):
+                private_access = self.generate_glsl_private_pointer_view_access(
+                    expr.array, expr.index
+                )
+                if private_access is not None:
+                    return private_access
                 workgroup_access = self.glsl_workgroup_pointer_access_expression(expr)
                 if workgroup_access is not None:
                     return workgroup_access
@@ -17400,11 +17487,15 @@ complex64_t crossgl_complex64_mod_assign(
                 self.expression_result_type(expr.object)
             )
             if object_type and object_type.rstrip().endswith("*"):
-                pointer_member = self.glsl_workgroup_pointer_member_expression(
-                    expr.object,
-                    expr.member,
-                    getattr(expr, "source_location", None),
+                pointer_member = self.glsl_private_pointer_member_expression(
+                    expr.object, expr.member
                 )
+                if pointer_member is None:
+                    pointer_member = self.glsl_workgroup_pointer_member_expression(
+                        expr.object,
+                        expr.member,
+                        getattr(expr, "source_location", None),
+                    )
                 if pointer_member is not None:
                     return pointer_member
                 pointer_member = self.glsl_storage_pointer_member_expression(
@@ -17423,11 +17514,15 @@ complex64_t crossgl_complex64_mod_assign(
                 return cast_member
             return f"{obj}.{member_name}"
         elif isinstance(expr, PointerAccessNode):
-            pointer_member = self.glsl_workgroup_pointer_member_expression(
-                expr.pointer_expr,
-                expr.member,
-                getattr(expr, "source_location", None),
+            pointer_member = self.glsl_private_pointer_member_expression(
+                expr.pointer_expr, expr.member
             )
+            if pointer_member is None:
+                pointer_member = self.glsl_workgroup_pointer_member_expression(
+                    expr.pointer_expr,
+                    expr.member,
+                    getattr(expr, "source_location", None),
+                )
             if pointer_member is None:
                 pointer_member = self.glsl_storage_pointer_member_expression(
                     expr.pointer_expr,
@@ -19524,6 +19619,13 @@ complex64_t crossgl_complex64_mod_assign(
     def generate_function_call_argument(
         self, func_name, arg, param_name, param_type, param_qualifiers=()
     ):
+        private_binding = self.glsl_private_pointer_call_argument_binding(
+            func_name,
+            param_name,
+            arg,
+        )
+        if private_binding is not None:
+            return [private_binding["backing"], private_binding["offset"]]
         buffer_array = self.structured_buffer_array_parameter_info(
             param_type, param_name, func_name
         )
@@ -23084,16 +23186,1391 @@ complex64_t crossgl_complex64_mod_assign(
         return global_hints, function_hints
 
     def collect_private_pointer_array_size_hints(self, ast):
-        functions = self.collect_functions(ast)
-        return collect_private_pointer_array_size_hints(
-            functions=functions,
-            walk_nodes=self.walk_ast,
-            expression_name=self.expression_name,
-            literal_int_value=self.literal_int_value,
-            visible_literal_int_constants=self.visible_literal_int_constants,
-            function_call_name=self.function_call_name,
-            initial_literal_int_constants=self.initial_literal_int_constants,
+        functions = []
+        seen_function_ids = set()
+        for function in [
+            *self.collect_functions(ast),
+            *getattr(self, "generic_function_specializations", {}).values(),
+        ]:
+            if id(function) in seen_function_ids or generic_function_parameters(
+                function
+            ):
+                continue
+            seen_function_ids.add(id(function))
+            functions.append(function)
+
+        functions_by_key = {}
+        source_candidates = {}
+        pointer_parameters = {}
+        pointer_parameter_indices = {}
+        pointer_element_types = {}
+        pointer_base_names = {}
+        source_names = {}
+        for function in functions:
+            function_name = getattr(function, "name", None)
+            if not function_name:
+                continue
+            function_key = self.glsl_function_declaration_name(function)
+            functions_by_key[function_key] = function
+            source_candidates.setdefault(function_name, []).append(function_key)
+            parameters = list(getattr(function, "parameters", []) or [])
+            private_parameters = [
+                parameter
+                for parameter in parameters
+                if is_private_pointer_parameter(parameter)
+            ]
+            if not private_parameters:
+                continue
+            pointer_parameters[function_key] = private_parameters
+            pointer_parameter_indices[function_key] = {
+                index: parameter.name
+                for index, parameter in enumerate(parameters)
+                if is_private_pointer_parameter(parameter)
+            }
+            pointer_element_types[function_key] = {
+                parameter.name: self.glsl_private_pointer_parameter_element_type(
+                    parameter, function_key
+                )
+                for parameter in private_parameters
+            }
+            used_names = self.collect_glsl_function_local_identifier_names(function)
+            base_names = {}
+            for parameter in private_parameters:
+                base_name = f"{parameter.name}_base"
+                while (
+                    base_name in used_names
+                    or base_name in self.GLSL_RESERVED_IDENTIFIERS
+                    or base_name in self.GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS
+                ):
+                    base_name += "_"
+                used_names.add(base_name)
+                base_names[parameter.name] = base_name
+            pointer_base_names[function_key] = base_names
+            source_names[function_key] = function_name
+
+        self.function_private_pointer_parameters = pointer_parameters
+        self.function_private_pointer_parameter_indices = pointer_parameter_indices
+        self.function_private_pointer_element_types = pointer_element_types
+        self.function_private_pointer_base_names = pointer_base_names
+        self.function_private_pointer_source_names = source_names
+        if not pointer_parameters:
+            self.function_private_pointer_required_spans = {}
+            self.function_private_pointer_backing_variants = {}
+            self.function_private_pointer_local_arrays = {}
+            self.function_private_pointer_view_calls = {}
+            self.function_private_pointer_full_span_parameters = {}
+            return {}
+
+        local_arrays = {
+            function_key: self.glsl_private_pointer_local_arrays(function)
+            for function_key, function in functions_by_key.items()
+        }
+        self.function_private_pointer_local_arrays = local_arrays
+        self.function_private_pointer_full_span_parameters = {
+            function_key: set() for function_key in pointer_parameters
+        }
+
+        required_spans = {}
+        for function_key, parameters in pointer_parameters.items():
+            function = functions_by_key[function_key]
+            direct_hints = collect_private_pointer_array_size_hints(
+                functions=[function],
+                walk_nodes=self.walk_ast,
+                expression_name=self.expression_name,
+                literal_int_value=self.literal_int_value,
+                visible_literal_int_constants=self.visible_literal_int_constants,
+                function_call_name=self.function_call_name,
+                initial_literal_int_constants=self.initial_literal_int_constants,
+                strict_fixed_local_array_sizes=False,
+                propagate_argument_sizes_to_callee=False,
+                validate_fixed_argument_sizes=False,
+            )
+            function_hints = direct_hints.get(getattr(function, "name", None), {})
+            spans = {}
+            for parameter in parameters:
+                raw_size = function_hints.get(parameter.name, "")
+                try:
+                    spans[parameter.name] = int(raw_size) if raw_size else 0
+                except (TypeError, ValueError):
+                    spans[parameter.name] = 0
+            self.glsl_collect_private_pointer_static_direct_spans(
+                function,
+                function_key,
+                spans,
+            )
+            required_spans[function_key] = spans
+
+        view_calls = {function_key: [] for function_key in functions_by_key}
+        for caller_key, function in functions_by_key.items():
+            caller_element_types = pointer_element_types.get(caller_key, {})
+            constants = self.visible_literal_int_constants(function)
+            caller_local_arrays = local_arrays.get(caller_key, {})
+            view_calls[caller_key] = self.glsl_collect_private_pointer_view_calls(
+                function,
+                caller_key,
+                source_candidates,
+                caller_element_types,
+                caller_local_arrays,
+                constants,
+            )
+
+        self.function_private_pointer_required_spans = required_spans
+        self.function_private_pointer_view_calls = view_calls
+        for calls in view_calls.values():
+            for call in calls:
+                seen_backing_roots = {}
+                for parameter_name, binding in call["bindings"].items():
+                    if binding.get("root_kind") not in {"local", "parameter"}:
+                        self.glsl_private_pointer_backing_error(
+                            call, parameter_name, binding
+                        )
+                    if (
+                        binding.get("root_kind") == "local"
+                        and not isinstance(binding.get("extent"), int)
+                    ):
+                        self.glsl_private_pointer_backing_error(
+                            call, parameter_name, binding
+                        )
+                    self.glsl_private_pointer_binding_offset(
+                        call, parameter_name, binding
+                    )
+                    expected_type = pointer_element_types[call["callee"]][
+                        parameter_name
+                    ]
+                    actual_type = binding.get("element_type")
+                    if actual_type != expected_type:
+                        display_name = self.glsl_private_pointer_display_name(
+                            call["callee"]
+                        )
+                        raise OpenGLPrivatePointerParameterError(
+                            "OpenGL private pointer view "
+                            f"'{display_name}.{parameter_name}' has incompatible "
+                            f"element type '{actual_type or 'unknown'}'; expected "
+                            f"'{expected_type}'",
+                            function_name=display_name,
+                            parameter_name=parameter_name,
+                            reason="incompatible-element-type",
+                            source_location=getattr(
+                                call.get("node"), "source_location", None
+                            ),
+                        )
+                    backing_key = (binding.get("root_kind"), binding.get("root"))
+                    previous_parameter = seen_backing_roots.get(backing_key)
+                    if previous_parameter is not None:
+                        display_name = self.glsl_private_pointer_display_name(
+                            call["callee"]
+                        )
+                        backing_name = binding.get("root") or "unknown"
+                        raise OpenGLPrivatePointerParameterError(
+                            "OpenGL private pointer call to "
+                            f"'{display_name}' binds parameters "
+                            f"'{previous_parameter}' and '{parameter_name}' to "
+                            f"the same backing array '{backing_name}'; GLSL "
+                            "inout array copy-out cannot preserve aliased views",
+                            function_name=display_name,
+                            parameter_name=parameter_name,
+                            reason="aliased-view-backing",
+                            source_location=getattr(
+                                call.get("node"), "source_location", None
+                            ),
+                        )
+                    seen_backing_roots[backing_key] = parameter_name
+
+        changed = True
+        while changed:
+            changed = False
+            for caller_key, calls in view_calls.items():
+                caller_full_span = (
+                    self.function_private_pointer_full_span_parameters.get(
+                        caller_key, set()
+                    )
+                )
+                for call in calls:
+                    callee_full_span = (
+                        self.function_private_pointer_full_span_parameters.get(
+                            call["callee"], set()
+                        )
+                    )
+                    for parameter_name in tuple(callee_full_span):
+                        binding = call["bindings"].get(parameter_name, {})
+                        if binding.get("root_kind") != "parameter":
+                            continue
+                        root_name = binding.get("root")
+                        if root_name not in caller_full_span:
+                            caller_full_span.add(root_name)
+                            changed = True
+
+        for calls in view_calls.values():
+            for call in calls:
+                full_span_parameters = (
+                    self.function_private_pointer_full_span_parameters.get(
+                        call["callee"], set()
+                    )
+                )
+                for parameter_name in full_span_parameters:
+                    binding = call["bindings"].get(parameter_name, {})
+                    if (
+                        binding.get("root_kind") == "local"
+                        and binding.get("offset") == 0
+                    ):
+                        required_spans[call["callee"]][parameter_name] = max(
+                            required_spans[call["callee"]][parameter_name],
+                            binding["extent"],
+                        )
+
+        max_iterations = max(
+            1,
+            sum(len(parameters) for parameters in pointer_parameters.values())
+            * max(len(functions_by_key), 1),
         )
+        for _iteration in range(max_iterations):
+            changed = False
+            for caller_key, calls in view_calls.items():
+                caller_spans = required_spans.get(caller_key, {})
+                for call in calls:
+                    callee_spans = required_spans[call["callee"]]
+                    for parameter_name, binding in call["bindings"].items():
+                        span = callee_spans.get(parameter_name, 0)
+                        if span <= 0 or binding.get("root_kind") != "parameter":
+                            continue
+                        offset = self.glsl_private_pointer_binding_offset(
+                            call, parameter_name, binding
+                        )
+                        needed = offset + span
+                        root_name = binding["root"]
+                        if needed > caller_spans.get(root_name, 0):
+                            caller_spans[root_name] = needed
+                            changed = True
+            if not changed:
+                break
+        else:
+            raise OpenGLPrivatePointerParameterError(
+                "OpenGL private pointer view requirements do not converge",
+                reason="recursive-view-span",
+            )
+
+        for function_key, parameters in pointer_parameters.items():
+            for parameter in parameters:
+                if required_spans[function_key].get(parameter.name, 0) > 0:
+                    continue
+                display_name = self.glsl_private_pointer_display_name(function_key)
+                raise OpenGLPrivatePointerParameterError(
+                    "OpenGL private pointer parameter "
+                    f"'{display_name}.{parameter.name}' has no provable bounded span",
+                    function_name=display_name,
+                    parameter_name=parameter.name,
+                    reason="missing-fixed-array-extent",
+                    source_location=getattr(parameter, "source_location", None),
+                )
+
+        variants = {
+            function_key: {
+                tuple(
+                    required_spans[function_key][parameter.name]
+                    for parameter in parameters
+                )
+            }
+            for function_key, parameters in pointer_parameters.items()
+        }
+        changed = True
+        while changed:
+            changed = False
+            for caller_key, calls in view_calls.items():
+                caller_parameters = pointer_parameters.get(caller_key, [])
+                caller_parameter_positions = {
+                    parameter.name: index
+                    for index, parameter in enumerate(caller_parameters)
+                }
+                caller_variants = variants.get(caller_key, {()})
+                for caller_variant in tuple(caller_variants):
+                    for call in calls:
+                        callee_variant = []
+                        for parameter in pointer_parameters[call["callee"]]:
+                            binding = call["bindings"][parameter.name]
+                            if binding["root_kind"] == "local":
+                                extent = binding["extent"]
+                            else:
+                                root_name = binding["root"]
+                                position = caller_parameter_positions.get(root_name)
+                                if position is None:
+                                    self.glsl_private_pointer_backing_error(
+                                        call, parameter.name, binding
+                                    )
+                                extent = caller_variant[position]
+                            self.glsl_validate_private_pointer_call_binding(
+                                call,
+                                parameter.name,
+                                binding,
+                                extent,
+                            )
+                            callee_variant.append(extent)
+                        callee_variant = tuple(callee_variant)
+                        if callee_variant not in variants[call["callee"]]:
+                            variants[call["callee"]].add(callee_variant)
+                            changed = True
+
+        self.function_private_pointer_backing_variants = {
+            function_key: tuple(sorted(function_variants))
+            for function_key, function_variants in variants.items()
+        }
+        return {
+            function_key: {
+                parameter.name: str(
+                    self.function_private_pointer_backing_variants[function_key][0][
+                        index
+                    ]
+                )
+                for index, parameter in enumerate(parameters)
+            }
+            for function_key, parameters in pointer_parameters.items()
+        }
+
+    def glsl_private_pointer_parameter_element_type(self, parameter, function_name):
+        parameter_type = getattr(
+            parameter, "param_type", getattr(parameter, "vtype", None)
+        )
+        pointee_type = getattr(parameter_type, "pointee_type", None)
+        if pointee_type is None or isinstance(pointee_type, PointerType):
+            display_name = self.glsl_private_pointer_display_name(function_name)
+            raise OpenGLPrivatePointerParameterError(
+                "OpenGL private pointer parameter "
+                f"'{display_name}.{getattr(parameter, 'name', None)}' has an "
+                "unsupported pointee type",
+                function_name=display_name,
+                parameter_name=getattr(parameter, "name", None),
+                reason="unsupported-pointee-type",
+                source_location=getattr(parameter, "source_location", None),
+            )
+        return self.map_type(pointee_type)
+
+    def glsl_private_pointer_local_arrays(self, function):
+        constants = self.visible_literal_int_constants(function)
+        arrays = {}
+        ambiguous = set()
+        for node in self.walk_ast(getattr(function, "body", [])):
+            if not isinstance(node, (VariableNode, ArrayNode)):
+                continue
+            name = getattr(node, "name", None)
+            if not name:
+                continue
+            info = self.glsl_private_pointer_local_array_node_info(node, constants)
+            if info is None:
+                continue
+            previous = arrays.get(name)
+            if previous is not None and previous != info:
+                ambiguous.add(name)
+            else:
+                arrays[name] = info
+        for name in ambiguous:
+            arrays[name]["extent"] = None
+        return arrays
+
+    def glsl_private_pointer_local_array_node_info(self, node, constants):
+        node_type = getattr(node, "var_type", getattr(node, "vtype", None))
+        if isinstance(node_type, ArrayType):
+            element_type = node_type.element_type
+            size_expression = node_type.size
+        elif isinstance(node, ArrayNode):
+            element_type = getattr(node, "element_type", None)
+            size_expression = get_array_size_from_node(node)
+        else:
+            return None
+        extent = self.literal_int_value(size_expression, constants)
+        return {
+            "extent": extent if isinstance(extent, int) and extent > 0 else None,
+            "element_type": (
+                self.map_type(element_type) if element_type is not None else None
+            ),
+            "source_location": getattr(node, "source_location", None),
+        }
+
+    def glsl_collect_private_pointer_view_calls(
+        self,
+        function,
+        caller_key,
+        source_candidates,
+        caller_element_types,
+        caller_local_arrays,
+        constants,
+    ):
+        calls = []
+        initial_bindings = {
+            name: {
+                "root_kind": "parameter",
+                "root": name,
+                "offset": 0,
+                "side_effecting": False,
+                "element_type": element_type,
+            }
+            for name, element_type in caller_element_types.items()
+        }
+
+        def shadow_binding(node):
+            name = getattr(node, "name", None)
+            if not name:
+                return None, None
+            info = self.glsl_private_pointer_local_array_node_info(node, constants)
+            if info is not None:
+                return name, {
+                    "root_kind": "local",
+                    "root": name,
+                    "extent": info["extent"],
+                    "offset": 0,
+                    "side_effecting": False,
+                    "element_type": info["element_type"],
+                }
+            return name, {
+                "root_kind": None,
+                "root": name,
+                "offset": None,
+                "side_effecting": False,
+                "element_type": None,
+            }
+
+        def record_call(node, active_bindings):
+            callee_key = self.glsl_private_pointer_call_target_key(
+                node,
+                source_candidates,
+            )
+            parameter_indices = self.function_private_pointer_parameter_indices.get(
+                callee_key, {}
+            )
+            if not parameter_indices:
+                return
+            arguments = list(
+                getattr(node, "arguments", getattr(node, "args", [])) or []
+            )
+            bindings = {}
+            for index, parameter_name in parameter_indices.items():
+                argument = arguments[index] if index < len(arguments) else None
+                binding = self.glsl_private_pointer_static_binding(
+                    argument,
+                    caller_element_types,
+                    caller_local_arrays,
+                    constants,
+                    active_bindings,
+                )
+                if binding is None:
+                    binding = {
+                        "root_kind": None,
+                        "root": self.expression_name(argument),
+                        "offset": None,
+                        "side_effecting": (
+                            self.glsl_private_pointer_expression_has_side_effects(
+                                argument
+                            )
+                        ),
+                        "element_type": None,
+                    }
+                bindings[parameter_name] = binding
+            calls.append(
+                {
+                    "caller": caller_key,
+                    "callee": callee_key,
+                    "node": node,
+                    "bindings": bindings,
+                }
+            )
+
+        def visit(value, active_bindings):
+            if value is None or isinstance(value, (str, int, float, bool)):
+                return
+            if isinstance(value, (list, tuple)):
+                for item in value:
+                    visit(item, active_bindings)
+                return
+            if isinstance(value, BlockNode):
+                block_bindings = dict(active_bindings)
+                for statement in getattr(value, "statements", []) or []:
+                    visit(statement, block_bindings)
+                return
+            if isinstance(value, (VariableNode, ArrayNode)):
+                visit(getattr(value, "initial_value", None), active_bindings)
+                name, binding = shadow_binding(value)
+                if name:
+                    active_bindings[name] = binding
+                return
+            if isinstance(value, FunctionCallNode):
+                record_call(value, active_bindings)
+                for argument in (
+                    getattr(value, "arguments", getattr(value, "args", [])) or []
+                ):
+                    visit(argument, active_bindings)
+                return
+            if isinstance(value, IfNode):
+                visit(getattr(value, "condition", None), active_bindings)
+                visit(getattr(value, "then_branch", None), dict(active_bindings))
+                visit(getattr(value, "else_branch", None), dict(active_bindings))
+                return
+            if isinstance(value, ForNode):
+                loop_bindings = dict(active_bindings)
+                visit(getattr(value, "init", None), loop_bindings)
+                visit(getattr(value, "condition", None), loop_bindings)
+                visit(getattr(value, "body", None), loop_bindings)
+                visit(getattr(value, "update", None), loop_bindings)
+                return
+            if isinstance(value, ForInNode):
+                loop_bindings = dict(active_bindings)
+                visit(getattr(value, "iterable", None), loop_bindings)
+                pattern = getattr(value, "pattern", None)
+                if pattern:
+                    loop_bindings[pattern] = {
+                        "root_kind": None,
+                        "root": pattern,
+                        "offset": None,
+                        "side_effecting": False,
+                        "element_type": None,
+                    }
+                visit(getattr(value, "body", None), loop_bindings)
+                return
+            if isinstance(value, (WhileNode, DoWhileNode, LoopNode)):
+                loop_bindings = dict(active_bindings)
+                visit(getattr(value, "condition", None), loop_bindings)
+                visit(getattr(value, "body", None), loop_bindings)
+                return
+            if not hasattr(value, "__dict__"):
+                return
+            for key, child in vars(value).items():
+                if key in {"parent", "annotations", "args", "name"}:
+                    continue
+                visit(child, active_bindings)
+
+        visit(getattr(function, "body", []), initial_bindings)
+        return calls
+
+    def glsl_private_pointer_expression_has_side_effects(self, expression):
+        if expression is None or isinstance(expression, (str, int, float, bool)):
+            return False
+        if isinstance(expression, AssignmentNode):
+            return True
+        if isinstance(expression, UnaryOpNode) and expression.op in {"++", "--"}:
+            return True
+        if isinstance(expression, FunctionCallNode):
+            function_name = self.function_call_name(expression)
+            if function_name not in {
+                "int",
+                "uint",
+                "short",
+                "ushort",
+                "int16",
+                "uint16",
+                "int32_t",
+                "uint32_t",
+                "size_t",
+                "ptrdiff_t",
+            }:
+                return True
+        if not hasattr(expression, "__dict__"):
+            return False
+        return any(
+            self.glsl_private_pointer_expression_has_side_effects(child)
+            for key, child in vars(expression).items()
+            if key not in {"parent", "annotations", "array", "index", "args", "name"}
+        )
+
+    def glsl_private_pointer_static_binding(
+        self,
+        expression,
+        parameter_element_types,
+        local_arrays,
+        constants,
+        lexical_bindings=None,
+    ):
+        if isinstance(expression, (str, IdentifierNode, VariableNode)):
+            name = (
+                expression
+                if isinstance(expression, str)
+                else getattr(expression, "name", None)
+            )
+            if lexical_bindings is not None and name in lexical_bindings:
+                return dict(lexical_bindings[name])
+            if name in parameter_element_types:
+                return {
+                    "root_kind": "parameter",
+                    "root": name,
+                    "offset": 0,
+                    "side_effecting": False,
+                    "element_type": parameter_element_types[name],
+                }
+            if name in local_arrays:
+                return {
+                    "root_kind": "local",
+                    "root": name,
+                    "extent": local_arrays[name]["extent"],
+                    "offset": 0,
+                    "side_effecting": False,
+                    "element_type": local_arrays[name]["element_type"],
+                }
+            return None
+
+        if isinstance(expression, UnaryOpNode) and expression.op == "&":
+            operand = expression.operand
+            if not isinstance(operand, ArrayAccessNode):
+                return None
+            binding = self.glsl_private_pointer_static_binding(
+                operand.array,
+                parameter_element_types,
+                local_arrays,
+                constants,
+                lexical_bindings,
+            )
+            delta_expression = operand.index
+            operator = "+"
+        elif isinstance(expression, BinaryOpNode) and expression.op in {"+", "-"}:
+            binding = self.glsl_private_pointer_static_binding(
+                expression.left,
+                parameter_element_types,
+                local_arrays,
+                constants,
+                lexical_bindings,
+            )
+            delta_expression = expression.right
+            operator = expression.op
+            if binding is None and expression.op == "+":
+                binding = self.glsl_private_pointer_static_binding(
+                    expression.right,
+                    parameter_element_types,
+                    local_arrays,
+                    constants,
+                    lexical_bindings,
+                )
+                delta_expression = expression.left
+            if binding is None:
+                return None
+        else:
+            return None
+
+        delta = self.literal_int_value(delta_expression, constants)
+        if delta is not None and operator == "-":
+            delta = -delta
+        current = binding.get("offset")
+        binding["offset"] = (
+            None if current is None or delta is None else current + delta
+        )
+        binding["side_effecting"] = binding.get(
+            "side_effecting", False
+        ) or self.glsl_private_pointer_expression_has_side_effects(delta_expression)
+        return binding
+
+    def glsl_private_pointer_interval(self, expression, intervals, constants):
+        value = self.literal_int_value(expression, constants)
+        if value is not None:
+            return value, value
+        if expression is None:
+            return None
+        name = self.expression_name(expression)
+        if name in intervals:
+            return intervals[name]
+        if isinstance(expression, UnaryOpNode):
+            if expression.op in {"++", "--"}:
+                return None
+            operand = self.glsl_private_pointer_interval(
+                expression.operand, intervals, constants
+            )
+            if operand is None:
+                return None
+            if expression.op == "+":
+                return operand
+            if expression.op == "-":
+                return -operand[1], -operand[0]
+            return None
+        if isinstance(expression, BinaryOpNode):
+            left = self.glsl_private_pointer_interval(
+                expression.left, intervals, constants
+            )
+            right = self.glsl_private_pointer_interval(
+                expression.right, intervals, constants
+            )
+            if left is None or right is None:
+                return None
+            if expression.op == "+":
+                return left[0] + right[0], left[1] + right[1]
+            if expression.op == "-":
+                return left[0] - right[1], left[1] - right[0]
+            if expression.op == "*":
+                products = (
+                    left[0] * right[0],
+                    left[0] * right[1],
+                    left[1] * right[0],
+                    left[1] * right[1],
+                )
+                return min(products), max(products)
+            if expression.op == "/" and right[0] == right[1] and right[0] > 0:
+                divisor = right[0]
+                return int(left[0] / divisor), int(left[1] / divisor)
+            return None
+        if isinstance(expression, TernaryOpNode):
+            true_interval = self.glsl_private_pointer_interval(
+                expression.true_expr, intervals, constants
+            )
+            false_interval = self.glsl_private_pointer_interval(
+                expression.false_expr, intervals, constants
+            )
+            if true_interval is None or false_interval is None:
+                return None
+            return (
+                min(true_interval[0], false_interval[0]),
+                max(true_interval[1], false_interval[1]),
+            )
+        if isinstance(expression, FunctionCallNode):
+            function_name = self.function_call_name(expression)
+            arguments = list(
+                getattr(
+                    expression,
+                    "arguments",
+                    getattr(expression, "args", []),
+                )
+                or []
+            )
+            if (
+                function_name
+                in {
+                    "int",
+                    "uint",
+                    "short",
+                    "ushort",
+                    "int16",
+                    "uint16",
+                    "int32_t",
+                    "uint32_t",
+                    "size_t",
+                    "ptrdiff_t",
+                }
+                and len(arguments) == 1
+            ):
+                return self.glsl_private_pointer_interval(
+                    arguments[0], intervals, constants
+                )
+        return None
+
+    def glsl_private_pointer_loop_interval(self, node, intervals, constants):
+        init = getattr(node, "init", None)
+        loop_name = getattr(init, "name", None)
+        if not loop_name or loop_name not in intervals:
+            return None, None
+        start = intervals[loop_name]
+        if start[0] != start[1]:
+            return loop_name, None
+        condition = getattr(node, "condition", None)
+        if not isinstance(condition, BinaryOpNode):
+            return loop_name, None
+        left_name = self.expression_name(condition.left)
+        right_name = self.expression_name(condition.right)
+        operator = condition.op
+        if left_name == loop_name:
+            bound_expression = condition.right
+        elif right_name == loop_name:
+            bound_expression = condition.left
+            operator = {"<": ">", "<=": ">=", ">": "<", ">=": "<="}.get(
+                operator
+            )
+        else:
+            return loop_name, None
+        bound = self.glsl_private_pointer_interval(
+            bound_expression, intervals, constants
+        )
+        update = getattr(node, "update", None)
+        step = None
+        if isinstance(update, UnaryOpNode):
+            update_name = self.expression_name(update.operand)
+            if update_name == loop_name and update.op in {"++", "--"}:
+                step = 1 if update.op == "++" else -1
+        if bound is None or step is None:
+            return loop_name, None
+        if step > 0 and operator in {"<", "<="}:
+            maximum = bound[1] - (1 if operator == "<" else 0)
+            return loop_name, (start[0], max(start[0], maximum))
+        if step < 0 and operator in {">", ">="}:
+            minimum = bound[0] + (1 if operator == ">" else 0)
+            return loop_name, (min(start[0], minimum), start[0])
+        return loop_name, None
+
+    def glsl_collect_private_pointer_static_direct_spans(
+        self,
+        function,
+        function_key,
+        spans,
+    ):
+        parameter_element_types = self.function_private_pointer_element_types.get(
+            function_key, {}
+        )
+        constants = self.initial_literal_int_constants(function)
+        intervals = {}
+        for name, value in constants.items():
+            literal = self.literal_int_value(value, constants)
+            if literal is not None:
+                intervals[name] = (literal, literal)
+        pointer_bindings = {
+            name: {
+                "root_kind": "parameter",
+                "root": name,
+                "offset": 0,
+                "side_effecting": False,
+                "element_type": element_type,
+            }
+            for name, element_type in parameter_element_types.items()
+        }
+
+        def shadow_binding(node):
+            name = getattr(node, "name", None)
+            if not name:
+                return None, None
+            info = self.glsl_private_pointer_local_array_node_info(node, constants)
+            if info is not None:
+                return name, {
+                    "root_kind": "local",
+                    "root": name,
+                    "extent": info["extent"],
+                    "offset": 0,
+                    "side_effecting": False,
+                    "element_type": info["element_type"],
+                }
+            return name, {
+                "root_kind": None,
+                "root": name,
+                "offset": None,
+                "side_effecting": False,
+                "element_type": None,
+            }
+
+        def pointer_parameter_binding(expression, active_bindings):
+            if not isinstance(expression, (str, IdentifierNode, VariableNode)):
+                return None
+            binding = self.glsl_private_pointer_static_binding(
+                expression,
+                parameter_element_types,
+                {},
+                constants,
+                active_bindings,
+            )
+            if binding is not None and binding.get("root_kind") == "parameter":
+                return binding
+            return None
+
+        def reject_pointer_rebinding(binding, source):
+            display_name = self.glsl_private_pointer_display_name(function_key)
+            parameter_name = binding["root"]
+            raise OpenGLPrivatePointerParameterError(
+                "OpenGL cannot rebase private pointer parameter "
+                f"'{display_name}.{parameter_name}' because GLSL array "
+                "parameters are not assignable",
+                function_name=display_name,
+                parameter_name=parameter_name,
+                reason="pointer-parameter-rebinding",
+                source_location=getattr(source, "source_location", None),
+            )
+
+        def record_access(
+            pointer_expression,
+            index_expression,
+            active_intervals,
+            active_bindings,
+            source,
+        ):
+            binding = self.glsl_private_pointer_static_binding(
+                pointer_expression,
+                parameter_element_types,
+                {},
+                constants,
+                active_bindings,
+            )
+            if binding is None or binding.get("root_kind") != "parameter":
+                return
+            index = self.glsl_private_pointer_interval(
+                index_expression, active_intervals, constants
+            )
+            offset = binding.get("offset")
+            if index is None or offset is None:
+                self.function_private_pointer_full_span_parameters.setdefault(
+                    function_key, set()
+                ).add(binding["root"])
+                return
+            lower = offset + index[0]
+            upper = offset + index[1]
+            if lower < 0:
+                display_name = self.glsl_private_pointer_display_name(function_key)
+                raise OpenGLPrivatePointerParameterError(
+                    "OpenGL private pointer access "
+                    f"'{display_name}.{binding['root']}' may use negative index "
+                    f"{lower}",
+                    function_name=display_name,
+                    parameter_name=binding["root"],
+                    reason="negative-view-access",
+                    source_location=getattr(source, "source_location", None),
+                )
+            spans[binding["root"]] = max(spans[binding["root"]], upper + 1)
+
+        def merge_intervals(left, right):
+            return {
+                name: (
+                    min(left[name][0], right[name][0]),
+                    max(left[name][1], right[name][1]),
+                )
+                for name in left.keys() & right.keys()
+            }
+
+        def visit(value, active_intervals, active_bindings):
+            if value is None or isinstance(value, (str, int, float, bool)):
+                return
+            if isinstance(value, (list, tuple)):
+                for item in value:
+                    visit(item, active_intervals, active_bindings)
+                return
+            if isinstance(value, BlockNode):
+                block_bindings = dict(active_bindings)
+                for statement in getattr(value, "statements", []) or []:
+                    visit(statement, active_intervals, block_bindings)
+                return
+            if isinstance(value, (VariableNode, ArrayNode)):
+                initial_value = getattr(value, "initial_value", None)
+                visit(initial_value, active_intervals, active_bindings)
+                name = getattr(value, "name", None)
+                if name:
+                    interval = self.glsl_private_pointer_interval(
+                        initial_value, active_intervals, constants
+                    )
+                    if interval is None:
+                        active_intervals.pop(name, None)
+                    else:
+                        active_intervals[name] = interval
+                    _name, binding = shadow_binding(value)
+                    active_bindings[name] = binding
+                return
+            if isinstance(value, AssignmentNode):
+                target = getattr(value, "target", getattr(value, "left", None))
+                assigned = getattr(value, "value", getattr(value, "right", None))
+                target_binding = pointer_parameter_binding(target, active_bindings)
+                if target_binding is not None:
+                    reject_pointer_rebinding(target_binding, value)
+                visit(target, active_intervals, active_bindings)
+                visit(assigned, active_intervals, active_bindings)
+                target_name = self.expression_name(target)
+                if target_name and isinstance(
+                    target, (str, IdentifierNode, VariableNode)
+                ):
+                    assigned_interval = self.glsl_private_pointer_interval(
+                        assigned, active_intervals, constants
+                    )
+                    operator = getattr(value, "operator", "=")
+                    current = active_intervals.get(target_name)
+                    if operator == "=":
+                        replacement = assigned_interval
+                    elif operator == "+=" and current and assigned_interval:
+                        replacement = (
+                            current[0] + assigned_interval[0],
+                            current[1] + assigned_interval[1],
+                        )
+                    elif operator == "-=" and current and assigned_interval:
+                        replacement = (
+                            current[0] - assigned_interval[1],
+                            current[1] - assigned_interval[0],
+                        )
+                    else:
+                        replacement = None
+                    if replacement is None:
+                        active_intervals.pop(target_name, None)
+                    else:
+                        active_intervals[target_name] = replacement
+                return
+            if isinstance(value, ArrayAccessNode):
+                record_access(
+                    value.array,
+                    value.index,
+                    active_intervals,
+                    active_bindings,
+                    value,
+                )
+                visit(value.array, active_intervals, active_bindings)
+                visit(value.index, active_intervals, active_bindings)
+                return
+            if isinstance(value, UnaryOpNode):
+                if value.op in {"++", "--"}:
+                    operand_binding = pointer_parameter_binding(
+                        value.operand, active_bindings
+                    )
+                    if operand_binding is not None:
+                        reject_pointer_rebinding(operand_binding, value)
+                if value.op == "*":
+                    record_access(
+                        value.operand,
+                        0,
+                        active_intervals,
+                        active_bindings,
+                        value,
+                    )
+                visit(value.operand, active_intervals, active_bindings)
+                return
+            if isinstance(value, PointerAccessNode):
+                record_access(
+                    value.pointer_expr,
+                    0,
+                    active_intervals,
+                    active_bindings,
+                    value,
+                )
+                visit(value.pointer_expr, active_intervals, active_bindings)
+                return
+            if isinstance(value, IfNode):
+                visit(
+                    getattr(value, "condition", None),
+                    active_intervals,
+                    active_bindings,
+                )
+                then_intervals = dict(active_intervals)
+                else_intervals = dict(active_intervals)
+                visit(
+                    getattr(value, "then_branch", None),
+                    then_intervals,
+                    dict(active_bindings),
+                )
+                visit(
+                    getattr(value, "else_branch", None),
+                    else_intervals,
+                    dict(active_bindings),
+                )
+                active_intervals.clear()
+                active_intervals.update(merge_intervals(then_intervals, else_intervals))
+                return
+            if isinstance(value, ForNode):
+                loop_intervals = dict(active_intervals)
+                loop_bindings = dict(active_bindings)
+                visit(getattr(value, "init", None), loop_intervals, loop_bindings)
+                loop_name, loop_interval = self.glsl_private_pointer_loop_interval(
+                    value, loop_intervals, constants
+                )
+                if loop_name:
+                    if loop_interval is None:
+                        loop_intervals.pop(loop_name, None)
+                    else:
+                        loop_intervals[loop_name] = loop_interval
+                visit(
+                    getattr(value, "condition", None),
+                    loop_intervals,
+                    loop_bindings,
+                )
+                visit(getattr(value, "body", None), loop_intervals, loop_bindings)
+                visit(getattr(value, "update", None), loop_intervals, loop_bindings)
+                return
+            if isinstance(value, ForInNode):
+                loop_intervals = dict(active_intervals)
+                loop_bindings = dict(active_bindings)
+                iterable = getattr(value, "iterable", None)
+                start = self.glsl_private_pointer_interval(
+                    getattr(iterable, "start", None), loop_intervals, constants
+                )
+                end = self.glsl_private_pointer_interval(
+                    getattr(iterable, "end", None), loop_intervals, constants
+                )
+                pattern = getattr(value, "pattern", None)
+                if pattern and start and end:
+                    maximum = end[1] - (
+                        0 if getattr(iterable, "inclusive", False) else 1
+                    )
+                    loop_intervals[pattern] = (start[0], maximum)
+                elif pattern:
+                    loop_intervals.pop(pattern, None)
+                if pattern:
+                    loop_bindings[pattern] = {
+                        "root_kind": None,
+                        "root": pattern,
+                        "offset": None,
+                        "side_effecting": False,
+                        "element_type": None,
+                    }
+                visit(getattr(value, "body", None), loop_intervals, loop_bindings)
+                return
+            if isinstance(value, (WhileNode, DoWhileNode, LoopNode)):
+                loop_intervals = dict(active_intervals)
+                loop_bindings = dict(active_bindings)
+                visit(
+                    getattr(value, "condition", None),
+                    loop_intervals,
+                    loop_bindings,
+                )
+                visit(getattr(value, "body", None), loop_intervals, loop_bindings)
+                return
+            if not hasattr(value, "__dict__"):
+                return
+            for key, child in vars(value).items():
+                if key in {
+                    "parent",
+                    "annotations",
+                    "array",
+                    "index",
+                    "args",
+                    "name",
+                }:
+                    continue
+                visit(child, active_intervals, active_bindings)
+
+        visit(getattr(function, "body", []), intervals, pointer_bindings)
+
+    def glsl_private_pointer_call_target_key(self, call, source_candidates):
+        function_name = self.function_call_name(call)
+        arguments = list(
+            getattr(call, "arguments", getattr(call, "args", [])) or []
+        )
+        specialized_name = generic_function_call_name(self, function_name, arguments)
+        if specialized_name in self.function_private_pointer_parameters:
+            return specialized_name
+        resolved = self.resolve_glsl_function_overload(
+            function_name,
+            arguments,
+            call_node=call,
+        )
+        if resolved is not None:
+            resolved_key = self.glsl_function_declaration_name(resolved)
+            if resolved_key in self.function_private_pointer_parameters:
+                return resolved_key
+        candidates = source_candidates.get(function_name, ())
+        private_candidates = [
+            candidate
+            for candidate in candidates
+            if candidate in self.function_private_pointer_parameters
+        ]
+        if len(private_candidates) == 1:
+            return private_candidates[0]
+        if function_name in self.function_private_pointer_parameters:
+            return function_name
+        return None
+
+    def glsl_private_pointer_display_name(self, function_name):
+        return self.function_private_pointer_source_names.get(
+            function_name, function_name
+        )
+
+    def glsl_private_pointer_binding_offset(
+        self, call, parameter_name, binding
+    ):
+        if binding.get("side_effecting"):
+            reason = "side-effecting-view-offset"
+        elif not isinstance(binding.get("offset"), int):
+            reason = "unprovable-view-offset"
+        elif binding["offset"] < 0:
+            reason = "negative-view-offset"
+        else:
+            return binding["offset"]
+        display_name = self.glsl_private_pointer_display_name(call["callee"])
+        backing_name = binding.get("root") or "unknown"
+        raise OpenGLPrivatePointerParameterError(
+            "OpenGL cannot prove the private pointer view offset for "
+            f"'{display_name}.{parameter_name}' into backing array "
+            f"'{backing_name}'",
+            function_name=display_name,
+            parameter_name=parameter_name,
+            reason=reason,
+            source_location=getattr(call.get("node"), "source_location", None),
+        )
+
+    def glsl_private_pointer_backing_error(self, call, parameter_name, binding):
+        display_name = self.glsl_private_pointer_display_name(call["callee"])
+        backing_name = binding.get("root") or "unknown"
+        raise OpenGLPrivatePointerParameterError(
+            "OpenGL private pointer view "
+            f"'{display_name}.{parameter_name}' has no concrete fixed backing "
+            f"array for '{backing_name}'",
+            function_name=display_name,
+            parameter_name=parameter_name,
+            reason="missing-view-backing",
+            source_location=getattr(call.get("node"), "source_location", None),
+        )
+
+    def glsl_validate_private_pointer_call_binding(
+        self,
+        call,
+        parameter_name,
+        binding,
+        extent,
+    ):
+        offset = self.glsl_private_pointer_binding_offset(
+            call, parameter_name, binding
+        )
+        required_span = self.function_private_pointer_required_spans[
+            call["callee"]
+        ][parameter_name]
+        if parameter_name in self.function_private_pointer_full_span_parameters.get(
+            call["callee"], set()
+        ):
+            if offset != 0:
+                display_name = self.glsl_private_pointer_display_name(call["callee"])
+                backing_name = binding.get("root") or "unknown"
+                raise OpenGLPrivatePointerParameterError(
+                    "OpenGL private pointer view "
+                    f"'{display_name}.{parameter_name}' requires the complete "
+                    f"backing array '{backing_name}' and cannot use offset {offset}",
+                    function_name=display_name,
+                    parameter_name=parameter_name,
+                    reason="full-span-view-offset",
+                    source_location=getattr(
+                        call.get("node"), "source_location", None
+                    ),
+                )
+            required_span = extent
+        upper = offset + required_span - 1
+        if upper < extent:
+            return
+        display_name = self.glsl_private_pointer_display_name(call["callee"])
+        backing_name = binding.get("root") or "unknown"
+        raise OpenGLPrivatePointerParameterError(
+            "OpenGL private pointer view "
+            f"'{display_name}.{parameter_name}' requires elements "
+            f"{offset} through {upper}, but backing array '{backing_name}' "
+            f"has extent {extent}",
+            function_name=display_name,
+            parameter_name=parameter_name,
+            reason="view-out-of-bounds",
+            source_location=getattr(call.get("node"), "source_location", None),
+        )
+
+    def glsl_private_pointer_contract_function_name(self, function_name):
+        if function_name in self.function_private_pointer_parameters:
+            return function_name
+        candidates = [
+            key
+            for key, source_name in self.function_private_pointer_source_names.items()
+            if source_name == function_name
+        ]
+        return candidates[0] if len(candidates) == 1 else None
+
+    def glsl_private_pointer_offset_sum(self, base, delta):
+        if base in {None, "", "0", "0u"}:
+            return delta
+        if delta in {None, "", "0", "0u", "int(0)", "int(0u)"}:
+            return base
+        return f"({base} + {delta})"
+
+    def glsl_private_pointer_view_binding(self, expression):
+        function_name = self.current_glsl_private_pointer_function_name
+        local_arrays = self.function_private_pointer_local_arrays.get(
+            function_name, {}
+        )
+        if isinstance(expression, (str, IdentifierNode, VariableNode)):
+            raw_name = (
+                expression
+                if isinstance(expression, str)
+                else getattr(expression, "name", None)
+            )
+            active_source_type = self.local_variable_source_types.get(raw_name)
+            _active_base_type, active_array_suffix = split_array_type_suffix(
+                str(active_source_type or "")
+            )
+            if raw_name in local_arrays and active_array_suffix:
+                return {
+                    "backing": self.generate_glsl_identifier_expression(raw_name),
+                    "offset": "0",
+                    "root_kind": "local",
+                }
+            if raw_name in self.current_glsl_private_pointer_base_names:
+                if active_source_type and not str(active_source_type).rstrip().endswith(
+                    "*"
+                ):
+                    return None
+                return {
+                    "backing": self.generate_glsl_identifier_expression(raw_name),
+                    "offset": self.current_glsl_private_pointer_base_names[raw_name],
+                    "root_kind": "parameter",
+                }
+            if raw_name in local_arrays:
+                return {
+                    "backing": self.generate_glsl_identifier_expression(raw_name),
+                    "offset": "0",
+                    "root_kind": "local",
+                }
+            return None
+
+        if isinstance(expression, UnaryOpNode) and expression.op == "&":
+            operand = expression.operand
+            if not isinstance(operand, ArrayAccessNode):
+                return None
+            binding = self.glsl_private_pointer_view_binding(operand.array)
+            delta_expression = operand.index
+            operator = "+"
+        elif isinstance(expression, BinaryOpNode) and expression.op in {"+", "-"}:
+            binding = self.glsl_private_pointer_view_binding(expression.left)
+            delta_expression = expression.right
+            operator = expression.op
+            if binding is None and expression.op == "+":
+                binding = self.glsl_private_pointer_view_binding(expression.right)
+                delta_expression = expression.left
+            if binding is None:
+                return None
+        else:
+            return None
+
+        if self.glsl_private_pointer_expression_has_side_effects(delta_expression):
+            display_name = self.glsl_private_pointer_display_name(function_name)
+            raise OpenGLPrivatePointerParameterError(
+                "OpenGL cannot emit a side-effecting private pointer view offset",
+                function_name=display_name,
+                reason="side-effecting-view-offset",
+                source_location=getattr(expression, "source_location", None),
+            )
+        rendered_delta = self.generate_expression(delta_expression)
+        if operator == "-":
+            rendered_delta = f"-({rendered_delta})"
+        rendered_delta = f"int({rendered_delta})"
+        binding["offset"] = self.glsl_private_pointer_offset_sum(
+            binding["offset"], rendered_delta
+        )
+        return binding
+
+    def generate_glsl_private_pointer_view_access(
+        self,
+        pointer_expression,
+        index_expression=0,
+    ):
+        binding = self.glsl_private_pointer_view_binding(pointer_expression)
+        if binding is None or binding.get("root_kind") != "parameter":
+            return None
+        rendered_index = (
+            str(index_expression)
+            if isinstance(index_expression, (int, float))
+            else self.generate_expression(index_expression)
+        )
+        return (
+            f"{binding['backing']}[({binding['offset']} + "
+            f"int({rendered_index}))]"
+        )
+
+    def glsl_private_pointer_call_argument_binding(
+        self,
+        function_name,
+        parameter_name,
+        argument,
+    ):
+        contract_name = self.glsl_private_pointer_contract_function_name(
+            function_name
+        )
+        if contract_name is None:
+            return None
+        parameter_names = {
+            parameter.name
+            for parameter in self.function_private_pointer_parameters[contract_name]
+        }
+        if parameter_name not in parameter_names:
+            return None
+        binding = self.glsl_private_pointer_view_binding(argument)
+        if binding is None:
+            display_name = self.glsl_private_pointer_display_name(contract_name)
+            raise OpenGLPrivatePointerParameterError(
+                "OpenGL private pointer argument for "
+                f"'{display_name}.{parameter_name}' has no concrete backing array",
+                function_name=display_name,
+                parameter_name=parameter_name,
+                reason="missing-view-backing",
+                source_location=getattr(argument, "source_location", None),
+            )
+        return binding
+
+    def glsl_private_pointer_member_expression(
+        self,
+        pointer_expression,
+        member,
+    ):
+        pointee = self.generate_glsl_private_pointer_view_access(pointer_expression)
+        if pointee is None:
+            return None
+        return f"{pointee}.{member}"
 
     def collect_unsized_sampled_texture_globals(self, ast):
         globals_by_name = {}
@@ -24746,15 +26223,18 @@ complex64_t crossgl_complex64_mod_assign(
         if not is_private_pointer_parameter(parameter):
             return None
         parameter_name = getattr(parameter, "name", None)
-        size = self.function_private_pointer_array_size_hints.get(
-            function_name, {}
-        ).get(parameter_name)
+        size = self.current_glsl_private_pointer_variant.get(parameter_name)
+        if size is None:
+            size = self.function_private_pointer_array_size_hints.get(
+                function_name, {}
+            ).get(parameter_name)
         if not size:
+            display_name = self.glsl_private_pointer_display_name(function_name)
             raise OpenGLPrivatePointerParameterError(
                 "OpenGL private pointer parameter "
-                f"'{function_name}.{parameter_name}' requires one consistent "
-                "fixed array extent",
-                function_name=function_name,
+                f"'{display_name}.{parameter_name}' requires a provable bounded "
+                "array span",
+                function_name=display_name,
                 parameter_name=parameter_name,
                 reason="missing-fixed-array-extent",
                 source_location=getattr(parameter, "source_location", None),
@@ -24764,10 +26244,11 @@ complex64_t crossgl_complex64_mod_assign(
         )
         pointee_type = getattr(parameter_type, "pointee_type", None)
         if pointee_type is None or isinstance(pointee_type, PointerType):
+            display_name = self.glsl_private_pointer_display_name(function_name)
             raise OpenGLPrivatePointerParameterError(
                 "OpenGL private pointer parameter "
-                f"'{function_name}.{parameter_name}' has an unsupported pointee type",
-                function_name=function_name,
+                f"'{display_name}.{parameter_name}' has an unsupported pointee type",
+                function_name=display_name,
                 parameter_name=parameter_name,
                 reason="unsupported-pointee-type",
                 source_location=getattr(parameter, "source_location", None),

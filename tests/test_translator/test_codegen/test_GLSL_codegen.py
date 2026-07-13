@@ -42,6 +42,7 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLGlobalInitializerError,
     OpenGLIndexTypeError,
     OpenGLMappedOverloadError,
+    OpenGLPrivatePointerParameterError,
     OpenGLReferenceParameterError,
     OpenGLResourceMemoryQualifierError,
     OpenGLScalarConversionError,
@@ -3917,40 +3918,334 @@ def test_glsl_private_pointer_helper_uses_fixed_local_array_extent():
 
     generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
 
-    assert "uint sum4(inout uint values[4])" in generated
-    assert "total += values[i];" in generated
+    assert "uint sum4(inout uint values[4], int values_base)" in generated
+    assert "total += values[(values_base + int(i))];" in generated
+    assert "sum4(values, 0)" in generated
     assert "uint8_t*" not in generated
     assert "uint8*" not in generated
 
 
-def test_glsl_private_pointer_helper_rejects_conflicting_local_array_extents():
+def test_glsl_private_pointer_view_accepts_exact_and_constant_slice_backings(tmp_path):
     code = """
-    shader PrivatePointerConflict {
-        uint first(thread uint* values) {
-            return values[0];
+    shader PrivatePointerViews {
+        void fill5(thread float* values) {
+            values[0] = 3.0;
+            values[4] = 7.0;
         }
 
         compute {
             layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
             void main() {
-                uint short_values[4];
-                uint long_values[8];
-                uint left = first(short_values);
-                uint right = first(long_values);
+                float exact[5];
+                float backing[10];
+                fill5(exact);
+                fill5(backing);
+                fill5(backing + 5);
+                float observed = exact[0] + backing[0] + backing[5] + backing[9];
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "void fill5(inout float values[5], int values_base)" in generated
+    assert "void fill5(inout float values[10], int values_base)" in generated
+    assert "values[(values_base + int(0))] = 3.0;" in generated
+    assert "values[(values_base + int(4))] = 7.0;" in generated
+    assert "fill5(exact, 0);" in generated
+    assert "fill5(backing, 0);" in generated
+    assert "fill5(backing, int(5));" in generated
+    assert "backing + 5" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "private_pointer_exact_and_slice"
+    )
+
+
+def test_glsl_private_pointer_view_nested_forwarding_composes_offset_once(tmp_path):
+    code = """
+    shader ForwardedPrivatePointerView {
+        void write_pair(thread uint* values) {
+            values[0] = 11;
+            values[1] = 13;
+        }
+
+        void forward(thread uint* values) {
+            write_pair(values + 2);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                uint backing[8];
+                forward(backing + 3);
+                uint observed = backing[5] + backing[6];
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "void forward(inout uint values[8], int values_base)" in generated
+    assert "void write_pair(inout uint values[8], int values_base)" in generated
+    assert "forward(backing, int(3));" in generated
+    assert "write_pair(values, (values_base + int(2)));" in generated
+    assert "values[(values_base + int(0))] = 11;" in generated
+    assert "values[(values_base + int(1))] = 13;" in generated
+    assert "values + 2" not in generated
+    assert "backing + 3" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "private_pointer_nested_forwarding"
+    )
+
+
+def test_glsl_private_pointer_view_rejects_slice_with_unproven_dynamic_access():
+    code = """
+    shader UnprovenPrivatePointerAccess {
+        void write_dynamic(thread float* values, int index) {
+            values[0] = 1.0;
+            values[index] = 2.0;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                float backing[8];
+                write_dynamic(backing + 2, 1);
             }
         }
     }
     """
 
     with pytest.raises(
-        ValueError,
+        OpenGLPrivatePointerParameterError,
         match=(
-            "Conflicting fixed local array sizes for private pointer parameter "
-            "'first.values': 4 and 8"
+            "private pointer view 'write_dynamic.values' requires the complete "
+            "backing array 'backing' and cannot use offset 2"
         ),
-    ):
+    ) as excinfo:
         GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert excinfo.value.reason == "full-span-view-offset"
+
+
+def test_glsl_private_pointer_view_accepts_provably_bounded_loop_slice(tmp_path):
+    code = """
+    shader BoundedPrivatePointerAccess {
+        void write4(thread float* values) {
+            values[0] = 1.0;
+            for (int i = 1; i < 4; ++i) {
+                values[i] = float(i);
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                float backing[8];
+                write4(backing + 4);
+                float observed = backing[4] + backing[7];
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "void write4(inout float values[8], int values_base)" in generated
+    assert "write4(backing, int(4));" in generated
+    assert "values[(values_base + int(i))] = float(i);" in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "private_pointer_bounded_loop_slice"
+    )
+
+
+def test_glsl_private_pointer_view_rejects_aliased_inout_backing():
+    code = """
+    shader AliasedPrivatePointerBacking {
+        void write_pair(thread float* left, thread float* right) {
+            left[0] = 1.0;
+            right[0] = 2.0;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                float backing[4];
+                write_pair(backing, backing + 2);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        OpenGLPrivatePointerParameterError,
+        match=(
+            "binds parameters 'left' and 'right' to the same backing array "
+            "'backing'"
+        ),
+    ) as excinfo:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert excinfo.value.reason == "aliased-view-backing"
+
+
+@pytest.mark.parametrize("assignment", ["values += 1;", "values = values + 1;"])
+def test_glsl_private_pointer_view_rejects_pointer_parameter_rebinding(assignment):
+    code = f"""
+    shader RebasedPrivatePointerParameter {{
+        void write_value(thread float* values) {{
+            {assignment}
+            values[0] = 1.0;
+        }}
+
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {{
+                float backing[2];
+                write_value(backing);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        OpenGLPrivatePointerParameterError,
+        match=(
+            "cannot rebase private pointer parameter 'write_value.values' because "
+            "GLSL array parameters are not assignable"
+        ),
+    ) as excinfo:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert excinfo.value.reason == "pointer-parameter-rebinding"
+
+
+def test_glsl_private_pointer_view_respects_lexical_array_shadowing(tmp_path):
+    code = """
+    shader ShadowedPrivatePointerView {
+        void fill(thread float* values) {
+            values[0] = 9.0;
+        }
+
+        void forward(thread float* values) {
+            {
+                float values[4];
+                fill(values);
+            }
+            fill(values + 1);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                float backing[6];
+                forward(backing);
+                float observed = backing[1];
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "void forward(inout float values[6], int values_base)" in generated
+    assert re.search(
+        r"float values\[4\];\s*fill\(values, 0\);", generated
+    ), generated
+    assert "fill(values, (values_base + int(1)));" in generated
+    assert "forward(backing, 0);" in generated
+    assert "float observed = backing[1];" in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "private_pointer_lexical_shadowing"
+    )
+
+
+def test_glsl_private_pointer_view_rejects_constant_out_of_bounds_slice():
+    code = """
+    shader OutOfBoundsPrivatePointerView {
+        void fill5(thread float* values) {
+            values[4] = 1.0;
+        }
+
+        void dispatch() {
+            float backing[5];
+            fill5(backing + 1);
+        }
+    }
+    """
+
+    with pytest.raises(
+        OpenGLPrivatePointerParameterError,
+        match=(
+            "private pointer view 'fill5.values' requires elements 1 through 5, "
+            "but backing array 'backing' has extent 5"
+        ),
+    ) as excinfo:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert excinfo.value.reason == "view-out-of-bounds"
+
+
+@pytest.mark.parametrize(
+    ("offset", "reason"),
+    [("offset", "unprovable-view-offset"), ("offset++", "side-effecting-view-offset")],
+)
+def test_glsl_private_pointer_view_rejects_unprovable_offset(offset, reason):
+    code = f"""
+    shader UnprovablePrivatePointerView {{
+        void fill(thread float* values) {{
+            values[0] = 1.0;
+        }}
+
+        void dispatch(int offset) {{
+            float backing[5];
+            fill(backing + {offset});
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        OpenGLPrivatePointerParameterError,
+        match="cannot prove the private pointer view offset",
+    ) as excinfo:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert excinfo.value.reason == reason
+
+
+def test_glsl_private_pointer_view_rejects_incompatible_element_type():
+    code = """
+    shader IncompatiblePrivatePointerView {
+        void fill(thread float* values) {
+            values[0] = 1.0;
+        }
+
+        void dispatch() {
+            int backing[5];
+            fill(backing);
+        }
+    }
+    """
+
+    with pytest.raises(
+        OpenGLPrivatePointerParameterError,
+        match=(
+            "private pointer view 'fill.values' has incompatible element type "
+            "'int'; expected 'float'"
+        ),
+    ) as excinfo:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert excinfo.value.reason == "incompatible-element-type"
 
 
 def test_opengl_fixed_array_helper_specializes_readonly_runtime_storage(tmp_path):
