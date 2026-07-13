@@ -12148,6 +12148,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def apply_hlsl_parameter_qualifiers(self, param_type, parameter):
         qualifiers = self.hlsl_parameter_qualifiers(parameter)
+        if self.is_hlsl_global_resource_type(param_type):
+            qualifiers = [qualifier for qualifier in qualifiers if qualifier != "const"]
         if self.hlsl_has_precise_modifier(parameter):
             qualifiers.append("precise")
         if not qualifiers:

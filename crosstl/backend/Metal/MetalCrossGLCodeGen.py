@@ -2248,10 +2248,22 @@ class MetalToCrossGLConverter:
             type_array_suffix = self.format_array_suffix(var, include_declarator_arrays)
             type_str = f"{mapped_type}{type_array_suffix}"
         address_space = self.address_space_qualifier_prefix(var)
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(var, "qualifiers", []) or []
+        }
+        lowered_buffer_type = self.constant_buffer_pointer_type(
+            var
+        ) or self.structured_buffer_pointer_type(var)
+        const_device_pointer = bool(
+            "const" in qualifiers
+            and "device" in qualifiers
+            and self.pointer_element_type(getattr(var, "vtype", None)) is not None
+        )
         const_str = (
             "const "
-            if hasattr(var, "is_const")
-            and var.is_const
+            if (getattr(var, "is_const", False) or const_device_pointer)
+            and lowered_buffer_type is None
             and address_space.strip() != "constant"
             else ""
         )

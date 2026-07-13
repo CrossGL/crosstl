@@ -2197,6 +2197,52 @@ def test_codegen_address_of_device_buffer_element_preserves_lvalue():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_preserves_readonly_device_helper_parameters_for_hlsl(tmp_path):
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void copy_one(const device float* src, device float* dst, uint index) {
+        dst[index] = src[index];
+    }
+
+    kernel void copy_kernel(
+        device const float* src [[buffer(0)]],
+        device float* dst [[buffer(1)]],
+        uint index [[thread_position_in_grid]]) {
+        copy_one(src, dst, index);
+    }
+    """
+
+    crossgl = convert(code)
+
+    assert (
+        "void copy_one(const device float* src, device float* dst, uint index)"
+        in crossgl
+    )
+    assert "StructuredBuffer<float> src @buffer(0)" in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert (
+        "void copy_one(StructuredBuffer<float> src, "
+        "RWStructuredBuffer<float> dst, uint index)" in hlsl
+    )
+    assert "StructuredBuffer<float> src : register(t0);" in hlsl
+    assert "copy_one(src, dst, index);" in hlsl
+
+    dxc = shutil.which("dxc")
+    if dxc is not None:
+        hlsl_path = tmp_path / "readonly-device-helper.hlsl"
+        hlsl_path.write_text(hlsl, encoding="utf-8")
+        result = subprocess.run(
+            [dxc, "-T", "cs_6_0", "-E", "CSMain", str(hlsl_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_directx_codegen_lowers_native_metal_entry_buffer_parameters_to_resources():
     code = """
     #include <metal_stdlib>
