@@ -13,7 +13,9 @@ The current harness verifies:
   `mlx/backend/metal/kernels`;
 - Metal-to-CrossGL-to-Metal translation of pinned `fence.metal`, including
   project artifact hashes, sizes, source maps, provenance, and native Metal
-  compilation on macOS CI;
+  compilation on macOS CI. Resource coherence and volatility preservation
+  remain blocked by [#1660](https://github.com/CrossGL/crosstl/issues/1660), so
+  this is a source and toolchain check rather than a semantic-equivalence claim;
 - DirectX and Vulkan artifact generation for the 12-source clean reduced
   frontier: `arange.metal`, `arg_reduce.metal`, `binary_two.metal`, `fence.metal`,
   `layer_norm.metal`, `logsumexp.metal`, `random.metal`, `rms_norm.metal`,
@@ -103,7 +105,9 @@ compile with DXC. Current DirectX smoke artifacts lower MLX bfloat16 aliases to
 HLSL `half` for toolchain coverage; exact bfloat16 storage and conversion
 semantics remain tracked separately. On macOS CI, the generated `fence.metal`
 round-trip artifact must compile to AIR with the native Metal compiler. This
-checks generated source and project metadata, not numerical runtime parity. On
+checks generated source and project metadata, not numerical runtime parity or
+equivalent resource visibility. CrossGL/crosstl#1660 tracks preservation of
+the source `volatile coherent(system)` pointer contract. On
 Linux CI the generated Vulkan
 `arangeuint32`, `arangeint32`, and `arangefloat32` entry points must assemble,
 load, dispatch, read back, and compare on the Vulkan compute runtime; other
@@ -179,6 +183,8 @@ CrossGL/crosstl#1376 tracks bounded runtime for the scheduled full-corpus scout.
 CrossGL/crosstl#1659 tracks quadratic DirectX resource-register relocation for
 large aggregate artifacts; a high-budget `binary.metal` DirectX translation
 reaches that allocator after template materialization.
+CrossGL/crosstl#1660 tracks resource coherence and volatility qualifiers that
+are currently absent from Metal round-trip artifacts.
 CrossGL/crosstl#1312 tracks native toolchain validation coverage for project
 CI. CrossGL/crosstl#1388 tracks the artifact execution metadata required by
 runtime-test manifests and native adapters. OpenGL type aliases are inlined

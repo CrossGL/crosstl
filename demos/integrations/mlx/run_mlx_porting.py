@@ -120,6 +120,9 @@ VULKAN_GEMV_REPORTING_TRACKED_ISSUE = "https://github.com/CrossGL/crosstl/issues
 FULL_CORPUS_SEMANTIC_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1491",
 )
+METAL_ROUNDTRIP_SEMANTIC_TRACKED_ISSUES = (
+    "https://github.com/CrossGL/crosstl/issues/1660",
+)
 OPENGL_ARANGE_VALIDATION_TRACKED_ISSUES: tuple[str, ...] = ()
 OPENGL_SCALED_DOT_PRODUCT_ATTENTION_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1538",
@@ -180,6 +183,7 @@ FULL_CORPUS_TRACKED_ISSUES = (
     *VULKAN_GEMV_SEMANTIC_TRACKED_ISSUES,
     VULKAN_GEMV_REPORTING_TRACKED_ISSUE,
     *FULL_CORPUS_SEMANTIC_TRACKED_ISSUES,
+    *METAL_ROUNDTRIP_SEMANTIC_TRACKED_ISSUES,
 )
 RESOLVED_FRONTIER_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1573",
@@ -840,6 +844,8 @@ def _check_metal_roundtrip(
         "diagnosticCounts": diagnostic_counts,
         "artifactValidationStatus": "validated",
         "nativeMetalValidation": native_validation,
+        "semanticReadinessStatus": "blocked",
+        "semanticTrackedIssues": list(METAL_ROUNDTRIP_SEMANTIC_TRACKED_ISSUES),
         "shaderArtifactsOnly": True,
         "runtimeIntegrationIncluded": False,
         "runtimeParityClaimed": False,

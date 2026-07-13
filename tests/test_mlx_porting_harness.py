@@ -251,6 +251,10 @@ def test_metal_roundtrip_validates_generated_artifact_natively(tmp_path, monkeyp
     assert 'targets = ["metal"]' in config
     assert result["roundTripStages"] == ["metal", "crossgl", "metal"]
     assert result["artifactValidationStatus"] == "validated"
+    assert result["semanticReadinessStatus"] == "blocked"
+    assert result["semanticTrackedIssues"] == [
+        "https://github.com/CrossGL/crosstl/issues/1660"
+    ]
     assert result["runtimeParityClaimed"] is False
     assert result["nativeMetalValidation"]["status"] == "validated"
     assert result["nativeMetalValidation"]["required"] is True

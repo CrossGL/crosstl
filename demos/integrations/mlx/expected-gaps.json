@@ -17,7 +17,7 @@
     ]
   },
   "metal_roundtrip_status": {
-    "status": "validated",
+    "status": "native-compilation-validated",
     "source": "mlx/backend/metal/kernels/fence.metal",
     "stages": [
       "metal",
@@ -27,6 +27,10 @@
     "artifact_count": 1,
     "project_metadata_validation": "required",
     "native_validation": "required-on-macos-ci",
+    "semantic_readiness_status": "blocked",
+    "blocked_by": [
+      "https://github.com/CrossGL/crosstl/issues/1660"
+    ],
     "runtime_integration_included": false,
     "runtime_parity_claimed": false
   },
@@ -477,7 +481,8 @@
     "https://github.com/CrossGL/crosstl/issues/1568",
     "https://github.com/CrossGL/crosstl/issues/1569",
     "https://github.com/CrossGL/crosstl/issues/1574",
-    "https://github.com/CrossGL/crosstl/issues/1659"
+    "https://github.com/CrossGL/crosstl/issues/1659",
+    "https://github.com/CrossGL/crosstl/issues/1660"
   ],
   "resolved_issues": [
     "https://github.com/CrossGL/crosstl/issues/1573",
