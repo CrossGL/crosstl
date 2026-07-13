@@ -3850,6 +3850,79 @@ def test_opengl_nested_storage_pointer_helpers_compose_forwarded_offsets(tmp_pat
     )
 
 
+def test_glsl_repeated_struct_uniform_resources_use_distinct_block_names(tmp_path):
+    code = """
+    shader RepeatedStructUniformBlocks {
+        struct Params {
+            uint value;
+            vec4 color;
+        };
+
+        layout(binding = 2) uniform Params firstParams;
+        layout(binding = 5) uniform Params secondParams[2];
+
+        compute {
+            void main() {
+                uint combined = firstParams.value + secondParams[1].value;
+                vec4 selected = firstParams.color + secondParams[0].color;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "compute")
+    regenerated = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "compute"
+    )
+
+    assert generated == regenerated
+    assert "layout(std140, binding = 2) uniform Params {" in generated
+    assert "} firstParams;" in generated
+    assert "layout(std140, binding = 5) uniform Params_secondParams {" in generated
+    assert "} secondParams[2];" in generated
+    assert generated.count(" uniform Params {") == 1
+    assert "firstParams.value" in generated
+    assert "secondParams[1].value" in generated
+    assert "firstParams.color" in generated
+    assert "secondParams[0].color" in generated
+
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "repeated_struct_uniform_blocks"
+    )
+
+
+def test_glsl_repeated_struct_storage_resources_use_distinct_block_names(tmp_path):
+    code = """
+    shader RepeatedStructStorageBlocks {
+        struct Data {
+            uint value;
+        };
+
+        layout(binding = 2) buffer Data sourceData;
+        layout(binding = 5) buffer Data destinationData;
+
+        compute {
+            void main() {
+                destinationData.value = sourceData.value;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "compute")
+
+    assert "layout(std430, binding = 2) buffer Data {" in generated
+    assert "} sourceData;" in generated
+    assert "layout(std430, binding = 5) buffer Data_destinationData {" in generated
+    assert "} destinationData;" in generated
+    assert generated.count(" buffer Data {") == 1
+    assert "destinationData.value = sourceData.value;" in generated
+
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "repeated_struct_storage_blocks"
+    )
+
+
 def test_glsl_descriptor_sets_flatten_to_opengl_bindings():
     # Mirrors the compiler OpenGL lowering policy: set N, binding M -> N * 1024 + M.
     code = """
@@ -3879,8 +3952,11 @@ def test_glsl_descriptor_sets_flatten_to_opengl_bindings():
 
     assert "layout(std140, binding = 0) uniform Params {" in generated
     assert "} frameParams;" in generated
-    assert "layout(std140, binding = 1024) uniform Params {" in generated
+    assert "layout(std140, binding = 1024) uniform Params_materialParams {" in generated
     assert "} materialParams;" in generated
+    assert "layout(std140, binding = 1024) uniform Params {" not in generated
+    assert "frameParams.color" in generated
+    assert "materialParams.color" in generated
     assert (
         "layout(std430, binding = 1) buffer valuesBuffer { float values[]; };"
         in generated
@@ -3891,6 +3967,54 @@ def test_glsl_descriptor_sets_flatten_to_opengl_bindings():
     )
     assert "layout(binding = 4) uniform sampler2D baseMap;" in generated
     assert "layout(binding = 1028) uniform sampler2D detailMap;" in generated
+
+
+def test_glsl_struct_uniform_derived_block_name_collision_uses_stable_suffix(
+    tmp_path,
+):
+    code = """
+    shader StructUniformBlockNameCollision {
+        struct Params {
+            uint value;
+        };
+
+        struct Params_materialParams {
+            uint marker;
+        };
+
+        layout(binding = 3) uniform Params frameParams;
+        layout(binding = 7) uniform Params materialParams;
+
+        compute {
+            void main() {
+                Params_materialParams local = Params_materialParams(1u);
+                uint combined = frameParams.value + materialParams.value
+                    + local.marker;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "compute")
+    regenerated = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "compute"
+    )
+
+    assert generated == regenerated
+    assert "struct Params_materialParams {" in generated
+    assert "layout(std140, binding = 3) uniform Params {" in generated
+    assert "} frameParams;" in generated
+    assert "layout(std140, binding = 7) uniform Params_materialParams_2 {" in generated
+    assert "} materialParams;" in generated
+    assert (
+        "layout(std140, binding = 7) uniform Params_materialParams {" not in generated
+    )
+    assert "frameParams.value" in generated
+    assert "materialParams.value" in generated
+
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "struct_uniform_block_name_collision"
+    )
 
 
 def test_glsl_descriptor_array_texture_bindings_remap_overlapping_target_slots():

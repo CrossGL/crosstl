@@ -1394,6 +1394,7 @@ class GLSLCodeGen:
         self.glsl_buffer_block_variable_names = set()
         self.glsl_buffer_block_variable_types = {}
         self.glsl_buffer_block_variable_accesses = {}
+        self.glsl_interface_block_names_by_qualifier = {}
         self.global_variable_types = {}
         self.glsl_runtime_global_initializer_node_ids = set()
         self.glsl_stage_runtime_global_initializers = {}
@@ -2999,6 +3000,7 @@ class GLSLCodeGen:
         self.glsl_buffer_block_variable_names = set()
         self.glsl_buffer_block_variable_types = {}
         self.glsl_buffer_block_variable_accesses = {}
+        self.glsl_interface_block_names_by_qualifier = {}
         self.global_variable_types = {}
         self.glsl_runtime_global_initializer_node_ids = set()
         self.glsl_stage_runtime_global_initializers = {}
@@ -3408,6 +3410,7 @@ class GLSLCodeGen:
         self.layout_bound_struct_uniform_names = (
             self.collect_layout_bound_struct_uniform_names(resource_declaration_nodes)
         )
+        self.prepare_glsl_interface_block_names(ast, target_stage, structs)
         self.vertex_input_struct_names = self.stage_parameter_struct_names(
             ast, "vertex"
         )
@@ -22643,13 +22646,76 @@ complex64_t crossgl_complex64_mod_assign(
             names.add(str(self.resource_base_type(node_type)))
         return names
 
+    def prepare_glsl_interface_block_names(self, ast, target_stage, structs):
+        ordinary_struct_names = {
+            getattr(node, "name", None)
+            for node in structs or []
+            if getattr(node, "name", None)
+            and not self.is_glsl_interface_block_struct(node)
+            and node.name not in self.layout_bound_struct_uniform_names
+            and node.name not in self.glsl_buffer_block_struct_names
+        }
+        for qualifier in ("uniform", "buffer"):
+            for name in ordinary_struct_names:
+                self.reserve_glsl_interface_block_name(qualifier, name)
+
+        cbuffers = list(getattr(ast, "cbuffers", []) or [])
+        cbuffers += collect_stage_local_cbuffers(ast, target_stage)
+        for cbuffer in cbuffers:
+            self.reserve_glsl_interface_block_name(
+                "uniform", getattr(cbuffer, "name", None)
+            )
+
+        for node in structs or []:
+            if not self.is_glsl_interface_block_struct(node):
+                continue
+            block_name = self.glsl_interface_block_name(node)
+            for qualifier in self.glsl_interface_block_qualifiers(node):
+                qualifier = str(qualifier).lower()
+                if qualifier in {"uniform", "buffer", "in", "out"}:
+                    self.reserve_glsl_interface_block_name(qualifier, block_name)
+
+    def reserve_glsl_interface_block_name(self, qualifier, name):
+        if not name:
+            return
+        self.glsl_interface_block_names_by_qualifier.setdefault(
+            str(qualifier).lower(), set()
+        ).add(str(name))
+
+    def unique_glsl_interface_block_name(self, qualifier, source_name, instance_name):
+        qualifier = str(qualifier).lower()
+        used_names = self.glsl_interface_block_names_by_qualifier.setdefault(
+            qualifier, set()
+        )
+        source_name = sanitize_type_name(str(source_name)) or "InterfaceBlock"
+        if (
+            source_name not in used_names
+            and source_name not in self.GLSL_RESERVED_IDENTIFIERS
+        ):
+            used_names.add(source_name)
+            return source_name
+
+        instance_name = sanitize_type_name(str(instance_name)) or "instance"
+        base_name = f"{source_name}_{instance_name}"
+        candidate = base_name
+        suffix = 2
+        while candidate in used_names or candidate in self.GLSL_RESERVED_IDENTIFIERS:
+            candidate = f"{base_name}_{suffix}"
+            suffix += 1
+        used_names.add(candidate)
+        return candidate
+
     def glsl_buffer_block_declaration(
         self, node, vtype, name, binding, array_suffix=""
     ):
-        block_name = str(self.resource_base_type(vtype))
-        struct = self.structs_by_name.get(block_name)
+        source_block_name = str(self.resource_base_type(vtype))
+        struct = self.structs_by_name.get(source_block_name)
         if struct is None:
             return None
+
+        block_name = self.unique_glsl_interface_block_name(
+            "buffer", source_block_name, name
+        )
 
         layout = self.glsl_buffer_block_layout(node)
         memory_qualifiers = self.resource_memory_qualifiers(node)
@@ -22659,7 +22725,7 @@ complex64_t crossgl_complex64_mod_assign(
         for member in getattr(struct, "members", []) or []:
             code += self.generate_struct_member_declaration(
                 member,
-                struct_name=block_name,
+                struct_name=source_block_name,
                 preserve_unsized_arrays=True,
             )
         code += f"}} {name}{array_suffix};\n"
@@ -22793,8 +22859,11 @@ complex64_t crossgl_complex64_mod_assign(
     ):
         struct_name = str(self.resource_base_type(vtype))
         struct = self.structs_by_name[struct_name]
+        block_name = self.unique_glsl_interface_block_name(
+            "uniform", struct_name, var_name
+        )
         layout = self.glsl_resource_layout_prefix("std140", binding=binding)
-        code = f"{layout} uniform {struct_name} {{\n"
+        code = f"{layout} uniform {block_name} {{\n"
         for member in getattr(struct, "members", []) or []:
             code += self.generate_struct_member_declaration(
                 member,
