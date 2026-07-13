@@ -27987,6 +27987,110 @@ def test_opengl_lowers_nested_aggregates_in_explicit_struct_constructor(tmp_path
     )
 
 
+def test_opengl_static_struct_members_are_excluded_from_instance_layout(tmp_path):
+    shader = """
+    shader StaticStructMembers {
+        struct Layout {
+            static const int WIDTH = 2;
+            static const int EXTENTS[2][2] = {{1, 2}, {3, 4}};
+            float value;
+        };
+
+        Layout makeLayout(float value) {
+            return {value};
+        }
+
+        float readLayout(Layout item) {
+            return item.value;
+        }
+
+        compute {
+            [numthreads(1, 1, 1)]
+            void main() {
+                Layout instance = makeLayout(1.0);
+                float value = readLayout(instance);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    static_members = ast.structs[0].members[:2]
+    assert all(
+        "static"
+        in {
+            str(getattr(attribute, "name", attribute)).lower()
+            for attribute in member.attributes
+        }
+        for member in static_members
+    )
+
+    codegen = GLSLCodeGen()
+    generated_code = codegen.generate(ast)
+
+    assert "struct Layout {\n    float value;\n};" in generated_code
+    assert "WIDTH" not in generated_code
+    assert "EXTENTS" not in generated_code
+    assert codegen.struct_member_types["Layout"] == {"value": "float"}
+    assert "return Layout(value);" in generated_code
+    assert "return item.value;" in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "static_struct_instance_members",
+    )
+
+
+def test_opengl_static_struct_member_qualifier_is_excluded_from_instance_fields():
+    static_member = StructMemberNode("TYPE_SIZE", PrimitiveType("int"))
+    static_member.qualifiers = ["STATIC"]
+    ast = ShaderNode(
+        "StaticStructQualifier",
+        ExecutionModel.COMPUTE_KERNEL,
+        structs=[
+            StructNode(
+                "Layout",
+                [
+                    static_member,
+                    StructMemberNode("value", PrimitiveType("float")),
+                ],
+            )
+        ],
+    )
+
+    codegen = GLSLCodeGen()
+    generated_code = codegen.generate(ast)
+
+    assert "struct Layout {\n    float value;\n};" in generated_code
+    assert "TYPE_SIZE" not in generated_code
+    assert codegen.struct_member_types["Layout"] == {"value": "float"}
+
+
+def test_opengl_generic_struct_specialization_excludes_static_members():
+    shader = """
+    shader GenericStaticStructMembers {
+        generic<T> struct Box {
+            static const int WIDTH = 2;
+            static const T[WIDTH] defaults;
+            value: T;
+        }
+
+        Box<float> makeBox(float value) {
+            return Box { value: value };
+        }
+    }
+    """
+
+    codegen = GLSLCodeGen()
+    generated_code = codegen.generate(crosstl.translator.parse(shader))
+
+    assert "struct Box_float {\n    float value;\n};" in generated_code
+    assert "WIDTH" not in generated_code
+    assert "defaults" not in generated_code
+    assert codegen.struct_member_types["Box_float"] == {"value": "float"}
+    assert "return Box_float(value);" in generated_code
+
+
 def test_opengl_lowers_aggregate_function_arguments_from_parameter_type(tmp_path):
     shader = """
     shader AggregateFunctionArgument {
