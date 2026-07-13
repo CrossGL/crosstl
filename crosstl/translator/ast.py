@@ -529,6 +529,7 @@ class VariableNode(ASTNode):
         attributes: List["AttributeNode"] = None,
         qualifiers: List[str] = None,
         is_mutable: bool = True,
+        is_type_alias: bool = False,
         visibility: str = "private",
         **kwargs,
     ):
@@ -539,6 +540,7 @@ class VariableNode(ASTNode):
         self.attributes = attributes or []
         self.qualifiers = qualifiers or []
         self.is_mutable = is_mutable
+        self.is_type_alias = is_type_alias
         self.visibility = visibility
 
         # Legacy aliases
@@ -1090,6 +1092,21 @@ class CastNode(ExpressionNode):
 
     def __repr__(self):
         return f"CastNode(expression={self.expression}, target_type={self.target_type})"
+
+
+class PointerReinterpretNode(ExpressionNode):
+    """Alias a pointer's backing storage through a different element type."""
+
+    def __init__(self, expression: ExpressionNode, target_type: PointerType, **kwargs):
+        super().__init__(target_type, **kwargs)
+        self.expression = expression
+        self.target_type = target_type
+
+    def __repr__(self):
+        return (
+            "PointerReinterpretNode("
+            f"expression={self.expression}, target_type={self.target_type})"
+        )
 
 
 class ConstructorNode(ExpressionNode):

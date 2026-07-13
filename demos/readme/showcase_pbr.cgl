@@ -1,0 +1,138 @@
+shader ShowcasePBRShader {
+    const float PI = 3.14159265359;
+    const float EPSILON = 0.0001;
+    const int MAX_LIGHTS = 4;
+
+    struct VertexInput {
+        vec3 position;
+        vec3 normal;
+        vec3 tangent;
+        vec2 texCoord;
+    }
+
+    struct VertexOutput {
+        vec3 worldPosition;
+        vec3 worldNormal;
+        vec3 worldTangent;
+        vec3 worldBitangent;
+        vec2 uv;
+        vec4 position;
+    }
+
+    struct FragmentInput {
+        vec3 worldPosition;
+        vec3 worldNormal;
+        vec3 worldTangent;
+        vec3 worldBitangent;
+        vec2 uv;
+    }
+
+    struct FragmentOutput {
+        vec4 color;
+    }
+
+    float distributionGGX(vec3 normal, vec3 halfVector, float roughness) {
+        float alpha = roughness * roughness;
+        float alpha2 = alpha * alpha;
+        float ndoth = max(dot(normal, halfVector), 0.0);
+        float denom = ndoth * ndoth * (alpha2 - 1.0) + 1.0;
+        return alpha2 / max(PI * denom * denom, EPSILON);
+    }
+
+    float geometrySchlickGGX(float ndotv, float roughness) {
+        float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+        return ndotv / max(ndotv * (1.0 - k) + k, EPSILON);
+    }
+
+    float geometrySmith(vec3 normal, vec3 viewDir, vec3 lightDir, float roughness) {
+        float ndotv = max(dot(normal, viewDir), 0.0);
+        float ndotl = max(dot(normal, lightDir), 0.0);
+        return geometrySchlickGGX(ndotv, roughness) * geometrySchlickGGX(ndotl, roughness);
+    }
+
+    vec3 fresnelSchlick(float cosTheta, vec3 baseReflectance) {
+        return baseReflectance + (vec3(1.0) - baseReflectance) * pow(max(1.0 - cosTheta, 0.0), 5.0);
+    }
+
+    vertex {
+        uniform mat4 modelMatrix;
+        uniform mat4 viewProjectionMatrix;
+        uniform mat3 normalMatrix;
+
+        VertexOutput main(VertexInput input) {
+            VertexOutput output;
+            vec4 worldPosition = modelMatrix * vec4(input.position, 1.0);
+            output.worldPosition = worldPosition.xyz;
+            output.worldNormal = normalize(normalMatrix * input.normal);
+            output.worldTangent = normalize(normalMatrix * input.tangent);
+            output.worldBitangent = normalize(cross(output.worldNormal, output.worldTangent));
+            output.uv = input.texCoord;
+            output.position = viewProjectionMatrix * worldPosition;
+            return output;
+        }
+    }
+
+    fragment {
+        uniform sampler2D albedoMap;
+        uniform sampler2D normalMap;
+        uniform sampler2D metallicRoughnessMap;
+        uniform vec3 cameraPosition;
+        uniform vec3 lightPositions[MAX_LIGHTS];
+        uniform vec3 lightColors[MAX_LIGHTS];
+        uniform int activeLightCount;
+        uniform vec3 baseColor;
+        uniform float metallicFactor;
+        uniform float roughnessFactor;
+
+        vec3 decodeNormal(vec3 encodedNormal, mat3 tangentFrame) {
+            vec3 tangentNormal = encodedNormal * 2.0 - 1.0;
+            return normalize(tangentFrame * tangentNormal);
+        }
+
+        FragmentOutput main(FragmentInput input) {
+            FragmentOutput output;
+            mat3 tangentFrame = mat3(
+                normalize(input.worldTangent),
+                normalize(input.worldBitangent),
+                normalize(input.worldNormal)
+            );
+            vec3 normal = decodeNormal(texture(normalMap, input.uv).rgb, tangentFrame);
+            vec3 viewDir = normalize(cameraPosition - input.worldPosition);
+            vec3 albedo = texture(albedoMap, input.uv).rgb * baseColor;
+            vec3 materialSample = texture(metallicRoughnessMap, input.uv).rgb;
+            float metallic = clamp(materialSample.b * metallicFactor, 0.0, 1.0);
+            float roughness = clamp(materialSample.g * roughnessFactor, 0.04, 1.0);
+            vec3 baseReflectance = mix(vec3(0.04), albedo, metallic);
+            vec3 radianceSum = vec3(0.0);
+
+            for (int i = 0; i < MAX_LIGHTS; i++) {
+                if (i >= activeLightCount) {
+                    break;
+                }
+                vec3 lightVector = lightPositions[i] - input.worldPosition;
+                float distanceSq = max(dot(lightVector, lightVector), EPSILON);
+                vec3 lightDir = normalize(lightVector);
+                vec3 halfVector = normalize(viewDir + lightDir);
+                float attenuation = 1.0 / distanceSq;
+                vec3 radiance = lightColors[i] * attenuation;
+
+                float normalDistribution = distributionGGX(normal, halfVector, roughness);
+                float geometry = geometrySmith(normal, viewDir, lightDir, roughness);
+                vec3 fresnel = fresnelSchlick(max(dot(halfVector, viewDir), 0.0), baseReflectance);
+                vec3 diffuseShare = (vec3(1.0) - fresnel) * (1.0 - metallic);
+                vec3 numerator = normalDistribution * geometry * fresnel;
+                float denominator = max(4.0 * max(dot(normal, viewDir), 0.0) * max(dot(normal, lightDir), 0.0), EPSILON);
+                vec3 specular = numerator / denominator;
+                float ndotl = max(dot(normal, lightDir), 0.0);
+                radianceSum += (diffuseShare * albedo / PI + specular) * radiance * ndotl;
+            }
+
+            vec3 ambient = albedo * 0.03;
+            vec3 color = ambient + radianceSum;
+            color = color / (color + vec3(1.0));
+            color = pow(color, vec3(1.0 / 2.2));
+            output.color = vec4(color, 1.0);
+            return output;
+        }
+    }
+}

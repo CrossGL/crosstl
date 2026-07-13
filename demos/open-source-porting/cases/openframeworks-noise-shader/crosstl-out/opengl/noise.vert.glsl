@@ -8,6 +8,10 @@ layout(std140) uniform Uniforms {
     vec2 mouse;
 };
 // Vertex Shader
+vec4 rand(vec2 A, vec2 B, vec2 C, vec2 D);
+
+float noise(vec2 coord, float d);
+
 vec4 rand(vec2 A, vec2 B, vec2 C, vec2 D) {
     vec2 s = vec2(12.9898, 78.233);
     vec4 tmp = vec4(dot(A, s), dot(B, s), dot(C, s), dot(D, s));

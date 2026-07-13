@@ -32,6 +32,23 @@ QUALIFIER_TOKENS = {
     "READ_WRITE",
 }
 
+CAST_TYPE_QUALIFIER_NAMES = {
+    "constant",
+    "device",
+    "threadgroup",
+    "threadgroup_imageblock",
+    "thread",
+    "const",
+    "constexpr",
+    "static",
+    "inline",
+    "volatile",
+    "restrict",
+    "read",
+    "write",
+    "read_write",
+}
+
 TYPE_TOKENS = {
     "VOID",
     "FLOAT",
@@ -369,6 +386,7 @@ class MetalParser:
             "matrix_float4x4",
         }
         self.local_variable_scopes = []
+        self.local_type_scopes = []
         self.pending_block_scope_names = []
         self.known_variable_templates = set()
         self.known_function_templates = set()
@@ -404,6 +422,54 @@ class MetalParser:
             token=token if token is not None else self.current_token,
             declaration_context=self.current_declaration_context(),
             file_path=self.file_path,
+        )
+
+    def source_span_from_tokens(self, start_token, end_token):
+        line = getattr(start_token, "line", None)
+        column = getattr(start_token, "column", None)
+        end_line = getattr(end_token, "line", None)
+        end_column = getattr(end_token, "column", None)
+        if None in {line, column, end_line, end_column}:
+            return None
+
+        end_text = str(end_token[1] or "")
+        if "\n" in end_text:
+            end_line += end_text.count("\n")
+            end_column = len(end_text.rsplit("\n", 1)[-1]) + 1
+        else:
+            end_column += len(end_text)
+        location = {
+            "file": self.file_path,
+            "line": line,
+            "column": column,
+            "end_line": end_line,
+            "end_column": end_column,
+        }
+        start_offset = getattr(start_token, "offset", None)
+        end_offset = getattr(end_token, "offset", None)
+        if start_offset is not None and end_offset is not None:
+            location["offset"] = start_offset
+            location["length"] = end_offset + len(end_text) - start_offset
+            location["end_offset"] = end_offset + len(end_text)
+        return location
+
+    def expression_contains_scoped_reference(self, node):
+        if node is None or isinstance(node, (str, int, float, bool)):
+            return False
+        if isinstance(node, VariableNode) and "::" in str(node.name):
+            return True
+        if isinstance(node, dict):
+            return any(
+                self.expression_contains_scoped_reference(value)
+                for value in node.values()
+            )
+        if isinstance(node, (list, tuple, set)):
+            return any(
+                self.expression_contains_scoped_reference(value) for value in node
+            )
+        return any(
+            self.expression_contains_scoped_reference(value)
+            for value in getattr(node, "__dict__", {}).values()
         )
 
     def current_declaration_context(self):
@@ -1428,6 +1494,7 @@ class MetalParser:
         return PreprocessorNode(directive, content)
 
     def parse_using_statement(self):
+        start_token = self.current_token
         self.eat("USING")
         if self.current_token[0] == "NAMESPACE":
             self.eat("NAMESPACE")
@@ -1443,17 +1510,31 @@ class MetalParser:
         self.eat("EQUALS")
         if self.is_union_alias_start():
             return self.parse_using_union_alias(alias_name)
-        alias_type, _qualifiers = self.parse_type_specifier()
+        alias_type, qualifiers = self.parse_type_specifier()
         if self.current_token[0] == "LPAREN":
             self.parse_parenthesized_parameter_tokens()
             self.eat("SEMICOLON")
-            self.known_types.add(alias_name)
-            alias = TypeAliasNode(alias_type, alias_name)
+            self.register_known_type(alias_name)
+            alias = TypeAliasNode(
+                alias_type,
+                alias_name,
+                qualifiers=qualifiers,
+                source_location=self.source_span_from_tokens(
+                    start_token, self.tokens[self.pos - 1]
+                ),
+            )
             alias.is_function_type = True
             return alias
         self.eat("SEMICOLON")
-        self.known_types.add(alias_name)
-        return TypeAliasNode(alias_type, alias_name)
+        self.register_known_type(alias_name)
+        return TypeAliasNode(
+            alias_type,
+            alias_name,
+            qualifiers=qualifiers,
+            source_location=self.source_span_from_tokens(
+                start_token, self.tokens[self.pos - 1]
+            ),
+        )
 
     def is_using_declaration_start(self):
         return self.current_token[0] in {"IDENTIFIER", "METAL", "SCOPE"} and not (
@@ -1476,7 +1557,7 @@ class MetalParser:
         self.eat("RBRACE")
         self.eat("SEMICOLON")
 
-        self.known_types.add(alias_name)
+        self.register_known_type(alias_name)
         union_node = StructNode(alias_name, members)
         union_node.aggregate_kind = "union"
         union_node.using_alias = True
@@ -1504,7 +1585,7 @@ class MetalParser:
         if self.current_token[0] == "IDENTIFIER":
             name = self.current_token[1]
             self.eat("IDENTIFIER")
-            self.known_types.add(name)
+            self.register_known_type(name)
         underlying_type = None
         if self.current_token[0] == "COLON":
             self.eat("COLON")
@@ -1532,6 +1613,7 @@ class MetalParser:
         return members
 
     def parse_typedef(self):
+        start_token = self.current_token
         self.eat("TYPEDEF")
         if self.current_token[0] == "STRUCT":
             return self.parse_typedef_struct()
@@ -1539,29 +1621,57 @@ class MetalParser:
             return self.parse_typedef_union()
         if self.current_token[0] == "ENUM":
             return self.parse_typedef_enum()
+        qualifiers = []
         if (
             self.current_token[0] == "IDENTIFIER"
             and self.current_token[1] == "decltype"
         ):
             alias_type = self.parse_decltype_type()
         else:
-            alias_type, _qualifiers = self.parse_type_specifier()
+            alias_type, qualifiers = self.parse_type_specifier()
         if self.current_token[0] == "LPAREN":
             alias_name = self.parse_function_typedef_declarator(alias_type)
             self.eat("SEMICOLON")
-            self.known_types.add(alias_name)
-            return TypeAliasNode(alias_type, alias_name)
-        alias_name, _array, _type_suffix, _grouped_suffix = self.parse_declarator()
+            self.register_known_type(alias_name)
+            return TypeAliasNode(
+                alias_type,
+                alias_name,
+                qualifiers=qualifiers,
+                source_location=self.source_span_from_tokens(
+                    start_token, self.tokens[self.pos - 1]
+                ),
+            )
+        alias_name, array_sizes, type_suffix, grouped_suffix = self.parse_declarator()
         if self.current_token[0] == "LPAREN":
             self.parse_parenthesized_parameter_tokens()
             self.eat("SEMICOLON")
-            self.known_types.add(alias_name)
-            alias = TypeAliasNode(alias_type, alias_name)
+            self.register_known_type(alias_name)
+            alias = TypeAliasNode(
+                alias_type,
+                alias_name,
+                qualifiers=qualifiers,
+                array_sizes=array_sizes,
+                declarator_type_suffix=type_suffix,
+                declarator_type_suffix_grouped=grouped_suffix,
+                source_location=self.source_span_from_tokens(
+                    start_token, self.tokens[self.pos - 1]
+                ),
+            )
             alias.is_function_type = True
             return alias
         self.eat("SEMICOLON")
-        self.known_types.add(alias_name)
-        return TypeAliasNode(alias_type, alias_name)
+        self.register_known_type(alias_name)
+        return TypeAliasNode(
+            alias_type,
+            alias_name,
+            qualifiers=qualifiers,
+            array_sizes=array_sizes,
+            declarator_type_suffix=type_suffix,
+            declarator_type_suffix_grouped=grouped_suffix,
+            source_location=self.source_span_from_tokens(
+                start_token, self.tokens[self.pos - 1]
+            ),
+        )
 
     def parse_typedef_enum(self):
         tag_name, is_scoped, underlying_type = self.parse_enum_header()
@@ -1580,7 +1690,7 @@ class MetalParser:
             enum_name = alias_name or tag_name
             if not enum_name:
                 raise SyntaxError("Expected typedef enum name")
-            self.known_types.add(enum_name)
+            self.register_known_type(enum_name)
             enum = EnumNode(enum_name, members)
             enum.typedef_tag = tag_name
             enum.is_scoped = is_scoped
@@ -1595,7 +1705,7 @@ class MetalParser:
         self.eat("SEMICOLON")
         if alias_name == tag_name:
             return None
-        self.known_types.add(alias_name)
+        self.register_known_type(alias_name)
         return TypeAliasNode(f"enum {tag_name}", alias_name)
 
     def parse_typedef_union(self):
@@ -1604,7 +1714,7 @@ class MetalParser:
         if self.is_current_name_token():
             tag_name = self.current_token[1]
             self.eat(self.current_token[0])
-            self.known_types.add(tag_name)
+            self.register_known_type(tag_name)
 
         if self.current_token[0] == "LBRACE":
             self.eat("LBRACE")
@@ -1620,7 +1730,7 @@ class MetalParser:
             union_name = alias_name or tag_name
             if not union_name:
                 raise SyntaxError("Expected typedef union name")
-            self.known_types.add(union_name)
+            self.register_known_type(union_name)
             union_node = StructNode(union_name, members)
             union_node.typedef_tag = tag_name
             union_node.aggregate_kind = "union"
@@ -1634,7 +1744,7 @@ class MetalParser:
         self.eat("SEMICOLON")
         if alias_name == tag_name:
             return None
-        self.known_types.add(alias_name)
+        self.register_known_type(alias_name)
         return TypeAliasNode(f"union {tag_name}", alias_name)
 
     def parse_function_typedef_declarator(self, return_type):
@@ -1693,7 +1803,7 @@ class MetalParser:
         if self.is_current_name_token():
             tag_name = self.current_token[1]
             self.eat(self.current_token[0])
-            self.known_types.add(tag_name)
+            self.register_known_type(tag_name)
 
         if self.current_token[0] == "LBRACE":
             self.eat("LBRACE")
@@ -1710,7 +1820,7 @@ class MetalParser:
             struct_name = alias_name or tag_name
             if not struct_name:
                 raise SyntaxError("Expected typedef struct name")
-            self.known_types.add(struct_name)
+            self.register_known_type(struct_name)
             struct_node = StructNode(struct_name, members)
             struct_node.typedef_tag = tag_name
             struct_node.attributes = struct_attributes
@@ -1725,7 +1835,7 @@ class MetalParser:
         self.eat("SEMICOLON")
         if alias_name == tag_name:
             return None
-        self.known_types.add(alias_name)
+        self.register_known_type(alias_name)
         return TypeAliasNode(f"struct {tag_name}", alias_name)
 
     def parse_static_assert(self):
@@ -3069,6 +3179,7 @@ class MetalParser:
             else set()
         )
         self.local_variable_scopes.append(set(initial_scope_names))
+        self.local_type_scopes.append(set())
         self.eat("LBRACE")
         try:
             while self.current_token[0] != "RBRACE":
@@ -3080,15 +3191,20 @@ class MetalParser:
             self.eat("RBRACE")
             return statements
         finally:
+            self.known_types.difference_update(self.local_type_scopes.pop())
             self.local_variable_scopes.pop()
 
     def parse_statement_body(self):
         if self.current_token[0] == "LBRACE":
             return self.parse_block()
-        statement = self.parse_statement()
-        if isinstance(statement, list):
-            return statement
-        return [] if statement is None else [statement]
+        self.local_type_scopes.append(set())
+        try:
+            statement = self.parse_statement()
+            if isinstance(statement, list):
+                return statement
+            return [] if statement is None else [statement]
+        finally:
+            self.known_types.difference_update(self.local_type_scopes.pop())
 
     def is_declaration_start(self):
         return self.is_declaration_start_at(
@@ -3145,6 +3261,8 @@ class MetalParser:
                     "MULTIPLY",
                     "BITWISE_AND",
                 ]:
+                    return True
+                if next_idx < len(self.tokens) and self.is_name_token_at(next_idx):
                     return True
                 while next_idx < len(self.tokens) and self.is_qualifier_token_at(
                     next_idx
@@ -3224,6 +3342,13 @@ class MetalParser:
         if self.local_variable_scopes and name:
             self.local_variable_scopes[-1].add(name)
 
+    def register_known_type(self, name):
+        if not name:
+            return
+        if self.local_type_scopes and name not in self.known_types:
+            self.local_type_scopes[-1].add(name)
+        self.known_types.add(name)
+
     def is_scoped_call_expression_start_at(self, idx):
         if idx + 2 >= len(self.tokens):
             return False
@@ -3264,11 +3389,17 @@ class MetalParser:
             self.parse_pragma_statement()
             return None
         if self.current_token[0] == "USING":
-            self.parse_using_statement()
-            return None
+            # Retain body-local ``using X = Y;`` aliases (parse_using_statement
+            # returns a TypeAliasNode) so codegen can resolve declarations that
+            # reference the alias; ``using namespace``/using-declarations return
+            # None and are filtered out by the statement collector.
+            return self.parse_using_statement()
         if self.current_token[0] == "TYPEDEF":
-            self.parse_typedef()
-            return None
+            # Retain body-local typedefs for the same reason as using aliases:
+            # later declarations and expressions must resolve them in lexical
+            # order before CrossGL generation.
+            alias = self.parse_typedef()
+            return alias if isinstance(alias, TypeAliasNode) else None
         if self.is_nested_aggregate_declaration_start():
             self.skip_nested_aggregate_declaration()
             return None
@@ -3759,12 +3890,14 @@ class MetalParser:
                 return FunctionCallNode(op, [type_name])
             operand = self.parse_unary()
             return FunctionCallNode(op, [operand])
-        if self.current_token[0] == "LPAREN" and self.is_type_in_parens():
+        if self.current_token[0] == "LPAREN" and self.is_type_in_parens(
+            require_cast_operand=True
+        ):
             self.eat("LPAREN")
-            type_name, _quals = self.parse_type_specifier()
+            type_name, qualifiers = self.parse_type_specifier()
             self.eat("RPAREN")
             operand = self.parse_unary()
-            return CastNode(type_name, operand)
+            return CastNode(type_name, operand, qualifiers=qualifiers)
         if self.current_token[0] in [
             "PLUS",
             "MINUS",
@@ -3781,7 +3914,7 @@ class MetalParser:
             return UnaryOpNode(op, operand)
         return self.parse_postfix()
 
-    def is_type_in_parens(self):
+    def is_type_in_parens(self, *, require_cast_operand=False):
         if self.current_token[0] != "LPAREN":
             return False
         idx = self.pos + 1
@@ -3800,10 +3933,16 @@ class MetalParser:
             tok_type = self.tokens[idx][0]
         if tok_type not in TYPE_TOKENS:
             return False
+        type_reference_start = idx
+        type_name_evidence = (
+            typename_prefix or saw_qualifier or tok_type != "IDENTIFIER"
+        )
         if tok_type == "IDENTIFIER":
             name = self.tokens[idx][1]
+            type_name_evidence = type_name_evidence or name in self.known_types
             next_type = self.tokens[idx + 1][0] if idx + 1 < len(self.tokens) else "EOF"
             if name in SIGNED_TYPE_PREFIXES and next_type in TYPE_TOKENS:
+                type_name_evidence = True
                 idx += 2
             else:
                 if (
@@ -3823,18 +3962,64 @@ class MetalParser:
         else:
             idx += 1
         idx = self.skip_type_reference_suffix_at(idx)
+        if any(
+            token_type == "SCOPE"
+            for token_type, _token_value in self.tokens[type_reference_start:idx]
+        ):
+            tail_name = self.scoped_type_tail_name_at(type_reference_start, idx)
+            type_name_evidence = (
+                typename_prefix or saw_qualifier or tail_name in self.known_types
+            )
+        saw_pointer_suffix = False
         while idx < len(self.tokens) and self.tokens[idx][0] in [
             "MULTIPLY",
             "BITWISE_AND",
         ]:
+            saw_pointer_suffix = True
             idx += 1
-        return idx < len(self.tokens) and self.tokens[idx][0] == "RPAREN"
+        type_name_evidence = type_name_evidence or saw_pointer_suffix
+        if idx >= len(self.tokens) or self.tokens[idx][0] != "RPAREN":
+            return False
+        if require_cast_operand:
+            return self.is_cast_operand_start_at(
+                idx + 1,
+                allow_unary=type_name_evidence,
+            )
+        return True
 
-    def is_cast_operand_start_at(self, idx):
+    def scoped_type_tail_name_at(self, start, end):
+        tail_name = self.tokens[start][1]
+        angle_depth = 0
+        expect_scoped_part = False
+        for token_type, token_value in self.tokens[start + 1 : end]:
+            if token_type == "LESS_THAN":
+                angle_depth += 1
+                continue
+            if token_type == "GREATER_THAN" and angle_depth > 0:
+                angle_depth -= 1
+                continue
+            if token_type == "SHIFT_RIGHT" and angle_depth > 0:
+                angle_depth = max(0, angle_depth - 2)
+                continue
+            if angle_depth > 0:
+                continue
+            if token_type == "SCOPE":
+                expect_scoped_part = True
+                continue
+            if not expect_scoped_part:
+                continue
+            if (token_type, token_value) == ("IDENTIFIER", "template"):
+                continue
+            if token_type in SCOPED_IDENTIFIER_PART_TOKENS:
+                tail_name = token_value
+            expect_scoped_part = False
+        return tail_name
+
+    def is_cast_operand_start_at(self, idx, *, allow_unary=False):
         if idx >= len(self.tokens):
             return False
         token_type = self.tokens[idx][0]
-        return token_type in CONSTRUCTOR_TYPE_TOKENS or token_type in {
+        if token_type in CONSTRUCTOR_TYPE_TOKENS or token_type in {
             "IDENTIFIER",
             "METAL",
             "SCOPE",
@@ -3845,6 +4030,17 @@ class MetalParser:
             "STRING",
             "LPAREN",
             "LBRACE",
+        }:
+            return True
+        return allow_unary and token_type in {
+            "PLUS",
+            "MINUS",
+            "NOT",
+            "BITWISE_NOT",
+            "INCREMENT",
+            "DECREMENT",
+            "MULTIPLY",
+            "BITWISE_AND",
         }
 
     def parse_postfix(self):
@@ -3852,11 +4048,13 @@ class MetalParser:
         while True:
             if self.is_static_cast_template_call(node):
                 template_args = self.parse_template_argument_suffix()
-                target_type = self.format_generic_type_tokens(template_args)
+                target_type, qualifiers = self.split_cast_target_qualifiers(
+                    self.format_generic_type_tokens(template_args)
+                )
                 self.eat("LPAREN")
                 expression = self.parse_expression()
                 self.eat("RPAREN")
-                node = CastNode(target_type, expression)
+                node = CastNode(target_type, expression, qualifiers=qualifiers)
                 continue
             if self.is_as_type_template_call(node):
                 template_args = self.parse_template_argument_suffix()
@@ -3946,10 +4144,22 @@ class MetalParser:
 
     def parse_conversion_operator_call(self, node):
         self.eat("IDENTIFIER")
-        target_type, _qualifiers = self.parse_type_specifier()
+        target_type, qualifiers = self.parse_type_specifier()
         self.eat("LPAREN")
         self.eat("RPAREN")
-        return CastNode(target_type, node)
+        return CastNode(target_type, node, qualifiers=qualifiers)
+
+    @staticmethod
+    def split_cast_target_qualifiers(target_type):
+        remaining = str(target_type).strip()
+        qualifiers = []
+        while remaining:
+            match = re.match(r"([A-Za-z_]\w*)\b\s*", remaining)
+            if match is None or match.group(1) not in CAST_TYPE_QUALIFIER_NAMES:
+                break
+            qualifiers.append(match.group(1))
+            remaining = remaining[match.end() :]
+        return remaining, qualifiers
 
     def skip_template_disambiguator(self):
         if (
@@ -4172,9 +4382,23 @@ class MetalParser:
                 self.eat("STRING")
             return value
         if self.current_token[0] == "LPAREN":
+            open_token = self.current_token
             self.eat("LPAREN")
             expr = self.parse_expression(allow_comma=True)
+            close_token = self.current_token
             self.eat("RPAREN")
+            group_location = self.source_span_from_tokens(open_token, close_token)
+            if (
+                group_location is not None
+                and hasattr(expr, "__dict__")
+                and self.expression_contains_scoped_reference(expr)
+            ):
+                group_locations = list(
+                    getattr(expr, "group_source_locations", ()) or ()
+                )
+                group_locations.append(group_location)
+                expr.group_source_locations = group_locations
+                expr.group_source_location = group_location
             return expr
         if self.current_token[0] == "LBRACKET":
             return self.parse_lambda_expression()
@@ -4185,8 +4409,15 @@ class MetalParser:
                 "LPAREN",
                 "LBRACE",
             }:
+                start_token = self.current_token
                 name = self.parse_scoped_identifier()
-                return VariableNode("", name)
+                node = VariableNode("", name)
+                if "::" in name:
+                    node.source_location = self.source_span_from_tokens(
+                        start_token,
+                        self.tokens[self.pos - 1],
+                    )
+                return node
             type_name = self.current_token[1]
             self.eat(self.current_token[0])
             if self.current_token[0] == "LPAREN":
@@ -4198,11 +4429,19 @@ class MetalParser:
                 return node
             raise SyntaxError(f"Unexpected type in expression: {type_name}")
         if self.current_token[0] in {"METAL", "SCOPE"} or self.is_current_name_token():
+            start_token = self.current_token
             name = self.parse_scoped_identifier()
-            return VariableNode("", name)
+            node = VariableNode("", name)
+            if "::" in name:
+                node.source_location = self.source_span_from_tokens(
+                    start_token,
+                    self.tokens[self.pos - 1],
+                )
+            return node
         raise SyntaxError(f"Unexpected token in expression: {self.current_token[0]}")
 
     def parse_lambda_expression(self):
+        start_token = self.current_token
         capture = self.parse_lambda_capture()
         params = []
         if self.current_token[0] == "LPAREN":
@@ -4228,13 +4467,17 @@ class MetalParser:
             {param.name for param in params if getattr(param, "name", None)}
         )
         body = self.parse_block()
-        return LambdaNode(
+        node = LambdaNode(
             capture,
             params,
             body,
             return_type,
             self.format_generic_type_tokens(specifier_tokens).split(),
         )
+        node.source_location = self.source_span_from_tokens(
+            start_token, self.tokens[self.pos - 1]
+        )
+        return node
 
     def parse_lambda_capture(self):
         self.eat("LBRACKET")
@@ -4449,38 +4692,46 @@ class MetalParser:
         expression = self.parse_expression()
         self.eat("RPAREN")
         self.eat("LBRACE")
+        self.local_type_scopes.append(set())
 
         cases = []
         default = None
+        try:
+            while self.current_token[0] not in ["RBRACE", "EOF"]:
+                if self.current_token[0] == "CASE":
+                    cases.append(self.parse_case_statement())
+                elif self.current_token[0] == "DEFAULT":
+                    self.eat("DEFAULT")
+                    self.eat("COLON")
+                    default_statements = []
 
-        while self.current_token[0] not in ["RBRACE", "EOF"]:
-            if self.current_token[0] == "CASE":
-                cases.append(self.parse_case_statement())
-            elif self.current_token[0] == "DEFAULT":
-                self.eat("DEFAULT")
-                self.eat("COLON")
-                default_statements = []
-
-                while self.current_token[0] not in ["CASE", "DEFAULT", "RBRACE", "EOF"]:
-                    if self.current_token[0] == "BREAK":
-                        self.eat("BREAK")
-                        self.eat("SEMICOLON")
-                        break
-                    else:
+                    while self.current_token[0] not in [
+                        "CASE",
+                        "DEFAULT",
+                        "RBRACE",
+                        "EOF",
+                    ]:
+                        if self.current_token[0] == "BREAK":
+                            self.eat("BREAK")
+                            self.eat("SEMICOLON")
+                            break
                         statement = self.parse_statement()
                         if isinstance(statement, list):
                             default_statements.extend(statement)
                         elif statement is not None:
                             default_statements.append(statement)
 
-                default = default_statements
-            else:
-                raise SyntaxError(
-                    f"Unexpected token in switch statement: {self.current_token[0]}"
-                )
+                    default = default_statements
+                else:
+                    raise SyntaxError(
+                        "Unexpected token in switch statement: "
+                        f"{self.current_token[0]}"
+                    )
 
-        self.eat("RBRACE")
-        return SwitchNode(expression, cases, default)
+            self.eat("RBRACE")
+            return SwitchNode(expression, cases, default)
+        finally:
+            self.known_types.difference_update(self.local_type_scopes.pop())
 
     def parse_case_statement(self):
         self.eat("CASE")

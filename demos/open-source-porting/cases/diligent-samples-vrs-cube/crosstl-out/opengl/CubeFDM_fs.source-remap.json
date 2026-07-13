@@ -204,9 +204,9 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 19,
-        "endOffset": 449,
+        "endOffset": 448,
         "file": "crosstl-out/opengl/CubeFDM_fs.glsl",
-        "length": 32,
+        "length": 31,
         "line": 18,
         "offset": 417
       },
@@ -225,12 +225,34 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 20,
-        "endOffset": 551,
+        "endLine": 21,
+        "endOffset": 481,
+        "file": "crosstl-out/opengl/CubeFDM_fs.glsl",
+        "length": 32,
+        "line": 20,
+        "offset": 449
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 368,
+        "file": "CubeFDM_fs.glsl",
+        "length": 30,
+        "line": 16,
+        "offset": 338
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 22,
+        "endOffset": 583,
         "file": "crosstl-out/opengl/CubeFDM_fs.glsl",
         "length": 102,
-        "line": 19,
-        "offset": 449
+        "line": 21,
+        "offset": 481
       },
       "original": {
         "column": 1,
@@ -247,12 +269,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 21,
-        "endOffset": 668,
+        "endLine": 23,
+        "endOffset": 700,
         "file": "crosstl-out/opengl/CubeFDM_fs.glsl",
         "length": 117,
-        "line": 20,
-        "offset": 551
+        "line": 22,
+        "offset": 583
       },
       "original": {
         "column": 1,
@@ -269,12 +291,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 22,
-        "endOffset": 724,
+        "endLine": 24,
+        "endOffset": 756,
         "file": "crosstl-out/opengl/CubeFDM_fs.glsl",
         "length": 56,
-        "line": 21,
-        "offset": 668
+        "line": 23,
+        "offset": 700
       },
       "original": {
         "column": 1,
@@ -291,12 +313,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 25,
-        "endOffset": 768,
+        "endLine": 27,
+        "endOffset": 800,
         "file": "crosstl-out/opengl/CubeFDM_fs.glsl",
         "length": 41,
-        "line": 24,
-        "offset": 727
+        "line": 26,
+        "offset": 759
       },
       "original": {
         "column": 1,
@@ -313,12 +335,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 27,
-        "endOffset": 802,
+        "endLine": 29,
+        "endOffset": 834,
         "file": "crosstl-out/opengl/CubeFDM_fs.glsl",
         "length": 20,
-        "line": 26,
-        "offset": 782
+        "line": 28,
+        "offset": 814
       },
       "original": {
         "column": 1,
@@ -335,12 +357,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 28,
-        "endOffset": 844,
+        "endLine": 30,
+        "endOffset": 876,
         "file": "crosstl-out/opengl/CubeFDM_fs.glsl",
         "length": 42,
-        "line": 27,
-        "offset": 802
+        "line": 29,
+        "offset": 834
       },
       "original": {
         "column": 1,
@@ -357,12 +379,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 35,
-        "endOffset": 1028,
+        "endLine": 37,
+        "endOffset": 1060,
         "file": "crosstl-out/opengl/CubeFDM_fs.glsl",
         "length": 66,
-        "line": 34,
-        "offset": 962
+        "line": 36,
+        "offset": 994
       },
       "original": {
         "column": 1,

@@ -44,6 +44,7 @@ from .ast import (
     NamedType,
     ParameterNode,
     PointerAccessNode,
+    PointerReinterpretNode,
     PointerType,
     PreprocessorNode,
     PrimitiveType,
@@ -90,8 +91,14 @@ WAVE_INTRINSICS = {
     "WaveActiveCountBits",
     "WaveReadLaneAt",
     "WaveReadLaneFirst",
+    "WaveShuffleDown",
+    "WaveShuffleUp",
+    "WaveShuffleAndFillUp",
+    "WaveShuffleXor",
     "WavePrefixSum",
     "WavePrefixProduct",
+    "WavePrefixInclusiveSum",
+    "WavePrefixInclusiveProduct",
     "WavePrefixCountBits",
     "QuadReadAcrossX",
     "QuadReadAcrossY",
@@ -244,11 +251,33 @@ SHADER_STAGE_TOKEN_TYPES = frozenset(
 )
 
 
+class CrossGLFunctionBodyParseError(SyntaxError):
+    """Raised when a function body cannot be represented by the shared IR."""
+
+    project_diagnostic_code = "project.translate.crossgl-function-body-parse-failed"
+    missing_capabilities = ("crossgl.function-body-parsing",)
+
+    def __init__(self, function_name, reason, token):
+        token_type, token_value = token
+        rendered_token = token_type
+        if token_value is not None:
+            rendered_token = f"{token_type} {token_value!r}"
+        super().__init__(
+            f"CrossGL could not parse the body of function {function_name!r} "
+            f"at {rendered_token}: {reason}"
+        )
+        self.function_name = function_name
+        self.reason = str(reason)
+        self.token_type = token_type
+        self.token_value = token_value
+
+
 class Parser:
     """Recursive-descent parser for CrossGL Universal IR tokens."""
 
-    def __init__(self, tokens):
+    def __init__(self, tokens, strict_function_bodies=False):
         self.tokens = tokens
+        self.strict_function_bodies = strict_function_bodies
         self.pos = 0
         self.current_token = (
             self.tokens[self.pos] if self.pos < len(self.tokens) else ("EOF", None)
@@ -1376,8 +1405,16 @@ class Parser:
             attributes.extend(qualifier_attributes)
             attributes.extend(self.parse_post_declaration_attributes())
 
+            default_value = None
+            if self.current_token[0] == "EQUALS":
+                self.eat("EQUALS")
+                default_value = self.parse_expression()
+
             member = StructMemberNode(
-                name=name, member_type=declarator_type, attributes=attributes
+                name=name,
+                member_type=declarator_type,
+                default_value=default_value,
+                attributes=attributes,
             )
 
             if self.current_token[0] == "COMMA":
@@ -1546,7 +1583,13 @@ class Parser:
             body_start_token = self.current_token
             try:
                 body = self.parse_block()
-            except SyntaxError:
+            except SyntaxError as exc:
+                if self.strict_function_bodies:
+                    raise CrossGLFunctionBodyParseError(
+                        name,
+                        exc,
+                        self.current_token,
+                    ) from exc
                 self.pos = body_start_pos
                 self.current_token = body_start_token
                 self.skip_balanced_declaration()
@@ -1793,6 +1836,9 @@ class Parser:
         """Parse a variable declaration, including qualifiers and attributes."""
         attributes = list(leading_attributes or [])
         attributes.extend(self.parse_attribute_annotations())
+        is_type_alias = self.current_token_starts_type_alias_declaration()
+        if is_type_alias:
+            self.eat("IDENTIFIER")
 
         if self.current_token_starts_var_address_space_declaration():
             return self.parse_var_address_space_declaration(attributes)
@@ -1829,6 +1875,7 @@ class Parser:
                 qualifiers=qualifiers,
                 attributes=attributes,
                 is_mutable="const" not in qualifiers,
+                is_type_alias=is_type_alias,
             )
 
         else:
@@ -1836,7 +1883,12 @@ class Parser:
             declarations = []
             while True:
                 declarations.append(
-                    self.parse_variable_declarator(var_type, qualifiers, attributes)
+                    self.parse_variable_declarator(
+                        var_type,
+                        qualifiers,
+                        attributes,
+                        is_type_alias=is_type_alias,
+                    )
                 )
                 if self.current_token[0] != "COMMA":
                     break
@@ -1845,7 +1897,14 @@ class Parser:
             self.eat("SEMICOLON")
             return declarations[0] if len(declarations) == 1 else declarations
 
-    def parse_variable_declarator(self, base_type, qualifiers, declaration_attributes):
+    def parse_variable_declarator(
+        self,
+        base_type,
+        qualifiers,
+        declaration_attributes,
+        *,
+        is_type_alias=False,
+    ):
         """Parse one declarator after a shared C-style variable type."""
         var_type = self.parse_array_suffixes(deepcopy(base_type))
         name = self.parse_binding_identifier()
@@ -1868,6 +1927,7 @@ class Parser:
             qualifiers=list(qualifiers),
             attributes=attributes,
             is_mutable="const" not in qualifiers,
+            is_type_alias=is_type_alias,
         )
         variable.generic_params = generic_params
         return variable
@@ -1943,6 +2003,9 @@ class Parser:
 
         try:
             self.parse_attribute_annotations()
+
+            if self.current_token_starts_type_alias_declaration():
+                self.eat("IDENTIFIER")
 
             if (
                 self.current_token[0] == "VAR"
@@ -2030,6 +2093,11 @@ class Parser:
             self.pos = saved_pos
             self.current_token = saved_token
 
+    def current_token_starts_type_alias_declaration(self):
+        """Return whether the current token starts a C-style type alias."""
+        token_type, token_value = self.current_token
+        return token_type == "IDENTIFIER" and token_value == "typedef"
+
     def pointer_suffix_starts_declaration(self):
         """Return whether pointer/reference suffix lookahead forms a declaration."""
         offset = 0
@@ -2098,6 +2166,7 @@ class Parser:
             "U32",
             "U64",
             "F16",
+            "BFLOAT16",
             "F32",
             "F64",
             "INT",
@@ -2229,6 +2298,24 @@ class Parser:
             "SAMPLERCUBEARRAYSHADOW",
             "SAMPLER2DMS",
             "SAMPLER2DMSARRAY",
+            "ISAMPLER1D",
+            "ISAMPLER1DARRAY",
+            "ISAMPLER2D",
+            "ISAMPLER3D",
+            "ISAMPLERCUBE",
+            "ISAMPLERCUBEARRAY",
+            "ISAMPLER2DARRAY",
+            "ISAMPLER2DMS",
+            "ISAMPLER2DMSARRAY",
+            "USAMPLER1D",
+            "USAMPLER1DARRAY",
+            "USAMPLER2D",
+            "USAMPLER3D",
+            "USAMPLERCUBE",
+            "USAMPLERCUBEARRAY",
+            "USAMPLER2DARRAY",
+            "USAMPLER2DMS",
+            "USAMPLER2DMSARRAY",
             "IIMAGE1D",
             "IIMAGE1DARRAY",
             "IIMAGE2D",
@@ -2272,6 +2359,24 @@ class Parser:
                 "SAMPLERCUBEARRAYSHADOW": "samplerCubeArrayShadow",
                 "SAMPLER2DMS": "sampler2DMS",
                 "SAMPLER2DMSARRAY": "sampler2DMSArray",
+                "ISAMPLER1D": "isampler1D",
+                "ISAMPLER1DARRAY": "isampler1DArray",
+                "ISAMPLER2D": "isampler2D",
+                "ISAMPLER3D": "isampler3D",
+                "ISAMPLERCUBE": "isamplerCube",
+                "ISAMPLERCUBEARRAY": "isamplerCubeArray",
+                "ISAMPLER2DARRAY": "isampler2DArray",
+                "ISAMPLER2DMS": "isampler2DMS",
+                "ISAMPLER2DMSARRAY": "isampler2DMSArray",
+                "USAMPLER1D": "usampler1D",
+                "USAMPLER1DARRAY": "usampler1DArray",
+                "USAMPLER2D": "usampler2D",
+                "USAMPLER3D": "usampler3D",
+                "USAMPLERCUBE": "usamplerCube",
+                "USAMPLERCUBEARRAY": "usamplerCubeArray",
+                "USAMPLER2DARRAY": "usampler2DArray",
+                "USAMPLER2DMS": "usampler2DMS",
+                "USAMPLER2DMSARRAY": "usampler2DMSArray",
                 "IIMAGE1D": "iimage1D",
                 "IIMAGE1DARRAY": "iimage1DArray",
                 "IIMAGE2D": "iimage2D",
@@ -2458,6 +2563,7 @@ class Parser:
         depth = 1
         saw_generic_separator = False
         saw_nested_brackets = False
+        ternary_depth = 0
 
         while index < len(self.tokens):
             token_type = self.tokens[index][0]
@@ -2477,8 +2583,15 @@ class Parser:
                         or saw_nested_brackets
                         or next_type == "LPAREN"
                     )
-            elif depth == 1 and token_type in {"COMMA", "COLON", "EQUALS"}:
+            elif depth == 1 and token_type in {"COMMA", "EQUALS"}:
                 saw_generic_separator = True
+            elif depth == 1 and token_type == "QUESTION":
+                ternary_depth += 1
+            elif depth == 1 and token_type == "COLON":
+                if ternary_depth:
+                    ternary_depth -= 1
+                else:
+                    saw_generic_separator = True
             elif (
                 depth == 1
                 and token_type == "RANGE"
@@ -2701,10 +2814,34 @@ class Parser:
         args = []
 
         while not self.current_token_is_type_greater_than():
+            if self.current_token[0] == "EOF":
+                raise SyntaxError("Unterminated generic argument list")
+
+            args.append(self.parse_generic_argument())
+
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+            elif not self.current_token_is_type_greater_than():
+                raise SyntaxError(
+                    "Expected ',' or '>' after generic argument, "
+                    f"got {self.current_token[0]} '{self.current_token[1]}'"
+                )
+
+        self.eat_type_greater_than()
+        return args
+
+    def parse_generic_argument(self):
+        """Parse one angle-bracket type or value argument."""
+        start_pos = self.pos
+        saved_token = self.current_token
+        saved_tokens = list(self.tokens)
+        argument = None
+
+        try:
             if self.current_token_starts_qualified_identifier():
-                args.append(IdentifierNode(self.parse_qualified_identifier()))
+                argument = IdentifierNode(self.parse_qualified_identifier())
             elif self.current_token_starts_type():
-                args.append(self.parse_type())
+                argument = self.parse_type()
             elif self.current_token[0] in {
                 "BOOLEAN_LITERAL",
                 "NUMBER",
@@ -2715,15 +2852,34 @@ class Parser:
                 "STRING_LITERAL",
                 "CHAR_LITERAL",
             }:
-                args.append(self.parse_literal())
-            else:
-                args.append(self.parse_expression())
+                argument = self.parse_literal()
+        except SyntaxError:
+            argument = None
 
-            if self.current_token[0] == "COMMA":
-                self.eat("COMMA")
+        if argument is not None and self.current_token[0] in {
+            "COMMA",
+            "GREATER_THAN",
+            "BITWISE_SHIFT_RIGHT",
+        }:
+            return argument
 
-        self.eat_type_greater_than()
-        return args
+        self.tokens[:] = saved_tokens
+        self.pos = start_pos
+        self.current_token = saved_token
+        argument = self.parse_expression(stop_at_generic_close=True)
+
+        if self.current_token[0] == "EOF":
+            raise SyntaxError("Unterminated generic argument list")
+        if self.pos == start_pos or self.current_token[0] not in {
+            "COMMA",
+            "GREATER_THAN",
+            "BITWISE_SHIFT_RIGHT",
+        }:
+            raise SyntaxError(
+                "Expected ',' or '>' after generic argument, "
+                f"got {self.current_token[0]} '{self.current_token[1]}'"
+            )
+        return argument
 
     def current_token_starts_qualified_identifier(self):
         """Return whether current tokens form a ``namespace::name`` value."""
@@ -2761,6 +2917,7 @@ class Parser:
             "U32",
             "U64",
             "F16",
+            "BFLOAT16",
             "F32",
             "F64",
             "INT",
@@ -2830,6 +2987,24 @@ class Parser:
             "SAMPLER2DARRAYSHADOW",
             "SAMPLERCUBESHADOW",
             "SAMPLERCUBEARRAYSHADOW",
+            "ISAMPLER1D",
+            "ISAMPLER1DARRAY",
+            "ISAMPLER2D",
+            "ISAMPLER2DARRAY",
+            "ISAMPLER3D",
+            "ISAMPLERCUBE",
+            "ISAMPLERCUBEARRAY",
+            "ISAMPLER2DMS",
+            "ISAMPLER2DMSARRAY",
+            "USAMPLER1D",
+            "USAMPLER1DARRAY",
+            "USAMPLER2D",
+            "USAMPLER2DARRAY",
+            "USAMPLER3D",
+            "USAMPLERCUBE",
+            "USAMPLERCUBEARRAY",
+            "USAMPLER2DMS",
+            "USAMPLER2DMSARRAY",
             "IIMAGE1D",
             "IIMAGE1DARRAY",
             "IIMAGE2D",
@@ -2919,6 +3094,8 @@ class Parser:
             )
         if isinstance(type_node, MemberAccessNode):
             return f"{self.format_expression_path(type_node.object_expr)}.{type_node.member}"
+        if isinstance(type_node, PointerType):
+            return f"{self.format_type_argument(type_node.pointee_type)}*"
         if isinstance(type_node, FunctionType):
             params = ", ".join(
                 self.format_type_argument(param_type)
@@ -3451,25 +3628,25 @@ class Parser:
         self.eat("SEMICOLON")
         return ReturnNode(value=value)
 
-    def parse_expression(self):
+    def parse_expression(self, stop_at_generic_close=False):
         """Parse an expression using the highest-precedence entry point."""
-        return self.parse_assignment_expression()
+        return self.parse_assignment_expression(stop_at_generic_close)
 
-    def parse_range_expression(self):
+    def parse_range_expression(self, stop_at_generic_close=False):
         """Parse range and inclusive-range expressions."""
-        left = self.parse_ternary_expression()
+        left = self.parse_ternary_expression(stop_at_generic_close)
 
         if self.current_token[0] in ["RANGE", "RANGE_INCLUSIVE"]:
             inclusive = self.current_token[0] == "RANGE_INCLUSIVE"
             self.eat(self.current_token[0])
-            right = self.parse_ternary_expression()
+            right = self.parse_ternary_expression(stop_at_generic_close)
             return RangeNode(left, right, inclusive=inclusive)
 
         return left
 
-    def parse_assignment_expression(self):
+    def parse_assignment_expression(self, stop_at_generic_close=False):
         """Parse assignment and compound-assignment expressions."""
-        left = self.parse_range_expression()
+        left = self.parse_range_expression(stop_at_generic_close)
 
         if self.current_token[0] in [
             "EQUALS",
@@ -3486,166 +3663,207 @@ class Parser:
         ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
-            right = self.parse_assignment_expression()
+            right = self.parse_assignment_expression(stop_at_generic_close)
             return AssignmentNode(left, right, op)
 
         return left
 
-    def parse_ternary_expression(self):
+    def parse_ternary_expression(self, stop_at_generic_close=False):
         """Parse a ternary conditional expression."""
-        condition = self.parse_logical_or_expression()
+        condition = self.parse_logical_or_expression(stop_at_generic_close)
 
         if self.current_token[0] == "QUESTION":
             self.eat("QUESTION")
-            true_expr = self.parse_expression()
+            true_expr = self.parse_expression(stop_at_generic_close)
             self.eat("COLON")
-            false_expr = self.parse_ternary_expression()
+            false_expr = self.parse_ternary_expression(stop_at_generic_close)
             return TernaryOpNode(condition, true_expr, false_expr)
 
         return condition
 
-    def parse_logical_or_expression(self):
+    def parse_logical_or_expression(self, stop_at_generic_close=False):
         """Parse logical OR expressions."""
-        left = self.parse_logical_and_expression()
+        left = self.parse_logical_and_expression(stop_at_generic_close)
 
         while self.current_token[0] == "LOGICAL_OR":
             op = self.current_token[1]
             self.eat("LOGICAL_OR")
-            right = self.parse_logical_and_expression()
+            right = self.parse_logical_and_expression(stop_at_generic_close)
             left = BinaryOpNode(left, op, right)
 
         return left
 
-    def parse_logical_and_expression(self):
+    def parse_logical_and_expression(self, stop_at_generic_close=False):
         """Parse logical AND expressions."""
-        left = self.parse_bitwise_or_expression()
+        left = self.parse_bitwise_or_expression(stop_at_generic_close)
 
         while self.current_token[0] == "LOGICAL_AND":
             op = self.current_token[1]
             self.eat("LOGICAL_AND")
-            right = self.parse_bitwise_or_expression()
+            right = self.parse_bitwise_or_expression(stop_at_generic_close)
             left = BinaryOpNode(left, op, right)
 
         return left
 
-    def parse_bitwise_or_expression(self):
+    def parse_bitwise_or_expression(self, stop_at_generic_close=False):
         """Parse bitwise OR expressions."""
-        left = self.parse_bitwise_xor_expression()
+        left = self.parse_bitwise_xor_expression(stop_at_generic_close)
 
         while self.current_token[0] == "BITWISE_OR":
             op = self.current_token[1]
             self.eat("BITWISE_OR")
-            right = self.parse_bitwise_xor_expression()
+            right = self.parse_bitwise_xor_expression(stop_at_generic_close)
             left = BinaryOpNode(left, op, right)
 
         return left
 
-    def parse_bitwise_xor_expression(self):
+    def parse_bitwise_xor_expression(self, stop_at_generic_close=False):
         """Parse bitwise XOR expressions."""
-        left = self.parse_bitwise_and_expression()
+        left = self.parse_bitwise_and_expression(stop_at_generic_close)
 
         while self.current_token[0] == "BITWISE_XOR":
             op = self.current_token[1]
             self.eat("BITWISE_XOR")
-            right = self.parse_bitwise_and_expression()
+            right = self.parse_bitwise_and_expression(stop_at_generic_close)
             left = BinaryOpNode(left, op, right)
 
         return left
 
-    def parse_bitwise_and_expression(self):
+    def parse_bitwise_and_expression(self, stop_at_generic_close=False):
         """Parse bitwise AND expressions."""
-        left = self.parse_equality_expression()
+        left = self.parse_equality_expression(stop_at_generic_close)
 
         while self.current_token[0] == "BITWISE_AND":
             op = self.current_token[1]
             self.eat("BITWISE_AND")
-            right = self.parse_equality_expression()
+            right = self.parse_equality_expression(stop_at_generic_close)
             left = BinaryOpNode(left, op, right)
 
         return left
 
-    def parse_equality_expression(self):
+    def parse_equality_expression(self, stop_at_generic_close=False):
         """Parse equality and inequality expressions."""
-        left = self.parse_relational_expression()
+        left = self.parse_relational_expression(stop_at_generic_close)
 
         while self.current_token[0] in ["EQUAL", "NOT_EQUAL"]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
-            right = self.parse_relational_expression()
+            right = self.parse_relational_expression(stop_at_generic_close)
             left = BinaryOpNode(left, op, right)
 
         return left
 
-    def parse_relational_expression(self):
+    def parse_relational_expression(self, stop_at_generic_close=False):
         """Parse relational comparison expressions."""
-        left = self.parse_shift_expression()
+        left = self.parse_shift_expression(stop_at_generic_close)
 
         while self.current_token[0] in [
             "LESS_THAN",
             "GREATER_THAN",
             "LESS_EQUAL",
             "GREATER_EQUAL",
-        ]:
+        ] and not (stop_at_generic_close and self.current_token[0] == "GREATER_THAN"):
             op = self.current_token[1]
             self.eat(self.current_token[0])
-            right = self.parse_shift_expression()
+            right = self.parse_shift_expression(stop_at_generic_close)
             left = BinaryOpNode(left, op, right)
 
         return left
 
-    def parse_shift_expression(self):
+    def parse_shift_expression(self, stop_at_generic_close=False):
         """Parse bit-shift expressions."""
-        left = self.parse_additive_expression()
+        left = self.parse_additive_expression(stop_at_generic_close)
 
-        while self.current_token[0] in ["BITWISE_SHIFT_LEFT", "BITWISE_SHIFT_RIGHT"]:
+        while self.current_token[0] in [
+            "BITWISE_SHIFT_LEFT",
+            "BITWISE_SHIFT_RIGHT",
+        ] and not (
+            stop_at_generic_close and self.current_token[0] == "BITWISE_SHIFT_RIGHT"
+        ):
             op = self.current_token[1]
             self.eat(self.current_token[0])
-            right = self.parse_additive_expression()
+            right = self.parse_additive_expression(stop_at_generic_close)
             left = BinaryOpNode(left, op, right)
 
         return left
 
-    def parse_additive_expression(self):
+    def parse_additive_expression(self, stop_at_generic_close=False):
         """Parse addition and subtraction expressions."""
-        left = self.parse_multiplicative_expression()
+        left = self.parse_multiplicative_expression(stop_at_generic_close)
 
         while self.current_token[0] in ["PLUS", "MINUS"]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
-            right = self.parse_multiplicative_expression()
+            right = self.parse_multiplicative_expression(stop_at_generic_close)
             left = BinaryOpNode(left, op, right)
 
         return left
 
-    def parse_multiplicative_expression(self):
+    def parse_multiplicative_expression(self, stop_at_generic_close=False):
         """Parse multiplication, division, and modulo expressions."""
-        left = self.parse_power_expression()
+        left = self.parse_power_expression(stop_at_generic_close)
 
         while self.current_token[0] in ["MULTIPLY", "DIVIDE", "MOD"]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
-            right = self.parse_power_expression()
+            right = self.parse_power_expression(stop_at_generic_close)
             left = BinaryOpNode(left, op, right)
 
         return left
 
-    def parse_power_expression(self):
+    def parse_power_expression(self, stop_at_generic_close=False):
         """Parse exponentiation syntax into the canonical ``pow`` intrinsic."""
-        left = self.parse_unary_expression()
+        left = self.parse_unary_expression(stop_at_generic_close)
 
         if self.current_token[0] == "POWER":
             self.eat("POWER")
-            right = self.parse_power_expression()
+            right = self.parse_power_expression(stop_at_generic_close)
             return FunctionCallNode(IdentifierNode("pow"), [left, right])
 
         return left
 
-    def parse_unary_expression(self):
+    # Operand starts that unambiguously begin a value (a "primary"). Used for
+    # identifier-headed casts like ``(int64)tid`` where the type name is lexed
+    # as an identifier: only these keep ``(name)operand`` distinct from a
+    # parenthesized variable followed by a binary operator (``(a) + b``).
+    UNAMBIGUOUS_CAST_OPERAND_START_TOKENS = frozenset(
+        {
+            "IDENTIFIER",
+            "NUMBER",
+            "FLOAT_NUMBER",
+            "HEX_NUMBER",
+            "BIN_NUMBER",
+            "OCT_NUMBER",
+            "BOOLEAN_LITERAL",
+            "STRING_LITERAL",
+            "CHAR_LITERAL",
+            "LPAREN",
+        }
+    )
+    # Additional operand starts allowed after a *keyword* type cast, where the
+    # parenthesized token is unambiguously a type (``(int)-x`` is a cast).
+    CAST_OPERAND_START_TOKENS = UNAMBIGUOUS_CAST_OPERAND_START_TOKENS | {
+        "NOT",
+        "MINUS",
+        "PLUS",
+        "MULTIPLY",
+        "BITWISE_NOT",
+        "BITWISE_AND",
+        "INCREMENT",
+        "DECREMENT",
+    }
+
+    def parse_unary_expression(self, stop_at_generic_close=False):
         """Parse prefix unary expressions."""
+        cast_expression = self.try_parse_c_style_cast(stop_at_generic_close)
+        if cast_expression is not None:
+            return cast_expression
+
         if self.current_token[0] in [
             "NOT",
             "MINUS",
             "PLUS",
+            "MULTIPLY",
             "BITWISE_NOT",
             "BITWISE_AND",
             "INCREMENT",
@@ -3653,10 +3871,97 @@ class Parser:
         ]:
             op = self.current_token[1]
             self.eat(self.current_token[0])
-            operand = self.parse_unary_expression()
+            operand = self.parse_unary_expression(stop_at_generic_close)
             return UnaryOpNode(op, operand)
 
         return self.parse_postfix_expression()
+
+    def try_parse_c_style_cast(self, stop_at_generic_close=False):
+        """Parse a C-style cast ``(type)operand`` into a constructor call.
+
+        The Metal/HLSL/GLSL reverse code generators emit C-style casts such as
+        ``(int64)tid``. These are lowered to the equivalent function-style
+        constructor call ``int64(tid)`` (a ``FunctionCallNode`` with the type
+        name as callee) so the existing scalar/vector cast handling applies.
+
+        Only a parenthesized *type keyword* is treated as a cast, so ordinary
+        parenthesized expressions like ``(a) * b`` are never misparsed.
+        """
+        if self.current_token[0] != "LPAREN":
+            return None
+        # Cheap guard: only a parenthesized type keyword can start a cast, so
+        # ordinary ``(expr)`` avoids the token snapshot below entirely.
+        if not self.next_token_starts_type():
+            return None
+
+        saved_pos = self.pos
+        saved_token = self.current_token
+        saved_tokens = list(self.tokens)
+
+        def restore():
+            self.tokens[:] = saved_tokens
+            self.pos = saved_pos
+            self.current_token = saved_token
+
+        try:
+            self.eat("LPAREN")
+            if not self.is_type_token():
+                restore()
+                return None
+            # Type names such as ``int64``/``uint64`` and user structs are lexed
+            # as identifiers, which are ambiguous with variables. Only treat a
+            # single identifier immediately closed by ``)`` as a cast type; this
+            # keeps ``(a < b)`` and ``(a).x`` out of the type parser (which would
+            # otherwise try to read a generic argument list and never return).
+            identifier_type = self.current_token[0] == "IDENTIFIER"
+            if identifier_type and self.peek()[0] not in {"RPAREN", "MULTIPLY"}:
+                restore()
+                return None
+            target_type = self.parse_type()
+            if self.current_token[0] != "RPAREN":
+                restore()
+                return None
+            self.eat("RPAREN")
+            # A keyword type is unambiguously a cast, so it accepts prefix
+            # operators in the operand (``(int)-x``). An identifier type only
+            # counts as a cast when followed by an unambiguous primary, so
+            # ``(a) + b`` stays an addition rather than becoming ``a(+b)``.
+            allowed_operand_starts = (
+                self.UNAMBIGUOUS_CAST_OPERAND_START_TOKENS
+                if identifier_type
+                else self.CAST_OPERAND_START_TOKENS
+            )
+            if (
+                self.current_token[0] not in allowed_operand_starts
+                and not self.is_type_token()
+            ):
+                restore()
+                return None
+            operand = self.parse_unary_expression(stop_at_generic_close)
+        except Exception:
+            restore()
+            return None
+
+        if isinstance(target_type, PointerType):
+            return PointerReinterpretNode(operand, target_type)
+
+        type_name = self.format_type_argument(target_type)
+        return FunctionCallNode(IdentifierNode(type_name), [operand])
+
+    def next_token_starts_type(self):
+        """Whether the token following the current one can begin a type.
+
+        This is a cheap gate for cast detection; ``try_parse_c_style_cast``
+        performs the precise disambiguation (identifier types must be closed by
+        ``)`` and followed by an unambiguous operand).
+        """
+        next_token = self.peek()
+        saved_token = self.current_token
+        self.current_token = next_token
+        try:
+            return self.is_type_token()
+        finally:
+            self.current_token = saved_token
 
     def parse_postfix_expression(self):
         """Parse member, call, index, and postfix unary expressions."""
@@ -3852,72 +4157,27 @@ class Parser:
         if self.current_token[0] != "LESS_THAN":
             return False
 
-        index = self.pos
-        angle_depth = 0
-        paren_depth = 0
-        bracket_depth = 0
-        brace_depth = 0
-
-        while index < len(self.tokens):
-            token_type = self.tokens[index][0]
-            in_nested_expression = paren_depth or bracket_depth or brace_depth
-
-            if token_type == "LPAREN":
-                paren_depth += 1
-            elif token_type == "RPAREN" and paren_depth:
-                paren_depth -= 1
-            elif token_type == "LBRACKET":
-                bracket_depth += 1
-            elif token_type == "RBRACKET" and bracket_depth:
-                bracket_depth -= 1
-            elif token_type == "LBRACE":
-                brace_depth += 1
-            elif token_type == "RBRACE" and brace_depth:
-                brace_depth -= 1
-            elif token_type == "LESS_THAN" and not in_nested_expression:
-                angle_depth += 1
-            elif token_type == "GREATER_THAN" and not in_nested_expression:
-                angle_depth -= 1
-                if angle_depth == 0:
-                    index += 1
-                    while index < len(self.tokens) and self.tokens[index][0] in {
-                        "COMMENT_SINGLE",
-                        "COMMENT_MULTI",
-                    }:
-                        index += 1
-                    return index < len(self.tokens) and self.tokens[index][0] in {
-                        "COMMA",
-                        "DOT",
-                        "LBRACKET",
-                        "LPAREN",
-                        "RBRACE",
-                        "RBRACKET",
-                        "RPAREN",
-                        "SEMICOLON",
-                    }
-            elif token_type == "BITWISE_SHIFT_RIGHT" and not in_nested_expression:
-                angle_depth -= 2
-                if angle_depth == 0:
-                    index += 1
-                    while index < len(self.tokens) and self.tokens[index][0] in {
-                        "COMMENT_SINGLE",
-                        "COMMENT_MULTI",
-                    }:
-                        index += 1
-                    return index < len(self.tokens) and self.tokens[index][0] in {
-                        "COMMA",
-                        "DOT",
-                        "LBRACKET",
-                        "LPAREN",
-                        "RBRACE",
-                        "RBRACKET",
-                        "RPAREN",
-                        "SEMICOLON",
-                    }
-
-            index += 1
-
-        return False
+        saved_pos = self.pos
+        saved_token = self.current_token
+        saved_tokens = list(self.tokens)
+        try:
+            self.parse_generic_arguments()
+            return self.current_token[0] in {
+                "COMMA",
+                "DOT",
+                "LBRACKET",
+                "LPAREN",
+                "RBRACE",
+                "RBRACKET",
+                "RPAREN",
+                "SEMICOLON",
+            }
+        except SyntaxError:
+            return False
+        finally:
+            self.tokens[:] = saved_tokens
+            self.pos = saved_pos
+            self.current_token = saved_token
 
     def format_expression_path(self, expression):
         if isinstance(expression, IdentifierNode):
@@ -4523,6 +4783,7 @@ class Parser:
             "U32",
             "U64",
             "F16",
+            "BFLOAT16",
             "F32",
             "F64",
             "INT",
@@ -4591,6 +4852,24 @@ class Parser:
             "SAMPLERCUBEARRAYSHADOW",
             "SAMPLER2DMS",
             "SAMPLER2DMSARRAY",
+            "ISAMPLER1D",
+            "ISAMPLER1DARRAY",
+            "ISAMPLER2D",
+            "ISAMPLER2DARRAY",
+            "ISAMPLER3D",
+            "ISAMPLERCUBE",
+            "ISAMPLERCUBEARRAY",
+            "ISAMPLER2DMS",
+            "ISAMPLER2DMSARRAY",
+            "USAMPLER1D",
+            "USAMPLER1DARRAY",
+            "USAMPLER2D",
+            "USAMPLER2DARRAY",
+            "USAMPLER3D",
+            "USAMPLERCUBE",
+            "USAMPLERCUBEARRAY",
+            "USAMPLER2DMS",
+            "USAMPLER2DMSARRAY",
             "IIMAGE1D",
             "IIMAGE1DARRAY",
             "IIMAGE2D",

@@ -1,4 +1,6 @@
 import re
+import shutil
+import subprocess
 from typing import List
 
 import pytest
@@ -24,7 +26,15 @@ from crosstl.translator.ast import (
     UnaryOpNode,
     VectorType,
 )
-from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
+from crosstl.translator.codegen.GLSL_codegen import (
+    GLSLCodeGen,
+    OpenGLAggregateInitializerError,
+    OpenGLIndexTypeError,
+    OpenGLMappedOverloadError,
+    OpenGLReferenceParameterError,
+    OpenGLScalarConversionError,
+    OpenGLWorkgroupPointerError,
+)
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 
@@ -55,6 +65,58 @@ def generate_code(ast_node):
     """
     codegen = GLSLCodeGen()
     return codegen.generate(ast_node)
+
+
+def assert_glsl_compute_validates_if_available(
+    generated_code, tmp_path, name, spirv_target=None
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        return
+    source_path = tmp_path / f"{name}.comp"
+    output_path = tmp_path / f"{name}.spv"
+    source_path.write_text(generated_code, encoding="utf-8")
+    command = [glslang]
+    if spirv_target is None:
+        command.append("-G")
+    else:
+        command.extend(["--target-env", "opengl", "--target-env", spirv_target])
+    command.extend(["-S", "comp", str(source_path), "-o", str(output_path)])
+    result = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    diagnostics = "\n".join(
+        part for part in (result.stdout, result.stderr) if part.strip()
+    )
+    assert result.returncode == 0, diagnostics
+    assert output_path.is_file()
+
+
+def glsl_expression_depends_on(generated_code, expression, expected_token):
+    initializers = {}
+    for name, value in re.findall(
+        r"\b(?:const\s+)?(?:int|uint|int64_t|uint64_t)\s+"
+        r"([A-Za-z_]\w*)\s*=\s*([^;]+);",
+        generated_code,
+    ):
+        initializers.setdefault(name, []).append(value)
+
+    pending = [expression]
+    visited = set()
+    while pending:
+        candidate = pending.pop()
+        if expected_token in candidate:
+            return True
+        if candidate in visited:
+            continue
+        visited.add(candidate)
+        for identifier in re.findall(r"\b[A-Za-z_]\w*\b", candidate):
+            pending.extend(initializers.get(identifier, ()))
+    return False
 
 
 def test_glsl_type_node_renders_expression_generic_arguments():
@@ -107,6 +169,27 @@ def test_glsl_specialization_constant_metadata_emits_layout():
         "literal. */"
     ) in generated
     assert "const int LIGHTING_MODEL = 0;" in generated
+
+
+def test_glsl_specialization_constant_branch_is_not_statically_pruned():
+    shader = """
+    shader SpecializationConstantBranch {
+        const bool ENABLE_FEATURE @constant_id(1) = true;
+
+        compute {
+            void main() {
+                if (ENABLE_FEATURE) {
+                    uint enabled = 1u;
+                }
+            }
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "const bool ENABLE_FEATURE = true;" in generated
+    assert "if (ENABLE_FEATURE) {" in generated
 
 
 def test_glsl_codegen_drops_metal_system_includes_but_preserves_glsl_includes():
@@ -213,6 +296,23 @@ def test_glsl_workgroup_barrier_builtin_lowers_to_native_barrier():
     assert "workgroupBarrier();" not in generated_code
 
 
+def test_glsl_workgroup_execution_barrier_lowers_without_intrinsic_leak():
+    shader = """
+    shader WorkgroupExecutionBarrier {
+        compute {
+            void main() {
+                workgroupExecutionBarrier();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert generated_code.count("barrier();") == 1
+    assert "workgroupExecutionBarrier" not in generated_code
+
+
 def test_glsl_user_defined_workgroup_barrier_is_not_lowered():
     shader = """
     shader SynchronizationShadowing {
@@ -233,6 +333,805 @@ def test_glsl_user_defined_workgroup_barrier_is_not_lowered():
     assert "void workgroupBarrier()" in generated_code
     assert "workgroupBarrier();" in generated_code
     assert "barrier();" not in generated_code
+
+
+def test_glsl_threadgroup_local_array_hoists_to_global_shared():
+    shader = """
+    shader SharedReduction {
+        compute {
+            @ stage_entry
+            void main(uint gid @gl_GlobalInvocationID,
+                      uint lid @gl_LocalInvocationIndex) {
+                threadgroup float[256] tile;
+                tile[lid] = float(gid);
+                tile[lid] = tile[lid] + 1.0;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    main_start = generated_code.index("void main(")
+    global_section = generated_code[:main_start]
+    main_body = generated_code[main_start:]
+
+    # (a) A global-scope ``shared`` declaration is emitted for the hoisted local.
+    shared_match = re.search(
+        r"^shared\s+float\s+(\w+)\[256\];", global_section, re.MULTILINE
+    )
+    assert shared_match is not None, generated_code
+    hoisted_name = shared_match.group(1)
+
+    # (b) No private local array of that name remains inside ``main``.
+    assert "float tile[256]" not in main_body
+    assert re.search(r"float\s+\w+\[256\]", main_body) is None, main_body
+
+    # References are rewritten to the hoisted global name, and the original
+    # local identifier ``tile`` no longer appears as a standalone name.
+    assert f"{hoisted_name}[" in main_body
+    assert re.search(r"(?<!\w)tile\b", main_body) is None, main_body
+
+
+def test_glsl_multiple_threadgroup_locals_hoist_with_unique_names():
+    shader = """
+    shader SharedScratch {
+        compute {
+            @ stage_entry
+            void main(uint lid @gl_LocalInvocationIndex) {
+                threadgroup float[64] scratch;
+                shared int counter;
+                scratch[lid] = 0.0;
+                counter = int(lid);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert re.search(
+        r"^shared\s+float\s+\w+\[64\];", generated_code, re.MULTILINE
+    ), generated_code
+    assert re.search(
+        r"^shared\s+int\s+\w+;", generated_code, re.MULTILINE
+    ), generated_code
+
+    main_body = generated_code[generated_code.index("void main(") :]
+    assert "float scratch[64]" not in main_body
+    assert "int counter;" not in main_body
+
+
+def test_opengl_threadgroup_pointer_alias_composes_dynamic_offset_into_accesses(
+    tmp_path,
+):
+    shader = """
+    shader WorkgroupAliasDirect {
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint lid @ gl_LocalInvocationIndex) {
+                threadgroup float storage[64];
+                uint dynamicOffset = (lid & 3u) + 5u;
+                threadgroup float* tile = storage + dynamicOffset;
+                tile[lid] = float(lid);
+                float observed = tile[lid + 1u];
+                storage[0] = observed;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    shared_declarations = re.findall(r"^shared\b[^;]*;", generated, re.MULTILINE)
+    assert len(shared_declarations) == 1, generated
+    backing_match = re.search(
+        r"^shared\s+float\s+([A-Za-z_]\w*)\s*\[\s*64\s*\]\s*;",
+        generated,
+        re.MULTILINE,
+    )
+    assert backing_match is not None, generated
+    backing_name = backing_match.group(1)
+    assert re.search(r"\bfloat\s*\*", generated) is None, generated
+
+    write_match = re.search(
+        rf"\b{re.escape(backing_name)}\s*\[([^\]]+)\]\s*=\s*float\(",
+        generated,
+    )
+    read_match = re.search(
+        rf"\bfloat\s+observed\s*=\s*" rf"{re.escape(backing_name)}\s*\[([^\]]+)\]",
+        generated,
+    )
+    assert write_match is not None, generated
+    assert read_match is not None, generated
+    for index_expression in (write_match.group(1), read_match.group(1)):
+        assert glsl_expression_depends_on(
+            generated, index_expression, "dynamicOffset"
+        ), generated
+        assert "gl_LocalInvocationIndex" in index_expression, generated
+    assert "1u" in read_match.group(1), generated
+
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "threadgroup_pointer_alias_direct"
+    )
+
+
+def test_opengl_nested_threadgroup_aliases_compose_offsets_once():
+    shader = """
+    shader WorkgroupAliasNested {
+        uint takeOffset(inout uint evaluations, uint amount) {
+            evaluations += 1u;
+            return amount;
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint lid @ gl_LocalInvocationIndex) {
+                threadgroup float storage[64];
+                uint evaluations = 0u;
+                threadgroup float* first =
+                    storage + takeOffset(evaluations, lid + 3u);
+                first[0u] = 1.0;
+                threadgroup float* second =
+                    first + takeOffset(evaluations, 5u);
+                second[1u] = 2.0;
+                float observed = second[2u];
+                storage[0] = observed + float(evaluations);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    backing_match = re.search(
+        r"^shared\s+float\s+([A-Za-z_]\w*)\s*\[\s*64\s*\]\s*;",
+        generated,
+        re.MULTILINE,
+    )
+    assert backing_match is not None, generated
+    backing_name = backing_match.group(1)
+    assert re.search(r"\bfloat\s*\*", generated) is None, generated
+    assert (
+        len(re.findall(r"\btakeOffset\s*\(\s*evaluations\s*,", generated)) == 2
+    ), generated
+
+    offset_statements = [
+        statement.strip()
+        for statement in generated.split(";")
+        if re.search(r"\btakeOffset\s*\(\s*evaluations\s*,", statement)
+    ]
+    first_statement = next(
+        (statement for statement in offset_statements if "3u" in statement), None
+    )
+    second_statement = next(
+        (statement for statement in offset_statements if "5u" in statement), None
+    )
+    assert first_statement is not None, generated
+    assert second_statement is not None, generated
+    first_offset_match = re.search(
+        r"\b(?:int|uint|int64_t|uint64_t)\s+([A-Za-z_]\w*)\s*=",
+        first_statement,
+    )
+    second_offset_match = re.search(
+        r"\b(?:int|uint|int64_t|uint64_t)\s+([A-Za-z_]\w*)\s*=",
+        second_statement,
+    )
+    assert first_offset_match is not None, generated
+    assert second_offset_match is not None, generated
+    first_offset = first_offset_match.group(1)
+    second_offset = second_offset_match.group(1)
+    assert first_offset != second_offset
+    assert glsl_expression_depends_on(
+        generated, second_statement, first_offset
+    ), generated
+
+    first_write = re.search(
+        rf"\b{re.escape(backing_name)}\s*\[([^\]]+)\]\s*=\s*1\.0\s*;",
+        generated,
+    )
+    second_write = re.search(
+        rf"\b{re.escape(backing_name)}\s*\[([^\]]+)\]\s*=\s*2\.0\s*;",
+        generated,
+    )
+    second_read = re.search(
+        rf"\bfloat\s+observed\s*=\s*" rf"{re.escape(backing_name)}\s*\[([^\]]+)\]",
+        generated,
+    )
+    assert first_write is not None, generated
+    assert second_write is not None, generated
+    assert second_read is not None, generated
+    assert glsl_expression_depends_on(
+        generated, first_write.group(1), first_offset
+    ), generated
+    for index_expression in (second_write.group(1), second_read.group(1)):
+        assert glsl_expression_depends_on(
+            generated, index_expression, second_offset
+        ), generated
+
+
+def test_opengl_threadgroup_pointer_helper_called_through_alias_is_valid_glsl(
+    tmp_path,
+):
+    shader = """
+    shader WorkgroupAliasHelper {
+        float update(threadgroup float* values, uint index) {
+            values[index] = values[index] + 1.0;
+            return values[index];
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint lid @ gl_LocalInvocationIndex) {
+                threadgroup float storage[64];
+                uint dynamicOffset = (lid & 3u) + 4u;
+                threadgroup float* tile = storage + dynamicOffset;
+                float observed = update(tile, lid);
+                storage[0] = observed;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    shared_declarations = re.findall(r"^shared\b[^;]*;", generated, re.MULTILINE)
+    assert len(shared_declarations) == 1, generated
+    backing_match = re.search(
+        r"^shared\s+float\s+([A-Za-z_]\w*)\s*\[\s*64\s*\]\s*;",
+        generated,
+        re.MULTILINE,
+    )
+    assert backing_match is not None, generated
+    backing_name = backing_match.group(1)
+    assert re.search(r"\bfloat\s*\*", generated) is None, generated
+
+    helper_matches = list(
+        re.finditer(
+            r"\bfloat\s+(?P<name>update[A-Za-z0-9_]*)\s*"
+            r"\((?P<params>[^)]*)\)\s*\{(?P<body>.*?)^\}",
+            generated,
+            re.MULTILINE | re.DOTALL,
+        )
+    )
+    helper_match = next(
+        (
+            match
+            for match in helper_matches
+            if re.search(rf"\b{re.escape(backing_name)}\s*\[", match.group("body"))
+            or re.search(
+                r"\binout\s+float\s+[A-Za-z_]\w*\s*\[\s*64\s*\]",
+                match.group("params"),
+            )
+        ),
+        None,
+    )
+    assert helper_match is not None, generated
+    array_parameter = re.search(
+        r"\binout\s+float\s+([A-Za-z_]\w*)\s*\[\s*64\s*\]",
+        helper_match.group("params"),
+    )
+    access_target = (
+        array_parameter.group(1) if array_parameter is not None else backing_name
+    )
+    integer_parameters = re.findall(
+        r"\b(?:int|uint)\s+([A-Za-z_]\w*)", helper_match.group("params")
+    )
+    assert "index" in integer_parameters, generated
+    offset_parameters = [name for name in integer_parameters if name != "index"]
+    assert offset_parameters, generated
+
+    helper_indices = re.findall(
+        rf"\b{re.escape(access_target)}\s*\[([^\]]+)\]",
+        helper_match.group("body"),
+    )
+    assert len(helper_indices) == 3, generated
+    for index_expression in helper_indices:
+        assert any(
+            glsl_expression_depends_on(
+                helper_match.group("body"), index_expression, offset_parameter
+            )
+            for offset_parameter in offset_parameters
+        ), generated
+        assert glsl_expression_depends_on(
+            helper_match.group("body"), index_expression, "index"
+        ), generated
+
+    helper_name = helper_match.group("name")
+    helper_calls = re.findall(rf"\b{re.escape(helper_name)}\s*\(([^)\n]*)\)", generated)
+    call_arguments = next(
+        (
+            arguments
+            for arguments in helper_calls
+            if "gl_LocalInvocationIndex" in arguments
+        ),
+        None,
+    )
+    assert call_arguments is not None, generated
+    if array_parameter is not None:
+        assert re.search(rf"\b{re.escape(backing_name)}\b", call_arguments), generated
+    assert glsl_expression_depends_on(
+        generated, call_arguments, "dynamicOffset"
+    ), generated
+    assert "gl_LocalInvocationIndex" in call_arguments, generated
+
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "threadgroup_pointer_alias_helper"
+    )
+
+
+def test_opengl_threadgroup_pointer_alias_shadowing_preserves_lexical_scope():
+    shader = """
+    shader WorkgroupAliasScope {
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint lid @ gl_LocalInvocationIndex) {
+                threadgroup float storage[64];
+                threadgroup float alternate[64];
+                threadgroup float* tile = storage + 2u;
+                if (lid > 0u) {
+                    threadgroup float* tile = alternate + 7u;
+                    tile[lid] = 1.0;
+                }
+                tile[lid] = 2.0;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    shared_names = re.findall(
+        r"^shared\s+float\s+([A-Za-z_]\w*)\s*\[\s*64\s*\]\s*;",
+        generated,
+        re.MULTILINE,
+    )
+    assert len(shared_names) == 2, generated
+    assert re.search(r"\bfloat\s*\*", generated) is None, generated
+
+    inner_write = re.search(
+        r"\b([A-Za-z_]\w*)\s*\[([^\]]+)\]\s*=\s*1\.0\s*;", generated
+    )
+    outer_write = re.search(
+        r"\b([A-Za-z_]\w*)\s*\[([^\]]+)\]\s*=\s*2\.0\s*;", generated
+    )
+    assert inner_write is not None, generated
+    assert outer_write is not None, generated
+    assert inner_write.group(1) in shared_names, generated
+    assert outer_write.group(1) in shared_names, generated
+    assert inner_write.group(1) != outer_write.group(1), generated
+
+    if_start = generated.index("if (")
+    inner_context = generated[if_start : outer_write.start()]
+    outer_context = generated[:if_start] + generated[outer_write.start() :]
+    assert glsl_expression_depends_on(
+        inner_context, inner_write.group(2), "7u"
+    ), generated
+    assert glsl_expression_depends_on(
+        outer_context, outer_write.group(2), "2u"
+    ), generated
+
+
+def test_opengl_global_threadgroup_array_passes_to_pointer_helper(tmp_path):
+    shader = """
+    shader GlobalWorkgroupPointer {
+        threadgroup float storage[16];
+
+        void store(threadgroup float* values, uint index) {
+            values[index] = 4.0;
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint lid @ gl_LocalInvocationIndex) {
+                store(storage, lid);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert re.search(
+        r"^shared\s+float\s+storage\s*\[\s*16\s*\]\s*;",
+        generated,
+        re.MULTILINE,
+    ), generated
+    assert re.search(r"\bfloat\s*\*", generated) is None, generated
+    helper = re.search(
+        r"\bvoid\s+(?P<name>store[A-Za-z0-9_]*)\s*"
+        r"\((?P<params>[^)]*)\)\s*\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert helper is not None, generated
+    write = re.search(r"\bstorage\s*\[([^\]]+)\]\s*=\s*4\.0\s*;", helper.group("body"))
+    assert write is not None, generated
+    assert glsl_expression_depends_on(
+        helper.group(0), write.group(1), "index"
+    ), generated
+    assert re.search(
+        rf"\b{re.escape(helper.group('name'))}\s*\("
+        r"[^;]*gl_LocalInvocationIndex[^;]*\)\s*;",
+        generated,
+    ), generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "global_threadgroup_pointer_helper"
+    )
+
+
+def test_opengl_specialized_helper_restores_shadowed_pointer_after_block(tmp_path):
+    shader = """
+    shader SpecializedPointerShadow {
+        threadgroup float alternate[32];
+
+        void store(threadgroup float* values, uint index) {
+            {
+                threadgroup float* values = alternate + 7u;
+                values[index] = 1.0;
+            }
+            values[index] = 2.0;
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint lid @ gl_LocalInvocationIndex) {
+                threadgroup float storage[32];
+                store(storage + 2u, lid);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    helper = re.search(
+        r"\bvoid\s+(?P<name>store[A-Za-z0-9_]*)\s*"
+        r"\((?P<params>[^)]*)\)\s*\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert helper is not None, generated
+    offset_parameters = [
+        name
+        for name in re.findall(
+            r"\b(?:int|uint)\s+([A-Za-z_]\w*)", helper.group("params")
+        )
+        if name != "index"
+    ]
+    assert len(offset_parameters) == 1, generated
+    inner_offset = re.search(
+        r"\bint\s+([A-Za-z_]\w*)\s*=\s*int\(7u\)\s*;",
+        helper.group("body"),
+    )
+    inner_write = re.search(
+        r"\balternate\s*\[([^\]]+)\]\s*=\s*1\.0\s*;", helper.group("body")
+    )
+    outer_write = re.search(
+        r"\bmain_storage\s*\[([^\]]+)\]\s*=\s*2\.0\s*;",
+        helper.group("body"),
+    )
+    assert inner_offset is not None, generated
+    assert inner_write is not None, generated
+    assert outer_write is not None, generated
+    assert inner_offset.group(1) in inner_write.group(1), generated
+    assert offset_parameters[0] in outer_write.group(1), generated
+    call_arguments = next(
+        (
+            arguments
+            for arguments in re.findall(
+                rf"\b{re.escape(helper.group('name'))}\s*\(([^;\n]+)\)\s*;",
+                generated,
+            )
+            if "gl_LocalInvocationIndex" in arguments
+        ),
+        None,
+    )
+    assert call_arguments is not None and "2u" in call_arguments, generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "specialized_pointer_shadow_scope"
+    )
+
+
+def test_opengl_workgroup_pointer_reassignment_updates_backing_and_offset(tmp_path):
+    shader = """
+    shader ReassignedWorkgroupPointer {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup float first[16];
+                threadgroup float second[16];
+                threadgroup float* tile = first + 2u;
+                tile[0u] = 1.0;
+                tile = second + 5u;
+                tile[1u] = 2.0;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert re.search(r"\bfloat\s*\*", generated) is None, generated
+    assert re.search(r"\btile\s*=", generated) is None, generated
+    first_write = re.search(
+        r"\b([A-Za-z_]\w*)\s*\[([^\]]+)\]\s*=\s*1\.0\s*;", generated
+    )
+    second_write = re.search(
+        r"\b([A-Za-z_]\w*)\s*\[([^\]]+)\]\s*=\s*2\.0\s*;", generated
+    )
+    assert first_write is not None, generated
+    assert second_write is not None, generated
+    assert first_write.group(1).endswith("first"), generated
+    assert second_write.group(1).endswith("second"), generated
+    assert "2u" in generated[: first_write.end()], generated
+    assert "5u" in generated[first_write.end() : second_write.end()], generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "reassigned_workgroup_pointer"
+    )
+
+
+def test_opengl_direct_pointer_helper_call_with_uint_offset_validates(tmp_path):
+    shader = """
+    shader DirectUintWorkgroupOffset {
+        void store(threadgroup float* values, uint index) {
+            values[index] = 3.0;
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint lid @ gl_LocalInvocationIndex) {
+                threadgroup float storage[32];
+                uint dynamicOffset = (lid & 3u) + 1u;
+                store(storage + dynamicOffset, lid);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert re.search(r"\bfloat\s*\*", generated) is None, generated
+    helper = re.search(
+        r"\bvoid\s+(?P<name>store[A-Za-z0-9_]*)\s*\([^)]*\)\s*" r"\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert helper is not None, generated
+    assert re.search(
+        r"\bmain_storage\s*\[[^\]]+\]\s*=\s*3\.0\s*;",
+        helper.group("body"),
+    ), generated
+    call = re.search(
+        rf"\b{re.escape(helper.group('name'))}\s*\(([^;]+)\)\s*;",
+        generated[helper.end() :],
+    )
+    assert call is not None, generated
+    assert "dynamicOffset" in call.group(1), generated
+    assert "gl_LocalInvocationIndex" in call.group(1), generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "direct_uint_workgroup_offset"
+    )
+
+
+def test_opengl_specialized_helper_local_array_stays_shared(tmp_path):
+    shader = """
+    shader SpecializedHelperSharedArray {
+        float load(threadgroup float* values, uint index) {
+            threadgroup float scratch[8];
+            scratch[index] = values[index];
+            return scratch[index];
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint lid @ gl_LocalInvocationIndex) {
+                threadgroup float storage[8];
+                storage[0] = load(storage, lid);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    shared_names = re.findall(
+        r"^shared\s+float\s+([A-Za-z_]\w*)\s*\[\s*8\s*\]\s*;",
+        generated,
+        re.MULTILINE,
+    )
+    assert len(shared_names) == 2, generated
+    backing_name = next(name for name in shared_names if name.endswith("storage"))
+    scratch_name = next(name for name in shared_names if name != backing_name)
+    helper = re.search(
+        r"\bfloat\s+load[A-Za-z0-9_]*\s*\([^)]*\)\s*" r"\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert helper is not None, generated
+    helper_body = helper.group("body")
+    assert (
+        re.search(r"\b(?:shared\s+)?float\s+\w+\s*\[\s*8\s*\]\s*;", helper_body) is None
+    )
+    assert len(re.findall(rf"\b{re.escape(scratch_name)}\s*\[", helper_body)) == 2
+    assert re.search(rf"\b{re.escape(backing_name)}\s*\[", helper_body), generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "specialized_helper_shared_array"
+    )
+
+
+def test_opengl_for_initializer_pointer_alias_does_not_leak(tmp_path):
+    shader = """
+    shader ForInitializerPointerScope {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup float first[16];
+                threadgroup float second[16];
+                threadgroup float* tile = first + 2u;
+                for (threadgroup float* tile = second + 7u; false; ) {
+                    tile[0u] = 1.0;
+                }
+                tile[0u] = 2.0;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert re.search(r"\bfloat\s*\*", generated) is None, generated
+    inner_write = re.search(
+        r"\b([A-Za-z_]\w*)\s*\[([^\]]+)\]\s*=\s*1\.0\s*;", generated
+    )
+    outer_write = re.search(
+        r"\b([A-Za-z_]\w*)\s*\[([^\]]+)\]\s*=\s*2\.0\s*;", generated
+    )
+    assert inner_write is not None, generated
+    assert outer_write is not None, generated
+    assert inner_write.group(1).endswith("second"), generated
+    assert outer_write.group(1).endswith("first"), generated
+    loop_start = generated.index("for (")
+    assert "7u" in generated[loop_start : inner_write.end()], generated
+    assert "2u" in generated[:loop_start], generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "for_initializer_pointer_scope"
+    )
+
+
+def test_opengl_workgroup_pointer_synthetic_offset_name_is_hygienic(tmp_path):
+    shader = """
+    shader WorkgroupOffsetNameCollision {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup float storage[16];
+                int tile_offset = 11;
+                threadgroup float* tile = storage + 3u;
+                tile[0u] = float(tile_offset);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    user_offset = re.search(r"\bint\s+([A-Za-z_]\w*)\s*=\s*11\s*;", generated)
+    synthetic_offset = re.search(
+        r"\bint\s+([A-Za-z_]\w*)\s*=\s*int\(3u\)\s*;", generated
+    )
+    assert user_offset is not None, generated
+    assert synthetic_offset is not None, generated
+    assert synthetic_offset.group(1) != user_offset.group(1), generated
+    declarations = re.findall(r"\bint\s+([A-Za-z_]\w*)\s*=", generated)
+    assert len(declarations) == len(set(declarations)), generated
+    write = re.search(
+        r"\bmain_storage\s*\[([^\]]+)\]\s*=\s*float\(([^)]+)\)\s*;",
+        generated,
+    )
+    assert write is not None, generated
+    assert synthetic_offset.group(1) in write.group(1), generated
+    assert write.group(2).strip() == user_offset.group(1), generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "workgroup_offset_name_collision"
+    )
+
+
+def test_opengl_unsized_stage_threadgroup_pointer_reports_structured_error():
+    shader = """
+    shader UnsizedWorkgroupPointer {
+        compute {
+            void main(threadgroup float* scratch) {
+                scratch[0] = 1.0;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.project_diagnostic_code == (
+        "project.translate.opengl-workgroup-pointer-unsupported"
+    )
+    assert error.missing_capabilities == ("opengl.workgroup-pointer-lowering",)
+    assert error.function_name == "main"
+    assert error.parameter_name == "scratch"
+    assert error.reason == "missing-concrete-size"
+
+
+def test_opengl_statically_null_unreachable_workgroup_pointer_is_elided(tmp_path):
+    shader = """
+    shader NullUnusedWorkgroupPointer {
+        void maybeWrite(threadgroup float* values) {
+            if (false) {
+                values[0] = 9.0;
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup float storage[1];
+                maybeWrite(true ? nullptr : storage);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert re.search(r"\bfloat\s*\*", generated) is None, generated
+    assert "nullptr" not in generated
+    assert "values[" not in generated
+    helper = re.search(
+        r"void\s+(maybeWrite[A-Za-z0-9_]*)\s*\(\s*\)\s*\{(?P<body>.*?)\}",
+        generated,
+        re.DOTALL,
+    )
+    assert helper is not None, generated
+    assert "9.0" not in helper.group("body")
+    assert f"{helper.group(1)}();" in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "statically_null_unused_workgroup_pointer"
+    )
+
+
+def test_opengl_statically_null_reachable_workgroup_pointer_reports_error():
+    shader = """
+    shader NullUsedWorkgroupPointer {
+        void writeValue(threadgroup float* values) {
+            values[0] = 9.0;
+        }
+
+        compute {
+            void main() {
+                threadgroup float storage[1];
+                writeValue(true ? nullptr : storage);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "writeValue"
+    assert error.reason == "call-backing-unresolved"
 
 
 def test_structured_buffer_operations_lower_to_ssbo():
@@ -317,16 +1216,35 @@ def test_compute_stage_validates_builtin_parameter_types():
             crosstl.translator.parse(float_global_id_code), "compute"
         )
 
-    vector_local_id_code = """
+    # A scalar/2-component parameter bound to a uvec3 positional builtin is
+    # valid in Metal (the driver fills the requested components); GLSL exposes
+    # these builtins only as uvec3, so we emit a component-extracting local
+    # alias instead of rejecting the kernel. MLX's 1-D reduction kernels rely on
+    # this scalar form.
+    scalar_local_id_code = """
+    shader ScalarComputeLocalInvocationID {
+        compute {
+            void main(uint lid @ gl_LocalInvocationID) {
+                uint value = lid;
+            }
+        }
+    }
+    """
+    scalar_generated = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(scalar_local_id_code), "compute"
+    )
+    assert "uint lid = uint(gl_LocalInvocationID.x);" in scalar_generated
+
+    float_local_id_code = """
     shader BadComputeLocalInvocationID {
         compute {
-            void main(uint2 lid @ gl_LocalInvocationID) { }
+            void main(float lid @ gl_LocalInvocationID) { }
         }
     }
     """
     with pytest.raises(ValueError, match="gl_LocalInvocationID.*uvec3"):
         GLSLCodeGen().generate_stage(
-            crosstl.translator.parse(vector_local_id_code), "compute"
+            crosstl.translator.parse(float_local_id_code), "compute"
         )
 
     signed_local_index_code = """
@@ -397,6 +1315,26 @@ def test_glsl_hlsl_compute_builtin_parameter_aliases_to_glsl_builtins():
     assert re.search(r"\blid\b", generated) is None
     assert re.search(r"\bgroupIndex\b", generated) is None
     assert "SV_DispatchThreadID" not in generated
+
+
+def test_glsl_threads_per_grid_parameter_uses_native_dispatch_extent():
+    code = """
+    shader ThreadsPerGrid {
+        compute {
+            layout(local_size_x = 8, local_size_y = 4, local_size_z = 2) in;
+
+            void main(uvec3 gsize @threads_per_grid) {
+                uint row_count = gsize.y;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "compute")
+
+    assert "void main()" in generated
+    assert "uint row_count = (gl_NumWorkGroups * gl_WorkGroupSize).y;" in generated
+    assert "gsize" not in generated
 
 
 def test_glsl_hlsl_graphics_builtin_parameter_aliases_to_glsl_builtins():
@@ -1436,19 +2374,105 @@ def test_structured_buffer_fixed_width_aliases_lower_to_standard_ssbo_types():
         in generated
     )
     assert (
-        "layout(std430, binding = 4) readonly buffer signedValuesBuffer { int signedValues[]; };"
+        "layout(std430, binding = 4) readonly buffer signedValuesBuffer { int64_t signedValues[]; };"
         in generated
     )
     assert (
         "layout(std430, binding = 5) buffer offsetsBuffer { uint offsets[]; };"
         in generated
     )
-    assert "uint offset = offsets[index];" in generated
-    assert "uint count = counts[index];" in generated
-    assert "int signedValue = signedValues[index];" in generated
-    assert "counts[index] = (count + uint(1u));" in generated
-    for invalid_token in ("uint16_t", "int64_t", "uint64_t", "size_t"):
+    assert generated.count("#extension GL_ARB_gpu_shader_int64 : require") == 1
+    assert "uint64_t offset = uint64_t(offsets[index]);" in generated
+    assert "uint count = bitfieldExtract(counts[index], 0, 16);" in generated
+    assert "int64_t signedValue = signedValues[index];" in generated
+    assert (
+        "counts[index] = bitfieldExtract(uint((int(count) + "
+        "int(bitfieldExtract(uint(1u), 0, 16)))), "
+        "0, 16);" in generated
+    )
+    for invalid_token in ("uint16_t", "size_t"):
         assert invalid_token not in generated
+
+
+def test_glsl_mixed_width_buffer_arithmetic_uses_common_operand_types(tmp_path):
+    shader = """
+    shader MixedWidthBufferArithmetic {
+        StructuredBuffer<int64_t> strides @ binding(0);
+
+        compute {
+            [numthreads(1, 1, 1)]
+            void main(uint3 tid @ SV_DispatchThreadID) {
+                uint invocation = tid.z;
+                int64_t signedStride = buffer_load(strides, 0);
+                int64_t signedProduct = invocation * signedStride;
+                int signedOffset = -1;
+                uint64_t wide = uint64_t(2u);
+                uint64_t unsignedSum = signedOffset + wide;
+                uint16_t narrowUnsigned = uint16_t(3u);
+                int16_t narrowSigned = int16_t(-2);
+                int promoted = narrowUnsigned + narrowSigned;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "int64_t signedProduct = (int64_t(invocation) * signedStride);" in generated
+    assert "uint64_t unsignedSum = (uint64_t(signedOffset) + wide);" in generated
+    assert "int promoted = (int(narrowUnsigned) + narrowSigned);" in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "mixed_width_buffer_arithmetic"
+    )
+
+
+def test_glsl_normalizes_64_bit_subscript_indices(tmp_path):
+    shader = """
+    shader WideSubscriptIndices {
+        StructuredBuffer<uint> source @ binding(0);
+        RWStructuredBuffer<uint> target @ binding(1);
+
+        compute {
+            [numthreads(1, 1, 1)]
+            void main() {
+                u64vec2 offsets = u64vec2(uint64_t(1u), uint64_t(2u));
+                uint values[4];
+                uint loaded = buffer_load(source, offsets.x);
+                values[uint64_t(1u)] = loaded;
+                buffer_store(target, offsets.y, values[int64_t(1)]);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "uint loaded = source[uint(offsets.x)];" in generated
+    assert "values[uint(uint64_t(1u))] = loaded;" in generated
+    assert "target[uint(offsets.y)] = values[int(int64_t(1))];" in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "wide_subscript_indices"
+    )
+
+
+def test_glsl_rejects_out_of_range_64_bit_constant_index():
+    shader = """
+    shader OutOfRangeIndex {
+        uint readValue() {
+            uint values[1];
+            return values[uint64_t(4294967296)];
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLIndexTypeError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.index_type == "uint64_t"
+    assert diagnostic.target_index_type == "uint"
+    assert diagnostic.indexed_value == "values"
+    assert diagnostic.reason == "constant-index-out-of-range"
 
 
 def test_structured_buffer_alias_helper_call_passes_ssbo_data_array():
@@ -1528,7 +2552,7 @@ def test_structured_buffer_alias_array_helpers_expand_to_data_array_parameters()
         in generated
     )
     assert (
-        "uint readOffset(uint localOffsets_0[], uint localOffsets_1[], uint which, uint index)"
+        "uint64_t readOffset(uint localOffsets_0[], uint localOffsets_1[], uint which, uint index)"
         in generated
     )
     assert (
@@ -1548,12 +2572,13 @@ def test_structured_buffer_alias_array_helpers_expand_to_data_array_parameters()
         in generated
     )
     assert (
-        "uint offset = readOffset(offsets[0].data, offsets[1].data, which, index);"
+        "uint64_t offset = readOffset(offsets[0].data, offsets[1].data, which, index);"
         in generated
     )
     assert (
-        "writeCount(counts[0].data, counts[1].data, which, index, (count + uint(1u)));"
-        in generated
+        "writeCount(counts[0].data, counts[1].data, which, index, "
+        "bitfieldExtract(uint((int(count) + "
+        "int(bitfieldExtract(uint(1u), 0, 16)))), 0, 16));" in generated
     )
     assert "readCount(counts, which, index)" not in generated
     assert "readOffset(offsets, which, index)" not in generated
@@ -1604,7 +2629,11 @@ def test_unsized_structured_buffer_array_helper_emits_diagnostic_fallback():
     )
     assert "return 0u;" in generated
     assert "uint value = readOne(which, index);" in generated
-    assert "writeOne(which, index, (value + uint(1u)));" in generated
+    assert (
+        "writeOne(which, index, "
+        "bitfieldExtract(uint((int(value) + "
+        "int(bitfieldExtract(uint(1u), 0, 16)))), 0, 16));" in generated
+    )
     assert "readOne(buffers, which, index)" not in generated
     assert "writeOne(buffers, which, index" not in generated
     assert "localBuffers[which][index]" not in generated
@@ -1851,6 +2880,24 @@ def test_glsl_unsigned_integer_literal_suffix_codegen():
     assert "uint b = 15u;" in generated_code
     assert "uint c = 5u;" in generated_code
     assert "7, u" not in generated_code
+
+
+def test_glsl_large_integer_literals_preserve_64_bit_values():
+    code = """
+    shader LargeIntegerLiteralCodegen {
+        compute {
+            void main() {
+                uint64_t max_unsigned = uint64_t(18446744073709551615);
+                int64_t max_signed = int64_t(9223372036854775807);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "18446744073709551615ul" in generated_code
+    assert "9223372036854775807ul" in generated_code
 
 
 def test_glsl_resource_binding_attributes_are_not_parameter_semantics():
@@ -2153,6 +3200,443 @@ def test_glsl_buffer_pointer_helper_parameters_lower_to_array_parameters():
     assert "float readValue(float values[], int index)" in generated
     assert "float value = readValue(values, 0);" in generated
     assert "PointerType" not in generated
+
+
+def test_glsl_private_pointer_helper_uses_fixed_local_array_extent():
+    code = """
+    shader PrivatePointerHelper {
+        uint sum4(thread uint8_t* values) {
+            uint total = 0;
+            for (int i = 0; i < 4; ++i) {
+                total += values[i];
+            }
+            return total;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                uint8_t values[4] = {1, 2, 3, 4};
+                uint total = sum4(values);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "uint sum4(inout uint values[4])" in generated
+    assert "total += values[i];" in generated
+    assert "uint8_t*" not in generated
+    assert "uint8*" not in generated
+
+
+def test_glsl_private_pointer_helper_rejects_conflicting_local_array_extents():
+    code = """
+    shader PrivatePointerConflict {
+        uint first(thread uint* values) {
+            return values[0];
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                uint short_values[4];
+                uint long_values[8];
+                uint left = first(short_values);
+                uint right = first(long_values);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Conflicting fixed local array sizes for private pointer parameter "
+            "'first.values': 4 and 8"
+        ),
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+
+def test_glsl_storage_pointer_reinterpret_reads_byte_lanes(tmp_path):
+    code = """
+    shader StoragePointerReinterpret {
+        compute {
+            @stage_entry
+            void unpack(
+                StructuredBuffer<uint> words @binding(0),
+                RWStructuredBuffer<uint> outBytes @binding(1),
+                RWStructuredBuffer<uint> outHalves @binding(2),
+                RWStructuredBuffer<float> outFloats @binding(3),
+                uint gid @gl_GlobalInvocationID
+            ) {
+                const device uint8* bytes = (uint8*)words;
+                const device uint16* halves = (uint16*)words;
+                const device float* floats = (float*)words;
+                buffer_store(outBytes, gid, bytes[gid]);
+                buffer_store(outHalves, gid, halves[gid]);
+                buffer_store(outFloats, gid, floats[gid]);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "bitfieldExtract(words[" in generated
+    assert "% 4) * 8" in generated
+    assert ", 8)" in generated
+    assert ", 16)" in generated
+    assert "uintBitsToFloat" in generated
+    assert "PointerReinterpretNode" not in generated
+    assert "uint8*" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "storage_pointer_reinterpret"
+    )
+
+
+def test_glsl_boolean_ternary_preserves_boolean_branch_types():
+    code = """
+    shader BooleanTernary {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(StructuredBuffer<bool> input_values @buffer(0)) {
+                bool values[4];
+                values[0] = gl_GlobalInvocationID.x < 1
+                    ? input_values[0]
+                    : bool(true);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "? input_values[0] : bool(true)" in generated
+    assert "? int(input_values[0])" not in generated
+
+
+def assert_glsl_storage_pointer_syntax_is_lowered(generated_code):
+    raw_syntax = re.search(
+        r"\b(?:auto|constant|device)\b|\bfloat\s*\*|(?<![&])&(?![&])",
+        generated_code,
+    )
+    assert raw_syntax is None, generated_code
+
+
+def test_opengl_storage_pointer_helper_reads_local_alias_with_dynamic_base(tmp_path):
+    shader = """
+    shader StoragePointerAliasRead {
+        float readValue(constant float* values, uint index) {
+            return values[index];
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1),
+                uint3 tid @gl_GlobalInvocationID
+            ) {
+                uint dynamicBase = tid.x + 3u;
+                constant float* localValues = &source[dynamicBase];
+                result[tid.x] = readValue(localValues, 2u);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "layout(std430, binding = 0) readonly buffer sourceBuffer { float source[]; };"
+        in generated
+    )
+    assert (
+        "layout(std430, binding = 1) buffer resultBuffer { float result[]; };"
+        in generated
+    )
+    assert_glsl_storage_pointer_syntax_is_lowered(generated)
+
+    helper = re.search(
+        r"\bfloat\s+(?P<name>readValue[A-Za-z0-9_]*)\s*"
+        r"\((?P<params>[^)]*)\)\s*\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert helper is not None, generated
+    array_parameters = set(
+        re.findall(r"\bfloat\s+([A-Za-z_]\w*)\s*\[\s*\]", helper.group("params"))
+    )
+    read = re.search(
+        r"\breturn\s+(?P<target>[A-Za-z_]\w*)\s*" r"\[(?P<index>[^\]]+)\]\s*;",
+        helper.group("body"),
+    )
+    assert read is not None, generated
+    assert read.group("target") == "source" or read.group("target") in array_parameters
+
+    integer_parameters = re.findall(
+        r"\b(?:int|uint)\s+([A-Za-z_]\w*)", helper.group("params")
+    )
+    assert "index" in integer_parameters, generated
+    offset_parameters = [name for name in integer_parameters if name != "index"]
+    assert offset_parameters, generated
+    assert glsl_expression_depends_on(
+        helper.group("body"), read.group("index"), "index"
+    ), generated
+    assert any(
+        glsl_expression_depends_on(
+            helper.group("body"), read.group("index"), offset_parameter
+        )
+        for offset_parameter in offset_parameters
+    ), generated
+
+    helper_calls = re.findall(
+        rf"\b{re.escape(helper.group('name'))}\s*\(([^;\n]*)\)\s*;", generated
+    )
+    main_call = next(
+        (arguments for arguments in helper_calls if "2u" in arguments), None
+    )
+    assert main_call is not None, generated
+    assert glsl_expression_depends_on(generated, main_call, "dynamicBase"), generated
+
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "storage_pointer_alias_dynamic_read"
+    )
+
+
+def test_opengl_storage_pointer_helper_writes_addressed_and_rebased_resource(
+    tmp_path,
+):
+    shader = """
+    shader StoragePointerAddressedWrite {
+        void writeValue(device float* values, uint index, float value) {
+            values[index] = value;
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1),
+                uint3 tid @gl_GlobalInvocationID
+            ) {
+                uint dynamicBase = tid.x + 4u;
+                writeValue(&result[dynamicBase], 1u, source[tid.x] + 7.0);
+                device float* rebasedValues = &result[dynamicBase + 8u];
+                writeValue(rebasedValues, 2u, source[tid.x + 1u] + 9.0);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "layout(std430, binding = 0) readonly buffer sourceBuffer { float source[]; };"
+        in generated
+    )
+    assert (
+        "layout(std430, binding = 1) buffer resultBuffer { float result[]; };"
+        in generated
+    )
+    assert_glsl_storage_pointer_syntax_is_lowered(generated)
+
+    helper = re.search(
+        r"\bvoid\s+(?P<name>writeValue[A-Za-z0-9_]*)\s*"
+        r"\((?P<params>[^)]*)\)\s*\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert helper is not None, generated
+    array_parameters = set(
+        re.findall(r"\bfloat\s+([A-Za-z_]\w*)\s*\[\s*\]", helper.group("params"))
+    )
+    write = re.search(
+        r"\b(?P<target>[A-Za-z_]\w*)\s*\[(?P<index>[^\]]+)\]" r"\s*=\s*value\s*;",
+        helper.group("body"),
+    )
+    assert write is not None, generated
+    assert (
+        write.group("target") == "result" or write.group("target") in array_parameters
+    )
+
+    integer_parameters = re.findall(
+        r"\b(?:int|uint)\s+([A-Za-z_]\w*)", helper.group("params")
+    )
+    assert "index" in integer_parameters, generated
+    offset_parameters = [name for name in integer_parameters if name != "index"]
+    assert offset_parameters, generated
+    assert glsl_expression_depends_on(
+        helper.group("body"), write.group("index"), "index"
+    ), generated
+    assert any(
+        glsl_expression_depends_on(
+            helper.group("body"), write.group("index"), offset_parameter
+        )
+        for offset_parameter in offset_parameters
+    ), generated
+
+    helper_calls = re.findall(
+        rf"\b{re.escape(helper.group('name'))}\s*\(([^;\n]*)\)\s*;", generated
+    )
+    addressed_call = next(
+        (arguments for arguments in helper_calls if "7.0" in arguments), None
+    )
+    rebased_call = next(
+        (arguments for arguments in helper_calls if "9.0" in arguments), None
+    )
+    assert addressed_call is not None, generated
+    assert rebased_call is not None, generated
+    assert "1u" in addressed_call, generated
+    assert "2u" in rebased_call, generated
+    assert glsl_expression_depends_on(
+        generated, addressed_call, "dynamicBase"
+    ), generated
+    assert not glsl_expression_depends_on(generated, addressed_call, "8u"), generated
+    assert glsl_expression_depends_on(generated, rebased_call, "dynamicBase"), generated
+    assert glsl_expression_depends_on(generated, rebased_call, "8u"), generated
+
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "storage_pointer_addressed_rebased_write"
+    )
+
+
+def test_opengl_nested_storage_pointer_helpers_compose_forwarded_offsets(tmp_path):
+    shader = """
+    shader NestedStoragePointerForwarding {
+        float readLeaf(constant float* values) {
+            return values[5u];
+        }
+
+        float readMiddle(constant float* values) {
+            return readLeaf(values + 3u);
+        }
+
+        float readOuter(constant float* values) {
+            return readMiddle(values + 2u);
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1),
+                uint3 tid @gl_GlobalInvocationID
+            ) {
+                uint dynamicBase = tid.x + 1u;
+                result[tid.x] = readOuter(&source[dynamicBase]);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "layout(std430, binding = 0) readonly buffer sourceBuffer { float source[]; };"
+        in generated
+    )
+    assert (
+        "layout(std430, binding = 1) buffer resultBuffer { float result[]; };"
+        in generated
+    )
+    assert_glsl_storage_pointer_syntax_is_lowered(generated)
+
+    def find_helper(source_name):
+        match = re.search(
+            rf"\bfloat\s+(?P<name>{source_name}[A-Za-z0-9_]*)\s*"
+            r"\((?P<params>[^)]*)\)\s*\{(?P<body>.*?)^\}",
+            generated,
+            re.MULTILINE | re.DOTALL,
+        )
+        assert match is not None, generated
+        return match
+
+    leaf = find_helper("readLeaf")
+    middle = find_helper("readMiddle")
+    outer = find_helper("readOuter")
+
+    leaf_offsets = re.findall(r"\b(?:int|uint)\s+([A-Za-z_]\w*)", leaf.group("params"))
+    middle_offsets = re.findall(
+        r"\b(?:int|uint)\s+([A-Za-z_]\w*)", middle.group("params")
+    )
+    outer_offsets = re.findall(
+        r"\b(?:int|uint)\s+([A-Za-z_]\w*)", outer.group("params")
+    )
+    assert len(leaf_offsets) == 1, generated
+    assert len(middle_offsets) == 1, generated
+    assert len(outer_offsets) == 1, generated
+
+    leaf_read = re.search(
+        r"\breturn\s+(?P<target>[A-Za-z_]\w*)\s*" r"\[(?P<index>[^\]]+)\]\s*;",
+        leaf.group("body"),
+    )
+    assert leaf_read is not None, generated
+    leaf_array_parameters = set(
+        re.findall(r"\bfloat\s+([A-Za-z_]\w*)\s*\[\s*\]", leaf.group("params"))
+    )
+    assert (
+        leaf_read.group("target") == "source"
+        or leaf_read.group("target") in leaf_array_parameters
+    )
+    assert glsl_expression_depends_on(
+        leaf.group("body"), leaf_read.group("index"), leaf_offsets[0]
+    ), generated
+    assert glsl_expression_depends_on(
+        leaf.group("body"), leaf_read.group("index"), "5u"
+    ), generated
+
+    middle_call = re.search(
+        rf"\b{re.escape(leaf.group('name'))}\s*\((?P<args>[^;\n]*)\)\s*;",
+        middle.group("body"),
+    )
+    assert middle_call is not None, generated
+    assert glsl_expression_depends_on(
+        middle.group("body"), middle_call.group("args"), middle_offsets[0]
+    ), generated
+    assert glsl_expression_depends_on(
+        middle.group("body"), middle_call.group("args"), "3u"
+    ), generated
+
+    outer_call = re.search(
+        rf"\b{re.escape(middle.group('name'))}\s*\((?P<args>[^;\n]*)\)\s*;",
+        outer.group("body"),
+    )
+    assert outer_call is not None, generated
+    assert glsl_expression_depends_on(
+        outer.group("body"), outer_call.group("args"), outer_offsets[0]
+    ), generated
+    assert glsl_expression_depends_on(
+        outer.group("body"), outer_call.group("args"), "2u"
+    ), generated
+
+    main_body = re.search(
+        r"\bvoid\s+main\s*\(\s*\)\s*\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert main_body is not None, generated
+    main_calls = re.findall(
+        rf"\b{re.escape(outer.group('name'))}\s*\(([^;\n]*)\)\s*;",
+        main_body.group("body"),
+    )
+    assert len(main_calls) == 1, generated
+    assert glsl_expression_depends_on(
+        generated, main_calls[0], "dynamicBase"
+    ), generated
+
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "nested_storage_pointer_forwarding"
+    )
 
 
 def test_glsl_descriptor_sets_flatten_to_opengl_bindings():
@@ -6010,6 +7494,153 @@ def test_glsl_hlsl_mul_alias_emits_binary_matrix_multiply():
     assert "mul(" not in generated_code
 
 
+def test_opengl_complex64_struct_operators_lower_to_helpers(tmp_path):
+    shader = """
+    shader Complex64OperatorLowering {
+        struct complex64_t {
+            float real;
+            float imag;
+        };
+
+        StructuredBuffer<complex64_t> source @ binding(0);
+
+        compute {
+            [numthreads(1, 1, 1)]
+            void main(uint3 dispatchId @ SV_DispatchThreadID) {
+                complex64_t left = complex64_t(2.0, 3.0);
+                complex64_t right = complex64_t(4.0, -1.0);
+                complex64_t values[2];
+                uint index = dispatchId.x & 1u;
+                complex64_t sum = left + right;
+                complex64_t difference = left - right;
+                complex64_t product = left * right;
+                complex64_t quotient = left / right;
+                complex64_t negated = -left;
+                bool equal = left == right;
+                bool notEqual = left != right;
+                complex64_t promoted = 2.0 + left;
+                complex64_t loadedProduct = left * buffer_load(source, index);
+                complex64_t copied = complex64_t(left);
+                complex64_t loadedCopy = complex64_t(buffer_load(source, index));
+                complex64_t promotedByConstructor = complex64_t(2u);
+                complex64_t defaultConstructed = complex64_t();
+                values[index] = promoted;
+                values[index] += product;
+            }
+        }
+    }
+    """
+
+    codegen = GLSLCodeGen()
+    generated = codegen.generate(crosstl.translator.parse(shader))
+
+    assert "struct complex64_t {\n    float real;\n    float imag;\n};" in generated
+    for helper in (
+        "complex64_t crossgl_complex64_add(",
+        "complex64_t crossgl_complex64_sub(",
+        "complex64_t crossgl_complex64_mul(",
+        "complex64_t crossgl_complex64_div(",
+        "complex64_t crossgl_complex64_negate(",
+        "bool crossgl_complex64_equal(",
+        "bool crossgl_complex64_not_equal(",
+    ):
+        assert helper in generated
+
+    assert "left.real + right.real, left.imag + right.imag" in generated
+    assert "left.real - right.real, left.imag - right.imag" in generated
+    assert "(left.real * right.real) - (left.imag * right.imag)" in generated
+    assert (
+        "float denominator = (right.real * right.real) + "
+        "(right.imag * right.imag);" in generated
+    )
+    assert "complex64_t sum = crossgl_complex64_add(left, right);" in generated
+    assert "complex64_t difference = crossgl_complex64_sub(left, right);" in generated
+    assert "complex64_t product = crossgl_complex64_mul(left, right);" in generated
+    assert "complex64_t quotient = crossgl_complex64_div(left, right);" in generated
+    assert "complex64_t negated = crossgl_complex64_negate(left);" in generated
+    assert "bool equal = crossgl_complex64_equal(left, right);" in generated
+    assert "bool notEqual = crossgl_complex64_not_equal(left, right);" in generated
+    assert (
+        "complex64_t promoted = crossgl_complex64_add("
+        "complex64_t(float(2.0), 0.0), left);" in generated
+    )
+    assert (
+        "complex64_t loadedProduct = crossgl_complex64_mul(left, source[index]);"
+        in generated
+    )
+    assert "complex64_t copied = left;" in generated
+    assert "complex64_t loadedCopy = source[index];" in generated
+    assert (
+        "complex64_t promotedByConstructor = complex64_t(float(2u), 0.0);" in generated
+    )
+    assert "complex64_t defaultConstructed = complex64_t(0.0, 0.0);" in generated
+    assert "complex64_t values[2];" in generated
+    assert "uint index = (gl_GlobalInvocationID.x & 1u);" in generated
+    assert "crossgl_complex64_add_assign(values[index], product);" in generated
+    for invalid_struct_operator in (
+        "complex64_t sum = (left + right);",
+        "complex64_t difference = (left - right);",
+        "complex64_t product = (left * right);",
+        "complex64_t quotient = (left / right);",
+        "complex64_t negated = (-left);",
+        "bool equal = (left == right);",
+        "bool notEqual = (left != right);",
+        "complex64_t promoted = (2.0 + left);",
+        "complex64_t loadedProduct = (left * source[index]);",
+        "complex64_t copied = complex64_t(left);",
+        "complex64_t loadedCopy = complex64_t(source[index]);",
+        "complex64_t promotedByConstructor = complex64_t(2u);",
+        "complex64_t defaultConstructed = complex64_t();",
+        "values[index] += product;",
+    ):
+        assert invalid_struct_operator not in generated
+
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "complex64_struct_operators"
+    )
+
+    reused = codegen.generate(
+        crosstl.translator.parse(
+            "shader NoComplexHelpers { float identity(float value) { return value; } }"
+        )
+    )
+    assert "crossgl_complex64_" not in reused
+
+
+def test_opengl_same_type_struct_constructor_lowers_to_copy(tmp_path):
+    shader = """
+    shader StructCopyConstruction {
+        struct Pair {
+            float first;
+            float second;
+        };
+
+        Pair copyPair(Pair value) {
+            return Pair(value);
+        }
+
+        compute {
+            [numthreads(1, 1, 1)]
+            void main() {
+                Pair original = Pair(1.0, 2.0);
+                Pair copied = Pair(original);
+                Pair returned = copyPair(copied);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "return value;" in generated
+    assert "Pair copied = original;" in generated
+    assert "Pair(value)" not in generated
+    assert "Pair(original)" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "same_type_struct_copy"
+    )
+
+
 def test_glsl_user_defined_mul_function_is_preserved():
     # Khronos GLSL 4.60 permits user-defined function calls; the CrossGL-to-GLSL
     # mul alias should only lower when no user helper shadows the alias name.
@@ -6335,17 +7966,21 @@ def test_glsl_narrow_integer_aliases_lower_to_standard_glsl_integer_types():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert "int signedScalar(int input_)" in generated_code
-    assert "int one = int(1);" in generated_code
+    assert "int one = bitfieldExtract(int(1), 0, 8);" in generated_code
     assert "uint unsignedScalar(uint input_)" in generated_code
-    assert "uint one = uint(1u);" in generated_code
+    assert "uint one = bitfieldExtract(uint(1u), 0, 8);" in generated_code
     assert "ivec2 signedPair(ivec2 input_)" in generated_code
-    assert "ivec2 inc = ivec2(1, 2);" in generated_code
+    assert "ivec2 inc = bitfieldExtract(ivec2(1, 2), 0, 8);" in generated_code
     assert "uvec3 unsignedTriple(uvec3 input_)" in generated_code
-    assert "uvec3 inc = uvec3(1u, 2u, 3u);" in generated_code
+    assert "uvec3 inc = bitfieldExtract(uvec3(1u, 2u, 3u), 0, 8);" in generated_code
     assert "ivec2 signedShort(ivec2 input_)" in generated_code
+    assert "ivec2 inc = bitfieldExtract(ivec2(1, 2), 0, 16);" in generated_code
     assert "uvec3 unsignedShort(uvec3 input_)" in generated_code
+    assert "uvec3 inc = bitfieldExtract(uvec3(1u, 2u, 3u), 0, 16);" in generated_code
     assert "ivec4 signedChar(ivec4 input_)" in generated_code
+    assert "ivec4 inc = bitfieldExtract(ivec4(1, 2, 3, 4), 0, 8);" in generated_code
     assert "uvec2 unsignedChar(uvec2 input_)" in generated_code
+    assert "uvec2 inc = bitfieldExtract(uvec2(1u, 2u), 0, 8);" in generated_code
     for invalid_token in (
         "int8",
         "uint8",
@@ -6519,39 +8154,40 @@ def test_glsl_fixed_width_scalar_aliases_lower_to_standard_glsl_scalars():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
+    assert generated_code.count("#extension GL_ARB_gpu_shader_int64 : require") == 1
     assert "int signedByte(int input_)" in generated_code
     assert "uint unsignedByte(uint input_)" in generated_code
     assert "int signedShortScalar(int input_)" in generated_code
     assert "uint unsignedShortScalar(uint input_)" in generated_code
     assert "int signedWord(int input_)" in generated_code
     assert "uint unsignedWord(uint input_)" in generated_code
-    assert "int signedLong(int input_)" in generated_code
-    assert "uint unsignedLong(uint input_)" in generated_code
-    assert "int signedLongT(int input_)" in generated_code
-    assert "uint unsignedLongT(uint input_)" in generated_code
+    assert "int64_t signedLong(int64_t input_)" in generated_code
+    assert "uint64_t unsignedLong(uint64_t input_)" in generated_code
+    assert "int64_t signedLongT(int64_t input_)" in generated_code
+    assert "uint64_t unsignedLongT(uint64_t input_)" in generated_code
     assert "uint sizeValue(uint input_)" in generated_code
     assert "int ptrDiff(int input_)" in generated_code
     assert "int longValue(int input_)" in generated_code
     assert "uint ulongValue(uint input_)" in generated_code
     assert "int one = int(1);" in generated_code
     assert "uint one = uint(1u);" in generated_code
-    for invalid_token in (
-        "int8_t",
-        "uint8_t",
-        "int16_t",
-        "uint16_t",
-        "int32_t",
-        "uint32_t",
-        "int64 ",
-        "uint64 ",
-        "int64_t",
-        "uint64_t",
-        "size_t",
-        "ptrdiff_t",
-        "long ",
-        "ulong ",
+    assert "int64_t one = int64_t(1);" in generated_code
+    assert "uint64_t one = uint64_t(1u);" in generated_code
+    for invalid_pattern in (
+        r"\bint8_t\b",
+        r"\buint8_t\b",
+        r"\bint16_t\b",
+        r"\buint16_t\b",
+        r"\bint32_t\b",
+        r"\buint32_t\b",
+        r"\bint64\s",
+        r"\buint64\s",
+        r"\bsize_t\b",
+        r"\bptrdiff_t\b",
+        r"\blong\s",
+        r"\bulong\s",
     ):
-        assert invalid_token not in generated_code
+        assert re.search(invalid_pattern, generated_code) is None
 
 
 def test_glsl_fixed_width_scalar_array_aliases_lower_in_aggregate_declarations():
@@ -6584,31 +8220,30 @@ def test_glsl_fixed_width_scalar_array_aliases_lower_in_aggregate_declarations()
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
+    assert generated_code.count("#extension GL_ARB_gpu_shader_int64 : require") == 1
     assert "int bytes[2];" in generated_code
     assert "uint words[3];" in generated_code
-    assert "int signedValue;" in generated_code
+    assert "int64_t signedValue;" in generated_code
     assert "uint offsets[2];" in generated_code
     assert "int globalBytes[2];" in generated_code
-    assert "uint globalCounters[2];" in generated_code
+    assert "uint64_t globalCounters[2];" in generated_code
     assert "int smalls[2];" in generated_code
     assert "uint count;" in generated_code
     assert "int delta;" in generated_code
-    assert "uint bump(uint counters[2], AliasPayload payload)" in generated_code
-    assert "uint localCounters[2];" in generated_code
-    assert "uint one = uint(1u);" in generated_code
-    for invalid_token in (
-        "int8_t",
-        "uint16_t",
-        "int16_t",
-        "uint32_t",
-        "int64 ",
-        "uint64 ",
-        "int64_t",
-        "uint64_t",
-        "size_t",
-        "ptrdiff_t",
+    assert "uint64_t bump(uint64_t counters[2], AliasPayload payload)" in generated_code
+    assert "uint64_t localCounters[2];" in generated_code
+    assert "uint64_t one = uint64_t(1u);" in generated_code
+    for invalid_pattern in (
+        r"\bint8_t\b",
+        r"\buint16_t\b",
+        r"\bint16_t\b",
+        r"\buint32_t\b",
+        r"\bint64\s",
+        r"\buint64\s",
+        r"\bsize_t\b",
+        r"\bptrdiff_t\b",
     ):
-        assert invalid_token not in generated_code
+        assert re.search(invalid_pattern, generated_code) is None
 
 
 def test_glsl_fixed_width_nested_array_aliases_lower_to_standard_glsl_types():
@@ -6641,31 +8276,31 @@ def test_glsl_fixed_width_nested_array_aliases_lower_to_standard_glsl_types():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
+    assert generated_code.count("#extension GL_ARB_gpu_shader_int64 : require") == 1
     assert "int bytes[2][3];" in generated_code
     assert "uint offsets[2][3];" in generated_code
-    assert "uint[2] makeCounters()" in generated_code
-    assert "uint counters[2];" in generated_code
+    assert "uint64_t[2] makeCounters()" in generated_code
+    assert "uint64_t counters[2];" in generated_code
     assert "uint bumpNested(uint values[2][3], int row, int col)" in generated_code
     assert "uint grid[2][3];" in generated_code
     assert (
         "int readPayload(AliasGridPayload payload, int row, int col)" in generated_code
     )
     assert "uint(1u)" in generated_code
-    assert "uint(2u)" in generated_code
+    assert "uint64_t(2u)" in generated_code
     assert "int(payload.bytes[row][col])" in generated_code
     assert "int(payload.offsets[row][col])" in generated_code
     assert "int[2] bytes[3]" not in generated_code
     assert "uint[2] offsets[3]" not in generated_code
-    for invalid_token in (
-        "int8_t",
-        "uint16_t",
-        "int64 ",
-        "uint64 ",
-        "uint64_t",
-        "size_t",
-        "ptrdiff_t",
+    for invalid_pattern in (
+        r"\bint8_t\b",
+        r"\buint16_t\b",
+        r"\bint64\s",
+        r"\buint64\s",
+        r"\bsize_t\b",
+        r"\bptrdiff_t\b",
     ):
-        assert invalid_token not in generated_code
+        assert re.search(invalid_pattern, generated_code) is None
 
 
 def test_glsl_fixed_width_nested_cbuffer_array_aliases_lower_to_standard_types():
@@ -6685,23 +8320,22 @@ def test_glsl_fixed_width_nested_cbuffer_array_aliases_lower_to_standard_types()
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
+    assert generated_code.count("#extension GL_ARB_gpu_shader_int64 : require") == 1
     assert "layout(std140, binding = 2) uniform AliasNestedConstants" in generated_code
-    assert "int signedGrid[2][3];" in generated_code
+    assert "int64_t signedGrid[2][3];" in generated_code
     assert "uint unsignedGrid[2][3];" in generated_code
     assert "uint offsets[2][3];" in generated_code
-    assert "uint readConstant(int row, int col)" in generated_code
-    assert "uint(offsets[row][col])" in generated_code
-    assert "uint(unsignedGrid[row][col])" in generated_code
+    assert "uint64_t readConstant(int row, int col)" in generated_code
+    assert "uint64_t(offsets[row][col])" in generated_code
+    assert "uint64_t(unsignedGrid[row][col])" in generated_code
     assert "int[2] signedGrid[3]" not in generated_code
     assert "uint[2] offsets[3]" not in generated_code
-    for invalid_token in (
-        "int64_t",
-        "uint16_t",
-        "uint64 ",
-        "uint64_t",
-        "size_t",
+    for invalid_pattern in (
+        r"\buint16_t\b",
+        r"\buint64\s",
+        r"\bsize_t\b",
     ):
-        assert invalid_token not in generated_code
+        assert re.search(invalid_pattern, generated_code) is None
 
 
 def test_glsl_default_float_image_scalar_and_vector_load_store():
@@ -7069,8 +8703,8 @@ def test_for_statement_preserves_declaration_initializers():
     generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "const float weights[2];" in generated_code
-    assert "for (int i = 0; (i < 2); (++i))" in generated_code
-    assert "for (i = 0; (i < 4); (++i))" in generated_code
+    assert "for (int i = 0; (i < 2); (i++))" in generated_code
+    assert "for (i = 0; (i < 4); (i++))" in generated_code
     assert "for (const int fixed = 0; (fixed < 0); )" in generated_code
     assert "for (; ; )" in generated_code
     assert "continue;" in generated_code
@@ -10008,6 +11642,182 @@ def test_glsl_stage_local_helpers_order_by_dependencies():
     assert "fragColor = first(uv);" in generated_code
 
 
+def test_opengl_top_level_helper_prototype_precedes_caller_and_definition():
+    shader = """
+    shader TopLevelHelperPrototype {
+        float caller(float value) {
+            return helper(value);
+        }
+
+        float helper(float value) {
+            return value + 1.0;
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    prototype = "float helper(float value);"
+    caller_body = "float caller(float value) {"
+    helper_body = "float helper(float value) {"
+    assert generated_code.count(prototype) == 1
+    assert generated_code.count(caller_body) == 1
+    assert generated_code.count(helper_body) == 1
+    assert generated_code.index(prototype) < generated_code.index(caller_body)
+    assert generated_code.index(prototype) < generated_code.index(helper_body)
+
+
+def test_opengl_top_level_overload_prototypes_use_distinct_emitted_names():
+    shader = """
+    shader TopLevelOverloadPrototypes {
+        float callFloat(float value) {
+            return adjust(value);
+        }
+
+        bfloat16_t callBFloat(bfloat16_t value) {
+            return adjust(value);
+        }
+
+        float adjust(float value) {
+            return value + 1.0;
+        }
+
+        bfloat16_t adjust(bfloat16_t value) {
+            return bfloat16_t(float(value) + 2.0);
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    caller_body = "float callFloat(float value) {"
+    signatures = (
+        "float adjust_float(float value)",
+        "float adjust_bfloat16_t(float value)",
+    )
+    for signature in signatures:
+        prototype = f"{signature};"
+        body = f"{signature} {{"
+        assert generated_code.count(prototype) == 1
+        assert generated_code.count(body) == 1
+        assert generated_code.count(signature) == 2
+        assert generated_code.index(prototype) < generated_code.index(caller_body)
+        assert generated_code.index(prototype) < generated_code.index(body)
+    assert "return adjust_float(value);" in generated_code
+    assert "return adjust_bfloat16_t(value);" in generated_code
+
+
+def test_opengl_recursion_detection_distinguishes_legal_overload_dispatch():
+    shader = """
+    shader OverloadDispatch {
+        float adjust(int value) {
+            return adjust(float(value));
+        }
+
+        float adjust(float value) {
+            return value + 1.0;
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float adjust(int value) {" in generated_code
+    assert "return adjust(float(value));" in generated_code
+    assert "float adjust(float value) {" in generated_code
+
+
+def test_opengl_top_level_helper_prototype_preserves_arrays_and_direction():
+    shader = """
+    shader TopLevelQualifiedPrototype {
+        void caller(float values[4], int& total, inout float scale) {
+            accumulate(values, total, scale);
+        }
+
+        void accumulate(float values[4], int& total, inout float scale) {
+            total += int(values[0]);
+            scale += values[1];
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    signature = "void accumulate(float values[4], inout int total, inout float scale)"
+    prototype = f"{signature};"
+    caller_body = "void caller(float values[4], inout int total, inout float scale) {"
+    helper_body = f"{signature} {{"
+    assert generated_code.count(prototype) == 1
+    assert generated_code.count(caller_body) == 1
+    assert generated_code.count(helper_body) == 1
+    assert generated_code.count(signature) == 2
+    assert generated_code.index(prototype) < generated_code.index(caller_body)
+    assert generated_code.index(prototype) < generated_code.index(helper_body)
+
+
+@pytest.mark.parametrize(
+    ("functions", "cycle_names"),
+    [
+        (
+            """
+            int countdown(int value) {
+                if (value <= 0) {
+                    return 0;
+                }
+                return countdown(value - 1);
+            }
+            """,
+            ("countdown",),
+        ),
+        (
+            """
+            bool isEven(int value) {
+                if (value == 0) {
+                    return true;
+                }
+                return isOdd(value - 1);
+            }
+
+            bool isOdd(int value) {
+                if (value == 0) {
+                    return false;
+                }
+                return isEven(value - 1);
+            }
+            """,
+            ("isEven", "isOdd"),
+        ),
+    ],
+    ids=("direct", "mutual"),
+)
+def test_opengl_reports_recursive_top_level_helpers_deterministically(
+    functions, cycle_names
+):
+    shader = f"""
+    shader RecursiveTopLevelHelpers {{
+        {functions}
+    }}
+    """
+    diagnostics = []
+
+    for _ in range(2):
+        with pytest.raises(ValueError) as exc_info:
+            GLSLCodeGen().generate(crosstl.translator.parse(shader))
+        diagnostic = exc_info.value
+        diagnostic_code = getattr(diagnostic, "project_diagnostic_code", "")
+        missing_capabilities = getattr(diagnostic, "missing_capabilities", ())
+        message = str(diagnostic)
+        assert diagnostic_code.startswith("project.translate.")
+        assert "unsupported" in diagnostic_code or "recurs" in diagnostic_code
+        assert missing_capabilities
+        assert "recurs" in message.lower()
+        for function_name in cycle_names:
+            assert function_name in message
+        diagnostics.append((diagnostic_code, tuple(missing_capabilities), message))
+
+    assert diagnostics[0] == diagnostics[1]
+
+
 def test_generate_compute_stage_suppresses_graphics_io_declarations():
     shader = """
     shader MixedComputeStageIOSmoke {
@@ -10425,6 +12235,36 @@ def test_match_identifier_binding_arm_lowers_to_scoped_else_body():
     assert "int other = mode;" in generated_code
     assert "value = other;" in generated_code
     assert "MatchNode(" not in generated_code
+
+
+def test_match_binding_source_type_shadows_outer_local(tmp_path):
+    shader = """
+    shader MatchBindingSourceType {
+        int helper(int mode) {
+            uint value = 1u;
+            match mode {
+                value => { return value / -2; }
+            }
+        }
+
+        compute {
+            void main() {
+                int result = helper(4);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "int value = mode;" in generated_code
+    assert "return (value / (-2));" in generated_code
+    assert "uint((-2))" not in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "match_binding_source_type",
+    )
 
 
 def test_match_guarded_identifier_binding_falls_through_to_later_arm():
@@ -11564,6 +13404,218 @@ def test_glsl_wave_intrinsics_lower_to_khr_subgroup_builtins():
     assert "QuadRead" not in generated
 
 
+def test_glsl_bitwise_wave_ops_bitcast_float_operands(tmp_path):
+    code = """
+    shader GLSLBitwiseFloat {
+        compute {
+            void main() {
+                float value = 1.5;
+                float reduced = WaveActiveBitXor(value);
+                vec3 values = vec3(1.5, 2.5, 3.5);
+                vec3 reducedValues = WaveActiveBitXor(values);
+            }
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uintBitsToFloat(subgroupXor(floatBitsToUint(value)))" in generated
+    assert "uintBitsToFloat(subgroupXor(floatBitsToUint(values)))" in generated
+    assert "GLSL wave intrinsic diagnostic" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "bitwise_wave_float_payloads",
+        spirv_target="spirv1.3",
+    )
+
+
+def test_glsl_relative_shuffle_intrinsics_lower_to_subgroup_shuffle():
+    # Canonical WaveShuffleDown/Up/Xor (Metal simd_shuffle_down/up/xor) map to the
+    # KHR relative-shuffle builtins. Down/Up require the shuffle_relative
+    # extension; Xor uses the plain shuffle extension.
+    code = """
+    shader GLSLRelativeShuffle {
+        compute {
+            void main() {
+                uint v = WaveGetLaneIndex();
+                uint down = WaveShuffleDown(v, 1u);
+                uint up = WaveShuffleUp(down, 1u);
+                uint xored = WaveShuffleXor(up, 2u);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    assert "#extension GL_KHR_shader_subgroup_shuffle_relative : require" in generated
+    assert "#extension GL_KHR_shader_subgroup_shuffle : require" in generated
+    for expected in [
+        "uint down = subgroupShuffleDown(v, 1u);",
+        "uint up = subgroupShuffleUp(down, 1u);",
+        "uint xored = subgroupShuffleXor(up, 2u);",
+    ]:
+        assert expected in generated
+    assert "WaveShuffle" not in generated
+
+
+def test_glsl_wave_shuffle_and_fill_up_lowers_scalar_vector_and_bool(tmp_path):
+    code = """
+    shader GLSLWaveShuffleAndFillUp {
+        compute {
+            void main() {
+                float scalarValue = 4.0;
+                float scalarFill = -1.0;
+                float scalarResult = WaveShuffleAndFillUp(
+                    scalarValue, scalarFill, 1u);
+
+                vec3 vectorValue = vec3(1.0, 2.0, 3.0);
+                vec3 vectorFill = vec3(-1.0);
+                int delta = 2;
+                vec3 vectorResult = WaveShuffleAndFillUp(
+                    vectorValue, vectorFill, delta);
+
+                bool boolValue = true;
+                bool boolFill = false;
+                bool boolResult = WaveShuffleAndFillUp(
+                    boolValue, boolFill, 1u);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert generated.count("#extension GL_KHR_shader_subgroup_basic : require") == 1
+    assert (
+        generated.count("#extension GL_KHR_shader_subgroup_shuffle_relative : require")
+        == 1
+    )
+    assert "#extension GL_KHR_shader_subgroup_shuffle : require" not in generated
+    for signature in (
+        "float crossglWaveShuffleAndFillUp(float value, float fill, uint delta)",
+        "vec3 crossglWaveShuffleAndFillUp(vec3 value, vec3 fill, uint delta)",
+        "bool crossglWaveShuffleAndFillUp(bool value, bool fill, uint delta)",
+    ):
+        assert signature in generated
+    assert generated.count("subgroupShuffleUp(value, delta);") == len(
+        GLSLCodeGen.GLSL_WAVE_HELPER_VALUE_TYPES
+    )
+    assert generated.count(
+        "return gl_SubgroupInvocationID >= delta ? shuffled : fill;"
+    ) == len(GLSLCodeGen.GLSL_WAVE_HELPER_VALUE_TYPES)
+    for call in (
+        "float scalarResult = crossglWaveShuffleAndFillUp("
+        "scalarValue, scalarFill, 1u);",
+        "vec3 vectorResult = crossglWaveShuffleAndFillUp("
+        "vectorValue, vectorFill, uint(delta));",
+        "bool boolResult = crossglWaveShuffleAndFillUp(" "boolValue, boolFill, 1u);",
+    ):
+        assert call in generated
+    assert not re.search(r"(?<!crossgl)WaveShuffleAndFillUp\(", generated)
+
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "wave_shuffle_and_fill_up",
+        spirv_target="spirv1.3",
+    )
+
+
+def test_glsl_wave_shuffle_and_fill_up_diagnostics_are_deterministic():
+    code = """
+    shader GLSLWaveShuffleAndFillUpDiagnostics {
+        compute {
+            void main() {
+                float scalarValue = 1.0;
+                float scalarFill = 0.0;
+                vec2 vectorValue = vec2(1.0);
+                vec3 vectorFill = vec3(0.0);
+                ivec2 integerFill = ivec2(0);
+                mat2 matrixValue = mat2(1.0);
+                float floatDelta = 1.0;
+                vec2 vectorDelta = vec2(1.0);
+
+                float badArity = WaveShuffleAndFillUp(scalarValue, scalarFill);
+                mat2 badValue = WaveShuffleAndFillUp(
+                    matrixValue, matrixValue, 1u);
+                vec2 badFill = WaveShuffleAndFillUp(
+                    vectorValue, matrixValue, 1u);
+                vec2 badShape = WaveShuffleAndFillUp(
+                    vectorValue, vectorFill, 1u);
+                vec2 badType = WaveShuffleAndFillUp(
+                    vectorValue, integerFill, 1u);
+                float badDelta = WaveShuffleAndFillUp(
+                    scalarValue, scalarFill, floatDelta);
+                vec2 badDeltaShape = WaveShuffleAndFillUp(
+                    vectorValue, vec2(0.0), vectorDelta);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    expected_diagnostics = (
+        "WaveShuffleAndFillUp expects 3 arguments, got 2",
+        (
+            "WaveShuffleAndFillUp requires a scalar or vector value argument: "
+            "matrixValue has type mat2"
+        ),
+        (
+            "WaveShuffleAndFillUp requires a scalar or vector fill argument: "
+            "matrixValue has type mat2"
+        ),
+        (
+            "WaveShuffleAndFillUp requires value and fill arguments with matching "
+            "scalar/vector types: vectorValue has type vec2, vectorFill has type vec3"
+        ),
+        (
+            "WaveShuffleAndFillUp requires value and fill arguments with matching "
+            "scalar/vector types: vectorValue has type vec2, integerFill has type "
+            "ivec2"
+        ),
+        (
+            "WaveShuffleAndFillUp requires a scalar integer delta argument: "
+            "floatDelta has type float"
+        ),
+        (
+            "WaveShuffleAndFillUp requires a scalar integer delta argument: "
+            "vectorDelta has type vec2"
+        ),
+    )
+    for diagnostic in expected_diagnostics:
+        assert generated.count(diagnostic) == 1
+
+    main_body = generated.rsplit("void main()", 1)[1]
+    assert "crossglWaveShuffleAndFillUp(" not in main_body
+
+
+def test_glsl_wave_shuffle_and_fill_up_preserves_source_and_result_types():
+    code = """
+    shader GLSLWaveShuffleAndFillUpTypes {
+        uint64 shuffleAndFill(uint64 data, uint64 filling, uint delta) {
+            let shuffled = WaveShuffleAndFillUp(
+                as_type<uvec2>(data), as_type<uvec2>(filling), delta);
+            return as_type<uint64>(shuffled);
+        }
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+    body = _opengl_function_body(generated, "shuffleAndFill")
+
+    assert "uvec2 shuffled = crossglWaveShuffleAndFillUp(" in body
+    assert "unpackUint2x32(data)" in body
+    assert "unpackUint2x32(filling)" in body
+    assert "return packUint2x32(shuffled);" in body
+    assert "as_type<" not in generated
+
+
 def test_glsl_lowers_metal_simd_group_helpers_to_khr_subgroup_builtins():
     code = """
     shader GLSLMetalSimdGroupHelpers {
@@ -11742,7 +13794,7 @@ def test_glsl_wave_intrinsic_type_mismatches_emit_diagnostics():
                 vec2 values;
                 mat2 transform;
                 float badSum = WaveActiveSum(flag);
-                uint badBits = WaveActiveBitAnd(value);
+                uint badBits = WaveActiveBitAnd(transform);
                 bool badVote = WaveActiveAnyTrue(values);
                 uint badLane = WaveReadLaneAt(1u, value);
                 uvec4 badMatch = WaveMatch(transform);
@@ -11763,7 +13815,7 @@ def test_glsl_wave_intrinsic_type_mismatches_emit_diagnostics():
         ),
         (
             "WaveActiveBitAnd requires an integer or boolean scalar or vector "
-            "value argument: value has type float"
+            "value argument: transform has type mat2"
         ),
         (
             "WaveActiveAnyTrue requires a boolean scalar value argument: "
@@ -11789,7 +13841,7 @@ def test_glsl_wave_intrinsic_type_mismatches_emit_diagnostics():
         assert expected in generated
 
     assert "subgroupAdd(flag)" not in generated
-    assert "subgroupAnd(value)" not in generated
+    assert "subgroupAnd(transform)" not in generated
     assert "subgroupAny(values)" not in generated
     assert "subgroupShuffle(1u, value)" not in generated
     assert "crossglWaveMatch(transform)" not in generated
@@ -12388,7 +14440,7 @@ def test_opengl_array_parameters_use_glsl_order():
     assert "vec3[2] colors" not in generated_code
 
 
-def test_opengl_helper_parameters_preserve_out_and_inout_qualifiers():
+def test_opengl_helper_parameters_preserve_out_and_inout_qualifiers(tmp_path):
     shader = """
     shader OutParamGLSL {
         void fill(out float value) {
@@ -12399,11 +14451,17 @@ def test_opengl_helper_parameters_preserve_out_and_inout_qualifiers():
             value += 1.0;
         }
 
+        void narrow(out uint16_t value) {
+            value = 7u;
+        }
+
         compute {
             void main() {
                 float x = 0.0;
+                uint narrowed = 0u;
                 fill(x);
                 accumulate(x);
+                narrow(narrowed);
             }
         }
     }
@@ -12413,8 +14471,91 @@ def test_opengl_helper_parameters_preserve_out_and_inout_qualifiers():
 
     assert "void fill(out float value)" in generated_code
     assert "void accumulate(inout float value)" in generated_code
+    assert "void narrow(out uint value)" in generated_code
     assert "void fill(float value)" not in generated_code
     assert "void accumulate(float value)" not in generated_code
+    assert "narrow(narrowed);" in generated_code
+    assert "narrow(bitfieldExtract" not in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "out_and_inout_parameters",
+    )
+
+
+def test_opengl_reference_parameters_lower_to_direction_qualifiers(tmp_path):
+    shader = """
+    shader ReferenceParameters {
+        struct Pair {
+            int value;
+        };
+
+        int readValue(constant int& value) {
+            return value;
+        }
+
+        void increment(int& value) {
+            value += 1;
+        }
+
+        void incrementPair(Pair& pair) {
+            pair.value += 1;
+        }
+
+        compute {
+            void main() {
+                int value = readValue(4);
+                Pair pair = Pair(7);
+                increment(value);
+                incrementPair(pair);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "int readValue(int value)" in generated_code
+    assert "void increment(inout int value)" in generated_code
+    assert "void incrementPair(inout Pair pair)" in generated_code
+    assert "readValue(4)" in generated_code
+    assert "increment(value)" in generated_code
+    assert "incrementPair(pair)" in generated_code
+    assert re.search(r"\b(?:int|Pair)\s*&", generated_code) is None
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "reference_parameters",
+    )
+
+
+def test_opengl_mutable_reference_rejects_non_lvalue_argument():
+    shader = """
+    shader InvalidMutableReferenceArgument {
+        void increment(int& value) {
+            value += 1;
+        }
+
+        compute {
+            void main() {
+                increment(1);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLReferenceParameterError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.project_diagnostic_code == (
+        "project.translate.opengl-reference-argument-invalid"
+    )
+    assert error.missing_capabilities == ("opengl.reference-parameter-lowering",)
+    assert error.function_name == "increment"
+    assert error.parameter_name == "value"
+    assert error.argument == "1"
+    assert error.reason == "mutable-reference-requires-lvalue"
 
 
 def test_opengl_non_resource_arrays_preserve_expression_sizes():
@@ -15297,7 +17438,7 @@ def test_opengl_texture_gather_offsets_accept_const_array_offsets():
 
     assert "sampler compareSampler" not in generated_code
     assert "sampler s" not in generated_code
-    assert "const ivec2 offsets[4] = {" in generated_code
+    assert "const ivec2 offsets[4] = ivec2[4](" in generated_code
     assert "textureGatherOffsets(" not in generated_code
     assert "textureGatherCompareOffsets(" not in generated_code
     assert (
@@ -24831,6 +26972,319 @@ def test_opengl_hlsl_bitcast_aliases_elide_same_type_conversions():
     assert "asfloat(" not in generated_code
 
 
+_OPENGL_EXPLICIT_AS_TYPE_SHAPES_SHADER = """
+shader OpenGLExplicitAsTypeShapes {
+    RWStructuredBuffer<uint64> bitcastOutput @binding(0);
+
+    uvec2 u64ToUvec2(uint64 u64Bits) {
+        return as_type<uvec2>(u64Bits);
+    }
+
+    ivec2 u64ToIvec2(uint64 u64SignedLanes) {
+        return as_type<ivec2>(u64SignedLanes);
+    }
+
+    uvec2 i64ToUvec2(int64 i64UnsignedLanes) {
+        return as_type<uvec2>(i64UnsignedLanes);
+    }
+
+    ivec2 i64ToIvec2(int64 i64Bits) {
+        return as_type<ivec2>(i64Bits);
+    }
+
+    uvec2 doubleToUvec2(double doubleUnsignedLanes) {
+        return as_type<uvec2>(doubleUnsignedLanes);
+    }
+
+    ivec2 doubleToIvec2(double doubleSignedLanes) {
+        return as_type<ivec2>(doubleSignedLanes);
+    }
+
+    uint64 uvec2ToU64(uvec2 uvec2U64Bits) {
+        return as_type<uint64>(uvec2U64Bits);
+    }
+
+    int64 uvec2ToI64(uvec2 uvec2I64Bits) {
+        return as_type<int64>(uvec2I64Bits);
+    }
+
+    double uvec2ToDouble(uvec2 uvec2DoubleBits) {
+        return as_type<double>(uvec2DoubleBits);
+    }
+
+    uint64 ivec2ToU64(ivec2 ivec2U64Bits) {
+        return as_type<uint64>(ivec2U64Bits);
+    }
+
+    int64 ivec2ToI64(ivec2 ivec2I64Bits) {
+        return as_type<int64>(ivec2I64Bits);
+    }
+
+    double ivec2ToDouble(ivec2 ivec2DoubleBits) {
+        return as_type<double>(ivec2DoubleBits);
+    }
+
+    compute {
+        void main() {
+            uint64 value = uint64(1u);
+            uvec2 lanes = as_type<uvec2>(value);
+            buffer_store(bitcastOutput, 0u, as_type<uint64>(lanes));
+        }
+    }
+}
+"""
+
+
+def _opengl_function_body(code, function_name):
+    match = re.search(
+        rf"\b{re.escape(function_name)}\([^)]*\)\s*\{{(?P<body>.*?)\n\}}",
+        code,
+        re.DOTALL,
+    )
+    assert match is not None, code
+    return match["body"]
+
+
+def test_opengl_explicit_as_type_preserves_64_bit_scalar_vector_lane_shapes():
+    generated_code = GLSLCodeGen().generate(
+        crosstl.translator.parse(_OPENGL_EXPLICIT_AS_TYPE_SHAPES_SHADER)
+    )
+
+    assert generated_code.count("#extension GL_ARB_gpu_shader_int64 : require") == 1
+    expected_signatures = (
+        "uvec2 u64ToUvec2(uint64_t u64Bits)",
+        "ivec2 u64ToIvec2(uint64_t u64SignedLanes)",
+        "uvec2 i64ToUvec2(int64_t i64UnsignedLanes)",
+        "ivec2 i64ToIvec2(int64_t i64Bits)",
+        "uvec2 doubleToUvec2(double doubleUnsignedLanes)",
+        "ivec2 doubleToIvec2(double doubleSignedLanes)",
+        "uint64_t uvec2ToU64(uvec2 uvec2U64Bits)",
+        "int64_t uvec2ToI64(uvec2 uvec2I64Bits)",
+        "double uvec2ToDouble(uvec2 uvec2DoubleBits)",
+        "uint64_t ivec2ToU64(ivec2 ivec2U64Bits)",
+        "int64_t ivec2ToI64(ivec2 ivec2I64Bits)",
+        "double ivec2ToDouble(ivec2 ivec2DoubleBits)",
+    )
+    for signature in expected_signatures:
+        assert signature in generated_code
+
+    expected_bitcast_calls = {
+        "u64ToUvec2": "unpackUint2x32(",
+        "u64ToIvec2": "unpackUint2x32(",
+        "i64ToUvec2": "unpackInt2x32(",
+        "i64ToIvec2": "unpackInt2x32(",
+        "doubleToUvec2": "unpackDouble2x32(",
+        "doubleToIvec2": "unpackDouble2x32(",
+        "uvec2ToU64": "packUint2x32(",
+        "uvec2ToI64": "packInt2x32(",
+        "uvec2ToDouble": "packDouble2x32(",
+        "ivec2ToU64": "packUint2x32(",
+        "ivec2ToI64": "packInt2x32(",
+        "ivec2ToDouble": "packDouble2x32(",
+    }
+    for function_name, bitcast_call in expected_bitcast_calls.items():
+        body = _opengl_function_body(generated_code, function_name)
+        assert bitcast_call in body, body
+
+    assert "return unpackUint2x32(u64Bits);" in generated_code
+    assert "return ivec2(unpackUint2x32(u64SignedLanes));" in generated_code
+    assert "return uvec2(unpackInt2x32(i64UnsignedLanes));" in generated_code
+    assert "return unpackInt2x32(i64Bits);" in generated_code
+    assert "return packUint2x32(uvec2U64Bits);" in generated_code
+    assert "return packInt2x32(ivec2(uvec2I64Bits));" in generated_code
+    assert "return packUint2x32(uvec2(ivec2U64Bits));" in generated_code
+    assert "return packInt2x32(ivec2I64Bits);" in generated_code
+    assert (
+        "layout(std430, binding = 0) buffer bitcastOutputBuffer { uint64_t bitcastOutput[]; };"
+        in generated_code
+    )
+    assert "bitcastOutput[0u] = packUint2x32(lanes);" in generated_code
+
+    direct_numeric_substitutions = (
+        ("uvec2", "u64Bits"),
+        ("ivec2", "u64SignedLanes"),
+        ("uvec2", "i64UnsignedLanes"),
+        ("ivec2", "i64Bits"),
+        ("uvec2", "doubleUnsignedLanes"),
+        ("ivec2", "doubleSignedLanes"),
+        ("uint64_t", "uvec2U64Bits"),
+        ("int64_t", "uvec2I64Bits"),
+        ("double", "uvec2DoubleBits"),
+        ("uint64_t", "ivec2U64Bits"),
+        ("int64_t", "ivec2I64Bits"),
+        ("double", "ivec2DoubleBits"),
+    )
+    for target_type, operand in direct_numeric_substitutions:
+        assert (
+            re.search(rf"\b{re.escape(target_type)}\(\s*{operand}\s*\)", generated_code)
+            is None
+        )
+    assert "as_type<" not in generated_code
+
+
+def test_opengl_explicit_as_type_result_inference_flows_through_nested_calls():
+    shader = """
+    shader OpenGLNestedExplicitAsType {
+        uint64 nestedRoundTrip(uint64 bits) {
+            let shuffled = WaveShuffleDown(as_type<uvec2>(bits), 1u);
+            return as_type<uint64>(shuffled);
+        }
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "#extension GL_ARB_gpu_shader_int64 : require" in generated_code
+    nested_body = _opengl_function_body(generated_code, "nestedRoundTrip")
+    assert "uvec2 shuffled = subgroupShuffleDown(" in nested_body
+    assert "unpackUint2x32(bits)" in nested_body
+    assert "return packUint2x32(shuffled);" in nested_body
+    assert "return uint64_t(shuffled);" not in nested_body
+
+
+def test_opengl_explicit_as_type_preserves_mangled_metal_subgroup_call_shape():
+    shader = """
+    shader OpenGLMangledMetalSubgroupBitcast {
+        uint64 shuffleAndFill(uint64 data, uint64 filling, uint delta) {
+            return as_type<uint64>(metal_u3a_u3asimd_shuffle_and_fill_up(
+                as_type<uvec2>(data), as_type<uvec2>(filling), delta));
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    body = _opengl_function_body(generated_code, "shuffleAndFill")
+    assert "return packUint2x32(" in body
+    assert "metal_u3a_u3asimd_shuffle_and_fill_up(" in body
+    assert "unpackUint2x32(data)" in body
+    assert "unpackUint2x32(filling)" in body
+    assert "uvec2(0)" not in body
+    assert "as_type<" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("source_type", "target_type", "source_glsl", "target_glsl", "widths"),
+    [
+        pytest.param("float", "uvec2", "float", "uvec2", (32, 64), id="32-to-64"),
+        pytest.param("uvec3", "uint64", "uvec3", "uint64_t", (96, 64), id="96-to-64"),
+    ],
+)
+def test_opengl_explicit_as_type_rejects_mismatched_total_widths(
+    source_type, target_type, source_glsl, target_glsl, widths
+):
+    shader = f"""
+    shader OpenGLInvalidExplicitAsTypeWidth {{
+        {target_type} invalidBitcast({source_type} value) {{
+            return as_type<{target_type}>(value);
+        }}
+
+        compute {{
+            void main() {{}}
+        }}
+    }}
+    """
+    source_width, target_width = widths
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            rf"OpenGL as_type<{re.escape(target_glsl)}> cannot bitcast from "
+            rf"{re.escape(source_glsl)}: total widths are {target_width} "
+            rf"and {source_width} bits"
+        ),
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_opengl_explicit_as_type_scalar_vector_bitcasts_validate_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    generated_code = GLSLCodeGen().generate(
+        crosstl.translator.parse(_OPENGL_EXPLICIT_AS_TYPE_SHAPES_SHADER)
+    )
+    source_path = tmp_path / "explicit_as_type.comp"
+    output_path = tmp_path / "explicit_as_type.spv"
+    source_path.write_text(generated_code, encoding="utf-8")
+    result = subprocess.run(
+        [
+            glslang,
+            "-G",
+            "-S",
+            "comp",
+            str(source_path),
+            "-o",
+            str(output_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    diagnostics = "\n".join(
+        part for part in (result.stdout, result.stderr) if part.strip()
+    )
+    assert result.returncode == 0, diagnostics
+    assert output_path.is_file()
+
+
+@pytest.mark.parametrize(
+    ("preprocessor", "message"),
+    [
+        pytest.param(
+            "#version 320 es",
+            "does not support GL_ARB_gpu_shader_int64",
+            id="opengl-es",
+        ),
+        pytest.param(
+            "#version 450 core\n#extension GL_ARB_gpu_shader_int64 : disable",
+            "requires GL_ARB_gpu_shader_int64",
+            id="disabled-extension",
+        ),
+    ],
+)
+def test_opengl_int64_rejects_profiles_without_required_capability(
+    preprocessor, message
+):
+    shader = f"""
+    {preprocessor}
+    shader OpenGLInt64UnsupportedProfile {{
+        uint64 increment(uint64 value) {{
+            return value + uint64(1u);
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_opengl_int64_upgrades_legacy_desktop_profile_to_extension_minimum():
+    shader = """
+    #version 330 core
+    shader OpenGLInt64LegacyProfile {
+        uint64 increment(uint64 value) {
+            return value + uint64(1u);
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert generated_code.startswith(
+        "#version 400 core\n#extension GL_ARB_gpu_shader_int64 : require\n"
+    )
+    assert "uint64_t increment(uint64_t value)" in generated_code
+
+
 def test_opengl_bfloat16_asuint_alias_lowers_to_uint_payload():
     shader = """
     shader BFloat16BitcastAlias {
@@ -24875,6 +27329,1050 @@ def test_opengl_bfloat16_as_type_alias_lowers_from_uint_payload():
     assert "bfloat16_t" not in generated_code
     assert "bfloat " not in generated_code
     assert "as_type<" not in generated_code
+
+
+def test_opengl_lowers_contextual_aggregate_initializers(tmp_path):
+    shader = """
+    shader ContextualAggregates {
+        struct Pair {
+            float x;
+            float y;
+        };
+
+        struct Bundle {
+            Pair pair;
+            float values[2];
+        };
+
+        Pair makePair(float x, float y) {
+            return {x, y};
+        }
+
+        Bundle makeBundle(float x, float y) {
+            Bundle result = {{x, y}, {1.0, 2.0}};
+            result = {{y, x}, {3.0, 4.0}};
+            return result;
+        }
+
+        compute {
+            void main() {
+                vec2 direction = {1.0, 2.0};
+                mat2 basis = {{1.0, 2.0}, {3.0, 4.0}};
+                mat2 flatBasis = {5.0, 6.0, 7.0, 8.0};
+                mat2x3 rectangular = {{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}};
+                Bundle value = makeBundle(direction.x, basis[0][0]);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "return Pair(x, y);" in generated_code
+    assert "Bundle result = Bundle(Pair(x, y), float[2](1.0, 2.0));" in generated_code
+    assert "result = Bundle(Pair(y, x), float[2](3.0, 4.0));" in generated_code
+    assert "vec2 direction = vec2(1.0, 2.0);" in generated_code
+    assert "mat2 basis = mat2(vec2(1.0, 3.0), vec2(2.0, 4.0));" in generated_code
+    assert "mat2 flatBasis = mat2(vec2(5.0, 7.0), vec2(6.0, 8.0));" in generated_code
+    assert (
+        "mat3x2 rectangular = mat3x2(vec2(1.0, 4.0), "
+        "vec2(2.0, 5.0), vec2(3.0, 6.0));" in generated_code
+    )
+    assert "return {" not in generated_code
+    assert " = {{" not in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "contextual_aggregate_initializers",
+    )
+
+
+def test_opengl_zero_fills_partial_aggregate_initializers(tmp_path):
+    shader = """
+    shader PartialAggregates {
+        struct Pair {
+            float x;
+            float y;
+        };
+
+        struct Bundle {
+            Pair pair;
+            float values[3];
+            vec2 direction;
+            float grid[2][2];
+        };
+
+        float supplied(float value) {
+            return value;
+        }
+
+        Bundle makeBundle() {
+            Bundle result = {{supplied(5.0)}, {supplied(7.0)}};
+            return result;
+        }
+
+        Bundle makeZeroBundle() {
+            return {0};
+        }
+
+        compute {
+            void main() {
+                Bundle value = makeBundle();
+                Bundle zero = makeZeroBundle();
+                float accum[4] = {0};
+                Pair pairs[2] = {0};
+                vec4 vectorZero = {0};
+                mat2 matrixZero = {0};
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "Bundle result = Bundle(Pair(supplied(5.0), 0.0), "
+        "float[3](supplied(7.0), 0.0, 0.0), vec2(0.0), "
+        "float[2][2](float[2](0.0, 0.0), float[2](0.0, 0.0)));" in generated_code
+    )
+    assert (
+        "return Bundle(Pair(0.0, 0.0), float[3](0.0, 0.0, 0.0), "
+        "vec2(0.0), float[2][2](float[2](0.0, 0.0), "
+        "float[2](0.0, 0.0)));" in generated_code
+    )
+    assert "float accum[4] = float[4](0.0, 0.0, 0.0, 0.0);" in generated_code
+    assert "Pair pairs[2] = Pair[2](Pair(0.0, 0.0), Pair(0.0, 0.0));" in generated_code
+    assert "vec4 vectorZero = vec4(0.0);" in generated_code
+    assert "mat2 matrixZero = mat2(0.0);" in generated_code
+    assert generated_code.count("supplied(5.0)") == 1
+    assert generated_code.count("supplied(7.0)") == 1
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "partial_aggregate_initializers",
+    )
+
+
+def test_opengl_resolves_scoped_local_constants_for_array_aggregates(tmp_path):
+    shader = """
+    shader ScopedArrayAggregates {
+        void makeValues() {
+            const int BASE = 2;
+            const int WIDTH = BASE * 2;
+            float outer[WIDTH] = {1.0, 2.0};
+
+            if (true) {
+                const int BASE = 3;
+                const int WIDTH = BASE * 2;
+                float inner[WIDTH] = {0};
+            }
+
+            float restored[WIDTH] = {3.0};
+        }
+
+        compute {
+            void main() {
+                makeValues();
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float outer[WIDTH] = float[4](1.0, 2.0, 0.0, 0.0);" in generated_code
+    assert (
+        "float inner[WIDTH] = float[6](0.0, 0.0, 0.0, 0.0, 0.0, 0.0);" in generated_code
+    )
+    assert "float restored[WIDTH] = float[4](3.0, 0.0, 0.0, 0.0);" in generated_code
+    assert "float[WIDTH](" not in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "scoped_array_aggregate_constants",
+    )
+
+
+def test_opengl_folds_narrow_local_constants_for_array_aggregates(tmp_path):
+    shader = """
+    shader NarrowArrayAggregates {
+        compute {
+            void main() {
+                const int16 WIDTH = 65538;
+                float signedValues[WIDTH] = {0};
+                const uint8 COUNT = 258u;
+                float unsignedValues[COUNT] = {0};
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "const int WIDTH = 2;" in generated_code
+    assert "const uint COUNT = 2u;" in generated_code
+    assert "float signedValues[WIDTH] = float[2](0.0, 0.0);" in generated_code
+    assert "float unsignedValues[COUNT] = float[2](0.0, 0.0);" in generated_code
+    assert "bitfieldExtract" not in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "narrow_array_aggregate_constants",
+    )
+
+
+def test_opengl_lowers_global_array_aggregate_initializer():
+    shader = """
+    shader GlobalArrayAggregate {
+        vec2 positions[3] = {
+            vec2(0.0, -0.5),
+            vec2(0.5, 0.5),
+            vec2(-0.5, 0.5)
+        };
+
+        compute {
+            void main() {
+                vec2 value = positions[0];
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "vec2 positions[3] = vec2[3](" in generated_code
+    assert "vec2(0.0, (-0.5))" in generated_code
+
+
+def test_opengl_lowers_nested_aggregates_in_explicit_struct_constructor(tmp_path):
+    shader = """
+    shader ExplicitAggregateConstructor {
+        struct Pair {
+            float x;
+            float y;
+        };
+
+        struct Bundle {
+            Pair pair;
+            float values[2];
+        };
+
+        Bundle makeBundle(float x, float y) {
+            return Bundle({x, y}, {1.0, 2.0});
+        }
+
+        compute {
+            void main() {
+                Bundle value = makeBundle(1.0, 2.0);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "return Bundle(Pair(x, y), float[2](1.0, 2.0));" in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "explicit_nested_aggregate_initializers",
+    )
+
+
+def test_opengl_lowers_aggregate_function_arguments_from_parameter_type(tmp_path):
+    shader = """
+    shader AggregateFunctionArgument {
+        struct Pair {
+            float x;
+            float y;
+        };
+
+        float sumPair(Pair value) {
+            return value.x + value.y;
+        }
+
+        float nested(float x, float y) {
+            return sumPair({x, y});
+        }
+
+        compute {
+            void main() {
+                float value = nested(1.0, 2.0);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "return sumPair(Pair(x, y));" in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "aggregate_function_argument",
+    )
+
+
+def test_opengl_empty_struct_aggregate_initializes_placeholder(tmp_path):
+    shader = """
+    shader EmptyStructAggregate {
+        struct Marker {
+        };
+
+        Marker makeMarker() {
+            return {};
+        }
+
+        compute {
+            void main() {
+                Marker value = makeMarker();
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "struct Marker {\n    int _crossgl_empty;\n};" in generated_code
+    assert "return Marker(0);" in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "empty_struct_aggregate_initializer",
+    )
+
+
+def test_opengl_aggregate_initializer_reports_excess_elements():
+    shader = """
+    shader InvalidAggregateShape {
+        struct Pair {
+            float x;
+            float y;
+        };
+
+        Pair makePair() {
+            return {1.0, 2.0, 3.0};
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLAggregateInitializerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.opengl-aggregate-initializer-invalid"
+    )
+    assert diagnostic.missing_capabilities == ("opengl.aggregate-initializer-lowering",)
+    assert diagnostic.expected_type == "Pair"
+    assert diagnostic.element_count == 3
+    assert diagnostic.expected_element_count == 2
+    assert diagnostic.reason == "element-count-mismatch"
+
+
+def test_opengl_aggregate_initializer_reports_excess_fixed_array_elements():
+    shader = """
+    shader InvalidArrayAggregateShape {
+        void makeValues() {
+            float values[2] = {1.0, 2.0, 3.0};
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLAggregateInitializerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.opengl-aggregate-initializer-invalid"
+    )
+    assert diagnostic.expected_type == "float[2]"
+    assert diagnostic.element_count == 3
+    assert diagnostic.expected_element_count == 2
+    assert diagnostic.reason == "element-count-mismatch"
+
+
+def test_opengl_aggregate_initializer_rejects_runtime_parameter_extent():
+    shader = """
+    shader RuntimeArrayAggregateExtent {
+        const int WIDTH = 4;
+
+        void makeValues(int WIDTH) {
+            float values[WIDTH] = {0};
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLAggregateInitializerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.expected_type == "float[WIDTH]"
+    assert diagnostic.reason == "array-extent-unresolved"
+    assert "not a known integer constant" in str(diagnostic)
+
+
+@pytest.mark.parametrize(
+    ("declaration", "reason"),
+    [
+        pytest.param(
+            "float values[] = {1.0};",
+            "unsized-array",
+            id="unsized-array",
+        ),
+        pytest.param(
+            "float value = {1.0};",
+            "non-aggregate-destination-type",
+            id="scalar-destination",
+        ),
+    ],
+)
+def test_opengl_aggregate_initializer_reports_unsupported_context(
+    declaration,
+    reason,
+):
+    shader = f"""
+    shader InvalidAggregateContext {{
+        void makeValue() {{
+            {declaration}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLAggregateInitializerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert exc_info.value.reason == reason
+
+
+def test_opengl_lowers_expected_scalar_and_vector_conversions(tmp_path):
+    shader = """
+    shader ExpectedScalarConversions {
+        uint identity(uint value) {
+            return value;
+        }
+
+        bool consume(bool value) {
+            return value;
+        }
+
+        bool convertFlag(uint value) {
+            bool initialized = value;
+            initialized = identity(value);
+            return consume(identity(value));
+        }
+
+        bool convertSignedFlag(int value) {
+            return value;
+        }
+
+        bool convertWideFlag(int64_t value) {
+            return value;
+        }
+
+        bool convertFloatFlag(float value) {
+            return value;
+        }
+
+        int convertSigned(uint value) {
+            return value;
+        }
+
+        float convertFloat(uint value) {
+            return value;
+        }
+
+        uvec2 convertUnsigned(ivec2 value) {
+            return value;
+        }
+
+        bvec2 convertFlags(uvec2 value) {
+            return value;
+        }
+
+        ivec2 convertFlagVector(bvec2 value) {
+            return value;
+        }
+
+        compute {
+            void main() {
+                bool flag = convertFlag(2u);
+                bool signedFlag = convertSignedFlag(-2);
+                bool wideFlag = convertWideFlag(int64_t(2));
+                bool floatFlag = convertFloatFlag(2.5);
+                int signedValue = convertSigned(3u);
+                float floatValue = convertFloat(4u);
+                uvec2 unsignedValue = convertUnsigned(ivec2(5, 6));
+                bvec2 flags = convertFlags(uvec2(0u, 7u));
+                ivec2 flagValues = convertFlagVector(bvec2(false, true));
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "bool initialized = (value != 0u);" in generated_code
+    assert "initialized = (identity(value) != 0u);" in generated_code
+    assert "return consume((identity(value) != 0u));" in generated_code
+    assert "return (value != 0);" in generated_code
+    assert "return (value != int64_t(0));" in generated_code
+    assert "return (value != 0.0);" in generated_code
+    assert "return int(value);" in generated_code
+    assert "return float(value);" in generated_code
+    assert "return uvec2(value);" in generated_code
+    assert "return notEqual(value, uvec2(0u));" in generated_code
+    assert "return ivec2(value);" in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "expected_scalar_conversions",
+    )
+
+
+def test_opengl_converts_mixed_integer_conditional_to_expected_type(tmp_path):
+    shader = """
+    shader MixedIntegerConditional {
+        int choose(bool condition, uint lane) {
+            return condition ? lane / 32 : 0;
+        }
+
+        int chooseConstant(uint lane) {
+            const int result = ((32 != 32) ? (lane / 32) : 0);
+            return result;
+        }
+
+        uint chooseMixedVariables(bool condition, uint unsignedValue, int signedValue) {
+            return condition ? unsignedValue : signedValue;
+        }
+
+        compute {
+            void main() {
+                uint lane = gl_LocalInvocationIndex;
+                int runtimeValue = choose(lane > 0u, lane);
+                int constantValue = chooseConstant(lane);
+                uint mixedValue = chooseMixedVariables(lane > 0u, lane, int(lane));
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "return int((condition ? (lane / 32) : 0));" in generated_code
+    assert "const int result = int(((32 != 32) ? (lane / 32) : 0));" in generated_code
+    assert "return (condition ? unsignedValue : uint(signedValue));" in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "mixed_integer_conditional",
+    )
+
+
+def test_opengl_preserves_componentwise_builtin_vector_result_types(tmp_path):
+    shader = """
+    shader ComponentwiseVectorResults {
+        vec4 randomize(vec4 value) {
+            return fract(sin(value) * 43758.5453) * 2.0 - 1.0;
+        }
+
+        vec2 snap(vec2 value, float scale) {
+            return floor(value * scale) / scale;
+        }
+
+        compute {
+            void main() {
+                vec4 randomized = randomize(vec4(1.0));
+                vec2 snapped = snap(vec2(1.5), 2.0);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "return vec4(" not in generated_code
+    assert "return vec2(" not in generated_code
+    assert "fract((sin(value) * 43758.5453))" in generated_code
+    assert "floor((value * scale))" in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "componentwise_vector_results",
+    )
+
+
+def test_opengl_preserves_metal_arithmetic_conversion_order(tmp_path):
+    shader = """
+    shader ArithmeticConversions {
+        int8_t arange8(int8_t start, int8_t step, uint index) {
+            return start + index * step;
+        }
+
+        int16_t arange16(int16_t start, int16_t step, uint index) {
+            return start + index * step;
+        }
+
+        int32_t arange32(int32_t start, int32_t step, uint index) {
+            return start + index * step;
+        }
+
+        int64_t arange64(int64_t start, int64_t step, uint index) {
+            return start + index * step;
+        }
+
+        float addWideInteger(float value, int64_t offset) {
+            return value + offset;
+        }
+
+        uint16_t explicitNarrow() {
+            return uint16_t(70000u);
+        }
+
+        int explicitNarrowWider() {
+            return uint16_t(70000u);
+        }
+
+        bool explicitNarrowFlag() {
+            return uint16_t(65536u);
+        }
+
+        int16_t negateNarrow(int16_t value) {
+            return -value;
+        }
+
+        int invertNarrow(uint16_t value) {
+            return ~value;
+        }
+
+        bool logicalNotNarrow(uint16_t value) {
+            return !value;
+        }
+
+        int promoteBoolean(bool value) {
+            return +value;
+        }
+
+        uint16_t updateNarrow(uint16_t value) {
+            value += 1u;
+            value &= -1;
+            value <<= 1u;
+            ++value;
+            value++;
+            return value;
+        }
+
+        void updateNarrowInout(inout uint16_t value) {
+            value += 1u;
+        }
+
+        compute {
+            void main() {
+                int first = arange8(127, 1, 1u);
+                int second = arange16(32767, 1, 1u);
+                int third = arange32(2147483647, 1, 1u);
+                int64_t fourth = arange64(int64_t(5), int64_t(-2), 4u);
+                float mixed = addWideInteger(1.5, int64_t(2));
+                uint narrowed = explicitNarrow();
+                int wider = explicitNarrowWider();
+                bool flag = explicitNarrowFlag();
+                int negated = negateNarrow(int16_t(-3));
+                int inverted = invertNarrow(uint16_t(7u));
+                bool logical = logicalNotNarrow(uint16_t(0u));
+                int promoted = promoteBoolean(true);
+                uint updated = updateNarrow(uint16_t(65535u));
+                updateNarrowInout(updated);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+    normalized = re.sub(r"\s+", " ", generated_code)
+
+    assert (
+        "return bitfieldExtract(int((uint(start) + (index * uint(step)))), 0, 8);"
+        in normalized
+    )
+    assert (
+        "return bitfieldExtract(int((uint(start) + (index * uint(step)))), 0, 16);"
+        in normalized
+    )
+    assert "return int((uint(start) + (index * uint(step))));" in normalized
+    assert "return (start + (int64_t(index) * step));" in normalized
+    assert "return (value + float(offset));" in normalized
+    assert "double(value)" not in normalized
+    assert "double(offset)" not in normalized
+    assert "return bitfieldExtract(uint(70000u), 0, 16);" in normalized
+    assert "return int(bitfieldExtract(uint(70000u), 0, 16));" in normalized
+    assert "return (bitfieldExtract(uint(65536u), 0, 16) != 0u);" in normalized
+    assert "return bitfieldExtract((-value), 0, 16);" in normalized
+    assert "return (~int(value));" in normalized
+    assert "return (!(value != 0u));" in normalized
+    assert "return (+int(value));" in normalized
+    assert "value = bitfieldExtract((value + 1u), 0, 16);" in normalized
+    assert "value = bitfieldExtract(uint((int(value) & (-1))), 0, 16);" in normalized
+    assert "value = bitfieldExtract(uint((int(value) << 1u)), 0, 16);" in normalized
+    assert (
+        normalized.count("(value = bitfieldExtract(uint((int(value) + 1)), 0, 16));")
+        == 2
+    )
+    assert "void updateNarrowInout(inout uint value)" in normalized
+    assert "updateNarrowInout(updated);" in normalized
+    assert "updateNarrowInout(bitfieldExtract" not in normalized
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "metal_arithmetic_conversions",
+    )
+
+
+def test_opengl_reports_unsupported_vector_to_scalar_conversion():
+    shader = """
+    shader InvalidScalarConversion {
+        float invalid(vec2 value) {
+            return value;
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLScalarConversionError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.opengl-scalar-conversion-unsupported"
+    )
+    assert diagnostic.missing_capabilities == ("opengl.scalar-conversion-lowering",)
+    assert diagnostic.source_type == "vec2"
+    assert diagnostic.target_type == "float"
+    assert diagnostic.reason == "vector-to-scalar"
+
+
+def test_opengl_reports_narrow_postfix_result_conversion():
+    shader = """
+    shader NarrowPostfixResult {
+        uint16_t update(uint16_t value) {
+            return value++;
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLScalarConversionError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.source_type == "uint16_t"
+    assert diagnostic.target_type == "uint16_t"
+    assert diagnostic.reason == "narrow-postfix-result"
+
+
+def test_opengl_renames_collapsed_bfloat_overloads_and_rewrites_nested_calls(
+    tmp_path,
+):
+    shader = """
+    shader MappedBFloatOverloads {
+        float adjust(float value) {
+            return value + 1.0;
+        }
+
+        bfloat16_t adjust(bfloat16_t value) {
+            return bfloat16_t(float(value) + 2.0);
+        }
+
+        float callFloat(float value) {
+            return adjust(adjust(value));
+        }
+
+        bfloat16_t callBFloat(bfloat16_t value) {
+            return adjust(adjust(value));
+        }
+
+        bfloat16_t callConstructed() {
+            return adjust(bfloat16_t(3.0));
+        }
+
+        bfloat16_t callExpression(bfloat16_t left, bfloat16_t right) {
+            return adjust(left + right);
+        }
+
+        bfloat16_t callElement(bfloat16_t values[2], int index) {
+            return adjust(values[index]);
+        }
+
+        bfloat16_t callInferred() {
+            auto value = bfloat16_t(6.0);
+            return adjust(value);
+        }
+
+        compute {
+            void main() {
+                float first = callFloat(1.0);
+                float second = callBFloat(bfloat16_t(2.0));
+                float third = callConstructed();
+                float fourth = callExpression(bfloat16_t(4.0), bfloat16_t(5.0));
+                float fifth = callInferred();
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float adjust_float(float value)" in generated_code
+    assert "float adjust_bfloat16_t(float value)" in generated_code
+    assert "return adjust_float(adjust_float(value));" in generated_code
+    assert "return adjust_bfloat16_t(adjust_bfloat16_t(value));" in generated_code
+    assert "return adjust_bfloat16_t(float(3.0));" in generated_code
+    assert "return adjust_bfloat16_t((left + right));" in generated_code
+    assert "return adjust_bfloat16_t(values[index]);" in generated_code
+    assert "return adjust_bfloat16_t(value);" in generated_code
+    assert "float adjust(float value)" not in generated_code
+
+    assert_glsl_compute_validates_if_available(
+        generated_code, tmp_path, "mapped_bfloat_overloads"
+    )
+
+
+def test_opengl_renames_collapsed_fixed_width_integer_overloads(tmp_path):
+    shader = """
+    shader MappedIntegerOverloads {
+        int widen(int8_t value) {
+            return int(value) + 8;
+        }
+
+        int widen(int16_t value) {
+            return int(value) + 16;
+        }
+
+        int callByte(int8_t value) {
+            return widen(value);
+        }
+
+        int callShort(int16_t value) {
+            return widen(value);
+        }
+
+        compute {
+            void main() {
+                int byteValue = callByte(int8_t(1));
+                int shortValue = callShort(int16_t(2));
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "int widen_int8_t(int value)" in generated_code
+    assert "int widen_int16_t(int value)" in generated_code
+    assert "return widen_int8_t(value);" in generated_code
+    assert "return widen_int16_t(value);" in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code, tmp_path, "mapped_integer_overloads"
+    )
+
+
+def test_opengl_preserves_overload_names_when_mapped_signatures_remain_distinct(
+    tmp_path,
+):
+    shader = """
+    shader DistinctMappedOverloads {
+        float select(float value) {
+            return value;
+        }
+
+        int select(int value) {
+            return value;
+        }
+
+        int pick(int value) {
+            return value;
+        }
+
+        int pick(uint value) {
+            return int(value);
+        }
+
+        float callFloat() {
+            return select(1.5);
+        }
+
+        int callInt() {
+            return select(2);
+        }
+
+        int callNarrow(uint16_t value) {
+            return pick(value);
+        }
+
+        int callBoolean(bool value) {
+            return pick(value);
+        }
+
+        compute {
+            void main() {
+                float selectedFloat = callFloat();
+                int selectedInt = callInt();
+                int selectedNarrow = callNarrow(uint16_t(3u));
+                int selectedBoolean = callBoolean(true);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float select(float value)" in generated_code
+    assert "int select(int value)" in generated_code
+    assert "return select(1.5);" in generated_code
+    assert "return select(2);" in generated_code
+    assert "select(int(1.5))" not in generated_code
+    assert generated_code.count("return pick(int(value));") == 2
+    assert "select_float" not in generated_code
+    assert "select_int" not in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "distinct_mapped_overloads",
+    )
+
+
+def test_opengl_mapped_overload_names_avoid_existing_declarations(tmp_path):
+    shader = """
+    #define adjust_bfloat16_t(value) (value)
+    shader HygienicMappedOverloads {
+        const int adjust_float = 7;
+
+        float adjust(float value) {
+            return value + float(adjust_float);
+        }
+
+        bfloat16_t adjust(bfloat16_t value) {
+            return value;
+        }
+
+        compute {
+            void main() {
+                float value = adjust(1.0);
+                float narrowValue = adjust(bfloat16_t(2.0));
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "const int adjust_float = 7;" in generated_code
+    assert "float adjust_float_2(float value)" in generated_code
+    assert "float adjust_bfloat16_t_2(float value)" in generated_code
+    assert "float value = adjust_float_2(1.0);" in generated_code
+    assert "float narrowValue = adjust_bfloat16_t_2(float(2.0));" in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code, tmp_path, "hygienic_mapped_overloads"
+    )
+
+
+def test_opengl_reports_resource_overloads_with_collapsed_emitted_signatures():
+    shader = """
+    shader ResourceMappedOverloads {
+        uint readValues(StructuredBuffer<uint> values[2], uint index) {
+            return buffer_load(values[0], index);
+        }
+
+        uint readValues(
+            StructuredBuffer<uint> first,
+            StructuredBuffer<uint> second,
+            uint index) {
+            return buffer_load(first, index) + buffer_load(second, index);
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLMappedOverloadError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.function_name == "readValues"
+    assert diagnostic.reason == "resource-parameter-collision"
+    assert diagnostic.argument_types == ()
+    assert diagnostic.candidates == (
+        "readValues(StructuredBuffer<uint>[2], uint) -> uint",
+        "readValues(StructuredBuffer<uint>, StructuredBuffer<uint>, uint) -> uint",
+    )
+
+
+def test_opengl_reports_ambiguous_call_after_overload_type_mapping():
+    shader = """
+    shader AmbiguousMappedOverloads {
+        float select(float value) {
+            return value;
+        }
+
+        bfloat16_t select(bfloat16_t value) {
+            return value;
+        }
+
+        float choose() {
+            return select(1);
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLMappedOverloadError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.opengl-mapped-overload-ambiguous"
+    )
+    assert diagnostic.function_name == "select"
+    assert diagnostic.argument_types == ("int",)
+    assert diagnostic.reason == "call-binding-ambiguous"
+    assert diagnostic.candidates == (
+        "select(float) -> float",
+        "select(bfloat16_t) -> bfloat16_t",
+    )
+
+
+def test_opengl_inlines_global_and_local_type_aliases_without_resources():
+    shader = """
+    shader TypeAliases {
+        typedef f16 float16_t;
+        typedef float Real;
+
+        Real convert(float16_t value) {
+            typedef float LocalReal;
+            LocalReal result = LocalReal(value);
+            return result;
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float convert(float value)" in generated_code
+    assert "float result = float(value);" in generated_code
+    assert "uniform float float16_t;" not in generated_code
+    assert "uniform float Real;" not in generated_code
+    assert "LocalReal" not in generated_code
+    assert "typedef" not in generated_code
+
+
+def test_opengl_rejects_cyclic_type_aliases():
+    shader = """
+    shader CyclicTypeAliases {
+        typedef Other Alias;
+        typedef Alias Other;
+
+        Alias value(Alias input) {
+            return input;
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="Cyclic OpenGL type alias"):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
 
 def test_opengl_empty_struct_emits_placeholder_member():

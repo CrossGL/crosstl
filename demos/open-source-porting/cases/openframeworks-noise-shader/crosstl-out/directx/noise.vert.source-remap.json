@@ -490,9 +490,9 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 44,
-        "endOffset": 1461,
+        "endOffset": 1459,
         "file": "crosstl-out/directx/noise.vert.hlsl",
-        "length": 42,
+        "length": 40,
         "line": 43,
         "offset": 1419
       },
@@ -512,11 +512,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 45,
-        "endOffset": 1496,
+        "endOffset": 1494,
         "file": "crosstl-out/directx/noise.vert.hlsl",
         "length": 35,
         "line": 44,
-        "offset": 1461
+        "offset": 1459
       },
       "original": {
         "column": 1,
@@ -534,11 +534,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 47,
-        "endOffset": 1543,
+        "endOffset": 1541,
         "file": "crosstl-out/directx/noise.vert.hlsl",
         "length": 27,
         "line": 46,
-        "offset": 1516
+        "offset": 1514
       },
       "original": {
         "column": 1,
@@ -556,11 +556,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 49,
-        "endOffset": 1600,
+        "endOffset": 1598,
         "file": "crosstl-out/directx/noise.vert.hlsl",
         "length": 39,
         "line": 48,
-        "offset": 1561
+        "offset": 1559
       },
       "original": {
         "column": 1,
@@ -578,11 +578,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 50,
-        "endOffset": 1639,
+        "endOffset": 1637,
         "file": "crosstl-out/directx/noise.vert.hlsl",
         "length": 39,
         "line": 49,
-        "offset": 1600
+        "offset": 1598
       },
       "original": {
         "column": 1,
@@ -600,11 +600,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 53,
-        "endOffset": 1713,
+        "endOffset": 1711,
         "file": "crosstl-out/directx/noise.vert.hlsl",
         "length": 34,
         "line": 52,
-        "offset": 1679
+        "offset": 1677
       },
       "original": {
         "column": 1,
@@ -622,11 +622,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 54,
-        "endOffset": 1743,
+        "endOffset": 1741,
         "file": "crosstl-out/directx/noise.vert.hlsl",
         "length": 30,
         "line": 53,
-        "offset": 1713
+        "offset": 1711
       },
       "original": {
         "column": 1,

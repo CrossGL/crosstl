@@ -43,6 +43,36 @@ shader ExternalValidatorSynchronization {
 """
 
 
+CROSSGL_LOCAL_GROUPSHARED_EXTENT_COMPUTE_SHADER = """
+shader ExternalValidatorLocalGroupSharedExtent {
+    compute {
+        @numthreads(1, 1, 1)
+        void main() {
+            const int BASE = 8;
+            const int WIDTH = BASE * 4;
+            threadgroup float scratch[WIDTH];
+            scratch[0] = 1.0;
+            workgroupBarrier();
+        }
+    }
+}
+"""
+
+
+CROSSGL_LOCAL_ARRAY_AGGREGATE_COMPUTE_SHADER = """
+shader ExternalValidatorLocalArrayAggregate {
+    compute {
+        @numthreads(1, 1, 1)
+        void main() {
+            const int BASE = 2;
+            const int WIDTH = BASE * 2;
+            float values[WIDTH] = {0};
+        }
+    }
+}
+"""
+
+
 CROSSGL_WAVE_QUAD_COMPUTE_SHADER = """
 shader ExternalValidatorWaveQuad {
     RWBuffer<uint> outputValues @register(u0);
@@ -1868,6 +1898,8 @@ def _run_validator(command):
     diagnostics = "\n".join(
         part for part in (result.stdout, result.stderr) if part.strip()
     )
+    if result.returncode != 0 and "missing Metal Toolchain" in diagnostics:
+        pytest.skip("macOS Metal toolchain is not installed")
     assert result.returncode == 0, diagnostics
 
 
@@ -1913,7 +1945,11 @@ def test_mixed_glsl_specialization_constants_lower_for_target_codegen():
     assert "layout(constant_id" not in glsl
     assert "CrossGL fallback: OpenGL source validation cannot preserve" in glsl
     assert "const int arraySize = 5;" in glsl
-    assert glsl.count("void foo") == 1
+    foo_prototype = "void foo(vec4 p[arraySize]);"
+    foo_definition = "void foo(vec4 p[arraySize]) {"
+    assert glsl.count(foo_prototype) == 1
+    assert glsl.count(foo_definition) == 1
+    assert glsl.index(foo_prototype) < glsl.index(foo_definition)
     assert "output." not in glsl
 
     metal = MetalCodeGen().generate(shader_ast)
@@ -1932,6 +1968,12 @@ def test_mixed_glsl_specialization_constants_lower_for_target_codegen():
     assert "WARNING" not in spirv
     assert "SpecId 16" in spirv
     assert "SpecId 116" in spirv
+    array_size = re.search(r'OpName (%\d+) "arraySize"', spirv)
+    assert array_size is not None
+    assert re.search(
+        rf"%\d+ = OpTypeArray %\d+ {re.escape(array_size.group(1))}\b",
+        spirv,
+    )
     assert re.search(r"OpFunctionCall %\d+ %\d+ %\d+ %\d+", spirv)
 
 
@@ -2177,6 +2219,32 @@ def test_generated_hlsl_compute_synchronization_compiles_with_dxc(tmp_path):
     assert code.count("GroupMemoryBarrierWithGroupSync();") == 2
     assert "AllMemoryBarrier();" in code
     assert "workgroupBarrier();" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator(
+        [
+            dxc,
+            "-T",
+            "cs_6_0",
+            "-E",
+            "CSMain",
+            str(shader_path),
+            "-Fo",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
+def test_generated_hlsl_local_groupshared_extent_compiles_with_dxc(tmp_path):
+    dxc = _require_tool("dxc")
+    shader_path = tmp_path / "local_groupshared_extent.hlsl"
+    output_path = tmp_path / "local_groupshared_extent.dxil"
+
+    code = HLSLCodeGen().generate(
+        crosstl.translator.parse(CROSSGL_LOCAL_GROUPSHARED_EXTENT_COMPUTE_SHADER)
+    )
+    assert "groupshared float main_scratch[32];" in code
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator(
@@ -3294,6 +3362,21 @@ def test_generated_glsl_compute_synchronization_validates_with_glslangvalidator(
     assert code.count("barrier();") == 2
     assert "memoryBarrier();" in code
     assert "workgroupBarrier();" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "comp", str(shader_path)])
+
+
+def test_generated_glsl_local_array_aggregate_validates_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "local_array_aggregate.comp"
+
+    code = GLSLCodeGen().generate(
+        crosstl.translator.parse(CROSSGL_LOCAL_ARRAY_AGGREGATE_COMPUTE_SHADER)
+    )
+    assert "float values[WIDTH] = float[4](0.0, 0.0, 0.0, 0.0);" in code
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator([glslang, "-S", "comp", str(shader_path)])

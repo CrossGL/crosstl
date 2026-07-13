@@ -3971,9 +3971,9 @@ def test_codegen_mixed_ssbo_unsupported_bool_conditions_are_boolean_diagnostics(
         "target function omitted */)" in hlsl
     )
     assert (
-        "if ((false /* unsupported HLSL GLSL buffer block access boolBlock: "
+        "if (false /* unsupported HLSL GLSL buffer block access boolBlock: "
         "no target-side fallback declaration emitted */ && false /* unsupported "
-        "HLSL GLSL buffer block function call readFlag: target function omitted */))"
+        "HLSL GLSL buffer block function call readFlag: target function omitted */)"
         in hlsl
     )
     assert (

@@ -235,6 +235,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         "allMemoryBarrier",
         "deviceMemoryBarrier",
         "workgroupBarrier",
+        "workgroupExecutionBarrier",
     }
     sampled_resource_type_aliases = {
         "Texture1D": "sampler1D",
@@ -645,6 +646,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "allMemoryBarrier": "__threadfence",
             "deviceMemoryBarrier": "__threadfence",
             "workgroupBarrier": "__syncthreads",
+            "workgroupExecutionBarrier": "__syncthreads",
             # Ray tracing placeholders
             "RayDesc": "CglRayDesc",
             "RayQuery": "CglRayQuery",
@@ -6863,6 +6865,8 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             texture_type = self.resource_base_type(
                 self.get_expression_type(raw_args[0])
             )
+            texture_shape = self.sampled_texture_shape_type(texture_type)
+            value_type = self.sampled_texture_value_type(texture_type)
             if self.is_multisample_resource_type(texture_type):
                 return self.unsupported_multisample_resource_call(
                     func_name, texture_type, args
@@ -6895,47 +6899,47 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
             texture_name = args[0]
             coord = args[1]
-            if texture_type == "sampler1D":
+            if texture_shape == "sampler1D":
                 if func_name == "texture":
-                    return f"tex1D<float4>({texture_name}, {coord})"
+                    return f"tex1D<{value_type}>({texture_name}, {coord})"
                 if func_name == "textureLod" and len(args) >= 3:
-                    return f"tex1DLod<float4>({texture_name}, {coord}, {args[2]})"
+                    return f"tex1DLod<{value_type}>({texture_name}, {coord}, {args[2]})"
                 if func_name == "textureGrad" and len(args) >= 4:
                     return (
-                        f"tex1DGrad<float4>"
+                        f"tex1DGrad<{value_type}>"
                         f"({texture_name}, {coord}, {grad_x}, {grad_y})"
                     )
 
-            if texture_type == "sampler2D":
+            if texture_shape == "sampler2D":
                 coord_args = (
                     f"{texture_name}, "
                     f"{self.coord_component(coord, 'x')}, "
                     f"{self.coord_component(coord, 'y')}"
                 )
                 if func_name == "texture":
-                    return f"tex2D<float4>({coord_args})"
+                    return f"tex2D<{value_type}>({coord_args})"
                 if func_name == "textureLod" and len(args) >= 3:
-                    return f"tex2DLod<float4>({coord_args}, {args[2]})"
+                    return f"tex2DLod<{value_type}>({coord_args}, {args[2]})"
                 if func_name == "textureGrad" and len(args) >= 4:
-                    return f"tex2DGrad<float4>" f"({coord_args}, {grad_x}, {grad_y})"
+                    return f"tex2DGrad<{value_type}>({coord_args}, {grad_x}, {grad_y})"
 
-            if texture_type == "sampler1DArray":
+            if texture_shape == "sampler1DArray":
                 coord_args = (
                     f"{texture_name}, "
                     f"{self.coord_component(coord, 'x')}, "
                     f"{self.coord_component(coord, 'y')}"
                 )
                 if func_name == "texture":
-                    return f"tex1DLayered<float4>({coord_args})"
+                    return f"tex1DLayered<{value_type}>({coord_args})"
                 if func_name == "textureLod" and len(args) >= 3:
-                    return f"tex1DLayeredLod<float4>({coord_args}, {args[2]})"
+                    return f"tex1DLayeredLod<{value_type}>({coord_args}, {args[2]})"
                 if func_name == "textureGrad" and len(args) >= 4:
                     return (
-                        f"tex1DLayeredGrad<float4>"
+                        f"tex1DLayeredGrad<{value_type}>"
                         f"({coord_args}, {grad_x}, {grad_y})"
                     )
 
-            if texture_type == "sampler2DArray":
+            if texture_shape == "sampler2DArray":
                 coord_args = (
                     f"{texture_name}, "
                     f"{self.coord_component(coord, 'x')}, "
@@ -6943,16 +6947,16 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                     f"{self.coord_component(coord, 'z')}"
                 )
                 if func_name == "texture":
-                    return f"tex2DLayered<float4>({coord_args})"
+                    return f"tex2DLayered<{value_type}>({coord_args})"
                 if func_name == "textureLod" and len(args) >= 3:
-                    return f"tex2DLayeredLod<float4>({coord_args}, {args[2]})"
+                    return f"tex2DLayeredLod<{value_type}>({coord_args}, {args[2]})"
                 if func_name == "textureGrad" and len(args) >= 4:
                     return (
-                        f"tex2DLayeredGrad<float4>"
+                        f"tex2DLayeredGrad<{value_type}>"
                         f"({coord_args}, {grad_x}, {grad_y})"
                     )
 
-            if texture_type == "sampler3D":
+            if texture_shape == "sampler3D":
                 coord_args = (
                     f"{texture_name}, "
                     f"{self.coord_component(coord, 'x')}, "
@@ -6960,13 +6964,13 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                     f"{self.coord_component(coord, 'z')}"
                 )
                 if func_name == "texture":
-                    return f"tex3D<float4>({coord_args})"
+                    return f"tex3D<{value_type}>({coord_args})"
                 if func_name == "textureLod" and len(args) >= 3:
-                    return f"tex3DLod<float4>({coord_args}, {args[2]})"
+                    return f"tex3DLod<{value_type}>({coord_args}, {args[2]})"
                 if func_name == "textureGrad" and len(args) >= 4:
-                    return f"tex3DGrad<float4>({coord_args}, {grad_x}, {grad_y})"
+                    return f"tex3DGrad<{value_type}>({coord_args}, {grad_x}, {grad_y})"
 
-            if texture_type == "samplerCube":
+            if texture_shape == "samplerCube":
                 coord_args = (
                     f"{texture_name}, "
                     f"{self.coord_component(coord, 'x')}, "
@@ -6974,15 +6978,16 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                     f"{self.coord_component(coord, 'z')}"
                 )
                 if func_name == "texture":
-                    return f"texCubemap<float4>({coord_args})"
+                    return f"texCubemap<{value_type}>({coord_args})"
                 if func_name == "textureLod" and len(args) >= 3:
-                    return f"texCubemapLod<float4>({coord_args}, {args[2]})"
+                    return f"texCubemapLod<{value_type}>({coord_args}, {args[2]})"
                 if func_name == "textureGrad" and len(args) >= 4:
                     return (
-                        f"texCubemapGrad<float4>" f"({coord_args}, {grad_x}, {grad_y})"
+                        f"texCubemapGrad<{value_type}>"
+                        f"({coord_args}, {grad_x}, {grad_y})"
                     )
 
-            if texture_type == "samplerCubeArray":
+            if texture_shape == "samplerCubeArray":
                 coord_args = (
                     f"{texture_name}, "
                     f"{self.coord_component(coord, 'x')}, "
@@ -6991,12 +6996,14 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                     f"{self.coord_component(coord, 'w')}"
                 )
                 if func_name == "texture":
-                    return f"texCubemapLayered<float4>({coord_args})"
+                    return f"texCubemapLayered<{value_type}>({coord_args})"
                 if func_name == "textureLod" and len(args) >= 3:
-                    return f"texCubemapLayeredLod<float4>({coord_args}, {args[2]})"
+                    return (
+                        f"texCubemapLayeredLod<{value_type}>({coord_args}, {args[2]})"
+                    )
                 if func_name == "textureGrad" and len(args) >= 4:
                     return (
-                        f"texCubemapLayeredGrad<float4>"
+                        f"texCubemapLayeredGrad<{value_type}>"
                         f"({coord_args}, {grad_x}, {grad_y})"
                     )
 
@@ -7301,38 +7308,40 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         coord_args = self.projected_coord_args(texture_type, texture_name, coord)
         if coord_args is None:
             return self.unsupported_sampled_resource_call(func_name, texture_type, args)
+        texture_shape = self.sampled_texture_shape_type(texture_type)
+        value_type = self.sampled_texture_value_type(texture_type)
 
-        if texture_type == "sampler1D":
+        if texture_shape == "sampler1D":
             if func_name == "textureProj":
-                return f"tex1D<float4>({coord_args})"
+                return f"tex1D<{value_type}>({coord_args})"
             if func_name == "textureProjLod" and len(args) >= 3:
-                return f"tex1DLod<float4>({coord_args}, {args[2]})"
+                return f"tex1DLod<{value_type}>({coord_args}, {args[2]})"
             if func_name == "textureProjGrad" and grad_x is not None:
-                return f"tex1DGrad<float4>({coord_args}, {grad_x}, {grad_y})"
+                return f"tex1DGrad<{value_type}>({coord_args}, {grad_x}, {grad_y})"
 
-        if texture_type == "sampler2D":
+        if texture_shape == "sampler2D":
             if func_name == "textureProj":
-                return f"tex2D<float4>({coord_args})"
+                return f"tex2D<{value_type}>({coord_args})"
             if func_name == "textureProjLod" and len(args) >= 3:
-                return f"tex2DLod<float4>({coord_args}, {args[2]})"
+                return f"tex2DLod<{value_type}>({coord_args}, {args[2]})"
             if func_name == "textureProjGrad" and grad_x is not None:
-                return f"tex2DGrad<float4>({coord_args}, {grad_x}, {grad_y})"
+                return f"tex2DGrad<{value_type}>({coord_args}, {grad_x}, {grad_y})"
 
-        if texture_type == "sampler3D":
+        if texture_shape == "sampler3D":
             if func_name == "textureProj":
-                return f"tex3D<float4>({coord_args})"
+                return f"tex3D<{value_type}>({coord_args})"
             if func_name == "textureProjLod" and len(args) >= 3:
-                return f"tex3DLod<float4>({coord_args}, {args[2]})"
+                return f"tex3DLod<{value_type}>({coord_args}, {args[2]})"
             if func_name == "textureProjGrad" and grad_x is not None:
-                return f"tex3DGrad<float4>({coord_args}, {grad_x}, {grad_y})"
+                return f"tex3DGrad<{value_type}>({coord_args}, {grad_x}, {grad_y})"
 
-        if texture_type == "samplerCube":
+        if texture_shape == "samplerCube":
             if func_name == "textureProj":
-                return f"texCubemap<float4>({coord_args})"
+                return f"texCubemap<{value_type}>({coord_args})"
             if func_name == "textureProjLod" and len(args) >= 3:
-                return f"texCubemapLod<float4>({coord_args}, {args[2]})"
+                return f"texCubemapLod<{value_type}>({coord_args}, {args[2]})"
             if func_name == "textureProjGrad" and grad_x is not None:
-                return f"texCubemapGrad<float4>({coord_args}, {grad_x}, {grad_y})"
+                return f"texCubemapGrad<{value_type}>({coord_args}, {grad_x}, {grad_y})"
 
         return self.unsupported_sampled_resource_call(func_name, texture_type, args)
 
@@ -9825,6 +9834,32 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 return self.sampled_texture_value_type(resource_type)
 
         if func_name in {
+            "texture",
+            "textureLod",
+            "textureGrad",
+            "textureOffset",
+            "textureLodOffset",
+            "textureGradOffset",
+            "textureProj",
+            "textureProjOffset",
+            "textureProjLod",
+            "textureProjLodOffset",
+            "textureProjGrad",
+            "textureProjGradOffset",
+            "texelFetch",
+            "texelFetchOffset",
+        }:
+            resource_type = None
+            if raw_args:
+                resource_type = self.resource_base_type(
+                    self.get_expression_type(raw_args[0])
+                )
+            if self.is_shadow_resource_type(resource_type):
+                return "float"
+            if self.is_sampled_texture_family_type(resource_type):
+                return self.sampled_texture_value_type(resource_type)
+
+        if func_name in {
             "textureProj",
             "textureProjLod",
             "textureProjGrad",
@@ -9837,7 +9872,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 )
             if self.is_shadow_resource_type(resource_type):
                 return "float"
-            return "float4"
+            return self.sampled_texture_value_type(resource_type)
         return super().resource_call_result_type(func_name, raw_args)
 
     def expression_result_type(self, node):

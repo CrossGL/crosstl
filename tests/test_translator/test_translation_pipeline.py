@@ -2,6 +2,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -217,6 +218,10 @@ def _compile_metal_if_available(source: str) -> None:
             text=True,
         )
 
+    if result.returncode != 0 and "missing Metal Toolchain" in (
+        result.stderr or result.stdout
+    ):
+        return
     assert result.returncode == 0, result.stderr
 
 
@@ -672,9 +677,12 @@ def test_metal_scalar_vector_constructor_lowers_to_directx_splat(tmp_path):
     )
 
     _assert_generated_output_is_usable(generated)
-    assert "Output literalValue = Output(half3(0, 0, 0));" in generated
-    assert "Output scalarValue = Output(half3(scalar, scalar, scalar));" in generated
-    assert "Output nestedValue = Output(half3(half(0), half(0), half(0)));" in generated
+    assert "Output literalValue;" in generated
+    assert "literalValue.viewDir = half3(0, 0, 0);" in generated
+    assert "Output scalarValue;" in generated
+    assert "scalarValue.viewDir = half3(scalar, scalar, scalar);" in generated
+    assert "Output nestedValue;" in generated
+    assert "nestedValue.viewDir = half3(half(0), half(0), half(0));" in generated
     assert "half3(0))" not in generated
     assert "half3(scalar))" not in generated
     assert "half3(half(0)))" not in generated
@@ -714,6 +722,111 @@ def test_metal_threadgroup_scratch_lowers_to_directx_groupshared(tmp_path):
     assert generated.index("groupshared float mat_mul_scratch[256];") < generated.index(
         "void CSMain"
     )
+
+
+def test_metal_constexpr_threadgroup_extent_lowers_to_directx_literal(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "mlx-constexpr-threadgroup-scratch.metal",
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        kernel void extent_copy(
+            const device float* input [[buffer(0)]],
+            device float* output [[buffer(1)]],
+            uint gid [[thread_position_in_grid]],
+            uint lid [[thread_position_in_threadgroup]]
+        ) {
+            constexpr int BASE = 8;
+            constexpr int SIMD_SIZE = BASE * 4;
+            threadgroup float scratch[SIMD_SIZE];
+            scratch[lid] = input[gid];
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+            output[gid] = scratch[lid];
+        }
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend="directx", format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+    assert "groupshared float extent_copy_scratch[32];" in generated
+    global_declarations = generated.split("void CSMain", maxsplit=1)[0]
+    assert "SIMD_SIZE" not in global_declarations
+
+
+def test_metal_value_template_threadgroup_extents_remain_entry_specific(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "template-threadgroup-scratch.metal",
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        template <int Width>
+        kernel void extent_copy(
+            const device float* input [[buffer(0)]],
+            device float* output [[buffer(1)]],
+            uint gid [[thread_position_in_grid]],
+            uint lid [[thread_position_in_threadgroup]]
+        ) {
+            threadgroup float scratch[Width];
+            scratch[lid] = input[gid];
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+            output[gid] = scratch[lid];
+        }
+
+        template [[host_name("extent_copy_16")]] [[kernel]]
+        decltype(extent_copy<16>) extent_copy<16>;
+        template [[host_name("extent_copy_32")]] [[kernel]]
+        decltype(extent_copy<32>) extent_copy<32>;
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend="directx", format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+    assert "groupshared float extent_copy_16_scratch[16];" in generated
+    assert "groupshared float extent_copy_32_scratch[32];" in generated
+    assert generated.count("void CSMain") == 2
+
+
+def test_metal_materialized_local_array_extent_lowers_to_opengl(tmp_path):
+    source_path = _write_source(
+        tmp_path,
+        "materialized-local-array-extent.metal",
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        template <typename T, int Width, int Lanes>
+        kernel void local_extent(
+            device T* out [[buffer(0)]],
+            uint gid [[thread_position_in_grid]]
+        ) {
+            constexpr int values_per_lane = Width / Lanes;
+            thread T values[values_per_lane] = {0};
+            out[gid] = values[0];
+        }
+
+        template [[host_name("local_extent_float32")]] [[kernel]]
+        decltype(local_extent<float, 64, 32>) local_extent<float, 64, 32>;
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend="opengl", format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+    assert "const int values_per_lane = (64 / 32);" in generated
+    assert "float values[values_per_lane] = float[2](0.0, 0.0);" in generated
+    assert "float[values_per_lane](" not in generated
 
 
 def test_metal_constant_reference_parameter_lowers_to_directx_constant_buffer(
@@ -1750,3 +1863,286 @@ def test_native_compute_extension_aliases_report_webgl_diagnostics(
         match="WebGL target does not support shader stage\\(s\\): compute",
     ):
         crosstl.translate(str(source_path), backend="webgl", format_output=False)
+
+
+def test_metal_template_placeholder_scan_ignores_comments():
+    # Regression: the residual-template placeholder scan treated comment words as
+    # identifiers, so a comment captured in an extracted type (e.g. a trailing
+    # `// Get the max ...`) produced a spurious "missing template parameter 'Get'"
+    # and wrongly blocked otherwise-translatable kernels (MLX softmax/logsumexp).
+    from crosstl.project.pipeline import (
+        _normalize_metal_type_text,
+        _unresolved_metal_template_placeholders_in_type,
+    )
+
+    # Comments are stripped from normalized type text.
+    assert (
+        _normalize_metal_type_text("void // Get the max and the normalizer") == "void"
+    )
+    assert _normalize_metal_type_text("float /* T */ x").replace(" ", "") == "floatx"
+
+    # No spurious placeholder is reported for comment words.
+    assert (
+        _unresolved_metal_template_placeholders_in_type(
+            "void // Get the max and the normalizer", set()
+        )
+        == []
+    )
+    # A genuine unresolved template parameter is still detected.
+    assert _unresolved_metal_template_placeholders_in_type("T", {"T"}) == ["T"]
+
+
+def test_metal_struct_member_templates_are_not_unresolved_free_templates():
+    # Regression: templated struct MEMBERS (constructors, conversion operators,
+    # `operator()` functors) carry their own `template <...>` header, so the
+    # residual-template scanner misread them as free template functions and
+    # reported spurious "missing template parameter" records such as
+    # `complex64_t<T>` / `operator<T>` / `T<T>` from MLX complex.h and the binary
+    # op functors — wrongly blocking otherwise-translatable kernels
+    # (MLX binary/copy/arg_reduce). Member templates are lowered to free functions
+    # by `_lower_struct_member_functions`; they must be excluded from the
+    # unresolved-free-template loop while genuine free templates still are not.
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+    from crosstl.project.pipeline import (
+        _metal_concrete_struct_member_spans,
+        _metal_template_is_struct_member,
+    )
+
+    preprocessor = MetalPreprocessor()
+    source = (
+        "struct complex64_t {\n"
+        "  float real;\n"
+        "  float imag;\n"
+        "  template <typename T>\n"
+        "  constexpr complex64_t(T x) thread : real(x), imag(0) {}\n"
+        "  template <typename T>\n"
+        "  constexpr operator T() const thread { return static_cast<T>(real); }\n"
+        "};\n"
+        "struct Add {\n"
+        "  template <typename T>\n"
+        "  T operator()(T x, T y) { return x + y; }\n"
+        "};\n"
+        "template <typename T, typename U, typename Op>\n"
+        "[[kernel]] void binary_ss(device const T* a, device U* c) {\n"
+        "  c[0] = Op()(a[0], a[0]);\n"
+        "}\n"
+    )
+
+    member_spans = _metal_concrete_struct_member_spans(preprocessor, source)
+    templates = preprocessor._find_template_functions(source)
+    classification = {
+        template.name: _metal_template_is_struct_member(
+            preprocessor, template, member_spans
+        )
+        for template in templates
+    }
+
+    # The templated constructor (name == struct name), the templated conversion
+    # operator (name == "T"), and the templated functor (name == "operator") are
+    # all member templates.
+    assert classification["complex64_t"] is True
+    assert classification["T"] is True
+    assert classification["operator"] is True
+    # The genuine free kernel template is NOT a member template and stays subject
+    # to materialization / unresolved detection.
+    assert classification["binary_ss"] is False
+
+
+def test_metal_project_template_instantiations_are_deduplicated():
+    # Regression: the same expanded `template [[host_name(...)]] ... Name<args>;`
+    # declaration is matched by more than one detector, so each instantiation was
+    # counted twice (overlapping spans). That doubled count inflated the
+    # `max_template_specializations` budget check and could spuriously bail out of
+    # materialization, leaving generic templates un-stripped and later flagged as
+    # unresolved (e.g. MLX binary/copy `binary_ss<T, U, Op>`). Identical
+    # specializations (same function, args, host) must collapse to one entry.
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    preprocessor = MetalPreprocessor()
+    source = (
+        "template <typename T, typename U>\n"
+        "[[kernel]] void copy_s(device const T* a, device U* c) { c[0] = a[0]; }\n"
+        'template [[host_name("copy_s_float")]] [[kernel]] '
+        "decltype(copy_s<float, float>) copy_s<float, float>;\n"
+    )
+
+    instantiations = preprocessor._find_project_template_instantiations(source)
+
+    copy_s = [inst for inst in instantiations if inst.function_name == "copy_s"]
+    assert len(copy_s) == 1, [
+        (inst.host_name, tuple(inst.template_arguments)) for inst in copy_s
+    ]
+    assert copy_s[0].host_name == "copy_s_float"
+    assert copy_s[0].template_arguments == ["float", "float"]
+
+
+def test_metal_struct_member_template_kernel_translates_without_false_positive(
+    tmp_path,
+):
+    # End-to-end regression mirroring MLX binary/copy/arg_reduce: a concrete struct
+    # with templated member constructors / conversion operators plus a templated
+    # `operator()` functor, used by an explicitly instantiated free kernel
+    # template. Before the fix the materializer reported a spurious
+    # `template-materialization-unsupported` for `complex64_t<T>` / `operator<T>`;
+    # now the kernel translates and emits no dangling template/member constructs.
+    from crosstl.project import load_project_config
+
+    repo = tmp_path / "repo"
+    source_dir = repo / "kernels"
+    source_dir.mkdir(parents=True)
+    (source_dir / "ops.metal").write_text(
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "\n"
+        "struct complex64_t {\n"
+        "  float real;\n"
+        "  float imag;\n"
+        "  constexpr complex64_t(float r, float i) : real(r), imag(i) {}\n"
+        "  constexpr complex64_t() : real(0), imag(0) {}\n"
+        "  template <typename T>\n"
+        "  constexpr complex64_t(T x) thread : real(x), imag(0) {}\n"
+        "  template <typename T>\n"
+        "  constexpr operator T() const thread { return static_cast<T>(real); }\n"
+        "};\n"
+        "\n"
+        "struct Add {\n"
+        "  template <typename T>\n"
+        "  T operator()(T x, T y) { return x + y; }\n"
+        "};\n"
+        "\n"
+        "template <typename T, typename Op>\n"
+        "[[kernel]] void binary_op(\n"
+        "    device const T* a [[buffer(0)]],\n"
+        "    device const T* b [[buffer(1)]],\n"
+        "    device T* c [[buffer(2)]],\n"
+        "    uint index [[thread_position_in_grid]]) {\n"
+        "  c[index] = Op()(a[index], b[index]);\n"
+        "}\n"
+        "\n"
+        'template [[host_name("add_float")]] [[kernel]] '
+        "decltype(binary_op<float, Add>) binary_op<float, Add>;\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["kernels"]
+            include = ["kernels/ops.metal"]
+            targets = ["vulkan"]
+            output_dir = "out"
+
+            [project.sources]
+            "**/*.metal" = "metal"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo), format_output=False)
+    payload = report.to_json()
+
+    unsupported = [
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic.get("code")
+        == "project.translate.template-materialization-unsupported"
+    ]
+    assert unsupported == [], unsupported
+
+    artifact = payload["artifacts"][0]
+    assert artifact.get("status") == "translated", artifact.get("error")
+
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    _assert_generated_output_is_usable(generated)
+    # No residual template/member-template scaffolding leaks into the output.
+    assert "complex64_t<" not in generated
+    assert "operator<T>" not in generated
+    assert "template <" not in generated
+
+
+def test_metal_local_constexpr_array_extent_is_not_unresolved_template(tmp_path):
+    # End-to-end regression mirroring MLX conv/sdpa: a materialized kernel body can
+    # size a threadgroup/array with LOCAL `constexpr int` constants
+    # (`constexpr int BN = 32; threadgroup float tile[BN * BD];`). The standalone
+    # residual-template scanner's placeholder heuristic flags short capitalized
+    # tokens like `BN`/`BD`/`TGH` as missing template parameters. The struct/class
+    # path already suppresses these via the local-constant guard; before the fix
+    # the standalone path did not, so it wrongly reported
+    # `template-materialization-unsupported` and blocked translatable kernels.
+    from crosstl.project import load_project_config
+
+    repo = tmp_path / "repo"
+    source_dir = repo / "kernels"
+    source_dir.mkdir(parents=True)
+    (source_dir / "tg.metal").write_text(
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "\n"
+        "template <typename T>\n"
+        "[[kernel]] void tg_sum(\n"
+        "    device const T* a [[buffer(0)]],\n"
+        "    device T* c [[buffer(1)]],\n"
+        "    uint index [[thread_position_in_grid]],\n"
+        "    uint lid [[thread_position_in_threadgroup]]) {\n"
+        "  constexpr int BN = 32;\n"
+        "  constexpr int BD = 4;\n"
+        "  threadgroup T tile[BN * BD];\n"
+        "  tile[lid] = a[index];\n"
+        "  threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+        "  c[index] = tile[lid];\n"
+        "}\n"
+        "\n"
+        'template [[host_name("tg_sum_float")]] [[kernel]] '
+        "decltype(tg_sum<float>) tg_sum<float>;\n",
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["kernels"]
+            include = ["kernels/tg.metal"]
+            targets = ["vulkan"]
+            output_dir = "out"
+
+            [project.sources]
+            "**/*.metal" = "metal"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo), format_output=False)
+    payload = report.to_json()
+
+    unsupported = [
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic.get("code")
+        == "project.translate.template-materialization-unsupported"
+    ]
+    assert unsupported == [], unsupported
+
+    artifact = payload["artifacts"][0]
+    assert artifact.get("status") == "translated", artifact.get("error")
+
+
+def test_metal_function_header_masks_comments_spanning_the_header_start():
+    # Regression: a function span can begin inside a preceding comment (e.g. a
+    # license block), so masking only the already-sliced header missed the
+    # opening `/*` and leaked license prose (e.g. "OR"/"AND") into extracted
+    # return/parameter types. _metal_function_header masks with full-source
+    # context so the sliced header is comment-free regardless of where it starts.
+    from types import SimpleNamespace
+
+    from crosstl.project.pipeline import _metal_function_header
+
+    source = "/* ... OR BUSINESS INTERRUPTION ... */ float foo(int x) { return x; }"
+    body_start = source.index("{")
+    # Span deliberately begins mid-comment (after the opening `/*`).
+    function = SimpleNamespace(
+        span=(3, len(source)), body_span=(body_start, len(source))
+    )
+
+    header = _metal_function_header(source, function)
+
+    assert "OR" not in header
+    assert "BUSINESS" not in header
+    assert "float foo(int x)" in header

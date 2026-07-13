@@ -3,7 +3,7 @@ from setuptools import find_namespace_packages, setup
 setup(
     name="crosstl",
     packages=find_namespace_packages(include=["crosstl*"]),
-    version="2.0.1",
+    version="3.0.0",
     author="CrossGL team",
     author_email="nripesh@crossgl.net",
     description="CrossGL shader and compute translator",

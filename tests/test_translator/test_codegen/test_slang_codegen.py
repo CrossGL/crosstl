@@ -3274,6 +3274,23 @@ def test_workgroup_barrier_lowers_to_slang_group_sync():
     assert "workgroupBarrier();" not in generated_code
 
 
+def test_workgroup_execution_barrier_lowers_to_slang_group_sync():
+    code = """
+    shader SlangExecutionBarrier {
+        compute {
+            void main() {
+                workgroupExecutionBarrier();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "GroupMemoryBarrierWithGroupSync();" in generated_code
+    assert "workgroupExecutionBarrier();" not in generated_code
+
+
 def test_user_defined_workgroup_barrier_is_not_lowered_to_group_sync():
     code = """
     shader BarrierGap {
@@ -3370,6 +3387,7 @@ def test_user_defined_synchronization_names_are_not_lowered_to_slang_barriers():
     [
         "barrier",
         "workgroupBarrier",
+        "workgroupExecutionBarrier",
         "groupMemoryBarrier",
         "memoryBarrierShared",
         "memoryBarrierBuffer",
@@ -3405,6 +3423,7 @@ def test_synchronization_intrinsics_reject_arguments(builtin_name):
     [
         "barrier",
         "workgroupBarrier",
+        "workgroupExecutionBarrier",
         "groupMemoryBarrier",
         "memoryBarrierShared",
         "memoryBarrierBuffer",
@@ -12707,6 +12726,41 @@ def test_sampled_texture_builtins_emit_slang_methods():
     assert "textureLod(" not in generated_code
     assert "textureGrad(" not in generated_code
     assert "texelFetch(" not in generated_code
+
+
+def test_integer_sampled_texture_builtins_emit_typed_slang_methods():
+    code = """
+    shader IntegerSampledTextures {
+        isampler2d signedTex;
+        usampler2d unsignedTex;
+
+        compute {
+            void sample(vec2 uv, ivec2 pixel) {
+                ivec4 signedColor = texture(signedTex, uv);
+                uvec4 unsignedColor = textureLod(unsignedTex, uv, 1.0);
+                ivec4 signedFetch = texelFetch(signedTex, pixel, 0);
+                uvec4 unsignedFetch = texelFetchOffset(unsignedTex, pixel, 0, pixel);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "[[vk::binding(0, 0)]] Sampler2D<int4> signedTex" in generated_code
+    assert "[[vk::binding(1, 0)]] Sampler2D<uint4> unsignedTex" in generated_code
+    assert "int4 signedColor = signedTex.Sample(uv);" in generated_code
+    assert "uint4 unsignedColor = unsignedTex.SampleLevel(uv, 1.0);" in generated_code
+    assert "int4 signedFetch = signedTex.Load(int3(pixel, 0));" in generated_code
+    assert (
+        "uint4 unsignedFetch = unsignedTex.Load(int3(pixel, 0), pixel);"
+        in generated_code
+    )
+    assert "texture(signedTex" not in generated_code
+    assert "textureLod(unsignedTex" not in generated_code
+    assert "texelFetch(signedTex" not in generated_code
 
 
 def test_slang_texture_multisample_backlog_fetch_queries_and_diagnostics():

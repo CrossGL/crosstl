@@ -50,9 +50,9 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 8,
-        "endOffset": 346,
+        "endOffset": 336,
         "file": "crosstl-out/opengl/main.glsl",
-        "length": 104,
+        "length": 94,
         "line": 7,
         "offset": 242
       },
@@ -72,11 +72,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 9,
-        "endOffset": 382,
+        "endOffset": 372,
         "file": "crosstl-out/opengl/main.glsl",
         "length": 36,
         "line": 8,
-        "offset": 346
+        "offset": 336
       },
       "original": {
         "column": 1,

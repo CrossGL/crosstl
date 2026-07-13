@@ -6,14 +6,22 @@ from typing import List
 import pytest
 
 import crosstl
-from crosstl.backend.Metal.MetalCrossGLCodeGen import MetalToCrossGLConverter
+from crosstl.backend.Metal.MetalCrossGLCodeGen import (
+    MetalBuiltinOverloadResolutionError,
+    MetalCallableLoweringError,
+    MetalSizeofResolutionError,
+    MetalStaticConstantResolutionError,
+    MetalToCrossGLConverter,
+)
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
+from crosstl.backend.Metal.preprocessor import MetalPreprocessor
 from crosstl.translator.codegen.directx_codegen import (
     HLSLCodeGen as TranslatorHLSLCodeGen,
 )
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
@@ -320,6 +328,36 @@ def test_codegen_type_mapping_vectors_and_matrices():
     assert "vec3" in result
     assert "vec4" in result
     assert "mat4" in result
+
+
+def test_codegen_normalizes_64_bit_integer_vectors_for_opengl():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    ulong2 unsigned_pair(ulong first, ulong second) {
+        return ulong2(first, second);
+    }
+
+    long3 signed_triple(long value) {
+        return long3(value, value + 1, value + 2);
+    }
+    """
+
+    crossgl = convert(code)
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "u64vec2 unsigned_pair(uint64 first, uint64 second)" in crossgl
+    assert "return u64vec2(first, second);" in crossgl
+    assert "i64vec3 signed_triple(int64 value)" in crossgl
+    assert "return i64vec3(value, value + 1, value + 2);" in crossgl
+    assert "u64vec2 unsigned_pair(uint64_t first, uint64_t second)" in glsl
+    assert "return u64vec2(first, second);" in glsl
+    assert "i64vec3 signed_triple(int64_t value)" in glsl
+    assert "return i64vec3(value, (value + 1), (value + 2));" in glsl
+    assert "#extension GL_ARB_gpu_shader_int64 : require" in glsl
+    assert "ulong2" not in crossgl
+    assert "long3" not in crossgl
 
 
 def test_codegen_xhalf_vectors_lower_before_opengl_generation():
@@ -860,8 +898,37 @@ def test_codegen_reference_to_array_params_from_spirv_cross_reference():
 
     crossgl = generate_code(ast)
 
-    assert "void spvArrayCopy(thread T[N]& dst, thread T[N]& src)" in crossgl
+    assert "void spvArrayCopy(inout thread T[N] dst, thread T[N] src)" in crossgl
     parse_crossgl(crossgl)
+
+
+def test_codegen_writable_c_array_parameter_preserves_aliasing():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    METAL_FUNC void fill(
+        thread float values[4],
+        thread const float source[4]) {
+        values[0] = source[0];
+    }
+    """
+
+    crossgl = convert(code)
+
+    assert "void fill(inout thread float[4] values, thread float[4] source)" in crossgl
+    assert (
+        "void fill(inout float values[4], float source[4])"
+        in TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    )
+    assert (
+        "void fill(inout float values[4], float source[4])"
+        in GLSLCodeGen().generate(parse_crossgl(crossgl))
+    )
+    assert (
+        "void fill(thread float values[4], thread float source[4])"
+        in MetalCodeGen().generate(parse_crossgl(crossgl))
+    )
 
 
 def test_codegen_fragment_early_tests_attribute_becomes_stage_layout():
@@ -1876,6 +1943,32 @@ def test_codegen_device_buffer_parameters_use_structured_buffer_contract():
     assert "data[tid.x] = value * 2.0;" in metal
 
 
+def test_codegen_address_of_device_buffer_element_preserves_lvalue():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void load_one(device const float* src, thread float& dst) {
+        dst = src[0];
+    }
+
+    kernel void repro(
+        device const float* values [[buffer(0)]],
+        device float* output [[buffer(1)]],
+        uint gid [[thread_position_in_grid]]) {
+        float result = 0.0f;
+        load_one(&values[gid], result);
+        output[gid] = result;
+    }
+    """
+
+    crossgl = convert(code)
+
+    assert "load_one((&values[gid]), result);" in crossgl
+    assert "&buffer_load(values, gid)" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_directx_codegen_lowers_native_metal_entry_buffer_parameters_to_resources():
     code = """
     #include <metal_stdlib>
@@ -2271,6 +2364,60 @@ def test_codegen_lowers_as_type_float_template_call():
     assert parse_crossgl(crossgl) is not None
 
 
+@pytest.mark.parametrize(
+    ("source_type", "target_type", "crossgl_source", "crossgl_target"),
+    [
+        pytest.param("uint64_t", "uint2", "uint64", "uvec2", id="uint64-to-uint2"),
+        pytest.param("uint2", "uint64_t", "uvec2", "uint64", id="uint2-to-uint64"),
+        pytest.param("double", "int2", "double", "ivec2", id="double-to-int2"),
+    ],
+)
+def test_codegen_preserves_as_type_target_shape_for_equal_width_reshape(
+    source_type, target_type, crossgl_source, crossgl_target
+):
+    # MLX materializes subgroup shuffles that carry 64-bit values through two
+    # 32-bit lanes. A family-only asuint/asint alias inherits the source shape.
+    code = f"""
+    static inline {target_type} reshape_bits({source_type} value) {{
+        return as_type<{target_type}>(value);
+    }}
+    """
+    crossgl = convert(code)
+
+    assert f"{crossgl_target} reshape_bits({crossgl_source} value)" in crossgl
+    assert f"return as_type<{crossgl_target}>(value);" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_preserves_outer_bitcast_shape_for_shuffle_and_fill_call():
+    code = """
+    static inline uint64_t shuffle_and_fill(uint64_t value, uint64_t fill) {
+        return as_type<uint64_t>(metal::simd_shuffle_and_fill_up(
+            as_type<uint2>(value), as_type<uint2>(fill), ushort(1)));
+    }
+    """
+    crossgl = convert(code)
+
+    assert "return as_type<uint64>(" in crossgl
+    assert crossgl.count("as_type<uvec2>") == 2
+    assert "WaveShuffleAndFillUp(" in crossgl
+    assert "simd_shuffle_and_fill_up" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_keeps_same_shape_as_type_uint_alias():
+    code = """
+    static inline uint uint_from_bits(float value) {
+        return as_type<uint>(value);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "return asuint(value);" in crossgl
+    assert "as_type<uint>" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_lowers_msl_bit_builtins_from_apple_spec():
     # Apple Metal Shading Language Specification, "Integer Functions":
     # popcount(T x), reverse_bits(T x).
@@ -2412,6 +2559,383 @@ def test_codegen_lowers_simdgroup_barrier_from_apple_silicon_sync_sample():
     parse_crossgl(crossgl)
 
 
+def test_codegen_lowers_execution_only_threadgroup_barrier_from_mlx_gemv():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void reduce(device float* out [[buffer(0)]]) {
+        threadgroup_barrier(mem_flags::mem_none);
+        threadgroup_barrier(mem_flags::mem_none | mem_flags::mem_threadgroup);
+        out[0] = 1.0f;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "workgroupExecutionBarrier();" in crossgl
+    assert "workgroupBarrier();" in crossgl
+    assert "threadgroup_barrier" not in crossgl
+    assert "mem_none" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_execution_only_threadgroup_barrier_reaches_native_targets():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void synchronize() {
+        threadgroup_barrier(mem_flags::mem_none);
+    }
+    """
+    ast = parse_crossgl(convert(code))
+
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+    glsl = GLSLCodeGen().generate(ast)
+    metal = MetalCodeGen().generate(ast)
+    spirv = VulkanSPIRVCodeGen().generate(ast)
+
+    assert "GroupMemoryBarrierWithGroupSync();" in hlsl
+    assert "barrier();" in glsl
+    assert "threadgroup_barrier(mem_flags::mem_none);" in metal
+    control_barrier = re.search(r"OpControlBarrier %\d+ %\d+ (%\d+)", spirv)
+    assert control_barrier is not None
+    assert re.search(
+        rf"{re.escape(control_barrier.group(1))} = OpConstant %\d+ 0", spirv
+    )
+    assert "OpMemoryBarrier" not in spirv
+    for generated in (hlsl, glsl, metal, spirv):
+        assert "workgroupExecutionBarrier" not in generated
+
+
+def test_codegen_preserves_standalone_void_cast_operand_evaluation():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    uint observe(uint value) {
+        return value + 1u;
+    }
+
+    kernel void discard_values(uint gid [[thread_position_in_grid]]) {
+        (void)gid;
+        (void)observe(gid);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "(void)" not in crossgl
+    assert "gid;" in crossgl
+    assert "observe(gid);" in crossgl
+
+    ast = parse_crossgl(crossgl)
+    generated_targets = (
+        TranslatorHLSLCodeGen().generate(ast),
+        GLSLCodeGen().generate(ast),
+        MetalCodeGen().generate(ast),
+        VulkanSPIRVCodeGen().generate(ast),
+    )
+    for generated in generated_targets:
+        assert "unknown function 'void'" not in generated
+        assert "void(gid)" not in generated
+    assert "OpFunctionCall" in generated_targets[-1]
+
+
+def test_static_template_sibling_helper_reaches_native_targets(tmp_path):
+    code = """
+    template <typename T, int N>
+    struct BlockKernel {
+      template <typename U = T>
+      static void load(const device T* src, thread U dst[N]) {
+        for (int i = 0; i < N; ++i) {
+          dst[i] = static_cast<U>(src[i]);
+        }
+      }
+
+      static void run(const device T* src, device T* out) {
+        thread T values[N];
+        load<T>(src, values);
+        out[0] = values[0];
+      }
+    };
+
+    [[kernel]] void k(
+        const device float* src [[buffer(0)]],
+        device float* out [[buffer(1)]]) {
+      BlockKernel<float, 4>::run(src, out);
+    }
+    """
+
+    crossgl = convert(MetalPreprocessor().preprocess(code))
+
+    helper_name = "BlockKernel_float_4__load__float"
+    assert helper_name in crossgl
+    assert "load_u3cfloat_u3e" not in crossgl
+    ast = parse_crossgl(crossgl)
+    generated_targets = (
+        TranslatorHLSLCodeGen().generate(ast),
+        GLSLCodeGen().generate(ast),
+        MetalCodeGen().generate(ast),
+        VulkanSPIRVCodeGen().generate(ast),
+    )
+    for generated in generated_targets:
+        assert "cannot lower unknown function" not in generated
+        assert "load_u3cfloat_u3e" not in generated
+    assert helper_name in generated_targets[0]
+    glsl_helper_name = "BlockKernel_float_4_load_float__glsl_src_src_float"
+    assert (
+        f"void {glsl_helper_name}(inout float dst[4], int src_offset);"
+        in generated_targets[1]
+    )
+    assert (
+        f"void {glsl_helper_name}(inout float dst[4], int src_offset) {{"
+        in generated_targets[1]
+    )
+    assert f"{glsl_helper_name}(values, int(src_offset));" in generated_targets[1]
+    assert "dst[i] = float(src[(src_offset + i)]);" in generated_targets[1]
+    assert helper_name in generated_targets[2]
+    assert "OpLoad" in generated_targets[3]
+    assert "OpStore" in generated_targets[3]
+    assert "WARNING" not in generated_targets[3]
+
+    glslang = shutil.which("glslangValidator")
+    if glslang is not None:
+        source = tmp_path / "static-template-sibling-helper.comp"
+        output = tmp_path / "static-template-sibling-helper.spv"
+        source.write_text(generated_targets[1], encoding="utf-8")
+        result = subprocess.run(
+            [
+                glslang,
+                "-V",
+                "--target-env",
+                "vulkan1.1",
+                "-S",
+                "comp",
+                str(source),
+                "-o",
+                str(output),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    "alias_declaration",
+    [
+        "using ConcreteKernel = BlockKernel<float, 4>;",
+        "typedef BlockKernel<float, 4> ConcreteKernel;",
+    ],
+)
+def test_codegen_materializes_static_template_helper_through_concrete_alias(
+    alias_declaration,
+):
+    code = """
+    template <typename T, int N>
+    struct BlockKernel {
+      template <typename U = T>
+      static void load(const device T* src, thread U dst[N]) {
+        for (int i = 0; i < N; ++i) {
+          dst[i] = static_cast<U>(src[i]);
+        }
+      }
+
+      static void run(const device T* src, device T* out) {
+        thread T values[N];
+        load(src, values);
+        out[0] = values[0];
+      }
+    };
+
+    [[kernel]] void k(
+        const device float* src [[buffer(0)]],
+        device float* out [[buffer(1)]]) {
+      __ALIAS_DECLARATION__
+      ConcreteKernel::run(src, out);
+    }
+    """.replace("__ALIAS_DECLARATION__", alias_declaration)
+
+    crossgl = convert(MetalPreprocessor().preprocess(code))
+
+    run_name = "BlockKernel_float_4__run"
+    helper_name = "BlockKernel_float_4__load__float"
+    assert re.search(rf"\bvoid\s+{helper_name}\s*\(", crossgl)
+    assert re.search(rf"\b{helper_name}\s*\(src,\s*values\);", crossgl)
+    assert re.search(rf"\bvoid\s+{run_name}\s*\(", crossgl)
+    assert re.search(rf"\b{run_name}\s*\(src,\s*out_\);", crossgl)
+    assert not re.search(r"(?<![\w:])run\s*\(", crossgl)
+
+
+def test_codegen_binds_reused_concrete_alias_to_nearest_specialization():
+    code = """
+    template <typename T, int N>
+    struct BlockKernel {
+      static void run(device T* out) {
+        out[0] = T(N);
+      }
+    };
+
+    [[kernel]] void float_kernel(device float* out [[buffer(0)]]) {
+      using ConcreteKernel = BlockKernel<float, 4>;
+      ConcreteKernel::run(out);
+    }
+
+    [[kernel]] void int_kernel(device int* out [[buffer(0)]]) {
+      using ConcreteKernel = BlockKernel<int, 2>;
+      ConcreteKernel::run(out);
+    }
+    """
+
+    crossgl = convert(MetalPreprocessor().preprocess(code))
+
+    assert re.search(r"\bBlockKernel_float_4__run\s*\(out_\);", crossgl)
+    assert re.search(r"\bBlockKernel_int_2__run\s*\(out_\);", crossgl)
+    assert not re.search(r"(?<![\w:])run\s*\(", crossgl)
+
+
+def test_codegen_restores_outer_alias_after_nested_shadowing():
+    code = """
+    template <typename T, int N>
+    struct BlockKernel {
+      static void run(device T* out) {
+        out[0] = T(N);
+      }
+    };
+
+    [[kernel]] void k(
+        device float* float_out [[buffer(0)]],
+        device int* int_out [[buffer(1)]]) {
+      using ConcreteKernel = BlockKernel<float, 4>;
+      {
+        using ConcreteKernel = BlockKernel<int, 2>;
+        ConcreteKernel::run(int_out);
+      }
+      ConcreteKernel::run(float_out);
+    }
+    """
+
+    crossgl = convert(MetalPreprocessor().preprocess(code))
+
+    assert re.search(r"\bBlockKernel_int_2__run\s*\(int_out\);", crossgl)
+    assert re.search(r"\bBlockKernel_float_4__run\s*\(float_out\);", crossgl)
+
+
+def test_codegen_rewrites_static_call_through_chained_alias():
+    code = """
+    template <typename T>
+    struct BlockKernel {
+      static void run(device T* out) {
+        out[0] = T(1);
+      }
+    };
+
+    [[kernel]] void k(device float* out [[buffer(0)]]) {
+      using ConcreteKernel = BlockKernel<float>;
+      using KernelAlias = ConcreteKernel;
+      KernelAlias::run(out);
+    }
+    """
+
+    crossgl = convert(MetalPreprocessor().preprocess(code))
+
+    assert re.search(r"\bBlockKernel_float__run\s*\(out_\);", crossgl)
+    assert "KernelAlias::run" not in crossgl
+
+
+def test_codegen_local_alias_shadows_concrete_struct_name():
+    code = """
+    struct FloatKernel {
+      static void run(device int* out) {
+        out[0] = 1;
+      }
+    };
+
+    struct IntKernel {
+      static void run(device int* out) {
+        out[0] = 2;
+      }
+    };
+
+    [[kernel]] void k(device int* out [[buffer(0)]]) {
+      using FloatKernel = IntKernel;
+      using KernelAlias = FloatKernel;
+      FloatKernel::run(out);
+      KernelAlias::run(out);
+    }
+    """
+
+    crossgl = convert(MetalPreprocessor().preprocess(code))
+
+    assert len(re.findall(r"\bIntKernel__run\s*\(out_\);", crossgl)) == 2
+    assert not re.search(r"\bFloatKernel__run\s*\(out_\);", crossgl)
+
+
+@pytest.mark.parametrize(
+    "alias_like_text",
+    [
+        "// using FloatKernel = IntKernel;",
+        "/* using FloatKernel = IntKernel; */",
+        'const char* note = "using FloatKernel = IntKernel;";',
+    ],
+)
+def test_codegen_ignores_alias_text_in_comments_and_literals(alias_like_text):
+    code = """
+    struct FloatKernel {
+      static void run(device int* out) {
+        out[0] = 1;
+      }
+    };
+
+    struct IntKernel {
+      static void run(device int* out) {
+        out[0] = 2;
+      }
+    };
+
+    [[kernel]] void k(device int* out [[buffer(0)]]) {
+      __ALIAS_LIKE_TEXT__
+      FloatKernel::run(out);
+    }
+    """.replace("__ALIAS_LIKE_TEXT__", alias_like_text)
+
+    preprocessed = MetalPreprocessor().preprocess(code)
+
+    assert "FloatKernel__run(out);" in preprocessed
+    assert "IntKernel__run(out);" not in preprocessed
+
+
+def test_codegen_rewrites_static_alias_call_inside_materialized_method():
+    code = """
+    template <typename T>
+    struct Helper {
+      static void run(device T* out) {
+        out[0] = T(1);
+      }
+    };
+
+    template <typename T>
+    struct Wrapper {
+      static void run(device T* out) {
+        using HelperType = Helper<T>;
+        HelperType::run(out);
+      }
+    };
+
+    [[kernel]] void k(device float* out [[buffer(0)]]) {
+      using ConcreteWrapper = Wrapper<float>;
+      ConcreteWrapper::run(out);
+    }
+    """
+
+    crossgl = convert(MetalPreprocessor().preprocess(code))
+
+    assert re.search(r"\bHelper_float__run\s*\(out_\);", crossgl)
+    assert re.search(r"\bWrapper_float__run\s*\(out_\);", crossgl)
+    assert "HelperType::run" not in crossgl
+
+
 def test_codegen_scoped_variable_template_expression_from_mlx_gemv_masked():
     # Reduced from:
     # Repo: https://github.com/ml-explore/mlx
@@ -2448,12 +2972,143 @@ def test_codegen_normalizes_generic_atomic_types_from_apple_msl_spec():
     """
     crossgl = convert(code)
 
-    assert "RWStructuredBuffer<atomic_uint> counters @buffer(0)" in crossgl
-    assert "RWStructuredBuffer<atomic_float> weights @buffer(1)" in crossgl
-    assert "RWStructuredBuffer<atomic_ulong> totals @buffer(2)" in crossgl
-    assert "RWStructuredBuffer<atomic_bool> flags @buffer(3)" in crossgl
+    # Metal atomics lower to their plain element type; atomicity is carried by the
+    # atomic_* intrinsics, and the GLSL/DirectX/SPIR-V backends store atomics as
+    # the underlying scalar (an atomic-wrapped buffer element is not valid).
+    assert "RWStructuredBuffer<uint> counters @buffer(0)" in crossgl
+    assert "RWStructuredBuffer<float> weights @buffer(1)" in crossgl
+    assert "RWStructuredBuffer<uint64> totals @buffer(2)" in crossgl
+    assert "RWStructuredBuffer<bool> flags @buffer(3)" in crossgl
     assert "atomic<" not in crossgl
     assert "metal::atomic" not in crossgl
+    assert "atomic_uint" not in crossgl
+    assert "atomic_float" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_lowers_metal_uniform_values_to_annotated_payload_types():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void uniform_values(device ulong* out [[buffer(0)]]) {
+        const uniform<int> signed_value = make_uniform(-4);
+        const metal::uniform<uint> unsigned_value = metal::make_uniform(5u);
+        const uniform<ulong> wide_value = make_uniform(6ul);
+        const metal::uniform<int2> lanes = metal::make_uniform(int2(1, 2));
+        const uniform<int> expression_value = make_uniform(1 + 2) * 3;
+        out[0] = ulong(signed_value + int(unsigned_value) + lanes.x
+            + expression_value) + wide_value;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "const int signed_value @uniform_value = (-4);" in crossgl
+    assert "const uint unsigned_value @uniform_value = 5u;" in crossgl
+    assert "const uint64 wide_value @uniform_value = 6u;" in crossgl
+    assert "const ivec2 lanes @uniform_value = ivec2(1, 2);" in crossgl
+    assert "const int expression_value @uniform_value = (1 + 2) * 3;" in crossgl
+    assert "make_uniform" not in crossgl
+    assert "uniform_<" not in crossgl
+    assert "metal::uniform" not in crossgl
+
+    parsed = parse_crossgl(crossgl)
+    entry_point = next(iter(parsed.stages.values())).entry_point
+    declarations = {
+        statement.name: statement
+        for statement in entry_point.body.statements
+        if getattr(statement, "name", None)
+        in {
+            "signed_value",
+            "unsigned_value",
+            "wide_value",
+            "lanes",
+            "expression_value",
+        }
+    }
+    assert set(declarations) == {
+        "signed_value",
+        "unsigned_value",
+        "wide_value",
+        "lanes",
+        "expression_value",
+    }
+    for declaration in declarations.values():
+        assert "uniform_value" in {
+            attribute.name for attribute in declaration.attributes
+        }
+
+
+def test_codegen_metal_uniform_values_reach_targets_without_fallbacks():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void uniform_stride(device int* out [[buffer(0)]],
+                               uint gid [[thread_position_in_grid]]) {
+        const uniform<int> stride = make_uniform(16);
+        out[gid] = stride + int(gid);
+    }
+    """
+    ast = parse_crossgl(convert(code))
+
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+    glsl = GLSLCodeGen().generate(ast)
+    spirv = VulkanSPIRVCodeGen().generate(ast)
+
+    for generated in (hlsl, glsl, spirv):
+        assert "make_uniform" not in generated
+        assert "uniform_value" not in generated
+        assert "uniform_<" not in generated
+    assert "cannot lower unknown function" not in spirv
+    assert "Unknown type" not in spirv
+
+
+def test_codegen_does_not_lower_user_defined_make_uniform_function():
+    code = """
+    int make_uniform(int value) {
+        return value + 1;
+    }
+
+    kernel void custom_uniform(device int* out [[buffer(0)]]) {
+        int value = make_uniform(16);
+        int scoped_value = helpers::make_uniform(32);
+        out[0] = value + scoped_value;
+    }
+    """
+    crossgl = convert(code)
+
+    assert "int make_uniform(int value)" in crossgl
+    assert "int value = make_uniform(16);" in crossgl
+    assert "int scoped_value = make_uniform(32);" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_lowers_metal_device_atomics_to_crossgl_intrinsics():
+    # Metal explicit atomics map to CrossGL atomic intrinsics: the trailing
+    # memory_order argument is dropped, and a `&buffer[i]` target lowers to the
+    # buffer element subscript the GLSL/DirectX/SPIR-V backends expect.
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void scatter(device atomic_int* out [[buffer(0)]],
+                        device const int* idx [[buffer(1)]],
+                        device const int* val [[buffer(2)]],
+                        uint i [[thread_position_in_grid]]) {
+        atomic_fetch_add_explicit(&out[idx[i]], val[i], memory_order_relaxed);
+        atomic_fetch_max_explicit(&out[0], val[i], memory_order_relaxed);
+        atomic_exchange_explicit(&out[1], val[i], memory_order_relaxed);
+    }
+    """
+    crossgl = convert(code)
+
+    assert "atomicAdd(out_[buffer_load(idx, i)], buffer_load(val, i));" in crossgl
+    assert "atomicMax(out_[0], buffer_load(val, i));" in crossgl
+    assert "atomicExchange(out_[1], buffer_load(val, i));" in crossgl
+    # The memory_order argument and the Metal spelling must not survive.
+    assert "atomic_fetch" not in crossgl
+    assert "memory_order" not in crossgl
     assert parse_crossgl(crossgl) is not None
 
 
@@ -3772,16 +4427,263 @@ def test_codegen_anonymous_enum_uses_synthetic_name_from_metal_base_effect():
 
 def test_codegen_sizeof_and_cast():
     code = """
+    using Scalar = half;
+
     void main() {
         int a = sizeof(int);
         int b = alignof(float4);
+        int c = sizeof(float3);
+        int d = sizeof(Scalar);
+        int e = sizeof(metal::array<float3, 2>);
         float3 v = (float3)(1.0);
     }
     """
     result = convert(code)
-    assert "sizeof(int)" in result
+    assert "int a = 4;" in result
     assert "alignof(float4)" in result
+    assert "int c = 16;" in result
+    assert "int d = 2;" in result
+    assert "int e = 32;" in result
+    assert "sizeof(" not in result
     assert "vec3(1.0)" in result
+
+
+def test_codegen_rejects_sizeof_known_aggregate_without_layout_contract():
+    code = """
+    struct alignas(16) Payload {
+        float value;
+    };
+
+    int payload_size() {
+        return sizeof(Payload);
+    }
+    """
+
+    with pytest.raises(MetalSizeofResolutionError) as error:
+        convert(code)
+
+    assert error.value.operand == "Payload"
+    assert "aggregate object layout" in error.value.reason
+
+
+def test_codegen_folds_exact_metal_struct_layouts():
+    code = """
+    struct ComplexValue {
+        float real;
+        float imag;
+    };
+
+    struct PaddedValue {
+        char tag;
+        float3 value;
+        short tail;
+    };
+
+    struct NestedValue {
+        ComplexValue value;
+        half lanes[3];
+        static constexpr int count = 3;
+    };
+
+    union ValueBits {
+        float value;
+        uint words[2];
+    };
+
+    int complex_size() { return sizeof(ComplexValue); }
+    int padded_size() { return sizeof(PaddedValue); }
+    int nested_size() { return sizeof(NestedValue); }
+    int union_size() { return sizeof(ValueBits); }
+    """
+
+    crossgl = convert(code)
+
+    assert crossgl.count("return 8;") == 2
+    assert "return 48;" in crossgl
+    assert "return 16;" in crossgl
+    assert "sizeof(" not in crossgl
+
+
+def test_codegen_sizeof_local_type_alias_does_not_leak_between_functions():
+    crossgl = convert("""
+        int first() {
+            using Scalar = half;
+            return sizeof(Scalar);
+        }
+
+        int second() {
+            return sizeof(Scalar);
+        }
+        """)
+
+    assert "return 2;" in crossgl
+    assert "return sizeof(Scalar);" in crossgl
+
+
+def test_codegen_resolves_function_local_typedef_uses():
+    crossgl = convert("""
+        template <typename T>
+        struct Limits {
+            static constexpr T finite_min = T(-1);
+        };
+
+        template <>
+        struct Limits<float> {
+            static constexpr float finite_min = -3.0f;
+        };
+
+        float compute(float scale) {
+            typedef float U;
+            U value = U(scale);
+            U minimum = Limits<U>::finite_min;
+            return value + minimum;
+        }
+        """)
+
+    assert "float value = float(scale);" in crossgl
+    assert "float minimum = ((-3.0f));" in crossgl
+    assert "typedef float U;" not in crossgl
+    assert "Limits_u3cU_u3e" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_scopes_nested_function_local_typedefs():
+    crossgl = convert("""
+        float convert_value(float value, bool use_integer) {
+            typedef float U;
+            if (use_integer) {
+                typedef int U;
+                U inner = U(value);
+            }
+            U outer = U(value);
+            return outer;
+        }
+        """)
+
+    assert "int inner = int(value);" in crossgl
+    assert "float outer = float(value);" in crossgl
+    assert "typedef" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_isolates_function_local_typedefs_between_siblings():
+    crossgl = convert("""
+        float first(float value) {
+            typedef float U;
+            U converted = U(value);
+            return converted;
+        }
+
+        int second(float value) {
+            typedef int U;
+            U converted = U(value);
+            return converted;
+        }
+        """)
+
+    assert "float converted = float(value);" in crossgl
+    assert "int converted = int(value);" in crossgl
+    assert "typedef" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_switch_typedef_scope_spans_cases():
+    crossgl = convert("""
+        int select_value(int mode) {
+            switch (mode) {
+                case 0:
+                    typedef int CaseValue;
+                    break;
+                case 1:
+                    CaseValue value = CaseValue(3);
+                    return value;
+                default:
+                    return 0;
+            }
+        }
+        """)
+
+    assert "int value = int(3);" in crossgl
+    assert "typedef" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_parses_materialized_owner_alias_pointer_casts():
+    source = """
+        template <typename T>
+        struct Tile {
+            using elem_type = T;
+            elem_type values[4];
+
+            thread elem_type* elems() {
+                return (thread elem_type*)values;
+            }
+
+            const thread elem_type* const_elems() const {
+                return reinterpret_cast<const thread elem_type*>(values);
+            }
+        };
+
+        Tile<float> float_tile;
+        Tile<int> int_tile;
+        """
+
+    crossgl = convert(MetalPreprocessor().preprocess(source))
+    float_helper = crossgl.split("Tile_float__elems", 1)[1].split("}", 1)[0]
+    float_const_helper = crossgl.split("Tile_float__const_elems", 1)[1].split("}", 1)[0]
+    int_helper = crossgl.split("Tile_int__elems", 1)[1].split("}", 1)[0]
+    int_const_helper = crossgl.split("Tile_int__const_elems", 1)[1].split("}", 1)[0]
+
+    assert "return (float*)self.values;" in float_helper
+    assert "return (float*)self.values;" in float_const_helper
+    assert "return (int*)self.values;" in int_helper
+    assert "return (int*)self.values;" in int_const_helper
+    assert "elem_type" not in float_helper
+    assert "elem_type" not in float_const_helper
+    assert "elem_type" not in int_helper
+    assert "elem_type" not in int_const_helper
+    assert "thread float*" not in crossgl
+    assert "thread int*" not in crossgl
+    strict_ast = CrossGLParser(
+        CrossGLLexer(crossgl).get_tokens(), strict_function_bodies=True
+    ).parse()
+    assert strict_ast is not None
+
+
+def test_codegen_parses_materialized_struct_alias_template_vectors():
+    source = """
+        struct BaseFrag {
+            static constexpr short kElems = 4;
+
+            template <typename U>
+            using dtype_frag_t = typename metal::vec<U, kElems>;
+
+            template <typename T>
+            static dtype_frag_t<T> make(T value) {
+                dtype_frag_t<T> result;
+                result[0] = value;
+                return result;
+            }
+        };
+
+        kernel void vector_alias(
+            device float* output [[buffer(0)]],
+            uint gid [[thread_position_in_grid]]) {
+            BaseFrag::dtype_frag_t<float> value = BaseFrag::make<float>(1.0f);
+            output[gid] = value[0];
+        }
+        """
+
+    crossgl = convert(MetalPreprocessor().preprocess(source))
+
+    assert "vec4 value = BaseFrag__make__float(1.0f);" in crossgl
+    assert "vec4 BaseFrag__make__float(float value)" in crossgl
+    assert "vec4 result;" in crossgl
+    assert "dtype_frag_t" not in crossgl
+    strict_ast = CrossGLParser(
+        CrossGLLexer(crossgl).get_tokens(), strict_function_bodies=True
+    ).parse()
+    assert strict_ast is not None
 
 
 def test_codegen_sizeof_dependent_typename_from_tinygrad_tile_copy():
@@ -4001,7 +4903,7 @@ def test_codegen_threadgroup_memory_and_barrier():
     assert "@threadgroup" in result or "threadgroup" in result
 
 
-def test_codegen_preserves_lambda_callback_from_mlx_fp_quantized_nax():
+def test_codegen_lowers_dispatch_bool_callback_from_mlx_fp_quantized_nax():
     # Reduced from:
     # Repo: https://github.com/ml-explore/mlx
     # Commit: b155224b9963cd9476363b464a559232a0868000
@@ -4018,11 +4920,14 @@ def test_codegen_preserves_lambda_callback_from_mlx_fp_quantized_nax():
     result = convert(code)
     compact = normalize(result)
 
-    assert "dispatch_bool" in compact
-    assert "[&](auto kAlignedM)" in compact
-    assert "if (kAlignedM.value)" in compact
+    assert "dispatch_bool" not in compact
+    assert "[&]" not in compact
+    assert "if ((!is_unaligned_sm))" in compact
+    assert "if (true)" in compact
+    assert "if (false)" in compact
     assert "workgroupBarrier();" in compact
     assert "Unhandled expression" not in compact
+    assert parse_crossgl(result) is not None
 
 
 def test_codegen_sanitizes_template_id_value_expression_from_mlx_gemm_gather_nax():
@@ -4047,11 +4952,126 @@ def test_codegen_sanitizes_template_id_value_expression_from_mlx_gemm_gather_nax
     result = convert(code)
     compact = normalize(result)
 
-    assert "gemm_loop_u3cT_u2cSM_u2ckAlignedM_u2evalue_u2cAccumType_u3e" in compact
+    assert "gemm_loop_u3cT_u2cSM_u2ctrue_u2cAccumType_u3e" in compact
+    assert "gemm_loop_u3cT_u2cSM_u2cfalse_u2cAccumType_u3e" in compact
     assert "gemm_loop<" not in compact
-    assert "if (kAlignedM.value)" in compact
+    assert "if (true)" in compact
+    assert "if (false)" in compact
     assert "Unhandled expression" not in compact
     assert parse_crossgl(result) is not None
+
+
+def test_codegen_lowers_nested_dispatch_bool_callbacks():
+    code = """
+    void run(bool align_m, bool align_n, device uint* out) {
+      dispatch_bool(align_m, [&](auto kAlignedM) {
+        dispatch_bool(align_n, [&](auto kAlignedN) {
+          if constexpr (kAlignedM.value && kAlignedN.value) {
+            out[0] = 1;
+          }
+        });
+      });
+    }
+    """
+
+    result = convert(code)
+    compact = normalize(result)
+
+    assert compact.count("if (align_m)") == 1
+    assert compact.count("if (align_n)") == 2
+    assert "if (true && true)" in compact
+    assert "if (true && false)" in compact
+    assert "if (false && true)" in compact
+    assert "if (false && false)" in compact
+    assert "dispatch_bool" not in compact
+    assert parse_crossgl(result) is not None
+
+
+def test_codegen_rejects_dispatch_bool_callback_without_parameter():
+    code = """
+    void run(bool condition) {
+      dispatch_bool(condition, [&]() {});
+    }
+    """
+
+    with pytest.raises(MetalCallableLoweringError) as error:
+        convert(code)
+
+    assert error.value.project_diagnostic_code == (
+        "project.translate.metal-callable-unsupported"
+    )
+    assert "exactly one integral-constant parameter" in error.value.reason
+
+
+@pytest.mark.parametrize(
+    ("callback", "reason"),
+    [
+        ("[=](auto flag) { out[0] = 1u; }", "reference-default capture"),
+        ("[&](auto flag) { return; }", "callback-local return statements"),
+    ],
+)
+def test_codegen_rejects_unsafe_dispatch_bool_callback_shapes(callback, reason):
+    code = f"""
+    void run(bool condition, device uint* out) {{
+      dispatch_bool(condition, {callback});
+    }}
+    """
+
+    with pytest.raises(MetalCallableLoweringError) as error:
+        convert(code)
+
+    assert reason in error.value.reason
+
+
+def test_codegen_preserves_dispatch_bool_call_with_named_functor():
+    code = """
+    void run(bool condition, Handler handler) {
+      dispatch_bool(condition, handler);
+    }
+    """
+
+    result = convert(code)
+
+    assert "dispatch_bool(condition, handler);" in result
+    assert parse_crossgl(result) is not None
+
+
+def test_codegen_nested_dispatch_bool_parameter_shadowing_uses_inner_value():
+    code = """
+    void run(bool outer, bool inner, device uint* out) {
+      dispatch_bool(outer, [&](auto flag) {
+        dispatch_bool(inner, [&](auto flag) {
+          if constexpr (flag.value) {
+            out[0] = 1u;
+          }
+        });
+      });
+    }
+    """
+
+    compact = normalize(convert(code))
+
+    assert compact.count("if (true)") == 2
+    assert compact.count("if (false)") == 2
+
+
+def test_codegen_rejects_callback_helper_without_semantic_lowering():
+    code = """
+    void run(device uint* out) {
+      apply_callback([&](auto value) {
+        out[0] = value.value ? 1u : 0u;
+      });
+    }
+    """
+
+    with pytest.raises(MetalCallableLoweringError) as error:
+        convert(code)
+
+    assert error.value.helper == "apply_callback"
+    assert error.value.capture == "&"
+    assert error.value.enclosing_function == "run"
+    assert error.value.source_location["line"] == 3
+    assert "invocation count" in error.value.suggested_action
 
 
 def test_codegen_names_unnamed_template_tag_parameters_from_mlx_nax():
@@ -4180,5 +5200,849 @@ def test_codegen_preserves_threadgroup_imageblock_local_pointer_roundtrip():
     assert "thread TransparentFragmentValues* fragmentValues" not in metal
 
 
+def test_codegen_lowers_metal_simd_group_intrinsics_to_crossgl_wave_ops():
+    # Metal SIMD-group (wave) intrinsics must lower to canonical CrossGL Wave*
+    # ops. Otherwise they leak unchanged into the IR and the DirectX/SPIR-V
+    # backends emit uncompilable or silently-defaulted code. Mirrors the SIMD
+    # reductions that MLX metal kernels rely on (reduce / softmax / gemv).
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void wave_ops(
+        device const float* in [[buffer(0)]],
+        device float* outf [[buffer(1)]],
+        device uint* outu [[buffer(2)]],
+        uint gid [[thread_position_in_grid]]) {
+        float v = in[gid];
+        uint u = outu[gid];
+        outf[gid] = simd_sum(v) + simd_product(v) + simd_min(v) + simd_max(v)
+            + simd_prefix_exclusive_sum(v) + simd_prefix_exclusive_product(v)
+            + simd_broadcast_first(v) + simd_broadcast(v, 0u)
+            + simd_shuffle_and_fill_up(v, 0.0f, 1u);
+        outu[gid] = simd_and(u) + simd_or(u) + simd_xor(u) + simd_ballot(v > 0.0);
+        if (simd_all(v > 0.0) && simd_any(v < 0.0)) {
+            outf[gid] = v;
+        }
+    }
+    """
+    generated = convert(code)
+
+    for token in (
+        "WaveActiveSum(v)",
+        "WaveActiveProduct(v)",
+        "WaveActiveMin(v)",
+        "WaveActiveMax(v)",
+        "WavePrefixSum(v)",
+        "WavePrefixProduct(v)",
+        "WaveReadLaneFirst(v)",
+        "WaveReadLaneAt(v",
+        "WaveShuffleAndFillUp(v, 0.0f, 1u)",
+        "WaveActiveBitAnd(u)",
+        "WaveActiveBitOr(u)",
+        "WaveActiveBitXor(u)",
+        "WaveActiveAllTrue(",
+        "WaveActiveAnyTrue(",
+        "WaveActiveBallot(",
+    ):
+        assert token in generated, f"missing {token} in:\n{generated}"
+
+    # The raw Metal spellings must not leak into the CrossGL IR.
+    for leaked in (
+        "simd_sum",
+        "simd_product",
+        "simd_min",
+        "simd_max",
+        "simd_prefix_exclusive",
+        "simd_broadcast",
+        "simd_shuffle_and_fill_up",
+        "simd_and",
+        "simd_or",
+        "simd_xor",
+        "simd_all",
+        "simd_any",
+        "simd_ballot",
+    ):
+        assert leaked not in generated, f"leaked {leaked} in:\n{generated}"
+
+    assert parse_crossgl(generated) is not None
+
+
+def test_codegen_binds_metal_simd_intrinsics_by_source_signature(tmp_path):
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct complex64_t {
+        float real;
+        float imag;
+    };
+
+    uint64_t simd_shuffle_down(uint64_t data, uint delta) {
+        return data;
+    }
+
+    bool simd_shuffle_down(bool data, uint delta) {
+        return simd_shuffle_down(uint(data), delta) != 0u;
+    }
+
+    complex64_t simd_shuffle_down(complex64_t data, uint delta) {
+        return {
+            simd_shuffle_down(data.real, delta),
+            simd_shuffle_down(data.imag, delta)
+        };
+    }
+
+    float simd_shuffle(float data, uint lane) {
+        return data;
+    }
+
+    kernel void shuffle_values(
+        device float* out_buffer [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {
+        uint delta = 1u;
+        bool flag = true;
+        uint64_t wide = uint64_t(gid);
+        out_buffer[gid] = simd_shuffle_down(float(gid), delta);
+        out_buffer[gid] += simd_shuffle(float(gid), delta);
+        out_buffer[gid] += metal::simd_shuffle(float(gid), ushort(delta));
+        flag = simd_shuffle_down(flag, delta);
+        wide = simd_shuffle_down(wide, delta);
+    }
+    """
+
+    generated = convert(code)
+
+    assert generated.count("WaveShuffleDown(data.real, delta)") == 1
+    assert generated.count("WaveShuffleDown(data.imag, delta)") == 1
+    assert "WaveShuffleDown(uint(data), delta)" in generated
+    assert "WaveShuffleDown(float(gid), delta)" in generated
+    assert "simd_shuffle_down(flag, delta)" in generated
+    assert "simd_shuffle_down(wide, delta)" in generated
+    assert "simd_shuffle(float(gid), delta)" in generated
+    assert "WaveReadLaneAt(float(gid), uint16(delta))" in generated
+    ast = parse_crossgl(generated)
+    assert ast is not None
+
+    glsl = GLSLCodeGen().generate(ast)
+    assert "subgroupShuffleDown(data.real, delta)" in glsl
+    assert "subgroupShuffleDown(data.imag, delta)" in glsl
+    assert "subgroupShuffleDown(uint(data), delta)" in glsl
+    assert "subgroupShuffleDown(float(gid), delta)" in glsl
+    assert "simd_shuffle(float(gid), delta)" in glsl
+    assert "subgroupShuffle(float(gid)," in glsl
+
+    glslang = shutil.which("glslangValidator")
+    if glslang is not None:
+        source = tmp_path / "metal-simd-overloads.comp"
+        output = tmp_path / "metal-simd-overloads.spv"
+        source.write_text(glsl, encoding="utf-8")
+        result = subprocess.run(
+            [
+                glslang,
+                "--target-env",
+                "opengl",
+                "--target-env",
+                "spirv1.3",
+                "-S",
+                "comp",
+                str(source),
+                "-o",
+                str(output),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_codegen_mlx_gemv_materialized_array_shuffle_uses_builtin_overload():
+    # Regression for #1504, reduced from MLX GEMV: the concrete helper's local
+    # float array and for-loop delta must not bind unrelated user overloads.
+    code = """
+    bool simd_shuffle_down(bool value, ushort delta) {
+        return value;
+    }
+
+    uint64_t simd_shuffle_down(uint64_t value, ushort delta) {
+        return value;
+    }
+
+    template <typename T>
+    T shuffle_local(T value, uint index) {
+        T result[1] = {value};
+        for (ushort sn = 1; sn > 0; sn >>= 1) {
+            result[index] = simd_shuffle_down(result[index], sn);
+        }
+        return result[index];
+    }
+
+    float use_shuffles(float value, bool flag, uint64_t wide, ushort delta) {
+        float shuffled = shuffle_local<float>(value, 0u);
+        flag = simd_shuffle_down(flag, delta);
+        wide = simd_shuffle_down(wide, delta);
+        return shuffled;
+    }
+    """
+
+    generated = convert(code)
+    normalized = normalize(generated)
+
+    assert (
+        "float shuffle_local_float(float value, uint index) { "
+        "float[1] result = {value}; "
+        "for (uint16 sn = 1; sn > 0; sn >>= 1) { "
+        "result[index] = WaveShuffleDown(result[index], sn); } "
+        "return result[index]; }"
+    ) in normalized
+    assert "flag = simd_shuffle_down(flag, delta);" in generated
+    assert "wide = simd_shuffle_down(wide, delta);" in generated
+    assert parse_crossgl(generated) is not None
+
+
+def test_codegen_mlx_gemvt_materialized_lane_expression_uses_builtin_overload(
+    tmp_path,
+):
+    code = """
+    struct complex64_t {
+        float real;
+        float imag;
+    };
+
+    bool simd_shuffle_down(bool value, ushort delta) {
+        return value;
+    }
+
+    uint64_t simd_shuffle_down(uint64_t value, ushort delta) {
+        return value;
+    }
+
+    complex64_t simd_shuffle_down(complex64_t value, uint delta) {
+        return value;
+    }
+
+    complex64_t preserve_complex_shuffle(complex64_t value, ushort sm) {
+        return simd_shuffle_down(value, 4 * sm);
+    }
+
+    template <typename T, int SN>
+    T shuffle_scaled(T value, uint index) {
+        T result[1] = {value};
+        for (ushort sm = 1; sm > 0; sm >>= 1) {
+            result[index] = simd_shuffle_down(result[index], SN * sm);
+        }
+        return result[index];
+    }
+
+    kernel void use_shuffles(
+        device float* out_buffer [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {
+        out_buffer[gid] = shuffle_scaled<float, 4>(float(gid), 0u);
+    }
+    """
+
+    generated = convert(code)
+    normalized = normalize(generated)
+
+    assert (
+        "float shuffle_scaled_float_4(float value, uint index) { "
+        "float[1] result = {value}; "
+        "for (uint16 sm = 1; sm > 0; sm >>= 1) { "
+        "result[index] = WaveShuffleDown(result[index], 4 * sm); } "
+        "return result[index]; }"
+    ) in normalized
+    assert (
+        "complex64_t preserve_complex_shuffle(complex64_t value, uint16 sm) { "
+        "return simd_shuffle_down(value, 4 * sm); }"
+    ) in normalized
+    ast = parse_crossgl(generated)
+    assert ast is not None
+
+    glsl = GLSLCodeGen().generate(ast)
+    assert "subgroupShuffleDown(result[index], (4 * int(sm)))" in glsl
+    assert "simd_shuffle_down(result[index]" not in glsl
+    assert "return simd_shuffle_down(value" in glsl
+
+    glslang = shutil.which("glslangValidator")
+    if glslang is not None:
+        source = tmp_path / "metal-materialized-lane-expression.comp"
+        output = tmp_path / "metal-materialized-lane-expression.spv"
+        source.write_text(glsl, encoding="utf-8")
+        result = subprocess.run(
+            [
+                glslang,
+                "--target-env",
+                "opengl",
+                "--target-env",
+                "spirv1.3",
+                "-S",
+                "comp",
+                str(source),
+                "-o",
+                str(output),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_codegen_reports_ambiguous_metal_builtin_user_overloads():
+    code = """
+    char simd_shuffle_down(char data, uint delta) {
+        return data;
+    }
+
+    int8_t simd_shuffle_down(int8_t data, uint delta) {
+        return data;
+    }
+
+    kernel void shuffle_value(device char* output [[buffer(0)]]) {
+        char value = 1;
+        uint delta = 1u;
+        output[0] = simd_shuffle_down(value, delta);
+    }
+    """
+
+    with pytest.raises(MetalBuiltinOverloadResolutionError) as exc_info:
+        convert(code)
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.metal-builtin-overload-ambiguous"
+    )
+    assert diagnostic.missing_capabilities == ("metal.builtin-overload-resolution",)
+    assert diagnostic.function_name == "simd_shuffle_down"
+    assert diagnostic.argument_types == ("int8", "uint")
+    assert set(diagnostic.candidates) == {
+        "simd_shuffle_down(char, uint)",
+        "simd_shuffle_down(int8_t, uint)",
+    }
+
+
+def test_metal_simd_reductions_reach_backend_wave_instructions():
+    # End to end: Metal simd_* reductions become real subgroup instructions on
+    # the DirectX and SPIR-V (Vulkan) backends instead of leaking into output.
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void wave_reduce(
+        device const float* in [[buffer(0)]],
+        device float* out [[buffer(1)]],
+        uint gid [[thread_position_in_grid]]) {
+        float v = in[gid];
+        ushort lane = ushort(gid & 31u);
+        out[gid] = simd_sum(v) + simd_prefix_exclusive_sum(v)
+            + simd_broadcast(v, lane);
+    }
+    """
+    ast = parse_crossgl(convert(code))
+
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+    assert "WaveActiveSum(" in hlsl
+    assert "WavePrefixSum(" in hlsl
+    # simd_broadcast carries a ushort lane (min16uint); DirectX must accept it.
+    assert "WaveReadLaneAt(" in hlsl
+    assert "simd_sum" not in hlsl
+    assert "simd_broadcast" not in hlsl
+
+    spirv = VulkanSPIRVCodeGen().generate(ast)
+    assert "OpGroupNonUniformFAdd" in spirv
+    # WaveReadLaneAt lowers to a dynamic-lane shuffle, not a constant broadcast.
+    assert "OpGroupNonUniformShuffle" in spirv
+    assert "cannot lower unknown function" not in spirv
+
+
 if __name__ == "__main__":
     pytest.main()
+
+
+def test_codegen_resolves_local_conditional_t_alias_to_integer_pack_type():
+    # Reduced from mlx quantized `affine_quantize`: an uninstantiated generic
+    # kernel aliases its packed accumulator type through metal::conditional_t.
+    # The alias must resolve to an integer type so the bit-packing math stays
+    # integer-typed instead of the alias defaulting to float (which produces an
+    # invalid float bitwise operation in the SPIR-V backend).
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    template <typename T, const int bits>
+    [[kernel]] void pack(
+        device uint8_t* out [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {
+        using OutType = metal::conditional_t<bits == 5, uint64_t, uint32_t>;
+        OutType output = 0;
+        output |= 7;
+        out[gid] = output & 0xff;
+    }
+    """
+    result = convert(code)
+    assert "uint output = 0" in result
+    assert "OutType" not in result
+    assert parse_crossgl(result) is not None
+
+
+def test_codegen_declares_bitwise_value_template_parameter_as_int():
+    # Reduced from mlx quantized: the `bits` non-type template parameter drives
+    # the power-of-two idiom `bits & (bits - 1)`. In an uninstantiated generic
+    # kernel it has no declaration and would default to float, so it is declared
+    # as an integer placeholder to keep the bitwise math integer-typed.
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    template <typename T, const int bits>
+    [[kernel]] void quant(
+        device uint* out [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {
+        int power_of_2 = (bits & (bits - 1)) == 0;
+        out[gid] = power_of_2;
+    }
+    """
+    result = convert(code)
+    assert "int bits = 0;" in result
+    assert parse_crossgl(result) is not None
+
+
+def test_codegen_leaves_array_extent_value_template_parameter_undeclared():
+    # A value template parameter used only as an array extent (as in mlx fft's
+    # `threadgroup float2 shared[tg_mem_size]`) must not be turned into an
+    # injected runtime local; doing so would disturb array sizing. Only
+    # parameters consumed by bitwise/shift operators receive the placeholder.
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    template <int tg_mem_size, typename T>
+    [[kernel]] void fftlike(
+        device T* out [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {
+        threadgroup float shared_mem[tg_mem_size];
+        out[gid] = shared_mem[0];
+    }
+    """
+    result = convert(code)
+    assert "int tg_mem_size = 0;" not in result
+
+
+def test_codegen_keeps_struct_local_using_alias_uninlined():
+    # A body-local `using` alias whose target is a struct/user template (as in
+    # mlx fft's `using read_writer_t = ReadWriter<...>;`) must keep its historical
+    # handling: only scalar-resolving aliases are inlined, so a struct alias is
+    # never rewritten to a scalar type.
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    template <typename T>
+    struct ReadWriter { T value; };
+
+    template <typename T>
+    [[kernel]] void rw(
+        device float* out [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {
+        using read_writer_t = ReadWriter<T>;
+        read_writer_t r;
+        out[gid] = r.value;
+    }
+    """
+    result = convert(code)
+    # The struct alias resolves to a non-scalar type, so it is not inlined to a
+    # primitive (which would otherwise misdeclare the variable as `uint r`).
+    assert "uint r " not in result
+    assert "float r " not in result
+
+
+def test_codegen_preserves_static_struct_integer_constants():
+    code = """
+    struct Tile {
+        static constant constexpr const int WIDTH = 4 / 2;
+        float values[WIDTH];
+    };
+    """
+
+    result = convert(code)
+    assert "static constant int WIDTH = 4 / 2;" in result
+
+    parsed = parse_crossgl(result)
+    tile = next(struct for struct in parsed.structs if struct.name == "Tile")
+    width = next(member for member in tile.members if member.name == "WIDTH")
+    assert {attribute.name for attribute in width.attributes} >= {
+        "static",
+        "constant",
+    }
+    assert width.default_value.operator == "/"
+
+
+def test_codegen_materializes_qualified_static_constant_initializers(tmp_path):
+    code = """
+    typedef bfloat bfloat16_t;
+
+    struct Values {
+        static constexpr constant int base = 40;
+        static constexpr constant int answer = base + 2;
+    };
+
+    template <typename T>
+    struct Limits {
+        static constexpr constant T max = T(13);
+    };
+
+    template <>
+    struct Limits<float> {
+        static constexpr constant float max =
+            metal::numeric_limits<float>::infinity();
+        static constexpr constant float finite_max =
+            metal::numeric_limits<float>::max();
+    };
+
+    template <>
+    struct Limits<bfloat16_t> {
+        static constexpr constant bfloat16_t max =
+            metal::numeric_limits<bfloat16_t>::infinity();
+    };
+
+    int answer() {
+        return Values::answer;
+    }
+
+    float clamp_float(float value) {
+        return min(value, Limits<float>::max);
+    }
+
+    bfloat16_t max_bfloat() {
+        return Limits<bfloat16_t>::max;
+    }
+
+    float alias_max() {
+        using FloatLimits = Limits<float>;
+        return FloatLimits::max;
+    }
+
+    kernel void use_limits(
+        device float* out [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {
+        out[gid] = clamp_float(float(gid));
+    }
+    """
+
+    crossgl = convert(code)
+
+    assert "return 42;" in crossgl
+    assert "return min(value, (asfloat(0x7f800000u)));" in crossgl
+    assert "return min(value, 13);" not in crossgl
+    assert "return (bfloat16(asfloat(0x7f800000u)));" in crossgl
+    assert "FloatLimits" not in crossgl
+    assert "static constant float finite_max = asfloat(0x7f7fffffu);" in crossgl
+    assert "_u3a_u3a" not in crossgl
+
+    ast = parse_crossgl(crossgl)
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+    glsl = GLSLCodeGen().generate(ast)
+    spirv = VulkanSPIRVCodeGen().generate(ast)
+
+    assert "asfloat(2139095040u)" in hlsl
+    assert "return half(asfloat(2139095040u));" in hlsl
+    assert "bfloat16(" not in hlsl
+    assert "uintBitsToFloat(2139095040u)" in glsl
+    assert "OpConstant" in spirv and " 2139095040" in spirv
+    assert "OpBitcast" in spirv
+    assert "WARNING" not in spirv
+
+    dxc = shutil.which("dxc")
+    if dxc is not None:
+        hlsl_path = tmp_path / "static-constant.hlsl"
+        hlsl_path.write_text(hlsl, encoding="utf-8")
+        subprocess.run(
+            [dxc, "-T", "cs_6_0", "-E", "CSMain", str(hlsl_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    glslang = shutil.which("glslangValidator")
+    if glslang is not None:
+        glsl_path = tmp_path / "static-constant.comp"
+        glsl_path.write_text(glsl, encoding="utf-8")
+        subprocess.run(
+            [
+                glslang,
+                "--target-env",
+                "opengl",
+                "--target-env",
+                "spirv1.3",
+                "-S",
+                "comp",
+                str(glsl_path),
+                "-o",
+                str(tmp_path / "static-constant-opengl.spv"),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    spirv_as = shutil.which("spirv-as")
+    spirv_val = shutil.which("spirv-val")
+    if spirv_as is not None and spirv_val is not None:
+        spirv_path = tmp_path / "static-constant.spvasm"
+        binary_path = tmp_path / "static-constant.spv"
+        spirv_path.write_text(spirv, encoding="utf-8")
+        subprocess.run(
+            [
+                spirv_as,
+                "--target-env",
+                "vulkan1.1",
+                str(spirv_path),
+                "-o",
+                str(binary_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            [spirv_val, "--target-env", "vulkan1.1", str(binary_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+
+def test_codegen_materializes_static_constant_through_decltype_expression_owner():
+    crossgl = convert("""
+        struct Tile {
+            static constexpr int count = 2;
+        };
+
+        struct State {
+            Tile tile;
+        };
+
+        int tile_count(State self) {
+            return decltype(self.tile)::count;
+        }
+        """)
+
+    assert "return 2;" in crossgl
+    assert "decltype" not in crossgl
+    assert "_u3a_u3a" not in crossgl
+
+
+def test_codegen_rejects_uninferable_decltype_static_constant_owner():
+    code = """
+    struct Tile {
+        static constexpr int count = 2;
+    };
+
+    int tile_count() {
+        return decltype(missing_tile)::count;
+    }
+    """
+
+    with pytest.raises(MetalStaticConstantResolutionError) as error:
+        convert(code)
+
+    assert error.value.owner == "decltype(missing_tile)"
+    assert error.value.member == "count"
+    assert "infer" in error.value.reason
+
+
+def test_codegen_rejects_decltype_owner_without_static_constant():
+    code = """
+    struct Tile {
+        int count;
+    };
+
+    struct State {
+        Tile tile;
+    };
+
+    int tile_count(State self) {
+        return decltype(self.tile)::count;
+    }
+    """
+
+    with pytest.raises(MetalStaticConstantResolutionError) as error:
+        convert(code)
+
+    assert error.value.owner == "Tile"
+    assert error.value.member == "count"
+    assert "no compile-time static member" in error.value.reason
+
+
+def test_codegen_rejects_cyclic_static_constant_initializers():
+    code = """
+    struct Cycle {
+        static constexpr int first = second;
+        static constexpr int second = first;
+    };
+
+    int value() {
+        return Cycle::first;
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=r"initializer dependency chain is cyclic .*Cycle::first",
+    ):
+        convert(code)
+
+
+def test_codegen_does_not_inline_mutable_static_struct_members():
+    crossgl = convert("""
+        struct Counter {
+            static int value = 1;
+        };
+
+        int read_counter() {
+            return Counter::value;
+        }
+        """)
+
+    assert "return Counter_u3a_u3avalue;" in crossgl
+    assert "return 1;" not in crossgl
+
+
+def test_codegen_resolves_unique_namespaced_static_constant_owner():
+    crossgl = convert("""
+        namespace Numeric {
+        struct Limits {
+            static constexpr float max =
+                metal::numeric_limits<float>::infinity();
+        };
+        }
+
+        using namespace Numeric;
+
+        float qualified_max() {
+            return Numeric::Limits::max;
+        }
+
+        float imported_max() {
+            return Limits::max;
+        }
+        """)
+
+    assert crossgl.count("return (asfloat(0x7f800000u));") == 2
+    assert "_u3a_u3amax" not in crossgl
+
+
+def test_codegen_rejects_ambiguous_namespaced_static_constant_owner():
+    code = """
+    namespace First {
+    struct Limits {
+        static constexpr float max = 1.0;
+    };
+    }
+
+    namespace Second {
+    struct Limits {
+        static constexpr float max = 2.0;
+    };
+    }
+
+    using namespace First;
+    using namespace Second;
+
+    float max_value() {
+        return Limits::max;
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"Cannot materialize Metal static constant Limits::max: "
+            r"multiple visible struct declarations"
+        ),
+    ):
+        convert(code)
+
+
+def test_const_for_loop_nonzero_indices_reach_vulkan_stores(tmp_path):
+    source = tmp_path / "const_for_loop.metal"
+    source.write_text("""
+        template <typename T, T v>
+        struct integral_constant { static constexpr T value = v; };
+        template <int Value>
+        using Int = integral_constant<int, Value>;
+        template <int start, int stop, int step, typename F>
+        constexpr void const_for_loop(F f) {
+          if constexpr (start < stop) {
+            constexpr auto index = Int<start>{};
+            f(index);
+            const_for_loop<start + step, stop, step, F>(f);
+          }
+        }
+        template <typename T, T lhs, typename U, U rhs>
+        constexpr auto operator*(
+            integral_constant<T, lhs>, integral_constant<U, rhs>) {
+          return integral_constant<decltype(lhs * rhs), lhs * rhs>{};
+        }
+
+        struct Writer {
+          template <typename Row, typename Col>
+          static void store(device int* out, Row row, Col col) {
+            out[row.value + col.value] = row.value + col.value;
+          }
+        };
+        struct Tile {
+          template <typename U>
+          void run(device U* out) {
+            const_for_loop<0, 2, 1>([&](auto row) {
+              const_for_loop<0, 2, 1>([&](auto col) {
+                Writer::store(out, row * Int<4>{}, col * Int<1>{});
+              });
+            });
+          }
+        };
+        kernel void write_indices(device int* out [[buffer(0)]]) {
+          Tile tile;
+          tile.run(out);
+        }
+        """)
+
+    spirv = crosstl.translate(str(source), backend="vulkan", format_output=False)
+
+    assert spirv.count("OpStore") == 4
+    constant_ids = {
+        int(value): result_id
+        for result_id, value in re.findall(
+            r"^(%\d+) = OpConstant %\d+ (-?\d+)$", spirv, re.MULTILINE
+        )
+    }
+    assert {0, 1, 4} <= constant_ids.keys()
+    for left, right in ((0, 0), (0, 1), (4, 0), (4, 1)):
+        operation = re.compile(
+            rf"^%\d+ = OpIAdd %\d+ {re.escape(constant_ids[left])} "
+            rf"{re.escape(constant_ids[right])}$",
+            re.MULTILINE,
+        )
+        assert len(operation.findall(spirv)) == 2
+    assert "WARNING" not in spirv
+
+    spirv_as = shutil.which("spirv-as")
+    spirv_val = shutil.which("spirv-val")
+    if spirv_as is None or spirv_val is None:
+        return
+    assembly = tmp_path / "const_for_loop.spvasm"
+    binary = tmp_path / "const_for_loop.spv"
+    assembly.write_text(spirv)
+    subprocess.run(
+        [spirv_as, "--target-env", "vulkan1.1", str(assembly), "-o", str(binary)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [spirv_val, "--target-env", "vulkan1.1", str(binary)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )

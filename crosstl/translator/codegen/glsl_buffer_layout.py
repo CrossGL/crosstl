@@ -101,24 +101,24 @@ def glsl_buffer_compound_binary_operator(operator, component_type):
     return None
 
 
-def std430_scalar_type_info(component_type):
+def std430_scalar_type_info(component_type, component_size=4):
     return {
-        "size": 4,
-        "align": 4,
+        "size": component_size,
+        "align": component_size,
         "components": 1,
         "component_type": component_type,
     }
 
 
-def std430_vector_type_info(component_type, components):
+def std430_vector_type_info(component_type, components, component_size=4):
     info = {
-        "size": components * 4,
-        "align": 8 if components == 2 else 16,
+        "size": components * component_size,
+        "align": component_size * (2 if components == 2 else 4),
         "components": components,
         "component_type": component_type,
     }
     if components == 3:
-        info["array_stride"] = 16
+        info["array_stride"] = 4 * component_size
     return info
 
 
@@ -154,16 +154,22 @@ def std430_scalar_vector_type_entries():
         "float": std430_scalar_type_info("float"),
         "int": std430_scalar_type_info("int"),
         "uint": std430_scalar_type_info("uint"),
+        "int64_t": std430_scalar_type_info("int64_t", 8),
+        "uint64_t": std430_scalar_type_info("uint64_t", 8),
     }
     vector_prefixes = {
-        "bool": ("bvec", "bool"),
-        "float": ("vec", "float"),
-        "int": ("ivec", "int"),
-        "uint": ("uvec", "uint"),
+        "bool": (("bvec", "bool"), 4),
+        "float": (("vec", "float"), 4),
+        "int": (("ivec", "int"), 4),
+        "uint": (("uvec", "uint"), 4),
+        "int64_t": (("i64vec", "int64_t"), 8),
+        "uint64_t": (("u64vec", "uint64_t"), 8),
     }
-    for component_type, prefixes in vector_prefixes.items():
+    for component_type, (prefixes, component_size) in vector_prefixes.items():
         for components in range(2, 5):
-            info = std430_vector_type_info(component_type, components)
+            info = std430_vector_type_info(
+                component_type, components, component_size=component_size
+            )
             for prefix in prefixes:
                 entries[f"{prefix}{components}"] = info
     return entries
@@ -203,16 +209,18 @@ STD430_SCALAR_TYPE_ALIASES = {
     "int8_t": "int",
     "int16_t": "int",
     "int32_t": "int",
-    "int64": "int",
-    "int64_t": "int",
+    "i64": "int64_t",
+    "int64": "int64_t",
+    "int64_t": "int64_t",
     "long": "int",
     "signed long": "int",
     "ptrdiff_t": "int",
     "uint8_t": "uint",
     "uint16_t": "uint",
     "uint32_t": "uint",
-    "uint64": "uint",
-    "uint64_t": "uint",
+    "u64": "uint64_t",
+    "uint64": "uint64_t",
+    "uint64_t": "uint64_t",
     "ulong": "uint",
     "unsigned long": "uint",
     "size_t": "uint",

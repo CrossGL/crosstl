@@ -536,6 +536,38 @@ map neutral fixture buffers and function constants to MLX runtime objects, but
 the fixture contract remains expressed in terms of entry points, bindings,
 constants, dispatch geometry, and validation hooks rather than MLX APIs.
 
+Saved project test-runner plans can execute deterministic runtime fixtures when
+callers supply adapter implementations explicitly:
+
+.. code-block:: bash
+
+   python -m crosstl execute-test-runner \
+     crosstl-out/project-test-runner-plan.json \
+     --runtime-executor native-vulkan=tools.runtime.vulkan:VulkanRuntimeAdapter \
+     --output crosstl-out/project-test-runner-report.json
+
+``--runtime-executor`` is repeatable and uses
+``EXECUTOR=MODULE:OBJECT``. ``MODULE`` may be a dotted Python module name or a
+``.py`` file path. ``OBJECT`` may be an adapter instance, adapter class, or
+factory returning an object with ``run(request)`` or the parity-adapter methods
+``prepare_buffers(state)``, ``dispatch(state, buffers)``, and
+``collect_outputs(state, result)``.
+
+For the built-in DirectX, OpenGL, and Vulkan native parity adapters, callers can
+also pass ``--native-runtime-adapter TARGET`` or
+``--native-runtime-adapter TARGET=MODULE:OBJECT``. The optional object is the
+backend runtime driver consumed by the native adapter after artifact validation.
+Use ``--no-native-runtime-validation`` only when the caller has already handled
+toolchain validation or is running a controlled test fixture.
+
+CrossTL includes ``crosstl.project.native_runtime_drivers:VulkanComputeRuntime``
+as an optional reference driver for simple Vulkan compute fixtures. The driver
+imports the Python ``vulkan`` binding lazily, reports structured unavailability
+when the binding, loader, or a compute-capable device is unavailable, and
+currently supports storage-buffer fixtures with 32-bit scalar element types and
+a single descriptor set. DirectX and OpenGL native dispatch drivers remain
+downstream or follow-up integration work.
+
 The translator stops at this contract boundary. Full framework rewrites,
 non-kernel host API ports, application command scheduling, target SDK
 installation, build-system migration, memory lifetime policy, and production
@@ -600,6 +632,14 @@ generated manifest. Valid fixture records remain in the manifest so
 ``plan_runtime_test_manifest`` and ``verify_runtime_test_manifest`` can apply
 the same adapter dependency checks and runtime planning used by hand-authored
 manifests.
+
+Generated test records also include ``metadata.runtimeMetadata``. When the
+selected artifact carries ``runtimeDataStatus`` from a runtime artifact
+manifest, that status is preserved; otherwise the generator derives readiness
+from the merged runtime adapter contract. The manifest summary includes
+``runtimeMetadataStatusCounts`` so downstream tooling can separate incomplete
+fixture data from incomplete artifact metadata before attempting native runtime
+execution.
 
 Build a runtime loader manifest from a runtime package manifest:
 
@@ -740,9 +780,12 @@ steps. The step phases cover tool preparation, loader consumption, artifact
 loading, host responsibility handling, blocker resolution, and other host
 actions. Plans carry required tools, host responsibilities, package paths,
 scaffold files, target status, and structured diagnostics so downstream host
-or build-system tooling can decide what to run next. The plan remains metadata
-only: it does not rewrite host application code, execute device code, generate
-runtime framework code, or install target SDKs.
+or build-system tooling can decide what to run next. Plans also include a
+``deviceExecution`` readiness block that declares the adapter-backed dispatch
+inputs a target will need, including the runtime package root, runtime adapter
+descriptor root, and an external target runtime runner. The plan remains
+metadata only: it does not rewrite host application code, execute device code,
+generate runtime framework code, or install target SDKs.
 
 Execute deterministic host integration checks from a saved execution plan:
 
@@ -767,8 +810,15 @@ when ``--adapter-root`` is provided, checks required host tools on ``PATH``, and
 reports project-specific host responsibilities as skipped actionable steps.
 Blocked plan steps remain blocked in the result, and missing files, stale
 descriptor hashes, or invalid paths are emitted as structured diagnostics.
-This command still does not rewrite host application code, execute device code,
-generate runtime framework code, or install target SDKs.
+The result ``deviceExecution`` block reports whether each target has a ready
+runtime package and verified runtime adapter descriptor for an external runner.
+Pass ``--runner-manifest`` with a
+``crosstl-runtime-device-runner-manifest`` JSON file to record target runner
+readiness alongside package and adapter readiness. Runner manifests list
+target-specific runner ids, statuses, optional capabilities, and optional
+commands; they are validated as readiness metadata only. This command still
+does not rewrite host application code, dispatch device work, generate runtime
+framework code, or install target SDKs.
 
 Diagnostics with ``originalLocation`` keep the generated or validation
 location as the primary SARIF location and attach the original source span as a

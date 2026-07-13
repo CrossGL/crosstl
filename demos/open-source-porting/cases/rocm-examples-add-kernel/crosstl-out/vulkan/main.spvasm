@@ -1,35 +1,35 @@
 ; SPIR-V
 ; Version: 1.0
 ; Generator: CrossGL Vulkan SPIR-V Generator
-; Bound: 45
+; Bound: 46
 OpCapability Shader
 %1 = OpExtInstImport "GLSL.std.450"
 OpMemoryModel Logical GLSL450
-OpEntryPoint GLCompute %11 "AddKernel" %22 %27
+OpEntryPoint GLCompute %11 "AddKernel" %23 %28
 OpExecutionMode %11 LocalSize 1 1 1
-OpName %13 "aBuffer"
-OpMemberName %13 0 "a"
-OpName %15 "a"
-OpName %16 "bBuffer"
-OpMemberName %16 0 "b"
-OpName %18 "b"
-OpName %22 "gl_LocalInvocationID"
-OpName %24 "global_idx"
-OpName %27 "gl_WorkGroupID"
-OpName %31 "gl_WorkGroupSize"
-OpDecorate %13 BufferBlock
-OpMemberDecorate %13 0 Offset 0
-OpDecorate %9 ArrayStride 4
-OpDecorate %15 DescriptorSet 0
-OpDecorate %15 Binding 0
-OpDecorate %16 BufferBlock
-OpMemberDecorate %16 0 Offset 0
-OpMemberDecorate %16 0 NonWritable
-OpDecorate %18 DescriptorSet 0
-OpDecorate %18 Binding 1
-OpDecorate %22 BuiltIn LocalInvocationId
-OpDecorate %27 BuiltIn WorkgroupId
-OpDecorate %31 BuiltIn WorkgroupSize
+OpName %14 "aBuffer"
+OpMemberName %14 0 "a"
+OpName %16 "a"
+OpName %17 "bBuffer"
+OpMemberName %17 0 "b"
+OpName %19 "b"
+OpName %23 "gl_LocalInvocationID"
+OpName %25 "global_idx"
+OpName %28 "gl_WorkGroupID"
+OpName %32 "gl_WorkGroupSize"
+OpDecorate %14 BufferBlock
+OpMemberDecorate %14 0 Offset 0
+OpDecorate %13 ArrayStride 4
+OpDecorate %16 DescriptorSet 0
+OpDecorate %16 Binding 0
+OpDecorate %17 BufferBlock
+OpMemberDecorate %17 0 Offset 0
+OpMemberDecorate %17 0 NonWritable
+OpDecorate %19 DescriptorSet 0
+OpDecorate %19 Binding 1
+OpDecorate %23 BuiltIn LocalInvocationId
+OpDecorate %28 BuiltIn WorkgroupId
+OpDecorate %32 BuiltIn WorkgroupSize
 %2 = OpTypeVoid
 %3 = OpTypeBool
 %4 = OpTypeInt 32 1
@@ -39,41 +39,42 @@ OpDecorate %31 BuiltIn WorkgroupSize
 %8 = OpTypeVector %5 4
 %9 = OpTypeRuntimeArray %5
 %10 = OpTypeFunction %2
-%13 = OpTypeStruct %9
-%14 = OpTypePointer Uniform %13
-%16 = OpTypeStruct %9
-%17 = OpTypePointer Uniform %16
-%19 = OpTypeInt 32 0
-%20 = OpTypeVector %19 3
-%21 = OpTypePointer Input %20
-%23 = OpTypePointer Function %4
-%30 = OpConstant %19 1
-%31 = OpConstantComposite %20 %30 %30 %30
-%37 = OpConstant %4 0
-%38 = OpTypePointer Uniform %5
-%15 = OpVariable %14 Uniform
-%18 = OpVariable %17 Uniform
-%22 = OpVariable %21 Input
-%27 = OpVariable %21 Input
+%13 = OpTypeRuntimeArray %5
+%14 = OpTypeStruct %13
+%15 = OpTypePointer Uniform %14
+%17 = OpTypeStruct %13
+%18 = OpTypePointer Uniform %17
+%20 = OpTypeInt 32 0
+%21 = OpTypeVector %20 3
+%22 = OpTypePointer Input %21
+%24 = OpTypePointer Function %4
+%31 = OpConstant %20 1
+%32 = OpConstantComposite %21 %31 %31 %31
+%38 = OpConstant %4 0
+%39 = OpTypePointer Uniform %5
+%16 = OpVariable %15 Uniform
+%19 = OpVariable %18 Uniform
+%23 = OpVariable %22 Input
+%28 = OpVariable %22 Input
 %11 = OpFunction %2 None %10
 %12 = OpLabel
-%24 = OpVariable %23 Function
-%25 = OpLoad %20 %22
-%26 = OpCompositeExtract %19 %25 0
-%28 = OpLoad %20 %27
-%29 = OpCompositeExtract %19 %28 0
-%32 = OpCompositeExtract %19 %31 0
-%33 = OpIMul %19 %29 %32
-%34 = OpIAdd %19 %26 %33
-%35 = OpBitcast %4 %34
-OpStore %24 %35
-%36 = OpLoad %4 %24
-%39 = OpAccessChain %38 %15 %37 %36
-%40 = OpLoad %5 %39
-%41 = OpLoad %4 %24
-%42 = OpAccessChain %38 %18 %37 %41
-%43 = OpLoad %5 %42
-%44 = OpFAdd %5 %40 %43
-OpStore %39 %44
+%25 = OpVariable %24 Function
+%26 = OpLoad %21 %23
+%27 = OpCompositeExtract %20 %26 0
+%29 = OpLoad %21 %28
+%30 = OpCompositeExtract %20 %29 0
+%33 = OpCompositeExtract %20 %32 0
+%34 = OpIMul %20 %30 %33
+%35 = OpIAdd %20 %27 %34
+%36 = OpBitcast %4 %35
+OpStore %25 %36
+%37 = OpLoad %4 %25
+%40 = OpAccessChain %39 %16 %38 %37
+%41 = OpLoad %5 %40
+%42 = OpLoad %4 %25
+%43 = OpAccessChain %39 %19 %38 %42
+%44 = OpLoad %5 %43
+%45 = OpFAdd %5 %41 %44
+OpStore %40 %45
 OpReturn
 OpFunctionEnd

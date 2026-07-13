@@ -251,6 +251,11 @@ def test_full_suite_runs_runtime_parity_only_for_available_adapters():
     assert "steps.probe_runtime_parity.outputs.available == 'true'" in full_suite
     assert "Record unavailable runtime parity adapter" in full_suite
     assert "tests/test_translator/test_runtime_verification.py" in full_suite
+    assert "tests/test_translator/test_native_runtime_drivers.py" in full_suite
+    assert "mesa-vulkan-drivers" in full_suite
+    assert "python -m pip install vulkan==1.3.275.1" in full_suite
+    assert "CROSTL_RUN_VULKAN_DEVICE_TEST=1" in full_suite
+    assert "vulkaninfo --summary" in full_suite
     assert '-k "runtime_parity"' in full_suite
 
 
@@ -2073,6 +2078,10 @@ def test_translator_test_matrix_matches_support_catalog_and_frontend_policy():
         in translator_tests
     )
     assert (
+        "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py"
+        in translator_tests
+    )
+    assert (
         "--junitxml support/generated/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml"
         in translator_tests
     )
@@ -2102,19 +2111,34 @@ def test_translator_test_matrix_matches_support_catalog_and_frontend_policy():
 def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     workflows = _workflow_texts()
     mlx_porting = workflows.get("mlx-project-porting.yml", "")
-    harness = (ROOT / "integrations" / "mlx" / "run_mlx_porting.py").read_text(
-        encoding="utf-8"
-    )
+    harness = (
+        ROOT / "demos" / "integrations" / "mlx" / "run_mlx_porting.py"
+    ).read_text(encoding="utf-8")
     mlx_commit = "968d264f2903d578e699c4452a4dbf48633921aa"
 
     assert mlx_porting, "mlx-project-porting.yml must exist"
-    assert "integrations/mlx/run_mlx_porting.py" in mlx_porting
+    assert "demos/integrations/mlx/run_mlx_porting.py" in mlx_porting
     assert mlx_commit in mlx_porting
     assert _matrix_values(mlx_porting, "os") == RUNNER_OSES
     assert re.search(r"\bschedule\s*:", mlx_porting)
     assert 'cron: "31 4 * * 1"' in mlx_porting
     assert "github.event_name != 'schedule'" in mlx_porting
     assert "--mode reduced-frontier" in mlx_porting
+    assert "--require-directx-toolchain" in mlx_porting
+    assert "--require-opengl-gemv-toolchain" in mlx_porting
+    assert "--require-vulkan-gemv-toolchain" in mlx_porting
+    assert "--require-vulkan-native-runtime" in mlx_porting
+    assert "Install Windows DirectX Shader Compiler" in mlx_porting
+    assert "DirectXShaderCompiler/releases/download/v1.9.2602.24" in mlx_porting
+    assert "dxc --version" in mlx_porting
+    assert "glslang-tools" in mlx_porting
+    assert "glslangValidator --version" in mlx_porting
+    assert "Validate OpenGL scalar conversions" in mlx_porting
+    assert "opengl_lowers_expected_scalar_and_vector_conversions" in mlx_porting
+    assert "opengl_preserves_metal_arithmetic_conversion_order" in mlx_porting
+    assert "mesa-vulkan-drivers" in mlx_porting
+    assert "python -m pip install vulkan==1.3.275.1" in mlx_porting
+    assert "vulkaninfo --summary" in mlx_porting
     assert "mlx-full-corpus-scout:" in mlx_porting
     assert "MLX full-corpus artifact scout" in mlx_porting
     assert (
@@ -2125,8 +2149,10 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "full-corpus-summary.json" in mlx_porting
     assert "out-full-corpus" in mlx_porting
     assert "name: mlx-full-corpus-scout" in mlx_porting
+    assert "include-hidden-files: true" in mlx_porting
     assert "retention-days: 30" in mlx_porting
-    assert re.search(r"translate-project\b[\s\S]*validation_flag", harness)
+    assert 'f"validate-{toolchain_name}-frontier-toolchain"' in harness
+    assert "require_directx_toolchain" in harness
     assert '"--run-toolchains"' in harness
     assert '"--validate"' in harness
     assert "FULL_CORPUS_EXPECTED_ARTIFACT_COUNT" in harness
@@ -2137,7 +2163,16 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "without tracked issue references" in harness
     assert "runtime-readiness" in harness
     assert "runtime-test-manifest" in harness
-    for tracked_issue_number in (1312, 1354, 1362, 1376, 1388, 1392):
+    assert "VulkanComputeRuntime" in harness
+    assert "require_vulkan_native_runtime" in harness
+    for tracked_issue_number in (
+        1312,
+        1376,
+        1388,
+        1392,
+        1394,
+        1471,
+    ):
         assert f"https://github.com/CrossGL/crosstl/issues/{tracked_issue_number}" in (
             harness
         )
@@ -2167,6 +2202,12 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         1340,
         1346,
         1355,
+        1354,
+        1362,
+        1396,
+        1452,
+        1453,
+        1454,
         1300,
         1317,
     ):

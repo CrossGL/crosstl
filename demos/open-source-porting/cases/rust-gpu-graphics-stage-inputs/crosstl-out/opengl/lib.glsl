@@ -5,6 +5,8 @@ in vec2 pos;
 #ifdef GL_FRAGMENT_SHADER
 layout(location = 0) out vec4 fragColor;
 #endif
+vec3 tonemap(vec3 color);
+
 vec3 tonemap(vec3 color) {
     return color;
 }

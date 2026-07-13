@@ -486,8 +486,14 @@ class MetalCodeGen:
         "WaveActiveBallot": 1,
         "WaveReadLaneAt": 2,
         "WaveReadLaneFirst": 1,
+        "WaveShuffleDown": 2,
+        "WaveShuffleUp": 2,
+        "WaveShuffleAndFillUp": 3,
+        "WaveShuffleXor": 2,
         "WavePrefixSum": 1,
         "WavePrefixProduct": 1,
+        "WavePrefixInclusiveSum": 1,
+        "WavePrefixInclusiveProduct": 1,
         "WavePrefixCountBits": 1,
         "WaveMatch": 1,
         "WaveMultiPrefixSum": 2,
@@ -514,8 +520,14 @@ class MetalCodeGen:
         "WaveActiveAllTrue": "simd_all",
         "WaveActiveAnyTrue": "simd_any",
         "WaveReadLaneFirst": "simd_broadcast_first",
+        "WaveShuffleDown": "simd_shuffle_down",
+        "WaveShuffleUp": "simd_shuffle_up",
+        "WaveShuffleAndFillUp": "simd_shuffle_and_fill_up",
+        "WaveShuffleXor": "simd_shuffle_xor",
         "WavePrefixSum": "simd_prefix_exclusive_sum",
         "WavePrefixProduct": "simd_prefix_exclusive_product",
+        "WavePrefixInclusiveSum": "simd_prefix_inclusive_sum",
+        "WavePrefixInclusiveProduct": "simd_prefix_inclusive_product",
         "QuadAny": "quad_any",
         "QuadAll": "quad_all",
     }
@@ -561,6 +573,8 @@ class MetalCodeGen:
         "WaveActiveMax",
         "WavePrefixSum",
         "WavePrefixProduct",
+        "WavePrefixInclusiveSum",
+        "WavePrefixInclusiveProduct",
     }
     METAL_WAVE_INTEGER_VALUE_INTRINSICS = {
         "WaveActiveBitAnd",
@@ -576,6 +590,7 @@ class MetalCodeGen:
         "QuadReadAcrossDiagonal",
         "QuadReadLaneAt",
     }
+    METAL_WAVE_SHUFFLE_AND_FILL_INTRINSICS = {"WaveShuffleAndFillUp"}
     METAL_WAVE_UINT_RESULT_INTRINSICS = {
         "WaveGetLaneCount",
         "WaveGetLaneIndex",
@@ -599,6 +614,7 @@ class MetalCodeGen:
         METAL_WAVE_NUMERIC_VALUE_INTRINSICS
         | METAL_WAVE_INTEGER_VALUE_INTRINSICS
         | METAL_WAVE_SIMDGROUP_VALUE_INTRINSICS
+        | METAL_WAVE_SHUFFLE_AND_FILL_INTRINSICS
         | {
             "WaveMultiPrefixSum",
             "WaveMultiPrefixProduct",
@@ -4899,13 +4915,19 @@ class MetalCodeGen:
         return stage_parameters
 
     def validate_compute_builtin_parameter_types(self, parameters):
+        # Metal allows the positional / dimension compute builtins to be declared
+        # as a scalar `uint`, `uint2`, or `uint3` (the driver fills the requested
+        # component count). See Apple's "Creating threads and threadgroups" guide,
+        # which uses the uint2 form. Restricting these to uint3 rejected valid MLX
+        # reduction kernels (softmax/rms_norm/layer_norm/... use scalar `uint`).
+        positional_builtin_types = ("uint", "uint2", "uint3")
         expected_types = {
-            "thread_position_in_grid": ("uint", "uint2", "uint3"),
-            "thread_position_in_threadgroup": "uint3",
-            "threadgroup_position_in_grid": "uint3",
+            "thread_position_in_grid": positional_builtin_types,
+            "thread_position_in_threadgroup": positional_builtin_types,
+            "threadgroup_position_in_grid": positional_builtin_types,
             "thread_index_in_threadgroup": "uint",
-            "threads_per_threadgroup": "uint3",
-            "threadgroups_per_grid": "uint3",
+            "threads_per_threadgroup": positional_builtin_types,
+            "threadgroups_per_grid": positional_builtin_types,
             "thread_index_in_simdgroup": "uint",
             "threads_per_simdgroup": "uint",
         }
@@ -9623,6 +9645,7 @@ class MetalCodeGen:
         return {
             "barrier": "threadgroup_barrier(mem_flags::mem_threadgroup)",
             "workgroupBarrier": "threadgroup_barrier(mem_flags::mem_threadgroup)",
+            "workgroupExecutionBarrier": "threadgroup_barrier(mem_flags::mem_none)",
             "groupMemoryBarrier": "threadgroup_barrier(mem_flags::mem_threadgroup)",
             "memoryBarrierShared": "threadgroup_barrier(mem_flags::mem_threadgroup)",
             "memoryBarrierBuffer": "threadgroup_barrier(mem_flags::mem_device)",
@@ -9741,6 +9764,39 @@ class MetalCodeGen:
             value = self.generate_expression(arguments[0])
             lane = self.generate_expression(arguments[1])
             return f"simd_broadcast({value}, ushort({lane}))"
+        if operation in self.METAL_WAVE_SHUFFLE_AND_FILL_INTRINSICS:
+            value = self.generate_expression(arguments[0])
+            fill = self.generate_expression(arguments[1])
+            delta = self.generate_expression(arguments[2])
+            mapped_type, component_type, _array_suffix = (
+                self.metal_wave_argument_mapped_type(arguments[0])
+            )
+            boolean_payload = (
+                mapped_type == "bool"
+                or component_type == "bool"
+                or all(
+                    self.metal_wave_expression_is_boolean(argument)
+                    for argument in arguments[:2]
+                )
+            )
+            if boolean_payload:
+                component_count = self.value_component_count(mapped_type) or 1
+                payload_type = (
+                    "uint" if component_count == 1 else f"uint{component_count}"
+                )
+                zero = "0u" if component_count == 1 else f"{payload_type}(0u)"
+                return (
+                    f"(simd_shuffle_and_fill_up({payload_type}({value}), "
+                    f"{payload_type}({fill}), ushort({delta})) != {zero})"
+                )
+            result = f"simd_shuffle_and_fill_up({value}, {fill}, ushort({delta}))"
+            expected_type = self.map_type(self.current_expression_expected_type)
+            if expected_type == "bool":
+                return (
+                    f"({result} != "
+                    f"{self.diagnostic_zero_value_for_type(mapped_type)})"
+                )
+            return result
         if operation == "QuadReadLaneAt":
             value = self.generate_expression(arguments[0])
             lane = self.generate_expression(arguments[1])
@@ -9775,7 +9831,8 @@ class MetalCodeGen:
         return None
 
     def metal_wave_argument_mapped_type(self, argument):
-        argument_type = self.expression_result_type(argument)
+        literal_type = getattr(getattr(argument, "literal_type", None), "name", None)
+        argument_type = literal_type or self.expression_result_type(argument)
         if argument_type is None:
             return None, None, None
         mapped_type = self.map_type(argument_type)
@@ -9897,7 +9954,53 @@ class MetalCodeGen:
             )
         return None
 
+    def metal_wave_validate_shuffle_and_fill_arguments(self, operation, arguments):
+        allowed_components = self.METAL_WAVE_NUMERIC_COMPONENT_TYPES | {"bool"}
+        mapped_types = []
+        for argument, role in ((arguments[0], "value"), (arguments[1], "fill")):
+            mapped_type, component_type, array_suffix = (
+                self.metal_wave_argument_mapped_type(argument)
+            )
+            mapped_types.append(mapped_type)
+            if mapped_type is None:
+                continue
+            if self.is_scalar_value_type(mapped_type):
+                component_type = mapped_type
+            if (
+                array_suffix
+                or self.metal_wave_mapped_type_is_matrix(mapped_type)
+                or component_type not in allowed_components
+            ):
+                return self.metal_wave_diagnostic_expression(
+                    operation,
+                    arguments,
+                    f"{role} argument must be a basic scalar or vector, got "
+                    f"{mapped_type}",
+                )
+
+        value_type, fill_type = mapped_types
+        if value_type is not None and fill_type is not None and value_type != fill_type:
+            return self.metal_wave_diagnostic_expression(
+                operation,
+                arguments,
+                "value and fill arguments must have matching types, got "
+                f"{value_type} and {fill_type}",
+            )
+        return self.metal_wave_validate_lane_argument(operation, arguments[2], "delta")
+
+    def metal_wave_expression_is_boolean(self, expression):
+        expression_type = self.expression_result_type(expression)
+        mapped_type = self.map_type(expression_type) if expression_type else None
+        if mapped_type == "bool" or self.vector_component_type(mapped_type) == "bool":
+            return True
+        literal_type = getattr(getattr(expression, "literal_type", None), "name", None)
+        return self.map_type(literal_type) == "bool" if literal_type else False
+
     def metal_wave_type_diagnostic(self, operation, arguments):
+        if operation in self.METAL_WAVE_SHUFFLE_AND_FILL_INTRINSICS:
+            return self.metal_wave_validate_shuffle_and_fill_arguments(
+                operation, arguments
+            )
         if operation == "WaveMultiPrefixCountBits":
             diagnostic = self.metal_wave_validate_predicate_argument(
                 operation, arguments[0]

@@ -250,7 +250,7 @@ def _binding_diagnostics(
     resources: Sequence[Mapping[str, Any]],
 ) -> list[ReflectionDiagnostic]:
     diagnostics = []
-    seen: dict[tuple[Any, Any], str] = {}
+    seen: dict[tuple[Any, Any], tuple[str, tuple[str, ...]]] = {}
     for resource in resources:
         resource_name = str(resource.get("name") or "<unnamed>")
         binding = resource.get("binding")
@@ -265,22 +265,50 @@ def _binding_diagnostics(
             )
             continue
         coordinate = (0 if set_number is None else set_number, binding)
+        owners = _resource_entry_points(resource)
         if coordinate in seen:
+            conflicting_resource, conflicting_owners = seen[coordinate]
+            if (
+                owners
+                and conflicting_owners
+                and set(owners).isdisjoint(conflicting_owners)
+            ):
+                continue
             diagnostics.append(
                 ReflectionDiagnostic(
                     REFLECTION_AMBIGUOUS_BINDING,
                     "Multiple reflected resources use the same binding coordinate.",
                     details={
                         "resource": resource_name,
-                        "conflictingResource": seen[coordinate],
+                        "conflictingResource": conflicting_resource,
                         "set": coordinate[0],
                         "binding": coordinate[1],
                     },
                 )
             )
         else:
-            seen[coordinate] = resource_name
+            seen[coordinate] = (resource_name, owners)
     return diagnostics
+
+
+def _resource_entry_points(resource: Mapping[str, Any]) -> tuple[str, ...]:
+    metadata = resource.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return ()
+    names: list[str] = []
+    for key in ("entryPoint", "entry_point"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            names.append(value.strip())
+    for key in ("entryPoints", "entry_points"):
+        value = metadata.get(key)
+        if isinstance(value, Sequence) and not isinstance(
+            value, (str, bytes, bytearray)
+        ):
+            names.extend(
+                item.strip() for item in value if isinstance(item, str) and item.strip()
+            )
+    return tuple(dict.fromkeys(names))
 
 
 def _read_text(path: Path) -> str:
@@ -801,9 +829,10 @@ def _reflect_spirv_assembly(source: str, *, artifact_format: str) -> dict[str, A
             continue
         if opcode == "OpName" and len(tokens) >= 3:
             names[tokens[1]] = tokens[2]
-        elif opcode == "OpDecorate" and len(tokens) >= 4:
+        elif opcode == "OpDecorate" and len(tokens) >= 3:
             target = tokens[1]
-            decorations.setdefault(target, {})[tokens[2]] = _literal_value(tokens[3])
+            value = _literal_value(tokens[3]) if len(tokens) >= 4 else True
+            decorations.setdefault(target, {})[tokens[2]] = value
         elif opcode == "OpEntryPoint" and len(tokens) >= 4:
             model = tokens[1]
             function_id = tokens[2]
@@ -876,6 +905,7 @@ def _reflect_spirv_assembly(source: str, *, artifact_format: str) -> dict[str, A
                 },
             }
         )
+    resources = _annotate_spirv_resource_entry_points(resources, entry_points)
 
     constants = []
     for constant_id, constant in constants_by_id.items():
@@ -906,6 +936,80 @@ def _reflect_spirv_assembly(source: str, *, artifact_format: str) -> dict[str, A
         resources=resources,
         constants=constants,
         diagnostics=[],
+    )
+
+
+def _annotate_spirv_resource_entry_points(
+    resources: Sequence[Mapping[str, Any]],
+    entry_points: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    annotated = [dict(resource) for resource in resources]
+    entry_names = [
+        str(entry_point.get("name"))
+        for entry_point in entry_points
+        if isinstance(entry_point.get("name"), str)
+    ]
+    if not entry_names:
+        return annotated
+
+    for resource in annotated:
+        owner = _spirv_resource_entry_point_by_name(resource, entry_names)
+        if owner is not None:
+            metadata = dict(resource.get("metadata") or {})
+            metadata.setdefault("entryPoint", owner)
+            resource["metadata"] = metadata
+
+    if len(entry_names) <= 1 or len(annotated) % len(entry_names):
+        return annotated
+
+    group_size = len(annotated) // len(entry_names)
+    if group_size == 0:
+        return annotated
+    groups = [
+        annotated[index : index + group_size]
+        for index in range(0, len(annotated), group_size)
+    ]
+    first_signature = [
+        _spirv_resource_layout_signature(resource) for resource in groups[0]
+    ]
+    if not all(
+        [_spirv_resource_layout_signature(resource) for resource in group]
+        == first_signature
+        for group in groups[1:]
+    ):
+        return annotated
+
+    for entry_name, group in zip(entry_names, groups):
+        for resource in group:
+            metadata = dict(resource.get("metadata") or {})
+            metadata.setdefault("entryPoint", entry_name)
+            resource["metadata"] = metadata
+    return annotated
+
+
+def _spirv_resource_entry_point_by_name(
+    resource: Mapping[str, Any], entry_names: Sequence[str]
+) -> str | None:
+    metadata = resource.get("metadata")
+    metadata_id = metadata.get("id") if isinstance(metadata, Mapping) else ""
+    candidates = (
+        str(resource.get("type") or ""),
+        str(resource.get("name") or ""),
+        str(metadata_id or ""),
+    )
+    for entry_name in entry_names:
+        prefixes = (f"{entry_name}_", f"{entry_name}.", f"{entry_name}$")
+        if any(candidate.startswith(prefixes) for candidate in candidates):
+            return entry_name
+    return None
+
+
+def _spirv_resource_layout_signature(resource: Mapping[str, Any]) -> tuple[Any, ...]:
+    return (
+        resource.get("set", 0),
+        resource.get("binding"),
+        resource.get("kind"),
+        resource.get("name"),
     )
 
 

@@ -22,7 +22,12 @@ from crosstl.backend.common_ast import (
     VectorConstructorNode,
     WhileNode,
 )
-from crosstl.backend.Metal.MetalAst import BlockNode, EnumNode, LambdaNode
+from crosstl.backend.Metal.MetalAst import (
+    BlockNode,
+    EnumNode,
+    LambdaNode,
+    TypeAliasNode,
+)
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
 
@@ -340,9 +345,33 @@ def test_parse_indexed_reinterpret_cast_assignment_from_pytorch_mps_quantized():
     """
     ast = parse_ok(code)
     assignment = ast.functions[0].body[0]
+    casts = [node for node in iter_ast_nodes(assignment) if isinstance(node, CastNode)]
 
     assert isinstance(assignment, AssignmentNode)
     assert isinstance(assignment.left, ArrayAccessNode)
+    assert len(casts) == 1
+    assert casts[0].target_type == "vecT*"
+    assert casts[0].qualifiers == ["device"]
+
+
+def test_parse_reinterpret_cast_retains_pointer_qualifiers():
+    code = """
+    void aliases(thread float* values) {
+        thread float* mutable_values =
+            reinterpret_cast<thread float*>(values);
+        const thread float* const_values =
+            reinterpret_cast<const thread float*>(values);
+    }
+    """
+
+    ast = parse_ok(code)
+    casts = [node for node in iter_ast_nodes(ast) if isinstance(node, CastNode)]
+
+    assert [cast.target_type for cast in casts] == ["float*", "float*"]
+    assert [cast.qualifiers for cast in casts] == [
+        ["thread"],
+        ["const", "thread"],
+    ]
 
 
 def test_parse_global_scoped_metal_array_declaration_from_pytorch_mps_scatter():
@@ -493,11 +522,16 @@ def test_parse_block_scope_using_decltype_alias_from_mlx_steel_attention():
     ast = parse_ok(code)
 
     body = ast.functions[0].body
-    assert body[1].left.name == "neg_inf"
-    assert body[1].left.vtype == "auto"
-    assert body[1].right.name == "Limits<selem_t>::finite_min"
-    assert body[2].left.name == "kRowsPT"
-    assert body[2].right.name == "stile_t::kRowsPerThread"
+    # Body-local ``using X = Y;`` aliases are retained as TypeAliasNode
+    # statements so codegen can resolve later declarations that reference them.
+    aliases = [stmt for stmt in body if isinstance(stmt, TypeAliasNode)]
+    assert [alias.name for alias in aliases] == ["stile_t", "selem_t"]
+    statements = [stmt for stmt in body if not isinstance(stmt, TypeAliasNode)]
+    assert statements[1].left.name == "neg_inf"
+    assert statements[1].left.vtype == "auto"
+    assert statements[1].right.name == "Limits<selem_t>::finite_min"
+    assert statements[2].left.name == "kRowsPT"
+    assert statements[2].right.name == "stile_t::kRowsPerThread"
 
 
 def test_parse_block_scope_decltype_variable_declaration():
@@ -532,12 +566,78 @@ def test_parse_block_scope_typedef_alias_from_mlx_fp_quantized():
     ast = parse_ok(code)
 
     body = ast.functions[0].body
-    assert body[1].vtype == "U"
-    assert body[1].qualifiers == ["thread"]
-    assert body[1].array_sizes[0].name == "values_per_thread"
-    assert body[2].left.vtype == "U"
-    assert body[2].left.qualifiers == ["thread"]
-    assert body[2].left.array_sizes == ["8"]
+    alias = body[1]
+    assert isinstance(alias, TypeAliasNode)
+    assert alias.name == "U"
+    assert alias.alias_type == "float"
+    assert alias.source_location is not None
+    assert body[2].vtype == "U"
+    assert body[2].qualifiers == ["thread"]
+    assert body[2].array_sizes[0].name == "values_per_thread"
+    assert body[3].left.vtype == "U"
+    assert body[3].left.qualifiers == ["thread"]
+    assert body[3].left.array_sizes == ["8"]
+
+
+def test_parse_block_scope_typedef_preserves_declarator_metadata():
+    ast = parse_ok("""
+        void prepare() {
+            typedef const device float* DeviceValues;
+            typedef float Lanes[4];
+        }
+        """)
+
+    pointer_alias, array_alias = ast.functions[0].body
+    assert pointer_alias.alias_type == "float*"
+    assert pointer_alias.qualifiers == ["const", "device"]
+    assert pointer_alias.array_sizes == []
+    assert pointer_alias.source_location is not None
+    assert array_alias.alias_type == "float"
+    assert len(array_alias.array_sizes) == 1
+    assert array_alias.array_sizes[0] == "4"
+    assert array_alias.source_location is not None
+
+
+def test_parse_block_scope_typedef_does_not_leak_to_sibling_function():
+    code = """
+    void first() {
+        typedef float LocalScalar;
+        LocalScalar value = 1.0f;
+    }
+
+    void second() {
+        LocalScalar value = 2.0f;
+    }
+    """
+
+    parser = MetalParser(tokenize_code(code))
+    parser.parse()
+
+    assert "LocalScalar" not in parser.known_types
+
+
+def test_parse_switch_typedef_scope_spans_cases_only():
+    source = """
+        void select(int mode) {
+            switch (mode) {
+                case 0:
+                    typedef int CaseValue;
+                    break;
+                case 1:
+                    CaseValue value = 1;
+                    break;
+            }
+            int after = 2;
+        }
+        """
+    parser = MetalParser(tokenize_code(source))
+    ast = parser.parse()
+
+    switch = ast.functions[0].body[0]
+    assert isinstance(switch.cases[0].statements[0], TypeAliasNode)
+    assert switch.cases[1].statements[0].left.vtype == "CaseValue"
+    assert ast.functions[0].body[1].left.vtype == "int"
+    assert "CaseValue" not in parser.known_types
 
 
 def test_parse_dependent_numeric_template_call_from_mlx_fp_quantized():
@@ -2713,6 +2813,7 @@ def test_parse_qualified_casts_and_range_designator_from_llama_cpp():
 
     assert isinstance(cast_assignment.right, CastNode)
     assert cast_assignment.right.target_type == "block_q1_0*"
+    assert cast_assignment.right.qualifiers == ["device", "const"]
     assert designator.designators[0][0] == "range"
     assert designator.designators[0][1] == "0"
     assert designator.designators[0][2] == "r1ptg-1"
@@ -2974,6 +3075,108 @@ def test_parse_scoped_variable_template_expression_from_mlx_gemv_masked():
     assert second_value.right.operand.name == "metal::is_same_v<op_mask_t,bool>"
 
 
+def test_parse_parenthesized_scoped_constant_expressions_from_mlx_steel():
+    code = """
+    struct Base {
+      static constant constexpr const int kFragRows = 8;
+    };
+
+    struct Tile {
+      static constant constexpr const int direct = (Base::kFragRows);
+      static constant constexpr const int product = 4 * (Base::kFragRows);
+      static constant constexpr const int sum = (Base::kFragRows) + 1;
+      static constant constexpr const int difference = (Base::kFragRows) - 1;
+      static constant constexpr const int scaled = (Base::kFragRows) * 2;
+      static constant constexpr const int grouped_arithmetic =
+          (Base::kFragRows + 1);
+      static constant constexpr const int nested =
+          ((outer::inner::Limits::value));
+      static constant constexpr const int negated = -(Base::kFragRows);
+      static constant constexpr const int selected =
+          true ? (Base::kFragRows) : 0;
+    };
+
+    void consume(int value) {}
+
+    void use_constant() {
+      consume((Base::kFragRows));
+    }
+    """
+    ast = parse_ok(code)
+
+    members = {member.name: member.default_value for member in ast.structs[1].members}
+    direct = members["direct"]
+    assert direct.name == "Base::kFragRows"
+    assert direct.source_location["file"] is None
+    assert direct.group_source_location["offset"] < direct.source_location["offset"]
+    assert direct.group_source_location["end_offset"] > (
+        direct.source_location["end_offset"]
+    )
+    assert members["product"].right.name == "Base::kFragRows"
+    assert members["sum"].left.name == "Base::kFragRows"
+    assert members["difference"].left.name == "Base::kFragRows"
+    assert members["scaled"].left.name == "Base::kFragRows"
+    grouped_arithmetic = members["grouped_arithmetic"]
+    assert grouped_arithmetic.left.name == "Base::kFragRows"
+    assert grouped_arithmetic.group_source_location["offset"] < (
+        grouped_arithmetic.left.source_location["offset"]
+    )
+    nested = members["nested"]
+    assert nested.name == "outer::inner::Limits::value"
+    assert len(nested.group_source_locations) == 2
+    inner_group, outer_group = nested.group_source_locations
+    assert outer_group["offset"] < inner_group["offset"]
+    assert outer_group["end_offset"] > inner_group["end_offset"]
+    assert members["negated"].operand.name == "Base::kFragRows"
+    assert members["selected"].true_expr.name == "Base::kFragRows"
+
+    call = ast.functions[1].body[0]
+    assert isinstance(call, FunctionCallNode)
+    assert call.args[0].name == "Base::kFragRows"
+
+
+def test_parenthesized_scoped_values_remain_distinct_from_casts_and_constructors():
+    code = """
+    namespace outer {
+    struct Payload {
+      int value;
+    };
+    }
+
+    void convert(outer::Payload input) {
+      outer::Payload qualified = (outer::Payload)input;
+      outer::Payload unary_qualified = (outer::Payload)-input;
+      int scalar = (int)-1.5;
+      int constructed = int(2.5);
+    }
+
+    template <typename T>
+    T negate(T input) {
+      return (T)-input;
+    }
+    """
+    ast = parse_ok(code)
+
+    body = ast.functions[0].body
+    assert isinstance(body[0].right, CastNode)
+    assert body[0].right.target_type == "outer::Payload"
+    assert isinstance(body[1].right, CastNode)
+    assert body[1].right.target_type == "outer::Payload"
+    assert isinstance(body[1].right.expression, UnaryOpNode)
+    assert isinstance(body[2].right, CastNode)
+    assert body[2].right.target_type == "int"
+    assert isinstance(body[2].right.expression, UnaryOpNode)
+    assert isinstance(body[3].right, VectorConstructorNode)
+    assert body[3].right.vector_type == "int"
+
+    template_casts = [
+        node for node in iter_ast_nodes(ast.functions[1]) if isinstance(node, CastNode)
+    ]
+    assert len(template_casts) == 1
+    assert template_casts[0].target_type == "T"
+    assert isinstance(template_casts[0].expression, UnaryOpNode)
+
+
 def test_parse_typename_qualified_threadgroup_type_from_mlx_gemv():
     code = """
     void load_tile() {
@@ -3122,6 +3325,9 @@ def test_parse_lambda_argument_from_mlx_fp_quantized_nax():
     assert lambda_arg.capture == "&"
     assert lambda_arg.params[0].vtype == "auto"
     assert lambda_arg.params[0].name == "kAlignedM"
+    assert lambda_arg.source_location["line"] == 3
+    assert lambda_arg.source_location["end_line"] == 7
+    assert lambda_arg.source_location["length"] > 0
 
     barrier_calls = [
         node

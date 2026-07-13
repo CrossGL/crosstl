@@ -338,6 +338,7 @@ class SlangCodeGen:
             "intBitsToFloat": "asfloat",
             "uintBitsToFloat": "asfloat",
             "workgroupBarrier": "GroupMemoryBarrierWithGroupSync",
+            "workgroupExecutionBarrier": "GroupMemoryBarrierWithGroupSync",
         }
 
     def indent(self):
@@ -9377,6 +9378,7 @@ class SlangCodeGen:
         return {
             "barrier": "GroupMemoryBarrierWithGroupSync",
             "workgroupBarrier": "GroupMemoryBarrierWithGroupSync",
+            "workgroupExecutionBarrier": "GroupMemoryBarrierWithGroupSync",
             "groupMemoryBarrier": "GroupMemoryBarrier",
             "memoryBarrierShared": "GroupMemoryBarrier",
             "memoryBarrierBuffer": "DeviceMemoryBarrier",
@@ -13001,6 +13003,9 @@ class SlangCodeGen:
             if coord_reason:
                 return self.unsupported_sampled_texture_call(func_name, coord_reason)
 
+            result_type = self.sampled_texture_value_type(
+                self.get_expression_type(args[0])
+            )
             if func_name == "texture":
                 if extra_args:
                     bias_reason = self.scalar_texture_bias_unsupported_reason(
@@ -13012,7 +13017,7 @@ class SlangCodeGen:
                         )
                     expected_reason = (
                         self.texture_result_expected_type_unsupported_reason(
-                            func_name, "float4"
+                            func_name, result_type
                         )
                     )
                     if expected_reason:
@@ -13024,7 +13029,7 @@ class SlangCodeGen:
                         texture_name, "SampleBias", args, coord, bias
                     )
                 expected_reason = self.texture_result_expected_type_unsupported_reason(
-                    func_name, "float4"
+                    func_name, result_type
                 )
                 if expected_reason:
                     return self.unsupported_sampled_texture_call(
@@ -13039,7 +13044,7 @@ class SlangCodeGen:
                 if lod_reason:
                     return self.unsupported_sampled_texture_call(func_name, lod_reason)
                 expected_reason = self.texture_result_expected_type_unsupported_reason(
-                    func_name, "float4"
+                    func_name, result_type
                 )
                 if expected_reason:
                     return self.unsupported_sampled_texture_call(
@@ -13059,7 +13064,7 @@ class SlangCodeGen:
                 if grad_reason:
                     return self.unsupported_sampled_texture_call(func_name, grad_reason)
                 expected_reason = self.texture_result_expected_type_unsupported_reason(
-                    func_name, "float4"
+                    func_name, result_type
                 )
                 if expected_reason:
                     return self.unsupported_sampled_texture_call(
@@ -14844,12 +14849,13 @@ class SlangCodeGen:
 
     def is_lod_query_sampler_type(self, type_name):
         resource_type = self.resource_base_type(type_name)
+        shape_type = self.sampled_texture_shape_type(resource_type)
         return (
-            isinstance(resource_type, str)
-            and resource_type.startswith("sampler")
-            and resource_type != "sampler"
-            and "MS" not in resource_type
-            and "Shadow" not in resource_type
+            isinstance(shape_type, str)
+            and shape_type.startswith("sampler")
+            and shape_type != "sampler"
+            and "MS" not in shape_type
+            and "Shadow" not in shape_type
         )
 
     def sampled_texture_shape_type(self, type_name):

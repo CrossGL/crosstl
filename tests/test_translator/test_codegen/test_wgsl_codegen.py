@@ -2606,6 +2606,24 @@ def test_wgsl_codegen_lowers_compute_barrier_to_workgroup_barrier():
     assert "barrier();" not in generated
 
 
+def test_wgsl_codegen_lowers_workgroup_execution_barrier():
+    shader = """
+    shader WGSLExecutionBarrier {
+        compute {
+            void main() {
+                workgroupExecutionBarrier();
+                return;
+            }
+        }
+    }
+    """
+
+    generated = WGSLCodeGen().generate(parse_shader(shader))
+
+    assert "workgroupBarrier();" in generated
+    assert "workgroupExecutionBarrier();" not in generated
+
+
 def test_wgsl_codegen_lowers_prefix_increment_and_decrement_statements():
     shader = """
     shader WGSLPrefixUpdate {

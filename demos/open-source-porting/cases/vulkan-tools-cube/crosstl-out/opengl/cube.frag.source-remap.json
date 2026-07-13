@@ -182,9 +182,9 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 11,
-        "endOffset": 341,
+        "endOffset": 340,
         "file": "crosstl-out/opengl/cube.frag.glsl",
-        "length": 35,
+        "length": 34,
         "line": 10,
         "offset": 306
       },
@@ -203,12 +203,34 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 12,
-        "endOffset": 374,
+        "endLine": 17,
+        "endOffset": 442,
+        "file": "crosstl-out/opengl/cube.frag.glsl",
+        "length": 35,
+        "line": 16,
+        "offset": 407
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 33,
+        "endOffset": 1109,
+        "file": "cube.frag",
+        "length": 35,
+        "line": 32,
+        "offset": 1074
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 18,
+        "endOffset": 475,
         "file": "crosstl-out/opengl/cube.frag.glsl",
         "length": 33,
-        "line": 11,
-        "offset": 341
+        "line": 17,
+        "offset": 442
       },
       "original": {
         "column": 1,
@@ -225,12 +247,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 13,
-        "endOffset": 407,
+        "endLine": 19,
+        "endOffset": 508,
         "file": "crosstl-out/opengl/cube.frag.glsl",
         "length": 33,
-        "line": 12,
-        "offset": 374
+        "line": 18,
+        "offset": 475
       },
       "original": {
         "column": 1,
@@ -247,12 +269,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 15,
-        "endOffset": 481,
+        "endLine": 21,
+        "endOffset": 582,
         "file": "crosstl-out/opengl/cube.frag.glsl",
         "length": 61,
-        "line": 14,
-        "offset": 420
+        "line": 20,
+        "offset": 521
       },
       "original": {
         "column": 1,
@@ -269,12 +291,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 20,
-        "endOffset": 612,
+        "endLine": 26,
+        "endOffset": 713,
         "file": "crosstl-out/opengl/cube.frag.glsl",
         "length": 89,
-        "line": 19,
-        "offset": 523
+        "line": 25,
+        "offset": 624
       },
       "original": {
         "column": 1,
@@ -291,12 +313,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 24,
-        "endOffset": 701,
+        "endLine": 30,
+        "endOffset": 802,
         "file": "crosstl-out/opengl/cube.frag.glsl",
         "length": 53,
-        "line": 23,
-        "offset": 648
+        "line": 29,
+        "offset": 749
       },
       "original": {
         "column": 1,
@@ -313,12 +335,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 29,
-        "endOffset": 780,
+        "endLine": 35,
+        "endOffset": 881,
         "file": "crosstl-out/opengl/cube.frag.glsl",
         "length": 21,
-        "line": 28,
-        "offset": 759
+        "line": 34,
+        "offset": 860
       },
       "original": {
         "column": 1,
@@ -335,12 +357,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 30,
-        "endOffset": 810,
+        "endLine": 36,
+        "endOffset": 911,
         "file": "crosstl-out/opengl/cube.frag.glsl",
         "length": 30,
-        "line": 29,
-        "offset": 780
+        "line": 35,
+        "offset": 881
       },
       "original": {
         "column": 1,
@@ -357,12 +379,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 31,
-        "endOffset": 840,
+        "endLine": 37,
+        "endOffset": 941,
         "file": "crosstl-out/opengl/cube.frag.glsl",
         "length": 30,
-        "line": 30,
-        "offset": 810
+        "line": 36,
+        "offset": 911
       },
       "original": {
         "column": 1,
@@ -379,12 +401,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 32,
-        "endOffset": 884,
+        "endLine": 38,
+        "endOffset": 985,
         "file": "crosstl-out/opengl/cube.frag.glsl",
         "length": 44,
-        "line": 31,
-        "offset": 840
+        "line": 37,
+        "offset": 941
       },
       "original": {
         "column": 1,
@@ -401,12 +423,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 33,
-        "endOffset": 935,
+        "endLine": 39,
+        "endOffset": 1036,
         "file": "crosstl-out/opengl/cube.frag.glsl",
         "length": 51,
-        "line": 32,
-        "offset": 884
+        "line": 38,
+        "offset": 985
       },
       "original": {
         "column": 1,
@@ -423,12 +445,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 34,
-        "endOffset": 1003,
+        "endLine": 40,
+        "endOffset": 1104,
         "file": "crosstl-out/opengl/cube.frag.glsl",
         "length": 68,
-        "line": 33,
-        "offset": 935
+        "line": 39,
+        "offset": 1036
       },
       "original": {
         "column": 1,

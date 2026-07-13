@@ -533,7 +533,7 @@ EXTERNAL_FIXTURES = [
         "roundtrip": True,
         "contains": [
             "alignas(8) struct AtomicVisibilityBuffer",
-            "atomic_fetch_add_explicit((&dst.count), src.count, memory_order_relaxed);",
+            "atomicAdd(dst.count, src.count);",
         ],
         "source": (
             """
@@ -1245,8 +1245,15 @@ EXTERNAL_FIXTURES = [
         "commit": MLX_CURRENT_COMMIT,
         "source_path": "mlx/backend/metal/kernels/bf16.h",
         "roundtrip": True,
-        "contains": ["typedef f16 bfloat16_t;"],
-        "not_contains": ["typedef bfloat bfloat16_t;"],
+        "contains": [
+            "typedef bfloat16 bfloat16_t;",
+            "return asuint(x);",
+            "return as_type<bfloat16_t>(x);",
+        ],
+        "not_contains": [
+            "typedef bfloat bfloat16_t;",
+            "typedef f16 bfloat16_t;",
+        ],
         "source": (
             """
             #include <metal_stdlib>
@@ -1273,7 +1280,7 @@ EXTERNAL_FIXTURES = [
         "struct_names": ["CumProd", "CumProd<bool>"],
         "contains": [
             "struct CumProd_u3cbool_u3e",
-            "constant bool init;",
+            "static constant bool init = true;",
         ],
         "not_contains": ["struct CumProd<bool>"],
         "source": (
@@ -1449,11 +1456,11 @@ EXTERNAL_FIXTURES = [
         "source_path": "c10/metal/atomic.h",
         "roundtrip": True,
         "contains": [
-            "void atomic_binary_op_helper(device atomic<AT>* data",
+            "void atomic_binary_op_helper(device AT* data",
             "T* op)",
             "val = op(value, value);",
         ],
-        "not_contains": ["(*op)"],
+        "not_contains": ["(*op)", "atomic<"],
         "source": (
             """
             #include <metal_atomic>
@@ -1639,7 +1646,7 @@ EXTERNAL_FIXTURES = [
         "struct_names": ["GemvDefaultAccT", "GEMVKernel"],
         "contains": [
             "struct GEMVKernel",
-            "constant int threadsM;",
+            "static constant int threadsM = BM * SM;",
             'static_assert(SM * SN == 32, "simdgroup must have 32 threads");',
         ],
         "source": (

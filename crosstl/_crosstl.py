@@ -1,6 +1,9 @@
 """High-level translation API and command-line entry point for CrossGL Translator."""
 
 import argparse
+import importlib
+import importlib.util
+import inspect
 import json
 import os
 import sys
@@ -17,6 +20,9 @@ from .translator.codegen import (
     get_backend_extension,
     get_codegen,
     normalize_backend_name,
+)
+from .translator.codegen.pointer_reinterpret import (
+    validate_pointer_reinterpretation_target,
 )
 from .translator.default_arguments import lower_default_arguments
 from .translator.plugin_loader import discover_backend_plugins
@@ -164,6 +170,7 @@ def translate(
         else:
             codegen = get_codegen(requested_backend)
             lower_default_arguments(ast)
+            validate_pointer_reinterpretation_target(ast, normalized_backend)
             generated_code = codegen.generate(ast)
     else:
         if normalized_backend in ["cgl", "crossgl"]:
@@ -191,7 +198,13 @@ def translate(
             cgl_spec = SOURCE_REGISTRY.get("cgl")
             if not cgl_spec:
                 raise ValueError("CrossGL parser not available for intermediate step")
-            cgl_ast = cgl_spec.parse(intermediate_code)
+            cgl_source_options = {
+                "strict_function_bodies": source_spec.name != "mojo",
+            }
+            cgl_ast = cgl_spec.parse(
+                intermediate_code,
+                source_options=cgl_source_options,
+            )
             if source_spec.name == "opencl" and normalized_backend != "webgl":
                 cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
                 validate_opencl_intermediate_for_target(cgl_ast, normalized_backend)
@@ -205,6 +218,7 @@ def translate(
                 cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
             codegen = get_codegen(requested_backend)
             lower_default_arguments(cgl_ast)
+            validate_pointer_reinterpretation_target(cgl_ast, normalized_backend)
             generated_code = codegen.generate(cgl_ast)
 
     if (
@@ -908,6 +922,135 @@ def _load_project_test_runner_config(path):
     return dict(payload)
 
 
+def _load_project_runtime_executors(
+    specs,
+    *,
+    native_adapter_specs=(),
+    validate_native_runtime=True,
+):
+    executors = _load_project_native_runtime_adapters(
+        native_adapter_specs,
+        validate=validate_native_runtime,
+    )
+    for spec in specs or ():
+        key, separator, reference = spec.partition("=")
+        key = key.strip()
+        reference = reference.strip()
+        if not separator or not key or not reference:
+            raise ValueError("Runtime executor specs must use EXECUTOR=MODULE:OBJECT.")
+        executor = _load_project_runtime_executor(reference)
+        executors[key] = executor
+    return executors
+
+
+def _load_project_native_runtime_adapters(specs, *, validate):
+    if not specs:
+        return {}
+    from .project import native_runtime_parity_adapter
+
+    executors = {}
+    for spec in specs:
+        target, separator, runtime_reference = spec.partition("=")
+        target = target.strip()
+        runtime_reference = runtime_reference.strip()
+        if not target:
+            raise ValueError(
+                "Native runtime adapter specs must use TARGET or TARGET=MODULE:OBJECT."
+            )
+        if separator and not runtime_reference:
+            raise ValueError(
+                "Native runtime adapter specs must use TARGET or TARGET=MODULE:OBJECT."
+            )
+        normalized_target = normalize_backend_name(target) or target.lower()
+        runtime = (
+            _load_project_runtime_object(runtime_reference)
+            if runtime_reference
+            else None
+        )
+        executors[normalized_target] = native_runtime_parity_adapter(
+            normalized_target,
+            runtime=runtime,
+            validate=validate,
+        )
+    return executors
+
+
+def _load_project_runtime_executor(reference):
+    module_ref, separator, object_name = reference.rpartition(":")
+    module_ref = module_ref.strip()
+    object_name = object_name.strip()
+    if not separator or not module_ref or not object_name:
+        raise ValueError("Runtime executor references must use MODULE:OBJECT.")
+    module = _load_project_runtime_executor_module(module_ref)
+    try:
+        value = getattr(module, object_name)
+    except AttributeError as exc:
+        raise ValueError(
+            f"Runtime executor object {object_name!r} was not found in {module_ref!r}."
+        ) from exc
+    executor = _project_runtime_executor_instance(value)
+    if not _project_runtime_executor_like(executor):
+        raise ValueError(
+            "Runtime executor objects must expose run(request) or "
+            "prepare_buffers(state), dispatch(state, buffers), and "
+            "collect_outputs(state, result)."
+        )
+    return executor
+
+
+def _load_project_runtime_executor_module(module_ref):
+    module_path = Path(module_ref)
+    if module_path.suffix == ".py" or module_path.exists():
+        module_path = module_path.resolve()
+        if not module_path.is_file():
+            raise ValueError(f"Runtime executor module is not a file: {module_path}")
+        module_name = f"crosstl_runtime_executor_{abs(hash(str(module_path)))}"
+        spec = importlib.util.spec_from_file_location(module_name, module_path)
+        if spec is None or spec.loader is None:
+            raise ValueError(f"Could not load runtime executor module: {module_path}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    return importlib.import_module(module_ref)
+
+
+def _project_runtime_executor_instance(value):
+    if inspect.isclass(value):
+        return value()
+    if _project_runtime_executor_like(value):
+        return value
+    if callable(value):
+        return value()
+    return value
+
+
+def _load_project_runtime_object(reference):
+    module_ref, separator, object_name = reference.rpartition(":")
+    module_ref = module_ref.strip()
+    object_name = object_name.strip()
+    if not separator or not module_ref or not object_name:
+        raise ValueError("Runtime object references must use MODULE:OBJECT.")
+    module = _load_project_runtime_executor_module(module_ref)
+    try:
+        value = getattr(module, object_name)
+    except AttributeError as exc:
+        raise ValueError(
+            f"Runtime object {object_name!r} was not found in {module_ref!r}."
+        ) from exc
+    if inspect.isclass(value):
+        return value()
+    return value
+
+
+def _project_runtime_executor_like(value):
+    if callable(getattr(value, "run", None)):
+        return True
+    return all(
+        callable(getattr(value, method, None))
+        for method in ("prepare_buffers", "dispatch", "collect_outputs")
+    )
+
+
 def _format_project_test_runner_plan(payload):
     lines = [
         f"Project test-runner plan: {payload.get('sourceArtifacts', {}).get('path')}"
@@ -1101,6 +1244,11 @@ def _run_execute_project_test_runner(args):
         project_root=args.project_root,
         output_path=args.output if args.format == "json" else None,
         run_runtime_tests=not args.no_runtime_tests,
+        runtime_executors=_load_project_runtime_executors(
+            args.runtime_executor,
+            native_adapter_specs=args.native_runtime_adapter,
+            validate_native_runtime=not args.no_native_runtime_validation,
+        ),
     )
     if args.format == "sarif":
         _write_json_payload(
@@ -2703,6 +2851,15 @@ def _format_runtime_host_integration_execution_plan(payload):
             f"{summary.get('failedStepCount', 0)} failed"
         )
 
+    device_execution = payload.get("deviceExecution")
+    if isinstance(device_execution, Mapping):
+        lines.append(
+            "Device execution readiness: "
+            f"{device_execution.get('status', 'unknown')}, "
+            f"{device_execution.get('requiresAdapterDescriptorTargetCount', 0)} "
+            "targets require adapter descriptors"
+        )
+
     targets = payload.get("targets", [])
     if targets:
         lines.append("Runtime host integration execution targets:")
@@ -2825,6 +2982,13 @@ def _format_runtime_host_integration_execution_result(payload):
             f"{adapter_package.get('verifiedDescriptorCount', 0)} verified, "
             f"{adapter_package.get('failedDescriptorCount', 0)} failed"
         )
+    runner_manifest = payload.get("deviceRunnerManifest")
+    runner_manifest_status = payload.get("deviceRunnerManifestStatus")
+    if isinstance(runner_manifest, str) and runner_manifest:
+        lines.append(
+            f"Runtime device runner manifest: {runner_manifest} "
+            f"[{runner_manifest_status}]"
+        )
     scope = payload.get("scope")
     if isinstance(scope, str) and scope:
         lines.append(f"Execution scope: {scope}")
@@ -2846,6 +3010,16 @@ def _format_runtime_host_integration_execution_result(payload):
             f"{summary.get('skippedStepCount', 0)} skipped, "
             f"{summary.get('blockedStepCount', 0)} blocked, "
             f"{summary.get('failedStepCount', 0)} failed"
+        )
+
+    device_execution = payload.get("deviceExecution")
+    if isinstance(device_execution, Mapping):
+        lines.append(
+            "Device execution readiness: "
+            f"{device_execution.get('status', 'unknown')}, "
+            f"{device_execution.get('readyTargetCount', 0)} ready, "
+            f"{device_execution.get('blockedTargetCount', 0)} blocked, "
+            f"{device_execution.get('failedTargetCount', 0)} failed"
         )
 
     targets = payload.get("targets", [])
@@ -2897,6 +3071,7 @@ def _run_execute_host_integration(args):
         scaffold_root=args.scaffold_root,
         package_root=args.package_root,
         adapter_root=args.adapter_root,
+        runner_manifest=args.runner_manifest,
     )
     if args.format == "sarif":
         _write_json_payload(
@@ -6585,6 +6760,31 @@ def _build_parser():
         help="Run project commands only and skip runtime fixture execution",
     )
     execute_test_runner_parser.add_argument(
+        "--runtime-executor",
+        action="append",
+        default=[],
+        metavar="EXECUTOR=MODULE:OBJECT",
+        help=(
+            "Runtime executor implementation to load for fixture execution; "
+            "repeatable. MODULE may be a dotted module name or a Python file path."
+        ),
+    )
+    execute_test_runner_parser.add_argument(
+        "--native-runtime-adapter",
+        action="append",
+        default=[],
+        metavar="TARGET[=MODULE:OBJECT]",
+        help=(
+            "Use a built-in native runtime parity adapter for TARGET; repeatable. "
+            "MODULE:OBJECT may provide the backend runtime driver."
+        ),
+    )
+    execute_test_runner_parser.add_argument(
+        "--no-native-runtime-validation",
+        action="store_true",
+        help="Skip built-in native runtime adapter toolchain validation before dispatch",
+    )
+    execute_test_runner_parser.add_argument(
         "--format",
         choices=("json", "text", "sarif"),
         default="json",
@@ -6895,6 +7095,10 @@ def _build_parser():
     execute_host_integration_parser.add_argument(
         "--adapter-root",
         help="Optional runtime adapter descriptor root for descriptor checks",
+    )
+    execute_host_integration_parser.add_argument(
+        "--runner-manifest",
+        help="Optional runtime device runner manifest for runner readiness checks",
     )
     execute_host_integration_parser.add_argument(
         "--format",

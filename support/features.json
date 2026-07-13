@@ -3816,8 +3816,11 @@
         },
         "opengl": {
           "status": "supported",
+          "notes": "OpenGL lowers struct declarations, member access, initialization, and return values. Contextual braced initializers preserve trailing value initialization recursively through nested structs and fixed arrays, with generated-code validation and native compute runtime coverage.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_generic_struct_concrete_constructor_and_member_access"
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_generic_struct_concrete_constructor_and_member_access",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_zero_fills_partial_aggregate_initializers",
+            "tests/test_translator/test_native_runtime_drivers.py::def test_runtime_parity_glsl_partial_aggregate_executes_on_vulkan"
           ]
         },
         "metal": {
@@ -3896,8 +3899,21 @@
         },
         "opengl": {
           "status": "supported",
+          "notes": "OpenGL lowers fixed arrays and indexed access, recursively materializes omitted trailing values in partial fixed-array and struct initializers, hoists function-local workgroup arrays to module-scope shared storage, and represents concrete workgroup pointer aliases as backing arrays plus composed element offsets. Nested aliases and helper calls preserve offsets, statically unreachable null-pointer parameters are removed, and excess initializer elements, unresolved extents, or reachable null pointers produce structured diagnostics.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_array_handling"
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_array_handling",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_zero_fills_partial_aggregate_initializers",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_aggregate_initializer_reports_excess_fixed_array_elements",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_threadgroup_pointer_alias_composes_dynamic_offset_into_accesses",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_nested_threadgroup_aliases_compose_offsets_once",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_threadgroup_pointer_helper_called_through_alias_is_valid_glsl",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_statically_null_unreachable_workgroup_pointer_is_elided",
+            "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py::def test_atomic_add_through_workgroup_alias_preserves_base_and_access_offsets",
+            "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py::def test_generic_workgroup_pointer_helper_specializes_without_pointer",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_unsupported_opengl_workgroup_pointer",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_reachable_null_opengl_workgroup_pointer",
+            "tests/test_translator/test_native_runtime_drivers.py::def test_runtime_parity_glsl_workgroup_alias_offset_executes_on_vulkan",
+            "tests/test_translator/test_native_runtime_drivers.py::def test_runtime_parity_glsl_partial_aggregate_executes_on_vulkan"
           ]
         },
         "metal": {
@@ -3958,6 +3974,97 @@
           "notes": "WGSL support for this capability has not been promoted to supported status; the target either emits only conservative core syntax today or reports deterministic diagnostics while deeper lowering is implemented.",
           "evidence": [
             "tests/test_translator/test_codegen/test_wgsl_codegen.py::def test_"
+          ]
+        }
+      }
+    },
+    {
+      "id": "language.pointer_reinterpretation",
+      "category": "language",
+      "name": "Storage-backed pointer reinterpretation",
+      "description": "Preserve read-only 32-bit scalar storage resources through aligned 8-, 16-, and 32-bit scalar pointer views with byte-composed offsets.",
+      "support": {
+        "directx": {
+          "status": "supported",
+          "notes": "The repo-owned contract lowers read-only scalar views through typed StructuredBuffer loads, bit extraction, and bit reinterpretation. Writes, 64-bit backing layouts, and incompatible views are structured diagnostics.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_storage_pointer_reinterpret_reads_byte_lanes",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_lowers_materialized_pointer_reinterpretation",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_reinterpreted_pointer_writes"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "The repo-owned contract lowers read-only scalar views through SSBO loads, floatBitsToUint/uintBitsToFloat where required, and bitfieldExtract. Writes, 64-bit backing layouts, and incompatible views are structured diagnostics.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_storage_pointer_reinterpret_reads_byte_lanes",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_lowers_materialized_pointer_reinterpretation",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_reinterpreted_pointer_writes"
+          ]
+        },
+        "vulkan": {
+          "status": "supported",
+          "notes": "The repo-owned contract lowers read-only scalar views to byte-index composition, typed storage-buffer loads, and SPIR-V shift/mask or bitcast operations with spirv-val coverage. Writes, 64-bit backing layouts, and incompatible views are structured diagnostics.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_spirv_storage_pointer_reinterpret_reads_byte_lanes",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_lowers_materialized_pointer_reinterpretation",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_reinterpreted_pointer_writes"
+          ]
+        },
+        "cuda": {
+          "status": "diagnostic",
+          "notes": "The shared pipeline rejects pointer reinterpretation before CUDA code generation until resource-preserving target lowering is implemented.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_pointer_reinterpretation_without_target_lowering"
+          ]
+        },
+        "hip": {
+          "status": "diagnostic",
+          "notes": "The shared pipeline rejects pointer reinterpretation before HIP code generation until resource-preserving target lowering is implemented.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_pointer_reinterpretation_without_target_lowering"
+          ]
+        },
+        "metal": {
+          "status": "diagnostic",
+          "notes": "The shared pipeline rejects pointer reinterpretation before Metal target generation until the target code generator consumes the shared pointer-view node.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_pointer_reinterpretation_without_target_lowering"
+          ]
+        },
+        "mojo": {
+          "status": "diagnostic",
+          "notes": "The shared pipeline rejects pointer reinterpretation before Mojo code generation until resource-preserving target lowering is implemented.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_pointer_reinterpretation_without_target_lowering"
+          ]
+        },
+        "rust": {
+          "status": "diagnostic",
+          "notes": "The shared pipeline rejects pointer reinterpretation before Rust code generation until resource-preserving target lowering is implemented.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_pointer_reinterpretation_without_target_lowering"
+          ]
+        },
+        "slang": {
+          "status": "diagnostic",
+          "notes": "The shared pipeline rejects pointer reinterpretation before Slang code generation until resource-preserving target lowering is implemented.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_pointer_reinterpretation_without_target_lowering"
+          ]
+        },
+        "webgl": {
+          "status": "diagnostic",
+          "notes": "The shared pipeline rejects storage pointer reinterpretation because WebGL has no corresponding storage-buffer contract.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_pointer_reinterpretation_without_target_lowering"
+          ]
+        },
+        "wgsl": {
+          "status": "diagnostic",
+          "notes": "The shared pipeline rejects pointer reinterpretation before WGSL code generation until resource-preserving target lowering is implemented.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_rejects_pointer_reinterpretation_without_target_lowering"
           ]
         }
       }
@@ -4256,25 +4363,27 @@
       "id": "language.wave_intrinsics",
       "category": "language",
       "name": "Wave/subgroup intrinsics",
-      "description": "Lower CrossGL Wave* subgroup operations including lane queries, reductions, scans, votes, ballots, and lane reads.",
+      "description": "Lower CrossGL Wave* subgroup operations including lane queries, reductions, scans, votes, ballots, lane reads, and shuffle-and-fill semantics.",
       "support": {
         "directx": {
           "status": "supported",
-          "notes": "WaveOpNode calls are preserved as native HLSL Wave* intrinsics across lane queries, votes, reductions, scans, ballots, WaveMatch, WaveMultiPrefix*, quad reads, and arity/type diagnostics. Optional DXC validation covers a compute wave shader when dxc is installed.",
+          "notes": "WaveOpNode calls lower to native HLSL Wave* intrinsics or equivalent helpers across lane queries, votes, reductions, scans, ballots, shuffle-and-fill, WaveMatch, WaveMultiPrefix*, quad reads, and arity/type diagnostics. Optional DXC validation covers compute wave shaders when dxc is installed.",
           "evidence": [
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_wave_and_rayquery_intrinsics_codegen",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_wave_intrinsics_reject_wrong_arity",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_wave_intrinsics_validate_argument_types",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_codegen_lowers_canonical_shuffle_and_fill_up_wave_op",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_wave_intrinsics_compute_validates_with_dxc"
           ]
         },
         "opengl": {
           "status": "supported",
-          "notes": "Lowers CrossGL Wave* lane, vote, reduction, ballot, shuffle, quad, WaveMatch, and WaveMultiPrefix* operations to GL_KHR_shader_subgroup builtins or local helper functions with required extension declarations, deterministic arity/type diagnostics, and glslang validation coverage.",
+          "notes": "Lowers CrossGL Wave* lane, vote, reduction, ballot, shuffle, shuffle-and-fill, quad, WaveMatch, and WaveMultiPrefix* operations to GL_KHR_shader_subgroup builtins or local helper functions with required extension declarations, deterministic arity/type diagnostics, and glslang validation coverage.",
           "evidence": [
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_intrinsics_lower_to_khr_subgroup_builtins",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_intrinsic_invalid_arities_and_wave_match_lowering",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_intrinsic_type_mismatches_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_shuffle_and_fill_up_lowers_scalar_vector_and_bool",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_additional_wave_ballot_count_intrinsics_lower_or_diagnose",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_match_and_multiprefix_forms_lower_to_helpers",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_wave_intrinsics_compute_validates_with_glslang"
@@ -4282,7 +4391,7 @@
         },
         "metal": {
           "status": "supported",
-          "notes": "Lowers CrossGL Wave* operations to Metal simdgroup intrinsics or helper functions, threads compute-stage lane metadata through helper calls, and emits compile-safe diagnostics for contexts where Metal cannot supply simdgroup lane values.",
+          "notes": "Lowers CrossGL Wave* operations, including shuffle-and-fill, to Metal simdgroup intrinsics or helper functions, threads compute-stage lane metadata through helper calls, and emits compile-safe diagnostics for contexts where Metal cannot supply simdgroup lane values.",
           "evidence": [
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_intrinsics_lower_to_simdgroup_and_diagnose_gaps",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_op_ir_nodes_lower_to_simdgroup_intrinsics",
@@ -4295,16 +4404,18 @@
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_is_first_lane_lowers_to_simd_is_first",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_prefix_ops_lower_to_simd_prefix_exclusive",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_read_lane_at_lowers_to_simd_broadcast",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_shuffle_and_fill_up_lowers_boolean_payloads",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_ballot_and_active_all_equal_vector_lowering",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_active_reductions_lower_to_simd_intrinsics"
           ]
         },
         "vulkan": {
           "status": "supported",
-          "notes": "Lowers WaveGetLaneCount, WaveGetLaneIndex, WaveIsFirstLane, WaveActiveSum/Product/Min/Max/BitAnd/BitOr/BitXor, WavePrefixSum/Product, WaveActiveAllTrue/AnyTrue/Ballot, WaveReadLaneAt, WaveReadLaneFirst, QuadRead*, WaveMatch, and WaveMultiPrefix* to SPIR-V GroupNonUniform operations with spirv-as/spirv-val coverage where tools are available. Dynamic or out-of-range quad lanes and invalid multi-prefix masks emit deterministic diagnostics.",
+          "notes": "Lowers WaveGetLaneCount, WaveGetLaneIndex, WaveIsFirstLane, WaveActiveSum/Product/Min/Max/BitAnd/BitOr/BitXor, WavePrefixSum/Product, WaveActiveAllTrue/AnyTrue/Ballot, WaveReadLaneAt, WaveReadLaneFirst, WaveShuffleAndFillUp, QuadRead*, WaveMatch, and WaveMultiPrefix* to SPIR-V GroupNonUniform operations with spirv-as/spirv-val coverage where tools are available. Dynamic or out-of-range quad lanes and invalid multi-prefix masks emit deterministic diagnostics.",
           "evidence": [
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_wave_lane_intrinsics_emit_subgroup_builtins",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_wave_intrinsics_emit_group_non_uniform_operations",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_wave_shuffle_and_fill_up_selects_fill_for_low_lanes_scalar",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_quad_wave_intrinsics_emit_group_non_uniform_quad_operations",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_quad_read_lane_requires_literal_lane_index",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_wave_match_and_multi_prefix_emit_partitioned_operations",
@@ -10070,12 +10181,13 @@
       "support": {
         "directx": {
           "status": "supported",
-          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. DirectX native runtime parity adapters add reusable adapter-backed execution with HLSL validation/compilation command orchestration, fixture resource and constant binding, dispatch/readback driver contracts, and distinct unavailable platform/tooling, setup, validation, dispatch, and comparison mismatch reporting. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, and ambiguous selectors while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, hard-code a validation corpus, or require native runtime execution when dependencies are unavailable.",
+          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. DirectX native runtime parity adapters add reusable adapter-backed execution with HLSL validation/compilation command orchestration, fixture resource and constant binding, dispatch/readback driver contracts, and distinct unavailable platform/tooling, setup, validation, dispatch, and comparison mismatch reporting. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, ambiguous selectors, and selected-artifact runtime metadata readiness counts while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, hard-code a validation corpus, or require native runtime execution when dependencies are unavailable.",
           "evidence": [
             "tests/test_translator/test_runtime_verification.py::def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_from_mlx_fixture_metadata",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_reports_ambiguous_fixture_selector",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_reports_incomplete_fixture_data",
+            "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_records_runtime_metadata_readiness",
             "tests/test_translator/test_runtime_verification.py::def test_project_cli_runtime_test_manifest_text_outputs_generated_tests",
             "tests/test_translator/test_runtime_verification.py::def test_plan_runtime_test_manifest_records_structured_skip_and_toolchain_logs",
             "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_reports_skipped_dependency_record",
@@ -10087,12 +10199,13 @@
         },
         "opengl": {
           "status": "supported",
-          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. OpenGL native runtime parity adapters add reusable adapter-backed execution with GLSL validation command orchestration, fixture resource and constant binding, dispatch/readback driver contracts, and distinct unavailable platform/tooling, setup, validation, dispatch, and comparison mismatch reporting. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, and ambiguous selectors while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, hard-code a validation corpus, or require native runtime execution when dependencies are unavailable.",
+          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. OpenGL native runtime parity adapters add reusable adapter-backed execution with GLSL validation command orchestration, fixture resource and constant binding, dispatch/readback driver contracts, and distinct unavailable platform/tooling, setup, validation, dispatch, and comparison mismatch reporting. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, ambiguous selectors, and selected-artifact runtime metadata readiness counts while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, hard-code a validation corpus, or require native runtime execution when dependencies are unavailable.",
           "evidence": [
             "tests/test_translator/test_runtime_verification.py::def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_from_mlx_fixture_metadata",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_reports_ambiguous_fixture_selector",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_reports_incomplete_fixture_data",
+            "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_records_runtime_metadata_readiness",
             "tests/test_translator/test_runtime_verification.py::def test_project_cli_runtime_test_manifest_text_outputs_generated_tests",
             "tests/test_translator/test_runtime_verification.py::def test_plan_runtime_test_manifest_records_structured_skip_and_toolchain_logs",
             "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_reports_skipped_dependency_record",
@@ -10109,12 +10222,13 @@
         },
         "webgl": {
           "status": "supported",
-          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, and ambiguous selectors while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, or require native runtime execution when dependencies are unavailable.",
+          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, ambiguous selectors, and selected-artifact runtime metadata readiness counts while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, or require native runtime execution when dependencies are unavailable.",
           "evidence": [
             "tests/test_translator/test_runtime_verification.py::def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_from_mlx_fixture_metadata",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_reports_ambiguous_fixture_selector",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_reports_incomplete_fixture_data",
+            "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_records_runtime_metadata_readiness",
             "tests/test_translator/test_runtime_verification.py::def test_project_cli_runtime_test_manifest_text_outputs_generated_tests",
             "tests/test_translator/test_runtime_verification.py::def test_plan_runtime_test_manifest_records_structured_skip_and_toolchain_logs",
             "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_reports_skipped_dependency_record",
@@ -10124,12 +10238,13 @@
         },
         "wgsl": {
           "status": "supported",
-          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, and ambiguous selectors while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, or require native runtime execution when dependencies are unavailable.",
+          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, ambiguous selectors, and selected-artifact runtime metadata readiness counts while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, or require native runtime execution when dependencies are unavailable.",
           "evidence": [
             "tests/test_translator/test_runtime_verification.py::def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_from_mlx_fixture_metadata",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_reports_ambiguous_fixture_selector",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_reports_incomplete_fixture_data",
+            "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_records_runtime_metadata_readiness",
             "tests/test_translator/test_runtime_verification.py::def test_project_cli_runtime_test_manifest_text_outputs_generated_tests",
             "tests/test_translator/test_runtime_verification.py::def test_plan_runtime_test_manifest_records_structured_skip_and_toolchain_logs",
             "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_reports_skipped_dependency_record",
@@ -10139,12 +10254,13 @@
         },
         "metal": {
           "status": "supported",
-          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, and ambiguous selectors while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, or require native runtime execution when dependencies are unavailable.",
+          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, ambiguous selectors, and selected-artifact runtime metadata readiness counts while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, or require native runtime execution when dependencies are unavailable.",
           "evidence": [
             "tests/test_translator/test_runtime_verification.py::def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_from_mlx_fixture_metadata",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_reports_ambiguous_fixture_selector",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_reports_incomplete_fixture_data",
+            "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_records_runtime_metadata_readiness",
             "tests/test_translator/test_runtime_verification.py::def test_project_cli_runtime_test_manifest_text_outputs_generated_tests",
             "tests/test_translator/test_runtime_verification.py::def test_plan_runtime_test_manifest_records_structured_skip_and_toolchain_logs",
             "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_reports_skipped_dependency_record",
@@ -10154,12 +10270,13 @@
         },
         "vulkan": {
           "status": "supported",
-          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Vulkan native runtime parity adapters add reusable adapter-backed execution with SPIR-V assembly/validation command orchestration, fixture resource and constant binding, dispatch/readback driver contracts, and distinct unavailable platform/tooling, setup, validation, dispatch, and comparison mismatch reporting. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, and ambiguous selectors while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, hard-code a validation corpus, or require native runtime execution when dependencies are unavailable.",
+          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Vulkan native runtime parity adapters add reusable adapter-backed execution with SPIR-V assembly/validation command orchestration, fixture resource and constant binding, dispatch/readback driver contracts, and distinct unavailable platform/tooling, setup, validation, dispatch, and comparison mismatch reporting. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, ambiguous selectors, and selected-artifact runtime metadata readiness counts while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, hard-code a validation corpus, or require native runtime execution when dependencies are unavailable.",
           "evidence": [
             "tests/test_translator/test_runtime_verification.py::def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_from_mlx_fixture_metadata",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_reports_ambiguous_fixture_selector",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_reports_incomplete_fixture_data",
+            "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_records_runtime_metadata_readiness",
             "tests/test_translator/test_runtime_verification.py::def test_project_cli_runtime_test_manifest_text_outputs_generated_tests",
             "tests/test_translator/test_runtime_verification.py::def test_plan_runtime_test_manifest_records_structured_skip_and_toolchain_logs",
             "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_reports_skipped_dependency_record",
@@ -10171,12 +10288,13 @@
         },
         "cuda": {
           "status": "supported",
-          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, and ambiguous selectors while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, or require native runtime execution when dependencies are unavailable.",
+          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, ambiguous selectors, and selected-artifact runtime metadata readiness counts while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, or require native runtime execution when dependencies are unavailable.",
           "evidence": [
             "tests/test_translator/test_runtime_verification.py::def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_from_mlx_fixture_metadata",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_reports_ambiguous_fixture_selector",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_reports_incomplete_fixture_data",
+            "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_records_runtime_metadata_readiness",
             "tests/test_translator/test_runtime_verification.py::def test_project_cli_runtime_test_manifest_text_outputs_generated_tests",
             "tests/test_translator/test_runtime_verification.py::def test_plan_runtime_test_manifest_records_structured_skip_and_toolchain_logs",
             "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_reports_skipped_dependency_record",
@@ -10186,12 +10304,13 @@
         },
         "hip": {
           "status": "supported",
-          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, and ambiguous selectors while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, or require native runtime execution when dependencies are unavailable.",
+          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, ambiguous selectors, and selected-artifact runtime metadata readiness counts while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, or require native runtime execution when dependencies are unavailable.",
           "evidence": [
             "tests/test_translator/test_runtime_verification.py::def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_from_mlx_fixture_metadata",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_reports_ambiguous_fixture_selector",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_reports_incomplete_fixture_data",
+            "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_records_runtime_metadata_readiness",
             "tests/test_translator/test_runtime_verification.py::def test_project_cli_runtime_test_manifest_text_outputs_generated_tests",
             "tests/test_translator/test_runtime_verification.py::def test_plan_runtime_test_manifest_records_structured_skip_and_toolchain_logs",
             "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_reports_skipped_dependency_record",
@@ -10201,12 +10320,13 @@
         },
         "mojo": {
           "status": "supported",
-          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, and ambiguous selectors while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, or require native runtime execution when dependencies are unavailable.",
+          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, ambiguous selectors, and selected-artifact runtime metadata readiness counts while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, or require native runtime execution when dependencies are unavailable.",
           "evidence": [
             "tests/test_translator/test_runtime_verification.py::def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_from_mlx_fixture_metadata",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_reports_ambiguous_fixture_selector",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_reports_incomplete_fixture_data",
+            "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_records_runtime_metadata_readiness",
             "tests/test_translator/test_runtime_verification.py::def test_project_cli_runtime_test_manifest_text_outputs_generated_tests",
             "tests/test_translator/test_runtime_verification.py::def test_plan_runtime_test_manifest_records_structured_skip_and_toolchain_logs",
             "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_reports_skipped_dependency_record",
@@ -10216,12 +10336,13 @@
         },
         "rust": {
           "status": "supported",
-          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, and ambiguous selectors while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, or require native runtime execution when dependencies are unavailable.",
+          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, ambiguous selectors, and selected-artifact runtime metadata readiness counts while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, or require native runtime execution when dependencies are unavailable.",
           "evidence": [
             "tests/test_translator/test_runtime_verification.py::def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_from_mlx_fixture_metadata",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_reports_ambiguous_fixture_selector",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_reports_incomplete_fixture_data",
+            "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_records_runtime_metadata_readiness",
             "tests/test_translator/test_runtime_verification.py::def test_project_cli_runtime_test_manifest_text_outputs_generated_tests",
             "tests/test_translator/test_runtime_verification.py::def test_plan_runtime_test_manifest_records_structured_skip_and_toolchain_logs",
             "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_reports_skipped_dependency_record",
@@ -10231,12 +10352,13 @@
         },
         "slang": {
           "status": "supported",
-          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, and ambiguous selectors while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, or require native runtime execution when dependencies are unavailable.",
+          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, ambiguous selectors, and selected-artifact runtime metadata readiness counts while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, or require native runtime execution when dependencies are unavailable.",
           "evidence": [
             "tests/test_translator/test_runtime_verification.py::def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_from_mlx_fixture_metadata",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_reports_ambiguous_fixture_selector",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_reports_incomplete_fixture_data",
+            "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_records_runtime_metadata_readiness",
             "tests/test_translator/test_runtime_verification.py::def test_project_cli_runtime_test_manifest_text_outputs_generated_tests",
             "tests/test_translator/test_runtime_verification.py::def test_plan_runtime_test_manifest_records_structured_skip_and_toolchain_logs",
             "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_reports_skipped_dependency_record",
@@ -10954,7 +11076,7 @@
       "support": {
         "directx": {
           "status": "supported",
-          "notes": "plan-host-integration-execution builds crosstl-runtime-host-integration-execution-plan JSON, text, and SARIF output from a host integration handoff manifest, runs handoff inspection before planning, records optional host-root readiness, normalizes per-target handoff actions into stable phase-ordered execution steps, maps actions to prepare-tools, consume-loader, load-artifact, satisfy-host-responsibility, resolve-blockers, and run-host-action phases, carries requiredTools, hostResponsibilities, package paths, scaffold files, and blocked-step records, and reports failed handoff inspection and host-root diagnostics without rewriting host files. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "plan-host-integration-execution builds crosstl-runtime-host-integration-execution-plan JSON, text, and SARIF output from a host integration handoff manifest, runs handoff inspection before planning, records optional host-root readiness, normalizes per-target handoff actions into stable phase-ordered execution steps, maps actions to prepare-tools, consume-loader, load-artifact, satisfy-host-responsibility, resolve-blockers, and run-host-action phases, carries requiredTools, hostResponsibilities, package paths, scaffold files, blocked-step records, and deviceExecution readiness inputs for adapter-backed dispatch, and reports failed handoff inspection and host-root diagnostics without rewriting host files. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_reports_ready_steps",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_carries_blocked_steps",
@@ -10966,7 +11088,7 @@
         },
         "opengl": {
           "status": "supported",
-          "notes": "plan-host-integration-execution builds crosstl-runtime-host-integration-execution-plan JSON, text, and SARIF output from a host integration handoff manifest, runs handoff inspection before planning, records optional host-root readiness, normalizes per-target handoff actions into stable phase-ordered execution steps, maps actions to prepare-tools, consume-loader, load-artifact, satisfy-host-responsibility, resolve-blockers, and run-host-action phases, carries requiredTools, hostResponsibilities, package paths, scaffold files, and blocked-step records, and reports failed handoff inspection and host-root diagnostics without rewriting host files. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "plan-host-integration-execution builds crosstl-runtime-host-integration-execution-plan JSON, text, and SARIF output from a host integration handoff manifest, runs handoff inspection before planning, records optional host-root readiness, normalizes per-target handoff actions into stable phase-ordered execution steps, maps actions to prepare-tools, consume-loader, load-artifact, satisfy-host-responsibility, resolve-blockers, and run-host-action phases, carries requiredTools, hostResponsibilities, package paths, scaffold files, blocked-step records, and deviceExecution readiness inputs for adapter-backed dispatch, and reports failed handoff inspection and host-root diagnostics without rewriting host files. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_reports_ready_steps",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_carries_blocked_steps",
@@ -10978,7 +11100,7 @@
         },
         "webgl": {
           "status": "supported",
-          "notes": "plan-host-integration-execution builds crosstl-runtime-host-integration-execution-plan JSON, text, and SARIF output from a host integration handoff manifest, runs handoff inspection before planning, records optional host-root readiness, normalizes per-target handoff actions into stable phase-ordered execution steps, maps actions to prepare-tools, consume-loader, load-artifact, satisfy-host-responsibility, resolve-blockers, and run-host-action phases, carries requiredTools, hostResponsibilities, package paths, scaffold files, and blocked-step records, and reports failed handoff inspection and host-root diagnostics without rewriting host files. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "plan-host-integration-execution builds crosstl-runtime-host-integration-execution-plan JSON, text, and SARIF output from a host integration handoff manifest, runs handoff inspection before planning, records optional host-root readiness, normalizes per-target handoff actions into stable phase-ordered execution steps, maps actions to prepare-tools, consume-loader, load-artifact, satisfy-host-responsibility, resolve-blockers, and run-host-action phases, carries requiredTools, hostResponsibilities, package paths, scaffold files, blocked-step records, and deviceExecution readiness inputs for adapter-backed dispatch, and reports failed handoff inspection and host-root diagnostics without rewriting host files. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_reports_ready_steps",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_carries_blocked_steps",
@@ -10990,7 +11112,7 @@
         },
         "metal": {
           "status": "supported",
-          "notes": "plan-host-integration-execution builds crosstl-runtime-host-integration-execution-plan JSON, text, and SARIF output from a host integration handoff manifest, runs handoff inspection before planning, records optional host-root readiness, normalizes per-target handoff actions into stable phase-ordered execution steps, maps actions to prepare-tools, consume-loader, load-artifact, satisfy-host-responsibility, resolve-blockers, and run-host-action phases, carries requiredTools, hostResponsibilities, package paths, scaffold files, and blocked-step records, and reports failed handoff inspection and host-root diagnostics without rewriting host files. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "plan-host-integration-execution builds crosstl-runtime-host-integration-execution-plan JSON, text, and SARIF output from a host integration handoff manifest, runs handoff inspection before planning, records optional host-root readiness, normalizes per-target handoff actions into stable phase-ordered execution steps, maps actions to prepare-tools, consume-loader, load-artifact, satisfy-host-responsibility, resolve-blockers, and run-host-action phases, carries requiredTools, hostResponsibilities, package paths, scaffold files, blocked-step records, and deviceExecution readiness inputs for adapter-backed dispatch, and reports failed handoff inspection and host-root diagnostics without rewriting host files. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_reports_ready_steps",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_carries_blocked_steps",
@@ -11002,7 +11124,7 @@
         },
         "vulkan": {
           "status": "supported",
-          "notes": "plan-host-integration-execution builds crosstl-runtime-host-integration-execution-plan JSON, text, and SARIF output from a host integration handoff manifest, runs handoff inspection before planning, records optional host-root readiness, normalizes per-target handoff actions into stable phase-ordered execution steps, maps actions to prepare-tools, consume-loader, load-artifact, satisfy-host-responsibility, resolve-blockers, and run-host-action phases, carries requiredTools, hostResponsibilities, package paths, scaffold files, and blocked-step records, and reports failed handoff inspection and host-root diagnostics without rewriting host files. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "plan-host-integration-execution builds crosstl-runtime-host-integration-execution-plan JSON, text, and SARIF output from a host integration handoff manifest, runs handoff inspection before planning, records optional host-root readiness, normalizes per-target handoff actions into stable phase-ordered execution steps, maps actions to prepare-tools, consume-loader, load-artifact, satisfy-host-responsibility, resolve-blockers, and run-host-action phases, carries requiredTools, hostResponsibilities, package paths, scaffold files, blocked-step records, and deviceExecution readiness inputs for adapter-backed dispatch, and reports failed handoff inspection and host-root diagnostics without rewriting host files. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_reports_ready_steps",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_carries_blocked_steps",
@@ -11014,7 +11136,7 @@
         },
         "cuda": {
           "status": "supported",
-          "notes": "plan-host-integration-execution builds crosstl-runtime-host-integration-execution-plan JSON, text, and SARIF output from a host integration handoff manifest, runs handoff inspection before planning, records optional host-root readiness, normalizes per-target handoff actions into stable phase-ordered execution steps, maps actions to prepare-tools, consume-loader, load-artifact, satisfy-host-responsibility, resolve-blockers, and run-host-action phases, carries requiredTools, hostResponsibilities, package paths, scaffold files, and blocked-step records, and reports failed handoff inspection and host-root diagnostics without rewriting host files. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "plan-host-integration-execution builds crosstl-runtime-host-integration-execution-plan JSON, text, and SARIF output from a host integration handoff manifest, runs handoff inspection before planning, records optional host-root readiness, normalizes per-target handoff actions into stable phase-ordered execution steps, maps actions to prepare-tools, consume-loader, load-artifact, satisfy-host-responsibility, resolve-blockers, and run-host-action phases, carries requiredTools, hostResponsibilities, package paths, scaffold files, blocked-step records, and deviceExecution readiness inputs for adapter-backed dispatch, and reports failed handoff inspection and host-root diagnostics without rewriting host files. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_reports_ready_steps",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_carries_blocked_steps",
@@ -11026,7 +11148,7 @@
         },
         "hip": {
           "status": "supported",
-          "notes": "plan-host-integration-execution builds crosstl-runtime-host-integration-execution-plan JSON, text, and SARIF output from a host integration handoff manifest, runs handoff inspection before planning, records optional host-root readiness, normalizes per-target handoff actions into stable phase-ordered execution steps, maps actions to prepare-tools, consume-loader, load-artifact, satisfy-host-responsibility, resolve-blockers, and run-host-action phases, carries requiredTools, hostResponsibilities, package paths, scaffold files, and blocked-step records, and reports failed handoff inspection and host-root diagnostics without rewriting host files. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "plan-host-integration-execution builds crosstl-runtime-host-integration-execution-plan JSON, text, and SARIF output from a host integration handoff manifest, runs handoff inspection before planning, records optional host-root readiness, normalizes per-target handoff actions into stable phase-ordered execution steps, maps actions to prepare-tools, consume-loader, load-artifact, satisfy-host-responsibility, resolve-blockers, and run-host-action phases, carries requiredTools, hostResponsibilities, package paths, scaffold files, blocked-step records, and deviceExecution readiness inputs for adapter-backed dispatch, and reports failed handoff inspection and host-root diagnostics without rewriting host files. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_reports_ready_steps",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_carries_blocked_steps",
@@ -11038,7 +11160,7 @@
         },
         "mojo": {
           "status": "supported",
-          "notes": "plan-host-integration-execution builds crosstl-runtime-host-integration-execution-plan JSON, text, and SARIF output from a host integration handoff manifest, runs handoff inspection before planning, records optional host-root readiness, normalizes per-target handoff actions into stable phase-ordered execution steps, maps actions to prepare-tools, consume-loader, load-artifact, satisfy-host-responsibility, resolve-blockers, and run-host-action phases, carries requiredTools, hostResponsibilities, package paths, scaffold files, and blocked-step records, and reports failed handoff inspection and host-root diagnostics without rewriting host files. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "plan-host-integration-execution builds crosstl-runtime-host-integration-execution-plan JSON, text, and SARIF output from a host integration handoff manifest, runs handoff inspection before planning, records optional host-root readiness, normalizes per-target handoff actions into stable phase-ordered execution steps, maps actions to prepare-tools, consume-loader, load-artifact, satisfy-host-responsibility, resolve-blockers, and run-host-action phases, carries requiredTools, hostResponsibilities, package paths, scaffold files, blocked-step records, and deviceExecution readiness inputs for adapter-backed dispatch, and reports failed handoff inspection and host-root diagnostics without rewriting host files. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_reports_ready_steps",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_carries_blocked_steps",
@@ -11050,7 +11172,7 @@
         },
         "rust": {
           "status": "supported",
-          "notes": "plan-host-integration-execution builds crosstl-runtime-host-integration-execution-plan JSON, text, and SARIF output from a host integration handoff manifest, runs handoff inspection before planning, records optional host-root readiness, normalizes per-target handoff actions into stable phase-ordered execution steps, maps actions to prepare-tools, consume-loader, load-artifact, satisfy-host-responsibility, resolve-blockers, and run-host-action phases, carries requiredTools, hostResponsibilities, package paths, scaffold files, and blocked-step records, and reports failed handoff inspection and host-root diagnostics without rewriting host files. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "plan-host-integration-execution builds crosstl-runtime-host-integration-execution-plan JSON, text, and SARIF output from a host integration handoff manifest, runs handoff inspection before planning, records optional host-root readiness, normalizes per-target handoff actions into stable phase-ordered execution steps, maps actions to prepare-tools, consume-loader, load-artifact, satisfy-host-responsibility, resolve-blockers, and run-host-action phases, carries requiredTools, hostResponsibilities, package paths, scaffold files, blocked-step records, and deviceExecution readiness inputs for adapter-backed dispatch, and reports failed handoff inspection and host-root diagnostics without rewriting host files. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_reports_ready_steps",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_carries_blocked_steps",
@@ -11062,7 +11184,7 @@
         },
         "slang": {
           "status": "supported",
-          "notes": "plan-host-integration-execution builds crosstl-runtime-host-integration-execution-plan JSON, text, and SARIF output from a host integration handoff manifest, runs handoff inspection before planning, records optional host-root readiness, normalizes per-target handoff actions into stable phase-ordered execution steps, maps actions to prepare-tools, consume-loader, load-artifact, satisfy-host-responsibility, resolve-blockers, and run-host-action phases, carries requiredTools, hostResponsibilities, package paths, scaffold files, and blocked-step records, and reports failed handoff inspection and host-root diagnostics without rewriting host files. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "plan-host-integration-execution builds crosstl-runtime-host-integration-execution-plan JSON, text, and SARIF output from a host integration handoff manifest, runs handoff inspection before planning, records optional host-root readiness, normalizes per-target handoff actions into stable phase-ordered execution steps, maps actions to prepare-tools, consume-loader, load-artifact, satisfy-host-responsibility, resolve-blockers, and run-host-action phases, carries requiredTools, hostResponsibilities, package paths, scaffold files, blocked-step records, and deviceExecution readiness inputs for adapter-backed dispatch, and reports failed handoff inspection and host-root diagnostics without rewriting host files. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_reports_ready_steps",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_carries_blocked_steps",
@@ -11074,7 +11196,7 @@
         },
         "wgsl": {
           "status": "supported",
-          "notes": "plan-host-integration-execution builds crosstl-runtime-host-integration-execution-plan JSON, text, and SARIF output from a host integration handoff manifest, runs handoff inspection before planning, records optional host-root readiness, normalizes per-target handoff actions into stable phase-ordered execution steps, maps actions to prepare-tools, consume-loader, load-artifact, satisfy-host-responsibility, resolve-blockers, and run-host-action phases, carries requiredTools, hostResponsibilities, package paths, scaffold files, and blocked-step records, and reports failed handoff inspection and host-root diagnostics without rewriting host files. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "plan-host-integration-execution builds crosstl-runtime-host-integration-execution-plan JSON, text, and SARIF output from a host integration handoff manifest, runs handoff inspection before planning, records optional host-root readiness, normalizes per-target handoff actions into stable phase-ordered execution steps, maps actions to prepare-tools, consume-loader, load-artifact, satisfy-host-responsibility, resolve-blockers, and run-host-action phases, carries requiredTools, hostResponsibilities, package paths, scaffold files, blocked-step records, and deviceExecution readiness inputs for adapter-backed dispatch, and reports failed handoff inspection and host-root diagnostics without rewriting host files. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_reports_ready_steps",
             "tests/test_translator/test_project_translation.py::def test_plan_runtime_host_integration_execution_carries_blocked_steps",
@@ -11094,7 +11216,7 @@
       "support": {
         "directx": {
           "status": "supported",
-          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, revalidates the planned host root or an explicit --host-root override, records scaffold-root, package-root, and optional adapter-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, verifies runtime adapter descriptor manifests and descriptor file hashes when --adapter-root is provided, checks required host tools on PATH, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, stale descriptors, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, revalidates the planned host root or an explicit --host-root override, records scaffold-root, package-root, and optional adapter-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, verifies runtime adapter descriptor manifests and descriptor file hashes when --adapter-root is provided, checks required host tools on PATH, validates optional crosstl-runtime-device-runner-manifest inputs and records deviceExecution readiness from package, descriptor, and runner state for external runners, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, stale descriptors, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_checked_and_skipped_steps",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_package_artifact",
@@ -11102,6 +11224,7 @@
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_accepts_host_root_override",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_rejects_stale_adapter_descriptor",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_checks_adapter_descriptors",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_ready_device_runner",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_blocked_steps_without_failure",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_tool_as_blocked",
             "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_text_outputs_results",
@@ -11110,7 +11233,7 @@
         },
         "opengl": {
           "status": "supported",
-          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, revalidates the planned host root or an explicit --host-root override, records scaffold-root, package-root, and optional adapter-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, verifies runtime adapter descriptor manifests and descriptor file hashes when --adapter-root is provided, checks required host tools on PATH, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, stale descriptors, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, revalidates the planned host root or an explicit --host-root override, records scaffold-root, package-root, and optional adapter-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, verifies runtime adapter descriptor manifests and descriptor file hashes when --adapter-root is provided, checks required host tools on PATH, validates optional crosstl-runtime-device-runner-manifest inputs and records deviceExecution readiness from package, descriptor, and runner state for external runners, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, stale descriptors, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_checked_and_skipped_steps",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_package_artifact",
@@ -11118,6 +11241,7 @@
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_accepts_host_root_override",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_rejects_stale_adapter_descriptor",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_checks_adapter_descriptors",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_ready_device_runner",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_blocked_steps_without_failure",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_tool_as_blocked",
             "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_text_outputs_results",
@@ -11126,7 +11250,7 @@
         },
         "webgl": {
           "status": "supported",
-          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, revalidates the planned host root or an explicit --host-root override, records scaffold-root, package-root, and optional adapter-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, verifies runtime adapter descriptor manifests and descriptor file hashes when --adapter-root is provided, checks required host tools on PATH, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, stale descriptors, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, revalidates the planned host root or an explicit --host-root override, records scaffold-root, package-root, and optional adapter-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, verifies runtime adapter descriptor manifests and descriptor file hashes when --adapter-root is provided, checks required host tools on PATH, validates optional crosstl-runtime-device-runner-manifest inputs and records deviceExecution readiness from package, descriptor, and runner state for external runners, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, stale descriptors, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_checked_and_skipped_steps",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_package_artifact",
@@ -11134,6 +11258,7 @@
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_accepts_host_root_override",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_rejects_stale_adapter_descriptor",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_checks_adapter_descriptors",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_ready_device_runner",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_blocked_steps_without_failure",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_tool_as_blocked",
             "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_text_outputs_results",
@@ -11142,7 +11267,7 @@
         },
         "metal": {
           "status": "supported",
-          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, revalidates the planned host root or an explicit --host-root override, records scaffold-root, package-root, and optional adapter-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, verifies runtime adapter descriptor manifests and descriptor file hashes when --adapter-root is provided, checks required host tools on PATH, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, stale descriptors, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, revalidates the planned host root or an explicit --host-root override, records scaffold-root, package-root, and optional adapter-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, verifies runtime adapter descriptor manifests and descriptor file hashes when --adapter-root is provided, checks required host tools on PATH, validates optional crosstl-runtime-device-runner-manifest inputs and records deviceExecution readiness from package, descriptor, and runner state for external runners, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, stale descriptors, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_checked_and_skipped_steps",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_package_artifact",
@@ -11150,6 +11275,7 @@
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_accepts_host_root_override",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_rejects_stale_adapter_descriptor",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_checks_adapter_descriptors",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_ready_device_runner",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_blocked_steps_without_failure",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_tool_as_blocked",
             "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_text_outputs_results",
@@ -11158,7 +11284,7 @@
         },
         "vulkan": {
           "status": "supported",
-          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, revalidates the planned host root or an explicit --host-root override, records scaffold-root, package-root, and optional adapter-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, verifies runtime adapter descriptor manifests and descriptor file hashes when --adapter-root is provided, checks required host tools on PATH, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, stale descriptors, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, revalidates the planned host root or an explicit --host-root override, records scaffold-root, package-root, and optional adapter-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, verifies runtime adapter descriptor manifests and descriptor file hashes when --adapter-root is provided, checks required host tools on PATH, validates optional crosstl-runtime-device-runner-manifest inputs and records deviceExecution readiness from package, descriptor, and runner state for external runners, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, stale descriptors, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_checked_and_skipped_steps",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_package_artifact",
@@ -11166,6 +11292,7 @@
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_accepts_host_root_override",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_rejects_stale_adapter_descriptor",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_checks_adapter_descriptors",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_ready_device_runner",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_blocked_steps_without_failure",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_tool_as_blocked",
             "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_text_outputs_results",
@@ -11174,7 +11301,7 @@
         },
         "cuda": {
           "status": "supported",
-          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, revalidates the planned host root or an explicit --host-root override, records scaffold-root, package-root, and optional adapter-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, verifies runtime adapter descriptor manifests and descriptor file hashes when --adapter-root is provided, checks required host tools on PATH, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, stale descriptors, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, revalidates the planned host root or an explicit --host-root override, records scaffold-root, package-root, and optional adapter-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, verifies runtime adapter descriptor manifests and descriptor file hashes when --adapter-root is provided, checks required host tools on PATH, validates optional crosstl-runtime-device-runner-manifest inputs and records deviceExecution readiness from package, descriptor, and runner state for external runners, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, stale descriptors, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_checked_and_skipped_steps",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_package_artifact",
@@ -11182,6 +11309,7 @@
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_accepts_host_root_override",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_rejects_stale_adapter_descriptor",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_checks_adapter_descriptors",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_ready_device_runner",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_blocked_steps_without_failure",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_tool_as_blocked",
             "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_text_outputs_results",
@@ -11190,7 +11318,7 @@
         },
         "hip": {
           "status": "supported",
-          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, revalidates the planned host root or an explicit --host-root override, records scaffold-root, package-root, and optional adapter-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, verifies runtime adapter descriptor manifests and descriptor file hashes when --adapter-root is provided, checks required host tools on PATH, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, stale descriptors, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, revalidates the planned host root or an explicit --host-root override, records scaffold-root, package-root, and optional adapter-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, verifies runtime adapter descriptor manifests and descriptor file hashes when --adapter-root is provided, checks required host tools on PATH, validates optional crosstl-runtime-device-runner-manifest inputs and records deviceExecution readiness from package, descriptor, and runner state for external runners, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, stale descriptors, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_checked_and_skipped_steps",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_package_artifact",
@@ -11198,6 +11326,7 @@
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_accepts_host_root_override",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_rejects_stale_adapter_descriptor",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_checks_adapter_descriptors",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_ready_device_runner",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_blocked_steps_without_failure",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_tool_as_blocked",
             "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_text_outputs_results",
@@ -11206,7 +11335,7 @@
         },
         "mojo": {
           "status": "supported",
-          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, revalidates the planned host root or an explicit --host-root override, records scaffold-root, package-root, and optional adapter-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, verifies runtime adapter descriptor manifests and descriptor file hashes when --adapter-root is provided, checks required host tools on PATH, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, stale descriptors, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, revalidates the planned host root or an explicit --host-root override, records scaffold-root, package-root, and optional adapter-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, verifies runtime adapter descriptor manifests and descriptor file hashes when --adapter-root is provided, checks required host tools on PATH, validates optional crosstl-runtime-device-runner-manifest inputs and records deviceExecution readiness from package, descriptor, and runner state for external runners, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, stale descriptors, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_checked_and_skipped_steps",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_package_artifact",
@@ -11214,6 +11343,7 @@
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_accepts_host_root_override",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_rejects_stale_adapter_descriptor",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_checks_adapter_descriptors",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_ready_device_runner",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_blocked_steps_without_failure",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_tool_as_blocked",
             "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_text_outputs_results",
@@ -11222,7 +11352,7 @@
         },
         "rust": {
           "status": "supported",
-          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, revalidates the planned host root or an explicit --host-root override, records scaffold-root, package-root, and optional adapter-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, verifies runtime adapter descriptor manifests and descriptor file hashes when --adapter-root is provided, checks required host tools on PATH, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, stale descriptors, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, revalidates the planned host root or an explicit --host-root override, records scaffold-root, package-root, and optional adapter-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, verifies runtime adapter descriptor manifests and descriptor file hashes when --adapter-root is provided, checks required host tools on PATH, validates optional crosstl-runtime-device-runner-manifest inputs and records deviceExecution readiness from package, descriptor, and runner state for external runners, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, stale descriptors, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_checked_and_skipped_steps",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_package_artifact",
@@ -11230,6 +11360,7 @@
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_accepts_host_root_override",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_rejects_stale_adapter_descriptor",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_checks_adapter_descriptors",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_ready_device_runner",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_blocked_steps_without_failure",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_tool_as_blocked",
             "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_text_outputs_results",
@@ -11238,7 +11369,7 @@
         },
         "slang": {
           "status": "supported",
-          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, revalidates the planned host root or an explicit --host-root override, records scaffold-root, package-root, and optional adapter-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, verifies runtime adapter descriptor manifests and descriptor file hashes when --adapter-root is provided, checks required host tools on PATH, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, stale descriptors, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, revalidates the planned host root or an explicit --host-root override, records scaffold-root, package-root, and optional adapter-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, verifies runtime adapter descriptor manifests and descriptor file hashes when --adapter-root is provided, checks required host tools on PATH, validates optional crosstl-runtime-device-runner-manifest inputs and records deviceExecution readiness from package, descriptor, and runner state for external runners, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, stale descriptors, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_checked_and_skipped_steps",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_package_artifact",
@@ -11246,6 +11377,7 @@
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_accepts_host_root_override",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_rejects_stale_adapter_descriptor",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_checks_adapter_descriptors",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_ready_device_runner",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_blocked_steps_without_failure",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_tool_as_blocked",
             "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_text_outputs_results",
@@ -11254,7 +11386,7 @@
         },
         "wgsl": {
           "status": "supported",
-          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, revalidates the planned host root or an explicit --host-root override, records scaffold-root, package-root, and optional adapter-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, verifies runtime adapter descriptor manifests and descriptor file hashes when --adapter-root is provided, checks required host tools on PATH, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, stale descriptors, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
+          "notes": "execute-host-integration consumes crosstl-runtime-host-integration-execution-plan JSON and emits crosstl-runtime-host-integration-execution-result JSON, text, and SARIF output, validates execution plans, revalidates the planned host root or an explicit --host-root override, records scaffold-root, package-root, and optional adapter-root readiness, verifies loader scaffold output paths when --scaffold-root is provided, verifies package artifact and source-remap paths when --package-root is provided, verifies runtime adapter descriptor manifests and descriptor file hashes when --adapter-root is provided, checks required host tools on PATH, validates optional crosstl-runtime-device-runner-manifest inputs and records deviceExecution readiness from package, descriptor, and runner state for external runners, preserves blocked plan steps, reports project-specific host responsibilities as skipped actionable steps, and emits structured diagnostics for missing files, stale descriptors, unsafe paths, unavailable tools, and invalid plans. It does not rewrite host application code, execute device code, generate runtime framework code, or install target SDKs.",
           "evidence": [
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_checked_and_skipped_steps",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_package_artifact",
@@ -11262,6 +11394,7 @@
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_accepts_host_root_override",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_rejects_stale_adapter_descriptor",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_checks_adapter_descriptors",
+            "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_ready_device_runner",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_blocked_steps_without_failure",
             "tests/test_translator/test_project_translation.py::def test_execute_runtime_host_integration_reports_missing_tool_as_blocked",
             "tests/test_translator/test_project_translation.py::def test_project_cli_execute_host_integration_text_outputs_results",
@@ -13368,6 +13501,7 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_filters_invalid_include_dirs_before_frontend",
             "tests/test_translator/test_project_translation.py::def test_translate_project_records_define_processing_without_frontend_support",
             "tests/test_translator/test_project_translation.py::def test_translate_project_groups_unresolved_template_bindings_by_signature",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_excess_opengl_aggregate_elements",
             "tests/test_translator/test_project_translation.py::def test_project_cli_validate_project_sarif_reports_generated_diagnostics",
             "tests/test_translator/test_project_translation.py::def test_project_diagnostics_preserve_original_locations",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_fails_on_error_diagnostics",

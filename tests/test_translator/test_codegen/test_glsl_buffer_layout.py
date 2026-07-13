@@ -132,8 +132,27 @@ def test_std430_type_info_normalizes_fixed_width_scalar_aliases():
     assert std430_layout_type_name("int8_t") == "int"
     assert std430_layout_type_name("uint16_t") == "uint"
     assert std430_layout_type_name("size_t") == "uint"
-    assert std430_value_type_info("int64_t") == std430_value_type_info("int")
-    assert std430_value_type_info("uint64_t") == std430_value_type_info("uint")
+    assert std430_layout_type_name("i64") == "int64_t"
+    assert std430_layout_type_name("u64") == "uint64_t"
+
+    signed = std430_value_type_info("int64_t")
+    unsigned = std430_value_type_info("uint64_t")
+    assert signed["size"] == 8
+    assert signed["align"] == 8
+    assert signed["component_type"] == "int64_t"
+    assert unsigned["size"] == 8
+    assert unsigned["align"] == 8
+    assert unsigned["component_type"] == "uint64_t"
+    assert std430_array_stride(signed) == 8
+
+    pair = std430_value_type_info("u64vec2")
+    assert pair["size"] == 16
+    assert pair["align"] == 16
+
+    triple = std430_value_type_info("i64vec3")
+    assert triple["size"] == 24
+    assert triple["align"] == 32
+    assert std430_array_stride(triple) == 32
 
 
 def test_byte_offset_expression_formats_literal_and_dynamic_indices():

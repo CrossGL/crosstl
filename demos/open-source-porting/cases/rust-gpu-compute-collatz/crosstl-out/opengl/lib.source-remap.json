@@ -115,12 +115,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 26,
-        "endOffset": 544,
+        "endLine": 28,
+        "endOffset": 605,
         "file": "crosstl-out/opengl/lib.glsl",
         "length": 29,
-        "line": 25,
-        "offset": 515
+        "line": 27,
+        "offset": 576
       },
       "original": {
         "column": 1,
@@ -137,12 +137,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 64,
-        "endOffset": 1349,
+        "endLine": 66,
+        "endOffset": 1422,
         "file": "crosstl-out/opengl/lib.glsl",
         "length": 18,
-        "line": 63,
-        "offset": 1331
+        "line": 65,
+        "offset": 1404
       },
       "original": {
         "column": 1,
@@ -159,12 +159,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 65,
-        "endOffset": 1415,
+        "endLine": 67,
+        "endOffset": 1488,
         "file": "crosstl-out/opengl/lib.glsl",
         "length": 66,
-        "line": 64,
-        "offset": 1349
+        "line": 66,
+        "offset": 1422
       },
       "original": {
         "column": 1,
@@ -181,12 +181,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 67,
-        "endOffset": 1477,
+        "endLine": 69,
+        "endOffset": 1550,
         "file": "crosstl-out/opengl/lib.glsl",
         "length": 48,
-        "line": 66,
-        "offset": 1429
+        "line": 68,
+        "offset": 1502
       },
       "original": {
         "column": 1,
@@ -203,12 +203,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 68,
-        "endOffset": 1558,
+        "endLine": 70,
+        "endOffset": 1631,
         "file": "crosstl-out/opengl/lib.glsl",
         "length": 81,
-        "line": 67,
-        "offset": 1477
+        "line": 69,
+        "offset": 1550
       },
       "original": {
         "column": 1,

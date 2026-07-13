@@ -2,21 +2,71 @@
 
 All notable changes to CrossTL are documented in this file.
 
-## [Unreleased]
+## [3.0.0] - 2026-06-23
 
 ### Added
 
-- Target-only WebGL/WebGL2 GLSL ES backend support.
-- Target-only WebGPU/WGSL backend support for vertex, fragment, and compute output.
-- DirectX target profile aliases for `dx11`, `dx12`, `d3d11`, and `d3d12`, all resolving to HLSL source output.
+- Target-only WebGL/WebGL2 GLSL ES backend with vertex and fragment stage output.
+- Target-only WebGPU/WGSL backend with vertex, fragment, and compute output.
+- DirectX target profile aliases (`dx11`, `dx12`, `d3d11`, `d3d12`) all resolving to HLSL source output.
+- MLX project porting integration with demos, CI workflow, and full-corpus validation.
+- Runtime host integration pipeline: loader scaffolds, adapter descriptors, manifest metadata, and execution adapters.
+- Project-scale shader porting pipeline with runtime readiness checks and blocked-unit tracking.
+- Metal struct-template materialization engine with instantiation, specialization, SFINAE-overloaded member lowering, and budget scaling.
+- Metal subgroup/SIMD intrinsic lowering to CrossGL Wave ops.
+- Metal atomic device lowering to CrossGL atomic intrinsics.
+- Metal threadgroup-local array hoisting to GLSL shared globals.
+- Runtime parity executors and verification harness for translated GPU artifacts.
+- WGSL resource binding, storage buffer, and texture sampler object model support.
+- Naga-based WGSL validation for generated project artifacts.
+- SPIR-V artifact assembly and validation pipeline.
+- Host runtime detection for WebGPU, OpenCL, D3D11, Rust wgpu, and game engine runtimes.
+- Open-source project porting demos with third-party notice coverage and failure summary reporting.
+- Runtime loader manifest generation and package inspection commands.
+- Host integration handoff bundles with blocked-step reporting.
+- Integer sampled texture lowering across backends.
+- GLSL specialization constant lowering for target backends.
+- Metal function constant lowering for SPIR-V output.
+- Backend-agnostic runtime manifest metadata for cross-target artifact planning.
 
 ### Improved
 
+- Metal preprocessor: full-source comment masking, functor lowering, template budget scaling, deterministic member lowering, and constexpr array extent recognition.
+- HLSL compute codegen: value-builtin lowering, subgroup-to-wave translation, semantic validation, and program-scope constant output.
+- GLSL codegen: subgroup builtins, specialization constants, vertex layout location mapping, storage image lowering, and fragment invocation density modeling.
+- SPIR-V codegen: storage buffer overload resolution, 64-bit layout validation, bool compute interfaces, access-chain typing, and gather offset vector operands.
+- DirectX codegen: groupshared hoisting, resource binding allocation, fragment varying semantics, typed buffer indexed writes, and loader profile metadata.
+- OpenGL codegen: Metal template specialization, buffer parameter lowering, stage input struct mapping, uniform block member disambiguation, and GLSL 330 resource bindings.
+- OpenCL reduce target artifact generation, diagnostics, and helper contract reporting.
+- Rust-GPU: vertex input lowering, compute construct lowering, storage buffer declarations, and Option value pre-lowering.
+- Mojo: GPU kernel extraction, vector overload resolution, compute builtin parameterization, and sampled texture binding lowering.
+- Slang: resource name collision avoidance, default parameter preservation, texture size query casting, and compute entry lowering.
+- WGSL: structured storage buffers, constant buffer block lowering, derivative intrinsic mapping, image2D storage textures, and reserved identifier escaping.
+- Project translation: unresolved-construct guardrails, source provenance tracking, macro variant classification, include resolution, and feature root scanning.
+- Support matrix tooling: target alias metadata, target-only source rejection documentation, and backend conformance edge coverage.
 - Split target backend registration from native source frontend availability in the backend registry and support matrix.
-- Added target alias and target profile metadata to backend support inventory.
-- Documented target-only source rejection for WebGL and WGSL outputs.
-- Hardened WGSL output with explicit IO attribute preservation, direct compute builtin injection, compute barrier lowering, and deterministic diagnostics for CrossGL resource and texture calls that do not have safe WebGPU lowering yet.
-- Improved WebGL target generation to emit supported vertex/fragment stages from mixed graphics and compute shaders while preserving deterministic pure-compute diagnostics.
+- Test suite grown to 13,485 collected tests (from ~8,000 at v2.0.0).
+
+### Fixed
+
+- Over 100 targeted backend bug fixes across CUDA, HIP, Metal, GLSL, HLSL, SPIR-V, WGSL, OpenCL, Rust-GPU, Mojo, and Slang.
+- Metal residual-template false positives from struct member templates.
+- SPIR-V storage buffer pointer overload inference and access-chain index typing.
+- WGSL vector narrowing, entry struct varying locations, reserved identifier escaping, and uniform scalar array layout.
+- DirectX vertex input semantics, scalar fragment targets, binding allocation, and groupshared hoist aliases.
+- HLSL compute value-builtin leakage, scalar splat swizzle lowering, and array semantic allocation.
+- OpenGL bfloat16 asuint lowering, GLSL 110 interface qualifiers, and gl_FragColor reserved local conflicts.
+- Vulkan matmul builtin vector stores, complex helper call argument types, and private scalar initializer types.
+- HIP scalar kernel params, bit-extract kernel loop preservation, and host main artifact generation.
+- CUDA vector-add DirectX lowering and OpenGL uniform name stabilization.
+- Metal-to-DirectX compute resource output and constant buffer member SPIR-V access.
+- Mojo GPU builtin lowering contract and vector-add Metal/SPIR-V artifacts.
+- Slang compute entry lowering to OpenGL and struct resource name collisions.
+- WebGL dynamic sampler array helper calls and unsupported sampler resource rejection.
+- GLSL usampler texelFetch SPIR-V lowering and fragment output name handling.
+- Python 3.8 collection type compatibility in the project pipeline.
+
+---
 
 ## [2.0.0] - 2026-06-01
 

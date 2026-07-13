@@ -7,6 +7,12 @@ layout(location = 0) in vec4 texcoord;
 layout(location = 1) in vec3 frag_pos;
 layout(binding = 1) uniform sampler2D tex;
 // Fragment Shader
+float linearToSrgb(float linear);
+
+vec3 linearToSrgb(vec3 linear);
+
+vec4 linearToSrgb(vec4 linear);
+
 float linearToSrgb(float linear) {
     if ((linear <= 0.0031308)) {
         return (linear * 12.92);
