@@ -356,6 +356,30 @@ class DirectXSemanticArraySizeError(ValueError):
         super().__init__(message)
 
 
+class DirectXAggregateInitializerError(ValueError):
+    """Raised when an aggregate initializer has no faithful HLSL lowering."""
+
+    project_diagnostic_code = "project.translate.directx-aggregate-initializer-invalid"
+    missing_capabilities = ("directx.aggregate-initializer-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        expected_type=None,
+        element_count=None,
+        expected_element_count=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.expected_type = expected_type
+        self.element_count = element_count
+        self.expected_element_count = expected_element_count
+        self.reason = reason
+        self.source_location = source_location
+
+
 class DirectXPrivatePointerParameterError(ValueError):
     """Raised when a private pointer cannot become a fixed HLSL array."""
 
@@ -3729,7 +3753,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
             const_type = getattr(node, "const_type", getattr(node, "vtype", "float"))
             value = getattr(node, "value", None)
-            value_code = self.generate_constant_expression(value)
+            value_code = self.generate_constant_expression(value, const_type)
             declaration = format_c_style_array_declaration(
                 self.map_type(const_type), name
             )
@@ -3764,8 +3788,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             declarations.append(f"static const int {name} = {value};")
         return "\n".join(declarations) + "\n\n" if declarations else ""
 
-    def generate_constant_expression(self, expr):
-        value_code = self.generate_expression(expr)
+    def generate_constant_expression(self, expr, expected_type=None):
+        value_code = self.generate_expression_with_expected(expr, expected_type)
         if value_code == "True":
             return "true"
         if value_code == "False":
@@ -5113,6 +5137,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         )
                     )
                     return f"{atomic_code}{indent_str}{expression};\n"
+                array_call = self.render_hlsl_fixed_array_literal_call_statement(
+                    stmt.expression, indent
+                )
+                if array_call is not None:
+                    return array_call
                 expression = self.generate_expression(stmt.expression)
                 return f"{indent_str}{expression};\n"
             else:
@@ -5136,6 +5165,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     )
                 )
                 return f"{atomic_code}{indent_str}{expression};\n"
+            array_call = self.render_hlsl_fixed_array_literal_call_statement(
+                stmt, indent
+            )
+            if array_call is not None:
+                return array_call
             return f"{indent_str}{self.generate_expression(stmt)};\n"
 
     def generate_tail_expression_statement(self, stmt, indent=0):
@@ -6597,6 +6631,30 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             target = node.left
             value = node.right
             op = getattr(node, "operator", "=")
+
+        target_type = self.expression_result_type(target)
+        if isinstance(value, ArrayLiteralNode) and self.hlsl_outer_array_type(
+            target_type
+        ):
+            if op != "=" or not self.hlsl_repeatable_array_assignment_target(target):
+                self.hlsl_fixed_array_aggregate_initializer(value, target_type)
+                self.hlsl_aggregate_error(
+                    value,
+                    expected_type=self.map_type(target_type),
+                    reason="array-assignment-unsupported",
+                    detail=(
+                        "this fixed-array assignment target cannot be expanded "
+                        "without changing evaluation order"
+                    ),
+                )
+            return "\n".join(
+                self.hlsl_aggregate_assignment_statements(
+                    self.generate_expression(target),
+                    value,
+                    target_type,
+                    value,
+                )
+            )
 
         pointer_store = self.generate_hlsl_resource_pointer_dereference_assignment(
             target, value, op
@@ -19001,6 +19059,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             expected_type = (
                 parameter_types[index] if index < len(parameter_types) else None
             )
+            if isinstance(arg, ArrayLiteralNode) and self.hlsl_outer_array_type(
+                expected_type
+            ):
+                self.hlsl_fixed_array_aggregate_initializer(arg, expected_type)
+                self.hlsl_aggregate_error(
+                    arg,
+                    expected_type=self.map_type(expected_type),
+                    reason="array-argument-unsupported",
+                    detail=(
+                        "HLSL has no fixed-array literal expression for a call "
+                        "argument; a materialized array temporary is required"
+                    ),
+                )
             rendered_args.append(
                 self.generate_expression_with_expected(arg, expected_type)
             )
@@ -21977,18 +22048,558 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             format_struct_constructor_expression(self, mapped_type, rendered_args),
         )
 
-    def hlsl_array_literal_element_expected_type(self, expected_type):
+    def hlsl_aggregate_error(
+        self,
+        expr,
+        *,
+        expected_type,
+        reason,
+        expected_element_count=None,
+        detail=None,
+    ):
+        element_count = len(getattr(expr, "elements", []) or [])
+        if reason == "expected-type-unresolved":
+            message = (
+                "DirectX aggregate initializer requires a concrete destination type"
+            )
+        elif reason == "element-count-mismatch":
+            message = (
+                f"DirectX aggregate initializer for '{expected_type}' expects at "
+                f"most {expected_element_count} elements, got {element_count}"
+            )
+        elif detail:
+            message = (
+                f"DirectX aggregate initializer for '{expected_type}' cannot be "
+                f"lowered: {detail}"
+            )
+        else:
+            message = (
+                f"DirectX aggregate initializer for '{expected_type}' cannot be lowered"
+            )
+        raise DirectXAggregateInitializerError(
+            message,
+            expected_type=expected_type,
+            element_count=element_count,
+            expected_element_count=expected_element_count,
+            reason=reason,
+            source_location=getattr(expr, "source_location", None),
+        )
+
+    def hlsl_outer_array_type(self, expected_type):
         type_name = self.type_name_string(expected_type)
         if not type_name:
             return None
-        base_type, array_suffix = split_array_type_suffix(type_name)
+        mapped_type = self.map_type(type_name)
+        base_type, array_suffix = split_array_type_suffix(mapped_type)
+        if not array_suffix:
+            return None
+        match = re.fullmatch(r"\[([^\]]*)\](.*)", array_suffix)
+        if match is None:
+            return None
+        extent_text = match.group(1).strip()
+        return mapped_type, extent_text, f"{base_type}{match.group(2)}"
+
+    def hlsl_array_literal_element_expected_type(self, expected_type):
+        array_type = self.hlsl_outer_array_type(expected_type)
+        return array_type[2] if array_type is not None else None
+
+    def hlsl_fixed_array_aggregate_contract(self, expr, expected_type):
+        array_type = self.hlsl_outer_array_type(expected_type)
+        mapped_type = self.map_type(expected_type)
+        if array_type is None:
+            self.hlsl_aggregate_error(
+                expr,
+                expected_type=mapped_type,
+                reason="array-type-invalid",
+                detail="the array suffix is invalid",
+            )
+
+        mapped_type, extent_text, element_type = array_type
+        if not extent_text:
+            self.hlsl_aggregate_error(
+                expr,
+                expected_type=mapped_type,
+                reason="unsized-array",
+                detail="an unsized array has no fixed initializer extent",
+            )
+        extent = evaluate_literal_int_expression(
+            extent_text,
+            self.hlsl_current_visible_int_constants(),
+        )
+        if extent is None:
+            self.hlsl_aggregate_error(
+                expr,
+                expected_type=mapped_type,
+                reason="array-extent-unresolved",
+                detail=f"array extent '{extent_text}' is not a known integer constant",
+            )
+        if extent <= 0:
+            self.hlsl_aggregate_error(
+                expr,
+                expected_type=mapped_type,
+                reason="array-extent-invalid",
+                detail=f"array extent '{extent}' must be positive",
+            )
+        return mapped_type, extent, element_type
+
+    def hlsl_is_zero_initializer_expression(self, expr):
+        if isinstance(expr, bool):
+            return False
+        if isinstance(expr, (int, float)):
+            return expr in {0, 0.0}
+        if not (hasattr(expr, "__class__") and "Literal" in str(expr.__class__)):
+            return False
+        value = getattr(expr, "value", None)
+        return not isinstance(value, bool) and value in {0, 0.0}
+
+    def hlsl_is_zero_aggregate_initializer(self, expr):
+        elements = list(getattr(expr, "elements", []) or [])
+        return len(elements) == 1 and self.hlsl_is_zero_initializer_expression(
+            elements[0]
+        )
+
+    def hlsl_value_initialized_expression(self, expr, expected_type):
+        mapped_type = self.map_type(expected_type)
+        _base_type, array_suffix = split_array_type_suffix(mapped_type)
         if array_suffix:
-            return base_type
-        return None
+            _array_type, extent, element_type = (
+                self.hlsl_fixed_array_aggregate_contract(expr, mapped_type)
+            )
+            elements = [
+                self.hlsl_value_initialized_expression(expr, element_type)
+                for _index in range(extent)
+            ]
+            return "{" + ", ".join(elements) + "}"
+
+        struct_fields = self.hlsl_struct_constructor_fields(mapped_type)
+        if struct_fields is not None:
+            for _field_name, field_type in struct_fields:
+                self.hlsl_value_initialized_expression(expr, field_type)
+            return f"({mapped_type})0"
+
+        if self.is_scalar_value_type(mapped_type):
+            return default_value_expression(self, mapped_type)
+        if (
+            self.is_vector_value_type(mapped_type)
+            or self.hlsl_matrix_shape(mapped_type) is not None
+        ):
+            return f"({mapped_type})0"
+
+        self.hlsl_aggregate_error(
+            expr,
+            expected_type=mapped_type,
+            reason="value-initialization-unsupported",
+            detail="the omitted element type has no HLSL value initializer",
+        )
+
+    def hlsl_contextual_initializer_element_expression(
+        self, element, expected_type, aggregate_expr
+    ):
+        mapped_type = self.map_type(expected_type)
+        _base_type, array_suffix = split_array_type_suffix(mapped_type)
+        is_aggregate = bool(
+            array_suffix
+            or self.hlsl_struct_constructor_fields(mapped_type) is not None
+            or self.is_vector_value_type(mapped_type)
+            or self.hlsl_matrix_shape(mapped_type) is not None
+        )
+        if isinstance(element, ArrayLiteralNode):
+            return self.hlsl_contextual_aggregate_initializer(element, mapped_type)
+        if is_aggregate and self.hlsl_is_zero_initializer_expression(element):
+            return self.hlsl_value_initialized_expression(aggregate_expr, mapped_type)
+        if is_aggregate:
+            source_type = self.expression_result_type(element)
+            if source_type is None or self.map_type(source_type) != mapped_type:
+                self.hlsl_aggregate_error(
+                    aggregate_expr,
+                    expected_type=mapped_type,
+                    reason="aggregate-element-shape-mismatch",
+                    detail=(
+                        "a nonzero scalar cannot initialize an aggregate element "
+                        "without explicit nested braces or a matching typed expression"
+                    ),
+                )
+        return self.generate_expression_with_expected(element, expected_type)
+
+    def hlsl_vector_aggregate_initializer(self, expr, mapped_type):
+        width = self.value_component_count(mapped_type)
+        component_type = self.vector_component_type(mapped_type)
+        if not width or width <= 1 or component_type is None:
+            return None
+        if self.hlsl_is_zero_aggregate_initializer(expr):
+            return self.hlsl_value_initialized_expression(expr, mapped_type)
+
+        elements = list(getattr(expr, "elements", []) or [])
+        rendered = []
+        provided_components = 0
+        for element in elements:
+            component_count = self.expression_component_count(element)
+            if component_count is None:
+                self.hlsl_aggregate_error(
+                    expr,
+                    expected_type=mapped_type,
+                    reason="vector-element-type-unresolved",
+                    detail="a vector aggregate element has no known component width",
+                )
+            if provided_components + component_count > width:
+                self.hlsl_aggregate_error(
+                    expr,
+                    expected_type=mapped_type,
+                    reason="element-count-mismatch",
+                    expected_element_count=width,
+                )
+            rendered.append(
+                self.generate_expression_with_expected(
+                    element,
+                    component_type if component_count == 1 else None,
+                )
+            )
+            provided_components += component_count
+        rendered.extend(
+            self.hlsl_value_initialized_expression(expr, component_type)
+            for _index in range(provided_components, width)
+        )
+        return f"{mapped_type}({', '.join(rendered)})"
+
+    def hlsl_matrix_aggregate_initializer(self, expr, mapped_type):
+        dimensions = self.hlsl_matrix_dimensions(mapped_type)
+        if dimensions is None:
+            return None
+        if self.hlsl_is_zero_aggregate_initializer(expr):
+            return self.hlsl_value_initialized_expression(expr, mapped_type)
+
+        component_type, rows, columns = dimensions
+        elements = list(getattr(expr, "elements", []) or [])
+        nested_count = sum(
+            isinstance(element, ArrayLiteralNode) for element in elements
+        )
+        if nested_count not in {0, len(elements)}:
+            self.hlsl_aggregate_error(
+                expr,
+                expected_type=mapped_type,
+                reason="matrix-shape-mismatch",
+                detail="matrix rows cannot mix nested and flat initializer elements",
+            )
+
+        rendered = []
+        if nested_count or not elements:
+            if len(elements) > rows:
+                self.hlsl_aggregate_error(
+                    expr,
+                    expected_type=mapped_type,
+                    reason="element-count-mismatch",
+                    expected_element_count=rows,
+                )
+            for row in elements:
+                row_elements = list(getattr(row, "elements", []) or [])
+                if len(row_elements) > columns:
+                    self.hlsl_aggregate_error(
+                        row,
+                        expected_type=mapped_type,
+                        reason="element-count-mismatch",
+                        expected_element_count=columns,
+                    )
+                rendered.extend(
+                    self.generate_expression_with_expected(element, component_type)
+                    for element in row_elements
+                )
+                rendered.extend(
+                    self.hlsl_value_initialized_expression(row, component_type)
+                    for _index in range(len(row_elements), columns)
+                )
+            rendered.extend(
+                self.hlsl_value_initialized_expression(expr, component_type)
+                for _index in range(len(elements) * columns, rows * columns)
+            )
+        else:
+            expected_count = rows * columns
+            if len(elements) > expected_count:
+                self.hlsl_aggregate_error(
+                    expr,
+                    expected_type=mapped_type,
+                    reason="element-count-mismatch",
+                    expected_element_count=expected_count,
+                )
+            rendered.extend(
+                self.generate_expression_with_expected(element, component_type)
+                for element in elements
+            )
+            rendered.extend(
+                self.hlsl_value_initialized_expression(expr, component_type)
+                for _index in range(len(elements), expected_count)
+            )
+        return f"{mapped_type}({', '.join(rendered)})"
+
+    def hlsl_struct_aggregate_initializer(self, expr, mapped_type):
+        fields = self.hlsl_struct_constructor_fields(mapped_type)
+        if fields is None:
+            return None
+        if self.hlsl_is_zero_aggregate_initializer(expr):
+            return self.hlsl_value_initialized_expression(expr, mapped_type)
+
+        elements = list(getattr(expr, "elements", []) or [])
+        if len(elements) > len(fields):
+            self.hlsl_aggregate_error(
+                expr,
+                expected_type=mapped_type,
+                reason="element-count-mismatch",
+                expected_element_count=len(fields),
+            )
+        rendered = [
+            self.hlsl_contextual_initializer_element_expression(
+                element,
+                fields[index][1],
+                expr,
+            )
+            for index, element in enumerate(elements)
+        ]
+        rendered.extend(
+            self.hlsl_value_initialized_expression(expr, fields[index][1])
+            for index in range(len(elements), len(fields))
+        )
+        return "{" + ", ".join(rendered) + "}"
+
+    def hlsl_fixed_array_aggregate_initializer(self, expr, expected_type):
+        mapped_type, extent, element_type = self.hlsl_fixed_array_aggregate_contract(
+            expr, expected_type
+        )
+        elements = list(getattr(expr, "elements", []) or [])
+        if self.hlsl_is_zero_aggregate_initializer(expr):
+            elements = []
+        if len(elements) > extent:
+            self.hlsl_aggregate_error(
+                expr,
+                expected_type=mapped_type,
+                reason="element-count-mismatch",
+                expected_element_count=extent,
+            )
+        rendered = [
+            self.hlsl_contextual_initializer_element_expression(
+                element,
+                element_type,
+                expr,
+            )
+            for element in elements
+        ]
+        rendered.extend(
+            self.hlsl_value_initialized_expression(expr, element_type)
+            for _index in range(len(elements), extent)
+        )
+        return "{" + ", ".join(rendered) + "}"
+
+    def hlsl_contextual_aggregate_initializer(self, expr, expected_type):
+        expected_type = self.type_name_string(expected_type)
+        if not expected_type:
+            self.hlsl_aggregate_error(
+                expr,
+                expected_type=None,
+                reason="expected-type-unresolved",
+            )
+        mapped_type = self.map_type(expected_type)
+        _base_type, array_suffix = split_array_type_suffix(mapped_type)
+        if array_suffix:
+            return self.hlsl_fixed_array_aggregate_initializer(expr, mapped_type)
+
+        struct_initializer = self.hlsl_struct_aggregate_initializer(expr, mapped_type)
+        if struct_initializer is not None:
+            return struct_initializer
+        vector_initializer = self.hlsl_vector_aggregate_initializer(expr, mapped_type)
+        if vector_initializer is not None:
+            return vector_initializer
+        matrix_initializer = self.hlsl_matrix_aggregate_initializer(expr, mapped_type)
+        if matrix_initializer is not None:
+            return matrix_initializer
+
+        self.hlsl_aggregate_error(
+            expr,
+            expected_type=mapped_type,
+            reason="non-aggregate-destination-type",
+            detail="the destination is not a struct, fixed array, vector, or matrix",
+        )
+
+    def hlsl_repeatable_array_assignment_target(self, target):
+        if isinstance(target, str):
+            return target.isidentifier()
+        if isinstance(target, (IdentifierNode, VariableNode)):
+            return True
+        if isinstance(target, MemberAccessNode) or (
+            hasattr(target, "__class__")
+            and "MemberAccess" in str(target.__class__)
+        ):
+            owner = getattr(target, "object_expr", getattr(target, "object", None))
+            member = getattr(target, "member", None)
+            return bool(
+                isinstance(member, str)
+                and member.isidentifier()
+                and self.hlsl_repeatable_array_assignment_target(owner)
+            )
+        return False
+
+    def hlsl_aggregate_assignment_statements(
+        self,
+        target,
+        initializer,
+        expected_type,
+        root_expr,
+        *,
+        value_initialize=False,
+    ):
+        mapped_type = self.map_type(expected_type)
+        array_type = self.hlsl_outer_array_type(mapped_type)
+        if array_type is not None:
+            contract_expr = (
+                initializer if isinstance(initializer, ArrayLiteralNode) else root_expr
+            )
+            _array_type, extent, element_type = (
+                self.hlsl_fixed_array_aggregate_contract(contract_expr, mapped_type)
+            )
+            if value_initialize or self.hlsl_is_zero_initializer_expression(
+                initializer
+            ):
+                elements = []
+            elif isinstance(initializer, ArrayLiteralNode):
+                elements = list(getattr(initializer, "elements", []) or [])
+                if self.hlsl_is_zero_aggregate_initializer(initializer):
+                    elements = []
+            else:
+                self.hlsl_aggregate_error(
+                    root_expr,
+                    expected_type=mapped_type,
+                    reason="array-assignment-unsupported",
+                    detail=(
+                        "HLSL fixed arrays require an aggregate literal for "
+                        "element-wise assignment"
+                    ),
+                )
+            if len(elements) > extent:
+                self.hlsl_aggregate_error(
+                    contract_expr,
+                    expected_type=mapped_type,
+                    reason="element-count-mismatch",
+                    expected_element_count=extent,
+                )
+            statements = []
+            for index in range(extent):
+                child_initializer = elements[index] if index < len(elements) else None
+                statements.extend(
+                    self.hlsl_aggregate_assignment_statements(
+                        f"{target}[{index}]",
+                        child_initializer,
+                        element_type,
+                        root_expr,
+                        value_initialize=index >= len(elements),
+                    )
+                )
+            return statements
+
+        struct_fields = self.hlsl_struct_constructor_fields(mapped_type)
+        if struct_fields is not None:
+            if (
+                value_initialize
+                or self.hlsl_is_zero_initializer_expression(initializer)
+                or (
+                    isinstance(initializer, ArrayLiteralNode)
+                    and self.hlsl_is_zero_aggregate_initializer(initializer)
+                )
+            ):
+                elements = []
+            elif isinstance(initializer, ArrayLiteralNode):
+                elements = list(getattr(initializer, "elements", []) or [])
+            else:
+                rendered = self.generate_expression_with_expected(
+                    initializer, mapped_type
+                )
+                return [f"{target} = {rendered}"]
+            if len(elements) > len(struct_fields):
+                self.hlsl_aggregate_error(
+                    initializer,
+                    expected_type=mapped_type,
+                    reason="element-count-mismatch",
+                    expected_element_count=len(struct_fields),
+                )
+            statements = []
+            for index, (field_name, field_type) in enumerate(struct_fields):
+                child_initializer = elements[index] if index < len(elements) else None
+                statements.extend(
+                    self.hlsl_aggregate_assignment_statements(
+                        f"{target}.{field_name}",
+                        child_initializer,
+                        field_type,
+                        root_expr,
+                        value_initialize=index >= len(elements),
+                    )
+                )
+            return statements
+
+        if value_initialize:
+            rendered = self.hlsl_value_initialized_expression(root_expr, mapped_type)
+        elif isinstance(initializer, ArrayLiteralNode):
+            rendered = self.hlsl_contextual_aggregate_initializer(
+                initializer, mapped_type
+            )
+        elif (
+            self.is_vector_value_type(mapped_type)
+            or self.hlsl_matrix_shape(mapped_type) is not None
+        ) and self.hlsl_is_zero_initializer_expression(initializer):
+            rendered = self.hlsl_value_initialized_expression(root_expr, mapped_type)
+        else:
+            rendered = self.generate_expression_with_expected(
+                initializer, mapped_type
+            )
+        return [f"{target} = {rendered}"]
+
+    def render_hlsl_fixed_array_literal_call_statement(self, expr, indent=0):
+        if not (
+            isinstance(expr, FunctionCallNode)
+            or (hasattr(expr, "__class__") and "FunctionCall" in str(expr.__class__))
+        ):
+            return None
+
+        func_name = self.function_call_name(expr)
+        parameter_types = self.function_parameter_types.get(func_name) or []
+        args = list(getattr(expr, "arguments", getattr(expr, "args", [])) or [])
+        rewritten_args = []
+        prelude = ""
+        changed = False
+        indent_str = "    " * indent
+        for index, arg in enumerate(args):
+            expected_type = (
+                parameter_types[index] if index < len(parameter_types) else None
+            )
+            if not (
+                isinstance(arg, ArrayLiteralNode)
+                and self.hlsl_outer_array_type(expected_type)
+            ):
+                rewritten_args.append(arg)
+                continue
+
+            initializer = self.hlsl_fixed_array_aggregate_initializer(
+                arg, expected_type
+            )
+            temp_name = self.next_hlsl_temp_variable("array_arg")
+            mapped_type = self.map_type(expected_type)
+            declaration = format_c_style_array_declaration(mapped_type, temp_name)
+            self.local_variable_types[temp_name] = self.type_name_string(expected_type)
+            prelude += f"{indent_str}{declaration} = {initializer};\n"
+            rewritten_args.append(IdentifierNode(temp_name))
+            changed = True
+
+        if not changed:
+            return None
+
+        rewritten_call = deepcopy(expr)
+        rewritten_call.arguments = rewritten_args
+        if hasattr(rewritten_call, "args"):
+            rewritten_call.args = rewritten_args
+        return f"{prelude}{indent_str}{self.generate_expression(rewritten_call)};\n"
 
     def hlsl_array_literal_expression(self, expr, expected_type=None):
         if expected_type is None:
             expected_type = self.current_expression_expected_type
+        mapped_type = self.map_type(expected_type) if expected_type else None
+        _base_type, array_suffix = split_array_type_suffix(str(mapped_type or ""))
+        if array_suffix:
+            return self.hlsl_fixed_array_aggregate_initializer(expr, mapped_type)
         struct_initializer = self.hlsl_struct_initializer_components(
             expected_type,
             expr,
@@ -21996,28 +22607,32 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if struct_initializer is not None:
             type_name, _fields, rendered_args, _field_exprs = struct_initializer
             return format_struct_constructor_expression(self, type_name, rendered_args)
-        component_count = self.value_component_count(expected_type)
-        if component_count and component_count > 1:
-            rendered_elements = [
-                self.generate_expression_with_expected(element, None)
-                for element in getattr(expr, "elements", []) or []
-            ]
-            return self.hlsl_constructor_expression_from_rendered_args(
-                expected_type,
-                list(getattr(expr, "elements", []) or []),
-                rendered_elements,
-            )
-        element_type = self.hlsl_array_literal_element_expected_type(expected_type)
-        elements = [
-            self.generate_expression_with_expected(element, element_type)
-            for element in getattr(expr, "elements", []) or []
-        ]
+        vector_initializer = self.hlsl_vector_aggregate_initializer(expr, mapped_type)
+        if vector_initializer is not None:
+            return vector_initializer
+        matrix_initializer = self.hlsl_matrix_aggregate_initializer(expr, mapped_type)
+        if matrix_initializer is not None:
+            return matrix_initializer
+        elements = [self.generate_expression(element) for element in expr.elements]
         return "{" + ", ".join(elements) + "}"
 
     def render_hlsl_typed_buffer_atomic_array_literal(
         self, expr, expected_type, indent
     ):
         element_type = self.hlsl_array_literal_element_expected_type(expected_type)
+        array_contract = None
+        if element_type is not None:
+            array_contract = self.hlsl_fixed_array_aggregate_contract(
+                expr, expected_type
+            )
+            _mapped_type, extent, _element_type = array_contract
+            if len(getattr(expr, "elements", []) or []) > extent:
+                self.hlsl_aggregate_error(
+                    expr,
+                    expected_type=self.map_type(expected_type),
+                    reason="element-count-mismatch",
+                    expected_element_count=extent,
+                )
         code = ""
         rendered_elements = []
         changed = False
@@ -22033,6 +22648,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         if not changed:
             return None
+        if array_contract is not None:
+            _mapped_type, extent, _element_type = array_contract
+            rendered_elements.extend(
+                self.hlsl_value_initialized_expression(expr, element_type)
+                for _index in range(len(rendered_elements), extent)
+            )
         return code, "{" + ", ".join(rendered_elements) + "}"
 
     def render_hlsl_typed_buffer_atomic_embedded_expression(
