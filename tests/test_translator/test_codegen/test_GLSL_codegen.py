@@ -36,6 +36,7 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLBooleanCompoundAssignmentError,
     OpenGLCompoundAssignmentError,
     OpenGLCooperativeMatrixError,
+    OpenGLFixedArrayResourceError,
     OpenGLGlobalInitializerError,
     OpenGLIndexTypeError,
     OpenGLMappedOverloadError,
@@ -77,7 +78,12 @@ def generate_code(ast_node):
 
 
 def assert_glsl_compute_validates_if_available(
-    generated_code, tmp_path, name, spirv_target=None
+    generated_code,
+    tmp_path,
+    name,
+    spirv_target=None,
+    *,
+    validate_spirv=False,
 ):
     glslang = shutil.which("glslangValidator")
     if glslang is None:
@@ -103,6 +109,20 @@ def assert_glsl_compute_validates_if_available(
     )
     assert result.returncode == 0, diagnostics
     assert output_path.is_file()
+    spirv_val = shutil.which("spirv-val")
+    if not validate_spirv or spirv_val is None:
+        return
+    validation = subprocess.run(
+        [spirv_val, "--target-env", "spv1.3", str(output_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    validation_diagnostics = "\n".join(
+        part for part in (validation.stdout, validation.stderr) if part.strip()
+    )
+    assert validation.returncode == 0, validation_diagnostics
 
 
 def glsl_expression_depends_on(generated_code, expression, expected_token):
@@ -3593,6 +3613,370 @@ def test_glsl_private_pointer_helper_rejects_conflicting_local_array_extents():
         ),
     ):
         GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+
+def test_opengl_fixed_array_helper_specializes_readonly_runtime_storage(tmp_path):
+    shader = """
+    shader FixedArrayRuntimeStorageRead {
+        int read2(uvec2 elem, constant int64[2] strides, int bias) {
+            return int(elem.x * strides[1] + elem.y * strides[0]) + bias;
+        }
+
+        compute {
+            @stage_entry
+            void main(
+                StructuredBuffer<int64> sourceStrides @binding(0),
+                RWStructuredBuffer<int> result @binding(1),
+                uvec2 index @gl_GlobalInvocationID
+            ) {
+                result[0] = read2(index, sourceStrides, 7);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    specialized = re.search(
+        r"\bint\s+(?P<name>read2__glsl_[A-Za-z0-9_]+)\s*"
+        r"\(uvec2 elem, int bias, int strides_offset\)\s*"
+        r"\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert specialized is not None, generated
+    assert "sourceStrides[(strides_offset + 1)]" in specialized.group("body")
+    assert "sourceStrides[strides_offset]" in specialized.group("body")
+    assert "int64_t strides[2]" not in specialized.group(0)
+    assert f"{specialized.group('name')}(index, 7, int(0))" in generated
+    assert "int64_t copiedStrides[2]" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "fixed_array_runtime_storage_read",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("declared_extent", "index", "resolved_extent"),
+    [("1", 0, 1), ("STRIDE_COUNT", 1, 2)],
+)
+def test_opengl_fixed_array_storage_specialization_resolves_compile_time_extent(
+    tmp_path, declared_extent, index, resolved_extent
+):
+    shader = f"""
+    shader FixedArrayStorageCompileTimeExtent {{
+        const int STRIDE_COUNT = 1 + 1;
+
+        int readBound(constant int[{declared_extent}] values) {{
+            return values[{index}];
+        }}
+
+        compute {{
+            @stage_entry
+            void main(
+                StructuredBuffer<int> sourceValues @binding(0),
+                RWStructuredBuffer<int> result @binding(1)
+            ) {{
+                result[0] = readBound(sourceValues);
+            }}
+        }}
+    }}
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    specialized_name = re.search(
+        r"\bint\s+(readBound__glsl_[A-Za-z0-9_]+)\s*\(int values_offset\)",
+        generated,
+    )
+    assert specialized_name is not None, generated
+    assert f"_{resolved_extent}_read" in specialized_name.group(1)
+    expected_index = "values_offset" if index == 0 else f"(values_offset + {index})"
+    assert f"return sourceValues[{expected_index}];" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        f"fixed_array_storage_extent_{resolved_extent}",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_opengl_fixed_array_helper_specializes_writable_runtime_storage(tmp_path):
+    shader = """
+    shader FixedArrayRuntimeStorageWrite {
+        void write2(inout device int[2] values, int index, int value) {
+            values[index] = value;
+        }
+
+        compute {
+            @stage_entry
+            void main(
+                RWStructuredBuffer<int> destination @binding(0),
+                uint tid @gl_GlobalInvocationID
+            ) {
+                write2(destination, int(tid & 1u), 11);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    specialized = re.search(
+        r"\bvoid\s+(?P<name>write2__glsl_[A-Za-z0-9_]+)\s*"
+        r"\(int index, int value, int values_offset\)\s*"
+        r"\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert specialized is not None, generated
+    assert "destination[(values_offset + index)] = value;" in specialized.group("body")
+    assert "int values[2]" not in specialized.group(0)
+    assert specialized.group("name").endswith("_2_read_write")
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "fixed_array_runtime_storage_write",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_opengl_fixed_array_helper_specializes_multiple_runtime_resources(tmp_path):
+    shader = """
+    shader FixedArrayMultipleRuntimeStorage {
+        int combine2(
+            constant int[2] left,
+            constant int[2] right,
+            int index,
+            int bias
+        ) {
+            return left[index] + right[1 - index] + bias;
+        }
+
+        compute {
+            @stage_entry
+            void main(
+                StructuredBuffer<int> leftData @binding(0),
+                StructuredBuffer<int> rightData @binding(1),
+                RWStructuredBuffer<int> result @binding(2),
+                uint tid @gl_GlobalInvocationID
+            ) {
+                result[0] = combine2(leftData, rightData, int(tid & 1u), 3);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    specialized = re.search(
+        r"\bint\s+(?P<name>combine2__glsl_[A-Za-z0-9_]+)\s*"
+        r"\(int index, int bias, int left_offset, int right_offset\)\s*"
+        r"\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert specialized is not None, generated
+    assert "leftData[(left_offset + index)]" in specialized.group("body")
+    assert "rightData[(right_offset + (1 - index))]" in specialized.group("body")
+    assert "int left[2]" not in specialized.group(0)
+    assert "int right[2]" not in specialized.group(0)
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "fixed_array_multiple_runtime_storage",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_opengl_fixed_array_storage_specialization_reuses_clone_and_keeps_private_call(
+    tmp_path,
+):
+    shader = """
+    shader FixedArrayStorageReuse {
+        int sum2(constant int[2] values, int bias) {
+            return values[0] + values[1] + bias;
+        }
+
+        compute {
+            @stage_entry
+            void main(
+                StructuredBuffer<int> sourceValues @binding(0),
+                RWStructuredBuffer<int> result @binding(1),
+                uint tid @gl_GlobalInvocationID
+            ) {
+                int localValues[2] = {3, 5};
+                int privateResult = sum2(localValues, 1);
+                int directResult = sum2(sourceValues, 2);
+                uint base = tid & 3u;
+                int offsetResult = sum2(&sourceValues[base], 4);
+                result[0] = privateResult + directResult + offsetResult;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    definitions = re.findall(
+        r"\bint\s+(sum2__glsl_[A-Za-z0-9_]+)\s*\([^;]*\)\s*\{",
+        generated,
+    )
+    assert len(definitions) == 1, generated
+    specialized_name = definitions[0]
+    specialized_calls = re.findall(
+        rf"=\s*{re.escape(specialized_name)}\s*\(([^;\n]+)\)", generated
+    )
+    assert len(specialized_calls) == 2, generated
+    assert any("int(0)" in call for call in specialized_calls)
+    assert any("base" in call for call in specialized_calls)
+    assert "sum2(localValues, 1)" in generated
+    assert "int sum2(int values[2], int bias)" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "fixed_array_storage_reuse",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_opengl_fixed_array_storage_rejects_unknown_extent():
+    shader = """
+    shader FixedArrayStorageUnknownExtent {
+        int first(constant int[COUNT] values) {
+            return values[0];
+        }
+
+        compute {
+            @stage_entry
+            void main(
+                StructuredBuffer<int> sourceValues @binding(0),
+                RWStructuredBuffer<int> result @binding(1)
+            ) {
+                result[0] = first(sourceValues);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLFixedArrayResourceError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.opengl-fixed-array-resource-unsupported"
+    )
+    assert diagnostic.missing_capabilities == (
+        "opengl.fixed-array-resource-specialization",
+    )
+    assert diagnostic.function_name == "first"
+    assert diagnostic.parameter_name == "values"
+    assert diagnostic.resource_names == ("sourceValues",)
+    assert diagnostic.fixed_extent == "COUNT"
+    assert diagnostic.reason == "unknown-fixed-extent"
+
+
+def test_opengl_fixed_array_storage_rejects_writable_readonly_conflict():
+    shader = """
+    shader FixedArrayStorageWritableConflict {
+        void write2(inout device int[2] values, int value) {
+            values[1] = value;
+        }
+
+        compute {
+            @stage_entry
+            void main(
+                StructuredBuffer<int> sourceValues @binding(0),
+                RWStructuredBuffer<int> result @binding(1)
+            ) {
+                write2(sourceValues, 9);
+                result[0] = sourceValues[0];
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLFixedArrayResourceError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.resource_names == ("sourceValues",)
+    assert diagnostic.fixed_extent == 2
+    assert diagnostic.required_access == "read_write"
+    assert diagnostic.actual_access == "read"
+    assert diagnostic.reason == "writable-access-conflict"
+
+
+def test_opengl_fixed_array_storage_rejects_ambiguous_resource_aliasing():
+    shader = """
+    shader FixedArrayStorageAmbiguousAlias {
+        int first(constant int[2] values) {
+            return values[0];
+        }
+
+        compute {
+            @stage_entry
+            void main(
+                StructuredBuffer<int> leftValues @binding(0),
+                StructuredBuffer<int> rightValues @binding(1),
+                RWStructuredBuffer<int> result @binding(2),
+                bool chooseRight
+            ) {
+                result[0] = first(chooseRight ? rightValues : leftValues);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLFixedArrayResourceError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.resource_names == ("leftValues", "rightValues")
+    assert diagnostic.fixed_extent == 2
+    assert diagnostic.reason == "ambiguous-resource-aliasing"
+
+
+def test_opengl_fixed_array_storage_rejects_side_effecting_resource_selection():
+    shader = """
+    shader FixedArrayStorageSideEffectingSelection {
+        bool chooseRight() {
+            return true;
+        }
+
+        int first(constant int[2] values) {
+            return values[0];
+        }
+
+        compute {
+            @stage_entry
+            void main(
+                StructuredBuffer<int> leftValues @binding(0),
+                StructuredBuffer<int> rightValues @binding(1),
+                RWStructuredBuffer<int> result @binding(2)
+            ) {
+                result[0] = first(
+                    chooseRight() ? rightValues : leftValues
+                );
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLFixedArrayResourceError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.resource_names == ("leftValues", "rightValues")
+    assert diagnostic.fixed_extent == 2
+    assert diagnostic.reason == "side-effecting-resource-selection"
 
 
 def test_glsl_storage_pointer_reinterpret_reads_byte_lanes(tmp_path):
@@ -8625,9 +9009,7 @@ def test_opengl_contextual_scalar_to_complex_return_conversion(tmp_path):
 
     generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert (
-        "return complex64_t(float(uintBitsToFloat(payload)), 0.0);" in generated
-    )
+    assert "return complex64_t(float(uintBitsToFloat(payload)), 0.0);" in generated
     assert "return uintBitsToFloat(payload);" not in generated
     assert_glsl_compute_validates_if_available(
         generated,

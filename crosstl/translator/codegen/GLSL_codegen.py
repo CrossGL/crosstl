@@ -8,6 +8,7 @@ from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
     ArrayNode,
+    ArrayType,
     AssignmentNode,
     AttributeNode,
     BinaryOpNode,
@@ -600,6 +601,38 @@ class OpenGLStoragePointerError(ValueError):
         super().__init__(message)
         self.function_name = function_name
         self.parameter_name = parameter_name
+        self.reason = reason
+        self.source_location = source_location
+
+
+class OpenGLFixedArrayResourceError(ValueError):
+    """Raised when a fixed array cannot bind a runtime storage resource."""
+
+    project_diagnostic_code = (
+        "project.translate.opengl-fixed-array-resource-unsupported"
+    )
+    missing_capabilities = ("opengl.fixed-array-resource-specialization",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        function_name=None,
+        parameter_name=None,
+        resource_names=None,
+        fixed_extent=None,
+        required_access=None,
+        actual_access=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.function_name = function_name
+        self.parameter_name = parameter_name
+        self.resource_names = tuple(sorted(resource_names or ()))
+        self.fixed_extent = fixed_extent
+        self.required_access = required_access
+        self.actual_access = actual_access
         self.reason = reason
         self.source_location = source_location
 
@@ -3509,13 +3542,9 @@ class GLSLCodeGen:
             for node in list(getattr(ast, "global_variables", []) or [])
             if not self.is_elided_glsl_type_alias_global(node)
         ]
-        empty_struct_global_ids = self.collect_glsl_empty_struct_global_ids(
-            global_vars
-        )
+        empty_struct_global_ids = self.collect_glsl_empty_struct_global_ids(global_vars)
         runtime_initialized_global_vars = [
-            node
-            for node in global_vars
-            if id(node) not in empty_struct_global_ids
+            node for node in global_vars if id(node) not in empty_struct_global_ids
         ]
         stage_local_resource_vars = collect_stage_local_variables(
             ast, target_stage, self.is_stage_local_resource_variable
@@ -5163,6 +5192,228 @@ class GLSLCodeGen:
             return resolved
         return self.function_definitions.get(func_name)
 
+    def glsl_fixed_array_parameter_contract(self, function, parameter):
+        raw_type = getattr(
+            parameter,
+            "param_type",
+            getattr(parameter, "vtype", None),
+        )
+        extent_expression = None
+        element_type = None
+        if isinstance(raw_type, ArrayType):
+            if raw_type.size is None:
+                return None
+            extent_expression = raw_type.size
+            element_type = raw_type.element_type
+            nested_array = isinstance(element_type, ArrayType)
+        else:
+            type_text = self.type_name_string(raw_type)
+            base_type, array_suffix = split_array_type_suffix(type_text)
+            if not array_suffix or array_suffix == "[]":
+                return None
+            match = re.fullmatch(r"\[([^\[\]]+)\]", array_suffix.strip())
+            extent_expression = match.group(1).strip() if match else None
+            element_type = base_type
+            nested_array = match is None
+
+        extent = evaluate_literal_int_expression(
+            extent_expression,
+            self.literal_int_constants,
+        )
+        if isinstance(extent, bool) or not isinstance(extent, int) or extent <= 0:
+            extent = None
+        element_type_name = self.type_name_string(element_type)
+        if self.is_structured_buffer_type(
+            element_type_name
+        ) or self.canonical_resource_type(element_type_name):
+            return None
+        mapped_element_type = None if nested_array else self.map_type(element_type_name)
+        extent_text = (
+            self.expression_to_string(extent_expression)
+            if extent_expression is not None and not isinstance(extent_expression, str)
+            else str(extent_expression or "")
+        )
+        return {
+            "extent": extent,
+            "extent_text": extent_text,
+            "element_type": mapped_element_type,
+            "required_access": self.glsl_fixed_array_parameter_required_access(
+                function, parameter
+            ),
+        }
+
+    def glsl_fixed_array_parameter_required_access(self, function, parameter):
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(parameter, "qualifiers", []) or []
+        }
+        if "inout" in qualifiers:
+            return "read_write"
+        if "out" in qualifiers or "writeonly" in qualifiers:
+            return "write"
+        if qualifiers.intersection({"const", "constant", "readonly", "in"}):
+            return "read"
+
+        parameter_name = getattr(parameter, "name", None)
+        if parameter_name and self.glsl_fixed_array_parameter_is_mutated(
+            function, parameter_name
+        ):
+            return "read_write"
+        return "read"
+
+    def glsl_fixed_array_parameter_is_mutated(self, function, parameter_name):
+        for node in self.walk_ast(getattr(function, "body", [])):
+            target = None
+            if isinstance(node, AssignmentNode):
+                target = getattr(node, "target", getattr(node, "left", None))
+            elif isinstance(node, UnaryOpNode) and self.map_operator(node.op) in {
+                "++",
+                "--",
+            }:
+                target = node.operand
+            if (
+                target is not None
+                and self.glsl_fixed_array_target_root_name(target) == parameter_name
+            ):
+                return True
+        return False
+
+    def glsl_fixed_array_target_root_name(self, expression):
+        current = expression
+        while isinstance(current, (ArrayAccessNode, MemberAccessNode)):
+            current = (
+                getattr(current, "array", getattr(current, "array_expr", None))
+                if isinstance(current, ArrayAccessNode)
+                else current.object
+            )
+        if isinstance(current, PointerAccessNode):
+            current = current.pointer_expr
+        return self.expression_name(current)
+
+    def glsl_fixed_array_storage_selection_bindings(self, expression, aliases):
+        binding = self.glsl_storage_pointer_binding(expression, aliases)
+        if binding is not None:
+            return [binding]
+        if not isinstance(expression, TernaryOpNode):
+            return []
+        return [
+            *self.glsl_fixed_array_storage_selection_bindings(
+                expression.true_expr, aliases
+            ),
+            *self.glsl_fixed_array_storage_selection_bindings(
+                expression.false_expr, aliases
+            ),
+        ]
+
+    def raise_glsl_fixed_array_resource_error(
+        self,
+        message,
+        *,
+        function,
+        parameter,
+        argument,
+        binding=None,
+        resource_names=None,
+        fixed_extent=None,
+        required_access=None,
+        actual_access=None,
+        reason,
+    ):
+        function_name = getattr(function, "name", None)
+        parameter_name = getattr(parameter, "name", None)
+        if resource_names is None and binding is not None:
+            resource_names = [binding.get("root")]
+        raise OpenGLFixedArrayResourceError(
+            message,
+            function_name=function_name,
+            parameter_name=parameter_name,
+            resource_names=[name for name in resource_names or () if name],
+            fixed_extent=fixed_extent,
+            required_access=required_access,
+            actual_access=actual_access,
+            reason=reason,
+            source_location=(
+                getattr(argument, "source_location", None)
+                or getattr(parameter, "source_location", None)
+            ),
+        )
+
+    def glsl_fixed_array_storage_binding(
+        self, function, parameter, argument, aliases, contract
+    ):
+        binding = self.glsl_storage_pointer_binding(argument, aliases)
+        if binding is None:
+            candidates = self.glsl_fixed_array_storage_selection_bindings(
+                argument, aliases
+            )
+            if candidates:
+                resource_names = {
+                    candidate.get("root")
+                    for candidate in candidates
+                    if candidate.get("root")
+                }
+                if not self.glsl_side_effect_free_expression(argument):
+                    self.raise_glsl_fixed_array_resource_error(
+                        "OpenGL cannot specialize a side-effecting runtime "
+                        "storage-resource selection for fixed-array parameter "
+                        f"'{getattr(function, 'name', None)}."
+                        f"{getattr(parameter, 'name', None)}'",
+                        function=function,
+                        parameter=parameter,
+                        argument=argument,
+                        resource_names=resource_names,
+                        fixed_extent=contract.get("extent"),
+                        required_access=contract.get("required_access"),
+                        reason="side-effecting-resource-selection",
+                    )
+                self.raise_glsl_fixed_array_resource_error(
+                    "OpenGL cannot choose one concrete storage resource for "
+                    "fixed-array parameter "
+                    f"'{getattr(function, 'name', None)}."
+                    f"{getattr(parameter, 'name', None)}'",
+                    function=function,
+                    parameter=parameter,
+                    argument=argument,
+                    resource_names=resource_names,
+                    fixed_extent=contract.get("extent"),
+                    required_access=contract.get("required_access"),
+                    reason="ambiguous-resource-aliasing",
+                )
+
+            argument_type = self.glsl_source_expression_type(argument)
+            if self.structured_buffer_type_name(argument_type) in {
+                "StructuredBuffer",
+                "RWStructuredBuffer",
+            }:
+                self.raise_glsl_fixed_array_resource_error(
+                    "OpenGL cannot specialize a side-effecting or unresolved "
+                    "runtime storage-resource expression for fixed-array "
+                    f"parameter '{getattr(function, 'name', None)}."
+                    f"{getattr(parameter, 'name', None)}'",
+                    function=function,
+                    parameter=parameter,
+                    argument=argument,
+                    fixed_extent=contract.get("extent"),
+                    required_access=contract.get("required_access"),
+                    reason="side-effecting-resource-selection",
+                )
+            return None
+
+        if not self.glsl_side_effect_free_expression(argument):
+            self.raise_glsl_fixed_array_resource_error(
+                "OpenGL cannot move a side-effecting storage-resource base "
+                "expression into a specialized fixed-array helper call",
+                function=function,
+                parameter=parameter,
+                argument=argument,
+                binding=binding,
+                fixed_extent=contract.get("extent"),
+                required_access=contract.get("required_access"),
+                actual_access=binding.get("access"),
+                reason="side-effecting-resource-selection",
+            )
+        return binding
+
     def glsl_resource_function_specialization_key(self, func_name, args, aliases):
         callee = self.glsl_resource_function_source(func_name, args)
         if callee is None:
@@ -5173,6 +5424,99 @@ class GLSLCodeGen:
         bindings = {}
         key_parts = []
         for index, (param, arg) in enumerate(zip(params, args or [])):
+            fixed_array_contract = self.glsl_fixed_array_parameter_contract(
+                callee, param
+            )
+            if fixed_array_contract is not None:
+                binding = self.glsl_fixed_array_storage_binding(
+                    callee,
+                    param,
+                    arg,
+                    aliases,
+                    fixed_array_contract,
+                )
+                if binding is not None:
+                    param_name = getattr(param, "name", None)
+                    extent = fixed_array_contract.get("extent")
+                    required_access = fixed_array_contract.get("required_access")
+                    actual_access = binding.get("access")
+                    if extent is None:
+                        self.raise_glsl_fixed_array_resource_error(
+                            "OpenGL fixed-array storage-resource specialization "
+                            "requires a positive compile-time extent for "
+                            f"'{getattr(callee, 'name', None)}.{param_name}'",
+                            function=callee,
+                            parameter=param,
+                            argument=arg,
+                            binding=binding,
+                            fixed_extent=(
+                                fixed_array_contract.get("extent_text") or None
+                            ),
+                            required_access=required_access,
+                            actual_access=actual_access,
+                            reason="unknown-fixed-extent",
+                        )
+                    parameter_element_type = fixed_array_contract.get("element_type")
+                    if (
+                        parameter_element_type is None
+                        or binding.get("element_type") != parameter_element_type
+                    ):
+                        self.raise_glsl_fixed_array_resource_error(
+                            "OpenGL fixed-array storage-resource specialization "
+                            "cannot preserve the parameter element type for "
+                            f"'{getattr(callee, 'name', None)}.{param_name}'",
+                            function=callee,
+                            parameter=param,
+                            argument=arg,
+                            binding=binding,
+                            fixed_extent=extent,
+                            required_access=required_access,
+                            actual_access=actual_access,
+                            reason="element-type-conflict",
+                        )
+                    if not image_access_satisfies_requirement(
+                        required_access, actual_access
+                    ):
+                        conflict = (
+                            "writable-access-conflict"
+                            if required_access in {"write", "read_write"}
+                            else "readable-access-conflict"
+                        )
+                        self.raise_glsl_fixed_array_resource_error(
+                            "OpenGL fixed-array helper "
+                            f"'{getattr(callee, 'name', None)}' requires "
+                            f"{required_access} access for '{param_name}', but "
+                            f"storage resource '{binding.get('root')}' is "
+                            f"{actual_access or 'unspecified'}",
+                            function=callee,
+                            parameter=param,
+                            argument=arg,
+                            binding=binding,
+                            fixed_extent=extent,
+                            required_access=required_access,
+                            actual_access=actual_access,
+                            reason=conflict,
+                        )
+                    binding = {
+                        **binding,
+                        "kind": "fixed-array-storage",
+                        "parameter_element_type": parameter_element_type,
+                        "fixed_extent": extent,
+                        "required_access": required_access,
+                    }
+                    bindings[index] = (param_name, binding)
+                    key_parts.append(
+                        (
+                            index,
+                            "fixed-array-storage",
+                            binding.get("root"),
+                            parameter_element_type,
+                            extent,
+                            required_access,
+                            actual_access,
+                        )
+                    )
+                    continue
             workgroup_element_type = self.glsl_workgroup_pointer_element_type(param)
             if workgroup_element_type is not None:
                 param_name = getattr(param, "name", None)
@@ -5420,7 +5764,10 @@ class GLSLCodeGen:
         storage_pointer_aliases = {}
         storage_pointer_bound_indices = []
         for index, (param_name, binding) in sorted(bindings.items()):
-            if binding.get("kind") != "storage-pointer":
+            if binding.get("kind") not in {
+                "storage-pointer",
+                "fixed-array-storage",
+            }:
                 continue
             offset_name = self.glsl_synthetic_local_identifier(
                 f"{sanitize_type_name(param_name)}_offset",
@@ -5440,6 +5787,8 @@ class GLSLCodeGen:
             storage_pointer_bound_indices.append(index)
             storage_pointer_aliases[param_name] = {
                 **binding,
+                "specialization_kind": binding.get("kind"),
+                "kind": "storage-pointer",
                 "offset": offset_name,
                 "resource_root": False,
             }
@@ -5451,6 +5800,7 @@ class GLSLCodeGen:
             for param_name, binding in bindings.values()
             if binding.get("kind")
             not in {
+                "fixed-array-storage",
                 "storage-pointer",
                 "workgroup-pointer",
                 "workgroup-pointer-unused",
@@ -5495,6 +5845,20 @@ class GLSLCodeGen:
                         sanitize_type_name(param_name),
                         sanitize_type_name(binding["root"]),
                         sanitize_type_name(binding["element_type"]),
+                    )
+                )
+                continue
+            if binding.get("kind") == "fixed-array-storage":
+                access_mode = binding["required_access"]
+                if binding.get("access") not in {None, access_mode}:
+                    access_mode = f"{access_mode}_{binding['access']}"
+                suffix_parts.append(
+                    "{}_{}_{}_{}_{}".format(
+                        sanitize_type_name(param_name),
+                        sanitize_type_name(binding["root"]),
+                        sanitize_type_name(binding["element_type"]),
+                        binding["fixed_extent"],
+                        sanitize_type_name(access_mode),
                     )
                 )
                 continue
@@ -15812,10 +16176,9 @@ complex64_t crossgl_complex64_mod_assign(
         if conversion_types is None:
             return None
         target_operand_type, value_operand_type = conversion_types
-        if (
-            self.map_type(target_operand_type) == self.map_type(expected_type)
-            and self.map_type(value_operand_type) == self.map_type(value_type)
-        ):
+        if self.map_type(target_operand_type) == self.map_type(
+            expected_type
+        ) and self.map_type(value_operand_type) == self.map_type(value_type):
             return None
 
         common_type = self.glsl_common_arithmetic_type(
@@ -17074,9 +17437,7 @@ complex64_t crossgl_complex64_mod_assign(
 
         return "memoryBarrierShared()"
 
-    def synchronization_function_call(
-        self, func_name, args, *, source_location=None
-    ):
+    def synchronization_function_call(self, func_name, args, *, source_location=None):
         if not func_name or func_name in self.function_return_types:
             return None
         if func_name == "atomicThreadFence":
