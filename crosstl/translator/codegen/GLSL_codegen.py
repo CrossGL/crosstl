@@ -4481,7 +4481,7 @@ class GLSLCodeGen:
                 if shared_binding is not None:
                     visible_aliases[node.name] = dict(shared_binding)
                     return
-                if self.glsl_workgroup_pointer_declaration(node):
+                if self.glsl_workgroup_pointer_declaration(node, visible_aliases):
                     pointer_binding = self.glsl_workgroup_pointer_binding(
                         getattr(node, "initial_value", None), visible_aliases
                     )
@@ -4489,7 +4489,7 @@ class GLSLCodeGen:
                         visible_aliases[node.name] = pointer_binding
                     else:
                         visible_aliases.pop(node.name, None)
-                elif self.glsl_storage_pointer_declaration(node):
+                elif self.glsl_storage_pointer_declaration(node, visible_aliases):
                     pointer_binding = self.glsl_storage_pointer_binding(
                         getattr(node, "initial_value", None), visible_aliases
                     )
@@ -10235,13 +10235,17 @@ class GLSLCodeGen:
                 return ""
             if stmt.name in self.flattened_stage_variables:
                 return ""
-            if self.glsl_workgroup_pointer_declaration(stmt):
+            if self.glsl_workgroup_pointer_declaration(
+                stmt, self.glsl_workgroup_pointer_aliases()
+            ):
                 self.current_identifier_aliases.pop(stmt.name, None)
                 self.current_glsl_workgroup_pointer_aliases.pop(stmt.name, None)
                 return self.generate_glsl_workgroup_pointer_alias_declaration(
                     stmt, indent
                 )
-            if self.glsl_storage_pointer_declaration(stmt):
+            if self.glsl_storage_pointer_declaration(
+                stmt, self.glsl_storage_pointer_aliases()
+            ):
                 self.current_identifier_aliases.pop(stmt.name, None)
                 self.current_glsl_storage_pointer_aliases.pop(stmt.name, None)
                 return self.generate_glsl_storage_pointer_alias_declaration(
@@ -10789,8 +10793,24 @@ class GLSLCodeGen:
             return None
         return self.map_type(self.type_name_string(pointee_type))
 
-    def glsl_workgroup_pointer_declaration(self, node):
-        return self.glsl_workgroup_pointer_pointee_type(node) is not None
+    def glsl_workgroup_pointer_declaration(self, node, aliases=None):
+        if self.glsl_workgroup_pointer_pointee_type(node) is not None:
+            return True
+        if aliases is None:
+            return False
+
+        raw_type = getattr(
+            node,
+            "param_type",
+            getattr(node, "var_type", getattr(node, "vtype", None)),
+        )
+        raw_type_name = self.type_name_string(raw_type)
+        if not isinstance(raw_type_name, str) or raw_type_name.strip() != "auto":
+            return False
+        initial_value = getattr(node, "initial_value", None)
+        if isinstance(initial_value, ArrayAccessNode):
+            return False
+        return self.glsl_workgroup_pointer_binding(initial_value, aliases) is not None
 
     def glsl_function_has_workgroup_pointer_parameter(self, function):
         return any(
@@ -10835,8 +10855,26 @@ class GLSLCodeGen:
             return None
         return self.map_type(pointee_name)
 
-    def glsl_storage_pointer_declaration(self, node):
-        return self.glsl_storage_pointer_pointee_type(node) is not None
+    def glsl_storage_pointer_declaration(self, node, aliases=None):
+        if self.glsl_storage_pointer_pointee_type(node) is not None:
+            return True
+        if aliases is None:
+            return False
+
+        raw_type = getattr(
+            node,
+            "param_type",
+            getattr(node, "var_type", getattr(node, "vtype", None)),
+        )
+        raw_type_name = self.type_name_string(raw_type)
+        if not isinstance(raw_type_name, str) or raw_type_name.strip() != "auto":
+            return False
+        return (
+            self.glsl_storage_pointer_binding(
+                getattr(node, "initial_value", None), aliases
+            )
+            is not None
+        )
 
     def glsl_function_has_storage_pointer_parameter(self, function):
         return any(
@@ -10847,6 +10885,42 @@ class GLSLCodeGen:
         )
 
     def glsl_function_forwards_structured_buffer_to_storage_pointer(self, function):
+        aliases = self.glsl_function_structured_buffer_parameter_aliases(function)
+        if not aliases:
+            return False
+
+        for node in self.walk_ast(getattr(function, "body", [])):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            callee = self.function_definitions.get(self.function_call_name(node))
+            if callee is None:
+                continue
+            callee_parameters = list(
+                getattr(callee, "parameters", getattr(callee, "params", [])) or []
+            )
+            arguments = list(
+                getattr(node, "arguments", getattr(node, "args", [])) or []
+            )
+            for callee_parameter, argument in zip(callee_parameters, arguments):
+                if not self.glsl_storage_pointer_declaration(callee_parameter):
+                    continue
+                if self.glsl_storage_pointer_binding(argument, aliases) is not None:
+                    return True
+        return False
+
+    def glsl_function_uses_structured_buffer_pointer_alias(self, function):
+        aliases = self.glsl_function_structured_buffer_parameter_aliases(function)
+        if not aliases:
+            return False
+
+        for node in self.walk_ast(getattr(function, "body", [])):
+            if not isinstance(node, VariableNode):
+                continue
+            if self.glsl_storage_pointer_declaration(node, aliases):
+                return True
+        return False
+
+    def glsl_function_structured_buffer_parameter_aliases(self, function):
         aliases = {}
         for parameter in (
             getattr(function, "parameters", getattr(function, "params", [])) or []
@@ -10872,27 +10946,7 @@ class GLSLCodeGen:
                 ),
                 "access": access or "read_write",
             }
-        if not aliases:
-            return False
-
-        for node in self.walk_ast(getattr(function, "body", [])):
-            if not isinstance(node, FunctionCallNode):
-                continue
-            callee = self.function_definitions.get(self.function_call_name(node))
-            if callee is None:
-                continue
-            callee_parameters = list(
-                getattr(callee, "parameters", getattr(callee, "params", [])) or []
-            )
-            arguments = list(
-                getattr(node, "arguments", getattr(node, "args", [])) or []
-            )
-            for callee_parameter, argument in zip(callee_parameters, arguments):
-                if not self.glsl_storage_pointer_declaration(callee_parameter):
-                    continue
-                if self.glsl_storage_pointer_binding(argument, aliases) is not None:
-                    return True
-        return False
+        return aliases
 
     def glsl_storage_pointer_mutation_binding(self, expression, aliases):
         if isinstance(expression, ArrayAccessNode):
@@ -10953,7 +11007,7 @@ class GLSLCodeGen:
                 for node in nodes:
                     if not isinstance(node, VariableNode):
                         continue
-                    if not self.glsl_storage_pointer_declaration(node):
+                    if not self.glsl_storage_pointer_declaration(node, aliases):
                         continue
                     binding = self.glsl_storage_pointer_binding(
                         getattr(node, "initial_value", None), aliases
@@ -11025,6 +11079,7 @@ class GLSLCodeGen:
             or self.glsl_function_forwards_structured_buffer_to_storage_pointer(
                 function
             )
+            or self.glsl_function_uses_structured_buffer_pointer_alias(function)
         )
 
     def glsl_shared_storage_binding(self, node, root_name):

@@ -457,6 +457,62 @@ def test_opengl_threadgroup_pointer_alias_composes_dynamic_offset_into_accesses(
     )
 
 
+def test_opengl_inferred_workgroup_alias_load_remains_scalar(tmp_path):
+    shader = """
+    shader InferredWorkgroupAlias {
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint lid @ gl_LocalInvocationIndex) {
+                threadgroup float storage[64];
+                uint dynamicOffset = (lid & 3u) + 5u;
+                auto tile = storage + dynamicOffset;
+                auto value = tile[lid + 1u];
+                storage[lid] = value;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    backing_match = re.search(
+        r"^shared\s+float\s+([A-Za-z_]\w*)\s*\[\s*64\s*\]\s*;",
+        generated,
+        re.MULTILINE,
+    )
+    assert backing_match is not None, generated
+    backing_name = backing_match.group(1)
+    assert re.search(r"\b(?:auto|threadgroup)\b|\bfloat\s*\*", generated) is None
+    assert (
+        re.search(rf"\b{re.escape(backing_name)}\b\s*(?:\+|-)(?!=)", generated) is None
+    ), generated
+
+    scalar_load = re.search(
+        rf"\bfloat\s+value\s*=\s*{re.escape(backing_name)}\s*"
+        r"\[(?P<index>[^\]\n]+)\]\s*;",
+        generated,
+    )
+    assert scalar_load is not None, generated
+    assert re.search(r"\b(?:int|uint)\s+value_offset\b", generated) is None, generated
+    assert glsl_expression_depends_on(
+        generated, scalar_load.group("index"), "dynamicOffset"
+    ), generated
+    assert "gl_LocalInvocationIndex" in scalar_load.group("index"), generated
+    assert glsl_expression_depends_on(
+        generated, scalar_load.group("index"), "1u"
+    ), generated
+    assert re.search(
+        rf"\b{re.escape(backing_name)}\s*\[gl_LocalInvocationIndex\]\s*=\s*"
+        r"value\s*;",
+        generated,
+    ), generated
+
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "inferred_workgroup_alias_scalar_load"
+    )
+
+
 def test_opengl_nested_threadgroup_aliases_compose_offsets_once():
     shader = """
     shader WorkgroupAliasNested {
@@ -3321,12 +3377,166 @@ def test_glsl_boolean_ternary_preserves_boolean_branch_types():
     assert "? int(input_values[0])" not in generated
 
 
-def assert_glsl_storage_pointer_syntax_is_lowered(generated_code):
+def assert_glsl_storage_pointer_syntax_is_lowered(generated_code, *resource_names):
     raw_syntax = re.search(
-        r"\b(?:auto|constant|device)\b|\bfloat\s*\*|(?<![&])&(?![&])",
+        r"\b(?:auto|constant|device|StructuredBuffer|RWStructuredBuffer)\b|"
+        r"\bfloat\s*\*|(?<![&])&(?![&])",
         generated_code,
     )
     assert raw_syntax is None, generated_code
+    for resource_name in resource_names:
+        resource_arithmetic = re.search(
+            rf"\b{re.escape(resource_name)}\b\s*(?:\+|-)(?!=)", generated_code
+        )
+        assert resource_arithmetic is None, generated_code
+
+
+def test_opengl_inferred_storage_alias_reads_stores_and_rebases(tmp_path):
+    shader = """
+    shader InferredStorageAliasLocal {
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1),
+                uint3 tid @gl_GlobalInvocationID
+            ) {
+                uint dynamicBase = tid.x + 3u;
+                const auto readable = source + dynamicBase;
+                result[tid.x] = readable[2u];
+
+                auto writable = result + dynamicBase;
+                writable[1u] = source[tid.x] + 7.0;
+                writable += 8u;
+                writable[2u] = source[tid.x + 1u] + 9.0;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert_glsl_storage_pointer_syntax_is_lowered(
+        generated, "source", "result", "readable", "writable"
+    )
+
+    read = re.search(
+        r"\bresult\s*\[[^\]\n]+\]\s*=\s*source\s*" r"\[(?P<index>[^\]\n]+)\]\s*;",
+        generated,
+    )
+    assert read is not None, generated
+    assert glsl_expression_depends_on(
+        generated, read.group("index"), "dynamicBase"
+    ), generated
+    assert glsl_expression_depends_on(generated, read.group("index"), "2u"), generated
+
+    writes = list(
+        re.finditer(
+            r"\bresult\s*\[(?P<index>[^\]\n]+)\]\s*=\s*" r"(?P<value>[^;\n]+);",
+            generated,
+        )
+    )
+    addressed_write = next(
+        (write for write in writes if "7.0" in write.group("value")), None
+    )
+    rebased_write = next(
+        (write for write in writes if "9.0" in write.group("value")), None
+    )
+    assert addressed_write is not None, generated
+    assert rebased_write is not None, generated
+
+    rebase = re.search(
+        r"\b(?P<offset>[A-Za-z_]\w*)\s*\+=\s*(?P<delta>[^;\n]+);",
+        generated,
+    )
+    assert rebase is not None, generated
+    assert glsl_expression_depends_on(generated, rebase.group("delta"), "8u"), generated
+    assert rebase.group("offset") in addressed_write.group("index"), generated
+    assert rebase.group("offset") in rebased_write.group("index"), generated
+    assert addressed_write.start() < rebase.start() < rebased_write.start(), generated
+    assert glsl_expression_depends_on(
+        generated, addressed_write.group("index"), "dynamicBase"
+    ), generated
+    assert glsl_expression_depends_on(
+        generated, addressed_write.group("index"), "1u"
+    ), generated
+    assert glsl_expression_depends_on(
+        generated, rebased_write.group("index"), "2u"
+    ), generated
+
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "inferred_storage_alias_local"
+    )
+
+
+def test_opengl_inferred_storage_alias_from_buffer_parameters(tmp_path):
+    shader = """
+    shader InferredStorageAliasParameter {
+        float readValue(
+            StructuredBuffer<float> values,
+            uint base,
+            uint index
+        ) {
+            const auto localValues = values + base;
+            return localValues[index];
+        }
+
+        void writeValue(
+            RWStructuredBuffer<float> values,
+            uint base,
+            uint index,
+            float value
+        ) {
+            auto localValues = values + base;
+            localValues[index] = value;
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(
+                StructuredBuffer<float> source @buffer(0),
+                RWStructuredBuffer<float> result @buffer(1),
+                uint3 tid @gl_GlobalInvocationID
+            ) {
+                result[tid.x] = readValue(source, tid.x + 2u, 1u);
+                writeValue(result, tid.x + 4u, 2u, source[tid.x]);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    read = re.search(
+        r"\breturn\s+(?:source|values)\s*\[(?P<index>[^\]\n]+)\]\s*;",
+        generated,
+    )
+    assert read is not None, generated
+    assert glsl_expression_depends_on(generated, read.group("index"), "base"), generated
+    assert glsl_expression_depends_on(
+        generated, read.group("index"), "index"
+    ), generated
+
+    write = re.search(
+        r"\b(?:result|values)\s*\[(?P<index>[^\]\n]+)\]\s*=\s*value\s*;",
+        generated,
+    )
+    assert write is not None, generated
+    assert glsl_expression_depends_on(
+        generated, write.group("index"), "base"
+    ), generated
+    assert glsl_expression_depends_on(
+        generated, write.group("index"), "index"
+    ), generated
+
+    assert_glsl_storage_pointer_syntax_is_lowered(
+        generated, "source", "result", "values", "localValues"
+    )
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "inferred_storage_alias_parameter"
+    )
 
 
 def test_opengl_storage_pointer_helper_reads_local_alias_with_dynamic_base(tmp_path):
