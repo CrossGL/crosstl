@@ -23911,6 +23911,52 @@ class TestVulkanSPIRVCodeGen:
         assert "ArrayLiteralNode" not in spv_code
         assert "WARNING" not in spv_code
 
+    def test_empty_initializer_uses_declared_scalar_type(self):
+        source_code = """
+        float initializedValue() {
+            float value = {};
+            return value;
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpTypeArray" not in spv_code
+        assert re.search(r"OpConstant %\d+ 0\.0\b", spv_code)
+        assert "WARNING" not in spv_code
+
+    def test_untyped_empty_initializer_fails_before_invalid_spirv(self):
+        source_code = """
+        void consume(float value) {}
+
+        void exercise() {
+            consume({});
+        }
+        """
+
+        with pytest.raises(UnsupportedSPIRVFeatureError) as error:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert error.value.feature == "untyped empty initializer"
+        assert error.value.missing_capabilities == (
+            "spirv.empty_initializer_type_inference",
+        )
+
+    def test_nonpositive_fixed_array_extent_fails_before_invalid_spirv(self):
+        source_code = """
+        void exercise() {
+            float values[0];
+        }
+        """
+
+        with pytest.raises(UnsupportedSPIRVFeatureError) as error:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert error.value.feature == "non-positive fixed array extent"
+        assert error.value.missing_capabilities == ("spirv.nonpositive_array_extent",)
+
     def test_array_literals_convert_elements_to_declared_element_type(self):
         source_code = """
         shader ArrayLiteralCoercions {

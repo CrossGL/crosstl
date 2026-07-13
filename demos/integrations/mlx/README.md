@@ -295,14 +295,28 @@ implementation of CrossGL/crosstl#1490; dependent function-local aliases and
 value expressions outside this contract remain tracked there.
 
 The isolated high-budget `quantized_nax.metal` run still completes 722
-specializations with no unsupported records and now resolves the NAX fragment
-aliases to concrete `vec<scalar, 8>` types. SPIR-V generation rejects the first
-`vec<float, 8>` with `project.translate.unsupported-feature` and the
-`spirv.generic_vector_width` capability instead of substituting a scalar. No
-Vulkan artifact or validator result is claimed. Generic vectors with supported
-widths 2, 3, and 4 now map to SPIR-V vector types; a signed 64-bit three-component
-construction and component update passes `spirv-val`. Aggregate lowering for
-the eight-component NAX representation remains tracked in CrossGL/crosstl#1569.
+specializations with no unsupported records and resolves the NAX fragment
+aliases to concrete eight-lane float, half, and bfloat vectors. Metal reverse
+translation now represents those local values as fixed aggregate wrappers with
+explicit lane storage and element-wise helpers. Reduced DirectX, OpenGL, and
+Vulkan fixtures preserve lane reads, writes, arithmetic, and mutable helper
+parameters; their generated artifacts pass the available native validators.
+The lowering rejects unsupported operators, member selections, mixed vector
+shapes, and ABI-visible device or constant storage instead of changing the
+source contract. Direct generic-vector canonicalization outside the Metal
+frontend remains tracked in CrossGL/crosstl#1569.
+
+The full pinned Vulkan run now advances beyond the generic-vector-width
+diagnostic. Its next empty `metal::bool_constant<...>{}` call argument loses the
+selected parameter type in the shared SPIR-V path. The backend fails closed with
+`project.translate.unsupported-feature` and the
+`spirv.empty_initializer_type_inference` capability, so no full-kernel artifact
+or validator result is claimed. Contextual aggregate typing is tracked in
+CrossGL/crosstl#1573. The captured intermediate also retains unresolved
+reference-returning `frag_at` calls and drops the dependent static owner from
+`CTile::NAXFrag_t::mma`; receiver identity remains tracked in
+CrossGL/crosstl#1557 and dependent static-owner materialization in
+CrossGL/crosstl#1574.
 Complete address-space, const, pointer-provenance, and
 unresolved-alias diagnostic transport remains tracked in CrossGL/crosstl#1566.
 Generic member calls with explicit type or value arguments in the shared parser

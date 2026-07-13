@@ -46593,7 +46593,7 @@ def test_translate_project_resolves_struct_owned_alias_template_vectors(tmp_path
     assert_spirv_asm_validates_if_available(outputs["vulkan"], tmp_path)
 
 
-def test_translate_project_rejects_unsupported_struct_alias_vector_width(tmp_path):
+def test_translate_project_lowers_struct_alias_wide_vector(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "wide_owner_alias.metal").write_text(
@@ -46608,10 +46608,71 @@ def test_translate_project_rejects_unsupported_struct_alias_vector_width(tmp_pat
             };
 
             [[kernel]] void wide_owner_alias(
-                device float* output [[buffer(0)]],
+                device float* out_buffer [[buffer(0)]],
                 uint gid [[thread_position_in_grid]]) {
-                BaseFrag::value_t<float> value;
-                output[gid] = value[0];
+                BaseFrag::value_t<float> value =
+                    BaseFrag::value_t<float>(1.0f);
+                value[gid & 7u] += 2.0f;
+                out_buffer[gid] = value[gid & 7u];
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx", "opengl", "vulkan"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+    artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
+    assert set(artifacts) == {"directx", "opengl", "vulkan"}
+    outputs = {
+        target: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for target, artifact in artifacts.items()
+    }
+    for output in outputs.values():
+        assert "vec<float,8>" not in output.replace(" ", "")
+        assert "WARNING" not in output
+    assert "struct CrossGLMetalVector_float_8" in outputs["directx"]
+    assert "struct CrossGLMetalVector_float_8" in outputs["opengl"]
+    assert "OpTypeStruct" in outputs["vulkan"]
+    assert "OpTypeArray" in outputs["vulkan"]
+    assert "OpFAdd" in outputs["vulkan"]
+    fadd_results = re.findall(r"^(%\d+) = OpFAdd\b", outputs["vulkan"], re.MULTILINE)
+    assert fadd_results
+    assert any(
+        re.search(
+            rf"^OpStore %\d+ {re.escape(result)}$", outputs["vulkan"], re.MULTILINE
+        )
+        for result in fadd_results
+    )
+    assert_directx_compute_validates_if_available(outputs["directx"], tmp_path)
+    assert_compute_glsl_validates_if_available(outputs["opengl"], tmp_path)
+    assert_spirv_asm_validates_if_available(outputs["vulkan"], tmp_path)
+
+
+def test_translate_project_rejects_unsupported_wide_vector_operation(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "wide_vector_negate.metal").write_text(
+        textwrap.dedent("""
+            using Wide = metal::vec<float, 8>;
+
+            Wide negate(Wide value) {
+                return -value;
+            }
+
+            [[kernel]] void wide_vector_negate(
+                device float* out_buffer [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {
+                Wide value = Wide(1.0f);
+                value = negate(value);
+                out_buffer[gid] = value[gid & 7u];
             }
             """).strip(),
         encoding="utf-8",
@@ -46626,12 +46687,54 @@ def test_translate_project_rejects_unsupported_struct_alias_vector_width(tmp_pat
 
     assert payload["summary"]["translatedCount"] == 0
     assert payload["summary"]["failedCount"] == 1
-    assert payload["diagnostics"][0]["code"] == "project.translate.unsupported-feature"
+    assert payload["diagnostics"][0]["code"] == (
+        "project.translate.metal-wide-vector-unsupported"
+    )
     assert payload["diagnostics"][0]["missingCapabilities"] == [
-        "spirv.generic_vector_width"
+        "metal.wide-vector-aggregate-lowering"
     ]
+    assert "operation '-'" in payload["diagnostics"][0]["message"]
     assert payload["artifacts"][0]["status"] == "failed"
     assert not (repo / payload["artifacts"][0]["path"]).exists()
+
+
+def test_translate_project_rejects_untyped_empty_spirv_initializer(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "empty_initializer.cgl").write_text(
+        textwrap.dedent("""
+            shader EmptyInitializer {
+                void consume(float value) {}
+
+                void exercise() {
+                    consume({});
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["vulkan"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "spirv.empty_initializer_type_inference": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.unsupported-feature"
+    assert diagnostic["missingCapabilities"] == [
+        "spirv.empty_initializer_type_inference"
+    ]
+    assert "cannot infer a value type" in diagnostic["message"]
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
 
 
 def test_metal_project_materialization_concretizes_dispatch_bool_functor_helper(

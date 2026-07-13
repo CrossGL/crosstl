@@ -23716,6 +23716,17 @@ class VulkanSPIRVCodeGen:
         target_type: Optional[SpirvId] = None,
         constant: bool = False,
     ) -> Optional[SpirvId]:
+        if not expr.elements:
+            if target_type is None:
+                raise UnsupportedSPIRVFeatureError(
+                    "untyped empty initializer",
+                    "SPIR-V cannot infer a value type from an empty initializer; "
+                    "preserve its declared or parameter type before code generation.",
+                    missing_capabilities=("spirv.empty_initializer_type_inference",),
+                    source_location=getattr(expr, "source_location", None),
+                )
+            return self.default_value_for_type(self.ensure_registered_type(target_type))
+
         array_type = target_type
         element_type = None
         target_size = None
@@ -27149,6 +27160,7 @@ class VulkanSPIRVCodeGen:
         self, element_type: SpirvId, size: Optional[int] = None
     ) -> SpirvId:
         """Create and register an array type."""
+        self.reject_nonpositive_array_length(size)
         key = (element_type.id, size)
         if key in self.array_types:
             return self.array_types[key]
@@ -27171,6 +27183,7 @@ class VulkanSPIRVCodeGen:
         self, element_type: SpirvId, size: Optional[int], layout: str
     ) -> SpirvId:
         """Create a layout-specific array clone for distinct ArrayStride values."""
+        self.reject_nonpositive_array_length(size)
         key = (element_type.id, size, layout)
         if key in self.layout_array_types:
             return self.layout_array_types[key]
@@ -27188,6 +27201,27 @@ class VulkanSPIRVCodeGen:
         spirv_id = SpirvId(id_value, SpirvType(type_name), type_name)
         self.layout_array_types[key] = spirv_id
         return spirv_id
+
+    def reject_nonpositive_array_length(self, size) -> None:
+        """Reject fixed array extents that SPIR-V cannot represent."""
+        if size is None:
+            return
+        specialization_length = self.named_specialization_array_length(size)
+        if specialization_length is not None:
+            resolved_size = self.specialization_constant_default_values.get(
+                specialization_length.id
+            )
+        else:
+            resolved_size = evaluate_literal_int_expression(
+                size, self.active_literal_int_constants()
+            )
+        if not isinstance(resolved_size, int) or resolved_size >= 1:
+            return
+        raise UnsupportedSPIRVFeatureError(
+            "non-positive fixed array extent",
+            f"SPIR-V fixed arrays require an extent of at least one; got " f"'{size}'.",
+            missing_capabilities=("spirv.nonpositive_array_extent",),
+        )
 
     def named_specialization_array_length(self, name: str) -> Optional[SpirvId]:
         """Return an integer specialization constant usable as an array length."""

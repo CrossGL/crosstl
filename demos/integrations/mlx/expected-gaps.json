@@ -57,7 +57,8 @@
       "https://github.com/CrossGL/crosstl/issues/1546"
     ],
     "next_kernel_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1569",
+      "https://github.com/CrossGL/crosstl/issues/1573",
+      "https://github.com/CrossGL/crosstl/issues/1574",
       "https://github.com/CrossGL/crosstl/issues/1544"
     ]
   },
@@ -79,7 +80,8 @@
       "https://github.com/CrossGL/crosstl/issues/1554"
     ],
     "next_kernel_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1569"
+      "https://github.com/CrossGL/crosstl/issues/1573",
+      "https://github.com/CrossGL/crosstl/issues/1574"
     ]
   },
   "compile_time_loop_status": {
@@ -103,7 +105,8 @@
       ]
     },
     "next_kernel_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1569"
+      "https://github.com/CrossGL/crosstl/issues/1573",
+      "https://github.com/CrossGL/crosstl/issues/1574"
     ],
     "semantic_readiness_blocked_by": [
       "https://github.com/CrossGL/crosstl/issues/1557"
@@ -134,17 +137,37 @@
       "BK_padded",
       "BN_padded"
     ],
+    "wide_vector_aggregate_lowering": {
+      "status": "validated-reduced-fixture",
+      "source_types": [
+        "vec<float,8>",
+        "vec<float16_t,8>",
+        "vec<bfloat16_t,8>"
+      ],
+      "representation": "fixed aggregate wrapper with explicit lane storage and element-wise helpers",
+      "native_validation": {
+        "directx": "validated-if-toolchain-available",
+        "opengl": "validated-if-toolchain-available",
+        "vulkan": "validated-if-toolchain-available"
+      },
+      "tracked_by": "https://github.com/CrossGL/crosstl/issues/1569"
+    },
     "post_materialization_translation": {
       "status": "blocked-by-tracked-issue",
       "diagnostic_code": "project.translate.unsupported-feature",
-      "feature": "unsupported-generic-vector-width",
-      "first_unsupported_type": "vec<float,8>",
-      "missing_capability": "spirv.generic_vector_width",
-      "issue": "https://github.com/CrossGL/crosstl/issues/1569",
+      "feature": "untyped empty initializer",
+      "first_unsupported_expression": "metal::bool_constant<false>{}",
+      "missing_capability": "spirv.empty_initializer_type_inference",
+      "issue": "https://github.com/CrossGL/crosstl/issues/1573",
       "artifact_status": "failed"
     },
     "next_kernel_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1569"
+      "https://github.com/CrossGL/crosstl/issues/1573",
+      "https://github.com/CrossGL/crosstl/issues/1574"
+    ],
+    "semantic_readiness_blocked_by": [
+      "https://github.com/CrossGL/crosstl/issues/1557",
+      "https://github.com/CrossGL/crosstl/issues/1574"
     ]
   },
   "struct_scoped_cast_alias_status": {
@@ -179,7 +202,8 @@
       "https://github.com/CrossGL/crosstl/issues/1566"
     ],
     "next_kernel_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1569"
+      "https://github.com/CrossGL/crosstl/issues/1573",
+      "https://github.com/CrossGL/crosstl/issues/1574"
     ]
   },
   "function_local_alias_status": {
@@ -415,7 +439,9 @@
     "https://github.com/CrossGL/crosstl/issues/1566",
     "https://github.com/CrossGL/crosstl/issues/1567",
     "https://github.com/CrossGL/crosstl/issues/1568",
-    "https://github.com/CrossGL/crosstl/issues/1569"
+    "https://github.com/CrossGL/crosstl/issues/1569",
+    "https://github.com/CrossGL/crosstl/issues/1573",
+    "https://github.com/CrossGL/crosstl/issues/1574"
   ],
   "resolved_issues": [
     "https://github.com/CrossGL/crosstl/issues/1551",

@@ -11989,10 +11989,23 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         parameter_type = getattr(
             parameter, "param_type", getattr(parameter, "vtype", None)
         )
+        source_qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(parameter, "qualifiers", []) or []
+        }
         if (
             is_private_pointer_parameter(parameter)
             and getattr(parameter_type, "is_mutable", True)
             and not set(qualifiers).intersection({"const", "in", "out", "inout"})
+        ):
+            qualifiers.append("inout")
+        if (
+            isinstance(parameter_type, ReferenceType)
+            and getattr(parameter_type, "is_mutable", False)
+            and not set(qualifiers).intersection({"const", "in", "out", "inout"})
+            and not source_qualifiers.intersection(
+                {"const", "constant", "readonly", "in"}
+            )
         ):
             qualifiers.append("inout")
 
