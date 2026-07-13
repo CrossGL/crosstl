@@ -836,6 +836,7 @@ class MetalParser:
         return aggregate
 
     def parse_template_declaration(self):
+        start_token = self.current_token
         template_parameters = self.parse_template_prefix()
         template_parameter_defaults = dict(
             getattr(self, "last_template_parameter_defaults", {}) or {}
@@ -867,6 +868,12 @@ class MetalParser:
                     ]
                     struct.template_parameters = template_parameters
                     struct.template_parameter_defaults = template_parameter_defaults
+                    template_location = self.source_span_from_tokens(
+                        start_token, self.tokens[self.pos - 1]
+                    )
+                    struct.template_source_location = template_location
+                    if not getattr(struct, "source_location", None):
+                        struct.source_location = template_location
                 return struct
 
             if not self.is_function_definition():
@@ -891,6 +898,12 @@ class MetalParser:
                 ]
                 function.template_parameters = template_parameters
                 function.template_parameter_defaults = template_parameter_defaults
+                template_location = self.source_span_from_tokens(
+                    start_token, self.tokens[self.pos - 1]
+                )
+                function.template_source_location = template_location
+                if not getattr(function, "source_location", None):
+                    function.source_location = template_location
             return function
         finally:
             if sys.exc_info()[0] is None:
@@ -964,18 +977,30 @@ class MetalParser:
         return parameters
 
     def parse_template_parameter_tokens(self, tokens):
-        for idx, (token_type, value) in enumerate(tokens):
+        declarator_tokens = tokens
+        for idx, (token_type, _value) in enumerate(tokens):
+            if token_type == "EQUALS":
+                declarator_tokens = tokens[:idx]
+                break
+
+        for idx, (token_type, value) in enumerate(declarator_tokens):
             if value == "typename" or token_type == "CLASS":
                 name_idx = idx + 1
                 is_variadic = False
-                if name_idx < len(tokens) and tokens[name_idx][0] == "ELLIPSIS":
+                if (
+                    name_idx < len(declarator_tokens)
+                    and declarator_tokens[name_idx][0] == "ELLIPSIS"
+                ):
                     is_variadic = True
                     name_idx += 1
-                if name_idx < len(tokens) and tokens[name_idx][0] == "IDENTIFIER":
+                if (
+                    name_idx < len(declarator_tokens)
+                    and declarator_tokens[name_idx][0] == "IDENTIFIER"
+                ):
                     kind = f"{value}..." if is_variadic else value
-                    return (kind, tokens[name_idx][1])
-        if len(tokens) >= 2 and tokens[-1][0] == "IDENTIFIER":
-            return ("value", tokens[-1][1])
+                    return (kind, declarator_tokens[name_idx][1])
+        if len(declarator_tokens) >= 2 and declarator_tokens[-1][0] == "IDENTIFIER":
+            return ("value", declarator_tokens[-1][1])
         return None
 
     def template_parameter_default(self, tokens):

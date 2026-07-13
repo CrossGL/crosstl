@@ -2945,6 +2945,72 @@ def test_parse_variadic_function_parameter_pack_from_mlx_integral_constant():
     assert pack_call.args[0].operand.name == "us"
 
 
+def test_parse_defaulted_value_template_parameters_and_source_location():
+    code = """
+    template <bool UseAlternate = false, int Width = 2 + 1>
+    float select_value(float primary, float alternate) {
+        return UseAlternate ? alternate : primary + Width;
+    }
+    """
+    function = parse_ok(code).functions[0]
+
+    assert function.template_parameters == [
+        ("value", "UseAlternate"),
+        ("value", "Width"),
+    ]
+    assert function.template_parameter_defaults == {
+        "UseAlternate": "false",
+        "Width": "2+1",
+    }
+    assert function.template_source_location == function.source_location
+    assert function.source_location["line"] == 2
+    assert function.source_location["end_line"] == 5
+    assert function.source_location["length"] > 0
+
+
+def test_parse_template_declaration_preserves_existing_source_location(monkeypatch):
+    existing_location = {
+        "file": "existing.metal",
+        "line": 40,
+        "column": 7,
+        "end_line": 42,
+        "end_column": 2,
+    }
+    original_parse_function = MetalParser.parse_function
+
+    def parse_function_with_existing_location(parser):
+        function = original_parse_function(parser)
+        function.source_location = existing_location
+        return function
+
+    monkeypatch.setattr(
+        MetalParser, "parse_function", parse_function_with_existing_location
+    )
+
+    source = """template <bool Enabled = false>
+bool selected() { return Enabled; }
+"""
+    function = parse_ok(source).functions[0]
+
+    assert function.source_location is existing_location
+    assert function.template_source_location["line"] == 1
+    assert function.template_source_location["column"] == 1
+    assert function.template_source_location["end_line"] == 2
+
+
+def test_parse_dependent_value_template_default_keeps_declared_parameter_name():
+    code = """
+    template <typename T, int Count = T::extent>
+    int count_value() {
+        return Count;
+    }
+    """
+    function = parse_ok(code).functions[0]
+
+    assert function.template_parameters == [("typename", "T"), ("value", "Count")]
+    assert function.template_parameter_defaults == {"Count": "T::extent"}
+
+
 def test_parse_dependent_enable_if_return_type_from_tinygrad_metal():
     # Reduced from:
     # Repo: https://github.com/tinygrad/tinygrad

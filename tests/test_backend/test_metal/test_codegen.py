@@ -13,6 +13,7 @@ from crosstl.backend.Metal.MetalCrossGLCodeGen import (
     MetalSizeofResolutionError,
     MetalStageEntryArrayResourceError,
     MetalStaticConstantResolutionError,
+    MetalTemplateArgumentResolutionError,
     MetalToCrossGLConverter,
     MetalWideVectorLoweringError,
 )
@@ -48,6 +49,12 @@ def generate_code(ast_node):
 def convert(code: str) -> str:
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
+    return generate_code(ast)
+
+
+def convert_without_preprocessing(code: str, file_path=None) -> str:
+    tokens = MetalLexer(code, preprocess=False).tokenize()
+    ast = MetalParser(tokens, file_path=file_path).parse()
     return generate_code(ast)
 
 
@@ -7004,3 +7011,354 @@ def test_metal_cooperative_matrix_operations_round_trip_through_shared_ir():
     )
     assert "simdgroup_store(accumulator, output, 8, 0, true);" in regenerated
     assert "cooperative_matrix_" not in regenerated
+
+
+def test_codegen_materializes_defaulted_bool_and_explicit_specialization():
+    code = """
+    template <bool UseAlternate = false>
+    float select_value(float primary, float alternate) {
+        return UseAlternate ? alternate : primary;
+    }
+
+    float select_both(float primary, float alternate) {
+        return select_value(primary, alternate)
+            + select_value<true>(primary, alternate);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(code)
+
+    assert "float select_value(float primary, float alternate)" in crossgl
+    assert "return false ? alternate : primary;" in crossgl
+    assert "float select_value_true(float primary, float alternate)" in crossgl
+    assert "return true ? alternate : primary;" in crossgl
+    assert "select_value(primary, alternate)" in crossgl
+    assert "select_value_true(primary, alternate)" in crossgl
+    assert not re.search(r"\bUseAlternate\b", crossgl)
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert not re.search(r"\bUseAlternate\b", hlsl)
+    assert "select_value_true" in hlsl
+    assert "false ? alternate : primary" in hlsl
+    assert "true ? alternate : primary" in hlsl
+
+
+def test_codegen_materializes_pinned_mlx_perform_fft_bool_specializations():
+    # Reduced from mlx/backend/metal/kernels/fft.h at
+    # 968d264f2903d578e699c4452a4dbf48633921aa.
+    code = """
+    template <bool rader = false>
+    int perform_fft(int value) {
+        return rader ? value + 11 : value + 2;
+    }
+
+    int run_fft_modes(int value) {
+        return perform_fft(value) + perform_fft<true>(value);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(code)
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    for output in (crossgl, hlsl):
+        assert not re.search(r"\brader\b", output)
+        assert "perform_fft" in output
+        assert "perform_fft_true" in output
+        assert "false ?" in output
+        assert "true ?" in output
+        assert "value + 11" in output
+        assert "value + 2" in output
+
+
+def test_codegen_propagates_nested_value_template_specializations():
+    code = """
+    template <bool Inner = false>
+    float leaf(float value) {
+        return Inner ? value : -value;
+    }
+
+    template <bool Outer = false>
+    float branch(float value) {
+        return leaf<Outer>(value);
+    }
+
+    float run_branches(float value) {
+        return branch(value) + branch<true>(value);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(code)
+
+    assert "return leaf_false(value);" in crossgl
+    assert "return leaf_true(value);" in crossgl
+    assert "return false ? value : (-value);" in crossgl
+    assert "return true ? value : (-value);" in crossgl
+    assert "branch(value) + branch_true(value)" in crossgl
+    assert not re.search(r"\b(?:Inner|Outer)\b", crossgl)
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_resolves_later_value_default_from_earlier_binding_in_extent():
+    code = """
+    template <int Base = 2, int Width = Base + 1>
+    int extent_value(int index) {
+        int values[Width];
+        values[0] = Base;
+        return values[index] + Width;
+    }
+
+    int run_extent() {
+        return extent_value(0);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(code)
+
+    assert "int[3] values;" in crossgl
+    assert "values[0] = 2;" in crossgl
+    assert "return values[index] + 3;" in crossgl
+    assert not re.search(r"\b(?:Base|Width)\b", crossgl)
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_value_template_substitution_respects_lexical_shadowing():
+    code = """
+    template <bool Flag = false>
+    float shadowed(float value) {
+        float selected = Flag ? value : -value;
+        {
+            bool Flag = true;
+            if (Flag) {
+                selected += 2.0f;
+            }
+        }
+        return Flag ? selected : -selected;
+    }
+
+    float run_shadowed(float value) {
+        return shadowed(value);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(code)
+
+    assert "float selected = false ? value : (-value);" in crossgl
+    assert "bool Flag = true;" in crossgl
+    assert "if (Flag)" in crossgl
+    assert "return false ? selected : (-selected);" in crossgl
+    assert "generic<Flag>" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+@pytest.mark.parametrize(
+    ("code", "argument_kind", "parameter_name", "expression", "reason", "message"),
+    [
+        (
+            "template<typename T, int Count = T::extent> "
+            "int count_value() { return Count; } "
+            "int run() { return count_value(); }",
+            "default",
+            "Count",
+            "T::extent",
+            "remains dependent on T, extent",
+            "Cannot materialize Metal function template 'count_value' for call "
+            "'count_value(...)': default argument for 'Count' (T::extent) "
+            "remains dependent on T, extent",
+        ),
+        (
+            "template<bool Flag = false> int choose() { return Flag; } "
+            "int run(bool Runtime) { return choose<Runtime>(); }",
+            "explicit",
+            "Flag",
+            "Runtime",
+            "remains dependent on Runtime",
+            "Cannot materialize Metal function template 'choose' for call "
+            "'choose<Runtime>': explicit argument for 'Flag' (Runtime) "
+            "remains dependent on Runtime",
+        ),
+        (
+            "template<int Count, bool Enabled = false> "
+            "int count_value() { return Enabled ? Count : Count; } "
+            "int run() { return count_value<>(); }",
+            "missing",
+            "Count",
+            None,
+            "was not supplied and has no declaration default",
+            "Cannot materialize Metal function template 'count_value' for call "
+            "'count_value<>': required argument for 'Count' was not supplied "
+            "and has no declaration default",
+        ),
+    ],
+)
+def test_codegen_value_template_resolution_diagnostics_are_structured(
+    code, argument_kind, parameter_name, expression, reason, message
+):
+    with pytest.raises(MetalTemplateArgumentResolutionError) as exc_info:
+        convert_without_preprocessing(code, file_path="template-diagnostic.metal")
+
+    diagnostic = exc_info.value
+    assert str(diagnostic) == message
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.metal-template-argument-unresolved"
+    )
+    assert diagnostic.missing_capabilities == (
+        "metal.value-template-argument-materialization",
+    )
+    assert diagnostic.argument_kind == argument_kind
+    assert diagnostic.parameter_name == parameter_name
+    assert diagnostic.argument_expression == expression
+    assert diagnostic.reason == reason
+    assert diagnostic.source_location["file"] == "template-diagnostic.metal"
+    assert diagnostic.source_location["line"] == 1
+    assert diagnostic.source_location["column"] == 1
+    assert diagnostic.default_expression == (
+        expression if argument_kind == "default" else None
+    )
+    assert diagnostic.explicit_argument == (
+        expression if argument_kind == "explicit" else None
+    )
+
+
+@pytest.mark.parametrize("template_first", [True, False])
+def test_codegen_same_name_template_and_overload_is_declaration_order_independent(
+    template_first,
+):
+    template = """
+    template <bool Alternate = false>
+    float pick(float value) {
+        return Alternate ? value : -value;
+    }
+    """
+    overload = """
+    int pick(int value) {
+        return value + 1;
+    }
+    """
+    declarations = template + overload if template_first else overload + template
+    code = declarations + """
+    float run_picks() {
+        return pick(1.0f) + float(pick(1));
+    }
+    """
+
+    crossgl = convert_without_preprocessing(code)
+
+    assert "float pick(float value)" in crossgl
+    assert "return false ? value : (-value);" in crossgl
+    assert "int pick(int value)" in crossgl
+    assert "return value + 1;" in crossgl
+    assert not re.search(r"\bAlternate\b", crossgl)
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_fails_closed_for_ambiguous_same_name_value_templates():
+    code = """
+    template <bool Alternate = false>
+    float pick(float value) {
+        return Alternate ? value : -value;
+    }
+
+    template <int Offset = 0>
+    float pick(float value) {
+        return value + Offset;
+    }
+
+    float run_pick() {
+        return pick(1.0f);
+    }
+    """
+
+    with pytest.raises(MetalTemplateArgumentResolutionError) as exc_info:
+        convert_without_preprocessing(code)
+
+    diagnostic = exc_info.value
+    assert diagnostic.argument_kind == "overload"
+    assert diagnostic.function_name == "pick"
+    assert diagnostic.reason == (
+        "does not identify one unique value-template declaration"
+    )
+    assert "pick<Alternate>(float)" in diagnostic.argument_expression
+    assert "pick<Offset>(float)" in diagnostic.argument_expression
+
+
+def test_codegen_allocates_specialization_name_around_unrelated_collision():
+    code = """
+    float leaf_false(float value) {
+        return 99.0f;
+    }
+
+    template <bool Inner>
+    float leaf(float value) {
+        return Inner ? value : -value;
+    }
+
+    template <bool Outer = false>
+    float branch(float value) {
+        return leaf<Outer>(value);
+    }
+
+    float run_collision(float value) {
+        return leaf_false(value) + branch(value);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(code)
+
+    assert "float leaf_false(float value)" in crossgl
+    assert "return 99.0f;" in crossgl
+    assert "float leaf_false_2(float value)" in crossgl
+    assert "return leaf_false_2(value);" in crossgl
+    assert "return leaf_false(value) + branch(value);" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_mixed_type_value_template_keeps_inferred_type_parameter():
+    code = """
+    template <typename T, bool Alternate = false>
+    T mixed(T value) {
+        return Alternate ? value : -value;
+    }
+
+    float run_mixed(float value) {
+        return mixed(value);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(code)
+
+    assert "generic<T> T mixed(T value)" in crossgl
+    assert "return false ? value : (-value);" in crossgl
+    assert not re.search(r"\bAlternate\b", crossgl)
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_fails_closed_for_explicit_mixed_type_value_arguments():
+    code = """
+    template <typename T, bool Alternate = false>
+    T mixed(T value) {
+        return Alternate ? value : -value;
+    }
+
+    float run_mixed(float value) {
+        return mixed<float, true>(value);
+    }
+    """
+
+    with pytest.raises(MetalTemplateArgumentResolutionError) as exc_info:
+        convert_without_preprocessing(code, file_path="mixed-template.metal")
+
+    diagnostic = exc_info.value
+    assert diagnostic.argument_kind == "explicit_type"
+    assert diagnostic.parameter_name == "T"
+    assert diagnostic.argument_expression == "float"
+    assert diagnostic.explicit_argument == "float"
+    assert diagnostic.reason == (
+        "cannot be preserved by the value-template specialization identity"
+    )
+    assert diagnostic.source_location["file"] == "mixed-template.metal"
+    assert diagnostic.source_location["line"] == 2
+    assert str(diagnostic) == (
+        "Cannot materialize Metal function template 'mixed' for call "
+        "'mixed<float,true>': explicit type argument for 'T' (float) cannot be "
+        "preserved by the value-template specialization identity"
+    )

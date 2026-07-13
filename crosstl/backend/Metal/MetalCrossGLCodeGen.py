@@ -55,6 +55,57 @@ class MetalSizeofResolutionError(ValueError):
         super().__init__(f"Cannot materialize Metal sizeof({operand}): {reason}")
 
 
+class MetalTemplateArgumentResolutionError(ValueError):
+    """Raised when a required non-type template argument is not concrete."""
+
+    project_diagnostic_code = "project.translate.metal-template-argument-unresolved"
+    missing_capabilities = ("metal.value-template-argument-materialization",)
+
+    def __init__(
+        self,
+        function_name,
+        parameter_name,
+        argument_expression,
+        selected_call,
+        reason,
+        argument_kind,
+        source_location=None,
+    ):
+        self.function_name = function_name
+        self.parameter_name = parameter_name
+        self.argument_expression = argument_expression
+        self.argument_kind = argument_kind
+        self.default_expression = (
+            argument_expression if argument_kind == "default" else None
+        )
+        self.explicit_argument = (
+            argument_expression
+            if argument_kind in {"explicit", "explicit_type"}
+            else None
+        )
+        self.selected_call = selected_call
+        self.reason = reason
+        self.source_location = source_location
+        if argument_kind == "missing":
+            argument = f"required argument for '{parameter_name}'"
+        elif argument_kind == "overload":
+            argument = f"overload set for '{function_name}'"
+        elif argument_kind == "explicit_type":
+            argument = (
+                f"explicit type argument for '{parameter_name}' "
+                f"({argument_expression})"
+            )
+        else:
+            argument = (
+                f"{argument_kind} argument for '{parameter_name}' "
+                f"({argument_expression})"
+            )
+        super().__init__(
+            "Cannot materialize Metal function template "
+            f"'{function_name}' for call '{selected_call}': {argument} {reason}"
+        )
+
+
 class MetalCallableLoweringError(ValueError):
     """Raised when a Metal callback cannot be lowered without changing semantics."""
 
@@ -745,6 +796,13 @@ class MetalToCrossGLConverter:
         self.current_struct_static_constant_owner = None
         self.local_struct_type_aliases = {}
         self.integral_constant_bindings = []
+        self.template_value_bindings = []
+        self.template_binding_shadow_scopes = []
+        self.value_template_functions = {}
+        self.default_value_template_bindings = {}
+        self.value_template_specializations = {}
+        self.pending_value_template_specializations = []
+        self.suppressed_value_template_function_ids = set()
         self.metal_atomic_fence_transport_declaration_ids = set()
         self.current_function_name = None
         self.current_function_return_type = None
@@ -905,6 +963,10 @@ class MetalToCrossGLConverter:
     def declare_identifier(self, name):
         if not name:
             return name
+        if self.template_binding_shadow_scopes and any(
+            name in bindings for bindings in self.template_value_bindings
+        ):
+            self.template_binding_shadow_scopes[-1].add(name)
         current_map = self.identifier_maps[-1]
         if name in current_map:
             return current_map[name]
@@ -921,6 +983,9 @@ class MetalToCrossGLConverter:
         return candidate
 
     def render_identifier(self, name):
+        template_value = self.template_value_binding(name)
+        if template_value is not None:
+            return template_value
         name = self.substitute_integral_constant_members(name)
         for scope in reversed(self.identifier_maps):
             if name in scope:
@@ -1785,6 +1850,7 @@ class MetalToCrossGLConverter:
                 self.user_function_overloads_by_name.setdefault(
                     function.name, []
                 ).append(function)
+        self.prepare_value_template_materializations(ast, functions)
         self.prepare_metal_atomic_fence_transport_constants(ast)
         code = ""
         includes = getattr(ast, "includes", []) or []
@@ -1917,9 +1983,8 @@ class MetalToCrossGLConverter:
 
         globals_list = [
             glob
-            for glob in getattr(ast, "global_variables", []) or getattr(
-                ast, "global_vars", []
-            )
+            for glob in getattr(ast, "global_variables", [])
+            or getattr(ast, "global_vars", [])
             if id(glob) not in self.metal_atomic_fence_transport_declaration_ids
         ]
         if globals_list:
@@ -1981,30 +2046,27 @@ class MetalToCrossGLConverter:
             code += "\n"
 
         for f in functions:
-            qualifier = getattr(f, "qualifier", None)
-            if qualifier == "vertex":
-                code += "    // Vertex Shader\n"
-                code += "    vertex {\n"
-                code += self.generate_function(f, stage_entry=f.name != "main")
-                code += "    }\n\n"
-            elif qualifier == "fragment":
-                code += "    // Fragment Shader\n"
-                code += "    fragment {\n"
-                code += self.generate_fragment_execution_layouts(f)
-                code += self.generate_function(f, stage_entry=f.name != "main")
-                code += "    }\n\n"
-            elif qualifier == "kernel":
-                code += "    // Compute Shader\n"
-                code += "    compute {\n"
-                code += self.generate_function(
-                    f, stage_entry=self.should_emit_kernel_stage_entry(f)
-                )
-                code += "    }\n\n"
-            elif qualifier in self.rt_qualifiers:
-                code += f"    // {qualifier} function\n"
-                code += self.generate_function(f)
-            else:
-                code += self.generate_function(f)
+            default_bindings = self.default_value_template_bindings.get(id(f))
+            if (
+                id(f) in self.suppressed_value_template_function_ids
+                and default_bindings is None
+            ):
+                continue
+            code += self.generate_top_level_function(
+                f, template_value_bindings=default_bindings
+            )
+
+        specialization_index = 0
+        while specialization_index < len(self.pending_value_template_specializations):
+            function, bindings, specialized_name = (
+                self.pending_value_template_specializations[specialization_index]
+            )
+            specialization_index += 1
+            code += self.generate_top_level_function(
+                function,
+                template_value_bindings=bindings,
+                output_name=specialized_name,
+            )
 
         code += "}\n"
         code = code.replace(
@@ -2013,6 +2075,59 @@ class MetalToCrossGLConverter:
             1,
         )
         return code
+
+    def generate_top_level_function(
+        self, function, *, template_value_bindings=None, output_name=None
+    ):
+        qualifier = getattr(function, "qualifier", None)
+        if qualifier == "vertex":
+            return (
+                "    // Vertex Shader\n"
+                "    vertex {\n"
+                + self.generate_function(
+                    function,
+                    stage_entry=function.name != "main",
+                    template_value_bindings=template_value_bindings,
+                    output_name=output_name,
+                )
+                + "    }\n\n"
+            )
+        if qualifier == "fragment":
+            return (
+                "    // Fragment Shader\n"
+                "    fragment {\n"
+                + self.generate_fragment_execution_layouts(function)
+                + self.generate_function(
+                    function,
+                    stage_entry=function.name != "main",
+                    template_value_bindings=template_value_bindings,
+                    output_name=output_name,
+                )
+                + "    }\n\n"
+            )
+        if qualifier == "kernel":
+            return (
+                "    // Compute Shader\n"
+                "    compute {\n"
+                + self.generate_function(
+                    function,
+                    stage_entry=self.should_emit_kernel_stage_entry(function),
+                    template_value_bindings=template_value_bindings,
+                    output_name=output_name,
+                )
+                + "    }\n\n"
+            )
+        if qualifier in self.rt_qualifiers:
+            return f"    // {qualifier} function\n" + self.generate_function(
+                function,
+                template_value_bindings=template_value_bindings,
+                output_name=output_name,
+            )
+        return self.generate_function(
+            function,
+            template_value_bindings=template_value_bindings,
+            output_name=output_name,
+        )
 
     def process_constant_struct(self, node):
         constants = (
@@ -2146,13 +2261,14 @@ class MetalToCrossGLConverter:
             mapped_names[raw_name] = candidate
         return mapped_names
 
-    def format_generic_prefix(self, node):
+    def format_generic_prefix(self, node, bound_value_names=None):
         defaults = getattr(node, "template_parameter_defaults", {}) or {}
         template_parameters = getattr(node, "template_parameters", None)
+        bound_value_names = set(bound_value_names or ())
         if template_parameters:
             generics = []
             for kind, name in template_parameters:
-                if not name:
+                if not name or (kind == "value" and name in bound_value_names):
                     continue
                 rendered = self.sanitize_identifier(name)
                 default_type = defaults.get(name)
@@ -2184,6 +2300,515 @@ class MetalToCrossGLConverter:
             yield from node
             return
         yield from getattr(node, "__dict__", {}).values()
+
+    def value_template_parameter_names(self, function):
+        return [
+            entry[1]
+            for entry in getattr(function, "template_parameters", None) or []
+            if isinstance(entry, (tuple, list))
+            and len(entry) >= 2
+            and entry[0] == "value"
+            and entry[1]
+        ]
+
+    def split_value_template_call_name(self, name):
+        text = str(name).strip()
+        if "<" not in text or not text.endswith(">"):
+            return None
+        angle = text.find("<")
+        base = text[:angle].strip()
+        if not base:
+            return None
+        arguments = self.split_generic_arguments(text[angle + 1 : -1])
+        function_name = base.rsplit("::", 1)[-1]
+        if function_name not in self.value_template_functions:
+            return None
+        return function_name, arguments
+
+    def value_template_overload_signature(self, function):
+        parameters = ", ".join(self.metal_function_source_signature(function))
+        template_parameters = ", ".join(
+            name
+            for _kind, name in getattr(function, "template_parameters", None) or []
+            if name
+        )
+        return f"{function.name}<{template_parameters}>({parameters})"
+
+    def resolve_value_template_function(
+        self, function_name, call_arguments, explicit_template_arguments=None
+    ):
+        value_candidates = [
+            function
+            for function in self.value_template_functions.get(function_name, [])
+            if len(getattr(function, "params", []) or []) == len(call_arguments)
+        ]
+        if not value_candidates:
+            return None
+
+        explicit_call = explicit_template_arguments is not None
+        if explicit_call:
+            explicit_count = len(explicit_template_arguments)
+            value_candidates = [
+                function
+                for function in value_candidates
+                if explicit_count
+                <= len(getattr(function, "template_parameters", None) or [])
+            ]
+            overloads = value_candidates
+        else:
+            overloads = [
+                function
+                for function in self.user_function_overloads_by_name.get(
+                    function_name, []
+                )
+                if len(getattr(function, "params", []) or []) == len(call_arguments)
+            ]
+
+        if not overloads:
+            return None
+        if len(overloads) == 1:
+            return overloads[0] if overloads[0] in value_candidates else None
+
+        argument_types = [
+            self.expression_mapped_type(argument) for argument in call_arguments
+        ]
+        matching = []
+        if all(argument_type is not None for argument_type in argument_types):
+            matching = [
+                function
+                for function in overloads
+                if self.metal_function_mapped_signature(function)
+                == tuple(argument_types)
+            ]
+        if len(matching) == 1:
+            return matching[0] if matching[0] in value_candidates else None
+
+        # A non-template exact match wins over a same-signature function
+        # template in C++. Leave that call on the ordinary overload.
+        non_template_matches = [
+            function
+            for function in matching
+            if not self.value_template_parameter_names(function)
+        ]
+        if len(non_template_matches) == 1:
+            return None
+
+        ambiguous = matching or overloads
+        ambiguous_value_candidates = [
+            function for function in ambiguous if function in value_candidates
+        ]
+        if len(ambiguous_value_candidates) <= 1 and not explicit_call:
+            # Unknown argument types plus an unrelated overload are not enough
+            # evidence to select the template. Preserve the call unchanged.
+            return None
+        signatures = ", ".join(
+            self.value_template_overload_signature(function)
+            for function in ambiguous_value_candidates
+        )
+        representative = ambiguous_value_candidates[0]
+        raise MetalTemplateArgumentResolutionError(
+            function_name,
+            "<overload>",
+            signatures,
+            f"{function_name}(...)",
+            "does not identify one unique value-template declaration",
+            "overload",
+            getattr(representative, "template_source_location", None)
+            or getattr(representative, "source_location", None),
+        )
+
+    def restrict_value_template_functions_to_default_dependency_graph(self):
+        all_candidates = self.value_template_functions
+        eligible_ids = {
+            id(function)
+            for functions in all_candidates.values()
+            for function in functions
+            if any(
+                name in (getattr(function, "template_parameter_defaults", {}) or {})
+                for name in self.value_template_parameter_names(function)
+            )
+        }
+        pending = [
+            function
+            for functions in all_candidates.values()
+            for function in functions
+            if id(function) in eligible_ids
+        ]
+        scanned = set()
+
+        while pending:
+            owner = pending.pop()
+            if id(owner) in scanned:
+                continue
+            scanned.add(id(owner))
+            owner_value_names = set(self.value_template_parameter_names(owner))
+            if not owner_value_names:
+                continue
+
+            seen_nodes = set()
+
+            def visit(node):
+                if node is None or isinstance(node, (str, int, float, bool)):
+                    return
+                if not isinstance(node, (dict, list, tuple, set)):
+                    node_id = id(node)
+                    if node_id in seen_nodes:
+                        return
+                    seen_nodes.add(node_id)
+                if isinstance(node, FunctionCallNode):
+                    parsed = self.split_value_template_call_name(node.name)
+                    if parsed is not None:
+                        function_name, explicit_arguments = parsed
+                        identifiers = {
+                            identifier
+                            for argument in explicit_arguments
+                            for identifier in re.findall(
+                                r"\b[A-Za-z_]\w*\b", str(argument)
+                            )
+                        }
+                        if identifiers.intersection(owner_value_names):
+                            selected = self.resolve_value_template_function(
+                                function_name,
+                                node.args,
+                                explicit_template_arguments=explicit_arguments,
+                            )
+                            if (
+                                selected is not None
+                                and id(selected) not in eligible_ids
+                            ):
+                                eligible_ids.add(id(selected))
+                                pending.append(selected)
+                for child in self.iter_ast_children(node):
+                    visit(child)
+
+            visit(getattr(owner, "body", None))
+
+        self.value_template_functions = {
+            name: [function for function in functions if id(function) in eligible_ids]
+            for name, functions in all_candidates.items()
+            if any(id(function) in eligible_ids for function in functions)
+        }
+
+    def prepare_value_template_materializations(self, ast, functions):
+        self.value_template_functions = {}
+        for function in functions:
+            if (
+                isinstance(function, FunctionNode)
+                and getattr(function, "name", None)
+                and self.value_template_parameter_names(function)
+            ):
+                self.value_template_functions.setdefault(function.name, []).append(
+                    function
+                )
+        self.restrict_value_template_functions_to_default_dependency_graph()
+        self.default_value_template_bindings = {}
+        self.value_template_specializations = {}
+        self.pending_value_template_specializations = []
+        self.suppressed_value_template_function_ids = set()
+        self.existing_function_names = {
+            function.name
+            for function in functions
+            if isinstance(function, FunctionNode) and getattr(function, "name", None)
+        }
+        if not self.value_template_functions:
+            return
+
+        omitted_calls = []
+        seen = set()
+
+        def visit(node):
+            if node is None or isinstance(node, (str, int, float, bool)):
+                return
+            if not isinstance(node, (dict, list, tuple, set)):
+                node_id = id(node)
+                if node_id in seen:
+                    return
+                seen.add(node_id)
+            if isinstance(node, FunctionCallNode):
+                call_name = str(getattr(node, "name", ""))
+                unscoped_name = call_name.rsplit("::", 1)[-1]
+                if unscoped_name in self.value_template_functions:
+                    omitted_calls.append((unscoped_name, node.args))
+                parsed = self.split_value_template_call_name(call_name)
+                if parsed is not None:
+                    function_name, explicit_arguments = parsed
+                    function = self.resolve_value_template_function(
+                        function_name,
+                        node.args,
+                        explicit_template_arguments=explicit_arguments,
+                    )
+                    if function is not None:
+                        self.suppressed_value_template_function_ids.add(id(function))
+            for child in self.iter_ast_children(node):
+                visit(child)
+
+        visit(ast)
+        for function_name, call_arguments in omitted_calls:
+            function = self.resolve_value_template_function(
+                function_name, call_arguments
+            )
+            if function is None or id(function) in self.default_value_template_bindings:
+                continue
+            bindings = self.bind_value_template_arguments(
+                function,
+                [],
+                selected_call=f"{function_name}(...)",
+                require_defaults=False,
+            )
+            if bindings is None:
+                continue
+            self.default_value_template_bindings[id(function)] = bindings
+            self.suppressed_value_template_function_ids.add(id(function))
+            key = self.value_template_specialization_key(function, bindings)
+            self.value_template_specializations[key] = function.name
+
+    def bind_value_template_arguments(
+        self,
+        function,
+        explicit_arguments,
+        *,
+        selected_call,
+        require_defaults=True,
+    ):
+        parameters = getattr(function, "template_parameters", None) or []
+        defaults = getattr(function, "template_parameter_defaults", {}) or {}
+        explicit_arguments = list(explicit_arguments or [])
+        bindings = {}
+        argument_index = 0
+        for entry in parameters:
+            if not isinstance(entry, (tuple, list)) or len(entry) < 2:
+                continue
+            kind, name = entry[0], entry[1]
+            if not name:
+                continue
+            explicit = argument_index < len(explicit_arguments)
+            if explicit:
+                argument = explicit_arguments[argument_index]
+                argument_index += 1
+                if kind != "value":
+                    raise MetalTemplateArgumentResolutionError(
+                        function.name,
+                        name,
+                        argument,
+                        selected_call,
+                        (
+                            "cannot be preserved by the value-template "
+                            "specialization identity"
+                        ),
+                        "explicit_type",
+                        getattr(function, "template_source_location", None)
+                        or getattr(function, "source_location", None),
+                    )
+                bindings[name] = self.resolve_value_template_constant(
+                    argument,
+                    bindings,
+                    function,
+                    name,
+                    selected_call,
+                    is_default=False,
+                )
+                continue
+            if kind != "value":
+                continue
+            default = defaults.get(name)
+            if default is None:
+                if require_defaults:
+                    raise MetalTemplateArgumentResolutionError(
+                        function.name,
+                        name,
+                        None,
+                        selected_call,
+                        "was not supplied and has no declaration default",
+                        "missing",
+                        getattr(function, "template_source_location", None)
+                        or getattr(function, "source_location", None),
+                    )
+                return None
+            bindings[name] = self.resolve_value_template_constant(
+                default,
+                bindings,
+                function,
+                name,
+                selected_call,
+                is_default=True,
+            )
+
+        if argument_index != len(explicit_arguments):
+            return None
+        value_names = self.value_template_parameter_names(function)
+        if any(name not in bindings for name in value_names):
+            return None
+        return bindings
+
+    def resolve_value_template_constant(
+        self,
+        expression,
+        earlier_bindings,
+        function,
+        parameter_name,
+        selected_call,
+        *,
+        is_default,
+    ):
+        text = self.substitute_template_value_text(
+            str(expression), bindings=earlier_bindings, honor_shadowing=False
+        ).strip()
+        active_bindings = {
+            name: value
+            for scope in self.template_value_bindings
+            for name, value in scope.items()
+            if not self.template_value_binding_is_shadowed(name)
+        }
+        if active_bindings:
+            text = self.substitute_template_value_text(
+                text, bindings=active_bindings, honor_shadowing=False
+            ).strip()
+        normalized = re.sub(r"\s+", " ", text)
+        if normalized in {"true", "false"}:
+            return normalized
+        integer = re.fullmatch(r"([-+]?\d+)(?:[uUlL]+)?", normalized)
+        if integer is not None:
+            return integer.group(1)
+
+        value = self.evaluate_value_template_constant_expression(normalized)
+        if value is not None:
+            return str(value)
+
+        identifiers = sorted(set(re.findall(r"\b[A-Za-z_]\w*\b", normalized)))
+        dependency = (
+            f"remains dependent on {', '.join(identifiers)}"
+            if identifiers
+            else "cannot be evaluated as a supported integral constant expression"
+        )
+        raise MetalTemplateArgumentResolutionError(
+            function.name,
+            parameter_name,
+            str(expression),
+            selected_call,
+            dependency,
+            "default" if is_default else "explicit",
+            getattr(function, "template_source_location", None)
+            or getattr(function, "source_location", None),
+        )
+
+    def evaluate_value_template_constant_expression(self, expression):
+        try:
+            lexer = MetalLexer(expression, preprocess=False)
+            parser = MetalParser(lexer.tokenize())
+            node = parser.parse_expression()
+            if parser.current_token[0] != "EOF":
+                return None
+        except (SyntaxError, ValueError, TypeError):
+            return None
+        return evaluate_literal_int_expression(node)
+
+    def value_template_specialization_key(self, function, bindings):
+        return (
+            id(function),
+            tuple(
+                bindings[name] for name in self.value_template_parameter_names(function)
+            ),
+        )
+
+    def value_template_specialization_identifier(self, function, bindings):
+        values = [
+            bindings[name] for name in self.value_template_parameter_names(function)
+        ]
+        parts = [function.name, *values]
+        identifier = "_".join(
+            part
+            for part in (
+                re.sub(r"[^A-Za-z0-9_]+", "_", str(value)).strip("_") for value in parts
+            )
+            if part
+        )
+        identifier = identifier or function.name
+        if len(self.value_template_functions.get(function.name, [])) > 1:
+            signature = "_".join(self.metal_function_source_signature(function))
+            if signature:
+                identifier = f"{identifier}_{signature}"
+        return self.sanitize_identifier(identifier)
+
+    def reserve_value_template_specialization_identifier(self, function, bindings):
+        base = self.value_template_specialization_identifier(function, bindings)
+        candidate = base
+        suffix = 2
+        while candidate in self.existing_function_names:
+            candidate = f"{base}_{suffix}"
+            suffix += 1
+        self.existing_function_names.add(candidate)
+        return candidate
+
+    def materialized_value_template_call_name(self, name, call_arguments):
+        parsed = self.split_value_template_call_name(name)
+        if parsed is None:
+            return name
+        function_name, arguments = parsed
+        function = self.resolve_value_template_function(
+            function_name,
+            call_arguments,
+            explicit_template_arguments=arguments,
+        )
+        if function is None:
+            return name
+        bindings = self.bind_value_template_arguments(
+            function,
+            arguments,
+            selected_call=str(name),
+        )
+        if bindings is None:
+            return name
+        key = self.value_template_specialization_key(function, bindings)
+        existing = self.value_template_specializations.get(key)
+        if existing is not None:
+            return existing
+
+        specialized_name = self.reserve_value_template_specialization_identifier(
+            function, bindings
+        )
+        self.value_template_specializations[key] = specialized_name
+        self.suppressed_value_template_function_ids.add(id(function))
+        self.pending_value_template_specializations.append(
+            (function, bindings, specialized_name)
+        )
+        self.user_function_names.add(specialized_name)
+        self.user_function_overloads_by_name.setdefault(specialized_name, []).append(
+            function
+        )
+        return specialized_name
+
+    def template_value_binding_is_shadowed(self, name):
+        return any(
+            name in scope for scope in reversed(self.template_binding_shadow_scopes)
+        )
+
+    def template_value_binding(self, name):
+        if self.template_value_binding_is_shadowed(name):
+            return None
+        for bindings in reversed(self.template_value_bindings):
+            if name in bindings:
+                return bindings[name]
+        return None
+
+    def substitute_template_value_text(
+        self, text, *, bindings=None, honor_shadowing=True
+    ):
+        text = str(text)
+        if bindings is None:
+            bindings = {
+                name: value
+                for scope in self.template_value_bindings
+                for name, value in scope.items()
+                if not honor_shadowing
+                or not self.template_value_binding_is_shadowed(name)
+            }
+        if not bindings:
+            return text
+        return re.sub(
+            r"\b[A-Za-z_]\w*\b",
+            lambda match: str(bindings.get(match.group(0), match.group(0))),
+            text,
+        )
 
     def collect_storage_texture_declaration_ids(self, root):
         storage_ids = set()
@@ -2251,6 +2876,13 @@ class MetalToCrossGLConverter:
         self.current_struct_static_constant_owner = None
         self.local_struct_type_aliases = {}
         self.integral_constant_bindings = []
+        self.template_value_bindings = []
+        self.template_binding_shadow_scopes = []
+        self.value_template_functions = {}
+        self.default_value_template_bindings = {}
+        self.value_template_specializations = {}
+        self.pending_value_template_specializations = []
+        self.suppressed_value_template_function_ids = set()
         self.current_function_name = None
 
     def format_array_suffix(self, var, include_declarator_arrays=True):
@@ -2275,7 +2907,7 @@ class MetalToCrossGLConverter:
         if not isinstance(size, str):
             return self.generate_expression(size, False)
 
-        extent = size.strip()
+        extent = self.substitute_template_value_text(size).strip()
         if self.is_scoped_identifier(extent.lstrip(":")):
             extent = extent.lstrip(":")
             return self.sanitize_identifier(extent)
@@ -2663,7 +3295,14 @@ class MetalToCrossGLConverter:
             declaration = re.sub(r"(?<=\S)&\s+(\w+)", r" \1", declaration, count=1)
         return declaration
 
-    def generate_function(self, func, indent=2, stage_entry=False):
+    def generate_function(
+        self,
+        func,
+        indent=2,
+        stage_entry=False,
+        template_value_bindings=None,
+        output_name=None,
+    ):
         """Render one Metal function node as a CrossGL function block."""
         code = ""
         if stage_entry:
@@ -2693,6 +3332,10 @@ class MetalToCrossGLConverter:
         self.current_stage_entry_resource_parameter_ids = (
             {id(param) for param in func.params} if stage_entry else set()
         )
+        active_template_bindings = dict(template_value_bindings or {})
+        if active_template_bindings:
+            self.template_value_bindings.append(active_template_bindings)
+        self.template_binding_shadow_scopes.append(set())
         self.push_identifier_scope()
         try:
             for param in func.params:
@@ -2713,18 +3356,25 @@ class MetalToCrossGLConverter:
             )
             fn_semantic = self.map_semantic(self.function_semantic_attributes(func))
             suffix = f" {fn_semantic}" if fn_semantic else ""
-            function_name = self.sanitize_identifier(self.function_output_name(func))
+            function_name = self.sanitize_identifier(
+                output_name or self.function_output_name(func)
+            )
             return_type = self.map_function_return_type(func.return_type)
             generic_prefix = (
                 ""
                 if getattr(func, "qualifier", None)
-                else self.format_generic_prefix(func)
+                else self.format_generic_prefix(
+                    func, bound_value_names=active_template_bindings
+                )
             )
             value_param_decls = (
                 ""
                 if generic_prefix
                 else self.format_value_template_parameter_declarations(
-                    func, indent + 1, body=func.body
+                    func,
+                    indent + 1,
+                    body=func.body,
+                    bound_value_names=active_template_bindings,
                 )
             )
             code += (
@@ -2738,6 +3388,9 @@ class MetalToCrossGLConverter:
             for param, attributes in implicit_buffer_bindings:
                 param.attributes = attributes
             self.pop_identifier_scope()
+            self.template_binding_shadow_scopes.pop()
+            if active_template_bindings:
+                self.template_value_bindings.pop()
             self.current_variable_types = previous_variable_types
             self.type_aliases = previous_type_aliases
             self.type_alias_qualifiers = previous_type_alias_qualifiers
@@ -2752,7 +3405,9 @@ class MetalToCrossGLConverter:
             self.current_function_return_type = previous_function_return_type
         return code
 
-    def format_value_template_parameter_declarations(self, func, indent, body=None):
+    def format_value_template_parameter_declarations(
+        self, func, indent, body=None, bound_value_names=None
+    ):
         """Declare non-type (value) template parameters that a body consumes with
         a bitwise/shift operator.
 
@@ -2769,13 +3424,14 @@ class MetalToCrossGLConverter:
         as array extents such as ``shared[tg_mem_size]`` - are left untouched so
         array sizing is not disturbed by an injected runtime local."""
         template_parameters = getattr(func, "template_parameters", None) or []
+        bound_value_names = set(bound_value_names or ())
         value_names = []
         seen = set()
         for entry in template_parameters:
             if not isinstance(entry, (tuple, list)) or len(entry) < 2:
                 continue
             kind, name = entry[0], entry[1]
-            if kind != "value" or not name or name in seen:
+            if kind != "value" or not name or name in seen or name in bound_value_names:
                 continue
             seen.add(name)
             value_names.append(name)
@@ -3073,9 +3729,11 @@ class MetalToCrossGLConverter:
         previous_type_alias_qualifiers = dict(self.type_alias_qualifiers)
         previous_local_type_alias_names = set(self.local_type_alias_names)
         previous_local_struct_type_aliases = dict(self.local_struct_type_aliases)
+        self.template_binding_shadow_scopes.append(set())
         try:
             return self.generate_function_body(body, indent, is_main)
         finally:
+            self.template_binding_shadow_scopes.pop()
             self.type_aliases = previous_type_aliases
             self.type_alias_qualifiers = previous_type_alias_qualifiers
             self.local_type_alias_names = previous_local_type_alias_names
@@ -3296,6 +3954,7 @@ class MetalToCrossGLConverter:
     def generate_for_loop(self, node, indent, is_main):
         previous_variable_types = self.current_variable_types
         self.current_variable_types = dict(previous_variable_types)
+        self.template_binding_shadow_scopes.append(set())
         try:
             for declaration in self.for_initializer_declarations(node.init):
                 self.current_variable_types[declaration.name] = declaration.vtype
@@ -3309,6 +3968,7 @@ class MetalToCrossGLConverter:
             code += "    " * indent + "}\n"
             return code
         finally:
+            self.template_binding_shadow_scopes.pop()
             self.current_variable_types = previous_variable_types
 
     def for_initializer_declarations(self, initializer):
@@ -3332,11 +3992,16 @@ class MetalToCrossGLConverter:
 
     def generate_range_for_loop(self, node, indent, is_main):
         iterable = self.generate_expression(node.iterable, is_main)
-
-        code = f"for {node.name} in {iterable} {{\n"
-        code += self.generate_scoped_function_body(node.body, indent + 1, is_main)
-        code += "    " * indent + "}\n"
-        return code
+        self.template_binding_shadow_scopes.append(set())
+        try:
+            if any(node.name in bindings for bindings in self.template_value_bindings):
+                self.template_binding_shadow_scopes[-1].add(node.name)
+            code = f"for {node.name} in {iterable} {{\n"
+            code += self.generate_scoped_function_body(node.body, indent + 1, is_main)
+            code += "    " * indent + "}\n"
+            return code
+        finally:
+            self.template_binding_shadow_scopes.pop()
 
     def generate_while_loop(self, node, indent, is_main):
         condition = self.generate_expression(node.condition, is_main)
@@ -3627,7 +4292,10 @@ class MetalToCrossGLConverter:
             if callback is not None:
                 raise self.unsupported_callback_error(expr.name, callback)
             self.reject_unsupported_wide_vector_call(expr)
-            function_name = self.map_function_call_name(expr.name, expr.args)
+            materialized_name = self.materialized_value_template_call_name(
+                expr.name, expr.args
+            )
+            function_name = self.map_function_call_name(materialized_name, expr.args)
             if function_name == "sampler":
                 args = ", ".join(
                     self.generate_sampler_constructor_arg(arg, is_main)
@@ -4469,6 +5137,8 @@ class MetalToCrossGLConverter:
         """Map a Metal type name to the closest CrossGL type name."""
         if not metal_type:
             return metal_type
+
+        metal_type = self.substitute_template_value_text(metal_type)
 
         resolved_local_type = self.resolve_local_type_aliases(metal_type)
         if resolved_local_type != str(metal_type).strip():
