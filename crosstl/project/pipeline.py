@@ -14726,18 +14726,14 @@ def _source_offset_in_spans(offset: int, spans: Sequence[tuple[int, int]]) -> bo
 
 
 def _metal_template_arguments_are_local_constants(
-    preprocessor: Any,
     source: str,
     offset: int,
     names: Sequence[str],
-    template_spans: Sequence[tuple[int, int]],
+    functions: Sequence[Any],
 ) -> bool:
     if not names:
         return False
-    for function in preprocessor._find_non_template_function_definitions(
-        source,
-        list(template_spans),
-    ):
+    for function in functions:
         body_start, body_end = function.body_span
         if not (body_start <= offset < body_end):
             continue
@@ -14817,6 +14813,8 @@ def _unresolved_metal_template_type_records(
     unit: ProjectTranslationUnit,
     source: str,
     target: str,
+    declaration_spans: Sequence[tuple[int, int]] | None = None,
+    functions: Sequence[Any] | None = None,
 ) -> list[dict[str, Any]]:
     declarations = _metal_template_type_declarations(preprocessor, unit, source)
     if not declarations:
@@ -14833,7 +14831,13 @@ def _unresolved_metal_template_type_records(
     if not template_parameter_names:
         return []
 
-    declaration_spans = preprocessor._find_template_declaration_spans(source)
+    if declaration_spans is None:
+        declaration_spans = preprocessor._find_template_declaration_spans(source)
+    if functions is None:
+        functions = preprocessor._find_non_template_function_definitions(
+            source,
+            declaration_spans,
+        )
     masked_source = _masked_metal_non_code_text(source)
     names_pattern = "|".join(
         re.escape(name) for name in sorted(declarations_by_name, key=len, reverse=True)
@@ -14865,11 +14869,10 @@ def _unresolved_metal_template_type_records(
             template_parameter_names,
         )
         if _metal_template_arguments_are_local_constants(
-            preprocessor,
             source,
             match.start(),
             missing,
-            declaration_spans,
+            functions,
         ):
             continue
         if not missing:
@@ -15151,16 +15154,13 @@ def _unresolved_metal_standalone_template_type_records(
     unit: ProjectTranslationUnit,
     source: str,
     target: str,
+    template_spans: Sequence[tuple[int, int]],
+    functions: Sequence[Any],
 ) -> list[dict[str, Any]]:
     template_parameter_names = _metal_template_parameter_name_set(
         preprocessor,
         unit,
         source,
-    )
-    template_spans = preprocessor._find_template_declaration_spans(source)
-    functions = preprocessor._find_non_template_function_definitions(
-        source,
-        list(template_spans),
     )
     records: list[dict[str, Any]] = []
     seen_records: set[tuple[str, tuple[str, ...], str]] = set()
@@ -15205,11 +15205,10 @@ def _unresolved_metal_standalone_template_type_records(
         # array extents (MLX conv `TGH`/`TGW`/`TGC`/`TH`/`TW`, sdpa `BN`/`BD`) as
         # unresolved template parameters and wrongly blocks translatable kernels.
         if _metal_template_arguments_are_local_constants(
-            preprocessor,
             source,
             offset,
             missing,
-            template_spans,
+            functions,
         ):
             return
         concrete_type_record = _metal_concrete_template_type_record(
@@ -15306,18 +15305,27 @@ def _post_materialization_unresolved_metal_template_type_records(
     source: str,
     target: str,
 ) -> list[dict[str, Any]]:
+    template_spans = preprocessor._find_template_declaration_spans(source)
+    functions = preprocessor._find_non_template_function_definitions(
+        source,
+        template_spans,
+    )
     return [
         *_unresolved_metal_template_type_records(
             preprocessor=preprocessor,
             unit=unit,
             source=source,
             target=target,
+            declaration_spans=template_spans,
+            functions=functions,
         ),
         *_unresolved_metal_standalone_template_type_records(
             preprocessor=preprocessor,
             unit=unit,
             source=source,
             target=target,
+            template_spans=template_spans,
+            functions=functions,
         ),
     ]
 

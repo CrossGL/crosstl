@@ -16093,6 +16093,63 @@ def test_translate_project_opengl_allows_defaulted_template_type_static_member(
     assert [record for record in records if record["name"] == "GEMMKernel"] == []
 
 
+def test_post_materialization_template_diagnostics_reuse_function_index(
+    tmp_path,
+    monkeypatch,
+):
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    function_count = 64
+    source = (
+        "template <int Width> struct WidthTag { float values[Width]; };\n"
+        + "\n".join(
+            textwrap.dedent(f"""
+                void helper_{index}() {{
+                    constexpr int Width = 4;
+                    thread float values[Width];
+                }}
+                """).strip()
+            for index in range(function_count)
+        )
+        + "\n"
+    )
+    source_path = tmp_path / "shader.metal"
+    source_path.write_text(source, encoding="utf-8")
+    unit = project_pipeline.ProjectTranslationUnit(
+        path=source_path,
+        relative_path="shader.metal",
+        source_backend="metal",
+        extension=".metal",
+        source_hash=project_pipeline._source_hash(source_path),
+        source_size_bytes=source_path.stat().st_size,
+    )
+    preprocessor = MetalPreprocessor()
+    find_functions = preprocessor._find_non_template_function_definitions
+    scan_count = 0
+
+    def counted_find_functions(source_text, excluded_spans):
+        nonlocal scan_count
+        scan_count += 1
+        return find_functions(source_text, excluded_spans)
+
+    monkeypatch.setattr(
+        preprocessor,
+        "_find_non_template_function_definitions",
+        counted_find_functions,
+    )
+
+    records = project_pipeline._post_materialization_unresolved_metal_template_type_records(
+        preprocessor=preprocessor,
+        unit=unit,
+        source=source,
+        target="opengl",
+    )
+
+    assert records == []
+    assert scan_count == 1
+    assert len(preprocessor._containing_span_cache) <= 2
+
+
 def test_translate_project_forwards_metal_template_specialization_limit(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
