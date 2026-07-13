@@ -5027,6 +5027,25 @@ def test_codegen_avoids_wide_vector_helper_name_collisions():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_avoids_wide_vector_helper_name_collisions_with_local_variables():
+    source = """
+        using Wide = metal::vec<float, 8>;
+
+        Wide make_value(float value) {
+            float CrossGLMetalVector_float_8_splat = value;
+            return Wide(CrossGLMetalVector_float_8_splat);
+        }
+        """
+
+    crossgl = convert(source)
+
+    assert "struct CrossGLMetalVector_float_8_1" in crossgl
+    assert (
+        "CrossGLMetalVector_float_8_1_splat(" "CrossGLMetalVector_float_8_splat)"
+    ) in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_sizeof_dependent_typename_from_tinygrad_tile_copy():
     code = """
     template<typename ST>

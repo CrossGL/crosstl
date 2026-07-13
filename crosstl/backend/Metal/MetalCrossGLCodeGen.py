@@ -1573,6 +1573,9 @@ class MetalToCrossGLConverter:
         self.local_struct_type_aliases = {}
         functions = getattr(ast, "functions", []) or []
         self.prepare_texture_usage(ast)
+        self.wide_vector_reserved_names.update(
+            self.collect_declared_identifier_names(ast)
+        )
         self.user_function_names = {
             function.name
             for function in functions
@@ -1994,6 +1997,30 @@ class MetalToCrossGLConverter:
 
         visit(root)
         return storage_ids
+
+    def collect_declared_identifier_names(self, root):
+        names = set()
+        seen = set()
+
+        def visit(node):
+            if node is None or isinstance(node, (str, int, float, bool)):
+                return
+            if not isinstance(node, (dict, list, tuple, set)):
+                node_id = id(node)
+                if node_id in seen:
+                    return
+                seen.add(node_id)
+            if isinstance(
+                node, (VariableNode, FunctionNode, StructNode, TypeAliasNode)
+            ):
+                name = getattr(node, "name", None)
+                if name:
+                    names.add(self.sanitize_identifier(name))
+            for child in self.iter_ast_children(node):
+                visit(child)
+
+        visit(root)
+        return names
 
     def prepare_texture_usage(self, ast):
         self.global_variable_types = {}
@@ -4543,7 +4570,11 @@ class MetalToCrossGLConverter:
             for operation_name in operation_names
             for right_kind in ("scalar", "vector")
         )
-        return bool(generated_names.intersection(self.user_function_names))
+        return bool(
+            generated_names.intersection(
+                self.user_function_names | self.wide_vector_reserved_names
+            )
+        )
 
     def wide_vector_constructor_argument_is_scalar(self, argument):
         argument_type = self.expression_metal_type(argument)
