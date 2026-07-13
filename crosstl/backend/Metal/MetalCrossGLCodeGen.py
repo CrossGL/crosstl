@@ -102,6 +102,29 @@ class MetalWideVectorLoweringError(ValueError):
         )
 
 
+class MetalStageEntryArrayResourceError(ValueError):
+    """Raised when a Metal entry array has no faithful resource contract."""
+
+    project_diagnostic_code = "project.translate.metal-entry-array-resource-invalid"
+    missing_capabilities = ("metal.stage-entry-array-resource-lowering",)
+
+    def __init__(
+        self,
+        parameter_name,
+        array_dimensions,
+        reason,
+        source_location=None,
+    ):
+        self.parameter_name = parameter_name
+        self.array_dimensions = tuple(array_dimensions or ())
+        self.reason = reason
+        self.source_location = source_location
+        super().__init__(
+            "Cannot lower Metal stage-entry array resource "
+            f"'{parameter_name}': {reason.replace('-', ' ')}"
+        )
+
+
 class MetalToCrossGLConverter:
     """Serialize Metal backend AST nodes back into CrossGL source."""
 
@@ -2204,7 +2227,14 @@ class MetalToCrossGLConverter:
             if getattr(var, "declarator_type_suffix_grouped", False)
             else ""
         )
-        if grouped_type_suffix and getattr(var, "array_sizes", None):
+        decayed_stage_entry_array = bool(
+            getattr(var, "array_sizes", None)
+            and self.structured_buffer_pointer_type(var) is not None
+            and self.pointer_element_type(getattr(var, "vtype", None)) is None
+        )
+        if decayed_stage_entry_array:
+            type_str = mapped_type
+        elif grouped_type_suffix and getattr(var, "array_sizes", None):
             include_declarator_arrays = False
             base_type = mapped_type
             if base_type.endswith(grouped_type_suffix):
@@ -5455,10 +5485,33 @@ class MetalToCrossGLConverter:
         }
         if not qualifiers.intersection({"device", "constant"}):
             return False
+        if self.stage_entry_array_resource_element_type(var) is not None:
+            return True
         raw_type = getattr(var, "vtype", None)
         if self.pointer_element_type(raw_type):
             return True
         return bool(self.reference_element_type(raw_type))
+
+    def stage_entry_array_resource_element_type(self, var):
+        array_dimensions = list(getattr(var, "array_sizes", None) or [])
+        if not array_dimensions:
+            return None
+        qualifiers = {
+            str(qualifier).lower() for qualifier in getattr(var, "qualifiers", []) or []
+        }
+        if not qualifiers.intersection({"device", "constant"}):
+            return None
+        element_type = str(getattr(var, "vtype", "") or "").strip()
+        if not element_type or element_type.endswith(("*", "&")):
+            return None
+        if len(array_dimensions) != 1:
+            raise MetalStageEntryArrayResourceError(
+                getattr(var, "name", None),
+                array_dimensions,
+                "multidimensional-parameter-array",
+                getattr(var, "source_location", None),
+            )
+        return element_type
 
     def apply_implicit_stage_entry_buffer_bindings(self, func):
         params = list(getattr(func, "params", []) or [])
@@ -5502,10 +5555,17 @@ class MetalToCrossGLConverter:
             return None
 
         element_type = self.pointer_element_type(getattr(var, "vtype", None))
+        array_element_type = self.stage_entry_array_resource_element_type(var)
+        if element_type is None:
+            element_type = array_element_type
         if not element_type:
             return None
         element_type = self.resolve_type_alias(element_type)
-        if "constant" in qualifiers and element_type in self.struct_member_types:
+        if (
+            array_element_type is None
+            and "constant" in qualifiers
+            and element_type in self.struct_member_types
+        ):
             return None
 
         buffer_type = (
