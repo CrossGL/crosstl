@@ -27754,6 +27754,204 @@ def test_opengl_lowers_global_array_aggregate_initializer():
     assert "vec2(0.0, (-0.5))" in generated_code
 
 
+def test_opengl_lowers_dynamically_indexed_nested_aggregate_literal(tmp_path):
+    shader = """
+    shader DynamicallyIndexedAggregate {
+        compute {
+            void main(
+                RWStructuredBuffer<float> results @buffer(0),
+                uint3 tid @gl_GlobalInvocationID
+            ) {
+                uint row = tid.x & 1u;
+                uint column = tid.y & 1u;
+                float value = ({{1.0, 2.0}, {3.0, 4.0}})[row][column];
+                results[0] = value;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "float value = (float[2][2](float[2](1.0, 2.0), "
+        "float[2](3.0, 4.0)))[row][column];" in generated_code
+    )
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "dynamically_indexed_nested_aggregate_literal",
+    )
+
+
+def test_opengl_indexed_aggregate_preserves_aggregate_result_context(tmp_path):
+    shader = """
+    shader IndexedAggregateRow {
+        compute {
+            void main(
+                RWStructuredBuffer<vec2> results @buffer(0),
+                uint3 tid @gl_GlobalInvocationID
+            ) {
+                uint row = tid.x & 1u;
+                vec2 value = ({{1.0, 2.0}, {3.0, 4.0}})[row];
+                results[0] = value;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "vec2 value = (vec2[2](vec2(1.0, 2.0), vec2(3.0, 4.0)))[row];" in generated_code
+    )
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "indexed_aggregate_row",
+    )
+
+
+def test_opengl_lowers_constant_indexed_aggregate_literal():
+    shader = """
+    shader ConstantIndexedAggregate {
+        compute {
+            void main() {
+                float value = ({1.0, 2.0, 3.0})[1];
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float value = (float[3](1.0, 2.0, 3.0))[1];" in generated_code
+
+
+def test_opengl_indexed_aggregate_infers_leaf_type_without_destination():
+    shader = """
+    shader ContextFreeIndexedAggregate {
+        compute {
+            void main(uint3 tid @gl_GlobalInvocationID) {
+                uint row = tid.x & 1u;
+                uint column = tid.y & 1u;
+                ({{1.0, 2.0}, {3.0, 4.0}})[row][column];
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "(float[2][2](float[2](1.0, 2.0), "
+        "float[2](3.0, 4.0)))[row][column];" in generated_code
+    )
+
+
+def test_opengl_indexed_aggregate_literal_evaluates_indexes_once_in_order():
+    shader = """
+    shader SideEffectingIndexedAggregate {
+        uint rowIndex(inout uint state) {
+            state += 1u;
+            return 0u;
+        }
+
+        uint columnIndex(inout uint state) {
+            state += 1u;
+            return 1u;
+        }
+
+        compute {
+            void main() {
+                uint state = 0u;
+                float value = ({{1.0, 2.0}, {3.0, 4.0}})
+                    [rowIndex(state)][columnIndex(state)];
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    row_call = "rowIndex(state)"
+    column_call = "columnIndex(state)"
+    assert generated_code.count(row_call) == 1
+    assert generated_code.count(column_call) == 1
+    assert generated_code.index(row_call) < generated_code.index(column_call)
+
+
+@pytest.mark.parametrize(
+    ("literal", "reason"),
+    [
+        pytest.param(
+            "{{1.0, 2.0}, {3.0}}",
+            "ragged-indexed-shape",
+            id="ragged",
+        ),
+        pytest.param(
+            "{{}, {}}",
+            "empty-indexed-shape",
+            id="empty",
+        ),
+        pytest.param(
+            "{1.0, 2.0}",
+            "indexed-shape-depth-mismatch",
+            id="insufficient-depth",
+        ),
+    ],
+)
+def test_opengl_indexed_nested_aggregate_literal_rejects_invalid_shape(
+    literal,
+    reason,
+):
+    shader = f"""
+    shader InvalidIndexedAggregateShape {{
+        compute {{
+            void main() {{
+                float value = ({literal})[0][0];
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLAggregateInitializerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.opengl-aggregate-initializer-invalid"
+    )
+    assert diagnostic.missing_capabilities == ("opengl.aggregate-initializer-lowering",)
+    assert diagnostic.reason == reason
+
+
+def test_opengl_indexed_aggregate_rejects_incompatible_inferred_leaf_types():
+    shader = """
+    shader IncompatibleIndexedAggregate {
+        struct Pair {
+            float x;
+            float y;
+        };
+
+        compute {
+            void main() {
+                ({Pair(1.0, 2.0), 3.0})[0];
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLAggregateInitializerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.opengl-aggregate-initializer-invalid"
+    )
+    assert diagnostic.reason == "indexed-element-context-incompatible"
+
+
 def test_opengl_lowers_nested_aggregates_in_explicit_struct_constructor(tmp_path):
     shader = """
     shader ExplicitAggregateConstructor {

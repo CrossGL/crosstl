@@ -13516,6 +13516,122 @@ complex64_t crossgl_complex64_mod_assign(
             return mapped_type
         return f"{base_type}[{extent}]{match.group(1)}"
 
+    def glsl_indexed_aggregate_literal_shape(self, expr, access_depth):
+        dimensions = []
+        frontier = [expr]
+        for depth in range(access_depth):
+            non_aggregates = [
+                element
+                for element in frontier
+                if not isinstance(element, ArrayLiteralNode)
+            ]
+            if non_aggregates:
+                self.glsl_aggregate_error(
+                    non_aggregates[0],
+                    expected_type=self.current_expression_expected_type,
+                    reason="indexed-shape-depth-mismatch",
+                    detail=(
+                        "the aggregate nesting depth is smaller than the "
+                        "subscript depth"
+                    ),
+                )
+
+            element_counts = {
+                len(getattr(element, "elements", []) or []) for element in frontier
+            }
+            if 0 in element_counts:
+                empty = next(
+                    element
+                    for element in frontier
+                    if not (getattr(element, "elements", []) or [])
+                )
+                self.glsl_aggregate_error(
+                    empty,
+                    expected_type=self.current_expression_expected_type,
+                    reason="empty-indexed-shape",
+                    detail=(
+                        f"dimension {depth + 1} is empty and has no fixed-array "
+                        "extent"
+                    ),
+                )
+            if len(element_counts) != 1:
+                self.glsl_aggregate_error(
+                    frontier[0],
+                    expected_type=self.current_expression_expected_type,
+                    reason="ragged-indexed-shape",
+                    detail=(
+                        f"dimension {depth + 1} has inconsistent row lengths "
+                        f"{sorted(element_counts)}"
+                    ),
+                )
+
+            extent = next(iter(element_counts))
+            dimensions.append(extent)
+            frontier = [
+                child
+                for element in frontier
+                for child in getattr(element, "elements", []) or []
+            ]
+        return dimensions, frontier
+
+    def glsl_indexed_aggregate_literal_leaf_type(self, expr, leaves):
+        leaf_types = [self.glsl_source_expression_type(leaf) for leaf in leaves]
+        if not leaf_types or any(leaf_type is None for leaf_type in leaf_types):
+            self.glsl_aggregate_error(
+                expr,
+                expected_type=None,
+                reason="expected-type-unresolved",
+            )
+
+        inferred_type = leaf_types[0]
+        for leaf_type in leaf_types[1:]:
+            if self.glsl_source_type_signature(
+                inferred_type
+            ) == self.glsl_source_type_signature(leaf_type):
+                continue
+            common_type = self.glsl_common_arithmetic_type(
+                inferred_type, leaf_type, "?:"
+            )
+            if common_type is None:
+                self.glsl_aggregate_error(
+                    expr,
+                    expected_type=None,
+                    reason="indexed-element-context-incompatible",
+                    detail=(
+                        "the indexed aggregate leaves do not have a unique "
+                        "compatible result type"
+                    ),
+                )
+            inferred_type = common_type
+        return inferred_type
+
+    def glsl_indexed_aggregate_literal_expression(self, expr):
+        accesses = []
+        base = expr
+        while isinstance(base, ArrayAccessNode):
+            accesses.append(base)
+            base = base.array
+        if not isinstance(base, ArrayLiteralNode):
+            return None
+
+        expected_type = self.type_name_string(self.current_expression_expected_type)
+        dimensions, leaves = self.glsl_indexed_aggregate_literal_shape(
+            base, len(accesses)
+        )
+        if not expected_type:
+            expected_type = self.glsl_indexed_aggregate_literal_leaf_type(base, leaves)
+        base_type, array_suffix = split_array_type_suffix(expected_type)
+        indexed_type = (
+            f"{base_type}"
+            f"{''.join(f'[{extent}]' for extent in dimensions)}"
+            f"{array_suffix}"
+        )
+        rendered = f"({self.generate_expression_with_expected(base, indexed_type)})"
+        for access in reversed(accesses):
+            index = self.glsl_resource_array_index_expression(access)
+            rendered += f"[{index}]"
+        return rendered
+
     def glsl_aggregate_error(
         self,
         expr,
@@ -15686,6 +15802,9 @@ complex64_t crossgl_complex64_mod_assign(
                 storage_access = self.glsl_storage_pointer_access_expression(expr)
                 if storage_access is not None:
                     return storage_access
+                indexed_aggregate = self.glsl_indexed_aggregate_literal_expression(expr)
+                if indexed_aggregate is not None:
+                    return indexed_aggregate
                 array = self.generate_expression(expr.array)
                 index = self.glsl_resource_array_index_expression(expr)
                 return f"{array}[{index}]"
@@ -17779,9 +17898,10 @@ complex64_t crossgl_complex64_mod_assign(
             type_name = self.type_name_string(array_type)
             if not type_name:
                 return None
-            base_type, array_suffix = split_array_type_suffix(type_name)
-            if array_suffix:
-                return base_type
+            outer_array = self.glsl_outer_array_type(type_name)
+            if outer_array is not None:
+                _extent, element_type = outer_array
+                return element_type
             if type_name.rstrip().endswith(("*", "&")):
                 return type_name.rstrip()[:-1].strip()
             return type_name
