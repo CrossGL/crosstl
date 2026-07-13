@@ -8558,6 +8558,73 @@ def test_translate_project_reports_directx_private_pointer_contract(tmp_path):
     assert not (repo / artifact["path"]).exists()
 
 
+def test_translate_project_reports_directx_dynamic_workgroup_pointer_backing(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "dynamic_workgroup_pointer.cgl").write_text(
+        textwrap.dedent("""
+            shader DynamicWorkgroupPointerBacking {
+                compute {
+                    layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+                    void main(uint lid @ gl_LocalInvocationIndex) {
+                        threadgroup float left[8];
+                        threadgroup float right[8];
+                        threadgroup float* selected = (lid == 0u) ? left : right;
+                        selected[0] = 1.0;
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="translated",
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.directx-workgroup-pointer-unsupported": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "directx.workgroup-pointer-lowering": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == (
+        "project.translate.directx-workgroup-pointer-unsupported"
+    )
+    assert diagnostic["target"] == "directx"
+    assert diagnostic["sourceBackend"] == "cgl"
+    assert diagnostic["missingCapabilities"] == ["directx.workgroup-pointer-lowering"]
+    assert diagnostic["location"] == {
+        "file": "dynamic_workgroup_pointer.cgl",
+        "line": 1,
+        "column": 1,
+        "offset": 0,
+        "length": 0,
+        "endLine": 1,
+        "endColumn": 1,
+        "endOffset": 0,
+    }
+    assert diagnostic["details"] == {
+        "sourcePath": "dynamic_workgroup_pointer.cgl",
+        "targetArtifact": "translated/directx/dynamic_workgroup_pointer.hlsl",
+        "workgroupPointer": {
+            "function": "main",
+            "reason": "conditional-backing-unresolved",
+        },
+    }
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["target"] == "directx"
+    assert not (repo / artifact["path"]).exists()
+
+
 def test_translate_project_reports_unsupported_opengl_index_type(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
