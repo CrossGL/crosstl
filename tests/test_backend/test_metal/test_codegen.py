@@ -12,6 +12,7 @@ from crosstl.backend.Metal.MetalCrossGLCodeGen import (
     MetalSizeofResolutionError,
     MetalStaticConstantResolutionError,
     MetalToCrossGLConverter,
+    MetalWideVectorLoweringError,
 )
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
@@ -4684,6 +4685,417 @@ def test_codegen_parses_materialized_struct_alias_template_vectors():
         CrossGLLexer(crossgl).get_tokens(), strict_function_bodies=True
     ).parse()
     assert strict_ast is not None
+
+
+def test_codegen_preserves_non_wide_array_return_initializer(tmp_path):
+    source = """
+        metal::array<bool, 2> make_pair(bool x, bool y) {
+            return {x, y};
+        }
+
+        kernel void use_pair(
+            device uint* output [[buffer(0)]],
+            uint gid [[thread_position_in_grid]]) {
+            metal::array<bool, 2> value = make_pair(true, false);
+            output[gid] = uint(value[0]);
+        }
+        """
+
+    crossgl = convert(source)
+
+    assert "bool[2] make_pair(bool x, bool y)" in crossgl
+    assert "return {x, y};" in crossgl
+    ast = parse_crossgl(crossgl)
+    spirv = VulkanSPIRVCodeGen().generate(ast)
+    assert "OpTypeArray" in spirv
+    assert "OpCompositeConstruct" in spirv
+    assert "OpReturnValue" in spirv
+    assert "WARNING" not in spirv
+
+    spirv_as = shutil.which("spirv-as")
+    spirv_val = shutil.which("spirv-val")
+    if spirv_as is not None and spirv_val is not None:
+        assembly_path = tmp_path / "array-return.spvasm"
+        binary_path = tmp_path / "array-return.spv"
+        assembly_path.write_text(spirv, encoding="utf-8")
+        subprocess.run(
+            [
+                spirv_as,
+                "--target-env",
+                "vulkan1.1",
+                str(assembly_path),
+                "-o",
+                str(binary_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            [spirv_val, "--target-env", "vulkan1.1", str(binary_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+
+def test_codegen_lowers_concrete_wide_vectors_to_aggregate_helpers():
+    source = """
+        using Wide = metal::vec<float, 8>;
+
+        Wide make_wide(float base) {
+            return Wide(
+                base,
+                base + 1.0f,
+                base + 2.0f,
+                base + 3.0f,
+                base + 4.0f,
+                base + 5.0f,
+                base + 6.0f,
+                base + 7.0f);
+        }
+
+        void accumulate(thread Wide& value, float delta) {
+            value += Wide(delta);
+            value[3] = value.s7;
+        }
+
+        float read_lane(Wide value, uint lane) {
+            return value[lane] + value.s2;
+        }
+
+        kernel void use_wide_vector(
+            device float* output [[buffer(0)]],
+            uint gid [[thread_position_in_grid]]) {
+            Wide splat = Wide(1.0f);
+            Wide full = make_wide(float(gid));
+            accumulate(full, 2.0f);
+            output[gid] = read_lane(full, gid & 7u) + splat.s0;
+        }
+        """
+
+    crossgl = convert(source)
+
+    aggregate = "CrossGLMetalVector_float_8"
+    assert crossgl.count(f"struct {aggregate}") == 1
+    assert "float lanes[8];" in crossgl
+    assert f"{aggregate} {aggregate}_splat(float value)" in crossgl
+    assert f"{aggregate} {aggregate}_make(" in crossgl
+    for lane in range(8):
+        assert f"result.lanes[{lane}] = value;" in crossgl
+        assert f"result.lanes[{lane}] = value{lane};" in crossgl
+    assert (
+        f"return {aggregate}_make(base, base + 1.0f, base + 2.0f, "
+        "base + 3.0f, base + 4.0f, base + 5.0f, base + 6.0f, "
+        "base + 7.0f);"
+    ) in crossgl
+    assert f"{aggregate} make_wide(float base)" in crossgl
+    assert f"void accumulate(thread {aggregate}& value, float delta)" in crossgl
+    assert (
+        f"{aggregate}_add_assign_vector(value, {aggregate}_splat(delta));"
+    ) in crossgl
+    assert "value.lanes[3] = value.lanes[7];" in crossgl
+    assert "return value.lanes[lane] + value.lanes[2];" in crossgl
+    assert f"{aggregate} splat = {aggregate}_splat(1.0f);" in crossgl
+    assert "accumulate(full, 2.0f);" in crossgl
+    assert "gid & 7u" in crossgl
+    assert "vec<float, 8>" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_wide_vector_aggregate_reaches_native_targets(tmp_path):
+    source = """
+        using Wide = metal::vec<float, 8>;
+
+        void add_bias(thread Wide& value, float bias) {
+            value += Wide(bias);
+        }
+
+        kernel void store_wide_lane(
+            device float* out_buffer [[buffer(0)]],
+            uint gid [[thread_position_in_grid]]) {
+            Wide value = Wide(
+                0.0f, 1.0f, 2.0f, 3.0f,
+                4.0f, 5.0f, 6.0f, 7.0f);
+            add_bias(value, 1.0f);
+            out_buffer[gid] = value[gid & 7u];
+        }
+        """
+
+    crossgl = convert(source)
+    ast = parse_crossgl(crossgl)
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+    glsl = GLSLCodeGen().generate(ast)
+    spirv = VulkanSPIRVCodeGen().generate(ast)
+
+    aggregate = "CrossGLMetalVector_float_8"
+    for generated in (hlsl, glsl):
+        assert f"struct {aggregate}" in generated
+        assert "float lanes[8]" in generated
+        assert "vec<float, 8>" not in generated
+    assert f"{aggregate}_add_assign_vector" in hlsl
+    assert f"{aggregate}_add_assign_vector" in glsl
+    assert f"void add_bias(inout {aggregate} value, float bias)" in hlsl
+    assert f"void add_bias(inout {aggregate} value, float bias)" in glsl
+    assert "add_bias(value, 1.0);" in hlsl
+    assert "add_bias(value, 1.0);" in glsl
+    assert "OpTypeStruct" in spirv
+    assert "OpTypeArray" in spirv
+    assert "OpAccessChain" in spirv
+    assert "OpFAdd" in spirv
+    assert "OpStore" in spirv
+    assert "WARNING" not in spirv
+
+    dxc = shutil.which("dxc")
+    glslang = shutil.which("glslangValidator")
+    hlsl_path = tmp_path / "wide-vector.hlsl"
+    hlsl_path.write_text(hlsl, encoding="utf-8")
+    if dxc is not None:
+        subprocess.run(
+            [dxc, "-T", "cs_6_0", "-E", "CSMain", str(hlsl_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    elif glslang is not None:
+        subprocess.run(
+            [
+                glslang,
+                "-D",
+                "-V",
+                "-S",
+                "comp",
+                "-e",
+                "CSMain",
+                str(hlsl_path),
+                "-o",
+                str(tmp_path / "wide-vector-hlsl.spv"),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    if glslang is not None:
+        glsl_path = tmp_path / "wide-vector.comp"
+        glsl_path.write_text(glsl, encoding="utf-8")
+        subprocess.run(
+            [glslang, "-S", "comp", str(glsl_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    spirv_as = shutil.which("spirv-as")
+    spirv_val = shutil.which("spirv-val")
+    if spirv_as is not None and spirv_val is not None:
+        assembly_path = tmp_path / "wide-vector.spvasm"
+        binary_path = tmp_path / "wide-vector.spv"
+        assembly_path.write_text(spirv, encoding="utf-8")
+        subprocess.run(
+            [
+                spirv_as,
+                "--target-env",
+                "vulkan1.1",
+                str(assembly_path),
+                "-o",
+                str(binary_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            [spirv_val, "--target-env", "vulkan1.1", str(binary_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+
+def test_codegen_rejects_multi_lane_wide_vector_member_selector():
+    source = """
+        using Wide = metal::vec<float, 8>;
+
+        float2 select_lanes(Wide value) {
+            return value.xy;
+        }
+        """
+
+    with pytest.raises(MetalWideVectorLoweringError) as error:
+        convert(source)
+
+    assert error.value.vector_type == "metal::vec<float,8>"
+    assert error.value.operation == "member-access"
+    assert "member selector 'xy' is not a single lane" in error.value.reason
+
+
+def test_codegen_rejects_wide_vector_constructor_from_narrow_vector():
+    source = """
+        using Wide = metal::vec<float, 8>;
+
+        Wide widen(float4 value) {
+            return Wide(value);
+        }
+        """
+
+    with pytest.raises(MetalWideVectorLoweringError) as error:
+        convert(source)
+
+    assert error.value.vector_type == "metal::vec<float,8>"
+    assert error.value.operation == "constructor"
+    assert "requires a scalar or one matching wide vector" in error.value.reason
+
+
+@pytest.mark.parametrize(
+    ("expression", "operation"),
+    [
+        ("-value", "-"),
+        ("metal::abs(value)", "call metal::abs"),
+    ],
+)
+def test_codegen_rejects_unsupported_wide_vector_operations(expression, operation):
+    source = f"""
+        using Wide = metal::vec<float, 8>;
+
+        Wide apply(Wide value) {{
+            return {expression};
+        }}
+        """
+
+    with pytest.raises(MetalWideVectorLoweringError) as error:
+        convert(source)
+
+    assert error.value.vector_type == "metal::vec<float,8>"
+    assert error.value.operation == operation
+    assert "no semantics-preserving aggregate" in error.value.reason
+
+
+def test_codegen_wide_vector_pointer_indexing_selects_the_pointee_first():
+    source = """
+        using Wide = metal::vec<float, 8>;
+
+        float read_lane(thread Wide* values, uint row, uint lane) {
+            return values[row][lane];
+        }
+        """
+
+    crossgl = convert(source)
+
+    assert "return values[row].lanes[lane];" in crossgl
+    assert "values.lanes[row]" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_wide_vector_compound_assignment_evaluates_lvalue_once():
+    source = """
+        using Wide = metal::vec<float, 8>;
+
+        void update(thread Wide* values, thread uint& index) {
+            values[index++] += Wide(1.0f);
+        }
+        """
+
+    crossgl = convert(source)
+
+    statement = next(
+        line for line in crossgl.splitlines() if "add_assign_vector(values" in line
+    )
+    assert statement.count("index++") == 1
+    assert "add_assign_vector(values[index++]" in statement
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_wide_vector_braced_initializer_zero_fills_remaining_lanes():
+    source = """
+        using Wide = metal::vec<float, 8>;
+
+        Wide make_value() {
+            return Wide{1.0f};
+        }
+        """
+
+    crossgl = convert(source)
+
+    assert (
+        "return CrossGLMetalVector_float_8_make(" "1.0f, 0, 0, 0, 0, 0, 0, 0);"
+    ) in crossgl
+    assert "CrossGLMetalVector_float_8_splat(1.0f)" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_wide_vector_nested_arithmetic_retains_aggregate_type():
+    source = """
+        using Wide = metal::vec<float, 8>;
+
+        Wide add_twice(Wide value, float bias) {
+            return (value + bias) + bias;
+        }
+        """
+
+    crossgl = convert(source)
+
+    helper = "CrossGLMetalVector_float_8_add_vector_scalar"
+    assert f"return {helper}({helper}(value, bias), bias);" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_rejects_abi_visible_wide_vector_storage():
+    source = """
+        using Wide = metal::vec<float, 8>;
+
+        kernel void store_wide(
+            device Wide* output [[buffer(0)]],
+            uint gid [[thread_position_in_grid]]) {
+            output[gid] = Wide(1.0f);
+        }
+        """
+
+    with pytest.raises(MetalWideVectorLoweringError) as error:
+        convert(source)
+
+    assert error.value.operation == "resource-layout"
+    assert "does not preserve Metal ABI alignment" in error.value.reason
+
+
+def test_codegen_avoids_wide_vector_helper_name_collisions():
+    source = """
+        float CrossGLMetalVector_float_8_splat(float value) {
+            return value;
+        }
+
+        using Wide = metal::vec<float, 8>;
+
+        Wide make_value(float value) {
+            return Wide(value);
+        }
+        """
+
+    crossgl = convert(source)
+
+    assert "struct CrossGLMetalVector_float_8_1" in crossgl
+    assert "CrossGLMetalVector_float_8_1_splat(value)" in crossgl
+    assert crossgl.count("CrossGLMetalVector_float_8_splat(float value)") == 1
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_avoids_wide_vector_helper_name_collisions_with_local_variables():
+    source = """
+        using Wide = metal::vec<float, 8>;
+
+        Wide make_value(float value) {
+            float CrossGLMetalVector_float_8_splat = value;
+            return Wide(CrossGLMetalVector_float_8_splat);
+        }
+        """
+
+    crossgl = convert(source)
+
+    assert "struct CrossGLMetalVector_float_8_1" in crossgl
+    assert (
+        "CrossGLMetalVector_float_8_1_splat(" "CrossGLMetalVector_float_8_splat)"
+    ) in crossgl
+    assert parse_crossgl(crossgl) is not None
 
 
 def test_codegen_sizeof_dependent_typename_from_tinygrad_tile_copy():

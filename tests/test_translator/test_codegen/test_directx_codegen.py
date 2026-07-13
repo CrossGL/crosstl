@@ -1365,6 +1365,73 @@ def test_hlsl_codegen_maps_structural_reference_parameters_to_values():
     HLSLParser(HLSLLexer(generated).tokenize()).parse()
 
 
+def test_hlsl_codegen_maps_mutable_reference_parameters_to_inout():
+    uint2_type = VectorType(PrimitiveType("uint"), 2)
+    ast = ShaderNode(
+        "MutableReferenceParameter",
+        ExecutionModel.COMPUTE_KERNEL,
+        functions=[
+            FunctionNode(
+                "update_key",
+                NamedType("void"),
+                [ParameterNode("key", ReferenceType(uint2_type, is_mutable=True))],
+                BlockNode([]),
+            )
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert "void update_key(inout uint2 key)" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+
+
+def test_hlsl_codegen_maps_writable_metal_reference_parameters_to_inout():
+    ast = parse_code(tokenize_code("void update_key(thread uvec2& key) {}"))
+
+    generated = generate_code(ast)
+
+    assert "void update_key(inout uint2 key)" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+
+
+@pytest.mark.parametrize(
+    ("source_qualifier", "expected_signature"),
+    [
+        ("const", "void inspect_key(const uint2 key)"),
+        ("readonly", "void inspect_key(uint2 key)"),
+    ],
+)
+def test_hlsl_codegen_keeps_readonly_reference_parameters_input_only(
+    source_qualifier, expected_signature
+):
+    uint2_type = VectorType(PrimitiveType("uint"), 2)
+    ast = ShaderNode(
+        "ReadonlyReferenceParameter",
+        ExecutionModel.COMPUTE_KERNEL,
+        functions=[
+            FunctionNode(
+                "inspect_key",
+                NamedType("void"),
+                [
+                    ParameterNode(
+                        "key",
+                        ReferenceType(uint2_type),
+                        qualifiers=["thread", source_qualifier],
+                    )
+                ],
+                BlockNode([]),
+            )
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert expected_signature in generated
+    assert "void inspect_key(inout " not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+
+
 HLSL_SCALAR_VECTOR_ZERO_DIAGNOSTIC = re.compile(
     r"(?:(?:\b(?:float|double|half|min16float|min10float|int|uint|"
     r"min16int|min16uint|bool)[234]\((?:0(?:\.0)?|0u|false|true)\)"

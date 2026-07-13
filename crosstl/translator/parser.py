@@ -1674,6 +1674,17 @@ class Parser:
             self.eat("RBRACKET")
             param_type = ArrayType(param_type, size)
 
+        if isinstance(param_type, ReferenceType):
+            qualifier_names = {str(qualifier).lower() for qualifier in qualifiers}
+            writable_address_space = qualifier_names.intersection(
+                {"thread", "threadgroup", "device", "ray_data", "object_data"}
+            )
+            readonly_reference = qualifier_names.intersection(
+                {"const", "constant", "readonly", "in"}
+            )
+            if (is_mutable or writable_address_space) and not readonly_reference:
+                param_type.is_mutable = True
+
         attributes.extend(self.parse_post_declaration_attributes())
 
         default_value = None

@@ -347,7 +347,8 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert pointer_reinterpretation["status"] == "partial"
     assert pointer_reinterpretation["targets"] == list(module.FULL_CORPUS_TARGETS)
     assert pointer_reinterpretation["next_kernel_blocked_by"] == [
-        "https://github.com/CrossGL/crosstl/issues/1569",
+        "https://github.com/CrossGL/crosstl/issues/1573",
+        "https://github.com/CrossGL/crosstl/issues/1574",
         "https://github.com/CrossGL/crosstl/issues/1544",
     ]
     assert set(pointer_reinterpretation["remaining_pointer_cases_blocked_by"]) == {
@@ -361,7 +362,8 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         "https://github.com/CrossGL/crosstl/issues/1554"
     ]
     assert callback["next_kernel_blocked_by"] == [
-        "https://github.com/CrossGL/crosstl/issues/1569",
+        "https://github.com/CrossGL/crosstl/issues/1573",
+        "https://github.com/CrossGL/crosstl/issues/1574",
     ]
 
     compile_time_loop = expected_gaps["compile_time_loop_status"]
@@ -374,7 +376,8 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         "vulkan": "validated-reduced-fixture",
     }
     assert compile_time_loop["next_kernel_blocked_by"] == [
-        "https://github.com/CrossGL/crosstl/issues/1569",
+        "https://github.com/CrossGL/crosstl/issues/1573",
+        "https://github.com/CrossGL/crosstl/issues/1574",
     ]
 
     template_alias = expected_gaps["template_alias_status"]
@@ -413,17 +416,40 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         "BK_padded",
         "BN_padded",
     ]
+    assert template_alias["wide_vector_aggregate_lowering"] == {
+        "status": "validated-reduced-fixture",
+        "source_types": [
+            "vec<float,8>",
+            "vec<float16_t,8>",
+            "vec<bfloat16_t,8>",
+        ],
+        "representation": (
+            "fixed aggregate wrapper with explicit lane storage and element-wise "
+            "helpers"
+        ),
+        "native_validation": {
+            "directx": "validated-if-toolchain-available",
+            "opengl": "validated-if-toolchain-available",
+            "vulkan": "validated-if-toolchain-available",
+        },
+        "tracked_by": "https://github.com/CrossGL/crosstl/issues/1569",
+    }
     assert template_alias["post_materialization_translation"] == {
         "status": "blocked-by-tracked-issue",
         "diagnostic_code": "project.translate.unsupported-feature",
-        "feature": "unsupported-generic-vector-width",
-        "first_unsupported_type": "vec<float,8>",
-        "missing_capability": "spirv.generic_vector_width",
-        "issue": "https://github.com/CrossGL/crosstl/issues/1569",
+        "feature": "untyped empty initializer",
+        "first_unsupported_expression": "metal::bool_constant<false>{}",
+        "missing_capability": "spirv.empty_initializer_type_inference",
+        "issue": "https://github.com/CrossGL/crosstl/issues/1573",
         "artifact_status": "failed",
     }
     assert template_alias["next_kernel_blocked_by"] == [
-        "https://github.com/CrossGL/crosstl/issues/1569",
+        "https://github.com/CrossGL/crosstl/issues/1573",
+        "https://github.com/CrossGL/crosstl/issues/1574",
+    ]
+    assert template_alias["semantic_readiness_blocked_by"] == [
+        "https://github.com/CrossGL/crosstl/issues/1557",
+        "https://github.com/CrossGL/crosstl/issues/1574",
     ]
 
     struct_scoped_cast_alias = expected_gaps["struct_scoped_cast_alias_status"]
@@ -451,7 +477,8 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         "https://github.com/CrossGL/crosstl/issues/1566",
     ]
     assert struct_scoped_cast_alias["next_kernel_blocked_by"] == [
-        "https://github.com/CrossGL/crosstl/issues/1569",
+        "https://github.com/CrossGL/crosstl/issues/1573",
+        "https://github.com/CrossGL/crosstl/issues/1574",
     ]
 
     function_local_alias = expected_gaps["function_local_alias_status"]
