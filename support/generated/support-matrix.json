@@ -617,7 +617,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 1288
+        "test_count": 1289
       },
       "translator_codegen": {
         "exists": true,
@@ -745,7 +745,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 1188
+        "test_count": 1212
       },
       "translator_codegen": {
         "exists": true,

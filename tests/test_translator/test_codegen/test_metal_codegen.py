@@ -32493,8 +32493,33 @@ def test_cooperative_matrix_contract_lowers_to_native_metal_operations():
         "simdgroup_multiply_accumulate(accumulator, left, right, accumulator);"
         in generated_code
     )
-    assert "simdgroup_store(destination, product, 8);" in generated_code
+    assert "simdgroup_store(product, destination, 8);" in generated_code
     assert "cooperative_matrix_" not in generated_code
+
+
+def test_cooperative_matrix_memory_argument_order_compiles_with_metal():
+    code = """
+    shader CooperativeMatrixMetalMemory {
+        StructuredBuffer<float> source @ binding(0);
+        RWStructuredBuffer<float> destination @ binding(1);
+
+        compute {
+            void main() {
+                CooperativeMatrix<float, 8, 8> value;
+                cooperative_matrix_load(value, source, 8);
+                cooperative_matrix_store(destination, value, 8);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(code), "compute"
+    )
+
+    assert "simdgroup_load(value, source, 8);" in generated_code
+    assert "simdgroup_store(value, destination, 8);" in generated_code
+    compile_with_metal_if_available(generated_code)
 
 
 def test_metal_cooperative_matrix_rejects_unrepresentable_type_contract():

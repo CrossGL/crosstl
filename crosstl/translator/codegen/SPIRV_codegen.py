@@ -346,6 +346,10 @@ class VulkanSPIRVCodeGen:
         self.current_expression_expected_type = None
         self.current_generic_type_substitutions = {}
         self.current_cooperative_matrix_role_overrides = {}
+        self.cooperative_matrix_selection_depth = 0
+        self.cooperative_matrix_loop_control_depth = 0
+        self.cooperative_matrix_control_flow_diverged = False
+        self.uses_device_scope_memory_operation = False
         self.mesh_output_counts_by_function = {}
         self.mesh_vertex_output_variable = None
         self.mesh_vertex_output_limit = None
@@ -10044,6 +10048,10 @@ class VulkanSPIRVCodeGen:
             "Subgroup": 3,
             "Invocation": 4,
         }
+        if scope == "Device":
+            self.uses_device_scope_memory_operation = True
+            if "VulkanMemoryModel" in self.required_capabilities:
+                self.require_capability("VulkanMemoryModelDeviceScopeKHR")
         return self.register_constant(
             scope_values[scope], self.register_primitive_type("uint")
         )
@@ -14883,7 +14891,7 @@ class VulkanSPIRVCodeGen:
         if contract is None:
             raise self.unsupported_cooperative_matrix_type_error(type_source, type_name)
 
-        component_source, rows_source, cols_source, scope, use, _layout = contract
+        component_source, rows_source, cols_source, scope, use, layout = contract
         component_name = self.cooperative_matrix_component_name(component_source)
         if component_name is None:
             component_label = self.type_name_from_value(component_source)
@@ -14930,8 +14938,9 @@ class VulkanSPIRVCodeGen:
                 "spirv.cooperative_matrix.use-role",
             )
 
+        layout_name = str(layout or "unspecified").strip().lower().replace("-", "_")
         component_type = self.register_primitive_type(component_name)
-        key = (component_type.id, scope_value, rows, cols, use_value)
+        key = (component_type.id, scope_value, rows, cols, use_value, layout_name)
         existing = self.cooperative_matrix_types.get(key)
         if existing is not None:
             return existing
@@ -14940,6 +14949,8 @@ class VulkanSPIRVCodeGen:
         self.require_capability("VulkanMemoryModel")
         self.require_extension("SPV_KHR_cooperative_matrix")
         self.require_extension("SPV_KHR_vulkan_memory_model")
+        if self.uses_device_scope_memory_operation:
+            self.require_capability("VulkanMemoryModelDeviceScopeKHR")
 
         uint_type = self.register_primitive_type("uint")
         scope_id = self.register_constant(scope_value, uint_type)
@@ -14963,6 +14974,7 @@ class VulkanSPIRVCodeGen:
             "cols": cols,
             "use": self.COOPERATIVE_MATRIX_USE_NAMES[use_value],
             "use_value": use_value,
+            "layout": layout_name,
         }
         self.cooperative_matrix_containing_type_ids.add(matrix_id.id)
         return matrix_id
@@ -15102,6 +15114,30 @@ class VulkanSPIRVCodeGen:
                         value.arguments[0], scopes, analysis, "element"
                     )
                 for argument in value.arguments[1:]:
+                    self.scan_cooperative_matrix_role_expression(
+                        argument, scopes, analysis
+                    )
+                return
+            if value.operation == "load":
+                if value.arguments:
+                    self.scan_cooperative_matrix_direct_role_operand(
+                        value.arguments[0], scopes, analysis, "element"
+                    )
+                for argument in value.arguments[1:]:
+                    self.scan_cooperative_matrix_role_expression(
+                        argument, scopes, analysis
+                    )
+                return
+            if value.operation == "store":
+                if value.arguments:
+                    self.scan_cooperative_matrix_role_expression(
+                        value.arguments[0], scopes, analysis
+                    )
+                if len(value.arguments) >= 2:
+                    self.scan_cooperative_matrix_direct_role_operand(
+                        value.arguments[1], scopes, analysis, "element"
+                    )
+                for argument in value.arguments[2:]:
                     self.scan_cooperative_matrix_role_expression(
                         argument, scopes, analysis
                     )
@@ -15484,6 +15520,10 @@ class VulkanSPIRVCodeGen:
     def process_cooperative_matrix_operation(self, expr):
         if expr.operation == "element":
             return self.process_cooperative_matrix_element(expr)
+        if expr.operation == "load":
+            return self.process_cooperative_matrix_load(expr)
+        if expr.operation == "store":
+            return self.process_cooperative_matrix_store(expr)
         if expr.operation != "multiply":
             raise self.cooperative_matrix_operation_error(
                 expr,
@@ -15493,6 +15533,391 @@ class VulkanSPIRVCodeGen:
                 "spirv.cooperative_matrix.operation-lowering",
             )
         return self.process_cooperative_matrix_multiply(expr)
+
+    def cooperative_matrix_memory_control_flow(self, expr, operation: str):
+        if self.current_function_node is not None and not self.function_is_entry_point(
+            self.current_function_node, self.current_stage
+        ):
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                f"cooperative-matrix-{operation}-control-flow",
+                "SPIR-V cooperative-matrix memory lowering currently requires "
+                f"{operation} directly in an entry point so subgroup participation "
+                "can be proven",
+                f"spirv.cooperative_matrix.{operation}-uniform-control-flow",
+            )
+        if (
+            not self.loop_merge_labels
+            and self.cooperative_matrix_selection_depth == 0
+            and self.cooperative_matrix_loop_control_depth == 0
+            and not self.cooperative_matrix_control_flow_diverged
+        ):
+            return
+        raise self.cooperative_matrix_operation_error(
+            expr,
+            f"cooperative-matrix-{operation}-control-flow",
+            "SPIR-V cooperative-matrix memory lowering currently requires "
+            f"statically unconditional subgroup participation for {operation}",
+            f"spirv.cooperative_matrix.{operation}-uniform-control-flow",
+        )
+
+    def process_loop_control_expression(self, expr):
+        self.cooperative_matrix_loop_control_depth += 1
+        try:
+            return self.process_expression(expr)
+        finally:
+            self.cooperative_matrix_loop_control_depth -= 1
+
+    def process_loop_control_statement(self, statement):
+        self.cooperative_matrix_loop_control_depth += 1
+        try:
+            return self.process_statement(statement)
+        finally:
+            self.cooperative_matrix_loop_control_depth -= 1
+
+    def cooperative_matrix_memory_layout(self, expr, contract, operation: str):
+        layout_name = str(contract.get("layout") or "unspecified")
+        layout_name = layout_name.strip().lower().replace("-", "_")
+        if layout_name not in {"row_major", "rowmajor", "unspecified"}:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                f"cooperative-matrix-{operation}-layout",
+                "SPIR-V cooperative-matrix memory lowering currently supports "
+                f"only default row-major layout; got '{layout_name}'",
+                f"spirv.cooperative_matrix.{operation}-row-major-layout",
+            )
+        uint_type = self.register_primitive_type("uint")
+        return self.register_constant(0, uint_type)
+
+    def cooperative_matrix_memory_alignment(self, contract) -> int:
+        component_size = self.uniform_scalar_size(contract["component_type"])
+        return min(16, contract["cols"] * component_size)
+
+    def cooperative_matrix_memory_operand_alignment(
+        self, required_alignment: int
+    ) -> int:
+        return required_alignment & -required_alignment
+
+    def cooperative_matrix_memory_pointee_size(self, pointee) -> Optional[int]:
+        vector_info = self.vector_type_info_from_type(pointee)
+        if vector_info is not None:
+            component_type, component_count = vector_info
+        else:
+            component_type, component_count = pointee, 1
+        component_name = self.normalize_primitive_name(component_type.type.base_type)
+        if component_name not in {"float", "int", "uint"}:
+            return None
+        return self.uniform_scalar_size(component_type) * component_count
+
+    def cooperative_matrix_memory_base_has_static_offset(self, base_source) -> bool:
+        base_pointer = self.variable_pointer_from_expression(base_source)
+        if base_pointer is None:
+            return False
+        offset_state = self.storage_buffer_pointer_offset_aliases.get(
+            self.storage_buffer_pointer_alias_key(base_pointer)
+        )
+        return offset_state is None
+
+    def cooperative_matrix_memory_static_offset(self, pointer_source) -> Optional[int]:
+        if self.cooperative_matrix_direct_identifier_name(pointer_source) is not None:
+            if self.cooperative_matrix_memory_base_has_static_offset(pointer_source):
+                return 0
+            return None
+        if isinstance(pointer_source, ArrayAccessNode):
+            if self.cooperative_matrix_direct_identifier_name(
+                pointer_source.array
+            ) is None or not self.cooperative_matrix_memory_base_has_static_offset(
+                pointer_source.array
+            ):
+                return None
+            offset = evaluate_literal_int_expression(
+                pointer_source.index, self.active_literal_int_constants()
+            )
+            return offset if offset is not None and offset >= 0 else None
+        if isinstance(pointer_source, BinaryOpNode) and pointer_source.op == "+":
+            for base, offset_source in (
+                (pointer_source.left, pointer_source.right),
+                (pointer_source.right, pointer_source.left),
+            ):
+                if self.cooperative_matrix_direct_identifier_name(
+                    base
+                ) is None or not self.cooperative_matrix_memory_base_has_static_offset(
+                    base
+                ):
+                    continue
+                offset = evaluate_literal_int_expression(
+                    offset_source, self.active_literal_int_constants()
+                )
+                if offset is not None and offset >= 0:
+                    return offset
+        return None
+
+    def cooperative_matrix_memory_stride(
+        self,
+        expr,
+        stride_source,
+        operation: str,
+        pointee_size: int,
+        required_alignment: int,
+    ):
+        stride = evaluate_literal_int_expression(
+            stride_source, self.active_literal_int_constants()
+        )
+        minimum_stride = 0 if operation == "load" else 1
+        if (
+            stride is None
+            or isinstance(stride, bool)
+            or stride < minimum_stride
+            or stride > self.UNSIGNED_INT32_MAX
+        ):
+            requirement = "non-negative" if operation == "load" else "positive"
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                f"cooperative-matrix-{operation}-stride",
+                "SPIR-V cooperative-matrix memory lowering currently requires "
+                f"a {requirement}, compile-time 32-bit integer stride for "
+                f"{operation}",
+                f"spirv.cooperative_matrix.{operation}-stride",
+            )
+        if (stride * pointee_size) % required_alignment != 0:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                f"cooperative-matrix-{operation}-alignment",
+                "SPIR-V cooperative-matrix memory lowering requires the byte "
+                f"stride for {operation} to be aligned to {required_alignment} "
+                f"bytes; got {stride * pointee_size} bytes",
+                f"spirv.cooperative_matrix.{operation}-alignment",
+            )
+        uint_type = self.register_primitive_type("uint")
+        return self.register_constant(stride, uint_type)
+
+    def cooperative_matrix_memory_pointer(
+        self, expr, pointer_source, contract, operation: str
+    ):
+        static_offset = self.cooperative_matrix_memory_static_offset(pointer_source)
+        pointer = self.variable_pointer_from_expression(pointer_source)
+        if pointer is None:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                f"cooperative-matrix-{operation}-pointer",
+                "SPIR-V cooperative-matrix memory lowering requires an "
+                f"addressable scalar or vector pointer for {operation}",
+                f"spirv.cooperative_matrix.{operation}-pointer",
+            )
+
+        root_pointee = self.pointer_pointee_type(pointer)
+        pointee = root_pointee
+        if (
+            pointee is None
+            or self.cooperative_matrix_memory_pointee_size(pointee) is None
+        ):
+            int_type = self.register_primitive_type("int")
+            zero = self.register_constant(0, int_type)
+            pointer, pointee = self.create_array_element_access(pointer_source, zero, 0)
+        pointee_size = (
+            self.cooperative_matrix_memory_pointee_size(pointee)
+            if pointee is not None
+            else None
+        )
+        if pointer is None or pointee is None or pointee_size is None:
+            pointee_name = None if pointee is None else pointee.type.base_type
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                f"cooperative-matrix-{operation}-pointee-type",
+                "SPIR-V cooperative-matrix memory lowering currently requires a "
+                "32-bit scalar or vector pointer element; got "
+                f"'{pointee_name}'",
+                f"spirv.cooperative_matrix.{operation}-pointee-type",
+            )
+
+        storage_class = pointer.type.storage_class
+        access_metadata = self.storage_buffer_access_metadata_for_pointer(pointer)
+        if storage_class == "StorageBuffer":
+            legal_storage = (
+                access_metadata is not None
+                and access_metadata.get("_access_path") == "element"
+                and not access_metadata.get("descriptor_array")
+            )
+        elif storage_class == "Workgroup":
+            workgroup_array_type = root_pointee
+            if isinstance(pointer_source, ArrayAccessNode):
+                workgroup_array = self.variable_pointer_from_expression(
+                    pointer_source.array
+                )
+                workgroup_array_type = (
+                    self.pointer_pointee_type(workgroup_array)
+                    if workgroup_array is not None
+                    else None
+                )
+            legal_storage = (
+                workgroup_array_type is not None
+                and self.array_type_info_from_type(workgroup_array_type) is not None
+            )
+        else:
+            legal_storage = False
+        if not legal_storage:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                f"cooperative-matrix-{operation}-storage-class",
+                "SPIR-V cooperative-matrix memory lowering currently supports "
+                "only storage-buffer and workgroup array elements; got storage "
+                f"class '{storage_class}'",
+                f"spirv.cooperative_matrix.{operation}-storage-class",
+            )
+
+        if access_metadata is not None:
+            if operation == "load" and access_metadata.get("writeonly"):
+                access_error = "a readable source buffer"
+            elif operation == "store" and access_metadata.get("readonly"):
+                access_error = "a writable destination buffer"
+            else:
+                access_error = None
+            if access_error is not None:
+                raise self.cooperative_matrix_operation_error(
+                    expr,
+                    f"cooperative-matrix-{operation}-buffer-access",
+                    "SPIR-V cooperative-matrix memory lowering requires "
+                    f"{access_error}",
+                    f"spirv.cooperative_matrix.{operation}-buffer-access",
+                )
+            if access_metadata.get("volatile") or access_metadata.get("coherent"):
+                raise self.cooperative_matrix_operation_error(
+                    expr,
+                    f"cooperative-matrix-{operation}-memory-operands",
+                    "SPIR-V cooperative-matrix memory lowering does not yet "
+                    "preserve volatile or coherent memory operands",
+                    f"spirv.cooperative_matrix.{operation}-memory-operands",
+                )
+
+        if static_offset is None:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                f"cooperative-matrix-{operation}-uniformity",
+                "SPIR-V cooperative-matrix memory pointer operands must have a "
+                "statically provable subgroup-uniform offset",
+                f"spirv.cooperative_matrix.{operation}-uniformity",
+            )
+        if self.is_non_uniform_value(pointer):
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                f"cooperative-matrix-{operation}-uniformity",
+                "SPIR-V cooperative-matrix memory pointer operands must be "
+                "dynamically uniform within the subgroup",
+                f"spirv.cooperative_matrix.{operation}-uniformity",
+            )
+        required_alignment = self.cooperative_matrix_memory_alignment(contract)
+        pointer_byte_offset = static_offset * pointee_size
+        if pointer_byte_offset % required_alignment != 0:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                f"cooperative-matrix-{operation}-alignment",
+                "SPIR-V cooperative-matrix memory lowering requires the pointer "
+                f"offset for {operation} to be aligned to {required_alignment} "
+                f"bytes; got {pointer_byte_offset} bytes",
+                f"spirv.cooperative_matrix.{operation}-alignment",
+            )
+        memory_operand_alignment = self.cooperative_matrix_memory_operand_alignment(
+            required_alignment
+        )
+        return pointer, pointee_size, required_alignment, memory_operand_alignment
+
+    def process_cooperative_matrix_load(self, expr):
+        self.cooperative_matrix_memory_control_flow(expr, "load")
+        if len(expr.arguments) != 3:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-load-memory-contract",
+                "SPIR-V cooperative-matrix load currently supports the default "
+                "row-major form with destination, pointer, and stride operands; "
+                f"got {len(expr.arguments)} operands",
+                "spirv.cooperative_matrix.load-memory-contract",
+            )
+
+        destination_source, pointer_source, stride_source = expr.arguments
+        if self.cooperative_matrix_direct_identifier_name(destination_source) is None:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-load-destination",
+                "SPIR-V cooperative-matrix load requires a direct local matrix "
+                "destination",
+                "spirv.cooperative_matrix.load-destination",
+            )
+        destination = self.variable_pointer_from_expression(destination_source)
+        destination_type = (
+            self.pointer_pointee_type(destination) if destination is not None else None
+        )
+        contract = self.cooperative_matrix_type_info(destination_type)
+        if (
+            destination is None
+            or destination.type.storage_class != "Function"
+            or contract is None
+        ):
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-load-destination",
+                "SPIR-V cooperative-matrix load requires a function-local "
+                "cooperative-matrix destination",
+                "spirv.cooperative_matrix.load-destination",
+            )
+
+        layout = self.cooperative_matrix_memory_layout(expr, contract, "load")
+        pointer, pointee_size, required_alignment, memory_operand_alignment = (
+            self.cooperative_matrix_memory_pointer(
+                expr, pointer_source, contract, "load"
+            )
+        )
+        stride = self.cooperative_matrix_memory_stride(
+            expr,
+            stride_source,
+            "load",
+            pointee_size,
+            required_alignment,
+        )
+        result_id = self.get_id()
+        self.emit(
+            f"%{result_id} = OpCooperativeMatrixLoadKHR %{destination_type.id} "
+            f"%{pointer.id} %{layout.id} %{stride.id} Aligned "
+            f"{memory_operand_alignment}"
+        )
+        result = SpirvId(result_id, destination_type.type)
+        self.value_types[result_id] = destination_type
+        self.store_to_variable(destination, result)
+        return result
+
+    def process_cooperative_matrix_store(self, expr):
+        self.cooperative_matrix_memory_control_flow(expr, "store")
+        if len(expr.arguments) != 3:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-store-memory-contract",
+                "SPIR-V cooperative-matrix store currently supports the default "
+                "row-major form with pointer, matrix, and stride operands; got "
+                f"{len(expr.arguments)} operands",
+                "spirv.cooperative_matrix.store-memory-contract",
+            )
+
+        pointer_source, matrix_source, stride_source = expr.arguments
+        matrix, contract = self.cooperative_matrix_operation_value(
+            expr, matrix_source, "stored"
+        )
+        layout = self.cooperative_matrix_memory_layout(expr, contract, "store")
+        pointer, pointee_size, required_alignment, memory_operand_alignment = (
+            self.cooperative_matrix_memory_pointer(
+                expr, pointer_source, contract, "store"
+            )
+        )
+        stride = self.cooperative_matrix_memory_stride(
+            expr,
+            stride_source,
+            "store",
+            pointee_size,
+            required_alignment,
+        )
+        self.emit(
+            f"OpCooperativeMatrixStoreKHR %{pointer.id} %{matrix.id} "
+            f"%{layout.id} %{stride.id} Aligned {memory_operand_alignment}"
+        )
+        return None
 
     def process_cooperative_matrix_multiply(self, expr):
         if len(expr.arguments) != 2:
@@ -16468,14 +16893,18 @@ class VulkanSPIRVCodeGen:
             self.unique_struct_type_name(block_name, block_members),
             block_members,
         )
-        self.decorations.append(f"OpDecorate %{block_type.id} BufferBlock")
+        self.decorations.append(
+            f"OpDecorate %{block_type.id} {self.storage_buffer_block_decoration()}"
+        )
         self.decorations.append(f"OpMemberDecorate %{block_type.id} 0 Offset 0")
         self.decorate_storage_buffer_member_memory_qualifiers(block_type, memory_flags)
 
         variable_type, is_descriptor_array = (
             self.structured_buffer_descriptor_variable_type(type_name, block_type)
         )
-        var_id = self.create_variable(variable_type, "Uniform", node.name)
+        var_id = self.create_variable(
+            variable_type, self.storage_buffer_storage_class(), node.name
+        )
         descriptor_set, binding = self.resource_descriptor_slot(node)
         self.decorations.append(
             f"OpDecorate %{var_id.id} DescriptorSet {descriptor_set}"
@@ -16513,14 +16942,18 @@ class VulkanSPIRVCodeGen:
         uint_type = self.register_primitive_type("uint")
         block_name = f"{node.name}CounterBuffer"
         block_type = self.register_struct_type(block_name, [(uint_type, "counter")])
-        self.decorations.append(f"OpDecorate %{block_type.id} BufferBlock")
+        self.decorations.append(
+            f"OpDecorate %{block_type.id} {self.storage_buffer_block_decoration()}"
+        )
         self.decorations.append(f"OpMemberDecorate %{block_type.id} 0 Offset 0")
 
         variable_type, is_descriptor_array = (
             self.structured_buffer_descriptor_variable_type(type_name, block_type)
         )
         counter_name = f"{node.name}Counter"
-        var_id = self.create_variable(variable_type, "Uniform", counter_name)
+        var_id = self.create_variable(
+            variable_type, self.storage_buffer_storage_class(), counter_name
+        )
         descriptor_set = self.resource_descriptor_set(node)
         binding = self.next_available_resource_binding(descriptor_set)
         self.used_resource_bindings.add((descriptor_set, binding))
@@ -16670,7 +17103,9 @@ class VulkanSPIRVCodeGen:
         memory_flags = self.storage_buffer_memory_flags(node)
         self.decorate_storage_buffer_member_memory_qualifiers(block_type, memory_flags)
 
-        var_id = self.create_variable(value_type, "Uniform", node.name)
+        var_id = self.create_variable(
+            value_type, self.storage_buffer_storage_class(), node.name
+        )
         descriptor_set, binding = self.resource_descriptor_slot(
             node, allow_binding_reassignment=allow_binding_reassignment
         )
@@ -17194,7 +17629,9 @@ class VulkanSPIRVCodeGen:
     ):
         if self.type_contains_bfloat16(block_type):
             self.require_bfloat16_storage()
-        self.decorations.append(f"OpDecorate %{block_type.id} BufferBlock")
+        self.decorations.append(
+            f"OpDecorate %{block_type.id} {self.storage_buffer_block_decoration()}"
+        )
         members = self.current_struct_members.get(block_type.type.base_type, [])
         self.validate_specialization_sized_member_layout(
             block_type.type.base_type, members
@@ -17214,6 +17651,12 @@ class VulkanSPIRVCodeGen:
                     f"MatrixStride {matrix_stride}"
                 )
             self.decorate_storage_buffer_nested_type(member_type, layout)
+
+    def storage_buffer_storage_class(self) -> str:
+        return "StorageBuffer" if self.cooperative_matrix_khr_enabled else "Uniform"
+
+    def storage_buffer_block_decoration(self) -> str:
+        return "Block" if self.cooperative_matrix_khr_enabled else "BufferBlock"
 
     def decorate_storage_buffer_nested_type(
         self, type_id: SpirvId, layout: str = "std430"
@@ -17456,6 +17899,14 @@ class VulkanSPIRVCodeGen:
 
     def process_function_node(self, function_node, stage=None):
         """Process a CrossGL function definition."""
+        previous_cooperative_matrix_control_state = (
+            self.cooperative_matrix_selection_depth,
+            self.cooperative_matrix_loop_control_depth,
+            self.cooperative_matrix_control_flow_diverged,
+        )
+        self.cooperative_matrix_selection_depth = 0
+        self.cooperative_matrix_loop_control_depth = 0
+        self.cooperative_matrix_control_flow_diverged = False
         previous_cooperative_matrix_role_overrides = (
             self.current_cooperative_matrix_role_overrides
         )
@@ -17826,6 +18277,11 @@ class VulkanSPIRVCodeGen:
         self.current_cooperative_matrix_role_overrides = (
             previous_cooperative_matrix_role_overrides
         )
+        (
+            self.cooperative_matrix_selection_depth,
+            self.cooperative_matrix_loop_control_depth,
+            self.cooperative_matrix_control_flow_diverged,
+        ) = previous_cooperative_matrix_control_state
         if previous_entry_resource_binding_state is not None:
             self.restore_resource_binding_state(previous_entry_resource_binding_state)
         self.local_variables.clear()
@@ -23495,6 +23951,8 @@ class VulkanSPIRVCodeGen:
         counter_block_type = metadata.get("counter_block_type")
         if counter_pointer is None or counter_block_type is None:
             return None
+        if self.include_resource_interface_variables:
+            self.mark_function_interface_variable(counter_pointer)
 
         counter_value_type = self.variable_value_types.get(counter_pointer.id)
         for index in metadata.get("_descriptor_indices", []):
@@ -23502,7 +23960,9 @@ class VulkanSPIRVCodeGen:
             if counter_element_type is None:
                 return None
 
-            ptr_type = self.register_pointer_type(counter_element_type, "Uniform")
+            ptr_type = self.register_pointer_type(
+                counter_element_type, self.storage_buffer_storage_class()
+            )
             counter_pointer = self.access_chain(counter_pointer, [index], ptr_type)
             self.variable_value_types[counter_pointer.id] = counter_element_type
             counter_value_type = counter_element_type
@@ -23514,7 +23974,9 @@ class VulkanSPIRVCodeGen:
         member_index = self.register_constant(
             metadata.get("counter_member_index", 0), self.primitive_types["int"]
         )
-        ptr_type = self.register_pointer_type(uint_type, "Uniform")
+        ptr_type = self.register_pointer_type(
+            uint_type, self.storage_buffer_storage_class()
+        )
         access = self.access_chain(counter_pointer, [member_index], ptr_type)
         self.variable_value_types[access.id] = uint_type
         self.storage_buffer_access_metadata[access.id] = {
@@ -26033,6 +26495,8 @@ class VulkanSPIRVCodeGen:
 
     def process_return(self, node: ReturnNode):
         """Process a CrossGL return statement."""
+        if self.loop_merge_labels or self.cooperative_matrix_selection_depth > 0:
+            self.cooperative_matrix_control_flow_diverged = True
         if hasattr(node, "value") and node.value:
             if isinstance(node.value, list) and node.value:
                 return_value = self.process_expression_with_expected_type(
@@ -26105,18 +26569,27 @@ class VulkanSPIRVCodeGen:
         self.create_selection_merge(merge_label)
         self.create_conditional_branch(condition, then_label, else_label)
 
-        self.emit(f"%{then_label.id} = OpLabel")
-        self.current_label = then_label.id
-        self.process_statements(node.if_body)
-        if not self.current_block_has_terminator():
-            self.create_branch(merge_label)
+        self.cooperative_matrix_selection_depth += 1
+        try:
+            self.emit(f"%{then_label.id} = OpLabel")
+            self.current_label = then_label.id
+            self.process_statements(node.if_body)
+            then_terminated = self.current_block_has_terminator()
+            if not then_terminated:
+                self.create_branch(merge_label)
 
-        self.emit(f"%{else_label.id} = OpLabel")
-        self.current_label = else_label.id
-        if node.else_body:
-            self.process_statements(node.else_body)
-        if not self.current_block_has_terminator():
-            self.create_branch(merge_label)
+            self.emit(f"%{else_label.id} = OpLabel")
+            self.current_label = else_label.id
+            if node.else_body:
+                self.process_statements(node.else_body)
+            else_terminated = self.current_block_has_terminator()
+            if not else_terminated:
+                self.create_branch(merge_label)
+        finally:
+            self.cooperative_matrix_selection_depth -= 1
+
+        if then_terminated or else_terminated:
+            self.cooperative_matrix_control_flow_diverged = True
 
         self.emit(f"%{merge_label.id} = OpLabel")
         self.current_label = merge_label.id
@@ -26136,7 +26609,7 @@ class VulkanSPIRVCodeGen:
         self.emit(f"%{header_label.id} = OpLabel")
         self.current_label = header_label.id
 
-        condition = self.process_expression(node.condition)
+        condition = self.process_loop_control_expression(node.condition)
         if condition is None:
             condition = self.register_constant(True, self.primitive_types["bool"])
         condition = self.ensure_bool_value(condition)
@@ -26160,7 +26633,7 @@ class VulkanSPIRVCodeGen:
         self.emit(f"%{continue_label.id} = OpLabel")
         self.current_label = continue_label.id
         if node.update:
-            self.process_statement(node.update)
+            self.process_loop_control_statement(node.update)
         if not self.current_block_has_terminator():
             self.create_branch(header_label)
 
@@ -26312,7 +26785,7 @@ class VulkanSPIRVCodeGen:
         int_type = self.register_primitive_type("int")
 
         if isinstance(iterable, RangeNode):
-            start = self.process_expression(iterable.start)
+            start = self.process_loop_control_expression(iterable.start)
             end_expr = iterable.end
             comparator = "<=" if iterable.inclusive else "<"
         elif self.process_sequence_for_in(node, pattern, iterable):
@@ -26341,7 +26814,7 @@ class VulkanSPIRVCodeGen:
         self.current_label = header_label.id
 
         loop_value = self.get_variable_value(loop_variable)
-        end_value = self.process_expression(end_expr)
+        end_value = self.process_loop_control_expression(end_expr)
         if end_value is None:
             end_value = self.register_constant(0, int_type)
         condition = self.binary_operation(comparator, int_type, loop_value, end_value)
@@ -26440,8 +26913,15 @@ class VulkanSPIRVCodeGen:
 
                 self.emit(f"%{body_label.id} = OpLabel")
                 self.current_label = body_label.id
-                process_arm_body(arm)
-                if not self.current_block_has_terminator():
+                self.cooperative_matrix_selection_depth += 1
+                try:
+                    process_arm_body(arm)
+                finally:
+                    self.cooperative_matrix_selection_depth -= 1
+                arm_terminated = self.current_block_has_terminator()
+                if arm_terminated:
+                    self.cooperative_matrix_control_flow_diverged = True
+                else:
                     self.store_to_variable(matched_variable, matched_true)
                     self.create_branch(next_label)
 
@@ -26868,7 +27348,7 @@ class VulkanSPIRVCodeGen:
         self.emit(f"%{header_label.id} = OpLabel")
         self.current_label = header_label.id
 
-        condition = self.process_expression(node.condition)
+        condition = self.process_loop_control_expression(node.condition)
         if condition is None:
             condition = self.register_constant(True, self.primitive_types["bool"])
         condition = self.ensure_bool_value(condition)
@@ -26926,7 +27406,7 @@ class VulkanSPIRVCodeGen:
         self.emit(f"%{continue_label.id} = OpLabel")
         self.current_label = continue_label.id
 
-        condition = self.process_expression(node.condition)
+        condition = self.process_loop_control_expression(node.condition)
         if condition is None:
             condition = self.register_constant(True, self.primitive_types["bool"])
         condition = self.ensure_bool_value(condition)
@@ -28186,7 +28666,8 @@ class VulkanSPIRVCodeGen:
                 return
         if (
             self.include_resource_interface_variables
-            and variable.type.storage_class in {"Uniform", "UniformConstant"}
+            and variable.type.storage_class
+            in {"StorageBuffer", "Uniform", "UniformConstant"}
             and any(
                 global_variable.id == variable.id
                 for global_variable in self.global_variables.values()
@@ -29174,7 +29655,7 @@ class VulkanSPIRVCodeGen:
             return "1.4"
         if "RayTracingKHR" in self.required_capabilities:
             return "1.4"
-        if "CooperativeMatrixKHR" in self.required_capabilities:
+        if self.cooperative_matrix_khr_enabled:
             return "1.3"
         if any(
             capability.startswith("GroupNonUniform")

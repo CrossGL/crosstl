@@ -396,10 +396,9 @@ def assert_spirv_module_validates(spv_code, tmp_path, target_env=None):
     assert validate.returncode == 0, validate.stderr
 
 
-def cooperative_matrix_type_source(component, rows, cols, use):
+def cooperative_matrix_type_source(component, rows, cols, use, layout="unspecified"):
     return (
-        f"CooperativeMatrix<{component}, {rows}, {cols}, "
-        f"subgroup, {use}, unspecified>"
+        f"CooperativeMatrix<{component}, {rows}, {cols}, " f"subgroup, {use}, {layout}>"
     )
 
 
@@ -472,6 +471,21 @@ def assert_cooperative_matrix_role_specialization_rejected(
     )
     emitted = "\n".join(generator.code_lines)
     assert "OpCooperativeMatrixMulAddKHR" not in emitted
+    assert "WARNING" not in emitted
+
+
+def assert_cooperative_matrix_memory_rejected(
+    profile_source, message, feature, capability
+):
+    generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+
+    with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
+        generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+    assert message in str(exc_info.value)
+    assert exc_info.value.feature == feature
+    assert exc_info.value.missing_capabilities == (capability,)
+    emitted = "\n".join(generator.code_lines)
     assert "WARNING" not in emitted
 
 
@@ -33527,6 +33541,828 @@ class TestSpirvShaderValidation:
             spv_code,
         )
         assert "OpMatrixTimesMatrix" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_lowers_default_row_major_matrix_memory(self, tmp_path):
+        left_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        right_type = cooperative_matrix_type_source("float", 8, 8, "matrix_b")
+        result_type = cooperative_matrix_type_source("float", 8, 8, "accumulator")
+        profile_source = f"""
+        shader CooperativeMatrixMemory {{
+            compute {{
+                layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+                layout(set = 0, binding = 0) buffer float* input;
+                layout(set = 0, binding = 1) buffer float* output;
+
+                void main() {{
+                    {left_type} left;
+                    {right_type} right;
+                    {result_type} result;
+                    cooperative_matrix_load(left, input, 8);
+                    cooperative_matrix_load(right, input + 64, 8);
+                    result = cooperative_matrix_multiply(left, right);
+                    cooperative_matrix_store(output, result, 8);
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        assert spv_code.count("OpCooperativeMatrixLoadKHR") == 2
+        assert spv_code.count("OpCooperativeMatrixStoreKHR") == 1
+        assert spv_code.count("OpCooperativeMatrixMulAddKHR") == 1
+        assert spv_code.count("Aligned 16") == 3
+        assert "OpTypePointer StorageBuffer" in spv_code
+        assert re.search(r"OpDecorate %\d+ Block\b", spv_code)
+        assert "BufferBlock" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_lowers_workgroup_matrix_memory(self, tmp_path):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixWorkgroupMemory {{
+            compute {{
+                layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+                void main() {{
+                    threadgroup float[64] scratch;
+                    {matrix_type} matrix;
+                    cooperative_matrix_load(matrix, scratch, 8);
+                    cooperative_matrix_store(scratch, matrix, 8);
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        assert spv_code.count("OpCooperativeMatrixLoadKHR") == 1
+        assert spv_code.count("OpCooperativeMatrixStoreKHR") == 1
+        assert "OpTypePointer Workgroup" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_uses_power_of_two_memory_operand_alignment(self, tmp_path):
+        matrix_type = cooperative_matrix_type_source("float", 8, 3, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixNaturalAlignment {{
+            compute {{
+                layout(set = 0, binding = 0) buffer float* input;
+                layout(set = 0, binding = 1) buffer float* output;
+
+                void main() {{
+                    {matrix_type} matrix;
+                    cooperative_matrix_load(matrix, input, 3);
+                    cooperative_matrix_store(output, matrix, 3);
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        assert spv_code.count("Aligned 4") == 2
+        assert "Aligned 12" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_lowers_workgroup_vector_array_matrix_memory(self, tmp_path):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixWorkgroupVectorArray {{
+            compute {{
+                void main() {{
+                    threadgroup vec4[16] scratch;
+                    {matrix_type} matrix;
+                    cooperative_matrix_load(matrix, scratch, 2);
+                    cooperative_matrix_store(scratch, matrix, 2);
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        scratch = spirv_named_variable(spv_code, "scratch", storage_class="Workgroup")
+        assert re.search(
+            rf"%\d+ = OpAccessChain %\d+ {re.escape(scratch)} %\d+",
+            spv_code,
+        )
+        assert spv_code.count("Aligned 16") == 2
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    @pytest.mark.parametrize(
+        "pointer_expression",
+        (
+            pytest.param("scratch", id="standalone-vector"),
+            pytest.param("scratch[0]", id="vector-lane"),
+        ),
+    )
+    def test_opt_in_profile_rejects_non_array_workgroup_matrix_memory(
+        self, pointer_expression
+    ):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixWorkgroupVector {{
+            compute {{
+                void main() {{
+                    threadgroup vec4 scratch;
+                    {matrix_type} matrix;
+                    cooperative_matrix_load(matrix, {pointer_expression}, 2);
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_memory_rejected(
+            profile_source,
+            "only storage-buffer and workgroup array elements",
+            "cooperative-matrix-load-storage-class",
+            "spirv.cooperative_matrix.load-storage-class",
+        )
+
+    def test_opt_in_profile_accepts_zero_matrix_load_stride(self, tmp_path):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixZeroLoadStride {{
+            compute {{
+                layout(set = 0, binding = 0) buffer float* input;
+
+                void main() {{
+                    {matrix_type} matrix;
+                    cooperative_matrix_load(matrix, input, 0);
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        constant_values = spirv_integer_constant_values(spv_code)
+        load = re.search(
+            r"OpCooperativeMatrixLoadKHR %\d+ %\d+ %\d+ (?P<stride>%\d+) "
+            r"Aligned 16",
+            spv_code,
+        )
+        assert load is not None
+        assert constant_values[load.group("stride")] == 0
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_rejects_column_major_matrix_memory_after_row_major_type(
+        self,
+    ):
+        row_type = cooperative_matrix_type_source(
+            "float", 8, 8, "matrix_a", "row_major"
+        )
+        column_type = cooperative_matrix_type_source(
+            "float", 8, 8, "matrix_a", "column_major"
+        )
+        profile_source = f"""
+        shader CooperativeMatrixColumnMajorMemory {{
+            compute {{
+                layout(set = 0, binding = 0) buffer float* input;
+
+                void main() {{
+                    {row_type} row_matrix;
+                    {column_type} column_matrix;
+                    cooperative_matrix_load(column_matrix, input, 8);
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_memory_rejected(
+            profile_source,
+            "only default row-major layout; got 'column_major'",
+            "cooperative-matrix-load-layout",
+            "spirv.cooperative_matrix.load-row-major-layout",
+        )
+
+    @pytest.mark.parametrize(
+        ("operation", "message", "feature", "capability"),
+        (
+            pytest.param(
+                "cooperative_matrix_load(matrix, input + 1, 8);",
+                "pointer offset for load to be aligned to 16 bytes; got 4 bytes",
+                "cooperative-matrix-load-alignment",
+                "spirv.cooperative_matrix.load-alignment",
+                id="unaligned-pointer-offset",
+            ),
+            pytest.param(
+                "cooperative_matrix_load(matrix, input, 1);",
+                "byte stride for load to be aligned to 16 bytes; got 4 bytes",
+                "cooperative-matrix-load-alignment",
+                "spirv.cooperative_matrix.load-alignment",
+                id="unaligned-load-stride",
+            ),
+            pytest.param(
+                "cooperative_matrix_load(matrix, input, -1);",
+                "non-negative, compile-time 32-bit integer stride",
+                "cooperative-matrix-load-stride",
+                "spirv.cooperative_matrix.load-stride",
+                id="negative-load-stride",
+            ),
+            pytest.param(
+                "cooperative_matrix_store(output, matrix, 0);",
+                "positive, compile-time 32-bit integer stride",
+                "cooperative-matrix-store-stride",
+                "spirv.cooperative_matrix.store-stride",
+                id="zero-store-stride",
+            ),
+            pytest.param(
+                "cooperative_matrix_load(matrix, input, 4294967296);",
+                "non-negative, compile-time 32-bit integer stride",
+                "cooperative-matrix-load-stride",
+                "spirv.cooperative_matrix.load-stride",
+                id="oversized-load-stride",
+            ),
+        ),
+    )
+    def test_opt_in_profile_rejects_invalid_matrix_memory_alignment_and_stride(
+        self, operation, message, feature, capability
+    ):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixMemoryAlignment {{
+            compute {{
+                layout(set = 0, binding = 0) buffer float* input;
+                layout(set = 0, binding = 1) buffer float* output;
+
+                void main() {{
+                    {matrix_type} matrix;
+                    {operation}
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_memory_rejected(
+            profile_source, message, feature, capability
+        )
+
+    def test_opt_in_profile_preserves_storage_buffer_descriptor_arrays(self, tmp_path):
+        profile_source = """
+        shader CooperativeMatrixStorageBufferArrays {
+            StructuredBuffer<float> inputs[2] @binding(0);
+            RWStructuredBuffer<float> outputs[2] @binding(1);
+
+            compute {
+                void main() {
+                    float value = inputs[1].Load(0u);
+                    outputs[0].Store(1u, value);
+                }
+            }
+        }
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        inputs_block = spirv_named_id(spv_code, "inputsBuffer")
+        outputs_block = spirv_named_id(spv_code, "outputsBuffer")
+        inputs_var = spirv_named_variable(
+            spv_code, "inputs", storage_class="StorageBuffer"
+        )
+        outputs_var = spirv_named_variable(
+            spv_code, "outputs", storage_class="StorageBuffer"
+        )
+        assert f"OpDecorate {inputs_block} Block" in spv_code
+        assert f"OpDecorate {outputs_block} Block" in spv_code
+        assert f"OpDecorate {inputs_var} Binding 0" in spv_code
+        assert f"OpDecorate {outputs_var} Binding 1" in spv_code
+        assert "BufferBlock" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_preserves_structured_buffer_counters(self, tmp_path):
+        profile_source = """
+        shader CooperativeMatrixStorageBufferCounter {
+            RWStructuredBuffer<uint> counters @binding(0);
+
+            compute {
+                void main() {
+                    uint index = counters.IncrementCounter();
+                    counters.Store(index, index);
+                }
+            }
+        }
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        counters_var = spirv_named_variable(
+            spv_code, "counters", storage_class="StorageBuffer"
+        )
+        counter_var = spirv_named_variable(
+            spv_code, "countersCounter", storage_class="StorageBuffer"
+        )
+        assert f"OpDecorate {counters_var} Binding 0" in spv_code
+        assert f"OpDecorate {counter_var} Binding 1" in spv_code
+        assert "OpAtomicIAdd" in spv_code
+        assert "BufferBlock" not in spv_code
+        assert "; Version: 1.3" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_enables_device_scope_vulkan_memory_model_for_counters(
+        self, tmp_path
+    ):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixDeviceScopeCounter {{
+            RWStructuredBuffer<uint> counters @binding(0);
+
+            compute {{
+                void main() {{
+                    {matrix_type} matrix;
+                    uint index = counters.IncrementCounter();
+                    cooperative_matrix_element(matrix, 0) = float(index);
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        assert "OpCapability VulkanMemoryModel" in spv_code
+        assert "OpCapability VulkanMemoryModelDeviceScopeKHR" in spv_code
+        assert 'OpExtension "SPV_KHR_vulkan_memory_model"' in spv_code
+        assert "OpMemoryModel Logical VulkanKHR" in spv_code
+        assert "OpAtomicIAdd" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_spirv_1_4_profile_lists_storage_buffer_counter_array_interfaces(
+        self, tmp_path
+    ):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixCounterArrayInterfaces {{
+            RWStructuredBuffer<uint> counters[2] @binding(0);
+
+            compute {{
+                void main() {{
+                    {matrix_type} matrix;
+                    uint index = counters[1].IncrementCounter();
+                    cooperative_matrix_element(matrix, 0) = float(index);
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(
+            target_profile="vulkan-khr-cooperative-matrix",
+            include_resource_interface_variables=True,
+        )
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        counters_var = spirv_named_variable(
+            spv_code, "counters", storage_class="StorageBuffer"
+        )
+        counter_var = spirv_named_variable(
+            spv_code, "countersCounter", storage_class="StorageBuffer"
+        )
+        entry_point = next(
+            line for line in spv_code.splitlines() if line.startswith("OpEntryPoint")
+        )
+        assert counters_var in entry_point.split()
+        assert counter_var in entry_point.split()
+        assert "; Version: 1.4" in spv_code
+        assert "OpCapability VulkanMemoryModelDeviceScopeKHR" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.2")
+
+    def test_opt_in_profile_rejects_matrix_memory_in_dynamic_control_flow(self):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixDynamicControlFlow {{
+            compute {{
+                layout(set = 0, binding = 0) buffer float* input;
+
+                void main() {{
+                    {matrix_type} matrix;
+                    if (gl_LocalInvocationIndex == 0u) {{
+                        cooperative_matrix_load(matrix, input, 8);
+                    }}
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_memory_rejected(
+            profile_source,
+            "statically unconditional subgroup participation for load",
+            "cooperative-matrix-load-control-flow",
+            "spirv.cooperative_matrix.load-uniform-control-flow",
+        )
+
+    @pytest.mark.parametrize(
+        "control_flow",
+        (
+            pytest.param(
+                "if (gl_LocalInvocationIndex == 0u) { return; }",
+                id="if-return",
+            ),
+            pytest.param(
+                "match gl_LocalInvocationIndex { " "0u => { return; } " "_ => { } " "}",
+                id="match-return",
+            ),
+            pytest.param(
+                "for (uint i = 0u; i < gl_LocalInvocationIndex; i++) { return; }",
+                id="loop-return",
+            ),
+        ),
+    )
+    def test_opt_in_profile_rejects_matrix_memory_after_divergent_exit(
+        self, control_flow
+    ):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixDivergentExit {{
+            compute {{
+                layout(set = 0, binding = 0) buffer float* input;
+
+                void main() {{
+                    {matrix_type} matrix;
+                    {control_flow}
+                    cooperative_matrix_load(matrix, input, 8);
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_memory_rejected(
+            profile_source,
+            "statically unconditional subgroup participation for load",
+            "cooperative-matrix-load-control-flow",
+            "spirv.cooperative_matrix.load-uniform-control-flow",
+        )
+
+    def test_opt_in_profile_rejects_matrix_load_in_for_update(self):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixForUpdate {{
+            compute {{
+                layout(set = 0, binding = 0) buffer float* input;
+
+                void main() {{
+                    {matrix_type} matrix;
+                    for (
+                        uint i = 0u;
+                        i < gl_LocalInvocationIndex;
+                        matrix = cooperative_matrix_load(matrix, input, 8)
+                    ) {{
+                        i++;
+                    }}
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_memory_rejected(
+            profile_source,
+            "statically unconditional subgroup participation for load",
+            "cooperative-matrix-load-control-flow",
+            "spirv.cooperative_matrix.load-uniform-control-flow",
+        )
+
+    @pytest.mark.parametrize("loop_kind", ("while", "do-while"))
+    def test_opt_in_profile_rejects_matrix_store_in_loop_condition(self, loop_kind):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        if loop_kind == "while":
+            loop = "while (cooperative_matrix_store(output, matrix, 8)) { }"
+        else:
+            loop = "do { } while (cooperative_matrix_store(output, matrix, 8));"
+        profile_source = f"""
+        shader CooperativeMatrixLoopCondition {{
+            compute {{
+                layout(set = 0, binding = 0) buffer float* output;
+
+                void main() {{
+                    {matrix_type} matrix;
+                    {loop}
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_memory_rejected(
+            profile_source,
+            "statically unconditional subgroup participation for store",
+            "cooperative-matrix-store-control-flow",
+            "spirv.cooperative_matrix.store-uniform-control-flow",
+        )
+
+    def test_opt_in_profile_rejects_matrix_memory_in_helper_function(self):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixHelperControlFlow {{
+            compute {{
+                layout(set = 0, binding = 0) buffer float* input;
+
+                void load_matrix() {{
+                    {matrix_type} matrix;
+                    cooperative_matrix_load(matrix, input, 8);
+                }}
+
+                void main() {{
+                    load_matrix();
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_memory_rejected(
+            profile_source,
+            "load directly in an entry point so subgroup participation can be proven",
+            "cooperative-matrix-load-control-flow",
+            "spirv.cooperative_matrix.load-uniform-control-flow",
+        )
+
+    @pytest.mark.parametrize(
+        "pointer_setup",
+        (
+            pytest.param("input += 4;", id="resource-pointer"),
+            pytest.param(
+                "device float* cursor = input; cursor += 4;",
+                id="copied-pointer",
+            ),
+            pytest.param(
+                "device float* cursor = input[1];",
+                id="literal-element-alias",
+            ),
+            pytest.param(
+                "device float* cursor = input[gl_LocalInvocationIndex];",
+                id="nonuniform-element-alias",
+            ),
+        ),
+    )
+    def test_opt_in_profile_rejects_mutable_matrix_memory_pointer_offsets(
+        self, pointer_setup
+    ):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        pointer_name = "cursor" if "cursor" in pointer_setup else "input"
+        profile_source = f"""
+        shader CooperativeMatrixMutablePointerOffset {{
+            compute {{
+                layout(set = 0, binding = 0) buffer float* input;
+
+                void main() {{
+                    {matrix_type} matrix;
+                    {pointer_setup}
+                    cooperative_matrix_load(matrix, {pointer_name}, 8);
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_memory_rejected(
+            profile_source,
+            "statically provable subgroup-uniform offset",
+            "cooperative-matrix-load-uniformity",
+            "spirv.cooperative_matrix.load-uniformity",
+        )
+
+    @pytest.mark.parametrize(
+        ("operation", "feature", "capability", "message"),
+        (
+            pytest.param(
+                "cooperative_matrix_load(matrix, input, 8, 0);",
+                "cooperative-matrix-load-memory-contract",
+                "spirv.cooperative_matrix.load-memory-contract",
+                "default row-major form",
+                id="load-origin-or-layout",
+            ),
+            pytest.param(
+                "cooperative_matrix_store(output, matrix, 8, 0);",
+                "cooperative-matrix-store-memory-contract",
+                "spirv.cooperative_matrix.store-memory-contract",
+                "default row-major form",
+                id="store-origin-or-layout",
+            ),
+            pytest.param(
+                "cooperative_matrix_load(matrix, input, stride);",
+                "cooperative-matrix-load-stride",
+                "spirv.cooperative_matrix.load-stride",
+                "non-negative, compile-time 32-bit integer stride",
+                id="dynamic-load-stride",
+            ),
+            pytest.param(
+                "cooperative_matrix_load(matrix, input + offset, 8);",
+                "cooperative-matrix-load-uniformity",
+                "spirv.cooperative_matrix.load-uniformity",
+                "statically provable subgroup-uniform offset",
+                id="dynamic-load-pointer-offset",
+            ),
+        ),
+    )
+    def test_opt_in_profile_rejects_unrepresented_matrix_memory_contracts(
+        self, operation, feature, capability, message
+    ):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixMemoryContract {{
+            compute {{
+                layout(set = 0, binding = 0) buffer float* input;
+                layout(set = 0, binding = 1) buffer float* output;
+
+                void main() {{
+                    {matrix_type} matrix;
+                    int stride = 8;
+                    int offset = 0;
+                    {operation}
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_memory_rejected(
+            profile_source, message, feature, capability
+        )
+
+    @pytest.mark.parametrize(
+        ("element_type", "stride"),
+        (
+            pytest.param("int", 8, id="scalar"),
+            pytest.param("vec4", 2, id="vector"),
+        ),
+    )
+    def test_opt_in_profile_accepts_different_matrix_memory_pointee_types(
+        self, tmp_path, element_type, stride
+    ):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixMemoryComponent {{
+            compute {{
+                layout(set = 0, binding = 0) buffer {element_type}* input;
+
+                void main() {{
+                    {matrix_type} matrix;
+                    cooperative_matrix_load(matrix, input, {stride});
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        assert "OpCooperativeMatrixLoadKHR" in spv_code
+        assert "Aligned 16" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    @pytest.mark.parametrize(
+        ("declaration", "operation", "feature", "capability", "message"),
+        (
+            pytest.param(
+                "RWStructuredBuffer<float> data @writeonly;",
+                "cooperative_matrix_load(matrix, data, 8);",
+                "cooperative-matrix-load-buffer-access",
+                "spirv.cooperative_matrix.load-buffer-access",
+                "requires a readable source buffer",
+                id="load-writeonly",
+            ),
+            pytest.param(
+                "StructuredBuffer<float> data;",
+                "cooperative_matrix_store(data, matrix, 8);",
+                "cooperative-matrix-store-buffer-access",
+                "spirv.cooperative_matrix.store-buffer-access",
+                "requires a writable destination buffer",
+                id="store-readonly",
+            ),
+            pytest.param(
+                "RWStructuredBuffer<float> data @coherent;",
+                "cooperative_matrix_load(matrix, data, 8);",
+                "cooperative-matrix-load-memory-operands",
+                "spirv.cooperative_matrix.load-memory-operands",
+                "does not yet preserve volatile or coherent memory operands",
+                id="load-coherent",
+            ),
+            pytest.param(
+                "RWStructuredBuffer<float> data @volatile;",
+                "cooperative_matrix_store(data, matrix, 8);",
+                "cooperative-matrix-store-memory-operands",
+                "spirv.cooperative_matrix.store-memory-operands",
+                "does not yet preserve volatile or coherent memory operands",
+                id="store-volatile",
+            ),
+        ),
+    )
+    def test_opt_in_profile_rejects_unpreserved_matrix_memory_access_contracts(
+        self, declaration, operation, feature, capability, message
+    ):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixMemoryAccess {{
+            {declaration}
+
+            compute {{
+                void main() {{
+                    {matrix_type} matrix;
+                    {operation}
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_memory_rejected(
+            profile_source, message, feature, capability
+        )
+
+    def test_opt_in_profile_rejects_function_matrix_memory(self):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixFunctionMemory {{
+            compute {{
+                void main() {{
+                    float values[64];
+                    {matrix_type} matrix;
+                    cooperative_matrix_load(matrix, values, 8);
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_memory_rejected(
+            profile_source,
+            "only storage-buffer and workgroup array elements",
+            "cooperative-matrix-load-storage-class",
+            "spirv.cooperative_matrix.load-storage-class",
+        )
+
+    def test_opt_in_profile_rejects_scalar_storage_block_matrix_memory(self):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixScalarStorageBlock {{
+            struct ScalarBlock {{
+                float value;
+            }};
+
+            ScalarBlock data @glsl_buffer_block(std430) @binding(0);
+
+            compute {{
+                void main() {{
+                    {matrix_type} matrix;
+                    cooperative_matrix_load(matrix, data.value, 8);
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_memory_rejected(
+            profile_source,
+            "only storage-buffer and workgroup array elements",
+            "cooperative-matrix-load-storage-class",
+            "spirv.cooperative_matrix.load-storage-class",
+        )
+
+    def test_metal_matrix_memory_translates_to_valid_spirv(self, tmp_path):
+        source_path = tmp_path / "matrix_memory.metal"
+        source_path.write_text(
+            """
+            #include <metal_stdlib>
+            #include <metal_simdgroup_matrix>
+            using namespace metal;
+
+            kernel void matrix_memory(
+                device float* input [[buffer(0)]],
+                device float* output [[buffer(1)]]) {
+              simdgroup_matrix<float, 8, 8> left;
+              simdgroup_matrix<float, 8, 8> right;
+              simdgroup_matrix<float, 8, 8> result;
+              simdgroup_load(left, input, 8);
+              simdgroup_load(right, input + 64, 8);
+              result = left * right;
+              simdgroup_store(result, output, 8);
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        spv_code = crosstl.translate(
+            str(source_path),
+            backend="vulkan-khr-cooperative-matrix",
+            format_output=False,
+        )
+
+        assert spv_code.count("OpCooperativeMatrixLoadKHR") == 2
+        assert spv_code.count("OpCooperativeMatrixStoreKHR") == 1
+        assert spv_code.count("OpCooperativeMatrixMulAddKHR") == 1
+        assert "OpTypePointer StorageBuffer" in spv_code
+        assert "cooperative-matrix-use-role" not in spv_code
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
 
