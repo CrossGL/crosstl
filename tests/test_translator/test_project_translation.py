@@ -50406,3 +50406,76 @@ def test_translate_project_reports_unresolved_function_local_template_argument(
         },
     }
     assert "function-local constant 'Width' unresolved" in diagnostic["message"]
+
+
+def test_translate_project_reports_unresolved_metal_value_template_default(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "dependent_default.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T, int Count = T::extent>
+            int count_value() {
+                return Count;
+            }
+
+            kernel void use_count(device int* out [[buffer(0)]]) {
+                out[0] = count_value();
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["cgl"],
+        output_dir="out",
+        format_output=False,
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-template-argument-unresolved": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "metal.value-template-argument-materialization": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == (
+        "project.translate.metal-template-argument-unresolved"
+    )
+    assert diagnostic["target"] == "cgl"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["location"]["file"] == "dependent_default.metal"
+    assert diagnostic["location"]["line"] == 4
+    assert diagnostic["location"]["column"] == 1
+    assert diagnostic["missingCapabilities"] == [
+        "metal.value-template-argument-materialization"
+    ]
+    assert diagnostic["details"] == {
+        "sourcePath": "dependent_default.metal",
+        "targetArtifact": "out/cgl/dependent_default.cgl",
+        "valueTemplateArgument": {
+            "argumentKind": "default",
+            "defaultExpression": "T::extent",
+            "expression": "T::extent",
+            "function": "count_value",
+            "parameter": "Count",
+            "reason": "remains dependent on T, extent",
+            "selectedCall": "count_value(...)",
+        },
+    }
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert {item["code"] for item in validation["diagnostics"]}.isdisjoint(
+        {"project.validate.invalid-report"}
+    )

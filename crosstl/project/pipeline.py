@@ -16658,6 +16658,39 @@ def _metal_sizeof_failure_details(
     return dict(sorted(details.items()))
 
 
+def _metal_template_argument_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.metal-template-argument-unresolved"
+    ):
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    argument = {}
+    fields = {
+        "function": getattr(exc, "function_name", None),
+        "parameter": getattr(exc, "parameter_name", None),
+        "selectedCall": getattr(exc, "selected_call", None),
+        "argumentKind": getattr(exc, "argument_kind", None),
+        "expression": getattr(exc, "argument_expression", None),
+        "defaultExpression": getattr(exc, "default_expression", None),
+        "explicitArgument": getattr(exc, "explicit_argument", None),
+        "reason": getattr(exc, "reason", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            argument[name] = value
+    if argument:
+        details["valueTemplateArgument"] = dict(sorted(argument.items()))
+    return dict(sorted(details.items()))
+
+
 def _metal_callable_failure_details(
     exc: Exception,
     unit: ProjectTranslationUnit,
@@ -17296,6 +17329,7 @@ def _translation_failure_details(
         **_metal_struct_method_failure_details(exc, unit, artifact_path),
         **_metal_static_constant_failure_details(exc, unit, artifact_path),
         **_metal_sizeof_failure_details(exc, unit, artifact_path),
+        **_metal_template_argument_failure_details(exc, unit, artifact_path),
         **_metal_callable_failure_details(exc, unit, artifact_path),
         **_template_materialization_failure_details(exc),
     }
