@@ -121,8 +121,10 @@ def _full_corpus_report(module, mlx_root, work_dir, *, include_extra_failure=Fal
                 "sourceBackend": "metal",
                 "target": "directx",
                 "path": (
-                    work_dir / "out-full-corpus/directx/other.hlsl"
-                ).relative_to(mlx_root).as_posix(),
+                    (work_dir / "out-full-corpus/directx/other.hlsl")
+                    .relative_to(mlx_root)
+                    .as_posix()
+                ),
                 "status": "failed",
                 "error": "unrelated full-corpus translation failure",
             }
@@ -681,12 +683,18 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert set(directx["directx_toolchain_gaps"]) == set(
         module.MLX_REDUCED_FRONTIER_SOURCES
     ) - set(module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES)
-    assert "1519" not in directx["directx_toolchain_gaps"][
-        "mlx/backend/metal/kernels/layer_norm.metal"
-    ]
-    assert "1519" not in directx["directx_toolchain_gaps"][
-        module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE
-    ]
+    assert (
+        "1519"
+        not in directx["directx_toolchain_gaps"][
+            "mlx/backend/metal/kernels/layer_norm.metal"
+        ]
+    )
+    assert (
+        "1519"
+        not in directx["directx_toolchain_gaps"][
+            module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE
+        ]
+    )
 
     pointer_reinterpretation = expected_gaps["pointer_reinterpretation_status"]
     assert pointer_reinterpretation["status"] == "partial"
@@ -912,9 +920,10 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         contract["diagnosticCode"]: 1
         for contract in module.MLX_FENCE_TARGET_CONTRACTS.values()
     }
-    assert "https://github.com/CrossGL/crosstl/issues/1537" in full_corpus[
-        "semantic_blocked_by"
-    ]
+    assert (
+        "https://github.com/CrossGL/crosstl/issues/1537"
+        in full_corpus["semantic_blocked_by"]
+    )
     assert full_corpus["runtime_integration_included"] is False
     assert full_corpus["runtime_parity_claimed"] is False
     assert full_corpus["last_completed"]["snapshot_scope"] == (
@@ -1078,9 +1087,10 @@ def test_binary_two_advances_into_opengl_toolchain_frontier_without_source_growt
     )
     assert len(module.MLX_CLEAN_REDUCED_FRONTIER_SOURCES) == 11
     assert len(module.MLX_REDUCED_FRONTIER_SOURCES) == 12
-    assert module.MLX_CLEAN_REDUCED_FRONTIER_SOURCES.count(
-        module.MLX_BINARY_TWO_SOURCE
-    ) == 1
+    assert (
+        module.MLX_CLEAN_REDUCED_FRONTIER_SOURCES.count(module.MLX_BINARY_TWO_SOURCE)
+        == 1
+    )
     assert issue in module.RESOLVED_FRONTIER_ISSUES
     assert issue not in module.FULL_CORPUS_TRACKED_ISSUES
     assert issue in expected_gaps["resolved_issues"]
@@ -1417,9 +1427,7 @@ def test_atomic_fence_contract_rejects_diagnostic_drift(
         module._check_atomic_fence_contract(*check[:5], "python")
 
 
-def test_atomic_fence_contract_rejects_emitted_target_artifact(
-    tmp_path, monkeypatch
-):
+def test_atomic_fence_contract_rejects_emitted_target_artifact(tmp_path, monkeypatch):
     module = _load_harness()
 
     def emit_directx_artifact(payload, mlx_root):
@@ -1662,12 +1670,13 @@ def test_opengl_frontier_required_toolchain_compiles_and_validates_artifacts(
         command_name = stem.replace("_", "-")
         generated_path = paths[1] / "out" / "opengl" / f"{stem}.glsl"
         output_path = paths[0] / result["nativeValidationOutputs"][source]
-        assert str(generated_path) in commands_by_name[
-            f"validate-{command_name}-opengl"
-        ]
-        assert str(output_path) in commands_by_name[
-            f"validate-{command_name}-opengl-spirv"
-        ]
+        assert (
+            str(generated_path) in commands_by_name[f"validate-{command_name}-opengl"]
+        )
+        assert (
+            str(output_path)
+            in commands_by_name[f"validate-{command_name}-opengl-spirv"]
+        )
     config = (paths[2] / "opengl-frontier.toml").read_text(encoding="utf-8")
     for source in module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES:
         assert source in config

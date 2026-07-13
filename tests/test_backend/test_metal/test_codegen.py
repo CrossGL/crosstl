@@ -19,13 +19,13 @@ from crosstl.backend.Metal.MetalCrossGLCodeGen import (
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
 from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+from crosstl.translator.ast import ResourceMemoryQualifierNode
 from crosstl.translator.codegen.directx_codegen import (
     HLSLCodeGen as TranslatorHLSLCodeGen,
 )
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
-from crosstl.translator.ast import ResourceMemoryQualifierNode
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
@@ -2798,9 +2798,7 @@ def test_codegen_scoped_atomic_thread_fence_from_mlx_kernel_roundtrips():
         "metal::atomic_thread_fence(metal::mem_flags::mem_device, "
         "metal::memory_order_seq_cst, metal::thread_scope_system);"
     ) in metal
-    assert (
-        "volatile coherent(system) device uint* timestamp [[buffer(0)]]" in metal
-    )
+    assert "volatile coherent(system) device uint* timestamp [[buffer(0)]]" in metal
     assert "device uint* volatile" not in metal
     assert "threadgroup_barrier(mem_flags::mem_device);" not in metal
     assert "#pragma METAL internals : enable" in metal
@@ -2828,8 +2826,7 @@ def test_codegen_resource_memory_qualifiers_survive_aliases_without_leaking():
     )
     assert "volatile RWStructuredBuffer<uint> volatile_only @buffer(1)" in crossgl
     assert (
-        "coherent(device) RWStructuredBuffer<uint> device_scoped @buffer(2)"
-        in crossgl
+        "coherent(device) RWStructuredBuffer<uint> device_scoped @buffer(2)" in crossgl
     )
     assert "RWStructuredBuffer<uint> plain @buffer(3)" in crossgl
     assert "volatile uint index" not in crossgl
@@ -2844,8 +2841,7 @@ def test_codegen_resource_memory_qualifiers_survive_aliases_without_leaking():
         for qualifier in aliased.resource_qualifiers
     )
     assert [
-        (qualifier.kind, qualifier.scope)
-        for qualifier in aliased.resource_qualifiers
+        (qualifier.kind, qualifier.scope) for qualifier in aliased.resource_qualifiers
     ] == [("volatile", None), ("coherent", "system")]
     assert [str(qualifier) for qualifier in volatile_only.resource_qualifiers] == [
         "volatile"
@@ -2859,8 +2855,7 @@ def test_codegen_resource_memory_qualifiers_survive_aliases_without_leaking():
 
     metal = MetalCodeGen().generate(shared_ast)
     assert (
-        "volatile coherent(system) device atomic_uint* aliased [[buffer(0)]]"
-        in metal
+        "volatile coherent(system) device atomic_uint* aliased [[buffer(0)]]" in metal
     )
     assert "volatile device uint* volatile_only [[buffer(1)]]" in metal
     assert "coherent(device) device uint* device_scoped [[buffer(2)]]" in metal

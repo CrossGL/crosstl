@@ -1917,8 +1917,8 @@ class MetalToCrossGLConverter:
 
         globals_list = [
             glob
-            for glob in (
-                getattr(ast, "global_variables", []) or getattr(ast, "global_vars", [])
+            for glob in getattr(ast, "global_variables", []) or getattr(
+                ast, "global_vars", []
             )
             if id(glob) not in self.metal_atomic_fence_transport_declaration_ids
         ]
@@ -2353,8 +2353,7 @@ class MetalToCrossGLConverter:
     def effective_declaration_qualifiers(self, var):
         """Return direct qualifiers plus those carried by a resolved type alias."""
         qualifiers = [
-            str(qualifier).lower()
-            for qualifier in getattr(var, "qualifiers", []) or []
+            str(qualifier).lower() for qualifier in getattr(var, "qualifiers", []) or []
         ]
         metal_type = str(getattr(var, "vtype", "") or "").strip()
         while metal_type.endswith(("*", "&")):
@@ -2400,7 +2399,9 @@ class MetalToCrossGLConverter:
     def map_resource_pointer_element_type(self, var, element_type):
         """Keep atomic pointer identity when resource qualifiers make it contractual."""
         normalized = self.normalized_metal_type(element_type)
-        if self.resource_memory_qualifiers(var) and self.atomic_element_type(normalized):
+        if self.resource_memory_qualifiers(var) and self.atomic_element_type(
+            normalized
+        ):
             if normalized.startswith("atomic<") and normalized.endswith(">"):
                 inner = normalized[len("atomic<") : -1]
                 return f"atomic<{self.map_type(inner)}>"

@@ -8,6 +8,8 @@ from crosstl.backend.DirectX.DirectxParser import HLSLParser
 from crosstl.translator.ast import ArrayLiteralNode, ArrayType, ShaderStage
 from crosstl.translator.codegen.directx_codegen import (
     DirectXAggregateInitializerError,
+)
+from crosstl.translator.codegen.directx_codegen import (
     HLSLCodeGen as TranslatorHLSLCodeGen,
 )
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen

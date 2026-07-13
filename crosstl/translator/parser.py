@@ -1444,8 +1444,7 @@ class Parser:
                 self.partition_resource_qualifiers(parsed_qualifiers)
             )
             qualifier_attributes = [
-                AttributeNode(name=qualifier)
-                for qualifier in declaration_qualifiers
+                AttributeNode(name=qualifier) for qualifier in declaration_qualifiers
             ]
 
         member_type = self.parse_type()
@@ -1831,9 +1830,7 @@ class Parser:
             self.eat("LPAREN")
             scope_token_type, scope_value = self.current_token
             if not isinstance(scope_value, str) or not scope_value.isidentifier():
-                raise SyntaxError(
-                    f"Expected coherence scope, got {scope_token_type}"
-                )
+                raise SyntaxError(f"Expected coherence scope, got {scope_token_type}")
             scope = scope_value.lower()
             self.eat(scope_token_type)
             self.eat("RPAREN")
@@ -1848,9 +1845,11 @@ class Parser:
             if isinstance(qualifier, ResourceMemoryQualifierNode)
         ]
         declaration_qualifiers = [
-            str(qualifier)
-            if isinstance(qualifier, ResourceMemoryQualifierNode)
-            else qualifier
+            (
+                str(qualifier)
+                if isinstance(qualifier, ResourceMemoryQualifierNode)
+                else qualifier
+            )
             for qualifier in qualifiers
         ]
         return declaration_qualifiers, resource_qualifiers

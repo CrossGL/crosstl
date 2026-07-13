@@ -111,8 +111,7 @@ class ResourceMemoryQualifierNode(ASTNode):
 
     def __repr__(self):
         return (
-            "ResourceMemoryQualifierNode("
-            f"kind={self.kind!r}, scope={self.scope!r})"
+            "ResourceMemoryQualifierNode(" f"kind={self.kind!r}, scope={self.scope!r})"
         )
 
 

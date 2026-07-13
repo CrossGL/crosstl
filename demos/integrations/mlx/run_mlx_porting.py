@@ -147,9 +147,7 @@ RUNTIME_READINESS_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1471",
 )
 VULKAN_GEMV_SEMANTIC_TRACKED_ISSUES: tuple[str, ...] = ()
-FENCE_CONTRACT_TRACKED_ISSUES = (
-    "https://github.com/CrossGL/crosstl/issues/1537",
-)
+FENCE_CONTRACT_TRACKED_ISSUES = ("https://github.com/CrossGL/crosstl/issues/1537",)
 VULKAN_GEMV_REPORTING_TRACKED_ISSUE = "https://github.com/CrossGL/crosstl/issues/1517"
 FULL_CORPUS_SEMANTIC_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1491",
@@ -1917,8 +1915,7 @@ def _check_opengl_frontier(
             validation_outputs[source] = _relpath(output_path, mlx_root)
             toolchain_validated_sources.append(source)
         _require(
-            toolchain_validated_sources
-            == list(MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES),
+            toolchain_validated_sources == list(MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES),
             "OpenGL frontier toolchain did not validate every configured source",
         )
         validation_status = "validated"

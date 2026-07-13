@@ -1398,8 +1398,7 @@ class MetalCodeGen:
             self.collect_metal_resource_memory_contracts(ast)
         )
         self.requires_metal_resource_coherence = any(
-            kind == "coherent"
-            for kind, _scope in self.metal_resource_memory_contracts
+            kind == "coherent" for kind, _scope in self.metal_resource_memory_contracts
         )
         self.functions_by_name = {
             func.name: func for func in all_functions if getattr(func, "name", None)
@@ -1797,9 +1796,7 @@ class MetalCodeGen:
         if (
             self.requires_metal_system_thread_scope
             or self.requires_metal_resource_coherence
-        ) and not any(
-            "#pragma metal internals" in line.lower() for line in pre_lines
-        ):
+        ) and not any("#pragma metal internals" in line.lower() for line in pre_lines):
             code += "#pragma METAL internals : enable\n"
         if pre_lines:
             code += "\n".join(pre_lines) + "\n"
@@ -2458,9 +2455,7 @@ class MetalCodeGen:
         nodes = walk() if callable(walk) else self.iter_ast_nodes(ast)
         contracts = []
         for node in nodes:
-            raw_type = getattr(
-                node, "param_type", getattr(node, "var_type", None)
-            )
+            raw_type = getattr(node, "param_type", getattr(node, "var_type", None))
             if not self.metal_resource_memory_contract_is_emittable(node, raw_type):
                 continue
             for contract in self.resource_memory_qualifier_contracts(node, raw_type):

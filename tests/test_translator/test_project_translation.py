@@ -8465,10 +8465,7 @@ def test_translate_project_reports_directx_private_pointer_contract(tmp_path):
         "directx.private-pointer-parameter-lowering": 1
     }
     diagnostic = payload["diagnostics"][0]
-    assert (
-        diagnostic["code"]
-        == "project.translate.directx-private-pointer-unsupported"
-    )
+    assert diagnostic["code"] == "project.translate.directx-private-pointer-unsupported"
     assert diagnostic["target"] == "directx"
     assert diagnostic["sourceBackend"] == "cgl"
     assert diagnostic["location"]["file"] == "private_pointer.cgl"
@@ -16233,15 +16230,12 @@ def test_post_materialization_template_diagnostics_reuse_function_index(
     function_count = 64
     source = (
         "template <int Width> struct WidthTag { float values[Width]; };\n"
-        + "\n".join(
-            textwrap.dedent(f"""
+        + "\n".join(textwrap.dedent(f"""
                 void helper_{index}() {{
                     constexpr int Width = 4;
                     thread float values[Width];
                 }}
-                """).strip()
-            for index in range(function_count)
-        )
+                """).strip() for index in range(function_count))
         + "\n"
     )
     source_path = tmp_path / "shader.metal"
@@ -16269,11 +16263,13 @@ def test_post_materialization_template_diagnostics_reuse_function_index(
         counted_find_functions,
     )
 
-    records = project_pipeline._post_materialization_unresolved_metal_template_type_records(
-        preprocessor=preprocessor,
-        unit=unit,
-        source=source,
-        target="opengl",
+    records = (
+        project_pipeline._post_materialization_unresolved_metal_template_type_records(
+            preprocessor=preprocessor,
+            unit=unit,
+            source=source,
+            target="opengl",
+        )
     )
 
     assert records == []
@@ -31206,9 +31202,7 @@ def test_translate_project_reports_unrepresentable_atomic_fence_contract(
     assert payload["summary"]["translatedCount"] == 0
     assert payload["summary"]["failedCount"] == 1
     assert payload["summary"]["diagnosticsByCode"] == {diagnostic_code: 1}
-    assert payload["summary"]["missingCapabilityCounts"] == {
-        missing_capability: 1
-    }
+    assert payload["summary"]["missingCapabilityCounts"] == {missing_capability: 1}
     diagnostic = payload["diagnostics"][0]
     assert diagnostic["code"] == diagnostic_code
     assert diagnostic["target"] == target

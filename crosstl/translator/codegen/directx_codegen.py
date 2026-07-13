@@ -4505,12 +4505,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             params.append(
                 f"{declaration} {semantic_attr}" if semantic_attr else declaration
             )
-            if (
-                is_private_pointer_parameter(p)
-                and p.name
-                not in self.function_private_pointer_scalar_parameters.get(
-                    function_name, set()
-                )
+            if is_private_pointer_parameter(
+                p
+            ) and p.name not in self.function_private_pointer_scalar_parameters.get(
+                function_name, set()
             ):
                 base_name = self.current_hlsl_private_pointer_base_names[p.name]
                 params.append(f"int {base_name}")
@@ -18604,9 +18602,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 parameter
                 for parameter in parameters
                 if is_private_pointer_parameter(parameter)
-                and self.hlsl_entry_resource_parameter_global_type(
-                    parameter, function
-                )
+                and self.hlsl_entry_resource_parameter_global_type(parameter, function)
                 is None
             ]
             if not private_parameters:
@@ -18616,14 +18612,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 index: parameter.name
                 for index, parameter in enumerate(parameters)
                 if is_private_pointer_parameter(parameter)
-                and self.hlsl_entry_resource_parameter_global_type(
-                    parameter, function
-                )
+                and self.hlsl_entry_resource_parameter_global_type(parameter, function)
                 is None
             }
-            used_names = {
-                getattr(parameter, "name", None) for parameter in parameters
-            }
+            used_names = {getattr(parameter, "name", None) for parameter in parameters}
             used_names.update(self.collect_hlsl_function_identifier_names(function))
             base_names = {}
             for parameter in private_parameters:
@@ -18675,10 +18667,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         is_scalar = binding.get("root_kind") == "scalar"
                         if binding.get("root_kind") == "parameter":
                             is_scalar = binding.get("root") in caller_scalar_parameters
-                        if (
-                            is_scalar
-                            and parameter_name
-                            not in scalar_parameters.get(call["callee"], set())
+                        if is_scalar and parameter_name not in scalar_parameters.get(
+                            call["callee"], set()
                         ):
                             scalar_parameters[call["callee"]].add(parameter_name)
                             changed = True
@@ -18693,9 +18683,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         continue
                     binding_is_scalar = binding.get("root_kind") == "scalar"
                     if binding.get("root_kind") == "parameter":
-                        binding_is_scalar = binding.get("root") in scalar_parameters.get(
-                            call["caller"], set()
-                        )
+                        binding_is_scalar = binding.get(
+                            "root"
+                        ) in scalar_parameters.get(call["caller"], set())
                     if binding_is_scalar:
                         continue
                     raise DirectXPrivatePointerParameterError(
@@ -18705,7 +18695,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         function_name=call["callee"],
                         parameter_name=parameter_name,
                         reason="mixed-scalar-array-backing",
-                        source_location=getattr(call.get("node"), "source_location", None),
+                        source_location=getattr(
+                            call.get("node"), "source_location", None
+                        ),
                     )
 
         for calls in view_calls.values():
@@ -18717,18 +18709,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
                 for parameter_name in full_span_parameters:
                     binding = call["bindings"].get(parameter_name, {})
-                    if (
-                        binding.get("root_kind") == "local"
-                        and binding.get("offset") == (0, 0)
-                    ):
+                    if binding.get("root_kind") == "local" and binding.get(
+                        "offset"
+                    ) == (0, 0):
                         direct_spans[call["callee"]][parameter_name] = max(
                             direct_spans[call["callee"]][parameter_name],
                             binding["extent"],
                         )
 
         required_spans = {
-            function_name: dict(spans)
-            for function_name, spans in direct_spans.items()
+            function_name: dict(spans) for function_name, spans in direct_spans.items()
         }
         self.function_private_pointer_required_spans = required_spans
         max_iterations = max(
@@ -18792,9 +18782,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         for calls in view_calls.values():
             for call in calls:
-                callee_scalar_parameters = scalar_parameters.get(
-                    call["callee"], set()
-                )
+                callee_scalar_parameters = scalar_parameters.get(call["callee"], set())
                 if not all(
                     binding.get("root_kind") == "local"
                     or binding.get("root_kind") == "scalar"
@@ -18826,10 +18814,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                             binding = call["bindings"][parameter.name]
                             if binding.get("root_kind") == "local":
                                 extent = binding["extent"]
-                            elif (
-                                binding.get("root_kind") == "scalar"
-                                and parameter.name
-                                in scalar_parameters.get(call["callee"], set())
+                            elif binding.get(
+                                "root_kind"
+                            ) == "scalar" and parameter.name in scalar_parameters.get(
+                                call["callee"], set()
                             ):
                                 extent = 1
                             elif binding.get("root_kind") == "parameter":
@@ -18992,18 +18980,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if isinstance(expression, FunctionCallNode):
             function_name = self.function_call_name(expression)
             arguments = list(getattr(expression, "arguments", []) or [])
-            if function_name in {
-                "int",
-                "uint",
-                "short",
-                "ushort",
-                "int16",
-                "uint16",
-                "int32_t",
-                "uint32_t",
-                "size_t",
-                "ptrdiff_t",
-            } and len(arguments) == 1:
+            if (
+                function_name
+                in {
+                    "int",
+                    "uint",
+                    "short",
+                    "ushort",
+                    "int16",
+                    "uint16",
+                    "int32_t",
+                    "uint32_t",
+                    "size_t",
+                    "ptrdiff_t",
+                }
+                and len(arguments) == 1
+            ):
                 return self.hlsl_private_pointer_interval(
                     arguments[0], intervals, constants
                 )
@@ -19105,9 +19097,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             bound_expression = condition.right
         elif right_name == loop_name:
             bound_expression = condition.left
-            operator = {"<": ">", "<=": ">=", ">": "<", ">=": "<="}.get(
-                operator
-            )
+            operator = {"<": ">", "<=": ">=", ">": "<", ">=": "<="}.get(operator)
         else:
             return loop_name, None
         bound = self.hlsl_private_pointer_interval(
@@ -19289,10 +19279,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                                 "root_kind": None,
                                 "root": self.expression_name(argument),
                                 "offset": None,
-                                "side_effecting": (
-                                    self.hlsl_private_pointer_expression_has_side_effects(
-                                        argument
-                                    )
+                                "side_effecting": self.hlsl_private_pointer_expression_has_side_effects(
+                                    argument
                                 ),
                             }
                         bindings[parameter_name] = binding
@@ -23720,8 +23708,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if isinstance(target, (IdentifierNode, VariableNode)):
             return True
         if isinstance(target, MemberAccessNode) or (
-            hasattr(target, "__class__")
-            and "MemberAccess" in str(target.__class__)
+            hasattr(target, "__class__") and "MemberAccess" in str(target.__class__)
         ):
             owner = getattr(target, "object_expr", getattr(target, "object", None))
             member = getattr(target, "member", None)
@@ -23840,9 +23827,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         ) and self.hlsl_is_zero_initializer_expression(initializer):
             rendered = self.hlsl_value_initialized_expression(root_expr, mapped_type)
         else:
-            rendered = self.generate_expression_with_expected(
-                initializer, mapped_type
-            )
+            rendered = self.generate_expression_with_expected(initializer, mapped_type)
         return [f"{target} = {rendered}"]
 
     def render_hlsl_fixed_array_literal_call_statement(self, expr, indent=0):

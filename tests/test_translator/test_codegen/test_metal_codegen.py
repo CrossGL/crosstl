@@ -1542,8 +1542,7 @@ def test_metal_resource_memory_qualifiers_precede_pointer_address_space(scope):
 
     assert "volatile device uint* volatile_only [[buffer(0)]]" in generated_code
     assert (
-        f"coherent({scope}) device atomic_uint* scoped [[buffer(1)]]"
-        in generated_code
+        f"coherent({scope}) device atomic_uint* scoped [[buffer(1)]]" in generated_code
     )
     assert "device uint* plain [[buffer(2)]]" in generated_code
     assert (
@@ -1552,14 +1551,9 @@ def test_metal_resource_memory_qualifiers_precede_pointer_address_space(scope):
     )
     assert "uint index [[thread_position_in_grid]]" in generated_code
     assert "device uint* volatile volatile_only" not in generated_code
-    assert (
-        f"device atomic_uint* coherent({scope}) scoped" not in generated_code
-    )
+    assert f"device atomic_uint* coherent({scope}) scoped" not in generated_code
     assert "device atomic_uint& volatile referenced" not in generated_code
-    assert (
-        "volatile coherent(system) device uint* qualified_local;"
-        in generated_code
-    )
+    assert "volatile coherent(system) device uint* qualified_local;" in generated_code
     assert "volatile uint local" not in generated_code
     assert f"coherent({scope}) uint local" not in generated_code
     assert "#pragma METAL internals : enable" in generated_code
@@ -1584,9 +1578,7 @@ def test_metal_resource_memory_qualifiers_survive_inout_reference_lowering():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert (
-        "volatile coherent(system) device Data& referenced" in generated_code
-    )
+    assert "volatile coherent(system) device Data& referenced" in generated_code
     assert "device Data& volatile referenced" not in generated_code
 
 
