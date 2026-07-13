@@ -148,6 +148,123 @@ def spirv_storage_buffer_store_operands(spv_code, variable_name):
     ]
 
 
+def spirv_basic_blocks(spv_code):
+    blocks = {}
+    current_label = None
+    for line in spv_code.splitlines():
+        label = re.fullmatch(r"(%\d+) = OpLabel", line)
+        if label is not None:
+            current_label = label.group(1)
+            blocks[current_label] = []
+        elif line == "OpFunctionEnd":
+            current_label = None
+        elif current_label is not None:
+            blocks[current_label].append(line)
+    return blocks
+
+
+def spirv_basic_block_successors(spv_code):
+    successors = {}
+    for label, instructions in spirv_basic_blocks(spv_code).items():
+        successors[label] = set()
+        for instruction in reversed(instructions):
+            branch = re.fullmatch(r"OpBranch (%\d+)", instruction)
+            if branch is not None:
+                successors[label].add(branch.group(1))
+                break
+
+            conditional = re.fullmatch(
+                r"OpBranchConditional %\d+ (%\d+) (%\d+)", instruction
+            )
+            if conditional is not None:
+                successors[label].update(conditional.groups())
+                break
+
+            switch = re.fullmatch(r"OpSwitch (%\d+) (%\d+)(.*)", instruction)
+            if switch is not None:
+                successors[label].add(switch.group(2))
+                successors[label].update(re.findall(r"-?\d+ (%\d+)", switch.group(3)))
+                break
+
+            if re.fullmatch(
+                r"Op(?:Return|ReturnValue|Kill|Unreachable).*", instruction
+            ):
+                break
+    return successors
+
+
+def spirv_reachable_blocks(successors, start):
+    reachable = set()
+    pending = [start]
+    while pending:
+        label = pending.pop()
+        if label in reachable:
+            continue
+        reachable.add(label)
+        pending.extend(successors.get(label, ()))
+    return reachable
+
+
+def spirv_storage_buffer_store_blocks(spv_code, variable_name, target_index):
+    variable = spirv_named_variable(spv_code, variable_name, storage_class="Uniform")
+    integer_constants = spirv_integer_constant_values(spv_code)
+    access_indexes = {}
+    for result_id, operands in re.findall(
+        rf"(%\d+) = Op(?:InBounds)?AccessChain %\d+ " rf"{re.escape(variable)}([^\n]*)",
+        spv_code,
+    ):
+        operand_ids = re.findall(r"%\d+", operands)
+        if operand_ids and operand_ids[-1] in integer_constants:
+            access_indexes[result_id] = integer_constants[operand_ids[-1]]
+
+    store_blocks = set()
+    for label, instructions in spirv_basic_blocks(spv_code).items():
+        for pointer_id in re.findall(r"OpStore (%\d+) %\d+\b", "\n".join(instructions)):
+            if access_indexes.get(pointer_id) == target_index:
+                store_blocks.add(label)
+    return store_blocks
+
+
+def spirv_integer_values_feeding_value(spv_code, value_id):
+    integer_constants = spirv_integer_constant_values(spv_code)
+    instructions = {
+        result_id: instruction
+        for result_id, instruction in re.findall(r"^(%\d+) = (.+)$", spv_code, re.M)
+    }
+    stores_by_pointer = {}
+    for pointer_id, stored_value in re.findall(
+        r"^OpStore (%\d+) (%\d+)\b", spv_code, re.M
+    ):
+        stores_by_pointer.setdefault(pointer_id, set()).add(stored_value)
+
+    visited = set()
+
+    def collect(candidate):
+        if candidate in integer_constants:
+            return {integer_constants[candidate]}
+        if candidate in visited:
+            return set()
+        visited.add(candidate)
+
+        instruction = instructions.get(candidate, "")
+        load = re.fullmatch(r"OpLoad %\d+ (%\d+)", instruction)
+        if load is not None:
+            return set().union(
+                *(
+                    collect(stored)
+                    for stored in stores_by_pointer.get(load.group(1), ())
+                )
+            )
+
+        if instruction.startswith(("OpPhi ", "OpSelect ", "OpCopyObject ")):
+            return set().union(
+                *(collect(operand) for operand in re.findall(r"%\d+", instruction)[1:])
+            )
+        return set()
+
+    return collect(value_id)
+
+
 def spirv_vector_type_widths(spv_code):
     return {
         type_id: int(width)
@@ -17859,7 +17976,7 @@ class TestVulkanSPIRVCodeGen:
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
-    def test_inlined_storage_buffer_helper_rejects_nested_return(self):
+    def test_inlined_void_conditional_return_bypasses_later_write(self, tmp_path):
         source_code = """
         shader NestedInlineReturn {
             RWStructuredBuffer<int> values @binding(0);
@@ -17875,40 +17992,438 @@ class TestVulkanSPIRVCodeGen:
 
             compute {
                 void main() {
-                    writeMaybe(values, 1);
+                    int enabled = values.Load(3);
+                    writeMaybe(values, enabled);
+                    values.Store(1, 2);
                 }
             }
         }
         """
 
-        with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
-            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
-
-        assert exc_info.value.feature == (
-            "nested-return-storage-buffer-function-inline"
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
         )
-        assert exc_info.value.missing_capabilities == (
-            "spirv.nested_return_storage_buffer_function",
-        )
-        assert "helper 'writeMaybe' contains a nested return" in str(exc_info.value)
 
-    def test_nested_inline_return_detection_ignores_caller_constant_scope(self):
+        successors = spirv_basic_block_successors(spv_code)
+        helper_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 0)
+        caller_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 1)
+        conditional_successors = [
+            tuple(targets) for targets in successors.values() if len(targets) == 2
+        ]
+        assert helper_write_blocks
+        assert caller_write_blocks
+        assert any(
+            bool(spirv_reachable_blocks(successors, left) & helper_write_blocks)
+            != bool(spirv_reachable_blocks(successors, right) & helper_write_blocks)
+            and all(
+                spirv_reachable_blocks(successors, target) & caller_write_blocks
+                for target in (left, right)
+            )
+            for left, right in conditional_successors
+        )
+        assert len(re.findall(r"^OpReturn$", spv_code, re.M)) == 1
+        assert "writeMaybe" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_inlined_non_void_return_merges_with_tail_expression(self, tmp_path):
         source_code = """
-        shader NestedInlineReturnShadow {
-            const int ENABLED = 0;
+        shader NestedInlineValueReturn {
             RWStructuredBuffer<int> values @binding(0);
 
-            void writeMaybe(RWStructuredBuffer<int> data) {
-                const int ENABLED = 1;
-                if (ENABLED) {
-                    return;
+            int selectValue(RWStructuredBuffer<int> data, int enabled) {
+                if (enabled != 0) {
+                    return 7;
                 }
-                data.Store(0, 1);
+                data.Store(0, 3);
+                3
             }
 
             compute {
                 void main() {
-                    writeMaybe(values);
+                    int enabled = values.Load(3);
+                    int selected = selectValue(values, enabled);
+                    values.Store(1, selected);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        output_stores = dict(spirv_storage_buffer_store_operands(spv_code, "values"))
+        integer_constants = spirv_integer_constant_values(spv_code)
+        assert integer_constants[output_stores[0]] == 3
+        assert spirv_integer_values_feeding_value(spv_code, output_stores[1]) == {3, 7}
+        assert "OpSelectionMerge" in spv_code
+        assert "OpReturnValue" not in spv_code
+        assert "selectValue" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_inlined_non_void_fallthrough_is_unreachable(self, tmp_path):
+        source_code = """
+        shader NestedInlineValueFallthrough {
+            RWStructuredBuffer<int> values @binding(0);
+
+            int selectValue(RWStructuredBuffer<int> data, int enabled) {
+                if (enabled != 0) {
+                    return 7;
+                }
+                data.Store(0, 3);
+            }
+
+            compute {
+                void main() {
+                    int enabled = values.Load(3);
+                    int selected = selectValue(values, enabled);
+                    values.Store(1, selected);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        output_stores = dict(spirv_storage_buffer_store_operands(spv_code, "values"))
+        assert spirv_integer_values_feeding_value(spv_code, output_stores[1]) == {7}
+        assert "OpUnreachable" in spv_code
+        assert "OpReturnValue" not in spv_code
+        assert "selectValue" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_inlined_non_void_without_reachable_return_is_unreachable(self, tmp_path):
+        source_code = """
+        shader InlineValueWithoutReachableReturn {
+            RWStructuredBuffer<int> values @binding(0);
+
+            int selectValue(RWStructuredBuffer<int> data) {
+                if (false) {
+                    return 7;
+                }
+                data.Store(0, 3);
+            }
+
+            compute {
+                void main() {
+                    int selected = selectValue(values);
+                    values.Store(1, selected);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        output_stores = dict(spirv_storage_buffer_store_operands(spv_code, "values"))
+        integer_constants = spirv_integer_constant_values(spv_code)
+        assert integer_constants[output_stores[0]] == 3
+        assert spirv_integer_values_feeding_value(spv_code, output_stores[1]) == set()
+        assert "OpUnreachable" in spv_code
+        assert "OpReturnValue" not in spv_code
+        assert "selectValue" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_inline_return_does_not_exit_caller_owned_loop(self, tmp_path):
+        source_code = """
+        shader CallerLoopInlineReturn {
+            RWStructuredBuffer<int> values @binding(0);
+
+            void writeMaybe(RWStructuredBuffer<int> data, int enabled) {
+                if (enabled != 0) {
+                    return;
+                }
+                data.Store(0, 10);
+            }
+
+            compute {
+                void main() {
+                    int enabled = values.Load(4);
+                    for (int i = 0; i < 2; i = i + 1) {
+                        writeMaybe(values, enabled);
+                        values.Store(1, i);
+                    }
+                    values.Store(2, 12);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        successors = spirv_basic_block_successors(spv_code)
+        helper_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 0)
+        loop_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 1)
+        post_loop_write_blocks = spirv_storage_buffer_store_blocks(
+            spv_code, "values", 2
+        )
+        assert helper_write_blocks
+        assert loop_write_blocks
+        assert post_loop_write_blocks
+        return_flag = spirv_named_variable(
+            spv_code, "__inline_returned", storage_class="Function"
+        )
+        flag_load = re.search(
+            rf"(%\d+) = OpLoad %\d+ {re.escape(return_flag)}\b", spv_code
+        )
+        assert flag_load is not None
+        fallthrough_condition = re.search(
+            rf"(%\d+) = OpLogicalNot %\d+ {re.escape(flag_load.group(1))}\b",
+            spv_code,
+        )
+        assert fallthrough_condition is not None
+        true_values = set(re.findall(r"(%\d+) = OpConstantTrue %\d+", spv_code))
+        return_blocks = {
+            block
+            for block, instructions in spirv_basic_blocks(spv_code).items()
+            if any(
+                re.fullmatch(
+                    rf"OpStore {re.escape(return_flag)} "
+                    rf"({'|'.join(map(re.escape, true_values))})",
+                    instruction,
+                )
+                for instruction in instructions
+            )
+        }
+        caller_loop_merges = set(re.findall(r"OpLoopMerge (%\d+) %\d+ None", spv_code))
+        assert return_blocks
+        assert caller_loop_merges
+        assert all(
+            not (successors[block] & caller_loop_merges) for block in return_blocks
+        )
+        guarded_branch = re.search(
+            rf"OpBranchConditional {re.escape(fallthrough_condition.group(1))} "
+            r"(%\d+) (%\d+)",
+            spv_code,
+        )
+        assert guarded_branch is not None
+        assert guarded_branch.group(1) in helper_write_blocks
+        assert guarded_branch.group(2) in loop_write_blocks
+        assert all(
+            spirv_reachable_blocks(successors, target) & loop_write_blocks
+            for target in guarded_branch.groups()
+        )
+        assert "OpLoopMerge" in spv_code
+        assert len(re.findall(r"^OpReturn$", spv_code, re.M)) == 1
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_inline_return_does_not_exit_caller_owned_switch(self, tmp_path):
+        source_code = """
+        shader CallerSwitchInlineReturn {
+            RWStructuredBuffer<int> values @binding(0);
+
+            void writeMaybe(RWStructuredBuffer<int> data, int enabled) {
+                if (enabled != 0) {
+                    return;
+                }
+                data.Store(0, 10);
+            }
+
+            compute {
+                void main() {
+                    int mode = values.Load(4);
+                    int enabled = values.Load(5);
+                    switch (mode) {
+                        case 0:
+                            writeMaybe(values, enabled);
+                            values.Store(1, 11);
+                            break;
+                        default:
+                            values.Store(2, 12);
+                    }
+                    values.Store(3, 13);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        blocks = spirv_basic_blocks(spv_code)
+        successors = spirv_basic_block_successors(spv_code)
+        helper_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 0)
+        case_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 1)
+        caller_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 3)
+        return_flag = spirv_named_variable(
+            spv_code, "__inline_returned", storage_class="Function"
+        )
+        true_values = set(re.findall(r"(%\d+) = OpConstantTrue %\d+", spv_code))
+        return_blocks = {
+            block
+            for block, instructions in blocks.items()
+            if any(
+                re.fullmatch(
+                    rf"OpStore {re.escape(return_flag)} "
+                    rf"({'|'.join(map(re.escape, true_values))})",
+                    instruction,
+                )
+                for instruction in instructions
+            )
+        }
+        switch_merges = {
+            match.group(1)
+            for instructions in blocks.values()
+            if any(instruction.startswith("OpSwitch ") for instruction in instructions)
+            for instruction in instructions
+            if (match := re.fullmatch(r"OpSelectionMerge (%\d+) None", instruction))
+        }
+        assert helper_write_blocks
+        assert case_write_blocks
+        assert caller_write_blocks
+        assert return_blocks
+        assert switch_merges
+        assert all(not (successors[block] & switch_merges) for block in return_blocks)
+        assert all(
+            spirv_reachable_blocks(successors, block) & case_write_blocks
+            for block in return_blocks
+        )
+        assert all(
+            spirv_reachable_blocks(successors, merge) & caller_write_blocks
+            for merge in switch_merges
+        )
+        assert "OpSwitch" in spv_code
+        assert len(re.findall(r"^OpReturn$", spv_code, re.M)) == 1
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_void_inline_return_expression_preserves_side_effects(self, tmp_path):
+        source_code = """
+        shader InlineVoidReturnExpression {
+            RWStructuredBuffer<int> values @binding(0);
+
+            void record(RWStructuredBuffer<int> data) {
+                data.Store(0, 10);
+            }
+
+            void writeMaybe(RWStructuredBuffer<int> data, int enabled) {
+                if (enabled != 0) {
+                    return record(data);
+                }
+                data.Store(1, 11);
+            }
+
+            compute {
+                void main() {
+                    int enabled = values.Load(3);
+                    writeMaybe(values, enabled);
+                    values.Store(2, 12);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        stores = spirv_storage_buffer_store_operands(spv_code, "values")
+        integer_constants = spirv_integer_constant_values(spv_code)
+        constant_stores = [
+            (index, integer_constants[value_id])
+            for index, value_id in stores
+            if value_id in integer_constants
+        ]
+        assert sorted(constant_stores) == [(0, 10), (1, 11), (2, 12)]
+        assert sum(index == 0 for index, _value in constant_stores) == 1
+        assert "record" not in spv_code
+        assert "writeMaybe" not in spv_code
+        assert len(re.findall(r"^OpReturn$", spv_code, re.M)) == 1
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_void_inline_return_match_preserves_arm_side_effects(self, tmp_path):
+        source_code = """
+        shader InlineVoidReturnMatch {
+            RWStructuredBuffer<int> values @binding(0);
+
+            void recordFirst(RWStructuredBuffer<int> data) {
+                data.Store(0, 10);
+            }
+
+            void recordSecond(RWStructuredBuffer<int> data) {
+                data.Store(1, 11);
+            }
+
+            void writeMode(RWStructuredBuffer<int> data, int mode) {
+                return match mode {
+                    0 => recordFirst(data),
+                    _ => recordSecond(data),
+                };
+                data.Store(2, 12);
+            }
+
+            compute {
+                void main() {
+                    int mode = values.Load(4);
+                    writeMode(values, mode);
+                    values.Store(3, 13);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        stores = spirv_storage_buffer_store_operands(spv_code, "values")
+        integer_constants = spirv_integer_constant_values(spv_code)
+        constant_stores = [
+            (index, integer_constants[value_id])
+            for index, value_id in stores
+            if value_id in integer_constants
+        ]
+        assert sorted(constant_stores) == [
+            (0, 10),
+            (1, 11),
+            (2, 12),
+            (3, 13),
+        ]
+        assert sum(index == 0 for index, _value in constant_stores) == 1
+        assert sum(index == 1 for index, _value in constant_stores) == 1
+        assert "recordFirst" not in spv_code
+        assert "recordSecond" not in spv_code
+        assert "writeMode" not in spv_code
+        assert "OpSelectionMerge" in spv_code
+        assert len(re.findall(r"^OpReturn$", spv_code, re.M)) == 1
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_inline_return_nested_in_match_arm_is_rejected(self):
+        source_code = """
+        shader NestedInlineMatchReturn {
+            RWStructuredBuffer<int> values @binding(0);
+
+            int selectValue(RWStructuredBuffer<int> data, int mode) {
+                return match mode {
+                    0 => {
+                        if (data.Load(0) != 0) {
+                            return 7;
+                        }
+                        3
+                    },
+                    _ => 4,
+                };
+            }
+
+            compute {
+                void main() {
+                    int mode = values.Load(1);
+                    int selected = selectValue(values, mode);
+                    values.Store(2, selected);
                 }
             }
         }
@@ -17918,11 +18433,415 @@ class TestVulkanSPIRVCodeGen:
             VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
         assert exc_info.value.feature == (
-            "nested-return-storage-buffer-function-inline"
+            "nested-match-return-storage-buffer-function-inline"
         )
         assert exc_info.value.missing_capabilities == (
-            "spirv.nested_return_storage_buffer_function",
+            "spirv.nested_match_return_storage_buffer_function",
         )
+        assert "helper 'selectValue' requires match-aware return control flow" in str(
+            exc_info.value
+        )
+
+    def test_inlined_return_nested_in_loop_exits_inline_helper(self, tmp_path):
+        source_code = """
+        shader NestedInlineLoopReturn {
+            RWStructuredBuffer<int> values @binding(0);
+
+            void writeUntil(RWStructuredBuffer<int> data, int stop) {
+                for (int i = 0; i < 3; i = i + 1) {
+                    if (i == stop) {
+                        return;
+                    }
+                    data.Store(i, i + 10);
+                }
+                data.Store(3, 13);
+            }
+
+            compute {
+                void main() {
+                    int stop = values.Load(5);
+                    writeUntil(values, stop);
+                    values.Store(4, 14);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        successors = spirv_basic_block_successors(spv_code)
+        post_loop_write_blocks = spirv_storage_buffer_store_blocks(
+            spv_code, "values", 3
+        )
+        caller_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 4)
+        assert post_loop_write_blocks
+        assert caller_write_blocks
+        assert any(
+            bool(spirv_reachable_blocks(successors, left) & post_loop_write_blocks)
+            != bool(spirv_reachable_blocks(successors, right) & post_loop_write_blocks)
+            and all(
+                spirv_reachable_blocks(successors, target) & caller_write_blocks
+                for target in (left, right)
+            )
+            for targets in successors.values()
+            if len(targets) == 2
+            for left, right in [tuple(targets)]
+        )
+        assert "OpLoopMerge" in spv_code
+        assert len(re.findall(r"^OpReturn$", spv_code, re.M)) == 1
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_inlined_return_unwinds_nested_loops_structurally(self, tmp_path):
+        source_code = """
+        shader NestedInlineTwoLoopReturn {
+            RWStructuredBuffer<int> values @binding(0);
+
+            void writeNested(RWStructuredBuffer<int> data, int stop) {
+                for (int outer = 0; outer < 2; outer = outer + 1) {
+                    for (int inner = 0; inner < 2; inner = inner + 1) {
+                        if (inner == stop) {
+                            return;
+                        }
+                        data.Store(0, inner);
+                    }
+                    data.Store(1, outer);
+                }
+                data.Store(2, 12);
+            }
+
+            compute {
+                void main() {
+                    int stop = values.Load(4);
+                    writeNested(values, stop);
+                    values.Store(3, 13);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert spv_code.count("OpLoopMerge") >= 2
+        assert spirv_storage_buffer_store_blocks(spv_code, "values", 1)
+        assert spirv_storage_buffer_store_blocks(spv_code, "values", 2)
+        assert spirv_storage_buffer_store_blocks(spv_code, "values", 3)
+        assert len(re.findall(r"^OpReturn$", spv_code, re.M)) == 1
+        assert "writeNested" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_inlined_return_unwinds_switch_nested_in_while(self, tmp_path):
+        source_code = """
+        shader NestedInlineSwitchLoopReturn {
+            RWStructuredBuffer<int> values @binding(0);
+
+            void writeModes(RWStructuredBuffer<int> data, int stop) {
+                int i = 0;
+                while (i < 2) {
+                    switch (i) {
+                        case 0:
+                            if (stop != 0) {
+                                return;
+                            }
+                            data.Store(0, 10);
+                            break;
+                        default:
+                            data.Store(1, 11);
+                    }
+                    data.Store(2, 12);
+                    i = i + 1;
+                }
+                data.Store(3, 13);
+            }
+
+            compute {
+                void main() {
+                    int stop = values.Load(5);
+                    writeModes(values, stop);
+                    values.Store(4, 14);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        successors = spirv_basic_block_successors(spv_code)
+        post_loop_write_blocks = spirv_storage_buffer_store_blocks(
+            spv_code, "values", 3
+        )
+        caller_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 4)
+        assert post_loop_write_blocks
+        assert caller_write_blocks
+        assert any(
+            bool(spirv_reachable_blocks(successors, left) & post_loop_write_blocks)
+            != bool(spirv_reachable_blocks(successors, right) & post_loop_write_blocks)
+            and all(
+                spirv_reachable_blocks(successors, target) & caller_write_blocks
+                for target in (left, right)
+            )
+            for targets in successors.values()
+            if len(targets) == 2
+            for left, right in [tuple(targets)]
+        )
+        assert "OpSwitch" in spv_code
+        assert "OpLoopMerge" in spv_code
+        assert len(re.findall(r"^OpReturn$", spv_code, re.M)) == 1
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_nested_inlined_helpers_keep_independent_return_state(self, tmp_path):
+        source_code = """
+        shader NestedInlineHelperReturn {
+            RWStructuredBuffer<int> values @binding(0);
+
+            void writeInner(RWStructuredBuffer<int> data, int enabled) {
+                if (enabled != 0) {
+                    return;
+                }
+                data.Store(0, 10);
+            }
+
+            void writeOuter(
+                RWStructuredBuffer<int> data,
+                int innerEnabled,
+                int outerEnabled
+            ) {
+                if (outerEnabled != 0) {
+                    return;
+                }
+                writeInner(data, innerEnabled);
+                data.Store(1, 11);
+            }
+
+            compute {
+                void main() {
+                    int innerEnabled = values.Load(3);
+                    int outerEnabled = values.Load(4);
+                    writeOuter(values, innerEnabled, outerEnabled);
+                    values.Store(2, 12);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        successors = spirv_basic_block_successors(spv_code)
+        inner_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 0)
+        outer_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 1)
+        caller_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 2)
+        assert inner_write_blocks
+        assert outer_write_blocks
+        assert caller_write_blocks
+        assert any(
+            bool(spirv_reachable_blocks(successors, left) & inner_write_blocks)
+            != bool(spirv_reachable_blocks(successors, right) & inner_write_blocks)
+            and all(
+                spirv_reachable_blocks(successors, target) & outer_write_blocks
+                for target in (left, right)
+            )
+            for targets in successors.values()
+            if len(targets) == 2
+            for left, right in [tuple(targets)]
+        )
+        assert len(re.findall(r'OpName %\d+ "__inline_returned[^"]*"', spv_code)) == 2
+        assert len(re.findall(r"^OpReturn$", spv_code, re.M)) == 1
+        assert "writeInner" not in spv_code
+        assert "writeOuter" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_inlined_return_nested_in_switch_preserves_prior_write(self, tmp_path):
+        source_code = """
+        shader NestedInlineSwitchReturn {
+            RWStructuredBuffer<int> values @binding(0);
+
+            void writeMode(RWStructuredBuffer<int> data, int mode) {
+                switch (mode) {
+                    case 0:
+                        data.Store(0, 10);
+                        return;
+                    case 1:
+                        data.Store(1, 11);
+                        break;
+                    default:
+                        data.Store(2, 12);
+                }
+                data.Store(3, 13);
+            }
+
+            compute {
+                void main() {
+                    int mode = values.Load(5);
+                    writeMode(values, mode);
+                    values.Store(4, 14);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        successors = spirv_basic_block_successors(spv_code)
+        prior_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 0)
+        post_switch_write_blocks = spirv_storage_buffer_store_blocks(
+            spv_code, "values", 3
+        )
+        caller_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 4)
+        assert prior_write_blocks
+        assert post_switch_write_blocks
+        assert caller_write_blocks
+        return_flag = spirv_named_variable(
+            spv_code, "__inline_returned", storage_class="Function"
+        )
+        true_values = set(re.findall(r"(%\d+) = OpConstantTrue %\d+", spv_code))
+        assert any(
+            any(
+                re.fullmatch(
+                    rf"OpStore {re.escape(return_flag)} ({'|'.join(map(re.escape, true_values))})",
+                    instruction,
+                )
+                for instruction in spirv_basic_blocks(spv_code)[block]
+            )
+            for block in prior_write_blocks
+        )
+        flag_load = re.search(
+            rf"(%\d+) = OpLoad %\d+ {re.escape(return_flag)}\b", spv_code
+        )
+        assert flag_load is not None
+        fallthrough_condition = re.search(
+            rf"(%\d+) = OpLogicalNot %\d+ {re.escape(flag_load.group(1))}\b",
+            spv_code,
+        )
+        assert fallthrough_condition is not None
+        guarded_branch = re.search(
+            rf"OpBranchConditional {re.escape(fallthrough_condition.group(1))} "
+            r"(%\d+) (%\d+)",
+            spv_code,
+        )
+        assert guarded_branch is not None
+        assert guarded_branch.group(1) in post_switch_write_blocks
+        assert not (
+            spirv_reachable_blocks(successors, guarded_branch.group(2))
+            & post_switch_write_blocks
+        )
+        assert all(
+            spirv_reachable_blocks(successors, target) & caller_write_blocks
+            for target in guarded_branch.groups()
+        )
+        assert "OpSwitch" in spv_code
+        assert len(re.findall(r"^OpReturn$", spv_code, re.M)) == 1
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_inlined_return_nested_in_lexical_block_exits_helper(self, tmp_path):
+        source_code = """
+        shader NestedInlineBlockReturn {
+            RWStructuredBuffer<int> values @binding(0);
+
+            void writeBlock(RWStructuredBuffer<int> data, int enabled) {
+                {
+                    if (enabled != 0) {
+                        return;
+                    }
+                    data.Store(0, 20);
+                }
+                data.Store(1, 21);
+            }
+
+            compute {
+                void main() {
+                    int enabled = values.Load(3);
+                    writeBlock(values, enabled);
+                    values.Store(2, 22);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        successors = spirv_basic_block_successors(spv_code)
+        helper_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 1)
+        caller_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 2)
+        assert helper_write_blocks
+        assert caller_write_blocks
+        assert any(
+            bool(spirv_reachable_blocks(successors, left) & helper_write_blocks)
+            != bool(spirv_reachable_blocks(successors, right) & helper_write_blocks)
+            and all(
+                spirv_reachable_blocks(successors, target) & caller_write_blocks
+                for target in (left, right)
+            )
+            for targets in successors.values()
+            if len(targets) == 2
+            for left, right in [tuple(targets)]
+        )
+        assert len(re.findall(r"^OpReturn$", spv_code, re.M)) == 1
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_repeated_inlined_returns_do_not_share_return_state(self, tmp_path):
+        source_code = """
+        shader RepeatedNestedInlineReturn {
+            RWStructuredBuffer<int> values @binding(0);
+
+            void writeOnce(
+                RWStructuredBuffer<int> data,
+                int index,
+                int enabled
+            ) {
+                if (enabled != 0) {
+                    return;
+                }
+                data.Store(index, 9);
+            }
+
+            compute {
+                void main() {
+                    int first = values.Load(4);
+                    int second = values.Load(5);
+                    writeOnce(values, 0, first);
+                    values.Store(2, 6);
+                    writeOnce(values, 1, second);
+                    values.Store(3, 7);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        integer_constants = spirv_integer_constant_values(spv_code)
+        stores = [
+            (index, integer_constants[value_id])
+            for index, value_id in spirv_storage_buffer_store_operands(
+                spv_code, "values"
+            )
+            if value_id in integer_constants
+        ]
+        assert sorted(stores) == [(0, 9), (1, 9), (2, 6), (3, 7)]
+        assert spv_code.count("OpBranchConditional") >= 2
+        assert len(re.findall(r"^OpReturn$", spv_code, re.M)) == 1
+        assert "writeOnce" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_ordered_argument_alignment_rejects_side_effectful_skipped_argument(self):
         source_code = """

@@ -131,6 +131,16 @@ class PointerOffsetState:
     reset_marker: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class InlineReturnContext:
+    """Return flag and optional result storage for one inline call."""
+
+    return_type: SpirvId
+    returned_pointer: SpirvId
+    result_pointer: Optional[SpirvId]
+    merge_stack_depth: int
+
+
 class UnsupportedSPIRVFeatureError(ValueError):
     """Raised when SPIR-V codegen sees a feature it cannot safely lower."""
 
@@ -316,6 +326,8 @@ class VulkanSPIRVCodeGen:
         self.inline_storage_buffer_functions = {}
         self.stage_local_inline_storage_buffer_functions = {}
         self.inline_storage_buffer_call_stack = []
+        self.inline_return_context_stack = []
+        self.inline_return_presence_by_node_id = {}
         self.generic_function_definitions = {}
         self.generic_function_definition_ordinals = {}
         self.generic_function_specializations = {}
@@ -18307,10 +18319,64 @@ class VulkanSPIRVCodeGen:
         else:
             stmt_list = [statements]
 
+        if self.inline_return_context_stack:
+            self.process_inline_statement_sequence(stmt_list)
+            return
+
         for stmt in stmt_list:
             if self.current_block_has_terminator():
                 break
             self.process_statement(stmt)
+
+    def process_inline_statement_sequence(self, statements):
+        """Guard a statement suffix after its first possible inline return."""
+        for index, stmt in enumerate(statements):
+            if self.current_block_has_terminator():
+                break
+            self.process_statement(stmt)
+            if not self.statement_contains_return(stmt):
+                continue
+
+            remaining = statements[index + 1 :]
+            if remaining and not self.current_block_has_terminator():
+                self.process_inline_fallthrough_statements(remaining)
+            break
+
+    def statement_contains_return(self, statement) -> bool:
+        statement_id = id(statement)
+        cached = self.inline_return_presence_by_node_id.get(statement_id)
+        if cached is not None and cached[0] is statement:
+            return cached[1]
+        contains_return = any(
+            isinstance(node, ReturnNode) or getattr(node, "is_tail_expression", False)
+            for node in self.walk_ast_nodes(statement)
+        )
+        self.inline_return_presence_by_node_id[statement_id] = (
+            statement,
+            contains_return,
+        )
+        return contains_return
+
+    def process_inline_fallthrough_statements(self, statements):
+        """Run a statement suffix only when the inline call has not returned."""
+        context = self.inline_return_context_stack[-1]
+        bool_type = self.register_primitive_type("bool")
+        returned = self.load_from_variable(context.returned_pointer, bool_type)
+        should_continue = self.unary_operation("!", bool_type, returned)
+        body_label = SpirvId(self.get_id(), SpirvType("label"))
+        merge_label = SpirvId(self.get_id(), SpirvType("label"))
+
+        self.create_selection_merge(merge_label)
+        self.create_conditional_branch(should_continue, body_label, merge_label)
+
+        self.emit(f"%{body_label.id} = OpLabel")
+        self.current_label = body_label.id
+        self.process_inline_statement_sequence(statements)
+        if not self.current_block_has_terminator():
+            self.create_branch(merge_label)
+
+        self.emit(f"%{merge_label.id} = OpLabel")
+        self.current_label = merge_label.id
 
     def process_statement(self, stmt):
         """Process a single CrossGL statement."""
@@ -18359,13 +18425,16 @@ class VulkanSPIRVCodeGen:
                 and self.current_return_type is not None
                 and self.current_return_type.type.base_type != "void"
             ):
-                return_value = self.process_expression_with_expected_type(
-                    expression, self.current_return_type_source
-                )
-                if return_value is not None:
-                    self.create_return_value(return_value)
+                if self.inline_return_context_stack:
+                    self.process_inline_return(ReturnNode(expression))
                 else:
-                    self.create_return()
+                    return_value = self.process_expression_with_expected_type(
+                        expression, self.current_return_type_source
+                    )
+                    if return_value is not None:
+                        self.create_return_value(return_value)
+                    else:
+                        self.create_return()
             else:
                 self.process_expression(expression)
 
@@ -22428,23 +22497,16 @@ class VulkanSPIRVCodeGen:
                 return nested_return
         return None
 
-    def validate_inline_function_returns(self, function_node, call_node=None):
-        nested_return = self.nested_inline_return_node(function_node)
-        if nested_return is None:
-            return
-
-        function_name = getattr(function_node, "name", "unknown")
-        source_location = getattr(nested_return, "source_location", None) or getattr(
-            call_node, "source_location", None
-        )
-        raise UnsupportedSPIRVFeatureError(
-            "nested-return-storage-buffer-function-inline",
-            "SPIR-V pointer-preserving function inlining requires returns to be "
-            f"top-level statements; helper '{function_name}' contains a nested "
-            "return",
-            missing_capabilities=("spirv.nested_return_storage_buffer_function",),
-            source_location=source_location,
-        )
+    def nested_match_inline_return_node(self, function_node):
+        """Return the first inline return owned by a match arm, if any."""
+        body = getattr(function_node, "body", [])
+        for node in self.walk_ast_nodes(body):
+            if not isinstance(node, MatchNode):
+                continue
+            for match_node in self.walk_ast_nodes(node):
+                if isinstance(match_node, ReturnNode):
+                    return match_node
+        return None
 
     def validate_skipped_storage_buffer_call_arguments(
         self, function_node, call_args, match, call_node=None
@@ -22475,7 +22537,21 @@ class VulkanSPIRVCodeGen:
         self, function_node, call_args, call_node=None
     ):
         func_name = getattr(function_node, "name", "unknown")
-        self.validate_inline_function_returns(function_node, call_node)
+        nested_match_return = self.nested_match_inline_return_node(function_node)
+        if nested_match_return is not None:
+            source_location = getattr(
+                nested_match_return, "source_location", None
+            ) or getattr(call_node, "source_location", None)
+            raise UnsupportedSPIRVFeatureError(
+                "nested-match-return-storage-buffer-function-inline",
+                "SPIR-V pointer-preserving function inlining does not yet "
+                f"support returns nested in match arms; helper '{func_name}' "
+                "requires match-aware return control flow",
+                missing_capabilities=(
+                    "spirv.nested_match_return_storage_buffer_function",
+                ),
+                source_location=source_location,
+            )
         if not self.validate_function_storage_buffer_access_arguments(
             function_node, call_args
         ):
@@ -22526,6 +22602,7 @@ class VulkanSPIRVCodeGen:
 
         previous_declaration_state = self.local_declaration_scope_state()
         previous_return_type = self.current_return_type
+        previous_return_type_source = self.current_return_type_source
         previous_generic_type_substitutions = self.current_generic_type_substitutions
         generic_type_substitutions = self.generic_storage_function_type_bindings(
             function_node, call_args
@@ -22546,6 +22623,9 @@ class VulkanSPIRVCodeGen:
             self.cooperative_matrix_role_overrides_for_function(function_node)
         )
         self.current_return_type = self.map_crossgl_type(function_node.return_type)
+        self.current_return_type_source = self.type_name_from_value(
+            function_node.return_type
+        )
         self.current_function_literal_int_constant_shadows = {
             param.name
             for param in self.function_parameters(function_node)
@@ -22686,6 +22766,7 @@ class VulkanSPIRVCodeGen:
             self.inline_storage_buffer_call_stack.pop()
             self.restore_local_declaration_scope_state(previous_declaration_state)
             self.current_return_type = previous_return_type
+            self.current_return_type_source = previous_return_type_source
             self.current_generic_type_substitutions = (
                 previous_generic_type_substitutions
             )
@@ -22704,6 +22785,27 @@ class VulkanSPIRVCodeGen:
             else body if isinstance(body, list) else [body]
         )
 
+        has_tail_expression = any(
+            getattr(node, "is_tail_expression", False)
+            for node in self.walk_ast_nodes(statements)
+        )
+        has_top_level_value_return = any(
+            isinstance(statement, ReturnNode)
+            and getattr(statement, "value", None) is not None
+            for statement in statements
+        )
+        non_void_fallthrough = (
+            self.current_return_type is not None
+            and self.current_return_type.type.base_type != "void"
+            and not has_top_level_value_return
+        )
+        if (
+            self.nested_inline_return_node(function_node) is not None
+            or has_tail_expression
+            or non_void_fallthrough
+        ):
+            return self.inline_function_body_with_return_state(statements)
+
         for stmt in statements:
             if isinstance(stmt, ReturnNode):
                 if getattr(stmt, "value", None) is None:
@@ -22712,11 +22814,69 @@ class VulkanSPIRVCodeGen:
                     return self.process_array_literal(
                         stmt.value, self.current_return_type
                     )
+                if isinstance(stmt.value, MatchNode):
+                    return self.process_match_expression_return(stmt.value)
                 return self.process_expression(stmt.value)
 
             self.process_statement(stmt)
 
         return None
+
+    def inline_function_body_with_return_state(self, statements) -> Optional[SpirvId]:
+        """Lower inline returns through invocation-local state."""
+        return_type = self.current_return_type
+        bool_type = self.register_primitive_type("bool")
+        returned_pointer = self.create_variable(
+            bool_type, "Function", "__inline_returned"
+        )
+        self.store_to_variable(
+            returned_pointer, self.register_constant(False, bool_type)
+        )
+        result_pointer = None
+
+        if return_type is not None and return_type.type.base_type != "void":
+            result_pointer = self.create_variable(
+                return_type, "Function", "__inline_return_value"
+            )
+
+        context = InlineReturnContext(
+            return_type,
+            returned_pointer,
+            result_pointer,
+            len(self.loop_merge_labels),
+        )
+        self.inline_return_context_stack.append(context)
+        try:
+            self.process_statements(statements)
+        finally:
+            self.inline_return_context_stack.pop()
+
+        if result_pointer is None:
+            return None
+        self.require_inline_return_value(context)
+        return self.load_from_variable(result_pointer, return_type)
+
+    def require_inline_return_value(self, context: InlineReturnContext):
+        """Terminate a non-void inline fallthrough path as unreachable."""
+        bool_type = self.register_primitive_type("bool")
+        returned = self.load_from_variable(context.returned_pointer, bool_type)
+        value_label = SpirvId(self.get_id(), SpirvType("label"))
+        unreachable_label = SpirvId(self.get_id(), SpirvType("label"))
+        merge_label = SpirvId(self.get_id(), SpirvType("label"))
+
+        self.create_selection_merge(merge_label)
+        self.create_conditional_branch(returned, value_label, unreachable_label)
+
+        self.emit(f"%{value_label.id} = OpLabel")
+        self.current_label = value_label.id
+        self.create_branch(merge_label)
+
+        self.emit(f"%{unreachable_label.id} = OpLabel")
+        self.current_label = unreachable_label.id
+        self.create_unreachable()
+
+        self.emit(f"%{merge_label.id} = OpLabel")
+        self.current_label = merge_label.id
 
     def collect_function_execution_models(self, ast, all_functions=None):
         ast_functions = self.collect_ast_functions(ast)
@@ -26497,6 +26657,9 @@ class VulkanSPIRVCodeGen:
         """Process a CrossGL return statement."""
         if self.loop_merge_labels or self.cooperative_matrix_selection_depth > 0:
             self.cooperative_matrix_control_flow_diverged = True
+        if self.inline_return_context_stack:
+            self.process_inline_return(node)
+            return
         if hasattr(node, "value") and node.value:
             if isinstance(node.value, list) and node.value:
                 return_value = self.process_expression_with_expected_type(
@@ -26523,6 +26686,49 @@ class VulkanSPIRVCodeGen:
                     self.create_return()
         else:
             self.create_return()
+
+    def process_inline_return(self, node: ReturnNode):
+        """Exit the active inline invocation without returning from its caller."""
+        context = self.inline_return_context_stack[-1]
+        value_expression = getattr(node, "value", None)
+        if isinstance(value_expression, list):
+            value_expression = value_expression[0] if value_expression else None
+
+        if context.result_pointer is not None:
+            if value_expression is None:
+                raise ValueError("non-void inline return requires a value")
+            if isinstance(value_expression, ArrayLiteralNode):
+                return_value = self.process_array_literal(
+                    value_expression, context.return_type
+                )
+            elif isinstance(value_expression, MatchNode):
+                return_value = self.process_match_expression_return(value_expression)
+            else:
+                expected_type = (
+                    self.current_return_type_source
+                    or context.return_type.type.base_type
+                )
+                return_value = self.process_expression_with_expected_type(
+                    value_expression, expected_type
+                )
+            if return_value is None:
+                raise ValueError("non-void inline return value could not be lowered")
+            self.store_to_variable(
+                context.result_pointer,
+                self.convert_value_to_type(return_value, context.return_type),
+            )
+        elif isinstance(value_expression, MatchNode):
+            self.process_match(value_expression)
+        elif value_expression is not None:
+            self.process_expression(value_expression)
+
+        bool_type = self.register_primitive_type("bool")
+        self.store_to_variable(
+            context.returned_pointer,
+            self.register_constant(True, bool_type),
+        )
+        if len(self.loop_merge_labels) > context.merge_stack_depth:
+            self.create_branch(self.loop_merge_labels[-1])
 
     def process_match_expression_return(self, node: MatchNode) -> Optional[SpirvId]:
         """Lower return-position matches through a temporary selected value."""
@@ -26594,6 +26800,28 @@ class VulkanSPIRVCodeGen:
         self.emit(f"%{merge_label.id} = OpLabel")
         self.current_label = merge_label.id
 
+    def branch_after_loop_body(
+        self, body, merge_label: SpirvId, continue_label: SpirvId
+    ):
+        """Exit an enclosing loop when a nested inline call path returned."""
+        if not self.inline_return_context_stack or not self.statement_contains_return(
+            body
+        ):
+            self.create_branch(continue_label)
+            return
+
+        context = self.inline_return_context_stack[-1]
+        bool_type = self.register_primitive_type("bool")
+        returned = self.load_from_variable(context.returned_pointer, bool_type)
+        fallthrough_label = SpirvId(self.get_id(), SpirvType("label"))
+
+        self.create_selection_merge(fallthrough_label)
+        self.create_conditional_branch(returned, merge_label, fallthrough_label)
+
+        self.emit(f"%{fallthrough_label.id} = OpLabel")
+        self.current_label = fallthrough_label.id
+        self.create_branch(continue_label)
+
     def process_for(self, node: ForNode):
         """Process a CrossGL for loop."""
         if node.init:
@@ -26625,7 +26853,7 @@ class VulkanSPIRVCodeGen:
             if node.body:
                 self.process_statements(node.body)
             if not self.current_block_has_terminator():
-                self.create_branch(continue_label)
+                self.branch_after_loop_body(node.body, merge_label, continue_label)
         finally:
             self.loop_continue_labels.pop()
             self.loop_merge_labels.pop()
@@ -26744,7 +26972,7 @@ class VulkanSPIRVCodeGen:
             if node.body:
                 self.process_statements(node.body)
             if not self.current_block_has_terminator():
-                self.create_branch(continue_label)
+                self.branch_after_loop_body(node.body, merge_label, continue_label)
         finally:
             self.loop_continue_labels.pop()
             self.loop_merge_labels.pop()
@@ -26830,7 +27058,7 @@ class VulkanSPIRVCodeGen:
             if node.body:
                 self.process_statements(node.body)
             if not self.current_block_has_terminator():
-                self.create_branch(continue_label)
+                self.branch_after_loop_body(node.body, merge_label, continue_label)
         finally:
             self.loop_continue_labels.pop()
             self.loop_merge_labels.pop()
@@ -27364,7 +27592,7 @@ class VulkanSPIRVCodeGen:
             if node.body:
                 self.process_statements(node.body)
             if not self.current_block_has_terminator():
-                self.create_branch(continue_label)
+                self.branch_after_loop_body(node.body, merge_label, continue_label)
         finally:
             self.loop_continue_labels.pop()
             self.loop_merge_labels.pop()
@@ -27398,7 +27626,7 @@ class VulkanSPIRVCodeGen:
             if node.body:
                 self.process_statements(node.body)
             if not self.current_block_has_terminator():
-                self.create_branch(continue_label)
+                self.branch_after_loop_body(node.body, merge_label, continue_label)
         finally:
             self.loop_continue_labels.pop()
             self.loop_merge_labels.pop()
@@ -27438,7 +27666,7 @@ class VulkanSPIRVCodeGen:
             if node.body:
                 self.process_statements(node.body)
             if not self.current_block_has_terminator():
-                self.create_branch(continue_label)
+                self.branch_after_loop_body(node.body, merge_label, continue_label)
         finally:
             self.loop_continue_labels.pop()
             self.loop_merge_labels.pop()
