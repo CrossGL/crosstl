@@ -2675,11 +2675,20 @@ class MetalToCrossGLConverter:
                     if stmt.value is None:
                         code += "return;\n"
                     else:
-                        value = self.generate_initializer_value(
-                            stmt.value,
-                            is_main,
-                            self.current_function_return_type,
-                        )
+                        if (
+                            self.wide_vector_type_info(
+                                self.current_function_return_type,
+                                getattr(stmt, "source_location", None),
+                            )
+                            is not None
+                        ):
+                            value = self.generate_initializer_value(
+                                stmt.value,
+                                is_main,
+                                self.current_function_return_type,
+                            )
+                        else:
+                            value = self.generate_expression(stmt.value, is_main)
                         code += f"return {value};\n"
             elif isinstance(stmt, BinaryOpNode):
                 code += f"{self.generate_expression(stmt.left, is_main)} {stmt.op} {self.generate_expression(stmt.right, is_main)};\n"

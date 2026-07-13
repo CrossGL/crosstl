@@ -4687,6 +4687,58 @@ def test_codegen_parses_materialized_struct_alias_template_vectors():
     assert strict_ast is not None
 
 
+def test_codegen_preserves_non_wide_array_return_initializer(tmp_path):
+    source = """
+        metal::array<bool, 2> make_pair(bool x, bool y) {
+            return {x, y};
+        }
+
+        kernel void use_pair(
+            device uint* output [[buffer(0)]],
+            uint gid [[thread_position_in_grid]]) {
+            metal::array<bool, 2> value = make_pair(true, false);
+            output[gid] = uint(value[0]);
+        }
+        """
+
+    crossgl = convert(source)
+
+    assert "bool[2] make_pair(bool x, bool y)" in crossgl
+    assert "return {x, y};" in crossgl
+    ast = parse_crossgl(crossgl)
+    spirv = VulkanSPIRVCodeGen().generate(ast)
+    assert "OpTypeArray" in spirv
+    assert "OpCompositeConstruct" in spirv
+    assert "OpReturnValue" in spirv
+    assert "WARNING" not in spirv
+
+    spirv_as = shutil.which("spirv-as")
+    spirv_val = shutil.which("spirv-val")
+    if spirv_as is not None and spirv_val is not None:
+        assembly_path = tmp_path / "array-return.spvasm"
+        binary_path = tmp_path / "array-return.spv"
+        assembly_path.write_text(spirv, encoding="utf-8")
+        subprocess.run(
+            [
+                spirv_as,
+                "--target-env",
+                "vulkan1.1",
+                str(assembly_path),
+                "-o",
+                str(binary_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            [spirv_val, "--target-env", "vulkan1.1", str(binary_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+
 def test_codegen_lowers_concrete_wide_vectors_to_aggregate_helpers():
     source = """
         using Wide = metal::vec<float, 8>;
