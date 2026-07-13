@@ -25,6 +25,7 @@ from crosstl.translator.codegen.directx_codegen import (
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
+from crosstl.translator.ast import ResourceMemoryQualifierNode
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
@@ -2770,7 +2771,10 @@ def test_codegen_scoped_atomic_thread_fence_from_mlx_kernel_roundtrips():
 
     #include <metal_atomic>
 
-    kernel void fence() {
+    [[kernel]] void fence(
+        volatile coherent(system) device uint* timestamp [[buffer(0)]],
+        constant uint& value [[buffer(1)]]) {
+        timestamp[0] = value;
         metal::atomic_thread_fence(metal::mem_flags::mem_device,
                                    metal::memory_order_seq_cst,
                                    metal::thread_scope_system);
@@ -2781,6 +2785,10 @@ def test_codegen_scoped_atomic_thread_fence_from_mlx_kernel_roundtrips():
     assert (
         "atomicThreadFence(mem_device, memory_order_seq_cst, " "thread_scope_system);"
     ) in crossgl
+    assert (
+        "volatile coherent(system) RWStructuredBuffer<uint> timestamp @buffer(0)"
+        in crossgl
+    )
     assert "memoryBarrier();" not in crossgl
     assert "constant thread_scope thread_scope_system" not in crossgl
     assert "metal_u3a_u3aatomic_thread_fence" not in crossgl
@@ -2790,9 +2798,107 @@ def test_codegen_scoped_atomic_thread_fence_from_mlx_kernel_roundtrips():
         "metal::atomic_thread_fence(metal::mem_flags::mem_device, "
         "metal::memory_order_seq_cst, metal::thread_scope_system);"
     ) in metal
+    assert (
+        "volatile coherent(system) device uint* timestamp [[buffer(0)]]" in metal
+    )
+    assert "device uint* volatile" not in metal
     assert "threadgroup_barrier(mem_flags::mem_device);" not in metal
     assert "#pragma METAL internals : enable" in metal
     assert "__METAL_MEMORY_SCOPE_SYSTEM__ 3" in metal
+
+
+def test_codegen_resource_memory_qualifiers_survive_aliases_without_leaking():
+    code = """
+    using FencePointer = volatile coherent(system) device atomic_uint*;
+
+    [[kernel]] void qualify(
+        FencePointer aliased [[buffer(0)]],
+        volatile device uint* volatile_only [[buffer(1)]],
+        coherent(device) device uint* device_scoped [[buffer(2)]],
+        device uint* plain [[buffer(3)]],
+        uint index [[thread_position_in_grid]]) {
+      uint local = index;
+    }
+    """
+
+    crossgl = convert(code)
+    assert (
+        "volatile coherent(system) RWStructuredBuffer<atomic_uint> aliased "
+        "@buffer(0)" in crossgl
+    )
+    assert "volatile RWStructuredBuffer<uint> volatile_only @buffer(1)" in crossgl
+    assert (
+        "coherent(device) RWStructuredBuffer<uint> device_scoped @buffer(2)"
+        in crossgl
+    )
+    assert "RWStructuredBuffer<uint> plain @buffer(3)" in crossgl
+    assert "volatile uint index" not in crossgl
+    assert "coherent(device) uint index" not in crossgl
+
+    shared_ast = parse_crossgl(crossgl)
+    function = next(iter(shared_ast.stages.values())).entry_point
+    aliased, volatile_only, device_scoped, plain, index = function.parameters
+
+    assert all(
+        isinstance(qualifier, ResourceMemoryQualifierNode)
+        for qualifier in aliased.resource_qualifiers
+    )
+    assert [
+        (qualifier.kind, qualifier.scope)
+        for qualifier in aliased.resource_qualifiers
+    ] == [("volatile", None), ("coherent", "system")]
+    assert [str(qualifier) for qualifier in volatile_only.resource_qualifiers] == [
+        "volatile"
+    ]
+    assert [str(qualifier) for qualifier in device_scoped.resource_qualifiers] == [
+        "coherent(device)"
+    ]
+    assert plain.resource_qualifiers == []
+    assert index.resource_qualifiers == []
+    assert function.body.statements[0].resource_qualifiers == []
+
+    metal = MetalCodeGen().generate(shared_ast)
+    assert (
+        "volatile coherent(system) device atomic_uint* aliased [[buffer(0)]]"
+        in metal
+    )
+    assert "volatile device uint* volatile_only [[buffer(1)]]" in metal
+    assert "coherent(device) device uint* device_scoped [[buffer(2)]]" in metal
+    assert "device uint* plain [[buffer(3)]]" in metal
+    assert "uint index [[thread_position_in_grid]]" in metal
+    assert "device atomic_uint* volatile" not in metal
+    assert "uint local = index;" in metal
+    assert "volatile uint local" not in metal
+    assert "coherent(device) uint local" not in metal
+
+
+def test_codegen_scopes_local_resource_alias_qualifiers_and_shadowing():
+    code = """
+    void aliases(uint index) {
+      using FencePointer = volatile coherent(system) device uint*;
+      FencePointer qualified = nullptr;
+      {
+        using FencePointer = device uint*;
+        FencePointer shadowed = nullptr;
+      }
+      FencePointer restored = nullptr;
+    }
+
+    void later(uint index) {
+      uint local = index;
+    }
+    """
+
+    crossgl = convert(code)
+
+    assert crossgl.count("volatile coherent(system) device uint*") == 2
+    assert "device uint* shadowed = nullptr;" in crossgl
+    assert "volatile device uint* shadowed" not in crossgl
+    assert "coherent(system) device uint* shadowed" not in crossgl
+    assert "uint local = index;" in crossgl
+    assert "volatile uint local" not in crossgl
+    assert "coherent(system) uint local" not in crossgl
+    assert parse_crossgl(crossgl) is not None
 
 
 def test_codegen_preserves_atomic_thread_fence_contract_matrix():

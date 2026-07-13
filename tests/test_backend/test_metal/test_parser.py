@@ -847,6 +847,34 @@ def test_parse_coherent_memory_qualifier_from_mlx_fence_kernel():
     assert param.attributes[0].args == ["0"]
 
 
+def test_parse_resource_memory_qualifiers_on_alias_and_post_pointer_declarations():
+    code = """
+    using FencePointer = volatile coherent(system) device atomic_uint*;
+
+    kernel void qualify(
+        FencePointer aliased [[buffer(0)]],
+        device atomic_uint* volatile coherent(device) direct [[buffer(1)]],
+        device uint* plain [[buffer(2)]],
+        uint index [[thread_position_in_grid]]) {
+      uint local = index;
+    }
+    """
+
+    ast = parse_ok(code)
+    alias = ast.typedefs[0]
+    aliased, direct, plain, index = ast.functions[0].params
+
+    assert alias.name == "FencePointer"
+    assert alias.alias_type == "atomic_uint*"
+    assert alias.qualifiers == ["volatile", "coherent(system)", "device"]
+    assert aliased.vtype == "FencePointer"
+    assert aliased.qualifiers == []
+    assert direct.qualifiers == ["device", "volatile", "coherent(device)"]
+    assert plain.qualifiers == ["device"]
+    assert index.qualifiers == []
+    assert ast.functions[0].body[0].left.qualifiers == []
+
+
 def test_parse_scoped_atomic_thread_fence_call_from_mlx_kernel():
     code = """
     #include <metal_stdlib>

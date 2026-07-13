@@ -1394,6 +1394,13 @@ class MetalCodeGen:
             for call in self.metal_atomic_fence_calls
             if len(call.args) == 3
         )
+        self.metal_resource_memory_contracts = (
+            self.collect_metal_resource_memory_contracts(ast)
+        )
+        self.requires_metal_resource_coherence = any(
+            kind == "coherent"
+            for kind, _scope in self.metal_resource_memory_contracts
+        )
         self.functions_by_name = {
             func.name: func for func in all_functions if getattr(func, "name", None)
         }
@@ -1787,7 +1794,10 @@ class MetalCodeGen:
             line = self.generate_preprocessor_directive(directive)
             if line:
                 pre_lines.append(line)
-        if self.requires_metal_system_thread_scope and not any(
+        if (
+            self.requires_metal_system_thread_scope
+            or self.requires_metal_resource_coherence
+        ) and not any(
             "#pragma metal internals" in line.lower() for line in pre_lines
         ):
             code += "#pragma METAL internals : enable\n"
@@ -2442,6 +2452,19 @@ class MetalCodeGen:
             if isinstance(node, FunctionCallNode)
             and self.function_call_name(node) == "atomicThreadFence"
         ]
+
+    def collect_metal_resource_memory_contracts(self, ast):
+        walk = getattr(ast, "walk", None)
+        nodes = walk() if callable(walk) else self.iter_ast_nodes(ast)
+        contracts = []
+        for node in nodes:
+            raw_type = getattr(
+                node, "param_type", getattr(node, "var_type", None)
+            )
+            for contract in self.resource_memory_qualifier_contracts(node, raw_type):
+                if contract not in contracts:
+                    contracts.append(contract)
+        return contracts
 
     @staticmethod
     def generate_metal_system_thread_scope_support():
@@ -7234,6 +7257,8 @@ class MetalCodeGen:
             for attribute in getattr(node, "attributes", []) or []
         }
         if self.local_variable_is_address_space_alias(node):
+            raw_type = self.local_variable_type_node(node)
+            memory_qualifiers = self.resource_memory_qualifier_prefix(node, raw_type)
             address_space = self.local_variable_address_space(node)
             if address_space is not None:
                 const_prefix = ""
@@ -7245,7 +7270,7 @@ class MetalCodeGen:
                     is not None
                 ):
                     const_prefix = "const "
-                return f"{const_prefix}{address_space} "
+                return f"{memory_qualifiers}{const_prefix}{address_space} "
         if "threadgroup_imageblock" in qualifiers | attributes:
             return "threadgroup_imageblock "
         if (qualifiers | attributes) & {
@@ -12528,10 +12553,13 @@ class MetalCodeGen:
             return "const device"
         return "device"
 
-    def format_structured_buffer_parameter(self, vtype, name, array_size=None):
+    def format_structured_buffer_parameter(
+        self, vtype, name, array_size=None, node=None
+    ):
         element_type = self.structured_buffer_element_type(vtype)
         address_space = self.structured_buffer_address_space(vtype)
-        pointer_type = f"{address_space} {element_type}*"
+        memory_qualifiers = self.resource_memory_qualifier_prefix(node, vtype)
+        pointer_type = f"{memory_qualifiers}{address_space} {element_type}*"
         if array_size is not None:
             array_size = array_size or "1"
             return f"array<{pointer_type}, {array_size}> {name}"
@@ -13215,7 +13243,7 @@ class MetalCodeGen:
                 raw_param_type, node
             )
             return self.format_structured_buffer_parameter(
-                raw_param_type, name, array_size
+                raw_param_type, name, array_size, node
             )
         if self.is_visible_function_table_type(raw_param_type):
             return self.format_visible_function_table_parameter(raw_param_type, name)
@@ -13284,7 +13312,10 @@ class MetalCodeGen:
             pointee_type = self.map_resource_type_with_format(
                 raw_param_type.pointee_type, node
             )
-            return f"{address_space} {pointee_type}* {name}"
+            memory_qualifiers = self.resource_memory_qualifier_prefix(
+                node, raw_param_type
+            )
+            return f"{memory_qualifiers}{address_space} {pointee_type}* {name}"
 
         if isinstance(raw_param_type, ReferenceType):
             address_space = self.effective_parameter_address_space(
@@ -13294,7 +13325,10 @@ class MetalCodeGen:
             referenced_type = self.map_resource_type_with_format(
                 raw_param_type.referenced_type, node
             )
-            return f"{address_space} {referenced_type}& {name}"
+            memory_qualifiers = self.resource_memory_qualifier_prefix(
+                node, raw_param_type
+            )
+            return f"{memory_qualifiers}{address_space} {referenced_type}& {name}"
 
         if self.is_array_type_node(raw_param_type):
             if self.resource_array_parameter(raw_param_type, node) is not None:
@@ -13320,9 +13354,15 @@ class MetalCodeGen:
                 element_type = self.map_resource_type_with_format(
                     raw_param_type.element_type, node
                 )
-                return f"{address_space} {element_type}* {name}"
+                memory_qualifiers = self.resource_memory_qualifier_prefix(
+                    node, raw_param_type
+                )
+                return f"{memory_qualifiers}{address_space} {element_type}* {name}"
             declaration = format_c_style_array_declaration(mapped_type, name)
-            return f"{address_space} {declaration}"
+            memory_qualifiers = self.resource_memory_qualifier_prefix(
+                node, raw_param_type
+            )
+            return f"{memory_qualifiers}{address_space} {declaration}"
 
         qualifiers = self.parameter_qualifier_names(node)
         address_space = self.effective_parameter_address_space(
@@ -13336,7 +13376,10 @@ class MetalCodeGen:
                 address_space,
                 node,
             )
-            return f"{address_space} {mapped_type}& {name}"
+            memory_qualifiers = self.resource_memory_qualifier_prefix(
+                node, raw_param_type
+            )
+            return f"{memory_qualifiers}{address_space} {mapped_type}& {name}"
 
         return None
 
@@ -13414,6 +13457,13 @@ class MetalCodeGen:
             str(getattr(attribute, "name", "")).lower()
             for attribute in getattr(node, "attributes", []) or []
         )
+        raw_type = getattr(node, "param_type", getattr(node, "var_type", None))
+        contract_type = raw_type
+        while self.is_array_type_node(contract_type):
+            contract_type = contract_type.element_type
+        if isinstance(contract_type, (PointerType, ReferenceType)):
+            qualifiers.add(str(getattr(contract_type, "address_space", "")).lower())
+            qualifiers.add(str(getattr(contract_type, "access_mode", "")).lower())
         qualifier_aliases = {
             "read": "readonly",
             "write": "writeonly",
@@ -13429,6 +13479,66 @@ class MetalCodeGen:
         )
         qualifiers.discard("")
         return qualifiers
+
+    def resource_memory_qualifier_contracts(self, node=None, raw_type=None):
+        """Return ordered ``(kind, scope)`` resource-memory contracts."""
+        values = []
+        contract_type = raw_type
+        while self.is_array_type_node(contract_type):
+            contract_type = contract_type.element_type
+        if isinstance(contract_type, (PointerType, ReferenceType)):
+            values.extend(getattr(contract_type, "resource_qualifiers", []) or [])
+        values.extend(getattr(node, "resource_qualifiers", []) or [])
+        values.extend(getattr(node, "qualifiers", []) or [])
+
+        contracts = []
+        for value in values:
+            kind = getattr(value, "kind", None)
+            scope = getattr(value, "scope", None)
+            text = str(value).lower()
+            if kind is None:
+                match = re.fullmatch(
+                    r"(?P<kind>volatile|coherent)(?:\((?P<scope>[a-z_][a-z0-9_]*)\))?",
+                    text,
+                )
+                if match is None:
+                    continue
+                kind = match.group("kind")
+                scope = match.group("scope")
+            else:
+                kind = str(kind).lower()
+                scope = str(scope).lower() if scope is not None else None
+            if kind not in {"volatile", "coherent"}:
+                continue
+            contract = (kind, scope)
+            if contract not in contracts:
+                contracts.append(contract)
+
+        for attribute in getattr(node, "attributes", []) or []:
+            kind = str(getattr(attribute, "name", "")).lower()
+            if kind not in {"volatile", "coherent"}:
+                continue
+            arguments = getattr(attribute, "arguments", []) or []
+            scope = self.attribute_value_to_string(arguments[0]) if arguments else None
+            contract = (kind, str(scope).lower() if scope is not None else None)
+            if contract not in contracts:
+                contracts.append(contract)
+        return contracts
+
+    def resource_memory_qualifier_prefix(self, node=None, raw_type=None):
+        rendered = []
+        for kind, scope in self.resource_memory_qualifier_contracts(node, raw_type):
+            if kind == "coherent" and scope is not None:
+                if scope not in {"threadgroup", "device", "system"}:
+                    name = getattr(node, "name", "<anonymous>")
+                    raise ValueError(
+                        f"Metal resource '{name}' has unsupported coherence scope "
+                        f"'{scope}'"
+                    )
+                rendered.append(f"coherent({scope})")
+            else:
+                rendered.append(kind)
+        return f"{' '.join(rendered)} " if rendered else ""
 
     def normalized_address_space(self, address_space):
         if address_space is None:

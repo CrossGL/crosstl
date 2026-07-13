@@ -724,6 +724,7 @@ class MetalToCrossGLConverter:
             "sampler": "sampler",
         }
         self.type_aliases = {}
+        self.type_alias_qualifiers = {}
         self.global_variable_types = {}
         self.current_variable_types = {}
         self.storage_texture_declaration_ids = set()
@@ -1758,6 +1759,11 @@ class MetalToCrossGLConverter:
             for alias in typedefs
             if isinstance(alias, TypeAliasNode)
         }
+        self.type_alias_qualifiers = {
+            alias.name: list(getattr(alias, "qualifiers", []) or [])
+            for alias in typedefs
+            if isinstance(alias, TypeAliasNode)
+        }
         # Body-local ``using`` and ``typedef`` aliases discovered while emitting
         # function bodies; these are inlined at their use sites rather than
         # emitted as typedefs.
@@ -2331,9 +2337,7 @@ class MetalToCrossGLConverter:
         ) or self.structured_buffer_pointer_type(var):
             return ""
 
-        qualifiers = [
-            str(qualifier).lower() for qualifier in getattr(var, "qualifiers", []) or []
-        ]
+        qualifiers = self.effective_declaration_qualifiers(var)
         address_spaces = []
         for qualifier in (
             "threadgroup_imageblock",
@@ -2345,6 +2349,65 @@ class MetalToCrossGLConverter:
             if qualifier in qualifiers and qualifier not in address_spaces:
                 address_spaces.append(qualifier)
         return f"{' '.join(address_spaces)} " if address_spaces else ""
+
+    def effective_declaration_qualifiers(self, var):
+        """Return direct qualifiers plus those carried by a resolved type alias."""
+        qualifiers = [
+            str(qualifier).lower()
+            for qualifier in getattr(var, "qualifiers", []) or []
+        ]
+        metal_type = str(getattr(var, "vtype", "") or "").strip()
+        while metal_type.endswith(("*", "&")):
+            metal_type = metal_type[:-1].strip()
+
+        seen = set()
+        while metal_type in self.type_aliases and metal_type not in seen:
+            seen.add(metal_type)
+            qualifiers.extend(
+                str(qualifier).lower()
+                for qualifier in self.type_alias_qualifiers.get(metal_type, [])
+            )
+            metal_type = str(self.type_aliases[metal_type]).strip()
+            while metal_type.endswith(("*", "&")):
+                metal_type = metal_type[:-1].strip()
+
+        return list(dict.fromkeys(qualifiers))
+
+    def resource_memory_qualifiers(self, var):
+        """Return ordered Metal resource-memory qualifiers for a declaration."""
+        if not self.declaration_has_resource_storage(var):
+            return []
+        qualifiers = []
+        for qualifier in self.effective_declaration_qualifiers(var):
+            if qualifier == "volatile" or re.fullmatch(
+                r"coherent(?:\([A-Za-z_][A-Za-z_0-9]*\))?", qualifier
+            ):
+                qualifiers.append(qualifier)
+        return qualifiers
+
+    def declaration_has_resource_storage(self, var):
+        resolved_type = self.resolve_type_alias(getattr(var, "vtype", None))
+        return bool(
+            self.pointer_element_type(resolved_type)
+            or self.reference_element_type(resolved_type)
+            or self.is_metal_resource_type(resolved_type)
+        )
+
+    def resource_memory_qualifier_prefix(self, var):
+        qualifiers = self.resource_memory_qualifiers(var)
+        return f"{' '.join(qualifiers)} " if qualifiers else ""
+
+    def map_resource_pointer_element_type(self, var, element_type):
+        """Keep atomic pointer identity when resource qualifiers make it contractual."""
+        normalized = self.normalized_metal_type(element_type)
+        if self.resource_memory_qualifiers(var) and self.atomic_element_type(normalized):
+            if normalized.startswith("atomic<") and normalized.endswith(">"):
+                inner = normalized[len("atomic<") : -1]
+                return f"atomic<{self.map_type(inner)}>"
+            if normalized.startswith("metal::"):
+                return normalized[len("metal::") :]
+            return normalized
+        return self.map_type(element_type)
 
     def address_space_qualifier_annotations(self, var):
         qualifiers = {
@@ -2422,10 +2485,7 @@ class MetalToCrossGLConverter:
             type_array_suffix = self.format_array_suffix(var, include_declarator_arrays)
             type_str = f"{mapped_type}{type_array_suffix}"
         address_space = self.address_space_qualifier_prefix(var)
-        qualifiers = {
-            str(qualifier).lower()
-            for qualifier in getattr(var, "qualifiers", []) or []
-        }
+        qualifiers = set(self.effective_declaration_qualifiers(var))
         lowered_buffer_type = self.constant_buffer_pointer_type(
             var
         ) or self.structured_buffer_pointer_type(var)
@@ -2461,7 +2521,11 @@ class MetalToCrossGLConverter:
         )
         if name_array_suffix:
             name = f"{name}{name_array_suffix}"
-        parts = [alignas_prefix + const_str + address_space + type_str, name]
+        memory_qualifiers = self.resource_memory_qualifier_prefix(var)
+        parts = [
+            alignas_prefix + memory_qualifiers + const_str + address_space + type_str,
+            name,
+        ]
         if semantic:
             parts.append(semantic)
         if access:
@@ -2611,6 +2675,7 @@ class MetalToCrossGLConverter:
         previous_variable_types = self.current_variable_types
         self.current_variable_types = dict(self.global_variable_types)
         previous_type_aliases = dict(self.type_aliases)
+        previous_type_alias_qualifiers = dict(self.type_alias_qualifiers)
         previous_local_type_alias_names = set(self.local_type_alias_names)
         previous_local_struct_type_aliases = dict(self.local_struct_type_aliases)
         previous_storage_texture_names = self.current_storage_texture_names
@@ -2674,6 +2739,7 @@ class MetalToCrossGLConverter:
             self.pop_identifier_scope()
             self.current_variable_types = previous_variable_types
             self.type_aliases = previous_type_aliases
+            self.type_alias_qualifiers = previous_type_alias_qualifiers
             self.local_type_alias_names = previous_local_type_alias_names
             self.local_struct_type_aliases = previous_local_struct_type_aliases
             self.current_storage_texture_names = previous_storage_texture_names
@@ -3003,12 +3069,14 @@ class MetalToCrossGLConverter:
     def generate_scoped_function_body(self, body, indent=0, is_main=False):
         """Render a nested lexical block without leaking local type aliases."""
         previous_type_aliases = dict(self.type_aliases)
+        previous_type_alias_qualifiers = dict(self.type_alias_qualifiers)
         previous_local_type_alias_names = set(self.local_type_alias_names)
         previous_local_struct_type_aliases = dict(self.local_struct_type_aliases)
         try:
             return self.generate_function_body(body, indent, is_main)
         finally:
             self.type_aliases = previous_type_aliases
+            self.type_alias_qualifiers = previous_type_alias_qualifiers
             self.local_type_alias_names = previous_local_type_alias_names
             self.local_struct_type_aliases = previous_local_struct_type_aliases
 
@@ -3092,6 +3160,7 @@ class MetalToCrossGLConverter:
     ):
         previous_variable_types = self.current_variable_types
         previous_type_aliases = dict(self.type_aliases)
+        previous_type_alias_qualifiers = dict(self.type_alias_qualifiers)
         previous_local_type_alias_names = set(self.local_type_alias_names)
         previous_local_struct_type_aliases = dict(self.local_struct_type_aliases)
         previous_storage_texture_names = self.current_storage_texture_names
@@ -3108,6 +3177,7 @@ class MetalToCrossGLConverter:
             self.integral_constant_bindings.pop()
             self.current_variable_types = previous_variable_types
             self.type_aliases = previous_type_aliases
+            self.type_alias_qualifiers = previous_type_alias_qualifiers
             self.local_type_alias_names = previous_local_type_alias_names
             self.local_struct_type_aliases = previous_local_struct_type_aliases
             self.current_storage_texture_names = previous_storage_texture_names
@@ -3141,6 +3211,7 @@ class MetalToCrossGLConverter:
         alias_type = getattr(alias, "alias_type", None)
         if not name or not alias_type:
             return
+        alias_qualifiers = list(getattr(alias, "qualifiers", None) or [])
         # Struct aliases remain uninlined, but scoped static-member references
         # need their concrete owner to resolve constants and backing globals.
         self.local_struct_type_aliases[name] = alias_type
@@ -3151,6 +3222,16 @@ class MetalToCrossGLConverter:
             is not None
         ):
             self.type_aliases[name] = alias_type
+            self.type_alias_qualifiers[name] = alias_qualifiers
+            self.local_type_alias_names.add(name)
+            return
+        if alias_qualifiers and (
+            self.pointer_element_type(alias_type) is not None
+            or self.reference_element_type(alias_type) is not None
+            or self.is_metal_resource_type(alias_type)
+        ):
+            self.type_aliases[name] = alias_type
+            self.type_alias_qualifiers[name] = alias_qualifiers
             self.local_type_alias_names.add(name)
             return
         # Inline body-local aliases that resolve to scalar/vector primitives or
@@ -3174,6 +3255,7 @@ class MetalToCrossGLConverter:
         ):
             return
         self.type_aliases[name] = alias_type
+        self.type_alias_qualifiers[name] = alias_qualifiers
         self.local_type_alias_names.add(name)
 
     def resolve_local_type_aliases(self, metal_type):
@@ -5880,14 +5962,12 @@ class MetalToCrossGLConverter:
     def is_stage_entry_buffer_resource_parameter(self, var):
         if not getattr(var, "name", None):
             return False
-        qualifiers = {
-            str(qualifier).lower() for qualifier in getattr(var, "qualifiers", []) or []
-        }
+        qualifiers = set(self.effective_declaration_qualifiers(var))
         if not qualifiers.intersection({"device", "constant"}):
             return False
         if self.stage_entry_array_resource_element_type(var) is not None:
             return True
-        raw_type = getattr(var, "vtype", None)
+        raw_type = self.resolve_type_alias(getattr(var, "vtype", None))
         if self.pointer_element_type(raw_type):
             return True
         return bool(self.reference_element_type(raw_type))
@@ -5896,9 +5976,7 @@ class MetalToCrossGLConverter:
         array_dimensions = list(getattr(var, "array_sizes", None) or [])
         if not array_dimensions:
             return None
-        qualifiers = {
-            str(qualifier).lower() for qualifier in getattr(var, "qualifiers", []) or []
-        }
+        qualifiers = set(self.effective_declaration_qualifiers(var))
         if not qualifiers.intersection({"device", "constant"}):
             return None
         element_type = str(getattr(var, "vtype", "") or "").strip()
@@ -5948,13 +6026,13 @@ class MetalToCrossGLConverter:
         ):
             return None
 
-        qualifiers = {
-            str(qualifier).lower() for qualifier in getattr(var, "qualifiers", []) or []
-        }
+        qualifiers = set(self.effective_declaration_qualifiers(var))
         if not qualifiers.intersection({"device", "constant"}):
             return None
 
-        element_type = self.pointer_element_type(getattr(var, "vtype", None))
+        element_type = self.pointer_element_type(
+            self.resolve_type_alias(getattr(var, "vtype", None))
+        )
         array_element_type = self.stage_entry_array_resource_element_type(var)
         if element_type is None:
             element_type = array_element_type
@@ -5973,19 +6051,20 @@ class MetalToCrossGLConverter:
             if qualifiers.intersection({"constant", "const"})
             else "RWStructuredBuffer"
         )
-        return f"{buffer_type}<{self.map_type(element_type)}>"
+        mapped_element_type = self.map_resource_pointer_element_type(var, element_type)
+        return f"{buffer_type}<{mapped_element_type}>"
 
     def constant_buffer_pointer_type(self, var):
         if not self.has_attribute(var, "buffer"):
             return None
 
-        qualifiers = {
-            str(qualifier).lower() for qualifier in getattr(var, "qualifiers", []) or []
-        }
+        qualifiers = set(self.effective_declaration_qualifiers(var))
         if "constant" not in qualifiers:
             return None
 
-        element_type = self.pointer_element_type(getattr(var, "vtype", None))
+        element_type = self.pointer_element_type(
+            self.resolve_type_alias(getattr(var, "vtype", None))
+        )
         if not element_type:
             return None
         element_type = self.resolve_type_alias(element_type)
@@ -6258,6 +6337,7 @@ class MetalToCrossGLConverter:
 
     def generate_switch_statement(self, node, indent, is_main):
         previous_type_aliases = dict(self.type_aliases)
+        previous_type_alias_qualifiers = dict(self.type_alias_qualifiers)
         previous_local_type_alias_names = set(self.local_type_alias_names)
         previous_local_struct_type_aliases = dict(self.local_struct_type_aliases)
         expression = self.generate_expression(node.expression, is_main)
@@ -6282,6 +6362,7 @@ class MetalToCrossGLConverter:
             return code
         finally:
             self.type_aliases = previous_type_aliases
+            self.type_alias_qualifiers = previous_type_alias_qualifiers
             self.local_type_alias_names = previous_local_type_alias_names
             self.local_struct_type_aliases = previous_local_struct_type_aliases
 
