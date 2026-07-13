@@ -571,6 +571,30 @@ class OpenGLReferenceParameterError(ValueError):
         self.source_location = source_location
 
 
+class OpenGLGlobalInitializerError(ValueError):
+    """Raised when a runtime-dependent global initializer cannot be lowered."""
+
+    project_diagnostic_code = "project.translate.opengl-global-initializer-invalid"
+    missing_capabilities = ("opengl.global-initializer-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        variable_name=None,
+        dependencies=None,
+        cycle=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.variable_name = variable_name
+        self.dependencies = tuple(sorted(dependencies or ()))
+        self.cycle = tuple(cycle or ())
+        self.reason = reason
+        self.source_location = source_location
+
+
 class GLSLCodeGen:
     """Emit GLSL source from the shared CrossGL translator AST."""
 
@@ -1371,6 +1395,8 @@ class GLSLCodeGen:
         self.glsl_buffer_block_variable_types = {}
         self.glsl_buffer_block_variable_accesses = {}
         self.global_variable_types = {}
+        self.glsl_runtime_global_initializer_node_ids = set()
+        self.glsl_stage_runtime_global_initializers = {}
         self.global_type_aliases = {}
         self.current_type_aliases = {}
         self.function_sampler_parameter_indices = {}
@@ -2974,6 +3000,8 @@ class GLSLCodeGen:
         self.glsl_buffer_block_variable_types = {}
         self.glsl_buffer_block_variable_accesses = {}
         self.global_variable_types = {}
+        self.glsl_runtime_global_initializer_node_ids = set()
+        self.glsl_stage_runtime_global_initializers = {}
         self.function_sampler_parameter_indices = (
             self.collect_function_sampler_parameter_indices(ast)
         )
@@ -3432,6 +3460,12 @@ class GLSLCodeGen:
             for stage_functions in [self.stage_functions(ast, stage_name)]
             if stage_functions
         }
+        self.prepare_glsl_runtime_global_initializers(
+            ast,
+            global_vars,
+            functions,
+            target_stage,
+        )
         emit_vertex_io = target_stage in {None, "vertex"}
         emit_fragment_io = target_stage in {None, "fragment"}
         emit_graphics_io = target_stage in {None, "vertex", "fragment"}
@@ -7925,6 +7959,8 @@ class GLSLCodeGen:
             func, shader_type
         ):
             code += f"    {declaration}\n"
+        if shader_type in stage_entry_types:
+            code += self.generate_glsl_runtime_global_initializers(func, 1)
         simd_placeholder_body = (
             self.glsl_unsupported_metal_simd_placeholder_function_body(func, 1)
         )
@@ -12298,6 +12334,242 @@ class GLSLCodeGen:
             return "const "
         return "uniform "
 
+    def prepare_glsl_runtime_global_initializers(
+        self, ast, global_vars, functions, target_stage
+    ):
+        initialized_nodes = {
+            self.resource_node_name(node): node
+            for node in global_vars or []
+            if self.resource_node_name(node)
+            and getattr(node, "initial_value", None) is not None
+        }
+        if not initialized_nodes:
+            return
+
+        global_nodes = {
+            self.resource_node_name(node): node
+            for node in global_vars or []
+            if self.resource_node_name(node)
+        }
+        global_names = set(global_nodes)
+        dependencies = {
+            name: self.glsl_global_initializer_dependencies(
+                getattr(node, "initial_value", None), global_names
+            )
+            for name, node in initialized_nodes.items()
+        }
+        ordered_names = self.order_glsl_global_initializers(
+            initialized_nodes, dependencies
+        )
+        runtime_names = {
+            name
+            for name, node in global_nodes.items()
+            if self.global_variable_qualifier(node).strip() != "const"
+        }
+        runtime_initializers = {
+            name: initialized_nodes[name]
+            for name in ordered_names
+            if self.global_variable_qualifier(initialized_nodes[name]).strip()
+            == "uniform"
+            and dependencies[name] & runtime_names
+        }
+        if not runtime_initializers:
+            return
+
+        for name, node in runtime_initializers.items():
+            self.validate_glsl_runtime_global_initializer(
+                name,
+                node,
+                dependencies[name],
+            )
+
+        self.glsl_runtime_global_initializer_node_ids = {
+            id(node) for node in runtime_initializers.values()
+        }
+        runtime_initializer_names = set(runtime_initializers)
+        functions_by_name = {}
+        for function in functions or []:
+            name = getattr(function, "name", None)
+            if name:
+                functions_by_name.setdefault(name, []).append(function)
+
+        direct_references = {
+            id(function): (
+                self.glsl_function_free_identifier_names(function)
+                & runtime_initializer_names
+            )
+            for function in functions or []
+        }
+        direct_calls = {
+            id(function): self.glsl_called_function_names(function)
+            for function in functions or []
+        }
+
+        def reachable_initializers(function, visited=None):
+            visited = set(visited or ())
+            function_id = id(function)
+            if function_id in visited:
+                return set()
+            visited.add(function_id)
+            required = set(direct_references.get(function_id, set()))
+            for called_name in direct_calls.get(function_id, set()):
+                for called_function in functions_by_name.get(called_name, []):
+                    required.update(
+                        reachable_initializers(called_function, set(visited))
+                    )
+            return required
+
+        stage_entries = collect_stage_entry_records(
+            ast,
+            target_stage,
+            self.combined_stage_entry_types(),
+        )
+        for _entry_id, _stage_name, entry_function in stage_entries:
+            required = reachable_initializers(entry_function)
+            pending = list(required)
+            while pending:
+                name = pending.pop()
+                for dependency in dependencies.get(name, set()):
+                    if (
+                        dependency in runtime_initializer_names
+                        and dependency not in required
+                    ):
+                        required.add(dependency)
+                        pending.append(dependency)
+            self.glsl_stage_runtime_global_initializers[id(entry_function)] = [
+                runtime_initializers[name] for name in ordered_names if name in required
+            ]
+
+    def glsl_global_initializer_dependencies(self, expression, global_names):
+        return {
+            node.name
+            for node in self.walk_ast(expression)
+            if isinstance(node, IdentifierNode) and node.name in global_names
+        }
+
+    def order_glsl_global_initializers(self, initialized_nodes, dependencies):
+        state = {}
+        stack = []
+        ordered = []
+        source_order = {name: index for index, name in enumerate(initialized_nodes)}
+
+        def visit(name):
+            current_state = state.get(name, 0)
+            if current_state == 2:
+                return
+            if current_state == 1:
+                start = stack.index(name)
+                cycle = stack[start:] + [name]
+                raise OpenGLGlobalInitializerError(
+                    "OpenGL global initializer dependency cycle: " + " -> ".join(cycle),
+                    variable_name=name,
+                    dependencies=dependencies.get(name, set()),
+                    cycle=cycle,
+                    reason="dependency-cycle",
+                    source_location=getattr(
+                        initialized_nodes.get(name), "source_location", None
+                    ),
+                )
+
+            state[name] = 1
+            stack.append(name)
+            for dependency in sorted(
+                dependencies.get(name, set()),
+                key=lambda item: (source_order.get(item, len(source_order)), item),
+            ):
+                if dependency in initialized_nodes:
+                    visit(dependency)
+            stack.pop()
+            state[name] = 2
+            ordered.append(name)
+
+        for name in initialized_nodes:
+            visit(name)
+        return ordered
+
+    def validate_glsl_runtime_global_initializer(self, name, node, dependencies):
+        initializer = getattr(node, "initial_value", None)
+        for expression in self.walk_ast(initializer):
+            reason = None
+            detail = None
+            if isinstance(expression, FunctionCallNode):
+                reason = "function-call"
+                detail = self.function_call_name(expression) or "<expression>"
+            elif isinstance(expression, AssignmentNode):
+                reason = "assignment"
+            elif isinstance(expression, UnaryOpNode) and self.map_operator(
+                expression.op
+            ) in {"++", "--"}:
+                reason = "mutation"
+            elif isinstance(
+                expression,
+                (WaveOpNode, MeshOpNode, RayQueryOpNode, RayTracingOpNode),
+            ):
+                reason = "stage-operation"
+                detail = expression.__class__.__name__
+
+            if reason is None:
+                continue
+            suffix = f" '{detail}'" if detail else ""
+            raise OpenGLGlobalInitializerError(
+                f"OpenGL runtime initializer for '{name}' cannot contain "
+                f"{reason.replace('-', ' ')}{suffix}",
+                variable_name=name,
+                dependencies=dependencies,
+                reason=reason,
+                source_location=getattr(expression, "source_location", None)
+                or getattr(node, "source_location", None),
+            )
+
+    def glsl_function_free_identifier_names(self, function):
+        body = getattr(function, "body", None)
+        bound_names = {
+            getattr(parameter, "name", None)
+            for parameter in (
+                getattr(function, "parameters", getattr(function, "params", [])) or []
+            )
+        }
+        callee_identifier_ids = set()
+        for node in self.walk_ast(body):
+            if isinstance(node, (VariableNode, ArrayNode)):
+                bound_names.add(getattr(node, "name", None))
+            elif isinstance(node, FunctionCallNode):
+                function_expression = getattr(
+                    node, "function", getattr(node, "name", None)
+                )
+                if isinstance(function_expression, IdentifierNode):
+                    callee_identifier_ids.add(id(function_expression))
+        bound_names.discard(None)
+        return {
+            node.name
+            for node in self.walk_ast(body)
+            if isinstance(node, IdentifierNode)
+            and id(node) not in callee_identifier_ids
+            and node.name not in bound_names
+        }
+
+    def glsl_called_function_names(self, function):
+        return {
+            name
+            for node in self.walk_ast(getattr(function, "body", None))
+            if isinstance(node, FunctionCallNode)
+            for name in [self.function_call_name(node)]
+            if name
+        }
+
+    def generate_glsl_runtime_global_initializers(self, function, indent):
+        code = ""
+        indent_string = "    " * indent
+        for node in self.glsl_stage_runtime_global_initializers.get(id(function), []):
+            source_name = self.resource_node_name(node, "")
+            emitted_name = self.current_identifier_aliases.get(source_name, source_name)
+            expected_type = self.global_variable_types.get(source_name, "float")
+            initializer = self.generate_expression_with_expected(
+                getattr(node, "initial_value", None), expected_type
+            )
+            code += f"{indent_string}{emitted_name} = {initializer};\n"
+        return code
+
     def global_stage_io_layout_direction(self, qualifier):
         parts = qualifier.split()
         if "in" in parts:
@@ -12344,7 +12616,8 @@ class GLSLCodeGen:
             self.current_identifier_aliases[name] = builtin_output
             return ""
 
-        qualifier = self.global_variable_qualifier(node)
+        runtime_initializer = id(node) in self.glsl_runtime_global_initializer_node_ids
+        qualifier = "" if runtime_initializer else self.global_variable_qualifier(node)
         emitted_name = self.glsl_global_identifier_name(name)
         if emitted_name != name:
             declaration = format_c_style_array_declaration(
@@ -12353,7 +12626,7 @@ class GLSLCodeGen:
             )
         initializer = ""
         initial_value = getattr(node, "initial_value", None)
-        if initial_value is not None:
+        if initial_value is not None and not runtime_initializer:
             initializer_type = (
                 mapped_type_for_layout if mapped_type_for_layout is not None else vtype
             )
