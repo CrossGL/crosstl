@@ -3014,6 +3014,119 @@ class TestVulkanSPIRVCodeGen:
         assert "SPIR-V codegen does not support generic functions" not in spv_code
         assert "WARNING" not in spv_code
 
+    def test_unused_dependent_generic_helper_does_not_block_compute(self, tmp_path):
+        source_code = """
+        shader UnusedDependentGenericHelper {
+            generic<T, N> fn unused_copy(
+                source: StructuredBuffer<T>,
+                target: RWStructuredBuffer<T>,
+                value: vec<T, N>
+            ) -> vec<T, N> {
+                StructuredBuffer<T> source_alias = source;
+                RWStructuredBuffer<T> target_alias = target;
+                T first = source_alias.Load(0u);
+                target_alias.Store(0u, first);
+                vec<T, N> local = value;
+                return local;
+            }
+
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                void main() {}
+            }
+        }
+        """
+
+        generator = VulkanSPIRVCodeGen()
+        spv_code = generator.generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert generator.generic_function_specializations == {}
+        assert "OpEntryPoint GLCompute %" in spv_code
+        assert "generic-vector" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_materialized_generic_resource_specialization_uses_substitutions(
+        self, tmp_path
+    ):
+        source_code = """
+        shader MaterializedGenericResourceSpecialization {
+            RWStructuredBuffer<float> output @binding(0);
+
+            generic<T> fn store_pair(value: T) -> vec<T, 2> {
+                RWStructuredBuffer<T> target_alias = output;
+                vec<T, 2> local;
+                local.x = value;
+                local.y = value + 1.0;
+                target_alias.Store(0u, local.x);
+                return local;
+            }
+
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                void main() {
+                    vec<float, 2> pair = store_pair(1.0);
+                    output.Store(1u, pair.y);
+                }
+            }
+        }
+        """
+
+        generator = VulkanSPIRVCodeGen()
+        spv_code = generator.generate(Parser(Lexer(source_code).tokens).parse())
+
+        specializations = list(generator.generic_function_specializations.values())
+        assert len(specializations) == 1
+        assert specializations[0]._generic_substitutions == {"T": "float"}
+
+        output_var = spirv_named_variable(spv_code, "output", storage_class="Uniform")
+        assert (
+            len(
+                re.findall(
+                    rf"OpAccessChain %\d+ {re.escape(output_var)} %\d+ %\d+",
+                    spv_code,
+                )
+            )
+            >= 2
+        )
+        assert "OpCompositeInsert" in spv_code
+        assert "OpFAdd" in spv_code
+        assert "OpFunctionCall" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_reachable_unresolved_generic_call_preserves_structured_diagnostic(self):
+        source_code = """
+        shader ReachableUnresolvedGenericCall {
+            generic<T> fn make_zero() -> T {
+                return T::zero();
+            }
+
+            compute {
+                void main() {
+                    float value = make_zero();
+                }
+            }
+        }
+        """
+        ast = Parser(Lexer(source_code).tokens).parse()
+        ast.functions[0].source_location = {"line": 3, "column": 13}
+
+        with pytest.raises(
+            UnsupportedSPIRVFeatureError,
+            match=(
+                r"unspecialized generic helper 'make_zero' with generic parameters "
+                r"\(T\) at line 3, column 13"
+            ),
+        ) as exc_info:
+            VulkanSPIRVCodeGen().generate(ast)
+
+        assert exc_info.value.feature == "generic-helper-specialization"
+        assert exc_info.value.missing_capabilities == (
+            "spirv.generic_function_specialization",
+        )
+        assert exc_info.value.source_location == {"line": 3, "column": 13}
+
     def test_unspecialized_generic_function_reports_helper_context(self):
         source_code = """
         shader GenericFunctionDiagnostic {

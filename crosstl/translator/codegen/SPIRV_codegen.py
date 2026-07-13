@@ -14348,8 +14348,6 @@ class VulkanSPIRVCodeGen:
             return None
 
         type_name = self.normalize_reference_type_name(type_name)
-        type_name = self.normalize_generic_vector_type(type_name)
-        type_name = self.normalize_hlsl_matrix_type(type_name)
         type_name = re.sub(r"\s+", "", str(type_name))
         if not type_name:
             return None
@@ -19314,6 +19312,35 @@ class VulkanSPIRVCodeGen:
         walk(root)
         return functions
 
+    def concrete_function_prepass_list(self, root):
+        """Return concrete functions, replacing generic definitions with emissions."""
+        functions = []
+        seen = set()
+        for function_node in self.collect_ast_functions(root):
+            candidates = (
+                generic_function_emission_list(self, function_node)
+                if generic_function_parameters(function_node)
+                else [function_node]
+            )
+            for candidate in candidates:
+                candidate_id = id(candidate)
+                if candidate_id in seen:
+                    continue
+                seen.add(candidate_id)
+                functions.append(candidate)
+        return functions
+
+    def run_function_prepass(self, function_node, operation):
+        """Evaluate one function analysis with materialized generic substitutions."""
+        previous_substitutions = self.current_generic_function_substitutions
+        self.current_generic_function_substitutions = (
+            getattr(function_node, "_generic_substitutions", {}) or {}
+        )
+        try:
+            return operation()
+        finally:
+            self.current_generic_function_substitutions = previous_substitutions
+
     def collect_functions_by_name(self, functions):
         functions_by_name = {}
         for function_node in functions:
@@ -20632,7 +20659,7 @@ class VulkanSPIRVCodeGen:
     def collect_function_storage_buffer_access_requirements_for_functions(
         self, functions
     ):
-        functions = list(functions)
+        functions = self.concrete_function_prepass_list(functions)
         functions_by_name = self.collect_functions_by_name(functions)
         function_parameter_names_by_id = {
             id(func): [
@@ -20651,8 +20678,11 @@ class VulkanSPIRVCodeGen:
             id(func): {} for func in functions if getattr(func, "name", None)
         }
         storage_buffer_parameter_roots = {
-            id(func): self.function_storage_buffer_alias_roots(
-                func, self.function_storage_buffer_parameters(func)
+            id(func): self.run_function_prepass(
+                func,
+                lambda func=func: self.function_storage_buffer_alias_roots(
+                    func, self.function_storage_buffer_parameters(func)
+                ),
             )
             for func in functions
             if getattr(func, "name", None)
@@ -20663,7 +20693,12 @@ class VulkanSPIRVCodeGen:
             if not func_name:
                 continue
             storage_buffer_parameter_indices.setdefault(func_name, set()).update(
-                self.function_storage_buffer_parameter_indices(func)
+                self.run_function_prepass(
+                    func,
+                    lambda func=func: self.function_storage_buffer_parameter_indices(
+                        func
+                    ),
+                )
             )
 
         for func in functions:
@@ -20672,13 +20707,18 @@ class VulkanSPIRVCodeGen:
                 continue
             func_key = id(func)
 
-            self.scan_storage_buffer_requirement_node(
-                getattr(func, "body", []),
-                func_key,
-                storage_buffer_parameter_roots.get(func_key, {}),
-                storage_buffer_parameter_indices,
-                requirements,
-                set(),
+            self.run_function_prepass(
+                func,
+                lambda func=func, func_key=func_key: (
+                    self.scan_storage_buffer_requirement_node(
+                        getattr(func, "body", []),
+                        func_key,
+                        storage_buffer_parameter_roots.get(func_key, {}),
+                        storage_buffer_parameter_indices,
+                        requirements,
+                        set(),
+                    )
+                ),
             )
 
         changed = True
@@ -20727,9 +20767,12 @@ class VulkanSPIRVCodeGen:
                             if index >= len(args):
                                 continue
 
-                            target_name = self.storage_buffer_pointer_root_name(
-                                args[index],
-                                storage_buffer_parameter_roots.get(func_key, {}),
+                            target_name = self.run_function_prepass(
+                                func,
+                                lambda: self.storage_buffer_pointer_root_name(
+                                    args[index],
+                                    storage_buffer_parameter_roots.get(func_key, {}),
+                                ),
                             )
                             if target_name not in parameter_set:
                                 continue
