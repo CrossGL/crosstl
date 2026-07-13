@@ -2461,10 +2461,48 @@ class MetalCodeGen:
             raw_type = getattr(
                 node, "param_type", getattr(node, "var_type", None)
             )
+            if not self.metal_resource_memory_contract_is_emittable(node, raw_type):
+                continue
             for contract in self.resource_memory_qualifier_contracts(node, raw_type):
                 if contract not in contracts:
                     contracts.append(contract)
         return contracts
+
+    def metal_resource_memory_contract_is_emittable(self, node, raw_type):
+        contract_type = raw_type
+        while self.is_array_type_node(contract_type):
+            contract_type = contract_type.element_type
+        if isinstance(contract_type, (PointerType, ReferenceType)):
+            return True
+        if self.is_structured_buffer_type(raw_type):
+            return True
+
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        qualifiers.update(
+            str(qualifier).lower()
+            for qualifier in getattr(node, "resource_qualifiers", []) or []
+        )
+        qualifiers.update(
+            str(getattr(attribute, "name", "")).lower()
+            for attribute in getattr(node, "attributes", []) or []
+        )
+        return bool(
+            qualifiers
+            & {
+                "constant",
+                "device",
+                "global",
+                "local",
+                "private",
+                "storage",
+                "thread",
+                "threadgroup",
+                "workgroup",
+            }
+        )
 
     @staticmethod
     def generate_metal_system_thread_scope_support():

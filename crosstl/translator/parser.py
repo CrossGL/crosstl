@@ -1848,9 +1848,10 @@ class Parser:
             if isinstance(qualifier, ResourceMemoryQualifierNode)
         ]
         declaration_qualifiers = [
-            qualifier
+            str(qualifier)
+            if isinstance(qualifier, ResourceMemoryQualifierNode)
+            else qualifier
             for qualifier in qualifiers
-            if not isinstance(qualifier, ResourceMemoryQualifierNode)
         ]
         return declaration_qualifiers, resource_qualifiers
 
