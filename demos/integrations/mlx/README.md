@@ -314,22 +314,21 @@ structured diagnostic instead of losing the generic suffix or computation.
 Pinned Vulkan replays confirm that both affected kernels advance past this
 contract without producing a full artifact. `fp_quantized.metal` next stops at
 type inference for the reference-returning `frag_at(i, j)` argument tracked in
-CrossGL/crosstl#1557. `quantized_nax.metal` next stops at contextual typing for
-an empty `mma` initializer under CrossGL/crosstl#1573. These results establish
-translation-frontier progress only; they do not include runtime integration or
-numerical parity.
+CrossGL/crosstl#1557. `quantized_nax.metal` next stops because the dependent
+static owner of `mma` is absent, so its empty tag argument has no selected
+parameter type. Dependent static-owner materialization remains tracked in
+CrossGL/crosstl#1574. These results establish translation-frontier progress
+only; they do not include runtime integration or numerical parity.
 
 The full pinned Vulkan run now advances beyond the generic-vector-width
-diagnostic. Its next empty `metal::bool_constant<...>{}` call argument loses the
-selected parameter type in the shared SPIR-V path. The backend fails closed with
-`project.translate.unsupported-feature` and the
-`spirv.empty_initializer_type_inference` capability, so no full-kernel artifact
-or validator result is claimed. Contextual aggregate typing is tracked in
-CrossGL/crosstl#1573. The captured intermediate also retains unresolved
-reference-returning `frag_at` calls and drops the dependent static owner from
-`CTile::NAXFrag_t::mma`; receiver identity remains tracked in
-CrossGL/crosstl#1557 and dependent static-owner materialization in
-CrossGL/crosstl#1574.
+diagnostic. The contextual initializer contract implemented for
+CrossGL/crosstl#1573 now rejects the empty `metal::bool_constant<...>{}` argument
+instead of inferring a zero-length array. The selected parameter type is still
+unavailable because the captured intermediate drops the dependent static owner
+from `CTile::NAXFrag_t::mma`; CrossGL/crosstl#1574 tracks that remaining
+materialization contract. The intermediate also retains unresolved
+reference-returning `frag_at` calls, whose receiver identity remains tracked in
+CrossGL/crosstl#1557. No full-kernel artifact or validator result is claimed.
 Complete address-space, const, pointer-provenance, and
 unresolved-alias diagnostic transport remains tracked in CrossGL/crosstl#1566.
 Pointer-bearing aggregate propagation remains tracked in CrossGL/crosstl#1544,
@@ -344,7 +343,8 @@ rejected explicitly and tracked in CrossGL/crosstl#1562.
 ## Resolved Frontier Issues
 
 The current reduced frontier no longer depends on the previously tracked issues:
-CrossGL/crosstl#1555, CrossGL/crosstl#1561, CrossGL/crosstl#1551,
+CrossGL/crosstl#1573, CrossGL/crosstl#1555, CrossGL/crosstl#1561,
+CrossGL/crosstl#1551,
 CrossGL/crosstl#1498,
 CrossGL/crosstl#1394,
 CrossGL/crosstl#1317,

@@ -177,6 +177,7 @@ FULL_CORPUS_TRACKED_ISSUES = (
     *FULL_CORPUS_SEMANTIC_TRACKED_ISSUES,
 )
 RESOLVED_FRONTIER_ISSUES = (
+    "https://github.com/CrossGL/crosstl/issues/1573",
     "https://github.com/CrossGL/crosstl/issues/1555",
     "https://github.com/CrossGL/crosstl/issues/1561",
     "https://github.com/CrossGL/crosstl/issues/1551",
