@@ -271,31 +271,22 @@
     "native_validation_blocked_by": []
   },
   "vulkan_gemv_toolchain_status": {
-    "status": "blocked-by-tracked-issue",
+    "status": "passed",
     "source": "mlx/backend/metal/kernels/gemv.metal",
     "target": "vulkan",
-    "specialization_count": null,
-    "entry_point_count": null,
-    "structural_validation_status": "blocked-before-artifact",
+    "specialization_count": 225,
+    "entry_point_count": 224,
+    "structural_validation_status": "validated",
     "available_validators": [
       "spirv-as",
       "spirv-val"
     ],
     "target_environment": "vulkan1.1",
-    "semantic_readiness_status": "blocked-before-artifact",
+    "semantic_readiness_status": "no-known-codegen-fallbacks",
     "semantic_warning_count": 0,
     "semantic_warnings_by_issue": {},
     "semantic_warning_descriptions_by_issue": {},
-    "semantic_blockers": [
-      "https://github.com/CrossGL/crosstl/issues/1561"
-    ],
-    "translation_diagnostic_code": "project.translate.unsupported-feature",
-    "translation_missing_capabilities": [
-      "spirv.nested_return_storage_buffer_function"
-    ],
-    "tracked_translation_issues": [
-      "https://github.com/CrossGL/crosstl/issues/1561"
-    ],
+    "semantic_blockers": [],
     "report_warning_transport_tracked_by": null,
     "runtime_integration_included": false
   },
@@ -372,7 +363,6 @@
       "https://github.com/CrossGL/crosstl/issues/1554",
       "https://github.com/CrossGL/crosstl/issues/1555",
       "https://github.com/CrossGL/crosstl/issues/1559",
-      "https://github.com/CrossGL/crosstl/issues/1561",
       "https://github.com/CrossGL/crosstl/issues/1562",
       "https://github.com/CrossGL/crosstl/issues/1566",
       "https://github.com/CrossGL/crosstl/issues/1567"
@@ -434,7 +424,6 @@
     "https://github.com/CrossGL/crosstl/issues/1558",
     "https://github.com/CrossGL/crosstl/issues/1559",
     "https://github.com/CrossGL/crosstl/issues/1560",
-    "https://github.com/CrossGL/crosstl/issues/1561",
     "https://github.com/CrossGL/crosstl/issues/1562",
     "https://github.com/CrossGL/crosstl/issues/1566",
     "https://github.com/CrossGL/crosstl/issues/1567",
@@ -444,6 +433,7 @@
     "https://github.com/CrossGL/crosstl/issues/1574"
   ],
   "resolved_issues": [
+    "https://github.com/CrossGL/crosstl/issues/1561",
     "https://github.com/CrossGL/crosstl/issues/1551",
     "https://github.com/CrossGL/crosstl/issues/1498",
     "https://github.com/CrossGL/crosstl/issues/1535",

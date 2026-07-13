@@ -39,12 +39,11 @@ The current harness verifies:
 - on Linux CI, full project materialization of `gemv.metal` to OpenGL followed
   by native GLSL compilation and SPIR-V 1.3 validation for all 225 source
   specializations represented by the generated artifact;
-- on Linux CI, full project translation of `gemv.metal` to Vulkan with
-  `spirv-as` and `spirv-val` available. The current gate requires the exact
-  structured nested-return diagnostic tracked in
-  [#1561](https://github.com/CrossGL/crosstl/issues/1561) and confirms that no
-  artifact reaches structural validation while pointer-preserving inlining is
-  unsafe;
+- on Linux CI, full project materialization and translation of `gemv.metal` to
+  Vulkan produces 225 specializations and 224 `GLCompute` entry points. The
+  generated artifact passes both `spirv-as` and `spirv-val` for `vulkan1.1`
+  with zero semantic warnings and no known codegen fallbacks. This is structural
+  validation, not numerical runtime parity;
 - runtime artifact manifest, runtime-test manifest, and runtime-test plan
   generation for reduced `arange` readiness probes across DirectX, OpenGL, and
   Vulkan;
@@ -221,14 +220,11 @@ translation successes.
 The full GEMV OpenGL gate accepts only the reserved double-underscore identifier
 warnings tracked in CrossGL/crosstl#1513; any other native compiler warning
 fails the check.
-The full GEMV Vulkan gate keeps `spirv-as` and `spirv-val` available but now
-stops before artifact emission. Pointer-preserving inlining rejects the nested
-return in the materialized GEMV helper under CrossGL/crosstl#1561; the gate
-accepts only that diagnostic and fails on any untracked translation error. The
-previous 225-specialization, 224-entry structural result is not treated as
-current proof because validating an artifact with incorrect return semantics
-would be misleading. Assembly and validation resume only after the nested
-return contract is implemented. No numerical runtime execution claim is made.
+The full GEMV Vulkan gate materializes all 225 source specializations and emits
+224 `GLCompute` entry points. The generated artifact passes both `spirv-as` and
+`spirv-val` for `vulkan1.1`, with zero semantic warnings and no known codegen
+fallbacks. This is structural validation only: runtime integration is not
+included, and the result does not establish numerical runtime parity.
 
 Read-only scalar storage-pointer reinterpretation now has a shared AST contract
 and target lowering for DirectX, OpenGL, and Vulkan. A 32-bit scalar storage
@@ -326,14 +322,15 @@ must satisfy CrossGL/crosstl#1557 before the kernel can be considered
 semantically ready.
 Lazy logical and conditional evaluation in SPIR-V remains tracked in
 CrossGL/crosstl#1560 for full-corpus semantic coverage.
-Nested returns and side-effectful compatibility arguments in pointer-preserving
-SPIR-V inlining now fail explicitly; complete lowering remains tracked in
-CrossGL/crosstl#1561 and CrossGL/crosstl#1562.
+Nested-return lowering in pointer-preserving SPIR-V inlining is covered by the
+passing full GEMV Vulkan gate. Side-effectful compatibility arguments remain
+rejected explicitly and tracked in CrossGL/crosstl#1562.
 
 ## Resolved Frontier Issues
 
 The current reduced frontier no longer depends on the previously tracked issues:
-CrossGL/crosstl#1551, CrossGL/crosstl#1498, CrossGL/crosstl#1394,
+CrossGL/crosstl#1561, CrossGL/crosstl#1551, CrossGL/crosstl#1498,
+CrossGL/crosstl#1394,
 CrossGL/crosstl#1317,
 CrossGL/crosstl#939, CrossGL/crosstl#940,
 CrossGL/crosstl#941, CrossGL/crosstl#943, CrossGL/crosstl#944,
