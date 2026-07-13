@@ -1394,6 +1394,8 @@ class GLSLCodeGen:
         self.glsl_buffer_block_variable_names = set()
         self.glsl_buffer_block_variable_types = {}
         self.glsl_buffer_block_variable_accesses = {}
+        self.glsl_uniform_block_variable_types = {}
+        self.glsl_interface_value_struct_names = set()
         self.glsl_interface_block_names_by_qualifier = {}
         self.global_variable_types = {}
         self.glsl_runtime_global_initializer_node_ids = set()
@@ -3000,6 +3002,8 @@ class GLSLCodeGen:
         self.glsl_buffer_block_variable_names = set()
         self.glsl_buffer_block_variable_types = {}
         self.glsl_buffer_block_variable_accesses = {}
+        self.glsl_uniform_block_variable_types = {}
+        self.glsl_interface_value_struct_names = set()
         self.glsl_interface_block_names_by_qualifier = {}
         self.global_variable_types = {}
         self.glsl_runtime_global_initializer_node_ids = set()
@@ -3410,6 +3414,14 @@ class GLSLCodeGen:
         self.layout_bound_struct_uniform_names = (
             self.collect_layout_bound_struct_uniform_names(resource_declaration_nodes)
         )
+        self.glsl_interface_value_struct_names = (
+            self.collect_glsl_interface_value_struct_names(
+                ast,
+                structs,
+                global_vars,
+                functions,
+            )
+        )
         self.prepare_glsl_interface_block_names(ast, target_stage, structs)
         self.vertex_input_struct_names = self.stage_parameter_struct_names(
             ast, "vertex"
@@ -3482,9 +3494,15 @@ class GLSLCodeGen:
                 if self.is_glsl_interface_block_struct(node):
                     code += self.generate_glsl_interface_block_declaration(node)
                     continue
-                if node.name in self.glsl_buffer_block_struct_names:
+                if (
+                    node.name in self.glsl_buffer_block_struct_names
+                    and node.name not in self.glsl_interface_value_struct_names
+                ):
                     continue
-                if node.name in self.layout_bound_struct_uniform_names:
+                if (
+                    node.name in self.layout_bound_struct_uniform_names
+                    and node.name not in self.glsl_interface_value_struct_names
+                ):
                     continue
                 elif (
                     node.name == "VSInput"
@@ -3773,6 +3791,9 @@ class GLSLCodeGen:
                     )
                 continue
             if self.is_constant_buffer_type(vtype):
+                self.glsl_uniform_block_variable_types[var_name] = (
+                    self.constant_buffer_element_type(vtype)
+                )
                 binding_namespace = "uniform buffer binding"
                 resource_binding = self.opengl_resource_binding_for_declaration(
                     node,
@@ -3859,6 +3880,9 @@ class GLSLCodeGen:
                     resource_count,
                 )
             elif self.is_layout_bound_struct_uniform(node, vtype):
+                self.glsl_uniform_block_variable_types[var_name] = str(
+                    self.resource_base_type(vtype)
+                )
                 binding_namespace = "uniform buffer binding"
                 resource_binding = self.opengl_resource_binding_for_declaration(
                     node,
@@ -12988,6 +13012,11 @@ class GLSLCodeGen:
 
     def generate_expression_with_expected(self, expr, expected_type):
         expected_type = self.type_name_string(expected_type)
+        interface_value = self.glsl_interface_block_value_expression(
+            expr, expected_type
+        )
+        if interface_value is not None:
+            return interface_value
         previous_expected_type = self.current_expression_expected_type
         self.current_expression_expected_type = expected_type
         try:
@@ -12995,6 +13024,79 @@ class GLSLCodeGen:
         finally:
             self.current_expression_expected_type = previous_expected_type
         return self.glsl_expected_type_conversion(expr, generated, expected_type)
+
+    def glsl_interface_block_value_expression(self, expression, expected_type):
+        root_name = self.glsl_interface_block_value_root_name(expression)
+        if root_name is None:
+            return None
+
+        emitted_root_name = self.current_identifier_aliases.get(root_name, root_name)
+        source_type = self.glsl_uniform_block_variable_types.get(emitted_root_name)
+        is_storage_block = False
+        if source_type is None:
+            source_type = self.glsl_buffer_block_variable_types.get(emitted_root_name)
+            is_storage_block = source_type is not None
+        if source_type is None and emitted_root_name != root_name:
+            source_type = self.glsl_uniform_block_variable_types.get(root_name)
+            if source_type is None:
+                source_type = self.glsl_buffer_block_variable_types.get(root_name)
+                is_storage_block = source_type is not None
+        if source_type not in self.glsl_interface_value_struct_names:
+            return None
+
+        expected_base_type, expected_array_suffix = split_array_type_suffix(
+            expected_type or ""
+        )
+        if expected_array_suffix or expected_base_type.strip() != source_type:
+            return None
+
+        struct = self.structs_by_name.get(source_type)
+        if struct is None:
+            return None
+        if is_storage_block and self.glsl_struct_has_unsized_array_member(struct):
+            return None
+        members = [
+            member
+            for member in getattr(struct, "members", []) or []
+            if not self.glsl_static_struct_member(member)
+        ]
+        if not members:
+            return None
+
+        base_expression = self.generate_expression(expression)
+        arguments = [
+            f"{base_expression}.{self.glsl_struct_member_name(source_type, member.name)}"
+            for member in members
+        ]
+        return f"{self.map_type(source_type)}({', '.join(arguments)})"
+
+    def glsl_struct_has_unsized_array_member(self, struct):
+        for member in getattr(struct, "members", []) or []:
+            if isinstance(member, ArrayNode) and getattr(member, "size", None) is None:
+                return True
+            member_type = getattr(member, "member_type", None)
+            while member_type is not None and hasattr(member_type, "element_type"):
+                if (
+                    "ArrayType" in member_type.__class__.__name__
+                    and getattr(member_type, "size", None) is None
+                ):
+                    return True
+                member_type = getattr(member_type, "element_type", None)
+        return False
+
+    def glsl_interface_block_value_root_name(self, expression):
+        if isinstance(expression, IdentifierNode):
+            return expression.name
+        if isinstance(expression, str):
+            return expression
+        if isinstance(expression, ArrayAccessNode) or (
+            hasattr(expression, "__class__")
+            and "ArrayAccess" in expression.__class__.__name__
+        ):
+            return self.glsl_interface_block_value_root_name(
+                getattr(expression, "array", getattr(expression, "array_expr", None))
+            )
+        return None
 
     def generate_glsl_complex64_helpers(self):
         if not getattr(self, "required_glsl_complex64_helpers", set()):
@@ -22646,14 +22748,78 @@ complex64_t crossgl_complex64_mod_assign(
             names.add(str(self.resource_base_type(node_type)))
         return names
 
+    def collect_glsl_interface_value_struct_names(
+        self, ast, structs, global_vars, functions
+    ):
+        candidates = set(self.glsl_buffer_block_struct_names)
+        candidates.update(self.layout_bound_struct_uniform_names)
+        if not candidates:
+            return set()
+
+        value_structs = set()
+
+        def referenced_types(type_node):
+            return {
+                name
+                for name in candidates
+                if self.type_node_references_name(type_node, name)
+            }
+
+        def record_type(type_node):
+            value_structs.update(referenced_types(type_node))
+
+        for function in functions or []:
+            record_type(getattr(function, "return_type", None))
+            for parameter in (
+                getattr(function, "parameters", getattr(function, "params", [])) or []
+            ):
+                parameter_type = self.resource_node_type(parameter)
+                referenced = referenced_types(parameter_type)
+                if not referenced:
+                    continue
+                if self.is_stage_entry_resource_parameter(parameter):
+                    continue
+                value_structs.update(referenced)
+
+            for node in self.walk_ast(getattr(function, "body", None)):
+                if isinstance(node, (VariableNode, ArrayNode)):
+                    record_type(self.resource_node_type(node))
+                    record_type(getattr(node, "element_type", None))
+                if isinstance(node, ConstructorNode):
+                    record_type(getattr(node, "constructor_type", None))
+                record_type(getattr(node, "target_type", None))
+
+        for struct in structs or []:
+            if getattr(struct, "name", None) in candidates:
+                continue
+            for member in getattr(struct, "members", []) or []:
+                record_type(getattr(member, "member_type", None))
+
+        for node in global_vars or []:
+            node_type = self.resource_node_type(node)
+            if self.is_glsl_buffer_block_variable(node, node_type):
+                continue
+            if self.is_layout_bound_struct_uniform(node, node_type):
+                continue
+            record_type(node_type)
+
+        for node in getattr(ast, "constants", []) or []:
+            record_type(getattr(node, "const_type", getattr(node, "vtype", None)))
+        return value_structs
+
     def prepare_glsl_interface_block_names(self, ast, target_stage, structs):
         ordinary_struct_names = {
             getattr(node, "name", None)
             for node in structs or []
             if getattr(node, "name", None)
             and not self.is_glsl_interface_block_struct(node)
-            and node.name not in self.layout_bound_struct_uniform_names
-            and node.name not in self.glsl_buffer_block_struct_names
+            and (
+                node.name in self.glsl_interface_value_struct_names
+                or (
+                    node.name not in self.layout_bound_struct_uniform_names
+                    and node.name not in self.glsl_buffer_block_struct_names
+                )
+            )
         }
         for qualifier in ("uniform", "buffer"):
             for name in ordinary_struct_names:
