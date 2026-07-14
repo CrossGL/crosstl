@@ -23,6 +23,7 @@ from crosstl.project.runtime_verification import (
     NativeRuntimeBufferBinding,
     NativeRuntimeConstantBinding,
     NativeRuntimeDispatchRequest,
+    RuntimeAdapterDispatchError,
     RuntimeAdapterSetupError,
     RuntimeArtifactSelector,
     RuntimeDispatchGeometry,
@@ -48,6 +49,30 @@ def _runtime_request(tmp_path: Path) -> RuntimeExecutionRequest:
         artifact={"target": "vulkan", "path": "out/vulkan/add.spv"},
         artifact_path=tmp_path / "out" / "vulkan" / "add.spv",
         project_root=tmp_path,
+    )
+
+
+def _opengl_dispatch_request(tmp_path: Path) -> NativeRuntimeDispatchRequest:
+    return NativeRuntimeDispatchRequest(
+        target="opengl",
+        artifact={"target": "opengl"},
+        artifact_path=tmp_path / "runtime.comp",
+        module_path=tmp_path / "runtime.comp",
+        loaded_artifact="#version 430\nvoid main() {}\n",
+        buffers={
+            "output_values": NativeRuntimeBufferBinding(
+                name="output_values",
+                binding=RuntimeResourceBinding(
+                    name="output_values", kind="storage-buffer", set=0, binding=0
+                ),
+                source="expectedOutput",
+                dtype="float32",
+                shape=(1,),
+            )
+        },
+        constants={},
+        dispatch=RuntimeDispatchGeometry(entry_point="main", workgroup_count=(1, 1, 1)),
+        entry_point="main",
     )
 
 
@@ -283,6 +308,114 @@ def test_opengl_compute_runtime_dispatches_and_reads_storage_buffer(tmp_path):
     assert context.barrier_called is True
     assert context.finish_called is True
     assert all(buffer.released for buffer in context.buffers)
+    assert context.shader.released is True
+    assert context.released is True
+
+
+def test_opengl_compute_runtime_releases_buffer_when_binding_fails(tmp_path):
+    class FailingBuffer:
+        def __init__(self):
+            self.released = False
+
+        def bind_to_storage_buffer(self, binding):
+            _ = binding
+            raise RuntimeError("storage binding unavailable")
+
+        def release(self):
+            self.released = True
+
+    class FakeShader:
+        def __init__(self):
+            self.released = False
+
+        def release(self):
+            self.released = True
+
+    class FakeContext:
+        def __init__(self):
+            self.buffer_resource = FailingBuffer()
+            self.shader = FakeShader()
+            self.released = False
+
+        def compute_shader(self, source):
+            _ = source
+            return self.shader
+
+        def buffer(self, data=None, reserve=None):
+            _ = data, reserve
+            return self.buffer_resource
+
+        def release(self):
+            self.released = True
+
+    context = FakeContext()
+    runtime = OpenGLComputeRuntime(
+        module_loader=lambda name: object(),
+        context_factory=lambda module: context,
+    )
+
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        runtime.dispatch(None, None, _opengl_dispatch_request(tmp_path))
+
+    assert excinfo.value.details["reasonKind"] == "resource-binding-failed"
+    assert excinfo.value.details["resource"] == "output_values"
+    assert context.buffer_resource.released is True
+    assert context.shader.released is True
+    assert context.released is True
+
+
+def test_opengl_compute_runtime_reports_synchronization_failure(tmp_path):
+    class FakeBuffer:
+        def __init__(self):
+            self.released = False
+
+        def bind_to_storage_buffer(self, binding):
+            _ = binding
+
+        def release(self):
+            self.released = True
+
+    class FakeShader:
+        def __init__(self):
+            self.released = False
+
+        def run(self, **kwargs):
+            _ = kwargs
+
+        def release(self):
+            self.released = True
+
+    class FakeContext:
+        def __init__(self):
+            self.buffer_resource = FakeBuffer()
+            self.shader = FakeShader()
+            self.released = False
+
+        def compute_shader(self, source):
+            _ = source
+            return self.shader
+
+        def buffer(self, data=None, reserve=None):
+            _ = data, reserve
+            return self.buffer_resource
+
+        def memory_barrier(self):
+            raise RuntimeError("barrier failed")
+
+        def release(self):
+            self.released = True
+
+    context = FakeContext()
+    runtime = OpenGLComputeRuntime(
+        module_loader=lambda name: object(),
+        context_factory=lambda module: context,
+    )
+
+    with pytest.raises(RuntimeAdapterDispatchError) as excinfo:
+        runtime.dispatch(None, None, _opengl_dispatch_request(tmp_path))
+
+    assert excinfo.value.details["reasonKind"] == "synchronization-failed"
+    assert context.buffer_resource.released is True
     assert context.shader.released is True
     assert context.released is True
 

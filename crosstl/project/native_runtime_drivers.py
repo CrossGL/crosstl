@@ -178,29 +178,87 @@ class OpenGLComputeRuntime:
         shader = None
         resources: list[tuple[_PreparedOpenGLBuffer, Any]] = []
         try:
-            context, _backend = self._create_context(moderngl)
+            try:
+                context, _backend = self._create_context(moderngl)
+            except Exception as exc:
+                raise RuntimeAdapterSetupError(
+                    f"OpenGL compute context creation failed: {exc}",
+                    details={
+                        "target": "opengl",
+                        "runtime": self.name,
+                        "reasonKind": "context-creation-failed",
+                    },
+                ) from exc
             try:
                 shader = context.compute_shader(shader_source)
             except Exception as exc:
                 raise RuntimeAdapterSetupError(
                     f"OpenGL compute shader compilation or linking failed: {exc}",
-                    details={"target": "opengl", "runtime": self.name},
+                    details={
+                        "target": "opengl",
+                        "runtime": self.name,
+                        "reasonKind": "shader-compilation-or-linking-failed",
+                    },
                 ) from exc
 
             for prepared in prepared_buffers:
-                buffer = self._create_buffer(context, prepared)
+                try:
+                    buffer = self._create_buffer(context, prepared)
+                except Exception as exc:
+                    raise RuntimeAdapterSetupError(
+                        f"OpenGL resource binding failed for {prepared.name!r}: {exc}",
+                        details={
+                            "target": "opengl",
+                            "runtime": self.name,
+                            "reasonKind": "resource-binding-failed",
+                            "resource": prepared.name,
+                            "binding": prepared.binding_index,
+                        },
+                    ) from exc
                 resources.append((prepared, buffer))
             self._bind_constants(shader, request.constants)
-            shader.run(
-                group_x=workgroup_count[0],
-                group_y=workgroup_count[1],
-                group_z=workgroup_count[2],
-            )
-            context.memory_barrier()
-            finish = getattr(context, "finish", None)
-            if callable(finish):
-                finish()
-            return self._read_outputs(resources)
+            try:
+                shader.run(
+                    group_x=workgroup_count[0],
+                    group_y=workgroup_count[1],
+                    group_z=workgroup_count[2],
+                )
+            except Exception as exc:
+                raise RuntimeAdapterDispatchError(
+                    f"OpenGL compute dispatch failed: {exc}",
+                    details={
+                        "target": "opengl",
+                        "runtime": self.name,
+                        "reasonKind": "dispatch-failed",
+                    },
+                ) from exc
+            try:
+                context.memory_barrier()
+                finish = getattr(context, "finish", None)
+                if callable(finish):
+                    finish()
+            except Exception as exc:
+                raise RuntimeAdapterDispatchError(
+                    f"OpenGL compute synchronization failed: {exc}",
+                    details={
+                        "target": "opengl",
+                        "runtime": self.name,
+                        "reasonKind": "synchronization-failed",
+                    },
+                ) from exc
+            try:
+                return self._read_outputs(resources)
+            except RuntimeAdapterDispatchError:
+                raise
+            except Exception as exc:
+                raise RuntimeAdapterDispatchError(
+                    f"OpenGL compute output readback failed: {exc}",
+                    details={
+                        "target": "opengl",
+                        "runtime": self.name,
+                        "reasonKind": "readback-failed",
+                    },
+                ) from exc
         except (RuntimeAdapterSetupError, RuntimeExecutorUnavailable):
             raise
         except RuntimeAdapterDispatchError:
@@ -254,28 +312,55 @@ class OpenGLComputeRuntime:
             buffer = context.buffer(prepared.payload)
         else:
             buffer = context.buffer(reserve=max(prepared.size, 1))
-        if prepared.resource_kind in {"constant-buffer", "uniform"}:
-            buffer.bind_to_uniform_block(prepared.binding_index)
-        else:
-            buffer.bind_to_storage_buffer(prepared.binding_index)
+        try:
+            if prepared.resource_kind in {"constant-buffer", "uniform"}:
+                buffer.bind_to_uniform_block(prepared.binding_index)
+            else:
+                buffer.bind_to_storage_buffer(prepared.binding_index)
+        except Exception:
+            _release_opengl_object(buffer)
+            raise
         return buffer
 
     def _bind_constants(self, shader: Any, constants: Mapping[str, Any]) -> None:
         for name, binding in constants.items():
             if binding.value is None:
-                raise RuntimeExecutorUnavailable(
-                    f"OpenGL runtime constant {name!r} has no bound value."
+                raise RuntimeAdapterSetupError(
+                    f"OpenGL runtime constant {name!r} has no bound value.",
+                    details={
+                        "target": "opengl",
+                        "runtime": self.name,
+                        "reasonKind": "constant-value-missing",
+                        "constant": name,
+                    },
                 )
             try:
                 uniform = shader[name]
             except (KeyError, TypeError) as exc:
-                raise RuntimeExecutorUnavailable(
-                    f"OpenGL runtime constant {name!r} is not an active uniform."
+                raise RuntimeAdapterSetupError(
+                    f"OpenGL runtime constant {name!r} is not an active uniform.",
+                    details={
+                        "target": "opengl",
+                        "runtime": self.name,
+                        "reasonKind": "active-uniform-missing",
+                        "constant": name,
+                    },
                 ) from exc
             value = binding.value
             if isinstance(value, list):
                 value = tuple(value)
-            uniform.value = value
+            try:
+                uniform.value = value
+            except Exception as exc:
+                raise RuntimeAdapterSetupError(
+                    f"OpenGL runtime constant {name!r} could not be bound: {exc}",
+                    details={
+                        "target": "opengl",
+                        "runtime": self.name,
+                        "reasonKind": "constant-binding-failed",
+                        "constant": name,
+                    },
+                ) from exc
 
     def _read_outputs(
         self,
@@ -1127,6 +1212,7 @@ def _unpack_values(
             f"{target} runtime output byte length is not aligned to the dtype size.",
             details={
                 "target": target.lower(),
+                "reasonKind": "output-layout-invalid",
                 "dtype": dtype,
                 "byteLength": len(payload),
             },
