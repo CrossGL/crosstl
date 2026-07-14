@@ -327,8 +327,12 @@ compiles for OpenGL/SPIR-V 1.3, and the resulting SPIR-V passes `spirv-val`. Thi
 resolves [#1661](https://github.com/CrossGL/crosstl/issues/1661) for the pinned
 frontier. It is artifact and toolchain evidence only; it does not establish
 numerical or runtime parity.
-`rms_norm.metal` remains outside the OpenGL/SPIR-V gate until Metal function
-constants are preserved as specialization inputs under
+The OpenGL/SPIR-V gate includes `rms_norm.metal`, `rope.metal`, and
+`scaled_dot_product_attention.metal`. Their Metal function constants retain
+their numeric identifiers as GLSL specialization constants; the gate compiles
+each generated module for OpenGL/SPIR-V 1.3 and validates the resulting binary.
+Project-supplied concrete values, DirectX compile-time variants, and host
+specialization wiring remain tracked under
 [#1538](https://github.com/CrossGL/crosstl/issues/1538).
 `fence.metal` emits no DirectX, OpenGL, or Vulkan target artifact. The harness
 requires the target-specific structured diagnostics and the exact requested

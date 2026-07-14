@@ -53,6 +53,9 @@ MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES = (
     MLX_ARG_REDUCE_SOURCE,
     MLX_BINARY_TWO_SOURCE,
     "mlx/backend/metal/kernels/logsumexp.metal",
+    "mlx/backend/metal/kernels/rms_norm.metal",
+    MLX_ROPE_SOURCE,
+    MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
     "mlx/backend/metal/kernels/softmax.metal",
 )
 MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (

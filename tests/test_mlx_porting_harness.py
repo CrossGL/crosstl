@@ -1303,8 +1303,8 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES
     )
     assert opengl_frontier["project_diagnostic_count"] == 0
-    assert opengl_frontier["glslang_compiled_artifact_count"] == 4
-    assert opengl_frontier["spirv_validated_artifact_count"] == 4
+    assert opengl_frontier["glslang_compiled_artifact_count"] == 7
+    assert opengl_frontier["spirv_validated_artifact_count"] == 7
     assert opengl_frontier["glslang_target_environments"] == [
         "opengl",
         "spirv1.3",
@@ -1694,6 +1694,9 @@ def test_arg_reduce_advances_into_clean_toolchain_frontiers():
         module.MLX_ARG_REDUCE_SOURCE,
         module.MLX_BINARY_TWO_SOURCE,
         "mlx/backend/metal/kernels/logsumexp.metal",
+        "mlx/backend/metal/kernels/rms_norm.metal",
+        module.MLX_ROPE_SOURCE,
+        module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
         "mlx/backend/metal/kernels/softmax.metal",
     )
     assert module.MLX_REDUCED_FRONTIER_SOURCES == tuple(
@@ -1810,7 +1813,7 @@ def test_empty_initializer_issue_is_resolved_for_pinned_quantized_nax():
     )
 
 
-def test_scaled_dot_product_attention_tracks_opengl_function_constant_blocker():
+def test_scaled_dot_product_attention_enters_opengl_function_constant_frontier():
     module = _load_harness()
     source = module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE
     resolved_issue = "https://github.com/CrossGL/crosstl/issues/1535"
@@ -1825,6 +1828,7 @@ def test_scaled_dot_product_attention_tracks_opengl_function_constant_blocker():
     )
     assert resolved_issue in module.RESOLVED_FRONTIER_ISSUES
     assert resolved_issue not in module.FULL_CORPUS_TRACKED_ISSUES
+    assert source in module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES
     assert module.OPENGL_SCALED_DOT_PRODUCT_ATTENTION_TRACKED_ISSUES == (
         function_constant_issue,
     )
@@ -2283,6 +2287,12 @@ def test_opengl_frontier_required_toolchain_compiles_and_validates_artifacts(
         "validate-binary-two-opengl-spirv",
         "validate-logsumexp-opengl",
         "validate-logsumexp-opengl-spirv",
+        "validate-rms-norm-opengl",
+        "validate-rms-norm-opengl-spirv",
+        "validate-rope-opengl",
+        "validate-rope-opengl-spirv",
+        "validate-scaled-dot-product-attention-opengl",
+        "validate-scaled-dot-product-attention-opengl-spirv",
         "validate-softmax-opengl",
         "validate-softmax-opengl-spirv",
     ]
@@ -2317,8 +2327,8 @@ def test_opengl_frontier_required_toolchain_compiles_and_validates_artifacts(
     config = (paths[2] / "opengl-frontier.toml").read_text(encoding="utf-8")
     for source in module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES:
         assert source in config
-    assert module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE not in config
-    assert "mlx/backend/metal/kernels/rms_norm.metal" not in config
+    assert module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE in config
+    assert "mlx/backend/metal/kernels/rms_norm.metal" in config
     assert 'targets = ["opengl"]' in config
 
 
