@@ -6,7 +6,7 @@ import os
 import re
 from bisect import bisect_right
 from dataclasses import dataclass, field, replace
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple, TypeVar, Union
 
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
 
@@ -191,6 +191,20 @@ class _MetalIntegralConstantBinding:
     scope_start: int
     scope_end: int
     value: Optional[str]
+
+
+@dataclass(frozen=True)
+class _MetalSubscriptableType:
+    """Element type plus a proven address-space-qualified pointer type."""
+
+    element_type: str
+    pointer_type: Optional[str] = None
+
+
+_MetalBufferType = Union[str, _MetalSubscriptableType]
+_MetalPositionedBufferTypes = Dict[str, List[Tuple[int, _MetalBufferType]]]
+_MetalBufferTypeView = Dict[str, _MetalBufferType]
+_DeclaredTypeT = TypeVar("_DeclaredTypeT")
 
 
 @dataclass(frozen=True)
@@ -4625,7 +4639,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         operator_call_structs: Set[str],
         variable_types: Dict[str, List[Tuple[int, str]]],
         structs_by_name: Dict[str, _MetalStructDefinition],
-        buffer_element_types: Dict[str, List[Tuple[int, str]]],
+        buffer_element_types: _MetalPositionedBufferTypes,
         local_variable_types: Dict[str, List[Tuple[int, str]]],
         instantiated_template_functions: Dict[str, str],
         field_variable_types: Optional[Dict[str, List[Tuple[int, str]]]] = None,
@@ -4939,7 +4953,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         operator_call_structs: Set[str],
         variable_types: Dict[str, List[Tuple[int, str]]],
         structs_by_name: Dict[str, _MetalStructDefinition],
-        buffer_element_types: Dict[str, List[Tuple[int, str]]],
+        buffer_element_types: _MetalPositionedBufferTypes,
         local_variable_types: Dict[str, List[Tuple[int, str]]],
         instantiated_template_functions: Dict[str, str],
         field_variable_types: Dict[str, List[Tuple[int, str]]],
@@ -5117,7 +5131,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         method: _MetalStructMethod,
         code: str,
         arg_open: int,
-        buffer_element_types: Dict[str, List[Tuple[int, str]]],
+        buffer_element_types: _MetalPositionedBufferTypes,
         local_variable_types: Dict[str, List[Tuple[int, str]]],
         variable_types: Dict[str, List[Tuple[int, str]]],
         structs_by_name: Dict[str, _MetalStructDefinition],
@@ -5238,7 +5252,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         struct: _MetalStructDefinition,
         overloads: List[_MetalStructMethod],
         arg_open: int,
-        buffer_element_types: Dict[str, List[Tuple[int, str]]],
+        buffer_element_types: _MetalPositionedBufferTypes,
         local_variable_types: Dict[str, List[Tuple[int, str]]],
         instantiated_template_functions: Dict[str, str],
         structs_by_name: Optional[Dict[str, _MetalStructDefinition]] = None,
@@ -5404,7 +5418,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         overloads: List[_MetalStructMethod],
         receiver: Optional[str],
         arg_open: int,
-        buffer_element_types: Dict[str, List[Tuple[int, str]]],
+        buffer_element_types: _MetalPositionedBufferTypes,
         local_variable_types: Dict[str, List[Tuple[int, str]]],
         instantiated_template_functions: Dict[str, str],
         structs_by_name: Optional[Dict[str, _MetalStructDefinition]] = None,
@@ -5702,10 +5716,15 @@ class MetalPreprocessor(HLSLPreprocessor):
             if default is None or not default.strip():
                 return None
         declared_parameter_types: List[str] = []
+        declared_parameter_is_indirect: List[bool] = []
+        declared_pointer_types: List[Optional[str]] = []
         for parameter in parameters[: len(concrete_argument_types)]:
-            declared = self._pointer_or_array_parameter_element_type(
-                parameter
-            ) or self._function_parameter_value_type(parameter)
+            subscriptable = self._pointer_or_array_parameter_type(parameter)
+            declared = (
+                subscriptable.element_type
+                if subscriptable is not None
+                else self._function_parameter_value_type(parameter)
+            )
             if owner_struct is not None:
                 declared = self._canonicalize_struct_scoped_type(
                     declared, owner_struct, structs_by_name
@@ -5713,6 +5732,10 @@ class MetalPreprocessor(HLSLPreprocessor):
             normalized = self._normalize_inferred_type(declared)
             if normalized and normalized != "void":
                 declared_parameter_types.append(normalized)
+                declared_parameter_is_indirect.append(subscriptable is not None)
+                declared_pointer_types.append(
+                    subscriptable.pointer_type if subscriptable is not None else None
+                )
         if len(declared_parameter_types) != len(concrete_argument_types):
             return None
         # Bind each parameter into its OWN dict and merge with explicit conflict
@@ -5725,22 +5748,37 @@ class MetalPreprocessor(HLSLPreprocessor):
         if len(explicit_template_arguments) > len(method.template_parameters):
             return None
         bindings: Dict[str, str] = {
-            name: self._normalize_inferred_type(argument)
+            name: self._normalize_template_binding_type(argument)
             for name, argument in zip(
                 method.template_parameters, explicit_template_arguments
             )
         }
         if any(not value for value in bindings.values()):
             return None
-        for declared_type, concrete_type in zip(
-            declared_parameter_types, concrete_argument_types
+        for declared_type, is_indirect, declared_pointer_type, concrete_type in zip(
+            declared_parameter_types,
+            declared_parameter_is_indirect,
+            declared_pointer_types,
+            concrete_argument_types,
         ):
             if concrete_type is None:
                 continue
             local_bindings: Dict[str, str] = {}
             concrete_value_type = (
-                self._normalize_inferred_type(concrete_type).rstrip("&").strip()
+                self._normalize_template_binding_type(concrete_type).rstrip("&").strip()
             )
+            if is_indirect and concrete_value_type.endswith("*"):
+                if declared_pointer_type is not None and not (
+                    self._pointer_argument_matches_declared_type(
+                        declared_pointer_type, concrete_value_type
+                    )
+                ):
+                    return None
+                concrete_value_type = self._pointer_pointee_value_type(
+                    concrete_value_type
+                )
+                if concrete_value_type is None:
+                    return None
             self._infer_template_parameter_bindings_from_type(
                 declared_type,
                 concrete_value_type,
@@ -5760,7 +5798,9 @@ class MetalPreprocessor(HLSLPreprocessor):
                 if default is None:
                     return None
                 resolved_default = self._replace_identifiers(default, bindings)
-                normalized_default = self._normalize_inferred_type(resolved_default)
+                normalized_default = self._normalize_template_binding_type(
+                    resolved_default
+                )
                 if not normalized_default:
                     return None
                 bindings[name] = normalized_default
@@ -5788,6 +5828,7 @@ class MetalPreprocessor(HLSLPreprocessor):
     def _template_member_name_component(value: str) -> str:
         text = str(value)
         text = re.sub(r"(?<![A-Za-z0-9_])-(?=\s*[0-9])", " negative ", text)
+        text = text.replace("*", " ptr ").replace("&", " ref ")
         return re.sub(r"[^A-Za-z0-9_]+", "_", text).strip("_")
 
     def _emit_template_member_free_function(
@@ -6944,16 +6985,16 @@ class MetalPreprocessor(HLSLPreprocessor):
         # Build flat name->type views for the body scope from the concrete
         # parameters plus body-local declarations.
         local_view: Dict[str, str] = {}
-        buffer_view: Dict[str, str] = {}
+        buffer_view: _MetalBufferTypeView = {}
         for parameter in self._split_top_level_commas(instantiated_parameters):
             if not parameter.strip():
                 continue
             name = self._declared_data_member_name(parameter)
             if not name:
                 continue
-            element = self._pointer_or_array_parameter_element_type(parameter)
-            if element is not None:
-                buffer_view[name] = element
+            subscriptable = self._pointer_or_array_parameter_type(parameter)
+            if subscriptable is not None:
+                buffer_view[name] = subscriptable
                 continue
             scalar = self._function_parameter_value_type(parameter)
             if scalar:
@@ -7292,7 +7333,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         body: str,
         sibling_overloads: Dict[str, List[_MetalStructMethod]],
         local_view: Dict[str, str],
-        buffer_view: Dict[str, str],
+        buffer_view: _MetalBufferTypeView,
         instantiated_template_functions: Dict[str, str],
         template_methods_by_struct: Dict[str, Dict[str, List[_MetalStructMethod]]],
         local_integral_constants: Dict[str, List[_MetalIntegralConstantBinding]],
@@ -7542,7 +7583,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         body: str,
         sibling_overloads: Dict[str, List[_MetalStructMethod]],
         local_view: Dict[str, str],
-        buffer_view: Dict[str, str],
+        buffer_view: _MetalBufferTypeView,
         instantiated_template_functions: Dict[str, str],
         template_methods_by_struct: Dict[str, Dict[str, List[_MetalStructMethod]]],
         local_integral_constants: Dict[str, List[_MetalIntegralConstantBinding]],
@@ -9099,10 +9140,10 @@ class MetalPreprocessor(HLSLPreprocessor):
 
     def _resolve_declared_type_at(
         self,
-        declarations: Dict[str, List[Tuple[int, str]]],
+        declarations: Dict[str, List[Tuple[int, _DeclaredTypeT]]],
         name: str,
         position: int,
-    ) -> Optional[str]:
+    ) -> Optional[_DeclaredTypeT]:
         # Resolve a name to the type of its NEAREST declaration appearing at or
         # before `position`. A later declaration cannot type an earlier use;
         # accepting it can leak a same-named parameter from another function
@@ -9110,7 +9151,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         entries = declarations.get(name)
         if not entries:
             return None
-        best: Optional[str] = None
+        best: Optional[_DeclaredTypeT] = None
         for decl_position, declared_type in entries:
             if decl_position <= position:
                 best = declared_type
@@ -9122,12 +9163,12 @@ class MetalPreprocessor(HLSLPreprocessor):
 
     def _flatten_types_at(
         self,
-        declarations: Dict[str, List[Tuple[int, str]]],
+        declarations: Dict[str, List[Tuple[int, _DeclaredTypeT]]],
         position: int,
-    ) -> Dict[str, str]:
+    ) -> Dict[str, _DeclaredTypeT]:
         # Flatten a position-ordered declaration map to a name -> type view valid
         # at `position` (nearest preceding declaration wins per name).
-        flattened: Dict[str, str] = {}
+        flattened: Dict[str, _DeclaredTypeT] = {}
         for name in declarations:
             resolved = self._resolve_declared_type_at(declarations, name, position)
             if resolved is not None:
@@ -9180,7 +9221,7 @@ class MetalPreprocessor(HLSLPreprocessor):
 
     def _collect_buffer_element_types(
         self, code: str, struct_spans: List[Tuple[int, int]]
-    ) -> Dict[str, List[Tuple[int, str]]]:
+    ) -> _MetalPositionedBufferTypes:
         # Map each subscriptable name to the POSITION-ORDERED list of declarations
         # that give it an ELEMENT type, so `name[expr]` can be element-typed. Three
         # declaration shapes contribute:
@@ -9192,23 +9233,42 @@ class MetalPreprocessor(HLSLPreprocessor):
         #     reduce, where reduction accumulators are stack arrays).
         # Struct bodies are excluded so member declarations do not pollute the map
         # (struct fields are typed separately via `data_member_types`).
-        element_types: Dict[str, List[Tuple[int, str]]] = {}
+        element_types: _MetalPositionedBufferTypes = {}
 
-        def record(name: str, element_type: str, position: int) -> None:
+        def record(
+            name: str,
+            element_type: str,
+            position: int,
+            pointer_type: Optional[str] = None,
+        ) -> None:
             normalized = self._normalize_inferred_type(element_type)
             if not normalized:
                 return
-            element_types.setdefault(name, []).append((position, normalized))
+            normalized_pointer = self._normalize_known_address_space_pointer_type(
+                pointer_type or ""
+            )
+            element_types.setdefault(name, []).append(
+                (
+                    position,
+                    _MetalSubscriptableType(normalized, normalized_pointer),
+                )
+            )
 
         pointer_pattern = re.compile(
-            r"\b(?:device|constant|threadgroup|thread)\b"
-            r"(?P<type>[^;,()\[\]{}]*?)\*\s*"
+            r"\b(?P<type>(?:(?:const|constexpr|volatile)\s+)*"
+            r"(?:device|constant|threadgroup|thread)\b"
+            r"[^;,()\[\]{}]*?)\*\s*"
             r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
         )
         for match in pointer_pattern.finditer(code):
             if self._containing_span(match.start(), struct_spans) is not None:
                 continue
-            record(match.group("name"), match.group("type"), match.start())
+            record(
+                match.group("name"),
+                match.group("type"),
+                match.start(),
+                f"{match.group('type')}*",
+            )
 
         # Array declarations: `<type> name[extent]` for locals and parameters.
         # The leading anchor keeps consecutive declarations from cannibalizing
@@ -9235,7 +9295,12 @@ class MetalPreprocessor(HLSLPreprocessor):
                 and normalized not in recognized_aggregates
             ):
                 continue
-            record(match.group("name"), normalized, match.start())
+            record(
+                match.group("name"),
+                normalized,
+                match.start(),
+                f"{match.group('type')}*",
+            )
 
         for entries in element_types.values():
             entries.sort(key=lambda item: item[0])
@@ -9302,7 +9367,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         self,
         code: str,
         struct_spans: List[Tuple[int, int]],
-        buffer_element_types: Dict[str, List[Tuple[int, str]]],
+        buffer_element_types: _MetalPositionedBufferTypes,
         local_variable_types: Dict[str, List[Tuple[int, str]]],
     ) -> None:
         # Augment the (position-ordered) type maps with each FUNCTION PARAMETER,
@@ -9333,10 +9398,10 @@ class MetalPreprocessor(HLSLPreprocessor):
                 name = self._declared_data_member_name(parameter_without_attributes)
                 if not name:
                     continue
-                element = self._pointer_or_array_parameter_element_type(parameter)
-                if element is not None:
+                subscriptable = self._pointer_or_array_parameter_type(parameter)
+                if subscriptable is not None:
                     buffer_element_types.setdefault(name, []).append(
-                        (body_start, element)
+                        (body_start, subscriptable)
                     )
                     continue
                 scalar = self._function_parameter_value_type(
@@ -9358,7 +9423,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         self,
         code: str,
         struct_spans: List[Tuple[int, int]],
-        buffer_element_types: Dict[str, List[Tuple[int, str]]],
+        buffer_element_types: _MetalPositionedBufferTypes,
         local_variable_types: Dict[str, List[Tuple[int, str]]],
         structs_by_name: Optional[Dict[str, "_MetalStructDefinition"]],
     ) -> None:
@@ -9412,6 +9477,15 @@ class MetalPreprocessor(HLSLPreprocessor):
         # or None when the parameter is neither (so the caller treats it as a
         # plain value parameter). Conservative: returns None unless a `*` or `[`
         # declarator is present.
+        subscriptable = self._pointer_or_array_parameter_type(parameter)
+        return subscriptable.element_type if subscriptable is not None else None
+
+    def _pointer_or_array_parameter_type(
+        self, parameter: str
+    ) -> Optional[_MetalSubscriptableType]:
+        # Preserve the full pointer spelling only when one Metal address space is
+        # explicit. Value inference still consumes the normalized element type;
+        # address-of inference separately requires the proven pointer spelling.
         text = self._strip_top_level_default_value(parameter)
         text = self._strip_metal_attributes(text).strip()
         if not text:
@@ -9419,11 +9493,23 @@ class MetalPreprocessor(HLSLPreprocessor):
         if "[" in text:
             type_text = text[: text.find("[")]
             type_text = re.sub(r"\b[A-Za-z_][A-Za-z0-9_]*\s*$", "", type_text).strip()
-            return self._normalize_inferred_type(type_text) or None
+            element_type = self._normalize_inferred_type(type_text)
+            if not element_type:
+                return None
+            return _MetalSubscriptableType(
+                element_type,
+                self._normalize_known_address_space_pointer_type(f"{type_text}*"),
+            )
         star = text.rfind("*")
         if star != -1:
             type_text = text[:star]
-            return self._normalize_inferred_type(type_text) or None
+            element_type = self._normalize_inferred_type(type_text)
+            if not element_type:
+                return None
+            return _MetalSubscriptableType(
+                element_type,
+                self._normalize_known_address_space_pointer_type(text[: star + 1]),
+            )
         return None
 
     # Recognized Metal scalar / vector / matrix element types whose declarations
@@ -9485,13 +9571,86 @@ class MetalPreprocessor(HLSLPreprocessor):
         kept = [token for token in tokens if token not in dropped]
         return " ".join(kept).strip()
 
+    def _normalize_known_address_space_pointer_type(
+        self, type_text: str
+    ) -> Optional[str]:
+        # Address-of inference may expose a pointer only when its complete Metal
+        # address space is known. Multi-level pointers and conflicting address
+        # spaces stay unsupported because reconstructing either would be a guess.
+        normalized = self._normalize_template_argument_text(type_text)
+        if (
+            not normalized.endswith("*")
+            or normalized.count("*") != 1
+            or "&" in normalized
+        ):
+            return None
+        address_spaces = {
+            token
+            for token in IDENTIFIER_RE.findall(normalized[:-1])
+            if token in {"device", "constant", "thread", "threadgroup"}
+        }
+        if len(address_spaces) != 1:
+            return None
+        pointee_type = self._normalize_inferred_type(normalized[:-1])
+        if not pointee_type or pointee_type.endswith("*"):
+            return None
+        return normalized
+
+    def _normalize_template_binding_type(self, type_text: str) -> str:
+        normalized = self._normalize_template_argument_text(type_text)
+        if normalized.endswith("*"):
+            return normalized
+        return self._normalize_inferred_type(normalized)
+
+    def _pointer_pointee_value_type(self, pointer_type: str) -> Optional[str]:
+        normalized = self._normalize_template_argument_text(pointer_type)
+        if not normalized.endswith("*") or normalized.count("*") != 1:
+            return None
+        pointee = self._normalize_inferred_type(normalized[:-1])
+        return pointee or None
+
+    @staticmethod
+    def _pointer_argument_matches_declared_type(
+        declared_pointer_type: str, concrete_pointer_type: str
+    ) -> bool:
+        address_space_tokens = {"device", "constant", "thread", "threadgroup"}
+        declared_tokens = set(IDENTIFIER_RE.findall(declared_pointer_type))
+        concrete_tokens = set(IDENTIFIER_RE.findall(concrete_pointer_type))
+        declared_spaces = declared_tokens & address_space_tokens
+        concrete_spaces = concrete_tokens & address_space_tokens
+        if len(declared_spaces) != 1 or declared_spaces != concrete_spaces:
+            return False
+        # Qualification may be added when binding to a const pointee, but it may
+        # not be discarded when the argument points at const storage.
+        if "const" in concrete_tokens and "const" not in declared_tokens:
+            return False
+        return True
+
+    @staticmethod
+    def _buffer_element_type(
+        buffer_element_types: _MetalBufferTypeView, name: str
+    ) -> Optional[str]:
+        entry = buffer_element_types.get(name)
+        if isinstance(entry, _MetalSubscriptableType):
+            return entry.element_type
+        return entry if isinstance(entry, str) and entry else None
+
+    @staticmethod
+    def _buffer_pointer_type(
+        buffer_element_types: _MetalBufferTypeView, name: str
+    ) -> Optional[str]:
+        entry = buffer_element_types.get(name)
+        if isinstance(entry, _MetalSubscriptableType):
+            return entry.pointer_type
+        return None
+
     def _is_metal_scalar_or_vector_type(self, type_text: str) -> bool:
         return self._scalar_and_width(type_text) is not None
 
     def _infer_argument_type(
         self,
         argument: str,
-        buffer_element_types: Dict[str, str],
+        buffer_element_types: _MetalBufferTypeView,
         local_variable_types: Dict[str, str],
         struct_field_types: Optional[Dict[str, Dict[str, str]]] = None,
         structs_by_name: Optional[Dict[str, "_MetalStructDefinition"]] = None,
@@ -9514,6 +9673,18 @@ class MetalPreprocessor(HLSLPreprocessor):
             expr = expr[1:-1].strip()
             if not expr:
                 return None
+
+        # Address-of a proven buffer/array element preserves the source pointer's
+        # address space, cv qualifiers, and pointee type. Every other unary `&`
+        # form is deliberately unsupported and therefore fails closed.
+        if expr.startswith("&"):
+            return self._infer_addressed_buffer_element_pointer_type(
+                expr,
+                buffer_element_types,
+                local_variable_types,
+                struct_field_types,
+                structs_by_name,
+            )
 
         # Cast: `static_cast<T>(expr)` -> T.
         static_cast = re.match(r"static_cast\s*<(?P<type>.+)>\s*\(", expr, re.DOTALL)
@@ -9596,7 +9767,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         # a declared `device U*` / `threadgroup U*` parameter binds U from this
         # element type, just as a subscript of the same source would.
         if IDENTIFIER_RE.fullmatch(expr) and expr in buffer_element_types:
-            return buffer_element_types[expr]
+            return self._buffer_element_type(buffer_element_types, expr)
 
         # Bare local variable -> its declared type.
         if IDENTIFIER_RE.fullmatch(expr) and expr in local_variable_types:
@@ -9650,6 +9821,51 @@ class MetalPreprocessor(HLSLPreprocessor):
 
         return None
 
+    def _infer_addressed_buffer_element_pointer_type(
+        self,
+        expr: str,
+        buffer_element_types: _MetalBufferTypeView,
+        local_variable_types: Dict[str, str],
+        struct_field_types: Optional[Dict[str, Dict[str, str]]],
+        structs_by_name: Optional[Dict[str, "_MetalStructDefinition"]],
+    ) -> Optional[str]:
+        # Accepted shape: `&base[index]` with optional enclosing parentheses
+        # around the subscript. `base` must be a bare, tracked subscriptable whose
+        # declaration retained one explicit Metal address space. The index must
+        # be a side-effect-free integral expression; calls, assignment,
+        # increment/decrement, comma/conditional expressions, nested subscripts,
+        # and precedence-ambiguous forms are rejected.
+        if not expr.startswith("&") or expr.startswith("&&"):
+            return None
+        operand = self._strip_enclosing_parens(expr[1:].strip())
+        bracket = operand.find("[")
+        if bracket <= 0 or not operand.endswith("]"):
+            return None
+        close = self._find_matching_delimiter(operand, bracket, "[", "]")
+        if close != len(operand) - 1:
+            return None
+        base = operand[:bracket].strip()
+        if IDENTIFIER_RE.fullmatch(base) is None:
+            return None
+        pointer_type = self._buffer_pointer_type(buffer_element_types, base)
+        if pointer_type is None:
+            return None
+        index = operand[bracket + 1 : close].strip()
+        if not self._direct_reference_expression_is_safe(
+            index
+        ) or self._static_integral_expression_has_ambiguous_precedence(index):
+            return None
+        index_type = self._infer_argument_type(
+            index,
+            buffer_element_types,
+            local_variable_types,
+            struct_field_types,
+            structs_by_name,
+        )
+        if index_type is None or not self._is_integral_concrete_type(index_type):
+            return None
+        return pointer_type
+
     def _infer_known_member_function_call_type(self, expr: str) -> Optional[str]:
         match = re.match(r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(", expr)
         if match is None:
@@ -9666,14 +9882,14 @@ class MetalPreprocessor(HLSLPreprocessor):
     def _infer_pointer_arithmetic_element_type(
         self,
         expr: str,
-        buffer_element_types: Dict[str, str],
+        buffer_element_types: _MetalBufferTypeView,
         local_variable_types: Dict[str, str],
         struct_field_types: Optional[Dict[str, Dict[str, str]]],
         structs_by_name: Optional[Dict[str, "_MetalStructDefinition"]],
     ) -> Optional[str]:
         expression = self._strip_enclosing_parens(expr)
         if IDENTIFIER_RE.fullmatch(expression):
-            return buffer_element_types.get(expression)
+            return self._buffer_element_type(buffer_element_types, expression)
         split = self._split_top_level_binary_arithmetic(expression)
         if split is None:
             return None
@@ -9721,7 +9937,7 @@ class MetalPreprocessor(HLSLPreprocessor):
     def _contains_bare_pointer_operand(
         self,
         expr: str,
-        buffer_element_types: Dict[str, str],
+        buffer_element_types: _MetalBufferTypeView,
     ) -> bool:
         expression = self._strip_enclosing_parens(expr)
         if IDENTIFIER_RE.fullmatch(expression):
@@ -9777,7 +9993,7 @@ class MetalPreprocessor(HLSLPreprocessor):
     def _infer_functor_construction_call_type(
         self,
         expr: str,
-        buffer_element_types: Dict[str, str],
+        buffer_element_types: _MetalBufferTypeView,
         local_variable_types: Dict[str, str],
         struct_field_types: Optional[Dict[str, Dict[str, str]]],
         structs_by_name: Optional[Dict[str, "_MetalStructDefinition"]],
@@ -9830,7 +10046,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         self,
         struct: "_MetalStructDefinition",
         argument_exprs: List[str],
-        buffer_element_types: Dict[str, str],
+        buffer_element_types: _MetalBufferTypeView,
         local_variable_types: Dict[str, str],
         struct_field_types: Optional[Dict[str, Dict[str, str]]],
         structs_by_name: Optional[Dict[str, "_MetalStructDefinition"]],
@@ -9938,7 +10154,7 @@ class MetalPreprocessor(HLSLPreprocessor):
     def _infer_binary_arithmetic_type(
         self,
         expr: str,
-        buffer_element_types: Dict[str, str],
+        buffer_element_types: _MetalBufferTypeView,
         local_variable_types: Dict[str, str],
         struct_field_types: Optional[Dict[str, Dict[str, str]]],
         structs_by_name: Optional[Dict[str, "_MetalStructDefinition"]],
@@ -10213,7 +10429,7 @@ class MetalPreprocessor(HLSLPreprocessor):
     def _infer_subscript_base_element_type(
         self,
         base: str,
-        buffer_element_types: Dict[str, str],
+        buffer_element_types: _MetalBufferTypeView,
         struct_field_types: Optional[Dict[str, Dict[str, str]]],
     ) -> Optional[str]:
         # Element type of the subscript base `base[...]`:
@@ -10221,7 +10437,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         #   * member access `obj.member` / `obj->member`: the element type of the
         #     struct field `member`.
         if IDENTIFIER_RE.fullmatch(base):
-            return buffer_element_types.get(base)
+            return self._buffer_element_type(buffer_element_types, base)
         field_type = self._struct_member_field_type(base, struct_field_types)
         if field_type is None:
             return None
@@ -10233,7 +10449,7 @@ class MetalPreprocessor(HLSLPreprocessor):
     def _infer_group_builtin_call_type(
         self,
         expr: str,
-        buffer_element_types: Dict[str, str],
+        buffer_element_types: _MetalBufferTypeView,
         local_variable_types: Dict[str, str],
         struct_field_types: Optional[Dict[str, Dict[str, str]]],
         structs_by_name: Optional[Dict[str, "_MetalStructDefinition"]],

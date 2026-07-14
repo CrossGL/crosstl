@@ -3733,6 +3733,42 @@ def test_preprocessor_instantiates_template_method_from_pointer_arguments():
     assert "tile.load(" not in output
 
 
+def test_preprocessor_infers_addressed_buffer_element_pointer_for_nested_call():
+    code = """
+    struct Fragment {
+      template <typename SrcPtrType>
+      static float load(SrcPtrType src) { return float(src[0]); }
+    };
+
+    struct Tile {
+      template <typename U>
+      float load(const device U* src, int i, int j) {
+        return Fragment::load(&(src[(i * 8) * 36 + (j * 8)]));
+      }
+    };
+
+    kernel void k(
+        const device half* input [[buffer(0)]],
+        device float* output [[buffer(1)]],
+        uint index [[thread_position_in_grid]]) {
+      Tile tile;
+      output[index] = tile.load(input, int(index), 1);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert (
+        "float Fragment__load__const_device_half_ptr(const device half* src)" in output
+    )
+    assert (
+        "Fragment__load__const_device_half_ptr("
+        "&(src[(i * 8) * 36 + (j * 8)]))" in output
+    )
+    assert "Tile__load__half(tile, input, int(index), 1)" in output
+    assert "Fragment::load(" not in output
+
+
 def test_preprocessor_instantiates_explicit_value_template_member_call():
     code = """
     struct Reducer {
@@ -5938,6 +5974,35 @@ def test_preprocessor_template_method_uninferable_argument_clean_fails():
     )
 
 
+def test_preprocessor_addressed_element_side_effect_clean_fails_structured():
+    code = """
+    struct Fragment {
+      template <typename SrcPtrType>
+      static float load(SrcPtrType src) { return float(src[0]); }
+    };
+
+    kernel void k(
+        const device half* src [[buffer(0)]],
+        device float* out [[buffer(1)]],
+        uint index [[thread_position_in_grid]]) {
+      out[index] = Fragment::load(&(src[index++]));
+    }
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.project_diagnostic_code == "project.translate.metal-struct-method"
+    assert error.missing_capabilities == ("struct.template-method",)
+    assert error.struct_name == "Fragment"
+    assert error.method_name == "load"
+    assert error.requested_signature == "Fragment.load(&(src[index++]))"
+    assert error.suggested_action
+    assert error.source_location["length"] == len("load(&(src[index++]))")
+    assert "could not be inferred conservatively" in str(error)
+
+
 def test_preprocessor_template_method_conflicting_binding_clean_fails():
     # The single template parameter T appears in two parameters whose call-site
     # arguments infer to DIFFERENT concrete types (float and int). Rather than
@@ -6178,6 +6243,62 @@ def test_infer_argument_type_recognizes_pointer_arguments_and_offsets():
     assert pp._infer_argument_type("input * 2", buffers, locals_) is None
     assert pp._infer_argument_type("input / 2", buffers, locals_) is None
     assert pp._infer_argument_type("input * offset", buffers, locals_) is None
+
+
+def test_infer_argument_type_preserves_addressed_element_pointer_type():
+    pp = MetalPreprocessor()
+    code = """
+    kernel void k(const device half* src [[buffer(0)]]) {
+      threadgroup float scratch[64];
+    }
+    """
+    positioned = pp._collect_buffer_element_types(code, [])
+    buffers = pp._flatten_types_at(positioned, len(code))
+
+    assert (
+        pp._infer_argument_type(
+            "&(src[(i * 8) * 36 + (j * 8)])",
+            buffers,
+            {"i": "short", "j": "short"},
+        )
+        == "const device half*"
+    )
+    assert (
+        pp._infer_argument_type("&scratch[i + 1]", buffers, {"i": "ushort"})
+        == "threadgroup float*"
+    )
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "&(src[index++])",
+        "&(src[next(index)])",
+        "&(src[index = 0])",
+        "&(src[index, 0])",
+        "&(src[index ? 1 : 0])",
+        "&(src[index][0])",
+        "&(src[index] + 1)",
+        "&(missing[index])",
+    ],
+)
+def test_infer_argument_type_rejects_unsupported_addressed_elements(expression):
+    pp = MetalPreprocessor()
+    code = "kernel void k(const device float* src [[buffer(0)]]) {}"
+    positioned = pp._collect_buffer_element_types(code, [])
+    buffers = pp._flatten_types_at(positioned, len(code))
+
+    assert pp._infer_argument_type(expression, buffers, {"index": "uint"}) is None
+
+
+def test_infer_argument_type_rejects_address_without_pointer_metadata():
+    # An element-only legacy view cannot prove the source address space.
+    assert (
+        MetalPreprocessor()._infer_argument_type(
+            "&(src[index])", {"src": "float"}, {"index": "uint"}
+        )
+        is None
+    )
 
 
 def test_infer_argument_type_simd_group_builtin_returns_first_arg_type():
@@ -6537,13 +6658,13 @@ def test_collect_buffer_element_types_rejects_non_declaration_subscripts():
     )
     element_types = pp._collect_buffer_element_types(code, [])
     # totals is a real `float totals[4]` array; the only recorded type is float.
-    assert [t for _, t in element_types.get("totals", [])] == ["float"]
+    assert [t.element_type for _, t in element_types.get("totals", [])] == ["float"]
     # A struct array records its element struct type.
-    assert [t for _, t in element_types.get("items", [])] == ["Pair"]
+    assert [t.element_type for _, t in element_types.get("items", [])] == ["Pair"]
     # `return`/`if` tokens never become element types.
     assert "block" not in element_types
     assert all(
-        t not in {"return", "if", "else", "for", "while"}
+        t.element_type not in {"return", "if", "else", "for", "while"}
         for entries in element_types.values()
         for _, t in entries
     )
