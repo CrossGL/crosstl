@@ -6594,6 +6594,118 @@ def test_codegen_const_implicit_reference_accessor_reaches_target_backends(tmp_p
         assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_codegen_nested_const_reference_alias_reaches_native_targets(tmp_path):
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct Tile {
+        static constexpr short width = 2;
+        float2 val_frags[4];
+
+        constexpr thread float2& frag_at(short i, short j) {
+            return val_frags[i * width + j];
+        }
+
+        constexpr const thread float2& frag_at(short i, short j) const {
+            return val_frags[i * width + j];
+        }
+    };
+
+    struct StoreLoop {
+        Tile Ctile;
+
+        void store(thread float2& stored, short i, short j) const {
+            thread const auto& accum = Ctile.frag_at(i, j);
+            for (short k = 0; k < 2; ++k) {
+                stored[k] = accum[k];
+            }
+        }
+    };
+
+    kernel void store_fragment(
+        device const StoreLoop* loops [[buffer(0)]],
+        device float2* out [[buffer(1)]]) {
+        StoreLoop loop = loops[0];
+        float2 stored;
+        loop.store(stored, 1, 1);
+        out[0] = stored;
+    }
+    """
+
+    crossgl = convert(code)
+    assert "frag_at" not in crossgl
+    assert "accum" not in crossgl
+    assert "self.Ctile.val_frags[i * 2 + j][k]" in crossgl
+
+    ast = parse_crossgl(crossgl)
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+    glsl = GLSLCodeGen().generate(ast)
+    for generated in (hlsl, glsl):
+        assert "frag_at" not in generated
+        assert "accum" not in generated
+        assert "val_frags[4]" in generated
+        assert "self.Ctile.val_frags[((i * 2) + j)][k]" in generated
+        assert "StoreLoop__store(loop, stored" in generated
+
+    dxc = shutil.which("dxc")
+    glslang = shutil.which("glslangValidator")
+    hlsl_path = tmp_path / "nested-const-reference-alias.hlsl"
+    hlsl_path.write_text(hlsl, encoding="utf-8")
+    if dxc is not None:
+        subprocess.run(
+            [
+                dxc,
+                "-T",
+                "cs_6_0",
+                "-E",
+                "CSMain",
+                str(hlsl_path),
+                "-Fo",
+                str(tmp_path / "nested-const-reference-alias.dxil"),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    elif glslang is not None:
+        subprocess.run(
+            [
+                glslang,
+                "-D",
+                "-V",
+                "-S",
+                "comp",
+                "-e",
+                "CSMain",
+                str(hlsl_path),
+                "-o",
+                str(tmp_path / "nested-const-reference-alias-hlsl.spv"),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    if glslang is not None:
+        glsl_path = tmp_path / "nested-const-reference-alias.comp"
+        glsl_path.write_text(glsl, encoding="utf-8")
+        subprocess.run(
+            [
+                glslang,
+                "-S",
+                "comp",
+                "-V",
+                str(glsl_path),
+                "-o",
+                str(tmp_path / "nested-const-reference-alias-glsl.spv"),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+
 def test_codegen_preserves_threadgroup_imageblock_local_pointer_roundtrip():
     code = """
     #include <metal_stdlib>
