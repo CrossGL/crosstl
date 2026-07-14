@@ -550,6 +550,38 @@ class DirectXAtomicFenceLoweringError(ValueError):
         )
 
 
+class DirectXSpecializationConstantError(ValueError):
+    """Raised when a deferred specialization input cannot be represented in HLSL."""
+
+    project_diagnostic_code = (
+        "project.translate.directx-specialization-constant-unsupported"
+    )
+    missing_capabilities = ("directx.specialization-constant-variant",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        constant_name=None,
+        constant_id=None,
+        constant_type=None,
+        reason=None,
+        source_location=None,
+        conflicting_name=None,
+        conflicting_id=None,
+        conflicting_type=None,
+    ):
+        super().__init__(message)
+        self.constant_name = constant_name
+        self.constant_id = constant_id
+        self.constant_type = constant_type
+        self.reason = reason
+        self.source_location = source_location
+        self.conflicting_name = conflicting_name
+        self.conflicting_id = conflicting_id
+        self.conflicting_type = conflicting_type
+
+
 class HLSLCodeGen:
     """Emit HLSL source from the shared CrossGL translator AST."""
 
@@ -983,6 +1015,7 @@ class HLSLCodeGen:
     HLSL_GLSL_BUILTIN_INT_CONSTANTS = {
         "gl_MaxImageUnits": 8,
     }
+    HLSL_SPECIALIZATION_CONSTANT_TYPES = frozenset({"bool", "int", "uint", "float"})
 
     def __init__(self, target_profile=None):
         """Initialize DirectX type maps and per-generation resource state."""
@@ -1055,6 +1088,9 @@ class HLSLCodeGen:
         self.directx_resource_register_overrides = {}
         self.literal_int_constants = {}
         self.literal_bool_constants = {}
+        self.directx_specialization_constant_records = []
+        self.directx_specialization_constant_global_ids = set()
+        self.directx_specialization_constant_types = {}
         self.standard_math_constant_shadow_names = set()
         self.current_identifier_aliases = {}
         self.current_identifier_reserved_names = set()
@@ -1652,6 +1688,9 @@ class HLSLCodeGen:
         self.required_hlsl_inverse_helpers = set()
         self.required_hlsl_fragment_shading_rate_helper = False
         self.directx_resource_register_overrides = {}
+        self.directx_specialization_constant_records = []
+        self.directx_specialization_constant_global_ids = set()
+        self.directx_specialization_constant_types = {}
         self.current_identifier_aliases = {}
         self.current_identifier_reserved_names = set()
         self.current_function_name = None
@@ -1702,15 +1741,41 @@ class HLSLCodeGen:
         self.current_unsupported_glsl_buffer_block_local_variables = set()
         self.current_glsl_buffer_block_parameter_failures = {}
         self.current_glsl_buffer_block_parameter_struct_failures = {}
+        self.directx_specialization_constant_records = (
+            self.collect_directx_specialization_constants(ast)
+        )
+        self.directx_specialization_constant_global_ids = {
+            id(record["node"])
+            for record in self.directx_specialization_constant_records
+            if record["is_global"]
+        }
+        self.directx_specialization_constant_types = {
+            record["name"]: self.type_name_string(record["type"])
+            for record in self.directx_specialization_constant_records
+        }
         self.literal_int_constants = collect_literal_int_constants(
             getattr(ast, "constants", [])
         )
+        for record in self.directx_specialization_constant_records:
+            if record["mapped_type"] not in {"int", "uint"}:
+                continue
+            value = self.literal_int_value(record["value"], self.literal_int_constants)
+            if value is not None:
+                self.literal_int_constants[record["name"]] = value
         self.literal_int_constants.update(
             self.referenced_hlsl_glsl_builtin_int_constants(ast)
         )
         self.literal_bool_constants = self.collect_hlsl_literal_bool_constants(
             getattr(ast, "constants", [])
         )
+        for record in self.directx_specialization_constant_records:
+            if record["mapped_type"] != "bool":
+                continue
+            value = self.hlsl_literal_bool_value(
+                record["value"], self.literal_bool_constants
+            )
+            if value is not None:
+                self.literal_bool_constants[record["name"]] = value
         self.current_hlsl_visible_int_constants = None
         structs = deduplicate_named_declarations(
             list(getattr(ast, "structs", []) or [])
@@ -1791,6 +1856,9 @@ class HLSLCodeGen:
             for node in getattr(ast, "constants", []) or []
             if getattr(node, "name", None)
         }
+        self.standard_math_constant_shadow_names.update(
+            record["name"] for record in self.directx_specialization_constant_records
+        )
         for import_node in getattr(ast, "imports", []) or []:
             alias = getattr(import_node, "alias", None)
             if alias:
@@ -1814,6 +1882,7 @@ class HLSLCodeGen:
             self.collect_hlsl_struct_buffer_resource_types(global_vars)
         )
         self.global_variable_types = self.collect_global_variable_types(global_vars)
+        self.global_variable_types.update(self.directx_specialization_constant_types)
         self.global_variable_types.update(self.collect_cbuffer_member_types(cbuffers))
         functions = self.collect_functions(ast)
         self.hlsl_compute_num_workgroups_uniform = (
@@ -2077,6 +2146,7 @@ class HLSLCodeGen:
             )
         )
         code += self.generate_constants(ast, leading_constants)
+        code += self.generate_directx_specialization_constant_globals()
         code += self.generate_hlsl_glsl_builtin_constant_declarations(ast)
         code += self.generate_hlsl_ordered_struct_declarations(structs)
         code += self.generate_constants(ast, struct_dependent_constants)
@@ -4137,6 +4207,210 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         type_key = str(type_name or "").rsplit("::", 1)[-1]
         return type_key == "thread_scope" and str(var_name).startswith("thread_scope")
 
+    def directx_specialization_constant_attributes(self, node):
+        attributes = []
+        for attr in getattr(node, "attributes", []) or []:
+            name = str(getattr(attr, "name", "")).lower().replace("-", "_")
+            if name.startswith("metal_") or name.startswith("msl_"):
+                name = name.split("_", 1)[1]
+            if name in {"function_constant", "constant_id"}:
+                attributes.append(attr)
+        return attributes
+
+    def directx_specialization_constant_source_location(self, node, attributes=()):
+        for candidate in (node, *attributes):
+            source_location = getattr(candidate, "source_location", None)
+            if source_location is not None:
+                return source_location
+        return None
+
+    def directx_specialization_constant_type(self, node):
+        return getattr(
+            node,
+            "const_type",
+            getattr(node, "var_type", getattr(node, "vtype", "float")),
+        )
+
+    def directx_specialization_constant_value(self, node):
+        if hasattr(node, "const_type"):
+            return getattr(node, "value", None)
+        return getattr(node, "initial_value", getattr(node, "value", None))
+
+    def directx_specialization_constant_id(self, node, attributes=None):
+        attributes = list(
+            self.directx_specialization_constant_attributes(node)
+            if attributes is None
+            else attributes
+        )
+        if not attributes:
+            return None
+
+        name = getattr(node, "name", getattr(node, "variable_name", "<unnamed>"))
+        type_name = self.type_name_string(
+            self.directx_specialization_constant_type(node)
+        )
+        source_location = self.directx_specialization_constant_source_location(
+            node, attributes
+        )
+        constant_ids = []
+        for attr in attributes:
+            arguments = list(getattr(attr, "arguments", []) or [])
+            raw_id = (
+                self.attribute_value_to_string(arguments[0])
+                if len(arguments) == 1
+                else None
+            )
+            constant_id = (
+                self.binding_index_value(arguments[0]) if len(arguments) == 1 else None
+            )
+            if constant_id is None:
+                rendered_id = raw_id if raw_id is not None else "<missing>"
+                raise DirectXSpecializationConstantError(
+                    f"DirectX specialization constant '{name}' requires one "
+                    f"non-negative integer id; received {rendered_id}",
+                    constant_name=name,
+                    constant_id=raw_id,
+                    constant_type=type_name,
+                    reason="invalid-id",
+                    source_location=source_location,
+                )
+            constant_ids.append(constant_id)
+
+        first_id = constant_ids[0]
+        for conflicting_id in constant_ids[1:]:
+            if conflicting_id == first_id:
+                continue
+            raise DirectXSpecializationConstantError(
+                f"DirectX specialization constant '{name}' carries conflicting "
+                f"ids {first_id} and {conflicting_id}",
+                constant_name=name,
+                constant_id=first_id,
+                constant_type=type_name,
+                reason="conflicting-id",
+                source_location=source_location,
+                conflicting_id=conflicting_id,
+            )
+        return first_id
+
+    def collect_directx_specialization_constants(self, ast):
+        global_nodes = list(getattr(ast, "global_variables", []) or [])
+        global_node_ids = {id(node) for node in global_nodes}
+        declarations = list(getattr(ast, "constants", []) or []) + global_nodes
+        records = []
+        records_by_id = {}
+
+        for node in declarations:
+            attributes = self.directx_specialization_constant_attributes(node)
+            if not attributes:
+                continue
+
+            name = getattr(node, "name", getattr(node, "variable_name", "<unnamed>"))
+            type_node = self.directx_specialization_constant_type(node)
+            source_type = self.type_name_string(type_node)
+            mapped_type = self.map_type(type_node)
+            source_location = self.directx_specialization_constant_source_location(
+                node, attributes
+            )
+            constant_id = self.directx_specialization_constant_id(node, attributes)
+
+            if mapped_type not in self.HLSL_SPECIALIZATION_CONSTANT_TYPES:
+                supported = ", ".join(sorted(self.HLSL_SPECIALIZATION_CONSTANT_TYPES))
+                raise DirectXSpecializationConstantError(
+                    f"DirectX specialization constant '{name}' (id {constant_id}) "
+                    f"cannot use type '{source_type}'; concrete DirectX variants "
+                    f"currently support scalar {supported}",
+                    constant_name=name,
+                    constant_id=constant_id,
+                    constant_type=source_type,
+                    reason="incompatible-type",
+                    source_location=source_location,
+                )
+
+            value = self.directx_specialization_constant_value(node)
+            if value is None:
+                raise DirectXSpecializationConstantError(
+                    f"DirectX specialization constant '{name}' (id {constant_id}, "
+                    f"type '{source_type}') has no concrete/default value; HLSL "
+                    "cannot preserve deferred specialization without a generated "
+                    "DirectX variant",
+                    constant_name=name,
+                    constant_id=constant_id,
+                    constant_type=source_type,
+                    reason="missing-required-value",
+                    source_location=source_location,
+                )
+
+            previous = records_by_id.get(constant_id)
+            if previous is not None:
+                if previous["mapped_type"] != mapped_type:
+                    reason = "conflicting-id-type"
+                    message = (
+                        f"DirectX specialization constant id {constant_id} has "
+                        f"incompatible declarations: '{previous['name']}' uses "
+                        f"'{previous['source_type']}', while '{name}' uses "
+                        f"'{source_type}'"
+                    )
+                else:
+                    reason = "duplicate-id"
+                    message = (
+                        f"DirectX specialization constant id {constant_id} is "
+                        f"assigned to both '{previous['name']}' and '{name}'"
+                    )
+                raise DirectXSpecializationConstantError(
+                    message,
+                    constant_name=name,
+                    constant_id=constant_id,
+                    constant_type=source_type,
+                    reason=reason,
+                    source_location=source_location,
+                    conflicting_name=previous["name"],
+                    conflicting_type=previous["source_type"],
+                )
+
+            record = {
+                "node": node,
+                "name": name,
+                "id": constant_id,
+                "type": type_node,
+                "source_type": source_type,
+                "mapped_type": mapped_type,
+                "value": value,
+                "is_global": id(node) in global_node_ids,
+            }
+            records.append(record)
+            records_by_id[constant_id] = record
+
+        return records
+
+    def directx_specialization_constant_record(self, node):
+        return next(
+            (
+                record
+                for record in self.directx_specialization_constant_records
+                if record["node"] is node
+            ),
+            None,
+        )
+
+    def generate_directx_specialization_constant_declaration(self, record):
+        declaration = format_c_style_array_declaration(
+            record["mapped_type"], record["name"]
+        )
+        value_code = self.generate_constant_expression(record["value"], record["type"])
+        return (
+            "/* CrossGL DirectX specialization constant "
+            f"id {record['id']} fixed to its default. */\n"
+            f"static const {declaration} = {value_code};\n"
+        )
+
+    def generate_directx_specialization_constant_globals(self):
+        code = "".join(
+            self.generate_directx_specialization_constant_declaration(record)
+            for record in self.directx_specialization_constant_records
+            if record["is_global"]
+        )
+        return f"{code}\n" if code else ""
+
     def generate_constants(self, ast, constants=None):
         code = ""
         for node in (
@@ -4144,6 +4418,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         ):
             name = getattr(node, "name", None)
             if not name:
+                continue
+
+            specialization_record = self.directx_specialization_constant_record(node)
+            if specialization_record is not None:
+                code += self.generate_directx_specialization_constant_declaration(
+                    specialization_record
+                )
                 continue
 
             const_type = getattr(node, "const_type", getattr(node, "vtype", "float"))
@@ -12058,7 +12339,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if current_nodes is not None and target_stage is None:
             return current_nodes
 
-        global_vars = list(getattr(root, "global_variables", []) or [])
+        specialization_constant_ids = getattr(
+            self, "directx_specialization_constant_global_ids", set()
+        )
+        global_vars = [
+            node
+            for node in getattr(root, "global_variables", []) or []
+            if id(node) not in specialization_constant_ids
+        ]
         stage_resource_vars = collect_stage_local_variables(
             root, target_stage, self.is_stage_local_resource_variable
         )

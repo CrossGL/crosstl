@@ -49,6 +49,7 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXResourcePointerArrayError,
     DirectXResourcePointerParameterError,
     DirectXSemanticArraySizeError,
+    DirectXSpecializationConstantError,
     DirectXTrailingZeroBuiltinError,
     DirectXUnresolvedSourceTypeError,
     DirectXWorkgroupPointerError,
@@ -249,6 +250,244 @@ def test_hlsl_standard_math_constant_metal_proxy_compute_validates(tmp_path):
     assert "M_PI_F" not in generated
     HLSLParser(HLSLLexer(generated).tokenize()).parse()
     assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_specialization_constant_defaults_are_compile_time_constants():
+    source = """
+    shader DirectXSpecializationDefaults {
+        const int ordinary = 9;
+        const int width @constant_id(19) = 4;
+        constant bool use_fast @function_constant(20) = true;
+        constant int mode @constant_id(21) = 2;
+        constant float scale @function_constant(22) = 0.5;
+
+        compute {
+            void main() {
+                float value = use_fast ? scale + float(mode + width + ordinary) : 0.0;
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert "static const int ordinary = 9;" in generated
+    assert "static const int width = 4;" in generated
+    assert "static const bool use_fast = true;" in generated
+    assert "static const int mode = 2;" in generated
+    assert "static const float scale = 0.5;" in generated
+    for constant_id in (19, 20, 21, 22):
+        assert (
+            f"DirectX specialization constant id {constant_id} fixed to its default"
+            in generated
+        )
+    assert "bool use_fast;" not in generated
+    assert "int mode;" not in generated
+    assert "float scale;" not in generated
+    assert "$Globals" not in generated
+
+
+def test_hlsl_metal_function_constant_defaults_use_compile_time_constants(tmp_path):
+    source = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    constant bool use_fast [[function_constant(20)]] = true;
+    constant int mode [[function_constant(21)]] = 2;
+    constant float scale [[function_constant(22)]] = 0.5;
+
+    kernel void write_value(
+        device float* output [[buffer(0)]],
+        uint index [[thread_position_in_grid]]) {
+        output[index] = use_fast ? scale + float(mode) : 0.0;
+    }
+    """
+    shader_path = tmp_path / "defaulted_function_constants.metal"
+    shader_path.write_text(source, encoding="utf-8")
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "static const bool use_fast = true;" in generated
+    assert "static const int mode = 2;" in generated
+    assert "static const float scale = 0.5;" in generated
+    assert "bool use_fast;" not in generated
+    assert "int mode;" not in generated
+    assert "float scale;" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+
+
+def test_hlsl_required_specialization_constant_fails_before_global_emission(
+    monkeypatch,
+):
+    source = """
+    shader RequiredDirectXSpecialization {
+        float runtime_state;
+        constant bool has_w @function_constant(20);
+    }
+    """
+    ast = crosstl.translator.parse(source)
+    source_location = {"line": 4, "column": 23}
+    ast.global_variables[1].source_location = source_location
+    codegen = HLSLCodeGen()
+
+    def fail_if_global_emission_starts(*_args, **_kwargs):
+        pytest.fail("ordinary HLSL global emission started before validation")
+
+    monkeypatch.setattr(
+        codegen,
+        "reserve_explicit_global_resource_registers",
+        fail_if_global_emission_starts,
+    )
+
+    with pytest.raises(DirectXSpecializationConstantError) as excinfo:
+        codegen.generate(ast)
+
+    diagnostic = excinfo.value
+    assert (
+        diagnostic.project_diagnostic_code
+        == "project.translate.directx-specialization-constant-unsupported"
+    )
+    assert diagnostic.missing_capabilities == (
+        "directx.specialization-constant-variant",
+    )
+    assert diagnostic.constant_name == "has_w"
+    assert diagnostic.constant_id == 20
+    assert diagnostic.constant_type == "bool"
+    assert diagnostic.reason == "missing-required-value"
+    assert diagnostic.source_location == source_location
+    assert "has_w" in str(diagnostic)
+    assert "id 20" in str(diagnostic)
+    assert "no concrete/default value" in str(diagnostic)
+
+
+@pytest.mark.parametrize(
+    ("declarations", "reason", "constant_id", "conflicting_value"),
+    [
+        (
+            "constant int mode @function_constant(3) @constant_id(4) = 1;",
+            "conflicting-id",
+            3,
+            4,
+        ),
+        (
+            """
+            constant bool use_fast @function_constant(7) = true;
+            constant int mode @constant_id(7) = 1;
+            """,
+            "conflicting-id-type",
+            7,
+            "bool",
+        ),
+        (
+            """
+            constant bool use_fast @function_constant(9) = true;
+            constant bool use_safe @constant_id(9) = false;
+            """,
+            "duplicate-id",
+            9,
+            "use_fast",
+        ),
+    ],
+    ids=["metadata", "type", "duplicate"],
+)
+def test_hlsl_specialization_constant_conflicts_are_structured(
+    declarations, reason, constant_id, conflicting_value
+):
+    source = f"""
+    shader ConflictingDirectXSpecialization {{
+        {declarations}
+    }}
+    """
+    ast = crosstl.translator.parse(source)
+    source_location = {"line": 4, "column": 13}
+    ast.global_variables[-1].source_location = source_location
+
+    with pytest.raises(DirectXSpecializationConstantError) as excinfo:
+        HLSLCodeGen().generate(ast)
+
+    diagnostic = excinfo.value
+    assert diagnostic.reason == reason
+    assert diagnostic.constant_id == constant_id
+    assert diagnostic.source_location == source_location
+    if reason == "conflicting-id":
+        assert diagnostic.conflicting_id == conflicting_value
+    elif reason == "duplicate-id":
+        assert diagnostic.conflicting_name == conflicting_value
+    else:
+        assert diagnostic.constant_type == "int"
+        assert diagnostic.conflicting_type == conflicting_value
+        assert diagnostic.conflicting_name == "use_fast"
+
+
+def test_hlsl_specialization_constant_rejects_incompatible_type():
+    source = """
+    shader InvalidDirectXSpecializationType {
+        constant vec2 offsets @function_constant(8) = vec2(1.0);
+    }
+    """
+    ast = crosstl.translator.parse(source)
+    source_location = {"line": 3, "column": 23}
+    ast.global_variables[0].source_location = source_location
+
+    with pytest.raises(DirectXSpecializationConstantError) as excinfo:
+        HLSLCodeGen().generate(ast)
+
+    diagnostic = excinfo.value
+    assert diagnostic.constant_name == "offsets"
+    assert diagnostic.constant_id == 8
+    assert diagnostic.constant_type == "float2"
+    assert diagnostic.reason == "incompatible-type"
+    assert diagnostic.source_location == source_location
+
+
+@pytest.mark.skipif(shutil.which("dxc") is None, reason="dxc is not available")
+def test_hlsl_specialization_constants_do_not_create_globals_cbuffer(tmp_path):
+    source = """
+    shader DirectXSpecializationNative {
+        constant bool use_fast @function_constant(20) = true;
+        constant int mode @constant_id(21) = 2;
+        constant float scale @function_constant(22) = 0.5;
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float> output @ binding(0)) {
+                output[0] = use_fast ? scale + float(mode) : 0.0;
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+    hlsl_path = tmp_path / "specialization_constants.hlsl"
+    dxil_path = tmp_path / "specialization_constants.dxil"
+    listing_path = tmp_path / "specialization_constants.ll"
+    hlsl_path.write_text(generated, encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            shutil.which("dxc"),
+            "-T",
+            "cs_6_0",
+            "-E",
+            "CSMain",
+            str(hlsl_path),
+            "-Fo",
+            str(dxil_path),
+            "-Fc",
+            str(listing_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "$Globals" not in listing_path.read_text(encoding="utf-8")
 
 
 def test_hlsl_type_node_renders_expression_generic_arguments():
