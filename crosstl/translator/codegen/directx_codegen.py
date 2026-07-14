@@ -6826,6 +6826,23 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             context="binary expression",
         )
 
+    def hlsl_minimum_precision_compound_target_is_stable(self, target):
+        if self.hlsl_repeatable_array_assignment_target(target):
+            return True
+        if not isinstance(target, ArrayAccessNode):
+            return False
+
+        index = getattr(target, "index", None)
+        index_is_literal = isinstance(index, (int, float)) or (
+            hasattr(index, "__class__") and "Literal" in str(index.__class__)
+        )
+        return (
+            index_is_literal
+            and self.hlsl_minimum_precision_compound_target_is_stable(
+                getattr(target, "array", None)
+            )
+        )
+
     def generate_hlsl_minimum_precision_integer_compound_assignment(
         self,
         node,
@@ -6860,6 +6877,23 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 detail=(
                     "the assignment target would need to be evaluated more than "
                     "once; materialize its index or pointer before the assignment"
+                ),
+            )
+        if self.hlsl_expression_has_observable_side_effects(
+            value
+        ) and not self.hlsl_minimum_precision_compound_target_is_stable(target):
+            self.hlsl_minimum_precision_integer_arithmetic_error(
+                node,
+                binary_operator,
+                target_type,
+                value_type,
+                expected_type=target_type,
+                context="compound assignment",
+                reason="rhs-may-change-assignment-target",
+                detail=(
+                    "the side-effecting right operand may change the storage "
+                    "selected by the repeated assignment target; materialize its "
+                    "index or pointer before the assignment"
                 ),
             )
 

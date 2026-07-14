@@ -3771,6 +3771,10 @@ def test_hlsl_minimum_precision_integer_vector_and_nested_operations():
             return lhs / rhs;
         }
 
+        short2 constructPair(short lhs, short rhs) {
+            return short2(lhs / rhs, lhs % rhs);
+        }
+
         int nested(short lhs, short rhs) {
             return (lhs / rhs) * 2 + (lhs % rhs);
         }
@@ -3786,6 +3790,10 @@ def test_hlsl_minimum_precision_integer_vector_and_nested_operations():
     assert "return min16int2((int2(lhs) / int2(rhs)));" in generated_code
     assert "return min16uint3((uint3(lhs) % uint3(rhs)));" in generated_code
     assert "return min16int2((int2(lhs) / int(rhs)));" in generated_code
+    assert (
+        "return min16int2((int(lhs) / int(rhs)), (int(lhs) % int(rhs)));"
+        in generated_code
+    )
     assert "((int(lhs) / int(rhs)) * 2)" in generated_code
     assert "(int(lhs) % int(rhs))" in generated_code
     assert "min16int((int(lhs) / int(rhs)))" not in generated_code
@@ -3973,6 +3981,36 @@ def test_hlsl_minimum_precision_compound_side_effecting_target_is_diagnostic():
     assert exc_info.value.right_type == "min16int"
     assert exc_info.value.context == "compound assignment"
     assert exc_info.value.reason == "side-effecting-assignment-target"
+
+
+def test_hlsl_minimum_precision_compound_rejects_rhs_that_can_change_target():
+    shader = """
+    shader MinimumPrecisionIntegerCompoundRhsTarget {
+        short values[4];
+
+        short advanceIndex(inout int index, short divisor) {
+            index += 1;
+            return divisor;
+        }
+
+        void update(int index, short divisor) {
+            values[index] /= advanceIndex(index, divisor);
+        }
+    }
+    """
+
+    with pytest.raises(
+        DirectXMinimumPrecisionIntegerArithmeticError,
+        match="right operand may change the storage selected",
+    ) as exc_info:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    assert exc_info.value.operator == "/"
+    assert exc_info.value.left_type == "min16int"
+    assert exc_info.value.right_type == "min16int"
+    assert exc_info.value.expected_type == "min16int"
+    assert exc_info.value.context == "compound assignment"
+    assert exc_info.value.reason == "rhs-may-change-assignment-target"
 
 
 def test_hlsl_fixed_width_scalar_array_aliases_map_in_aggregate_declarations():
