@@ -40,6 +40,50 @@ shader FragmentRangeValidation {
 """
 
 
+GLSL_FIXED_ARRAY_FOR_IN_COMPUTE_SHADER = """
+shader GLSLFixedArrayForInValidation {
+    struct Pair {
+        uint first;
+        uint second;
+    };
+
+    constant uint[2][4] rotations = {
+        {13u, 15u, 26u, 6u},
+        {17u, 29u, 16u, 24u}
+    };
+
+    compute {
+        void main() {
+            int row = 1;
+            uint[2] scalars = {1u, 2u};
+            uvec2[2] vectors = {uvec2(3u, 4u), uvec2(5u, 6u)};
+            Pair[2] pairs = {Pair(7u, 8u), Pair(9u, 10u)};
+            uint total = 0u;
+            for scalar in scalars {
+                total += scalar;
+            }
+            for vectorValue in vectors {
+                total += vectorValue.x;
+            }
+            for pairValue in pairs {
+                total += pairValue.first;
+            }
+            for rowValue in rotations {
+                total += rowValue[0];
+                break;
+            }
+            for rotation in rotations[row] {
+                if (rotation == 29u) {
+                    continue;
+                }
+                total += rotation;
+            }
+        }
+    }
+}
+"""
+
+
 METAL_FUNCTION_CONSTANT_FRAGMENT_SHADER = """
 shader MetalFunctionConstantValidation {
     bool useFast @function_constant(0) = true;
@@ -11592,6 +11636,26 @@ def test_generated_glsl_fragment_smoke_validates_with_glslang(tmp_path):
     source.write_text(code, encoding="utf-8")
 
     run_validator([glslang, "-S", "frag", str(source)])
+
+
+def test_generated_glsl_fixed_array_for_in_validates_with_glslang_and_spirv_val(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    spirv_val = shutil.which("spirv-val")
+    if glslang is None or spirv_val is None:
+        pytest.skip("glslangValidator and spirv-val are required")
+
+    source = tmp_path / "fixed_array_for_in.comp"
+    output = tmp_path / "fixed_array_for_in.spv"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(GLSL_FIXED_ARRAY_FOR_IN_COMPUTE_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-V", "-S", "comp", str(source), "-o", str(output)])
+    run_validator([spirv_val, str(output)])
 
 
 def test_generated_glsl_fragment_switch_match_case_scope_validates_with_glslang(

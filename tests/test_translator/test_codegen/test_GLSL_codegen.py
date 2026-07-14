@@ -12,6 +12,7 @@ from crosstl.translator.ast import (
     CooperativeMatrixOpNode,
     CooperativeMatrixType,
     ExecutionModel,
+    ForInNode,
     FunctionCallNode,
     FunctionNode,
     IdentifierNode,
@@ -21,6 +22,7 @@ from crosstl.translator.ast import (
     PointerType,
     PreprocessorNode,
     PrimitiveType,
+    ReferenceType,
     ResourceMemoryQualifierNode,
     ReturnNode,
     ShaderNode,
@@ -40,6 +42,7 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLCompoundAssignmentError,
     OpenGLCooperativeMatrixError,
     OpenGLFixedArrayResourceError,
+    OpenGLForInIterableError,
     OpenGLGlobalInitializerError,
     OpenGLIndexTypeError,
     OpenGLMappedOverloadError,
@@ -11701,7 +11704,7 @@ def test_do_while_statement_lowers_to_c_style_syntax():
     assert "DoWhileNode(" not in generated_code
 
 
-def test_for_in_statement_lowers_to_counted_loop():
+def test_for_in_scalar_bound_lowers_to_counted_loop():
     shader = """
     shader ForInNodeSmoke {
         int helper(int limit) {
@@ -11720,6 +11723,172 @@ def test_for_in_statement_lowers_to_counted_loop():
     assert "total = (total + i);" in generated_code
     assert "return total;" in generated_code
     assert "ForInNode(" not in generated_code
+
+
+def test_for_in_fixed_arrays_bind_source_element_types_and_evaluate_once():
+    shader = """
+    shader FixedArrayForIn {
+        struct Pair {
+            uint first;
+            uint second;
+        };
+
+        constant uint[2][4] rotations = {
+            {13u, 15u, 26u, 6u},
+            {17u, 29u, 16u, 24u}
+        };
+
+        int selectRow() {
+            return 1;
+        }
+
+        uint helper() {
+            uint[2] scalars = {1u, 2u};
+            uvec2[2] vectors = {uvec2(3u, 4u), uvec2(5u, 6u)};
+            Pair[2] pairs = {
+                Pair(7u, 8u),
+                Pair(9u, 10u)
+            };
+            uint total = 0u;
+            for scalar in scalars {
+                total += scalar;
+            }
+            for vectorValue in vectors {
+                total += vectorValue.x;
+            }
+            for pairValue in pairs {
+                total += pairValue.first;
+            }
+            for rowValue in rotations {
+                total += rowValue[0];
+                break;
+            }
+            for rotation in rotations[selectRow()] {
+                if (rotation == 29u) {
+                    continue;
+                }
+                total += rotation;
+                if (total > 100u) {
+                    return total;
+                }
+            }
+            return total;
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "uint scalar = scalar_crossgl_iterable[scalar_crossgl_index];" in generated_code
+    )
+    assert "uvec2 vectorValue = vectorValue_crossgl_iterable[" in generated_code
+    assert "Pair pairValue = pairValue_crossgl_iterable[" in generated_code
+    assert "uint rowValue[4] = rowValue_crossgl_iterable[" in generated_code
+    assert "uint rotation = rotation_crossgl_iterable[" in generated_code
+    assert "rotation_crossgl_iterable[4] = rotations[selectRow()];" in generated_code
+    assert generated_code.count("rotations[selectRow()]") == 1
+    assert "rotation_crossgl_index < 4" in generated_code
+    assert "continue;" in generated_code
+    assert "break;" in generated_code
+    assert "return total;" in generated_code
+    assert "< rotations" not in generated_code
+
+
+def test_for_in_fixed_array_literal_expression_extent_is_resolved():
+    shader = """
+    shader FixedArrayExpressionExtent {
+        void helper() {
+            uint[(2 + 2)] values = {1u, 2u, 3u, 4u};
+            for value in values {
+                uint copy = value;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "uint value_crossgl_iterable[(2 + 2)] = values;" in generated_code
+    assert "value_crossgl_index < 4" in generated_code
+
+
+@pytest.mark.parametrize(
+    ("declaration", "iterable", "expected_type", "reason"),
+    (
+        ("uint[] values", "values", "uint[]", "unknown-extent"),
+        ("Iterator values", "values", "Iterator", "not-fixed-array"),
+        ("float limit", "limit", "float", "not-fixed-array"),
+    ),
+)
+def test_for_in_unknown_or_user_defined_iterables_are_structured_diagnostics(
+    declaration, iterable, expected_type, reason
+):
+    struct = "struct Iterator { int value; };" if expected_type == "Iterator" else ""
+    shader = f"""
+    shader UnsupportedForIn {{
+        {struct}
+        void helper({declaration}) {{
+            for value in {iterable} {{
+                return;
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLForInIterableError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.iterable_type == expected_type
+    assert diagnostic.reason == reason
+
+
+def test_for_in_mutable_reference_binding_is_structured_diagnostic():
+    shader = """
+    shader MutableReferenceForIn {
+        void helper() {
+            uint[2] values = {1u, 2u};
+            for value in values {
+                value += 1u;
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(shader)
+    loop = next(
+        node for node in GLSLCodeGen().walk_ast(ast) if isinstance(node, ForInNode)
+    )
+    loop.binding_type = ReferenceType(PrimitiveType("uint"), is_mutable=True)
+
+    with pytest.raises(OpenGLForInIterableError) as exc_info:
+        GLSLCodeGen().generate(ast)
+
+    diagnostic = exc_info.value
+    assert diagnostic.binding_type == "uint&"
+    assert diagnostic.reason == "mutable-reference-binding"
+
+
+def test_for_in_immutable_reference_binding_lowers_to_const_value():
+    shader = """
+    shader ImmutableReferenceForIn {
+        void helper() {
+            uint[2] values = {1u, 2u};
+            for value in values {
+                uint copy = value;
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(shader)
+    loop = next(
+        node for node in GLSLCodeGen().walk_ast(ast) if isinstance(node, ForInNode)
+    )
+    loop.binding_type = ReferenceType(PrimitiveType("uint"), is_mutable=False)
+
+    generated_code = GLSLCodeGen().generate(ast)
+
+    assert "const uint value = value_crossgl_iterable[" in generated_code
 
 
 def test_for_in_range_statement_lowers_to_counted_loop():

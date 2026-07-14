@@ -742,6 +742,30 @@ class OpenGLCompileTimeGlobalError(ValueError):
         self.source_location = source_location
 
 
+class OpenGLForInIterableError(ValueError):
+    """Raised when a CrossGL for-in binding has no faithful GLSL lowering."""
+
+    project_diagnostic_code = "project.translate.opengl-for-in-iterable-unsupported"
+    missing_capabilities = ("opengl.fixed-array-for-in-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        pattern=None,
+        iterable_type=None,
+        binding_type=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.pattern = pattern
+        self.iterable_type = iterable_type
+        self.binding_type = binding_type
+        self.reason = reason
+        self.source_location = source_location
+
+
 class OpenGLAtomicFenceLoweringError(ValueError):
     """Raised when OpenGL GLSL cannot preserve an atomic fence contract."""
 
@@ -17335,30 +17359,94 @@ complex64_t crossgl_complex64_mod_assign(
         iterable_node = getattr(node, "iterable", "")
         previous_local_variable_types = dict(self.local_variable_types)
         previous_local_variable_source_types = dict(self.local_variable_source_types)
+        previous_identifier_aliases = dict(self.current_identifier_aliases)
         previous_compile_time_constant_state = (
             self.glsl_compile_time_constant_scope_state()
         )
 
         try:
-            self.local_variable_types[pattern] = "int"
-            self.local_variable_source_types[pattern] = "int"
+            binding_qualifier = self.validate_glsl_for_in_binding(node, pattern)
+            pattern_name = self.glsl_local_identifier_name(pattern)
             self.current_compile_time_int_constants.pop(pattern, None)
             self.current_compile_time_int_vector_constants.pop(pattern, None)
             self.current_compile_time_int_vector_array_constants.pop(pattern, None)
 
             if isinstance(iterable_node, RangeNode):
+                self.local_variable_types[pattern] = "int"
+                self.local_variable_source_types[pattern] = "int"
                 start = self.generate_expression(iterable_node.start)
                 end = self.generate_expression(iterable_node.end)
                 comparator = "<=" if iterable_node.inclusive else "<"
                 code = (
-                    f"{indent_str}for (int {pattern} = {start}; "
-                    f"{pattern} {comparator} {end}; ++{pattern}) {{\n"
+                    f"{indent_str}for (int {pattern_name} = {start}; "
+                    f"{pattern_name} {comparator} {end}; ++{pattern_name}) {{\n"
                 )
-            else:
+            elif self.is_scalar_integer_type(
+                self.glsl_source_expression_type(iterable_node)
+            ):
+                self.local_variable_types[pattern] = "int"
+                self.local_variable_source_types[pattern] = "int"
                 iterable = self.generate_expression(iterable_node)
                 code = (
-                    f"{indent_str}for (int {pattern} = 0; {pattern} < {iterable}; "
-                    f"++{pattern}) {{\n"
+                    f"{indent_str}for (int {pattern_name} = 0; "
+                    f"{pattern_name} < {iterable}; ++{pattern_name}) {{\n"
+                )
+            else:
+                iterable_type = self.glsl_for_in_fixed_array_type(
+                    node, pattern, iterable_node
+                )
+                extent, element_type = self.glsl_for_in_array_shape(
+                    node, pattern, iterable_type
+                )
+                if extent == 0:
+                    if not self.glsl_side_effect_free_expression(iterable_node):
+                        self.raise_glsl_for_in_iterable_error(
+                            node,
+                            pattern,
+                            iterable_type,
+                            reason="side-effecting-empty-array",
+                        )
+                    return ""
+
+                mapped_iterable_type = self.map_type(iterable_type)
+                mapped_element_type = self.map_type(element_type)
+                if self.type_contains_opaque_resource(element_type):
+                    self.raise_glsl_for_in_iterable_error(
+                        node,
+                        pattern,
+                        iterable_type,
+                        binding_type=element_type,
+                        reason="unsupported-element-type",
+                    )
+
+                container_name = self.glsl_synthetic_local_identifier(
+                    f"{pattern}_crossgl_iterable"
+                )
+                index_name = self.glsl_synthetic_local_identifier(
+                    f"{pattern}_crossgl_index"
+                )
+                iterable = self.generate_expression_with_expected(
+                    iterable_node, iterable_type
+                )
+                container_declaration = format_c_style_array_declaration(
+                    mapped_iterable_type, container_name
+                )
+                pattern_declaration = format_c_style_array_declaration(
+                    mapped_element_type, pattern_name
+                )
+                pattern_declaration = f"{binding_qualifier}{pattern_declaration}"
+                self.local_variable_types[container_name] = iterable_type
+                self.local_variable_source_types[container_name] = iterable_type
+                self.local_variable_types[index_name] = "int"
+                self.local_variable_source_types[index_name] = "int"
+                self.local_variable_types[pattern] = element_type
+                self.local_variable_source_types[pattern] = element_type
+                code = (
+                    f"{indent_str}{container_declaration} = {iterable};\n"
+                    f"{indent_str}for (int {index_name} = 0; "
+                    f"{index_name} < {extent}; ++{index_name}) {{\n"
+                    f"{indent_str}    {pattern_declaration} = "
+                    f"{container_name}[{index_name}];\n"
                 )
 
             code += self.generate_scoped_statement_body(
@@ -17369,9 +17457,120 @@ complex64_t crossgl_complex64_mod_assign(
         finally:
             self.local_variable_types = previous_local_variable_types
             self.local_variable_source_types = previous_local_variable_source_types
+            self.current_identifier_aliases = previous_identifier_aliases
             self.restore_glsl_compile_time_constant_scope_state(
                 previous_compile_time_constant_state
             )
+
+    def validate_glsl_for_in_binding(self, node, pattern):
+        binding_type = getattr(
+            node, "binding_type", getattr(node, "pattern_type", None)
+        )
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "binding_qualifiers", []) or []
+        }
+        mutable_reference = bool(
+            getattr(node, "is_mutable_reference", False)
+            or getattr(node, "mutable_reference", False)
+            or (
+                isinstance(binding_type, ReferenceType)
+                and getattr(binding_type, "is_mutable", False)
+            )
+            or (
+                not isinstance(binding_type, ReferenceType)
+                and self.type_name_string(binding_type or "").rstrip().endswith("&")
+                and "const" not in qualifiers
+                and "readonly" not in qualifiers
+            )
+        )
+        if not mutable_reference:
+            immutable_reference = isinstance(
+                binding_type, ReferenceType
+            ) and not getattr(binding_type, "is_mutable", False)
+            return (
+                "const "
+                if immutable_reference
+                or qualifiers
+                & {
+                    "const",
+                    "constant",
+                    "readonly",
+                }
+                else ""
+            )
+        self.raise_glsl_for_in_iterable_error(
+            node,
+            pattern,
+            self.glsl_source_expression_type(getattr(node, "iterable", None)),
+            binding_type=self.type_name_string(binding_type),
+            reason="mutable-reference-binding",
+        )
+
+    def glsl_for_in_fixed_array_type(self, node, pattern, iterable_node):
+        iterable_type = self.type_name_string(
+            self.glsl_source_expression_type(iterable_node)
+        )
+        if not iterable_type:
+            self.raise_glsl_for_in_iterable_error(
+                node, pattern, None, reason="unresolved-iterable-type"
+            )
+        if self.glsl_outer_array_type(iterable_type) is None:
+            self.raise_glsl_for_in_iterable_error(
+                node, pattern, iterable_type, reason="not-fixed-array"
+            )
+        return iterable_type
+
+    def glsl_for_in_array_shape(self, node, pattern, iterable_type):
+        extent_text, element_type = self.glsl_outer_array_type(iterable_type)
+        constants = {
+            **self.literal_int_constants,
+            **self.current_compile_time_int_constants,
+        }
+        extent = evaluate_literal_int_expression(extent_text, constants)
+        if extent is None:
+            self.raise_glsl_for_in_iterable_error(
+                node, pattern, iterable_type, reason="unknown-extent"
+            )
+        if extent < 0:
+            self.raise_glsl_for_in_iterable_error(
+                node, pattern, iterable_type, reason="invalid-extent"
+            )
+        return extent, element_type
+
+    def raise_glsl_for_in_iterable_error(
+        self,
+        node,
+        pattern,
+        iterable_type,
+        *,
+        binding_type=None,
+        reason,
+    ):
+        descriptions = {
+            "invalid-extent": "has a negative fixed-array extent",
+            "mutable-reference-binding": (
+                "requires mutable reference binding, which GLSL cannot preserve"
+            ),
+            "not-fixed-array": "is not a fixed array",
+            "side-effecting-empty-array": (
+                "is an empty array whose container expression has side effects"
+            ),
+            "unknown-extent": "does not have a compile-time fixed-array extent",
+            "unresolved-iterable-type": "has an unresolved iterable type",
+            "unsupported-element-type": "contains an unsupported opaque element type",
+        }
+        detail = descriptions.get(reason, "has no faithful GLSL iterable contract")
+        type_label = iterable_type or "<unresolved>"
+        raise OpenGLForInIterableError(
+            f"OpenGL for-in binding '{pattern}' over '{type_label}' {detail}",
+            pattern=pattern,
+            iterable_type=iterable_type,
+            binding_type=binding_type,
+            reason=reason,
+            source_location=getattr(node, "source_location", None)
+            or getattr(getattr(node, "iterable", None), "source_location", None),
+        )
 
     def generate_while(self, node, indent):
         indent_str = "    " * indent

@@ -79,6 +79,45 @@ def test_webgl_codegen_emits_glsl_es_header_and_default_precision():
     assert "layout(location = 0) out vec4 fragColor;" in generated
 
 
+def test_webgl_codegen_reuses_fixed_array_for_in_contract():
+    shader = """
+    shader WebGLFixedArrayForIn {
+        constant uint[2] values = {3u, 5u};
+        fragment {
+            vec4 main() @ gl_FragColor {
+                uint total = 0u;
+                for value in values {
+                    total += value;
+                }
+                return vec4(float(total));
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "uint value_crossgl_iterable[2] = values;" in generated
+    assert "value_crossgl_index < 2" in generated
+    assert "uint value = value_crossgl_iterable[value_crossgl_index];" in generated
+
+    counted_shader = """
+    shader WebGLIntegerBoundForIn {
+        int helper(int limit) {
+            int total = 0;
+            for value in limit {
+                total += value;
+            }
+            return total;
+        }
+    }
+    """
+
+    counted = WebGLCodeGen().generate(parse_shader(counted_shader))
+
+    assert "for (int value = 0; value < limit; ++value)" in counted
+
+
 def test_webgl_codegen_preserves_explicit_precision_qualifiers():
     shader = """
     precision mediump float;
