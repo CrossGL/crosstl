@@ -2680,6 +2680,7 @@ class HLSLCodeGen:
         }
         self.current_hlsl_available_functions = global_functions_by_name
         functions_code = ""
+        function_declaration_sources = []
         ordered_functions = order_functions_by_dependencies(
             functions,
             self.walk_ast,
@@ -2696,12 +2697,14 @@ class HLSLCodeGen:
                 continue
 
             if generic_function_parameters(func):
-                for specialized_func in generic_function_emission_list(self, func):
+                specialized_functions = generic_function_emission_list(self, func)
+                for specialized_func in specialized_functions:
                     if (
                         getattr(specialized_func, "name", None)
                         in self.hlsl_omitted_function_names
                     ):
                         continue
+                    function_declaration_sources.append(specialized_func)
                     functions_code += self.generate_function(specialized_func)
                 continue
 
@@ -2728,6 +2731,8 @@ class HLSLCodeGen:
                     func,
                     entry_name=stage_entry_names.get(id(func)),
                 )
+                if qualifier_name is None:
+                    function_declaration_sources.append(func)
 
         if hasattr(ast, "stages") and ast.stages:
             for stage_type, stage in ast.stages.items():
@@ -2756,17 +2761,19 @@ class HLSLCodeGen:
                     if getattr(func, "name", None) in self.hlsl_omitted_function_names:
                         continue
                     if generic_function_parameters(func):
-                        for specialized_func in generic_function_emission_list(
-                            self,
-                            func,
-                        ):
+                        specialized_functions = generic_function_emission_list(
+                            self, func
+                        )
+                        for specialized_func in specialized_functions:
                             if (
                                 getattr(specialized_func, "name", None)
                                 in self.hlsl_omitted_function_names
                             ):
                                 continue
+                            function_declaration_sources.append(specialized_func)
                             functions_code += self.generate_function(specialized_func)
                     else:
+                        function_declaration_sources.append(func)
                         functions_code += self.generate_function(func)
 
                 if hasattr(stage, "entry_point"):
@@ -2792,6 +2799,9 @@ class HLSLCodeGen:
                             previous_available_functions
                         )
 
+        function_declarations_code = self.generate_hlsl_function_declarations(
+            function_declaration_sources
+        )
         code += self.generate_texture_query_helpers()
         code += self.generate_image_atomic_helpers()
         code += self.generate_byteaddress_atomic_helpers()
@@ -2803,9 +2813,30 @@ class HLSLCodeGen:
         code += self.generate_hlsl_complex64_helpers()
         code += self.generate_hlsl_explicit_bitcast_helpers()
         code += self.generate_hlsl_fixed_array_return_helpers()
+        code += function_declarations_code
         code += functions_code
 
         return code
+
+    def generate_hlsl_function_declarations(self, functions):
+        declarations = ""
+        seen_declarations = set()
+        for function in functions:
+            if getattr(function, "body", None) is None:
+                continue
+            if getattr(function, "name", None) in (
+                self.unsupported_glsl_buffer_block_functions
+            ):
+                continue
+
+            prototype = deepcopy(function)
+            prototype.body = None
+            declaration = self.generate_function(prototype)
+            if declaration in seen_declarations:
+                continue
+            seen_declarations.add(declaration)
+            declarations += declaration
+        return declarations
 
     def prepare_hlsl_trailing_zero_helper_names(self, functions):
         used_names = set(self.global_variable_types)

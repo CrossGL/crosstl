@@ -7,6 +7,12 @@ struct FragmentInput {
 };
 Texture2D tex : register(t1);
 SamplerState texSampler : register(s0);
+float linearToSrgb(float linear_);
+
+float4 linearToSrgb(float4 linear_);
+
+float3 linearToSrgb(float3 linear_);
+
 float linearToSrgb(float linear_) {
     if (linear_ <= 0.0031308) {
         return (linear_ * 12.92);

@@ -9415,6 +9415,47 @@ def test_generic_function_call_emits_concrete_specialization():
     assert "T::one" not in generated_code
 
 
+def test_hlsl_forward_declares_helper_overloads_before_definitions():
+    shader = """
+    shader HelperOverloadVisibility {
+        fragment {
+            vec4 linearToSrgb(vec4 linear) {
+                vec3 rgb = linearToSrgb(linear.rgb);
+                return vec4(rgb, linear.a);
+            }
+
+            vec3 linearToSrgb(vec3 linear) {
+                return vec3(
+                    linearToSrgb(linear.r),
+                    linearToSrgb(linear.g),
+                    linearToSrgb(linear.b)
+                );
+            }
+
+            float linearToSrgb(float linear) {
+                return linear;
+            }
+
+            vec4 main(vec4 color @ COLOR0) @ gl_FragColor {
+                return linearToSrgb(color);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    first_definition = generated_code.index("float4 linearToSrgb(float4 linear_) {")
+    for declaration in (
+        "float4 linearToSrgb(float4 linear_);",
+        "float3 linearToSrgb(float3 linear_);",
+        "float linearToSrgb(float linear_);",
+    ):
+        assert generated_code.index(declaration) < first_definition
+    assert "float3 rgb = linearToSrgb(linear_.rgb);" in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
 def test_hlsl_orders_late_array_helper_overloads_before_caller(tmp_path):
     shader = """
     shader LateArrayHelperOverloads {
@@ -37263,7 +37304,10 @@ def test_hlsl_private_pointer_view_overloads_exact_and_offset_backings(tmp_path)
 
     generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert generated.count("void fill5(") == 2
+    assert "void fill5(inout float values[5], int values_base);" in generated
+    assert "void fill5(inout float values[10], int values_base);" in generated
+    assert generated.count("void fill5(inout float values[5], int values_base) {") == 1
+    assert generated.count("void fill5(inout float values[10], int values_base) {") == 1
     assert "void fill5(inout float values[5], int values_base)" in generated
     assert "void fill5(inout float values[10], int values_base)" in generated
     assert "values[(values_base + 0)] = 3.0;" in generated
