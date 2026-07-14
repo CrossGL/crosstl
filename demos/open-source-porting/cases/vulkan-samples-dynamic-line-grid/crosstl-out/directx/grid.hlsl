@@ -3,6 +3,8 @@ struct FragmentInput {
     float3 nearPoint: TEXCOORD0;
     float3 farPoint: TEXCOORD1;
 };
+float4 grid(float3 pos);
+
 float4 grid(float3 pos) {
     float2 coord = pos.xz;
     float2 derivative = fwidth(coord);

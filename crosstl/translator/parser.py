@@ -54,6 +54,7 @@ from .ast import (
     RayQueryOpNode,
     RayTracingOpNode,
     ReferenceType,
+    ResourceMemoryQualifierNode,
     ReturnNode,
     ShaderNode,
     ShaderStage,
@@ -162,6 +163,32 @@ VARIABLE_QUALIFIER_TOKEN_TYPES = frozenset(
 )
 
 PARAMETER_QUALIFIER_TOKEN_TYPES = VARIABLE_QUALIFIER_TOKEN_TYPES - {"MUT"}
+
+RESOURCE_MEMORY_QUALIFIER_NAMES = frozenset({"coherent", "volatile"})
+RESOURCE_ADDRESS_SPACE_NAMES = frozenset(
+    {
+        "constant",
+        "device",
+        "global",
+        "local",
+        "private",
+        "storage",
+        "thread",
+        "threadgroup",
+        "threadgroup_imageblock",
+        "workgroup",
+    }
+)
+RESOURCE_ACCESS_MODE_NAMES = frozenset(
+    {
+        "read",
+        "readonly",
+        "read_write",
+        "readwrite",
+        "write",
+        "writeonly",
+    }
+)
 
 VARIABLE_QUALIFIER_NAMES = frozenset(
     {
@@ -1409,10 +1436,15 @@ class Parser:
             )
 
         qualifier_attributes = []
+        resource_qualifiers = []
+        declaration_qualifiers = []
         if self.current_token_is_variable_qualifier():
+            parsed_qualifiers = self.parse_variable_qualifiers()
+            declaration_qualifiers, resource_qualifiers = (
+                self.partition_resource_qualifiers(parsed_qualifiers)
+            )
             qualifier_attributes = [
-                AttributeNode(name=qualifier)
-                for qualifier in self.parse_variable_qualifiers()
+                AttributeNode(name=qualifier) for qualifier in declaration_qualifiers
             ]
 
         member_type = self.parse_type()
@@ -1437,6 +1469,9 @@ class Parser:
 
             name = self.parse_binding_identifier()
             declarator_type = self.parse_array_suffixes(deepcopy(member_type))
+            declaration_resource_qualifiers = self.apply_pointer_resource_contract(
+                declarator_type, declaration_qualifiers, resource_qualifiers
+            )
 
             attributes = list(leading_attributes)
             attributes.extend(qualifier_attributes)
@@ -1452,6 +1487,7 @@ class Parser:
                 member_type=declarator_type,
                 default_value=default_value,
                 attributes=attributes,
+                resource_qualifiers=declaration_resource_qualifiers,
             )
 
             if self.current_token[0] == "COMMA":
@@ -1681,7 +1717,10 @@ class Parser:
         if self.current_token[0] == "VAR":
             return self.parse_resource_parameter(attributes)
 
-        qualifiers = self.parse_parameter_qualifiers()
+        parsed_qualifiers = self.parse_parameter_qualifiers()
+        qualifiers, resource_qualifiers = self.partition_resource_qualifiers(
+            parsed_qualifiers
+        )
 
         is_mutable = False
         if self.current_token[0] == "MUT":
@@ -1733,12 +1772,17 @@ class Parser:
             self.eat("EQUALS")
             default_value = self.parse_expression()
 
+        declaration_resource_qualifiers = self.apply_pointer_resource_contract(
+            param_type, qualifiers, resource_qualifiers
+        )
+
         return ParameterNode(
             name=name,
             param_type=param_type,
             default_value=default_value,
             attributes=attributes,
             qualifiers=qualifiers,
+            resource_qualifiers=declaration_resource_qualifiers,
             is_mutable=is_mutable,
         )
 
@@ -1752,6 +1796,10 @@ class Parser:
 
             if self.current_token_is_binding_identifier() and self.peek()[0] == "COLON":
                 return qualifiers
+
+            if normalized in RESOURCE_MEMORY_QUALIFIER_NAMES:
+                qualifiers.append(self.parse_resource_memory_qualifier())
+                continue
 
             if self.current_token_is_parameter_qualifier():
                 qualifiers.append(normalized)
@@ -1768,6 +1816,80 @@ class Parser:
                 continue
 
             return qualifiers
+
+    def parse_resource_memory_qualifier(self):
+        """Parse volatility or scoped coherence as typed resource metadata."""
+        token_type, token_value = self.current_token
+        kind = str(token_value).lower()
+        if kind not in RESOURCE_MEMORY_QUALIFIER_NAMES:
+            raise SyntaxError(f"Expected resource memory qualifier, got {token_type}")
+        self.eat(token_type)
+
+        scope = None
+        if kind == "coherent" and self.current_token[0] == "LPAREN":
+            self.eat("LPAREN")
+            scope_token_type, scope_value = self.current_token
+            if not isinstance(scope_value, str) or not scope_value.isidentifier():
+                raise SyntaxError(f"Expected coherence scope, got {scope_token_type}")
+            scope = scope_value.lower()
+            self.eat(scope_token_type)
+            self.eat("RPAREN")
+
+        return ResourceMemoryQualifierNode(kind=kind, scope=scope)
+
+    @staticmethod
+    def partition_resource_qualifiers(qualifiers):
+        resource_qualifiers = [
+            qualifier
+            for qualifier in qualifiers
+            if isinstance(qualifier, ResourceMemoryQualifierNode)
+        ]
+        declaration_qualifiers = [
+            (
+                str(qualifier)
+                if isinstance(qualifier, ResourceMemoryQualifierNode)
+                else qualifier
+            )
+            for qualifier in qualifiers
+        ]
+        return declaration_qualifiers, resource_qualifiers
+
+    def apply_pointer_resource_contract(
+        self, type_node, declaration_qualifiers, resource_qualifiers
+    ):
+        """Attach declaration metadata to its pointer/reference type when possible."""
+        resource_qualifiers = deepcopy(list(resource_qualifiers))
+        owner = type_node
+        while isinstance(owner, ArrayType):
+            owner = owner.element_type
+
+        if not isinstance(owner, (PointerType, ReferenceType)):
+            return list(resource_qualifiers)
+
+        if resource_qualifiers:
+            existing = list(getattr(owner, "resource_qualifiers", []) or [])
+            existing_text = {str(qualifier) for qualifier in existing}
+            owner.resource_qualifiers = existing + [
+                qualifier
+                for qualifier in resource_qualifiers
+                if str(qualifier) not in existing_text
+            ]
+        address_spaces = [
+            str(qualifier).lower()
+            for qualifier in declaration_qualifiers
+            if str(qualifier).lower() in RESOURCE_ADDRESS_SPACE_NAMES
+        ]
+        if len(set(address_spaces)) == 1:
+            owner.address_space = address_spaces[0]
+
+        access_modes = [
+            str(qualifier).lower()
+            for qualifier in declaration_qualifiers
+            if str(qualifier).lower() in RESOURCE_ACCESS_MODE_NAMES
+        ]
+        if len(set(access_modes)) == 1:
+            owner.access_mode = access_modes[0]
+        return []
 
     def current_token_starts_qualified_parameter_type(self):
         """Return whether a primitive qualifier is followed by a real parameter."""
@@ -1901,7 +2023,12 @@ class Parser:
             and self.peek(2)[0] == "COLON"
         )
 
-        qualifiers = [] if is_colon_style_var else self.parse_variable_qualifiers()
+        parsed_qualifiers = (
+            [] if is_colon_style_var else self.parse_variable_qualifiers()
+        )
+        qualifiers, resource_qualifiers = self.partition_resource_qualifiers(
+            parsed_qualifiers
+        )
 
         if is_colon_style_var:
             self.eat("VAR")
@@ -1939,6 +2066,7 @@ class Parser:
                         var_type,
                         qualifiers,
                         attributes,
+                        resource_qualifiers,
                         is_type_alias=is_type_alias,
                     )
                 )
@@ -1954,6 +2082,7 @@ class Parser:
         base_type,
         qualifiers,
         declaration_attributes,
+        resource_qualifiers=None,
         *,
         is_type_alias=False,
     ):
@@ -1972,11 +2101,15 @@ class Parser:
             self.eat("EQUALS")
             initial_value = self.parse_expression()
 
+        declaration_resource_qualifiers = self.apply_pointer_resource_contract(
+            var_type, qualifiers, resource_qualifiers or []
+        )
         variable = VariableNode(
             name=name,
             var_type=var_type,
             initial_value=initial_value,
             qualifiers=list(qualifiers),
+            resource_qualifiers=declaration_resource_qualifiers,
             attributes=attributes,
             is_mutable="const" not in qualifiers,
             is_type_alias=is_type_alias,
@@ -2018,6 +2151,9 @@ class Parser:
         qualifiers = []
         while self.current_token_is_variable_qualifier():
             token_type, token_value = self.current_token
+            if str(token_value).lower() in RESOURCE_MEMORY_QUALIFIER_NAMES:
+                qualifiers.append(self.parse_resource_memory_qualifier())
+                continue
             qualifiers.append(str(token_value).lower())
             self.eat(token_type)
         return qualifiers
@@ -3511,12 +3647,17 @@ class Parser:
                 attributes=attributes,
             )
 
-        qualifiers = self.parse_variable_qualifiers()
+        parsed_qualifiers = self.parse_variable_qualifiers()
+        qualifiers, resource_qualifiers = self.partition_resource_qualifiers(
+            parsed_qualifiers
+        )
         var_type = self.parse_type()
         declarations = []
         while True:
             declarations.append(
-                self.parse_variable_declarator(var_type, qualifiers, [])
+                self.parse_variable_declarator(
+                    var_type, qualifiers, [], resource_qualifiers
+                )
             )
             if self.current_token[0] != "COMMA":
                 break

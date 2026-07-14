@@ -2,7 +2,7 @@
 
 This directory contains the project-level MLX porting checks used by CrossTL.
 The checks are pinned to MLX commit
-`968d264f2903d578e699c4452a4dbf48633921aa` and exercise the Metal kernel tree
+`4367c73b60541ddd5a266ce4644fd93d20223b6e` and exercise the Metal kernel tree
 as a source repository, not as isolated parser snippets.
 
 ## Scope
@@ -11,31 +11,48 @@ The current harness verifies:
 
 - discovery of the MLX Metal kernel project surface under
   `mlx/backend/metal/kernels`;
-- DirectX and Vulkan artifact generation for the 12-source clean reduced
-  frontier: `arange.metal`, `arg_reduce.metal`, `binary_two.metal`, `fence.metal`,
+- Metal-to-CrossGL-to-Metal translation of pinned `fence.metal`, including
+  project artifact hashes, sizes, source maps, provenance, and native Metal
+  compilation on macOS CI. The gate requires all three device-memory,
+  sequentially consistent, system-scope atomic fences to survive the round
+  trip without a weaker barrier fallback. Resource coherence and volatility
+  preservation remain blocked by
+  [#1660](https://github.com/CrossGL/crosstl/issues/1660), so this is not yet a
+  complete semantic-equivalence claim;
+- DirectX and Vulkan artifact generation for the 11-source clean reduced
+  frontier: `arange.metal`, `arg_reduce.metal`, `binary_two.metal`,
   `layer_norm.metal`, `logsumexp.metal`, `random.metal`, `rms_norm.metal`,
   `rope.metal`, `scaled_dot_product_attention.metal`, `softmax.metal`, and
-  `ternary.metal`;
+  `ternary.metal`. This establishes structural and configured toolchain
+  coverage, not semantic readiness or runtime parity;
+- a separate project-level expected-failure check for pinned `fence.metal`
+  across DirectX, OpenGL, and Vulkan. Each target must report its exact
+  `project.translate.*-atomic-fence-unsupported` diagnostic, target-specific
+  `*.atomic-thread-fence-contract-lowering` missing capability, and requested
+  `mem_device`, `memory_order_seq_cst`, `thread_scope_system` contract without
+  emitting a target file. The blocked contract is tracked by
+  [#1537](https://github.com/CrossGL/crosstl/issues/1537);
 - materialization of all 51 concrete `arg_reduce.metal` specializations and
   clean artifact generation for DirectX, OpenGL, and Vulkan. OpenGL compilation
   and both OpenGL-derived and native SPIR-V validation run in the required Linux
   toolchain gate;
 - DirectX HLSL smoke checks with DXC on Windows CI for the verified subset
-  (`arange.metal`, `arg_reduce.metal`, `fence.metal`). The gate compiles every
-  discovered entry, including the unsuffixed `CSMain`. Other clean frontier
-  kernels translate to DirectX but are excluded for structural and semantic gaps
-  recorded in `expected-gaps.json`;
-- Vulkan assembly and validator checks when SPIR-V tools are available. The
-  reduced frontier remains semantically blocked on the Metal atomic-fence order
-  and scope contract tracked in
-  [#1537](https://github.com/CrossGL/crosstl/issues/1537), even when every module
-  passes structural validation;
+  (`arange.metal`, `arg_reduce.metal`, and `rope.metal`). The gate
+  compiles every discovered entry, including the unsuffixed `CSMain`. Other
+  clean frontier kernels translate to DirectX but are excluded for structural
+  and semantic gaps recorded in `expected-gaps.json`; `fence.metal` is excluded
+  because its DirectX translation intentionally fails before DXC;
+- Vulkan assembly and validator checks for the existing non-fence regression
+  frontier when SPIR-V tools are available. Vulkan atomic-fence feature work is
+  deferred; the separate `fence.metal` contract check prevents generated
+  barriers from being mistaken for semantic support;
 - OpenGL artifact generation for `arange.metal`, including deterministic
   separation of the source `float` and `bfloat16_t` helper declarations after
   both map to GLSL `float` and source-typed call rewriting coverage;
-- OpenGL artifact generation for the clean `arg_reduce.metal`,
-  `logsumexp.metal`, and `softmax.metal` frontier. In the CI-required mode every
-  artifact compiles for OpenGL/SPIR-V 1.3 and passes `spirv-val`;
+- OpenGL artifact generation for the clean four-source `arg_reduce.metal`,
+  `binary_two.metal`, `logsumexp.metal`, and `softmax.metal` frontier. Project
+  translation must emit four artifacts with zero diagnostics. In the CI-required
+  mode every artifact compiles for OpenGL/SPIR-V 1.3 and passes `spirv-val`;
 - on Linux CI, full project materialization of `gemv.metal` to OpenGL followed
   by native GLSL compilation and SPIR-V 1.3 validation for all 225 source
   specializations represented by the generated artifact;
@@ -57,23 +74,29 @@ The current harness verifies:
   `arange.metal` unsigned 32-bit, signed 32-bit, and floating-point entry points
   through the optional Vulkan compute runtime and Mesa Vulkan software driver.
 
-Pull requests run the clean reduced frontier above. Scheduled and manually
+Pull requests run the 12-source reduced scope: 11 clean frontier sources and
+the explicitly blocked `fence.metal` contract source. Scheduled and manually
 triggered CI also run the full-corpus artifact scout with finite Metal template
 materialization budgets. The generated full-corpus project config caps
 `max_template_specializations` at 4096 and
 `max_template_materialization_work` at 131072. The full scout translates all 40
-pinned MLX Metal kernel units to DirectX, OpenGL, and Vulkan and requires 120
-clean generated artifacts: 40 DirectX, 40 OpenGL, and 40 Vulkan. It uploads
+pinned MLX Metal kernel units to DirectX, OpenGL, and Vulkan and records 120
+target attempts. Its fence-aware baseline is 117 translated artifacts and three
+expected failed `fence.metal` records, one per target, with no fence target files
+emitted. Additional failures remain issue-backed scout results. CI uploads
 generated portability reports, validation summaries embedded in those reports,
-generated logs, generated artifacts, and a concise JSON summary.
+generated logs, available generated artifacts, and a concise JSON summary.
+Because `binary_two.metal` was already in the DirectX/Vulkan frontier, its OpenGL
+promotion does not change either reduced source count.
 
-The last completed full-corpus scout against the same pinned MLX revision
+The checked-in historical full-corpus scout snapshot against MLX revision
+`968d264f2903d578e699c4452a4dbf48633921aa`
 scanned 40 Metal kernels and attempted 120 target artifacts across DirectX,
 OpenGL, and Vulkan. It translated 24 artifacts and reported 96 structured
 artifact failures behind tracked issues. The current materialization pass
 rejects template-hostile targets when concrete variants are missing instead of
 emitting generic artifacts, so full-corpus counts should not be treated as
-runtime-complete coverage.
+runtime-complete coverage or as the current fence-aware expected baseline.
 
 This is shader/kernel artifact coverage. It does not claim that the MLX host
 runtime has been ported to Direct3D, OpenGL, or Vulkan. Running the upstream MLX
@@ -98,7 +121,12 @@ buffers. The native execution report attempts the built-in native adapter
 contract separately. On Windows CI the generated DirectX frontier HLSL must
 compile with DXC. Current DirectX smoke artifacts lower MLX bfloat16 aliases to
 HLSL `half` for toolchain coverage; exact bfloat16 storage and conversion
-semantics remain tracked separately. On Linux CI the generated Vulkan
+semantics remain tracked separately. On macOS CI, the generated `fence.metal`
+round-trip artifact must compile to AIR with the native Metal compiler. This
+checks generated source and project metadata, not numerical runtime parity or
+equivalent resource visibility. CrossGL/crosstl#1660 tracks preservation of
+the source `volatile coherent(system)` pointer contract. On
+Linux CI the generated Vulkan
 `arangeuint32`, `arangeint32`, and `arangefloat32` entry points must assemble,
 load, dispatch, read back, and compare on the Vulkan compute runtime; other
 unavailable native backends remain structured blockers until backend runtime
@@ -112,7 +140,7 @@ Clone MLX and check out the pinned revision:
 
 ```bash
 git clone https://github.com/ml-explore/mlx.git /tmp/mlx
-git -C /tmp/mlx checkout 968d264f2903d578e699c4452a4dbf48633921aa
+git -C /tmp/mlx checkout 4367c73b60541ddd5a266ce4644fd93d20223b6e
 ```
 
 Run the project-porting harness from the CrossTL repository:
@@ -156,12 +184,28 @@ python demos/integrations/mlx/run_mlx_porting.py \
   --require-directx-toolchain
 ```
 
+On macOS, require native compilation of the generated Metal round-trip artifact:
+
+```bash
+python demos/integrations/mlx/run_mlx_porting.py \
+  --mlx-root /tmp/mlx \
+  --require-metal-toolchain
+```
+
 The harness writes reports, generated artifacts, and command logs under
 `<mlx-root>/.crosstl-mlx-porting`.
 
 ## Current Translator Gaps
 
 CrossGL/crosstl#1376 tracks bounded runtime for the scheduled full-corpus scout.
+CrossGL/crosstl#1676 tracks demand-driven materialization so repository
+translation charges configured work budgets to reachable concrete template
+graphs instead of eager whole-source cross products.
+CrossGL/crosstl#1659 tracks quadratic DirectX resource-register relocation for
+large aggregate artifacts; a high-budget `binary.metal` DirectX translation
+reaches that allocator after template materialization.
+CrossGL/crosstl#1660 tracks resource coherence and volatility qualifiers that
+are currently absent from Metal round-trip artifacts.
 CrossGL/crosstl#1312 tracks native toolchain validation coverage for project
 CI. CrossGL/crosstl#1388 tracks the artifact execution metadata required by
 runtime-test manifests and native adapters. OpenGL type aliases are inlined
@@ -171,10 +215,18 @@ ownership for reflected constants in runtime reports. CrossGL/crosstl#1472
 tracks the Direct3D compute runtime driver needed to move Windows DirectX
 coverage from DXC validation to native dispatch/readback. CrossGL/crosstl#1474
 tracks exact DirectX bfloat16 lowering beyond the current compile-time smoke
-mapping. CrossGL/crosstl#1491 tracks the current scaled-attention
-qualified-static-constant materialization blocker. Built-in overloads are
-resolved alongside user-defined wrappers by source signature. Before native
-validation, the harness verifies
+mapping. Current DXC checks use Shader Model 6 compute profiles and do not prove
+Direct3D 10 or 11 compatibility; CrossGL/crosstl#1670 tracks explicit target
+profiles, feature gates, and compiler selection. CrossGL/crosstl#1669 tracks
+the fixed arrays of resource aliases introduced by the pinned revision's wide
+quantized matrix-vector helpers. CrossGL/crosstl#1671 tracks workgroup backing
+provenance through nested FFT helper parameters. CrossGL/crosstl#1672 tracks
+owner-dependent `constexpr` helper calls in quantized struct static members.
+CrossGL/crosstl#1491 tracks the current scaled-attention
+qualified-static-constant materialization blocker.
+Built-in overloads are resolved alongside user-defined wrappers by source
+signature.
+Before native validation, the harness verifies
 the four numeric-to-Boolean SIMD wrapper conversions and the signed 8-, 16-,
 32-, and 64-bit `arange` arithmetic conversions in the generated artifact.
 Ubuntu CI installs `glslangValidator` and runs it with an OpenGL/SPIR-V 1.3
@@ -188,11 +240,11 @@ the function-constant contract in
 [#1538](https://github.com/CrossGL/crosstl/issues/1538). Function-local scalar
 and vector aliases now retain lexical scope and resolve across declarations,
 constructors, casts, and generic static-member owners. For the pinned attention
-source this resolves 444 concrete uses across all 36 entries, including the
+source this resolves 531 concrete uses across all 42 entries, including the
 float accumulation type used by the half and bfloat input families. The full
 source translates to DirectX, OpenGL, and Vulkan; local OpenGL and Vulkan native
 validation passes. DirectX remains outside the DXC gate for the independent
-resource-cursor and fixed-array issues listed in `expected-gaps.json`.
+resource-cursor issue listed in `expected-gaps.json`.
 The project Vulkan artifact is warning-free because project preparation removes
 unreachable generic declarations. Direct single-file translation still emits
 five such warnings under
@@ -207,12 +259,21 @@ cbuffer. The aggregate OpenGL module typechecks every generated kernel body but
 exposes only the first as `main`; entry-scoped packaging for the other 23 kernels
 remains tracked in
 [#1523](https://github.com/CrossGL/crosstl/issues/1523).
+`binary_two.metal` now also belongs to the required OpenGL toolchain frontier.
+CrossTL commit `db593d19b` specializes fixed-array helper views to their concrete
+runtime storage resources while retaining fixed extents and offsets. For the
+pinned source, project translation emits zero diagnostics, the generated GLSL
+compiles for OpenGL/SPIR-V 1.3, and the resulting SPIR-V passes `spirv-val`. This
+resolves [#1661](https://github.com/CrossGL/crosstl/issues/1661) for the pinned
+frontier. It is artifact and toolchain evidence only; it does not establish
+numerical or runtime parity.
 `rms_norm.metal` remains outside the OpenGL/SPIR-V gate until Metal function
 constants are preserved as specialization inputs under
 [#1538](https://github.com/CrossGL/crosstl/issues/1538).
-The Vulkan `fence.metal` artifact retains deterministic evidence of the
-unconsumed system-scope constant and is reported as structurally validated but
-not semantically ready under #1537.
+`fence.metal` emits no DirectX, OpenGL, or Vulkan target artifact. The harness
+requires the target-specific structured diagnostics and the exact requested
+atomic-fence operands under #1537 instead of accepting generated barrier text as
+semantic evidence.
 Future scouts should add issue-backed blockers only when there are
 concrete repros. Host runtime integration gaps should be handled in repository
 integration code or downstream runtime adapters, not hidden as shader
@@ -343,7 +404,8 @@ rejected explicitly and tracked in CrossGL/crosstl#1562.
 ## Resolved Frontier Issues
 
 The current reduced frontier no longer depends on the previously tracked issues:
-CrossGL/crosstl#1573, CrossGL/crosstl#1555, CrossGL/crosstl#1561,
+CrossGL/crosstl#1661, CrossGL/crosstl#1573, CrossGL/crosstl#1555,
+CrossGL/crosstl#1561,
 CrossGL/crosstl#1551,
 CrossGL/crosstl#1498,
 CrossGL/crosstl#1394,
@@ -406,3 +468,6 @@ rewriting. CrossGL/crosstl#1502 is covered by contextual GLSL aggregate
 construction for struct, fixed-array, vector, and matrix values.
 CrossGL/crosstl#1503 is covered by explicit expected-type scalar coercion for
 numeric-to-Boolean returns and signed mixed-width `arange` arithmetic.
+CrossGL/crosstl#1661 is covered for pinned `binary_two.metal` by fixed-array
+resource helper specialization in CrossTL commit `db593d19b` and the required
+OpenGL/SPIR-V 1.3 compilation and validation gate.

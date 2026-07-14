@@ -114,6 +114,9 @@ class MetalTemplateSpecializationError(ValueError):
         owner_aliases: Optional[Tuple[str, ...]] = None,
         nested_struct_name: Optional[str] = None,
         unresolved_local_constants: Optional[Tuple[str, ...]] = None,
+        caller_specialization: Optional[str] = None,
+        callee_template: Optional[str] = None,
+        requested_arguments: Optional[Tuple[str, ...]] = None,
     ):
         super().__init__(message)
         self.limit = limit
@@ -127,6 +130,9 @@ class MetalTemplateSpecializationError(ValueError):
         self.owner_aliases = owner_aliases
         self.nested_struct_name = nested_struct_name
         self.unresolved_local_constants = unresolved_local_constants
+        self.caller_specialization = caller_specialization
+        self.callee_template = callee_template
+        self.requested_arguments = requested_arguments
 
 
 @dataclass

@@ -7,6 +7,9 @@ from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
 from crosstl.translator.ast import ArrayLiteralNode, ArrayType, ShaderStage
 from crosstl.translator.codegen.directx_codegen import (
+    DirectXAggregateInitializerError,
+)
+from crosstl.translator.codegen.directx_codegen import (
     HLSLCodeGen as TranslatorHLSLCodeGen,
 )
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
@@ -14,6 +17,9 @@ from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
+from tests.test_translator.test_project_translation import (
+    assert_directx_compute_validates_if_available,
+)
 
 VERTEX_PIXEL_HLSL = textwrap.dedent("""
     cbuffer CameraBuffer : register(b0) {
@@ -7152,6 +7158,235 @@ def test_codegen_cbuffer_member_initializers_from_dxc_issue_reparse():
     assert "float x = 1.0;" in output
     assert "vec2 param[2] = {vec2(0, 1), vec2(2, 3)};" in output
     parse_crossgl(output)
+
+
+def test_codegen_fixed_array_partial_initializers_expand_declared_extent(tmp_path):
+    crossgl = textwrap.dedent("""
+        shader FixedArrayPartialInitializers {
+            float supplied(float value) {
+                return value;
+            }
+
+            void accept(float values[4]) {}
+
+            float[4] makeValues() {
+                return {1.0, 2.0};
+            }
+
+            compute {
+                void main() {
+                    const int BASE = 2;
+                    const int WIDTH = BASE * 2;
+                    float zeroed[WIDTH] = {0};
+                    float partial[WIDTH] = {
+                        supplied(1.0),
+                        supplied(2.0)
+                    };
+                    float assigned[WIDTH];
+                    assigned = {supplied(3.0), supplied(4.0)};
+                    accept({supplied(5.0), supplied(6.0)});
+                    float returned = makeValues()[3];
+                }
+            }
+        }
+    """).strip()
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "float zeroed[WIDTH] = {float(0), float(0), float(0), float(0)};" in hlsl
+    assert (
+        "float partial[WIDTH] = {supplied(1.0), supplied(2.0), "
+        "float(0), float(0)};" in hlsl
+    )
+    assert hlsl.count("supplied(1.0)") == 1
+    assert hlsl.count("supplied(2.0)") == 1
+    assert "assigned[0] = supplied(3.0);" in hlsl
+    assert "assigned[1] = supplied(4.0);" in hlsl
+    assert "assigned[2] = float(0);" in hlsl
+    assert "assigned[3] = float(0);" in hlsl
+    assert hlsl.count("supplied(3.0)") == 1
+    assert hlsl.count("supplied(4.0)") == 1
+    assert (
+        "float __crossgl_array_arg_0[4] = {supplied(5.0), supplied(6.0), "
+        "float(0), float(0)};" in hlsl
+    )
+    assert "accept(__crossgl_array_arg_0);" in hlsl
+    assert hlsl.count("supplied(5.0)") == 1
+    assert hlsl.count("supplied(6.0)") == 1
+    assert "return float4(1.0, 2.0, float(0), float(0));" in hlsl
+    assert "= {0};" not in hlsl
+    assert_directx_compute_validates_if_available(hlsl, tmp_path)
+
+
+def test_codegen_fixed_array_partial_initializers_recurse_through_aggregates(
+    tmp_path,
+):
+    crossgl = textwrap.dedent("""
+        shader RecursiveFixedArrayInitializers {
+            struct Pair {
+                float x;
+                float y;
+            };
+
+            compute {
+                void main() {
+                    float nested[2][3] = {{1.0}, {2.0, 3.0}};
+                    vec2 vectors[3] = {{1.0}, {2.0, 3.0}};
+                    mat2 matrices[2] = {{{1.0}, {2.0, 3.0}}};
+                    Pair pairs[2] = {{1.0}};
+                    Pair zeroPairs[2] = {0};
+                    float assignedNested[2][3];
+                    assignedNested = {{1.0}, {2.0, 3.0}};
+                    vec2 assignedVectors[2];
+                    assignedVectors = {{1.0}};
+                    Pair assignedPairs[2];
+                    assignedPairs = {{1.0}};
+                }
+            }
+        }
+    """).strip()
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert (
+        "float nested[2][3] = {{1.0, float(0), float(0)}, "
+        "{2.0, 3.0, float(0)}};" in hlsl
+    )
+    assert (
+        "float2 vectors[3] = {float2(1.0, float(0)), "
+        "float2(2.0, 3.0), (float2)0};" in hlsl
+    )
+    assert (
+        "float2x2 matrices[2] = {float2x2(1.0, float(0), 2.0, 3.0), "
+        "(float2x2)0};" in hlsl
+    )
+    assert "Pair pairs[2] = {{1.0, float(0)}, (Pair)0};" in hlsl
+    assert "Pair zeroPairs[2] = {(Pair)0, (Pair)0};" in hlsl
+    assert "assignedNested[0][0] = 1.0;" in hlsl
+    assert "assignedNested[0][2] = float(0);" in hlsl
+    assert "assignedNested[1][1] = 3.0;" in hlsl
+    assert "assignedVectors[0] = float2(1.0, float(0));" in hlsl
+    assert "assignedVectors[1] = (float2)0;" in hlsl
+    assert "assignedPairs[0].x = 1.0;" in hlsl
+    assert "assignedPairs[0].y = float(0);" in hlsl
+    assert "assignedPairs[1].x = float(0);" in hlsl
+    assert "assignedPairs[1].y = float(0);" in hlsl
+    assert_directx_compute_validates_if_available(hlsl, tmp_path)
+
+
+def test_codegen_global_fixed_array_partial_initializer_uses_declared_type():
+    crossgl = textwrap.dedent("""
+        shader GlobalFixedArrayInitializer {
+            const float weights[4] = {1.0, 2.0};
+
+            compute {
+                void main() {}
+            }
+        }
+    """).strip()
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "static const float weights[4] = {1.0, 2.0, float(0), float(0)};" in hlsl
+
+
+def test_codegen_fixed_array_partial_initializer_preserves_lifted_atomics():
+    crossgl = textwrap.dedent("""
+        shader PartialAtomicFixedArrayInitializer {
+            RWBuffer<uint> counters @register(u0);
+
+            compute {
+                void main(uvec3 tid @gl_GlobalInvocationID) {
+                    uint values[4] = {
+                        atomicAdd(counters[tid.x], 1u),
+                        atomicCompareExchange(counters[tid.x], 2u, 3u)
+                    };
+                }
+            }
+        }
+    """).strip()
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert hlsl.count("InterlockedAdd(") == 1
+    assert hlsl.count("InterlockedCompareExchange(") == 1
+    assert (
+        "uint values[4] = {__crossgl_atomic_expr_0, "
+        "__crossgl_atomic_expr_1, uint(0), uint(0)};" in hlsl
+    )
+
+
+@pytest.mark.parametrize(
+    ("source", "reason", "expected_type"),
+    [
+        pytest.param(
+            "float values[2] = {1.0, 2.0, 3.0};",
+            "element-count-mismatch",
+            "float[2]",
+            id="excess-elements",
+        ),
+        pytest.param(
+            "float values[WIDTH] = {0};",
+            "array-extent-unresolved",
+            "float[WIDTH]",
+            id="runtime-extent",
+        ),
+        pytest.param(
+            "float values[] = {1.0};",
+            "unsized-array",
+            "float[]",
+            id="unsized-array",
+        ),
+    ],
+)
+def test_codegen_fixed_array_initializer_reports_invalid_shape(
+    source,
+    reason,
+    expected_type,
+):
+    crossgl = textwrap.dedent(f"""
+        shader InvalidFixedArrayInitializer {{
+            void makeValues(int WIDTH) {{
+                {source}
+            }}
+        }}
+    """).strip()
+
+    with pytest.raises(DirectXAggregateInitializerError) as exc_info:
+        TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.directx-aggregate-initializer-invalid"
+    )
+    assert diagnostic.missing_capabilities == (
+        "directx.aggregate-initializer-lowering",
+    )
+    assert diagnostic.reason == reason
+    assert diagnostic.expected_type == expected_type
+
+
+def test_codegen_fixed_array_value_initializer_rejects_resource_members():
+    crossgl = textwrap.dedent("""
+        shader UnsupportedFixedArrayValueInitializer {
+            struct ResourceHolder {
+                sampler2D texture;
+            };
+
+            compute {
+                void main() {
+                    ResourceHolder values[2] = {0};
+                }
+            }
+        }
+    """).strip()
+
+    with pytest.raises(DirectXAggregateInitializerError) as exc_info:
+        TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == "value-initialization-unsupported"
+    assert diagnostic.expected_type == "Texture2D"
 
 
 def test_codegen_invalid_hlsl_raises():

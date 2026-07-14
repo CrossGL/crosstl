@@ -355,20 +355,28 @@ def order_functions_by_dependencies(
     walk_nodes,
     function_call_name,
     function_call_node_type,
+    include_overloads=False,
 ):
     ordered = []
     visiting = set()
     visited = set()
     function_list = list(functions)
     function_names = [getattr(func, "name", None) for func in function_list]
-    unique_names = {
-        name for name in function_names if name and function_names.count(name) == 1
-    }
-    functions_by_name = {
-        func.name: func
-        for func in function_list
-        if getattr(func, "name", None) in unique_names
-    }
+    if include_overloads:
+        functions_by_name = {}
+        for func in function_list:
+            name = getattr(func, "name", None)
+            if name:
+                functions_by_name.setdefault(name, []).append(func)
+    else:
+        unique_names = {
+            name for name in function_names if name and function_names.count(name) == 1
+        }
+        functions_by_name = {
+            func.name: [func]
+            for func in function_list
+            if getattr(func, "name", None) in unique_names
+        }
 
     def visit(func):
         func_id = id(func)
@@ -380,9 +388,10 @@ def order_functions_by_dependencies(
             if not isinstance(node, function_call_node_type):
                 continue
 
-            dependency = functions_by_name.get(function_call_name(node))
-            if dependency is not None and dependency is not func:
-                visit(dependency)
+            dependencies = functions_by_name.get(function_call_name(node), ())
+            for dependency in dependencies:
+                if dependency is not func:
+                    visit(dependency)
 
         visiting.remove(func_id)
         visited.add(func_id)

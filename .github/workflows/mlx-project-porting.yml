@@ -2,7 +2,7 @@ name: MLX Project Porting
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  MLX_COMMIT: "968d264f2903d578e699c4452a4dbf48633921aa"
+  MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"
 
 on:
   push:
@@ -15,7 +15,11 @@ on:
       - "pyproject.toml"
       - "requirements.txt"
       - "tests/test_ci_workflows.py"
+      - "tests/test_mlx_porting_harness.py"
       - "tests/test_translator/test_codegen/test_GLSL_codegen.py"
+      - "tests/test_translator/test_codegen/test_SPIRV_codegen.py"
+      - "tests/test_translator/test_codegen/test_directx_codegen.py"
+      - "tests/test_translator/test_project_translation.py"
   pull_request:
     branches: [main]
     paths:
@@ -26,7 +30,11 @@ on:
       - "pyproject.toml"
       - "requirements.txt"
       - "tests/test_ci_workflows.py"
+      - "tests/test_mlx_porting_harness.py"
       - "tests/test_translator/test_codegen/test_GLSL_codegen.py"
+      - "tests/test_translator/test_codegen/test_SPIRV_codegen.py"
+      - "tests/test_translator/test_codegen/test_directx_codegen.py"
+      - "tests/test_translator/test_project_translation.py"
   schedule:
     - cron: "31 4 * * 1"
   workflow_dispatch:
@@ -72,12 +80,14 @@ jobs:
         if: runner.os == 'Linux'
         uses: ./.github/actions/install-linux-dxc
 
-      - name: Validate OpenGL scalar conversions
+      - name: Validate OpenGL lowering contracts
         if: runner.os == 'Linux'
         run: |
           python -m pip install pytest
           python -m pytest -q tests/test_translator/test_codegen/test_GLSL_codegen.py \
-            -k "opengl_lowers_expected_scalar_and_vector_conversions or opengl_preserves_metal_arithmetic_conversion_order or opengl_helper_parameters_preserve_out_and_inout_qualifiers"
+            -k "opengl_lowers_expected_scalar_and_vector_conversions or opengl_preserves_metal_arithmetic_conversion_order or opengl_helper_parameters_preserve_out_and_inout_qualifiers or glsl_atomic_thread_fence"
+          python -m pytest -q tests/test_translator/test_project_translation.py \
+            -k "translate_project_reports_unrepresentable_atomic_fence_contract"
 
       - name: Install Windows DirectX Shader Compiler
         if: runner.os == 'Windows'
@@ -146,8 +156,65 @@ jobs:
           else
             python demos/integrations/mlx/run_mlx_porting.py \
               --mode reduced-frontier \
-              --mlx-root mlx-upstream
+              --mlx-root mlx-upstream \
+              --require-metal-toolchain
           fi
+
+      - name: Verify MLX frontier accounting
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          fence_source = "mlx/backend/metal/kernels/fence.metal"
+          fence_issue = "https://github.com/CrossGL/crosstl/issues/1537"
+          opengl_frontier_sources = {
+              "mlx/backend/metal/kernels/arg_reduce.metal",
+              "mlx/backend/metal/kernels/binary_two.metal",
+              "mlx/backend/metal/kernels/logsumexp.metal",
+              "mlx/backend/metal/kernels/softmax.metal",
+          }
+          payload = json.loads(
+              Path("mlx-upstream/.crosstl-mlx-porting/summary.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+          scope = payload["scope"]
+          if len(scope["cleanFrontierSources"]) != 11:
+              raise SystemExit("expected 11 clean MLX frontier sources")
+          if scope["blockedFrontierSources"] != [fence_source]:
+              raise SystemExit("fence.metal must be the sole blocked frontier source")
+          if scope["blockedFrontierIssues"] != [fence_issue]:
+              raise SystemExit("blocked frontier must track issue #1537")
+          checks = {check["name"]: check for check in payload["checks"]}
+          fence = checks["atomic-fence-contract"]
+          if fence["failedArtifactCount"] != 3 or fence["emittedArtifactCount"] != 0:
+              raise SystemExit("fence contract accounting must be 3 failed, 0 emitted")
+          opengl = checks["opengl-frontier"]
+          if set(opengl["sources"]) != opengl_frontier_sources:
+              raise SystemExit("expected 4 OpenGL toolchain frontier sources")
+          if (
+              opengl["sourceCount"] != 4
+              or opengl["artifactCount"] != 4
+              or opengl["projectDiagnosticCount"] != 0
+          ):
+              raise SystemExit("OpenGL frontier accounting must be 4 sources, 4 artifacts, and 0 project diagnostics")
+          if os.environ["RUNNER_OS"] == "Linux":
+              validated_sources = set(opengl["toolchainValidatedSources"])
+              validation_outputs = set(opengl["nativeValidationOutputs"])
+              if (
+                  opengl["toolchainRequired"] is not True
+                  or opengl["nativeValidationStatus"] != "validated"
+                  or opengl["toolchainValidatedArtifactCount"] != 4
+                  or validated_sources != opengl_frontier_sources
+                  or validation_outputs != opengl_frontier_sources
+              ):
+                  raise SystemExit(
+                      "OpenGL frontier toolchain must validate all 4 source paths"
+                  )
+          PY
 
       - name: Upload MLX project-porting reports
         if: always()

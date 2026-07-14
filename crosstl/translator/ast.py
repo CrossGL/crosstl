@@ -91,6 +91,30 @@ class TypeNode(ASTNode):
     """Base class for all type representations."""
 
 
+class ResourceMemoryQualifierNode(ASTNode):
+    """A resource-memory qualifier with an optional visibility scope."""
+
+    def __init__(self, kind: str, scope: Optional[str] = None, **kwargs):
+        super().__init__(**kwargs)
+        self.kind = str(kind).lower()
+        self.scope = str(scope).lower() if scope is not None else None
+
+    @property
+    def name(self):
+        """Expose the qualifier kind through the common metadata name API."""
+        return self.kind
+
+    def __str__(self):
+        if self.scope is not None:
+            return f"{self.kind}({self.scope})"
+        return self.kind
+
+    def __repr__(self):
+        return (
+            "ResourceMemoryQualifierNode(" f"kind={self.kind!r}, scope={self.scope!r})"
+        )
+
+
 class PrimitiveType(TypeNode):
     """Primitive types (int, float, bool, etc.)."""
 
@@ -181,25 +205,57 @@ class ArrayType(TypeNode):
 class PointerType(TypeNode):
     """Pointer types for languages that support them."""
 
-    def __init__(self, pointee_type: TypeNode, is_mutable: bool = True, **kwargs):
+    def __init__(
+        self,
+        pointee_type: TypeNode,
+        is_mutable: bool = True,
+        address_space: Optional[str] = None,
+        access_mode: Optional[str] = None,
+        resource_qualifiers: List[ResourceMemoryQualifierNode] = None,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self.pointee_type = pointee_type
         self.is_mutable = is_mutable
+        self.address_space = address_space
+        self.access_mode = access_mode
+        self.resource_qualifiers = resource_qualifiers or []
 
     def __repr__(self):
-        return f"PointerType(pointee_type={self.pointee_type}, is_mutable={self.is_mutable})"
+        return (
+            "PointerType("
+            f"pointee_type={self.pointee_type}, is_mutable={self.is_mutable}, "
+            f"address_space={self.address_space!r}, access_mode={self.access_mode!r}, "
+            f"resource_qualifiers={self.resource_qualifiers!r})"
+        )
 
 
 class ReferenceType(TypeNode):
     """Reference types for languages like Rust."""
 
-    def __init__(self, referenced_type: TypeNode, is_mutable: bool = False, **kwargs):
+    def __init__(
+        self,
+        referenced_type: TypeNode,
+        is_mutable: bool = False,
+        address_space: Optional[str] = None,
+        access_mode: Optional[str] = None,
+        resource_qualifiers: List[ResourceMemoryQualifierNode] = None,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self.referenced_type = referenced_type
         self.is_mutable = is_mutable
+        self.address_space = address_space
+        self.access_mode = access_mode
+        self.resource_qualifiers = resource_qualifiers or []
 
     def __repr__(self):
-        return f"ReferenceType(referenced_type={self.referenced_type}, is_mutable={self.is_mutable})"
+        return (
+            "ReferenceType("
+            f"referenced_type={self.referenced_type}, is_mutable={self.is_mutable}, "
+            f"address_space={self.address_space!r}, access_mode={self.access_mode!r}, "
+            f"resource_qualifiers={self.resource_qualifiers!r})"
+        )
 
 
 class FunctionType(TypeNode):
@@ -439,6 +495,7 @@ class StructMemberNode(ASTNode):
         member_type: TypeNode,
         default_value: Optional["ExpressionNode"] = None,
         attributes: List["AttributeNode"] = None,
+        resource_qualifiers: List[ResourceMemoryQualifierNode] = None,
         visibility: str = "public",
         **kwargs,
     ):
@@ -447,6 +504,7 @@ class StructMemberNode(ASTNode):
         self.member_type = member_type
         self.default_value = default_value
         self.attributes = attributes or []
+        self.resource_qualifiers = resource_qualifiers or []
         self.visibility = visibility
 
     def __repr__(self):
@@ -536,6 +594,7 @@ class ParameterNode(ASTNode):
         default_value: Optional["ExpressionNode"] = None,
         attributes: List["AttributeNode"] = None,
         qualifiers: List[str] = None,
+        resource_qualifiers: List[ResourceMemoryQualifierNode] = None,
         is_mutable: bool = False,
         **kwargs,
     ):
@@ -545,6 +604,7 @@ class ParameterNode(ASTNode):
         self.default_value = default_value
         self.attributes = attributes or []
         self.qualifiers = qualifiers or []
+        self.resource_qualifiers = resource_qualifiers or []
         self.is_mutable = is_mutable
 
     def __repr__(self):
@@ -561,6 +621,7 @@ class VariableNode(ASTNode):
         initial_value: Optional["ExpressionNode"] = None,
         attributes: List["AttributeNode"] = None,
         qualifiers: List[str] = None,
+        resource_qualifiers: List[ResourceMemoryQualifierNode] = None,
         is_mutable: bool = True,
         is_type_alias: bool = False,
         visibility: str = "private",
@@ -572,6 +633,7 @@ class VariableNode(ASTNode):
         self.initial_value = initial_value
         self.attributes = attributes or []
         self.qualifiers = qualifiers or []
+        self.resource_qualifiers = resource_qualifiers or []
         self.is_mutable = is_mutable
         self.is_type_alias = is_type_alias
         self.visibility = visibility

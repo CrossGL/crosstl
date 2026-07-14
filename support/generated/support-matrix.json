@@ -22,7 +22,7 @@
         "path": "crosstl/backend/DirectX"
       },
       "signals": {
-        "unsupported_marker_count": 306,
+        "unsupported_marker_count": 333,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/directx_codegen.py",
@@ -123,7 +123,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1179
+        "test_count": 1224
       },
       "translator_codegen": {
         "exists": true,
@@ -152,7 +152,7 @@
         "path": "crosstl/backend/GLSL"
       },
       "signals": {
-        "unsupported_marker_count": 221,
+        "unsupported_marker_count": 242,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
@@ -247,7 +247,7 @@
           "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1333
+        "test_count": 1393
       },
       "translator_codegen": {
         "exists": true,
@@ -524,7 +524,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 533,
+        "unsupported_marker_count": 546,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
@@ -617,7 +617,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 1301
+        "test_count": 1353
       },
       "translator_codegen": {
         "exists": true,
@@ -650,7 +650,7 @@
         "path": "crosstl/backend/SPIRV"
       },
       "signals": {
-        "unsupported_marker_count": 112,
+        "unsupported_marker_count": 115,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
@@ -659,6 +659,14 @@
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
             "text": "project_diagnostic_code = \"project.translate.unsupported-feature\""
+          },
+          {
+            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
+            "text": "class SPIRVAtomicFenceLoweringError(UnsupportedSPIRVFeatureError):"
+          },
+          {
+            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
+            "text": "project_diagnostic_code = \"project.translate.vulkan-atomic-fence-unsupported\""
           },
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
@@ -723,14 +731,6 @@
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
             "text": "def unsupported_call_initializer_binding_error("
-          },
-          {
-            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "return UnsupportedSPIRVFeatureError("
-          },
-          {
-            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "def unsupported_reference_argument_error("
           }
         ]
       },
@@ -745,7 +745,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 1230
+        "test_count": 1234
       },
       "translator_codegen": {
         "exists": true,

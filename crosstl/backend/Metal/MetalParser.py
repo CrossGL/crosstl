@@ -4,6 +4,7 @@ import sys
 
 from .MetalAst import *
 from .MetalLexer import *
+from .preprocessor import DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT
 
 MIN_METAL_PARSE_RECURSION_LIMIT = 10000
 
@@ -279,10 +280,24 @@ class MetalParserError(SyntaxError):
 class MetalParser:
     """Parse Metal tokens into the Metal backend shader AST."""
 
-    def __init__(self, tokens, file_path=None):
+    def __init__(
+        self,
+        tokens,
+        file_path=None,
+        max_template_specializations=None,
+        template_specialization_limit_source=None,
+    ):
         self.tokens = tokens
         self.pos = 0
         self.file_path = file_path
+        self.max_template_specializations = (
+            DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT
+            if max_template_specializations is None
+            else max_template_specializations
+        )
+        self.template_specialization_limit_source = (
+            template_specialization_limit_source or "max_template_specializations"
+        )
         self.current_token = (
             self.tokens[self.pos] if self.pos < len(self.tokens) else ("EOF", None)
         )
@@ -646,7 +661,7 @@ class MetalParser:
             else:
                 self.eat(self.current_token[0])
 
-        return ShaderNode(
+        shader = ShaderNode(
             includes=preprocessors,
             functions=functions,
             structs=structs,
@@ -655,6 +670,11 @@ class MetalParser:
             enums=enums,
             typedefs=typedefs,
         )
+        shader.max_template_specializations = self.max_template_specializations
+        shader.template_specialization_limit_source = (
+            self.template_specialization_limit_source
+        )
+        return shader
 
     def add_global_declaration(self, global_variables, declaration):
         if isinstance(declaration, list):
@@ -836,6 +856,7 @@ class MetalParser:
         return aggregate
 
     def parse_template_declaration(self):
+        start_token = self.current_token
         template_parameters = self.parse_template_prefix()
         template_parameter_defaults = dict(
             getattr(self, "last_template_parameter_defaults", {}) or {}
@@ -867,6 +888,12 @@ class MetalParser:
                     ]
                     struct.template_parameters = template_parameters
                     struct.template_parameter_defaults = template_parameter_defaults
+                    template_location = self.source_span_from_tokens(
+                        start_token, self.tokens[self.pos - 1]
+                    )
+                    struct.template_source_location = template_location
+                    if not getattr(struct, "source_location", None):
+                        struct.source_location = template_location
                 return struct
 
             if not self.is_function_definition():
@@ -891,6 +918,12 @@ class MetalParser:
                 ]
                 function.template_parameters = template_parameters
                 function.template_parameter_defaults = template_parameter_defaults
+                template_location = self.source_span_from_tokens(
+                    start_token, self.tokens[self.pos - 1]
+                )
+                function.template_source_location = template_location
+                if not getattr(function, "source_location", None):
+                    function.source_location = template_location
             return function
         finally:
             if sys.exc_info()[0] is None:
@@ -964,18 +997,30 @@ class MetalParser:
         return parameters
 
     def parse_template_parameter_tokens(self, tokens):
-        for idx, (token_type, value) in enumerate(tokens):
+        declarator_tokens = tokens
+        for idx, (token_type, _value) in enumerate(tokens):
+            if token_type == "EQUALS":
+                declarator_tokens = tokens[:idx]
+                break
+
+        for idx, (token_type, value) in enumerate(declarator_tokens):
             if value == "typename" or token_type == "CLASS":
                 name_idx = idx + 1
                 is_variadic = False
-                if name_idx < len(tokens) and tokens[name_idx][0] == "ELLIPSIS":
+                if (
+                    name_idx < len(declarator_tokens)
+                    and declarator_tokens[name_idx][0] == "ELLIPSIS"
+                ):
                     is_variadic = True
                     name_idx += 1
-                if name_idx < len(tokens) and tokens[name_idx][0] == "IDENTIFIER":
+                if (
+                    name_idx < len(declarator_tokens)
+                    and declarator_tokens[name_idx][0] == "IDENTIFIER"
+                ):
                     kind = f"{value}..." if is_variadic else value
-                    return (kind, tokens[name_idx][1])
-        if len(tokens) >= 2 and tokens[-1][0] == "IDENTIFIER":
-            return ("value", tokens[-1][1])
+                    return (kind, declarator_tokens[name_idx][1])
+        if len(declarator_tokens) >= 2 and declarator_tokens[-1][0] == "IDENTIFIER":
+            return ("value", declarator_tokens[-1][1])
         return None
 
     def template_parameter_default(self, tokens):
@@ -1512,19 +1557,20 @@ class MetalParser:
             return self.parse_using_union_alias(alias_name)
         alias_type, qualifiers = self.parse_type_specifier()
         if self.current_token[0] == "LPAREN":
-            self.parse_parenthesized_parameter_tokens()
+            indirection = self.parse_callable_alias_abstract_indirection()
+            parameters = self.parse_callable_alias_parameters()
             self.eat("SEMICOLON")
             self.register_known_type(alias_name)
-            alias = TypeAliasNode(
+            return CallableTypeAliasNode(
                 alias_type,
                 alias_name,
+                parameters,
+                indirection=indirection,
                 qualifiers=qualifiers,
                 source_location=self.source_span_from_tokens(
                     start_token, self.tokens[self.pos - 1]
                 ),
             )
-            alias.is_function_type = True
-            return alias
         self.eat("SEMICOLON")
         self.register_known_type(alias_name)
         return TypeAliasNode(
@@ -1630,35 +1676,51 @@ class MetalParser:
         else:
             alias_type, qualifiers = self.parse_type_specifier()
         if self.current_token[0] == "LPAREN":
-            alias_name = self.parse_function_typedef_declarator(alias_type)
+            alias_name, indirection = self.parse_function_typedef_declarator()
+            if self.current_token[0] != "LPAREN":
+                self.eat("SEMICOLON")
+                self.register_known_type(alias_name)
+                return TypeAliasNode(
+                    self.apply_declarator_type_suffix(alias_type, indirection),
+                    alias_name,
+                    qualifiers=qualifiers,
+                    declarator_type_suffix=indirection,
+                    declarator_type_suffix_grouped=bool(indirection),
+                    source_location=self.source_span_from_tokens(
+                        start_token, self.tokens[self.pos - 1]
+                    ),
+                )
+            parameters = self.parse_callable_alias_parameters()
             self.eat("SEMICOLON")
             self.register_known_type(alias_name)
-            return TypeAliasNode(
+            return CallableTypeAliasNode(
                 alias_type,
                 alias_name,
+                parameters,
+                indirection=indirection,
                 qualifiers=qualifiers,
+                declarator_type_suffix_grouped=bool(indirection),
                 source_location=self.source_span_from_tokens(
                     start_token, self.tokens[self.pos - 1]
                 ),
             )
         alias_name, array_sizes, type_suffix, grouped_suffix = self.parse_declarator()
         if self.current_token[0] == "LPAREN":
-            self.parse_parenthesized_parameter_tokens()
+            parameters = self.parse_callable_alias_parameters()
             self.eat("SEMICOLON")
             self.register_known_type(alias_name)
-            alias = TypeAliasNode(
+            return CallableTypeAliasNode(
                 alias_type,
                 alias_name,
+                parameters,
+                indirection=type_suffix,
                 qualifiers=qualifiers,
                 array_sizes=array_sizes,
-                declarator_type_suffix=type_suffix,
                 declarator_type_suffix_grouped=grouped_suffix,
                 source_location=self.source_span_from_tokens(
                     start_token, self.tokens[self.pos - 1]
                 ),
             )
-            alias.is_function_type = True
-            return alias
         self.eat("SEMICOLON")
         self.register_known_type(alias_name)
         return TypeAliasNode(
@@ -1747,16 +1809,37 @@ class MetalParser:
         self.register_known_type(alias_name)
         return TypeAliasNode(f"union {tag_name}", alias_name)
 
-    def parse_function_typedef_declarator(self, return_type):
+    def parse_function_typedef_declarator(self):
         self.eat("LPAREN")
+        indirection = ""
         while self.current_token[0] in {"MULTIPLY", "BITWISE_AND"}:
+            indirection += self.declarator_pointer_token_suffix(self.current_token[0])
             self.eat(self.current_token[0])
         alias_name = self.current_token[1]
         self.eat("IDENTIFIER")
         self.eat("RPAREN")
-        if self.current_token[0] == "LPAREN":
-            self.parse_parenthesized_parameter_tokens()
-        return alias_name
+        return alias_name, indirection
+
+    def parse_callable_alias_abstract_indirection(self):
+        if self.current_token[0] != "LPAREN" or self.peek(1)[0] not in {
+            "MULTIPLY",
+            "BITWISE_AND",
+        }:
+            return ""
+
+        self.eat("LPAREN")
+        indirection = ""
+        while self.current_token[0] in {"MULTIPLY", "BITWISE_AND"}:
+            indirection += self.declarator_pointer_token_suffix(self.current_token[0])
+            self.eat(self.current_token[0])
+        self.eat("RPAREN")
+        return indirection
+
+    def parse_callable_alias_parameters(self):
+        self.eat("LPAREN")
+        parameters = self.parse_parameters()
+        self.eat("RPAREN")
+        return parameters
 
     def parse_parenthesized_parameter_tokens(self):
         self.eat("LPAREN")
@@ -2885,7 +2968,7 @@ class MetalParser:
             qualifier = self.current_token[1]
             self.eat(self.current_token[0])
 
-        return_type, _return_qualifiers = self.parse_type_specifier(
+        return_type, return_qualifiers = self.parse_type_specifier(
             attributes=attributes
         )
 
@@ -2952,6 +3035,7 @@ class MetalParser:
             attributes=attributes,
             qualifier=qualifier,  # Also store as single qualifier for backward compatibility
         )
+        function.declaration_qualifiers = list(return_qualifiers)
         self.pop_declaration_context()
         return function
 

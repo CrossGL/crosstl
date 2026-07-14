@@ -43,15 +43,23 @@ from crosstl.translator.ast import (
     create_legacy_shader_node,
 )
 from crosstl.translator.codegen.directx_codegen import (
+    DirectXAtomicFenceLoweringError,
     DirectXCooperativeMatrixUnsupportedError,
+    DirectXPrivatePointerParameterError,
+    DirectXResourcePointerArrayError,
     DirectXSemanticArraySizeError,
+    DirectXTrailingZeroBuiltinError,
     DirectXUnresolvedSourceTypeError,
+    DirectXWorkgroupPointerError,
     HLSLCodeGen,
 )
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 from tests.test_backend.test_SPIRV.test_codegen import (
     SPIRV_TOOLS_GLPERVERTEX_ACCESS_CHAIN_ASSEMBLY,
+)
+from tests.test_translator.test_project_translation import (
+    assert_directx_compute_validates_if_available,
 )
 
 
@@ -81,6 +89,165 @@ def generate_code(ast_node):
     """
     codegen = HLSLCodeGen()
     return codegen.generate(ast_node)
+
+
+HLSL_M_PI_F_LITERAL = "3.14159265358979323846264338327950288f"
+HLSL_M_PI_LITERAL = "3.14159265358979323846264338327950288L"
+
+
+def test_hlsl_unresolved_standard_math_identifier_uses_exact_float_literal():
+    assert (
+        HLSLCodeGen().generate_expression(IdentifierNode("M_PI_F"))
+        == HLSL_M_PI_F_LITERAL
+    )
+
+
+def test_hlsl_unresolved_standard_math_variable_uses_exact_double_literal():
+    assert (
+        HLSLCodeGen().generate_expression(VariableNode("M_PI", PrimitiveType("double")))
+        == HLSL_M_PI_LITERAL
+    )
+
+
+@pytest.mark.parametrize(
+    "node",
+    [
+        IdentifierNode("M_TAU"),
+        VariableNode("M_TAU_F", PrimitiveType("float")),
+    ],
+    ids=["identifier", "variable"],
+)
+def test_hlsl_unknown_math_identifier_is_preserved(node):
+    assert HLSLCodeGen().generate_expression(node) == node.name
+
+
+@pytest.mark.parametrize(
+    ("source", "declaration"),
+    [
+        (
+            """
+            shader StandardMathParameterShadow {
+                float read_pi(float M_PI_F) {
+                    return M_PI_F;
+                }
+            }
+            """,
+            "float read_pi(float M_PI_F)",
+        ),
+        (
+            """
+            shader StandardMathLocalShadow {
+                float read_pi() {
+                    float M_PI_F = 2.0;
+                    return M_PI_F;
+                }
+            }
+            """,
+            "float M_PI_F = 2.0;",
+        ),
+        (
+            """
+            shader StandardMathGlobalShadow {
+                float M_PI_F;
+
+                float read_pi() {
+                    return M_PI_F;
+                }
+            }
+            """,
+            "float M_PI_F;",
+        ),
+    ],
+    ids=["parameter", "local", "global"],
+)
+def test_hlsl_standard_math_constant_respects_variable_shadowing(source, declaration):
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert declaration in generated
+    assert "return M_PI_F;" in generated
+    assert HLSL_M_PI_F_LITERAL not in generated
+
+
+def test_hlsl_standard_math_constant_respects_constant_enum_and_alias_shadows():
+    constant_source = """
+    shader StandardMathConstantShadow {
+        const float M_PI_F = 2.0;
+
+        float read_pi() {
+            return M_PI_F;
+        }
+    }
+    """
+    enum_source = """
+    shader StandardMathEnumShadow {
+        enum StandardValue { M_PI_F }
+
+        int read_pi() {
+            return M_PI_F;
+        }
+    }
+    """
+
+    constant_hlsl = HLSLCodeGen().generate(crosstl.translator.parse(constant_source))
+    enum_hlsl = HLSLCodeGen().generate(crosstl.translator.parse(enum_source))
+    aliased_codegen = HLSLCodeGen()
+    aliased_codegen.current_identifier_aliases["M_PI_F"] = "source_pi"
+
+    assert "static const float M_PI_F = 2.0;" in constant_hlsl
+    assert "return M_PI_F;" in constant_hlsl
+    assert HLSL_M_PI_F_LITERAL not in constant_hlsl
+    assert "static const int StandardValue_M_PI_F = 0;" in enum_hlsl
+    assert "return M_PI_F;" in enum_hlsl
+    assert HLSL_M_PI_F_LITERAL not in enum_hlsl
+    assert aliased_codegen.generate_expression(IdentifierNode("M_PI_F")) == "source_pi"
+
+
+def test_hlsl_standard_math_constant_native_compute_validates(tmp_path):
+    source = """
+    shader StandardMathNativeCompute {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float> output @ binding(0)) {
+                output[0] = M_PI_F;
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert f"output[0] = {HLSL_M_PI_F_LITERAL};" in generated
+    assert "M_PI_F" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_standard_math_constant_metal_proxy_compute_validates(tmp_path):
+    source = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void write_pi(
+        device float* output [[buffer(0)]],
+        uint index [[thread_position_in_grid]]) {
+        output[index] = M_PI_F;
+    }
+    """
+    shader_path = tmp_path / "standard_math_constant.metal"
+    shader_path.write_text(source, encoding="utf-8")
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert f"output[index] = {HLSL_M_PI_F_LITERAL};" in generated
+    assert "M_PI_F" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
 
 
 def test_hlsl_type_node_renders_expression_generic_arguments():
@@ -1578,6 +1745,145 @@ def test_directx_synchronization_builtins_lower_to_hlsl_intrinsics():
     assert "memoryBarrierShared();" not in generated_code
     assert "deviceMemoryBarrier();" not in generated_code
     assert "memoryBarrierBuffer();" not in generated_code
+
+
+def test_directx_atomic_thread_fence_rejects_seq_cst_system_contract():
+    shader = """
+    shader AtomicThreadFenceSystemScope {
+        compute {
+            void main() {
+                atomicThreadFence(mem_device, memory_order_seq_cst,
+                                  thread_scope_system);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(shader))
+    call = next(node for node in ast.walk() if isinstance(node, FunctionCallNode))
+    source_location = {"line": 6, "column": 17}
+    call.source_location = source_location
+
+    with pytest.raises(DirectXAtomicFenceLoweringError) as exc_info:
+        generate_code(ast)
+
+    diagnostic = exc_info.value
+    assert (
+        diagnostic.project_diagnostic_code
+        == "project.translate.directx-atomic-fence-unsupported"
+    )
+    assert diagnostic.missing_capabilities == (
+        "directx.atomic-thread-fence-contract-lowering",
+    )
+    assert diagnostic.reason == "unsupported-system-thread-scope"
+    assert diagnostic.memory_flags == "mem_device"
+    assert diagnostic.memory_order == "memory_order_seq_cst"
+    assert diagnostic.thread_scope == "thread_scope_system"
+    assert diagnostic.source_location == source_location
+    assert "flags=mem_device" in str(diagnostic)
+    assert "order=memory_order_seq_cst" in str(diagnostic)
+    assert "scope=thread_scope_system" in str(diagnostic)
+
+
+@pytest.mark.parametrize(
+    ("memory_flags", "memory_order", "thread_scope", "reason"),
+    [
+        (
+            "mem_global",
+            "memory_order_acq_rel",
+            "thread_scope_threadgroup",
+            "unknown-memory-flags",
+        ),
+        (
+            "mem_threadgroup",
+            "memory_order_consume",
+            "thread_scope_threadgroup",
+            "unknown-memory-order",
+        ),
+        (
+            "mem_threadgroup",
+            "memory_order_acq_rel",
+            "thread_scope_queue_family",
+            "unknown-thread-scope",
+        ),
+    ],
+)
+def test_directx_atomic_thread_fence_rejects_unknown_operands(
+    memory_flags, memory_order, thread_scope, reason
+):
+    shader = f"""
+    shader UnknownAtomicThreadFenceOperand {{
+        compute {{
+            void main() {{
+                atomicThreadFence(
+                    {memory_flags}, {memory_order}, {thread_scope}
+                );
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(DirectXAtomicFenceLoweringError) as exc_info:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == reason
+    assert diagnostic.memory_flags == memory_flags
+    assert diagnostic.memory_order == memory_order
+    assert diagnostic.thread_scope == thread_scope
+    assert diagnostic.missing_capabilities == (
+        "directx.atomic-thread-fence-contract-lowering",
+    )
+
+
+def test_directx_atomic_thread_fence_lowers_exact_threadgroup_acq_rel_subset(tmp_path):
+    shader = """
+    shader AtomicThreadFenceThreadgroup {
+        compute {
+            void main() {
+                atomicThreadFence(
+                    mem_threadgroup,
+                    memory_order_acq_rel,
+                    thread_scope_threadgroup
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert generated_code.count("GroupMemoryBarrier();") == 1
+    assert "DeviceMemoryBarrier();" not in generated_code
+    assert "AllMemoryBarrier();" not in generated_code
+    assert "atomicThreadFence" not in generated_code
+    assert "memory_order_acq_rel" not in generated_code
+    assert "thread_scope_threadgroup" not in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated_code, tmp_path)
+
+
+def test_directx_user_defined_atomic_thread_fence_is_not_lowered():
+    shader = """
+    shader AtomicThreadFenceShadowing {
+        compute {
+            void atomicThreadFence(int flags, int order, int scope) {
+                return;
+            }
+
+            void main() {
+                atomicThreadFence(1, 2, 3);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "void atomicThreadFence(int flags, int order, int scope)" in generated_code
+    assert "atomicThreadFence(1, 2, 3);" in generated_code
+    assert "GroupMemoryBarrier();" not in generated_code
+    assert "DeviceMemoryBarrier();" not in generated_code
+    assert "AllMemoryBarrier();" not in generated_code
 
 
 def test_directx_workgroup_execution_barrier_lowers_without_intrinsic_leak():
@@ -3929,6 +4235,77 @@ def test_hlsl_metal_matmul_pointer_params_lower_to_resources(tmp_path):
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
 
 
+def test_hlsl_metal_constant_array_helpers_preserve_resource_parameters(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void read_stride(
+        constant const int64_t strides[3],
+        device int64_t* result) {
+      result[0] = strides[1];
+    }
+
+    void forward_stride(
+        constant const int64_t strides[3],
+        device int64_t* result) {
+      read_stride(strides, result);
+    }
+
+    kernel void apply_stride(
+        constant const int64_t strides[3] [[buffer(0)]],
+        device int64_t* result [[buffer(1)]]) {
+      forward_stride(strides, result);
+    }
+    """
+    shader_path = tmp_path / "constant_array_helper.metal"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "StructuredBuffer<int64_t> strides : register(t0);" in generated_code
+    assert "RWStructuredBuffer<int64_t> result : register(u1);" in generated_code
+    assert (
+        "void read_stride(StructuredBuffer<int64_t> strides, "
+        "RWStructuredBuffer<int64_t> result)" in generated_code
+    )
+    assert (
+        "void forward_stride(StructuredBuffer<int64_t> strides, "
+        "RWStructuredBuffer<int64_t> result)" in generated_code
+    )
+    assert "read_stride(strides, result);" in generated_code
+    assert "forward_stride(strides, result);" in generated_code
+    assert "int64_t strides[3]" not in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+    dxc = shutil.which("dxc")
+    if dxc is not None:
+        generated_path = tmp_path / "constant_array_helper.hlsl"
+        generated_path.write_text(generated_code, encoding="utf-8")
+        output_path = tmp_path / "constant_array_helper.dxil"
+        result = subprocess.run(
+            [
+                dxc,
+                "-T",
+                "cs_6_2",
+                "-E",
+                "CSMain",
+                str(generated_path),
+                "-Fo",
+                str(output_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_hlsl_metal_scalar_constant_kernel_params_promote_to_cbuffers(tmp_path):
     shader = """
     #include <metal_stdlib>
@@ -4105,6 +4482,206 @@ def test_hlsl_readonly_resource_pointer_root_can_advance(tmp_path):
     assert "float value = sourceValues[uint(sourceValues_offset)];" in generated_code
     assert "sourceValues +=" not in generated_code
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
+def test_hlsl_metal_fixed_device_pointer_array_lowers_to_bounded_offsets(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    template <typename T, int Count>
+    void read_rows(
+        const device T* input,
+        device T* output,
+        constant int& row_stride) {
+      const device T* rows[Count];
+      for (int i = 0; i < Count; ++i) {
+        rows[i] = input + i * row_stride;
+      }
+      for (int i = 0; i < Count; ++i) {
+        output[i] = rows[i][0];
+      }
+      output[Count] = rows[Count - 1][1];
+    }
+
+    kernel void pointer_array(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]],
+        constant int& row_stride [[buffer(2)]]) {
+      read_rows<float, 4>(input, output, row_stride);
+    }
+    """
+    shader_path = tmp_path / "pointer_array.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "int64_t rows_offsets[4];" in generated
+    assert "rows_offsets[uint(i)] = int64_t((i * row_stride));" in generated
+    assert "output[i] = input[uint(rows_offsets[uint(i)])];" in generated
+    assert "rows_offsets[uint((4 - 1))]" in generated
+    assert "float* rows" not in generated
+    assert "input +" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+
+
+def test_hlsl_metal_mutable_device_pointer_array_preserves_stores(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void write_rows(device float* output, constant int& row_stride) {
+      device float* rows[2];
+      for (int i = 0; i < 2; ++i) {
+        rows[i] = output + i * row_stride;
+      }
+      for (int i = 0; i < 2; ++i) {
+        rows[i][0] = float(i);
+      }
+    }
+
+    kernel void pointer_array_store(
+        device float* output [[buffer(0)]],
+        constant int& row_stride [[buffer(1)]]) {
+      write_rows(output, row_stride);
+    }
+    """
+    shader_path = tmp_path / "pointer_array_store.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "int64_t rows_offsets[2];" in generated
+    assert "output[uint(rows_offsets[uint(i)])] = float(i);" in generated
+    assert "float* rows" not in generated
+    assert "output +" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+
+
+def test_hlsl_metal_device_pointer_array_rejects_unbounded_selection(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void read_row(
+        const device float* input,
+        device float* output,
+        int selected) {
+      const device float* rows[2];
+      for (int i = 0; i < 2; ++i) {
+        rows[i] = input + i * 4;
+      }
+      output[0] = rows[selected][0];
+    }
+
+    kernel void pointer_array_unbounded(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]],
+        constant int& selected [[buffer(2)]]) {
+      read_row(input, output, selected);
+    }
+    """
+    shader_path = tmp_path / "pointer_array_unbounded.metal"
+    shader_path.write_text(shader)
+
+    with pytest.raises(DirectXResourcePointerArrayError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    diagnostic = excinfo.value
+    assert diagnostic.array_name == "rows"
+    assert diagnostic.address_space == "device"
+    assert diagnostic.reason == "index-unproven"
+
+
+def test_hlsl_metal_device_pointer_array_rejects_dynamic_backing_root(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void read_rows(
+        const device float* left,
+        const device float* right,
+        device float* output) {
+      const device float* rows[2];
+      for (int i = 0; i < 2; ++i) {
+        rows[i] = (i == 0) ? left : right;
+      }
+      for (int i = 0; i < 2; ++i) {
+        output[i] = rows[i][0];
+      }
+    }
+
+    kernel void pointer_array_roots(
+        const device float* left [[buffer(0)]],
+        const device float* right [[buffer(1)]],
+        device float* output [[buffer(2)]]) {
+      read_rows(left, right, output);
+    }
+    """
+    shader_path = tmp_path / "pointer_array_roots.metal"
+    shader_path.write_text(shader)
+
+    with pytest.raises(DirectXResourcePointerArrayError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    diagnostic = excinfo.value
+    assert diagnostic.array_name == "rows"
+    assert diagnostic.address_space == "device"
+    assert diagnostic.reason == "backing-contract-unproven"
+
+
+def test_hlsl_metal_device_pointer_array_rejects_element_escape(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void read_row(const device float* input, device float* output) {
+      const device float* rows[2];
+      for (int i = 0; i < 2; ++i) {
+        rows[i] = input + i * 4;
+      }
+      const device float* selected = rows[0];
+      output[0] = selected[0];
+    }
+
+    kernel void pointer_array_escape(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+      read_row(input, output);
+    }
+    """
+    shader_path = tmp_path / "pointer_array_escape.metal"
+    shader_path.write_text(shader)
+
+    with pytest.raises(DirectXResourcePointerArrayError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    assert excinfo.value.reason == "pointer-element-escape"
 
 
 def test_hlsl_resource_pointer_alias_rejects_readonly_write():
@@ -9110,6 +9687,83 @@ def test_generic_function_call_emits_concrete_specialization():
     assert "T::one" not in generated_code
 
 
+def test_hlsl_forward_declares_helper_overloads_before_definitions():
+    shader = """
+    shader HelperOverloadVisibility {
+        fragment {
+            vec4 linearToSrgb(vec4 linear) {
+                vec3 rgb = linearToSrgb(linear.rgb);
+                return vec4(rgb, linear.a);
+            }
+
+            vec3 linearToSrgb(vec3 linear) {
+                return vec3(
+                    linearToSrgb(linear.r),
+                    linearToSrgb(linear.g),
+                    linearToSrgb(linear.b)
+                );
+            }
+
+            float linearToSrgb(float linear) {
+                return linear;
+            }
+
+            vec4 main(vec4 color @ COLOR0) @ gl_FragColor {
+                return linearToSrgb(color);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    first_definition = generated_code.index("float4 linearToSrgb(float4 linear_) {")
+    for declaration in (
+        "float4 linearToSrgb(float4 linear_);",
+        "float3 linearToSrgb(float3 linear_);",
+        "float linearToSrgb(float linear_);",
+    ):
+        assert generated_code.index(declaration) < first_definition
+    assert "float3 rgb = linearToSrgb(linear_.rgb);" in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
+def test_hlsl_orders_late_array_helper_overloads_before_caller(tmp_path):
+    shader = """
+    shader LateArrayHelperOverloads {
+        void call_helper(inout float values[3]) {
+            update_u3c3_u3e(values);
+        }
+
+        void update_3(inout float values[3]) {
+            values[0] = 1.0;
+        }
+
+        void update_3(inout float values[5]) {
+            values[0] = 2.0;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                float values[3];
+                call_helper(values);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    caller_index = generated_code.index("void call_helper(inout float values[3])")
+    assert generated_code.index("void update_3(inout float values[3])") < caller_index
+    assert generated_code.index("void update_3(inout float values[5])") < caller_index
+    assert "update_3(values);" in generated_code
+    assert "update_u3c3_u3e" not in generated_code
+    assert_directx_compute_validates_if_available(generated_code, tmp_path)
+
+
 def test_generic_struct_concrete_constructor_and_member_access():
     shader = """
     shader GenericStructConcrete {
@@ -10146,6 +10800,241 @@ def test_hlsl_first_bit_builtins_lower_to_native_intrinsics():
     assert "findMSB(" not in generated_code
     assert "uint firstbitlow = tid.x;" not in generated_code
     assert "uint firstbithigh = tid.y;" not in generated_code
+
+
+def test_hlsl_clang_trailing_zero_builtins_preserve_width_and_signedness():
+    shader = """
+    shader HlslClangTrailingZeroBuiltins {
+        int probe(
+            int signed32,
+            uint unsigned32,
+            int64_t signed64,
+            uint64_t unsigned64) {
+            let signed32Count = __builtin_ctz(signed32);
+            let unsigned32Count = __builtin_ctz(unsigned32);
+            let signed64Count = __builtin_ctzl(signed64);
+            let unsigned64Count = __builtin_ctzll(unsigned64);
+            let wideLiteralCount = __builtin_ctzll(4294967296);
+            return signed32Count + unsigned32Count
+                + signed64Count + unsigned64Count + wideLiteralCount;
+        }
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "int __crossgl_ctz_uint(uint value)" in generated_code
+    assert "return value == 0u ? -1 : int(firstbitlow(value));" in generated_code
+    assert "int __crossgl_ctz_uint64_t(uint64_t value)" in generated_code
+    assert "uint lowBits = uint(value);" in generated_code
+    assert "uint highBits = uint(value >> 32);" in generated_code
+    assert (
+        "return highBits == 0u ? -1 : (32 + int(firstbitlow(highBits)));"
+        in generated_code
+    )
+    assert "int signed32Count = __crossgl_ctz_uint(uint(signed32));" in generated_code
+    assert "int unsigned32Count = __crossgl_ctz_uint(unsigned32);" in generated_code
+    assert (
+        "int signed64Count = __crossgl_ctz_uint64_t(uint64_t(signed64));"
+        in generated_code
+    )
+    assert "int unsigned64Count = __crossgl_ctz_uint64_t(unsigned64);" in generated_code
+    assert (
+        "int wideLiteralCount = __crossgl_ctz_uint64_t(4294967296ull);"
+        in generated_code
+    )
+    assert "__builtin_ctz" not in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
+def test_hlsl_clang_trailing_zero_builtins_respect_function_and_lexical_shadows():
+    shader = """
+    shader HlslClangTrailingZeroShadows {
+        int __builtin_ctz(uint value) {
+            return int(value) + 7;
+        }
+
+        int ctz(uint value) {
+            return int(value) + 11;
+        }
+
+        int __builtin_ctz_extra(uint value) {
+            return int(value) + 13;
+        }
+
+        int callFunctions(uint value) {
+            return __builtin_ctz(value) + ctz(value)
+                + __builtin_ctz_extra(value);
+        }
+
+        int callLexicalShadow(uint __builtin_ctzl, uint value) {
+            return __builtin_ctzl(value);
+        }
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "int __builtin_ctz(uint value)" in generated_code
+    assert "int ctz(uint value)" in generated_code
+    assert "int __builtin_ctz_extra(uint value)" in generated_code
+    assert "return __builtin_ctzl(value);" in generated_code
+    assert "__crossgl_ctz_" not in generated_code
+    assert "firstbitlow(" not in generated_code
+
+
+def test_hlsl_clang_trailing_zero_helper_avoids_user_name_collision():
+    shader = """
+    shader HlslClangTrailingZeroHelperCollision {
+        int __crossgl_ctz_uint(uint value) {
+            return int(value) + 1;
+        }
+
+        int probe(uint value) {
+            return __builtin_ctz(value);
+        }
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "int __crossgl_ctz_uint(uint value)" in generated_code
+    assert "int __crossgl_ctz_uint_(uint value)" in generated_code
+    assert "return __crossgl_ctz_uint_(value);" in generated_code
+    assert "return (int(value) + 1);" in generated_code
+
+
+@pytest.mark.parametrize(
+    ("operand_type", "diagnostic_type", "reason"),
+    [
+        pytest.param("float", "float", "unsupported-operand-type", id="float"),
+        pytest.param("uvec2", "uint2", "unsupported-operand-shape", id="vector"),
+        pytest.param("ushort", "ushort", "unsupported-integer-width", id="narrow"),
+    ],
+)
+def test_hlsl_clang_trailing_zero_builtin_rejects_unsupported_operands(
+    operand_type, diagnostic_type, reason
+):
+    shader = f"""
+    shader HlslInvalidClangTrailingZeroOperand {{
+        int probe({operand_type} value) {{
+            return __builtin_ctz(value);
+        }}
+
+        compute {{
+            void main() {{}}
+        }}
+    }}
+    """
+
+    with pytest.raises(DirectXTrailingZeroBuiltinError) as exc_info:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.directx-trailing-zero-unsupported"
+    )
+    assert diagnostic.missing_capabilities == (
+        "directx.trailing-zero-builtin-lowering",
+    )
+    assert diagnostic.builtin_name == "__builtin_ctz"
+    assert diagnostic.operand_type == diagnostic_type
+    assert diagnostic.reason == reason
+
+
+@pytest.mark.parametrize("arguments", ["", "left, right"], ids=["zero", "two"])
+def test_hlsl_clang_trailing_zero_builtin_rejects_invalid_arity(arguments):
+    shader = f"""
+    shader HlslInvalidClangTrailingZeroArity {{
+        int probe(uint left, uint right) {{
+            return __builtin_ctz({arguments});
+        }}
+
+        compute {{
+            void main() {{}}
+        }}
+    }}
+    """
+
+    with pytest.raises(DirectXTrailingZeroBuiltinError) as exc_info:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert exc_info.value.reason == "invalid-arity"
+    assert "requires exactly 1 scalar integer operand" in str(exc_info.value)
+
+
+def test_hlsl_clang_trailing_zero_unresolved_type_reports_source_location():
+    shader = """
+    shader HlslUnresolvedClangTrailingZeroOperand {
+        int probe() {
+            return __builtin_ctz(missingValue);
+        }
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+    ast = crosstl.translator.parse(shader)
+    call = next(node for node in ast.walk() if isinstance(node, FunctionCallNode))
+    source_location = {"line": 4, "column": 20}
+    call.source_location = source_location
+
+    with pytest.raises(DirectXTrailingZeroBuiltinError) as exc_info:
+        HLSLCodeGen().generate(ast)
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == "unresolved-operand-type"
+    assert diagnostic.operand_type is None
+    assert diagnostic.source_location == source_location
+    assert "could not resolve source type metadata" in str(diagnostic)
+
+
+def test_hlsl_clang_trailing_zero_metal_proxy_validates_natively(tmp_path):
+    source = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void write_trailing_zero_counts(
+        device const ulong* input [[buffer(0)]],
+        device int* output [[buffer(1)]],
+        uint index [[thread_position_in_grid]]) {
+        uint dynamic32 = index | 8u;
+        ulong dynamic64 = input[index];
+        output[(index * 4u) + 0u] = __builtin_ctz(dynamic32);
+        output[(index * 4u) + 1u] = __builtin_ctzl(dynamic64);
+        output[(index * 4u) + 2u] = __builtin_ctzll(dynamic64);
+        output[(index * 4u) + 3u] = __builtin_ctz(8u);
+    }
+    """
+    shader_path = tmp_path / "clang_trailing_zero.metal"
+    shader_path.write_text(source, encoding="utf-8")
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "__builtin_ctz" not in generated_code
+    assert "__crossgl_ctz_uint(dynamic32)" in generated_code
+    assert "__crossgl_ctz_uint64_t(dynamic64)" in generated_code
+    assert "__crossgl_ctz_uint(8u)" in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated_code, tmp_path)
 
 
 def test_hlsl_user_defined_bitfield_reverse_name_is_not_lowered():
@@ -17362,8 +18251,15 @@ def test_directx_wave_intrinsic_infers_pointer_index_element_type():
 
     generated = generate_code(parse_code(tokenize_code(code)))
 
-    assert "void reduceValues(inout float values[4], uint index)" in generated
-    assert "values[index] = WaveActiveSum(values[index]);" in generated
+    assert (
+        "void reduceValues(inout float values[4], int values_base, uint index)"
+        in generated
+    )
+    assert (
+        "values[(values_base + index)] = "
+        "WaveActiveSum(values[(values_base + index)]);" in generated
+    )
+    assert "reduceValues(values, 0, 0);" in generated
 
 
 def test_directx_wave_intrinsics_infer_let_result_types():
@@ -36649,10 +37545,434 @@ def test_hlsl_private_pointer_helper_uses_fixed_local_array_extent():
 
     generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "uint sum4(inout uint values[4])" in generated
-    assert "total += values[i];" in generated
+    assert "uint sum4(inout uint values[4], int values_base)" in generated
+    assert "total += values[(values_base + i)];" in generated
+    assert "sum4(values, 0)" in generated
     assert "uint8_t*" not in generated
     assert "uint8 *" not in generated
+
+
+def test_hlsl_private_pointer_view_overloads_exact_and_offset_backings(tmp_path):
+    shader = """
+    shader PrivatePointerViewOverloads {
+        void fill5(thread float* values) {
+            values[0] = 3.0;
+            values[4] = 7.0;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                float exact[5];
+                float backing[10];
+                fill5(exact);
+                fill5(backing + 5);
+                float observed = exact[0] + backing[5] + backing[9];
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "void fill5(inout float values[5], int values_base);" in generated
+    assert "void fill5(inout float values[10], int values_base);" in generated
+    assert generated.count("void fill5(inout float values[5], int values_base) {") == 1
+    assert generated.count("void fill5(inout float values[10], int values_base) {") == 1
+    assert "void fill5(inout float values[5], int values_base)" in generated
+    assert "void fill5(inout float values[10], int values_base)" in generated
+    assert "values[(values_base + 0)] = 3.0;" in generated
+    assert "values[(values_base + 4)] = 7.0;" in generated
+    assert "fill5(exact, 0);" in generated
+    assert "fill5(backing, 5);" in generated
+    assert "float observed = ((exact[0] + backing[5]) + backing[9]);" in generated
+    assert "backing + 5" not in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_private_scalar_pointer_forwards_caller_visible_write():
+    shader = """
+    shader PrivateScalarPointer {
+        void increment(thread int* value) {
+            (*value) += 1;
+        }
+
+        void forward(thread int* value) {
+            increment(value);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                int value = 4;
+                forward(&value);
+                int observed = value;
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "void increment(inout int value)" in generated
+    assert "void forward(inout int value)" in generated
+    assert "value += 1;" in generated
+    assert "increment(value);" in generated
+    assert "forward(value);" in generated
+    assert "int observed = value;" in generated
+    assert "int*" not in generated
+    assert "&value" not in generated
+
+
+def test_hlsl_private_pointer_view_forwards_backing_and_composes_offset():
+    shader = """
+    shader ForwardedPrivatePointerView {
+        void write_pair(thread uint* values) {
+            values[0] = 11;
+            values[1] = 13;
+        }
+
+        void forward(thread uint* values) {
+            write_pair(values + 2);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                uint backing[8];
+                forward(backing + 3);
+                uint observed = backing[5] + backing[6];
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "void forward(inout uint values[8], int values_base)" in generated
+    assert "void write_pair(inout uint values[8], int values_base)" in generated
+    assert "forward(backing, 3);" in generated
+    assert "write_pair(values, (values_base + 2));" in generated
+    assert "values[(values_base + 0)] = 11;" in generated
+    assert "values[(values_base + 1)] = 13;" in generated
+    assert "uint observed = (backing[5] + backing[6]);" in generated
+    assert "values + 2" not in generated
+    assert "backing + 3" not in generated
+
+
+def test_hlsl_private_pointer_view_rejects_constant_out_of_bounds_slice():
+    shader = """
+    shader OutOfBoundsPrivatePointerView {
+        void fill5(thread float* values) {
+            values[4] = 1.0;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                float backing[5];
+                fill5(backing + 1);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        DirectXPrivatePointerParameterError,
+        match=(
+            "private pointer view 'fill5.values' requires elements 1 through 5, "
+            "but backing array 'backing' has extent 5"
+        ),
+    ) as excinfo:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert excinfo.value.reason == "view-out-of-bounds"
+
+
+@pytest.mark.parametrize("offset", ["offset", "offset++"])
+def test_hlsl_private_pointer_view_rejects_unprovable_offset(offset):
+    shader = f"""
+    shader UnprovablePrivatePointerView {{
+        void fill(thread float* values) {{
+            values[0] = 1.0;
+        }}
+
+        void dispatch(int offset) {{
+            float backing[5];
+            fill(backing + {offset});
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        DirectXPrivatePointerParameterError,
+        match="cannot prove the private pointer view offset",
+    ) as excinfo:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert excinfo.value.reason in {
+        "side-effecting-view-offset",
+        "unprovable-view-offset",
+    }
+
+
+def test_hlsl_workgroup_pointer_aliases_compose_offsets_and_forward_writes(tmp_path):
+    shader = """
+    shader WorkgroupPointerViews {
+        void update(threadgroup float2* values, uint index) {
+            values[index] = values[index] + float2(1.0, 2.0);
+        }
+
+        void forward(threadgroup float2* values, uint index) {
+            update(values + 2, index);
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint lid @ gl_LocalInvocationIndex) {
+                threadgroup float2 storage[64];
+                threadgroup float2* first = &storage[lid];
+                threadgroup float2* second = first + 5;
+                second = first + 7;
+                forward(second, lid);
+                second[1] = storage[0];
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "groupshared float2 main_storage[64];" in generated
+    assert (
+        "void update(inout float2 values[64], int values_offset, uint index)"
+        in generated
+    )
+    assert (
+        "void forward(inout float2 values[64], int values_offset, uint index)"
+        in generated
+    )
+    assert "values[uint((values_offset + index))] =" in generated
+    assert "update(values, int((values_offset + 2)), index);" in generated
+    assert "int first_offset = int(lid);" in generated
+    assert "int second_offset = int((first_offset + 5));" in generated
+    assert "second_offset = int((first_offset + 7));" in generated
+    assert "forward(main_storage, int(second_offset), lid);" in generated
+    assert "main_storage[uint((second_offset + 1))] = main_storage[0];" in generated
+    assert "groupshared float2*" not in generated
+    assert "float2*" not in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_workgroup_pointer_variants_preserve_lexical_shadowing(tmp_path):
+    shader = """
+    shader WorkgroupPointerShadowing {
+        void update(threadgroup float* values) {
+            values[0] += 1.0;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup float left[8];
+                threadgroup float right[16];
+                threadgroup float* selected = &left[1];
+                {
+                    threadgroup float* selected = &right[2];
+                    update(selected);
+                }
+                update(selected);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "void update(inout float values[8], int values_offset)" in generated
+    assert "void update(inout float values[16], int values_offset)" in generated
+    assert "int selected_offset = int(1);" in generated
+    assert "int selected_offset_ = int(2);" in generated
+    assert "update(main_right, int(selected_offset_));" in generated
+    assert "update(main_left, int(selected_offset));" in generated
+    assert "float*" not in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_workgroup_pointer_omits_unreachable_unresolved_helper():
+    shader = """
+    shader UnresolvedWorkgroupPointerExtent {
+        void orphan(threadgroup float* values) {
+            values[2] = 1.0;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "orphan" not in generated
+    assert "void CSMain()" in generated
+    assert "float*" not in generated
+
+
+def test_hlsl_workgroup_pointer_omits_unreachable_wrapper_and_hoisted_state():
+    shader = """
+    shader UnreachableWorkgroupPointerWrapper {
+        void update(threadgroup float* values) {
+            values[0] = 1.0;
+        }
+
+        void dead_wrapper() {
+            threadgroup float dead_values[];
+            update(dead_values);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "void update(" not in generated
+    assert "void dead_wrapper(" not in generated
+    assert "dead_wrapper_dead_values" not in generated
+    assert "groupshared float" not in generated
+    assert "void CSMain()" in generated
+
+
+def test_hlsl_workgroup_pointer_rejects_reachable_unresolved_helper():
+    shader = """
+    shader ReachableUnresolvedWorkgroupPointerExtent {
+        void update(threadgroup float* values) {
+            values[0] = 1.0;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                threadgroup float values[];
+                update(values);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(DirectXWorkgroupPointerError) as excinfo:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = excinfo.value
+    assert diagnostic.function_name == "update"
+    assert diagnostic.parameter_name == "values"
+    assert diagnostic.reason == "missing-concrete-size"
+
+
+def test_hlsl_workgroup_pointer_keeps_helper_reachable_from_selected_stage(tmp_path):
+    shader = """
+    shader SelectedStageWorkgroupPointerHelper {
+        void update(threadgroup float* values) {
+            values[0] += 1.0;
+        }
+
+        vertex {
+            void main() {
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                threadgroup float values[8];
+                update(values);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "groupshared float main_values[8];" in generated
+    assert "void update(inout float values[8], int values_offset)" in generated
+    assert "update(main_values, int(0));" in generated
+    assert "float*" not in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_workgroup_pointer_rejects_dynamic_backing_selection():
+    shader = """
+    shader DynamicWorkgroupPointerBacking {
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint lid @ gl_LocalInvocationIndex) {
+                threadgroup float left[8];
+                threadgroup float right[8];
+                threadgroup float* selected = (lid == 0u) ? left : right;
+                selected[0] = 1.0;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(DirectXWorkgroupPointerError) as excinfo:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = excinfo.value
+    assert (
+        diagnostic.project_diagnostic_code
+        == "project.translate.directx-workgroup-pointer-unsupported"
+    )
+    assert diagnostic.missing_capabilities == ("directx.workgroup-pointer-lowering",)
+    assert diagnostic.function_name == "main"
+    assert diagnostic.reason == "conditional-backing-unresolved"
+
+
+def test_hlsl_private_scalar_pointer_accepts_proven_zero_loop_index():
+    shader = """
+    shader PrivateScalarPointerLoop {
+        void threadgroup_sum_1(thread float* x) {
+            for (int i = 0; i < 1; ++i) {
+                x[i] += 1.0;
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                float mean = 0.0;
+                threadgroup_sum_1(&mean);
+                float observed = mean;
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "void threadgroup_sum_1(inout float x)" in generated
+    assert "x += 1.0;" in generated
+    assert "threadgroup_sum_1(mean);" in generated
+    assert "float observed = mean;" in generated
+    assert "x[i]" not in generated
+    assert "float*" not in generated
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Iterator, Mapping, Sequence
 
 REFLECTION_DIAGNOSTIC_PREFIX = "project.runtime-package-inspection"
 REFLECTION_TOOL_UNAVAILABLE = (
@@ -343,13 +343,6 @@ def _parse_register(register_text: str | None) -> tuple[int | None, int | None]:
     return 0 if set_number is None else set_number, _int_value(match.group("binding"))
 
 
-HLSL_FUNCTION_RE = re.compile(
-    r"(?P<attributes>(?:\s*\[[^\]]+\]\s*)*)"
-    r"(?:[A-Za-z_][\w:<>,\s*&]*\s+)+"
-    r"(?P<name>[A-Za-z_]\w*)\s*\([^;{}]*\)"
-    r"(?:\s*:\s*[A-Za-z_]\w*)?\s*\{",
-    re.MULTILINE,
-)
 HLSL_NUMTHREADS_RE = re.compile(
     r"\[\s*numthreads\s*\(\s*([^,\]]+)\s*,\s*([^,\]]+)\s*,\s*([^,\]]+)\s*\)\s*\]",
     re.IGNORECASE,
@@ -405,15 +398,223 @@ HLSL_ENTRY_STAGE_BY_ATTR = {
     "callable": "ray_callable",
 }
 
+HLSL_NON_DECLARATION_KEYWORDS = {
+    "case",
+    "catch",
+    "do",
+    "else",
+    "for",
+    "if",
+    "return",
+    "switch",
+    "while",
+}
+
+
+def _iter_hlsl_function_declarations(
+    source: str,
+) -> Iterator[tuple[str, str]]:
+    """Yield function names and attributes using a bounded declaration scan."""
+
+    segment_start = 0
+    index = 0
+    while index < len(source):
+        character = source[index]
+        if character in {'"', "'"}:
+            index = _skip_hlsl_quoted_text(source, index)
+            continue
+        if character in "{};":
+            if character == "{":
+                declaration = _parse_hlsl_function_declaration(
+                    source[segment_start:index]
+                )
+                if declaration is not None:
+                    yield declaration
+            segment_start = index + 1
+        index += 1
+
+
+def _skip_hlsl_quoted_text(source: str, start: int) -> int:
+    quote = source[start]
+    index = start + 1
+    while index < len(source):
+        if source[index] == "\\":
+            index += 2
+            continue
+        if source[index] == quote:
+            return index + 1
+        index += 1
+    return len(source)
+
+
+def _parse_hlsl_function_declaration(
+    header: str,
+) -> tuple[str, str] | None:
+    header = _strip_hlsl_preprocessor_directives(header)
+    parentheses = _hlsl_top_level_parentheses(header)
+    if not parentheses:
+        return None
+
+    parameter_start, parameter_end = parentheses[-1]
+    suffix = header[parameter_end + 1 :].strip()
+    if suffix:
+        if not suffix.startswith(":") or not _is_hlsl_identifier(suffix[1:].strip()):
+            return None
+
+    prefix = header[:parameter_start]
+    name_end = len(prefix.rstrip())
+    name_start = name_end
+    while name_start and _is_hlsl_identifier_character(prefix[name_start - 1]):
+        name_start -= 1
+    name = prefix[name_start:name_end]
+    if not _is_hlsl_identifier(name):
+        return None
+    if name_start == 0 or not prefix[name_start - 1].isspace():
+        return None
+
+    declaration_prefix = prefix[:name_start]
+    attributes, type_prefix = _split_hlsl_attributes(declaration_prefix)
+    if attributes is None or not _is_hlsl_type_prefix(type_prefix):
+        return None
+    return name, attributes
+
+
+def _strip_hlsl_preprocessor_directives(header: str) -> str:
+    declaration_lines = []
+    in_continuation = False
+    for line in header.splitlines(keepends=True):
+        stripped = line.lstrip()
+        if in_continuation or stripped.startswith("#"):
+            in_continuation = line.rstrip().endswith("\\")
+            continue
+        declaration_lines.append(line)
+    return "".join(declaration_lines)
+
+
+def _hlsl_top_level_parentheses(header: str) -> list[tuple[int, int]] | None:
+    pairs = []
+    parentheses = []
+    square_depth = 0
+    index = 0
+    while index < len(header):
+        character = header[index]
+        if character in {'"', "'"}:
+            index = _skip_hlsl_quoted_text(header, index)
+            continue
+        if character == "[":
+            square_depth += 1
+        elif character == "]":
+            if square_depth == 0:
+                return None
+            square_depth -= 1
+        elif square_depth == 0 and character == "(":
+            parentheses.append(index)
+        elif square_depth == 0 and character == ")":
+            if not parentheses:
+                return None
+            start = parentheses.pop()
+            if not parentheses:
+                pairs.append((start, index))
+        index += 1
+    if square_depth or parentheses:
+        return None
+    return pairs
+
+
+def _split_hlsl_attributes(prefix: str) -> tuple[str | None, str]:
+    attributes = []
+    type_characters = []
+    attribute_start = None
+    square_depth = 0
+    index = 0
+    while index < len(prefix):
+        character = prefix[index]
+        if character in {'"', "'"}:
+            quoted_end = _skip_hlsl_quoted_text(prefix, index)
+            if square_depth == 0:
+                type_characters.append(prefix[index:quoted_end])
+            index = quoted_end
+            continue
+        if character == "[":
+            if square_depth == 0:
+                attribute_start = index
+            square_depth += 1
+        elif character == "]":
+            if square_depth == 0:
+                return None, ""
+            square_depth -= 1
+            if square_depth == 0 and attribute_start is not None:
+                attribute = prefix[attribute_start : index + 1]
+                if not _is_balanced_hlsl_attribute(attribute):
+                    return None, ""
+                attributes.append(attribute)
+                attribute_start = None
+        elif square_depth == 0:
+            type_characters.append(character)
+        index += 1
+    if square_depth:
+        return None, ""
+    return " ".join(attributes), "".join(type_characters)
+
+
+def _is_balanced_hlsl_attribute(attribute: str) -> bool:
+    parentheses = 0
+    index = 0
+    while index < len(attribute):
+        character = attribute[index]
+        if character in {'"', "'"}:
+            quoted_end = _skip_hlsl_quoted_text(attribute, index)
+            if quoted_end == len(attribute) and attribute[-1] != character:
+                return False
+            index = quoted_end
+            continue
+        if character == "(":
+            parentheses += 1
+        elif character == ")":
+            if parentheses == 0:
+                return False
+            parentheses -= 1
+        index += 1
+    return parentheses == 0
+
+
+def _is_hlsl_type_prefix(prefix: str) -> bool:
+    stripped = prefix.strip()
+    if not stripped:
+        return False
+    allowed_punctuation = {":", "<", ">", ",", "*", "&"}
+    if any(
+        not (
+            character.isalnum()
+            or character == "_"
+            or character.isspace()
+            or character in allowed_punctuation
+        )
+        for character in stripped
+    ):
+        return False
+    identifiers = re.findall(r"[A-Za-z_]\w*", stripped)
+    return bool(identifiers) and identifiers[0] not in HLSL_NON_DECLARATION_KEYWORDS
+
+
+def _is_hlsl_identifier(value: str) -> bool:
+    return (
+        bool(value)
+        and (value[0].isalpha() or value[0] == "_")
+        and all(_is_hlsl_identifier_character(character) for character in value[1:])
+    )
+
+
+def _is_hlsl_identifier_character(character: str) -> bool:
+    return character.isalnum() or character == "_"
+
 
 def _reflect_hlsl_source(
     artifact_path: Path, *, artifact_format: str, stage: str | None
 ) -> dict[str, Any]:
     source = _strip_comments(_read_text(artifact_path))
     entry_points = []
-    for match in HLSL_FUNCTION_RE.finditer(source):
-        name = match.group("name")
-        attributes = match.group("attributes") or ""
+    for name, attributes in _iter_hlsl_function_declarations(source):
         reflected_stage = _hlsl_entry_stage(name, attributes, stage)
         if reflected_stage is None:
             continue

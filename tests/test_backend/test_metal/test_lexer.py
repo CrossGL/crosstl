@@ -138,7 +138,7 @@ def test_tokenizes_structs_functions_and_attributes():
 def test_tokenizes_cpp_raw_string_literal_from_mlx_jit_header():
     # Reduced from:
     # Repo: https://github.com/ml-explore/mlx
-    # Commit: 968d264f2903d578e699c4452a4dbf48633921aa
+    # Commit: 4367c73b60541ddd5a266ce4644fd93d20223b6e
     # Path: mlx/backend/metal/jit/indexing.h
     code = 'constexpr std::string_view kernel_src = R"(template [[host_name("{0}")]] [[kernel]] void k();)";'
     tokens = tokenize_code(code)

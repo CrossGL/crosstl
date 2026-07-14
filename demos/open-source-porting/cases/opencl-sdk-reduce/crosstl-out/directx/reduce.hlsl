@@ -10,6 +10,12 @@ cbuffer reduce_Args : register(b2) {
 cbuffer CrossGLDispatchInfo : register(b3) {
     uint3 crossglNumWorkGroups;
 };
+int op(int lhs, int rhs);
+
+int read_local(int shared_[1024], uint count, int zero, uint i);
+
+uint zmin(uint a, uint b);
+
 int op(int lhs, int rhs) {
     return min(lhs, rhs);
 }

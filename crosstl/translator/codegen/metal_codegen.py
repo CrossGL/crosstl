@@ -392,6 +392,34 @@ class MetalCodeGen:
         "%": 10,
     }
     ASSOCIATIVE_BINARY_OPS = {"+", "*", "&&", "||", "&", "|", "^"}
+    METAL_ATOMIC_FENCE_MEMORY_FLAGS = frozenset(
+        {
+            "mem_none",
+            "mem_device",
+            "mem_threadgroup",
+            "mem_texture",
+            "mem_threadgroup_imageblock",
+            "mem_object_data",
+        }
+    )
+    METAL_ATOMIC_FENCE_MEMORY_ORDERS = frozenset(
+        {
+            "memory_order_relaxed",
+            "memory_order_acquire",
+            "memory_order_release",
+            "memory_order_acq_rel",
+            "memory_order_seq_cst",
+        }
+    )
+    METAL_ATOMIC_FENCE_THREAD_SCOPES = frozenset(
+        {
+            "thread_scope_thread",
+            "thread_scope_simdgroup",
+            "thread_scope_threadgroup",
+            "thread_scope_device",
+            "thread_scope_system",
+        }
+    )
     METAL_COOPERATIVE_MATRIX_FUNCTIONS = {
         "load": "simdgroup_load",
         "store": "simdgroup_store",
@@ -1359,6 +1387,19 @@ class MetalCodeGen:
         self.user_function_names = {
             func.name for func in all_functions if getattr(func, "name", None)
         }
+        self.metal_atomic_fence_calls = self.collect_metal_atomic_fence_calls(ast)
+        self.requires_metal_atomic_fence = bool(self.metal_atomic_fence_calls)
+        self.requires_metal_system_thread_scope = any(
+            self.atomic_fence_operand_identifier(call.args[2]) == "thread_scope_system"
+            for call in self.metal_atomic_fence_calls
+            if len(call.args) == 3
+        )
+        self.metal_resource_memory_contracts = (
+            self.collect_metal_resource_memory_contracts(ast)
+        )
+        self.requires_metal_resource_coherence = any(
+            kind == "coherent" for kind, _scope in self.metal_resource_memory_contracts
+        )
         self.functions_by_name = {
             func.name: func for func in all_functions if getattr(func, "name", None)
         }
@@ -1752,10 +1793,19 @@ class MetalCodeGen:
             line = self.generate_preprocessor_directive(directive)
             if line:
                 pre_lines.append(line)
+        if (
+            self.requires_metal_system_thread_scope
+            or self.requires_metal_resource_coherence
+        ) and not any("#pragma metal internals" in line.lower() for line in pre_lines):
+            code += "#pragma METAL internals : enable\n"
         if pre_lines:
             code += "\n".join(pre_lines) + "\n"
         if not any("metal_stdlib" in line for line in pre_lines):
             code += "#include <metal_stdlib>\n"
+        if self.requires_metal_atomic_fence and not any(
+            "metal_atomic" in line for line in pre_lines
+        ):
+            code += "#include <metal_atomic>\n"
         if self.uses_cooperative_matrix(ast) and not any(
             "metal_simdgroup_matrix" in line for line in pre_lines
         ):
@@ -1764,6 +1814,8 @@ class MetalCodeGen:
         if self.uses_metal_raytracing_namespace(ast, global_vars, all_functions):
             code += "using namespace metal::raytracing;\n"
         code += "\n"
+        if self.requires_metal_system_thread_scope:
+            code += self.generate_metal_system_thread_scope_support()
         if self.has_geometry_stage(ast, target_stage):
             code += self.generate_metal_geometry_stream_helpers()
         if self.has_tessellation_stage(ast, target_stage):
@@ -2385,6 +2437,79 @@ class MetalCodeGen:
         code += self.generate_metal_inverse_helpers()
         code += functions_code
         return code
+
+    def collect_metal_atomic_fence_calls(self, ast):
+        if "atomicThreadFence" in self.user_function_names:
+            return []
+        walk = getattr(ast, "walk", None)
+        nodes = walk() if callable(walk) else self.iter_ast_nodes(ast)
+        return [
+            node
+            for node in nodes
+            if isinstance(node, FunctionCallNode)
+            and self.function_call_name(node) == "atomicThreadFence"
+        ]
+
+    def collect_metal_resource_memory_contracts(self, ast):
+        walk = getattr(ast, "walk", None)
+        nodes = walk() if callable(walk) else self.iter_ast_nodes(ast)
+        contracts = []
+        for node in nodes:
+            raw_type = getattr(node, "param_type", getattr(node, "var_type", None))
+            if not self.metal_resource_memory_contract_is_emittable(node, raw_type):
+                continue
+            for contract in self.resource_memory_qualifier_contracts(node, raw_type):
+                if contract not in contracts:
+                    contracts.append(contract)
+        return contracts
+
+    def metal_resource_memory_contract_is_emittable(self, node, raw_type):
+        contract_type = raw_type
+        while self.is_array_type_node(contract_type):
+            contract_type = contract_type.element_type
+        if isinstance(contract_type, (PointerType, ReferenceType)):
+            return True
+        if self.is_structured_buffer_type(raw_type):
+            return True
+
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        qualifiers.update(
+            str(qualifier).lower()
+            for qualifier in getattr(node, "resource_qualifiers", []) or []
+        )
+        qualifiers.update(
+            str(getattr(attribute, "name", "")).lower()
+            for attribute in getattr(node, "attributes", []) or []
+        )
+        return bool(
+            qualifiers
+            & {
+                "constant",
+                "device",
+                "global",
+                "local",
+                "private",
+                "storage",
+                "thread",
+                "threadgroup",
+                "workgroup",
+            }
+        )
+
+    @staticmethod
+    def generate_metal_system_thread_scope_support():
+        return (
+            "#ifndef __METAL_MEMORY_SCOPE_SYSTEM__\n"
+            "#define __METAL_MEMORY_SCOPE_SYSTEM__ 3\n"
+            "#endif\n"
+            "namespace metal {\n"
+            "constexpr constant thread_scope thread_scope_system =\n"
+            "    static_cast<thread_scope>(__METAL_MEMORY_SCOPE_SYSTEM__);\n"
+            "}\n\n"
+        )
 
     def uses_cooperative_matrix(self, ast):
         """Return whether a canonical cooperative-matrix node is present."""
@@ -7165,6 +7290,8 @@ class MetalCodeGen:
             for attribute in getattr(node, "attributes", []) or []
         }
         if self.local_variable_is_address_space_alias(node):
+            raw_type = self.local_variable_type_node(node)
+            memory_qualifiers = self.resource_memory_qualifier_prefix(node, raw_type)
             address_space = self.local_variable_address_space(node)
             if address_space is not None:
                 const_prefix = ""
@@ -7176,7 +7303,7 @@ class MetalCodeGen:
                     is not None
                 ):
                     const_prefix = "const "
-                return f"{const_prefix}{address_space} "
+                return f"{memory_qualifiers}{const_prefix}{address_space} "
         if "threadgroup_imageblock" in qualifiers | attributes:
             return "threadgroup_imageblock "
         if (qualifiers | attributes) & {
@@ -9060,7 +9187,9 @@ class MetalCodeGen:
                 return buffer_atomic_call
 
             synchronization_call = self.synchronization_function_call(
-                func_name, expr.args
+                func_name,
+                expr.args,
+                source_location=getattr(expr, "source_location", None),
             )
             if synchronization_call is not None:
                 return synchronization_call
@@ -9674,8 +9803,102 @@ class MetalCodeGen:
             return f"({rendered})"
         return rendered
 
-    def synchronization_function_call(self, func_name, args):
-        if args or func_name in self.user_function_names:
+    def atomic_fence_operand_identifier(self, expr):
+        name = self.expression_name(expr)
+        if name is None:
+            return None
+        return str(name).lstrip(":").rsplit("::", 1)[-1]
+
+    def atomic_fence_operand_text(self, expr):
+        if isinstance(expr, BinaryOpNode) and expr.op == "|":
+            return (
+                f"{self.atomic_fence_operand_text(expr.left)} | "
+                f"{self.atomic_fence_operand_text(expr.right)}"
+            )
+        name = self.atomic_fence_operand_identifier(expr)
+        return name if name is not None else expression_debug_name(expr)
+
+    def collect_atomic_fence_memory_flags(self, expr):
+        if isinstance(expr, BinaryOpNode) and expr.op == "|":
+            left = self.collect_atomic_fence_memory_flags(expr.left)
+            right = self.collect_atomic_fence_memory_flags(expr.right)
+            if left is None or right is None:
+                return None
+            return left + right
+        name = self.atomic_fence_operand_identifier(expr)
+        if name in self.METAL_ATOMIC_FENCE_MEMORY_FLAGS:
+            return (name,)
+        return None
+
+    def metal_atomic_fence_contract_error(
+        self,
+        reason,
+        args,
+        *,
+        source_location=None,
+    ):
+        rendered = [self.atomic_fence_operand_text(arg) for arg in args]
+        requested_contract = ", ".join(rendered) or "<no operands>"
+        capability = {
+            "invalid-argument-count": "metal.atomic-thread-fence.contract",
+            "unsupported-memory-flags": "metal.atomic-thread-fence.memory-flags",
+            "unsupported-memory-order": "metal.atomic-thread-fence.memory-order",
+            "unsupported-thread-scope": "metal.atomic-thread-fence.thread-scope",
+        }[reason]
+        return UnsupportedMetalFeatureError(
+            "atomic-thread-fence-contract",
+            "Metal codegen cannot represent atomicThreadFence("
+            f"{requested_contract}) exactly: {reason.replace('-', ' ')}",
+            missing_capabilities=(capability,),
+            operation="atomicThreadFence",
+            reason=reason,
+            source_location=source_location,
+        )
+
+    def generate_metal_atomic_thread_fence(self, args, *, source_location=None):
+        if len(args) != 3:
+            raise self.metal_atomic_fence_contract_error(
+                "invalid-argument-count",
+                args,
+                source_location=source_location,
+            )
+
+        flags = self.collect_atomic_fence_memory_flags(args[0])
+        order = self.atomic_fence_operand_identifier(args[1])
+        scope = self.atomic_fence_operand_identifier(args[2])
+        if flags is None:
+            raise self.metal_atomic_fence_contract_error(
+                "unsupported-memory-flags",
+                args,
+                source_location=source_location,
+            )
+        if order not in self.METAL_ATOMIC_FENCE_MEMORY_ORDERS:
+            raise self.metal_atomic_fence_contract_error(
+                "unsupported-memory-order",
+                args,
+                source_location=source_location,
+            )
+        if scope not in self.METAL_ATOMIC_FENCE_THREAD_SCOPES:
+            raise self.metal_atomic_fence_contract_error(
+                "unsupported-thread-scope",
+                args,
+                source_location=source_location,
+            )
+
+        rendered_flags = " | ".join(f"metal::mem_flags::{flag}" for flag in flags)
+        return (
+            f"metal::atomic_thread_fence({rendered_flags}, "
+            f"metal::{order}, metal::{scope})"
+        )
+
+    def synchronization_function_call(self, func_name, args, *, source_location=None):
+        if func_name in self.user_function_names:
+            return None
+        if func_name == "atomicThreadFence":
+            return self.generate_metal_atomic_thread_fence(
+                args, source_location=source_location
+            )
+        if args:
             return None
         return {
             "barrier": "threadgroup_barrier(mem_flags::mem_threadgroup)",
@@ -12363,10 +12586,13 @@ class MetalCodeGen:
             return "const device"
         return "device"
 
-    def format_structured_buffer_parameter(self, vtype, name, array_size=None):
+    def format_structured_buffer_parameter(
+        self, vtype, name, array_size=None, node=None
+    ):
         element_type = self.structured_buffer_element_type(vtype)
         address_space = self.structured_buffer_address_space(vtype)
-        pointer_type = f"{address_space} {element_type}*"
+        memory_qualifiers = self.resource_memory_qualifier_prefix(node, vtype)
+        pointer_type = f"{memory_qualifiers}{address_space} {element_type}*"
         if array_size is not None:
             array_size = array_size or "1"
             return f"array<{pointer_type}, {array_size}> {name}"
@@ -13050,7 +13276,7 @@ class MetalCodeGen:
                 raw_param_type, node
             )
             return self.format_structured_buffer_parameter(
-                raw_param_type, name, array_size
+                raw_param_type, name, array_size, node
             )
         if self.is_visible_function_table_type(raw_param_type):
             return self.format_visible_function_table_parameter(raw_param_type, name)
@@ -13119,7 +13345,10 @@ class MetalCodeGen:
             pointee_type = self.map_resource_type_with_format(
                 raw_param_type.pointee_type, node
             )
-            return f"{address_space} {pointee_type}* {name}"
+            memory_qualifiers = self.resource_memory_qualifier_prefix(
+                node, raw_param_type
+            )
+            return f"{memory_qualifiers}{address_space} {pointee_type}* {name}"
 
         if isinstance(raw_param_type, ReferenceType):
             address_space = self.effective_parameter_address_space(
@@ -13129,7 +13358,10 @@ class MetalCodeGen:
             referenced_type = self.map_resource_type_with_format(
                 raw_param_type.referenced_type, node
             )
-            return f"{address_space} {referenced_type}& {name}"
+            memory_qualifiers = self.resource_memory_qualifier_prefix(
+                node, raw_param_type
+            )
+            return f"{memory_qualifiers}{address_space} {referenced_type}& {name}"
 
         if self.is_array_type_node(raw_param_type):
             if self.resource_array_parameter(raw_param_type, node) is not None:
@@ -13155,9 +13387,15 @@ class MetalCodeGen:
                 element_type = self.map_resource_type_with_format(
                     raw_param_type.element_type, node
                 )
-                return f"{address_space} {element_type}* {name}"
+                memory_qualifiers = self.resource_memory_qualifier_prefix(
+                    node, raw_param_type
+                )
+                return f"{memory_qualifiers}{address_space} {element_type}* {name}"
             declaration = format_c_style_array_declaration(mapped_type, name)
-            return f"{address_space} {declaration}"
+            memory_qualifiers = self.resource_memory_qualifier_prefix(
+                node, raw_param_type
+            )
+            return f"{memory_qualifiers}{address_space} {declaration}"
 
         qualifiers = self.parameter_qualifier_names(node)
         address_space = self.effective_parameter_address_space(
@@ -13171,7 +13409,10 @@ class MetalCodeGen:
                 address_space,
                 node,
             )
-            return f"{address_space} {mapped_type}& {name}"
+            memory_qualifiers = self.resource_memory_qualifier_prefix(
+                node, raw_param_type
+            )
+            return f"{memory_qualifiers}{address_space} {mapped_type}& {name}"
 
         return None
 
@@ -13249,6 +13490,13 @@ class MetalCodeGen:
             str(getattr(attribute, "name", "")).lower()
             for attribute in getattr(node, "attributes", []) or []
         )
+        raw_type = getattr(node, "param_type", getattr(node, "var_type", None))
+        contract_type = raw_type
+        while self.is_array_type_node(contract_type):
+            contract_type = contract_type.element_type
+        if isinstance(contract_type, (PointerType, ReferenceType)):
+            qualifiers.add(str(getattr(contract_type, "address_space", "")).lower())
+            qualifiers.add(str(getattr(contract_type, "access_mode", "")).lower())
         qualifier_aliases = {
             "read": "readonly",
             "write": "writeonly",
@@ -13264,6 +13512,66 @@ class MetalCodeGen:
         )
         qualifiers.discard("")
         return qualifiers
+
+    def resource_memory_qualifier_contracts(self, node=None, raw_type=None):
+        """Return ordered ``(kind, scope)`` resource-memory contracts."""
+        values = []
+        contract_type = raw_type
+        while self.is_array_type_node(contract_type):
+            contract_type = contract_type.element_type
+        if isinstance(contract_type, (PointerType, ReferenceType)):
+            values.extend(getattr(contract_type, "resource_qualifiers", []) or [])
+        values.extend(getattr(node, "resource_qualifiers", []) or [])
+        values.extend(getattr(node, "qualifiers", []) or [])
+
+        contracts = []
+        for value in values:
+            kind = getattr(value, "kind", None)
+            scope = getattr(value, "scope", None)
+            text = str(value).lower()
+            if kind is None:
+                match = re.fullmatch(
+                    r"(?P<kind>volatile|coherent)(?:\((?P<scope>[a-z_][a-z0-9_]*)\))?",
+                    text,
+                )
+                if match is None:
+                    continue
+                kind = match.group("kind")
+                scope = match.group("scope")
+            else:
+                kind = str(kind).lower()
+                scope = str(scope).lower() if scope is not None else None
+            if kind not in {"volatile", "coherent"}:
+                continue
+            contract = (kind, scope)
+            if contract not in contracts:
+                contracts.append(contract)
+
+        for attribute in getattr(node, "attributes", []) or []:
+            kind = str(getattr(attribute, "name", "")).lower()
+            if kind not in {"volatile", "coherent"}:
+                continue
+            arguments = getattr(attribute, "arguments", []) or []
+            scope = self.attribute_value_to_string(arguments[0]) if arguments else None
+            contract = (kind, str(scope).lower() if scope is not None else None)
+            if contract not in contracts:
+                contracts.append(contract)
+        return contracts
+
+    def resource_memory_qualifier_prefix(self, node=None, raw_type=None):
+        rendered = []
+        for kind, scope in self.resource_memory_qualifier_contracts(node, raw_type):
+            if kind == "coherent" and scope is not None:
+                if scope not in {"threadgroup", "device", "system"}:
+                    name = getattr(node, "name", "<anonymous>")
+                    raise ValueError(
+                        f"Metal resource '{name}' has unsupported coherence scope "
+                        f"'{scope}'"
+                    )
+                rendered.append(f"coherent({scope})")
+            else:
+                rendered.append(kind)
+        return f"{' '.join(rendered)} " if rendered else ""
 
     def normalized_address_space(self, address_space):
         if address_space is None:

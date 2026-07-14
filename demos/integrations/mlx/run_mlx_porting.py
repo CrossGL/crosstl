@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import shutil
@@ -28,30 +29,34 @@ from crosstl.project.runtime_verification import (
 )
 
 MLX_REPOSITORY = "https://github.com/ml-explore/mlx"
-MLX_COMMIT = "968d264f2903d578e699c4452a4dbf48633921aa"
+MLX_COMMIT = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
 MLX_METAL_KERNEL_ROOT = "mlx/backend/metal/kernels"
 MLX_ARANGE_SOURCE = "mlx/backend/metal/kernels/arange.metal"
 MLX_ARG_REDUCE_SOURCE = "mlx/backend/metal/kernels/arg_reduce.metal"
+MLX_BINARY_TWO_SOURCE = "mlx/backend/metal/kernels/binary_two.metal"
 MLX_FENCE_SOURCE = "mlx/backend/metal/kernels/fence.metal"
+MLX_FENCE_EXPECTED_ATOMIC_FENCE_COUNT = 3
 MLX_GEMV_SOURCE = "mlx/backend/metal/kernels/gemv.metal"
+MLX_METAL_ROUNDTRIP_SOURCE = MLX_FENCE_SOURCE
+MLX_ROPE_SOURCE = "mlx/backend/metal/kernels/rope.metal"
 MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE = (
     "mlx/backend/metal/kernels/scaled_dot_product_attention.metal"
 )
 MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES = (
     MLX_ARG_REDUCE_SOURCE,
+    MLX_BINARY_TWO_SOURCE,
     "mlx/backend/metal/kernels/logsumexp.metal",
     "mlx/backend/metal/kernels/softmax.metal",
 )
 MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
     "mlx/backend/metal/kernels/arange.metal",
     MLX_ARG_REDUCE_SOURCE,
-    "mlx/backend/metal/kernels/binary_two.metal",
-    MLX_FENCE_SOURCE,
+    MLX_BINARY_TWO_SOURCE,
     "mlx/backend/metal/kernels/layer_norm.metal",
     "mlx/backend/metal/kernels/logsumexp.metal",
     "mlx/backend/metal/kernels/random.metal",
     "mlx/backend/metal/kernels/rms_norm.metal",
-    "mlx/backend/metal/kernels/rope.metal",
+    MLX_ROPE_SOURCE,
     MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
     "mlx/backend/metal/kernels/softmax.metal",
     "mlx/backend/metal/kernels/ternary.metal",
@@ -64,8 +69,16 @@ MLX_CLEAN_REDUCED_FRONTIER_SOURCES = tuple(
         )
     )
 )
+MLX_BLOCKED_REDUCED_FRONTIER_SOURCES = (MLX_FENCE_SOURCE,)
 MLX_REDUCED_FRONTIER_SOURCES = tuple(
-    dict.fromkeys(sorted(MLX_CLEAN_REDUCED_FRONTIER_SOURCES))
+    dict.fromkeys(
+        sorted(
+            (
+                *MLX_CLEAN_REDUCED_FRONTIER_SOURCES,
+                *MLX_BLOCKED_REDUCED_FRONTIER_SOURCES,
+            )
+        )
+    )
 )
 # Subset of the clean frontier gated by DXC on Windows. The DirectX/Vulkan frontier
 # is still translated in full (and all Vulkan artifacts are spirv-val'd), but the
@@ -74,12 +87,38 @@ MLX_REDUCED_FRONTIER_SOURCES = tuple(
 MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES = (
     "mlx/backend/metal/kernels/arange.metal",
     MLX_ARG_REDUCE_SOURCE,
-    "mlx/backend/metal/kernels/fence.metal",
+    MLX_ROPE_SOURCE,
 )
+MLX_FENCE_REQUESTED_CONTRACT = {
+    "memoryFlags": ["mem_device"],
+    "memoryOrder": "memory_order_seq_cst",
+    "threadScope": "thread_scope_system",
+}
+MLX_FENCE_TARGET_CONTRACTS = {
+    "directx": {
+        "diagnosticCode": "project.translate.directx-atomic-fence-unsupported",
+        "missingCapability": "directx.atomic-thread-fence-contract-lowering",
+        "targetDescription": "HLSL",
+    },
+    "opengl": {
+        "diagnosticCode": "project.translate.opengl-atomic-fence-unsupported",
+        "missingCapability": "opengl.atomic-thread-fence-contract-lowering",
+        "targetDescription": "OpenGL GLSL",
+    },
+    "vulkan": {
+        "diagnosticCode": "project.translate.vulkan-atomic-fence-unsupported",
+        "missingCapability": "spirv.atomic-thread-fence-contract-lowering",
+        "targetDescription": "Vulkan SPIR-V",
+    },
+}
 EXPECTED_METAL_KERNEL_COUNT = 40
 FULL_CORPUS_TARGETS = ("directx", "opengl", "vulkan")
 FULL_CORPUS_EXPECTED_ARTIFACT_COUNT = EXPECTED_METAL_KERNEL_COUNT * len(
     FULL_CORPUS_TARGETS
+)
+FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT = len(MLX_FENCE_TARGET_CONTRACTS)
+FULL_CORPUS_EXPECTED_TRANSLATED_ARTIFACT_COUNT = (
+    FULL_CORPUS_EXPECTED_ARTIFACT_COUNT - FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT
 )
 FULL_CORPUS_MAX_TEMPLATE_SPECIALIZATIONS = 4096
 FULL_CORPUS_MAX_TEMPLATE_MATERIALIZATION_WORK = 131072
@@ -93,6 +132,7 @@ FULL_CORPUS_MODE = "full-corpus"
 FRONTIER_VALIDATION_TRACKED_ISSUES: tuple[str, ...] = ()
 FULL_CORPUS_TRANSLATION_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1376",
+    "https://github.com/CrossGL/crosstl/issues/1676",
     "https://github.com/CrossGL/crosstl/issues/1476",
     "https://github.com/CrossGL/crosstl/issues/1479",
     "https://github.com/CrossGL/crosstl/issues/1490",
@@ -101,19 +141,23 @@ FULL_CORPUS_TRANSLATION_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1554",
     "https://github.com/CrossGL/crosstl/issues/1559",
     "https://github.com/CrossGL/crosstl/issues/1562",
+    "https://github.com/CrossGL/crosstl/issues/1659",
+    "https://github.com/CrossGL/crosstl/issues/1669",
+    "https://github.com/CrossGL/crosstl/issues/1671",
+    "https://github.com/CrossGL/crosstl/issues/1672",
 )
 RUNTIME_READINESS_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1388",
     "https://github.com/CrossGL/crosstl/issues/1471",
 )
 VULKAN_GEMV_SEMANTIC_TRACKED_ISSUES: tuple[str, ...] = ()
-VULKAN_FRONTIER_SEMANTIC_TRACKED_ISSUES = (
-    "https://github.com/CrossGL/crosstl/issues/1537",
-)
-VULKAN_FRONTIER_FENCE_EXPECTED_MEMORY_BARRIERS = 3
+FENCE_CONTRACT_TRACKED_ISSUES = ("https://github.com/CrossGL/crosstl/issues/1537",)
 VULKAN_GEMV_REPORTING_TRACKED_ISSUE = "https://github.com/CrossGL/crosstl/issues/1517"
 FULL_CORPUS_SEMANTIC_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1491",
+)
+METAL_ROUNDTRIP_SEMANTIC_TRACKED_ISSUES = (
+    "https://github.com/CrossGL/crosstl/issues/1660",
 )
 OPENGL_ARANGE_VALIDATION_TRACKED_ISSUES: tuple[str, ...] = ()
 OPENGL_SCALED_DOT_PRODUCT_ATTENTION_TRACKED_ISSUES = (
@@ -167,16 +211,21 @@ RUNTIME_READINESS_PLAN_DIAGNOSTIC_CODES = frozenset(
 FULL_CORPUS_TRACKED_ISSUES = (
     *FRONTIER_VALIDATION_TRACKED_ISSUES,
     "https://github.com/CrossGL/crosstl/issues/1312",
+    "https://github.com/CrossGL/crosstl/issues/1670",
     *FULL_CORPUS_TRANSLATION_TRACKED_ISSUES,
     *OPENGL_ARANGE_VALIDATION_TRACKED_ISSUES,
     *OPENGL_SCALED_DOT_PRODUCT_ATTENTION_TRACKED_ISSUES,
     *RUNTIME_READINESS_TRACKED_ISSUES,
-    *VULKAN_FRONTIER_SEMANTIC_TRACKED_ISSUES,
+    *FENCE_CONTRACT_TRACKED_ISSUES,
     *VULKAN_GEMV_SEMANTIC_TRACKED_ISSUES,
     VULKAN_GEMV_REPORTING_TRACKED_ISSUE,
     *FULL_CORPUS_SEMANTIC_TRACKED_ISSUES,
+    *METAL_ROUNDTRIP_SEMANTIC_TRACKED_ISSUES,
 )
 RESOLVED_FRONTIER_ISSUES = (
+    "https://github.com/CrossGL/crosstl/issues/1667",
+    "https://github.com/CrossGL/crosstl/issues/1668",
+    "https://github.com/CrossGL/crosstl/issues/1661",
     "https://github.com/CrossGL/crosstl/issues/1573",
     "https://github.com/CrossGL/crosstl/issues/1555",
     "https://github.com/CrossGL/crosstl/issues/1561",
@@ -393,6 +442,136 @@ def _run_command(
     return result
 
 
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _probe_native_metal_toolchain(
+    mlx_root: Path,
+    work_dir: Path,
+    log_dir: Path,
+) -> dict[str, Any]:
+    if sys.platform != "darwin":
+        return {
+            "status": "not-applicable",
+            "platform": sys.platform,
+            "reason": "native Metal validation requires macOS",
+        }
+
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        return {
+            "status": "toolchain-unavailable",
+            "platform": sys.platform,
+            "reason": "xcrun is not installed",
+        }
+
+    native_dir = work_dir / "native-metal"
+    native_dir.mkdir(parents=True, exist_ok=True)
+    source_path = native_dir / "toolchain-probe.metal"
+    output_path = native_dir / "toolchain-probe.air"
+    output_path.unlink(missing_ok=True)
+    source_path.write_text(
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "kernel void crosstl_mlx_probe() {}\n",
+        encoding="utf-8",
+    )
+    result = _run_command(
+        "probe-native-metal-toolchain",
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-c",
+            str(source_path),
+            "-o",
+            str(output_path),
+        ],
+        log_dir=log_dir,
+        check=False,
+    )
+    available = result.returncode == 0 and output_path.is_file()
+    return {
+        "status": "available" if available else "toolchain-unavailable",
+        "platform": sys.platform,
+        "xcrun": xcrun,
+        "probeSource": _relpath(source_path, mlx_root),
+        "probeArtifact": (
+            _relpath(output_path, mlx_root) if output_path.is_file() else None
+        ),
+        "returncode": result.returncode,
+        "stdout": _relpath(result.stdout_path, mlx_root),
+        "stderr": _relpath(result.stderr_path, mlx_root),
+        "reason": (
+            None
+            if available
+            else "a minimal Metal compilation did not produce an AIR artifact"
+        ),
+    }
+
+
+def _validate_native_metal_artifact(
+    *,
+    mlx_root: Path,
+    work_dir: Path,
+    log_dir: Path,
+    artifact_path: Path,
+    required: bool,
+) -> dict[str, Any]:
+    probe = _probe_native_metal_toolchain(mlx_root, work_dir, log_dir)
+    if probe["status"] != "available":
+        _require(
+            not required,
+            "native Metal validation was required, but a usable macOS Metal "
+            f"toolchain was not available ({probe['reason']})",
+        )
+        return {
+            **probe,
+            "required": required,
+            "artifactCompiled": False,
+        }
+
+    output_path = work_dir / "native-metal" / "mlx-fence-roundtrip.air"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.unlink(missing_ok=True)
+    result = _run_command(
+        "validate-metal-roundtrip-native",
+        [
+            str(probe["xcrun"]),
+            "-sdk",
+            "macosx",
+            "metal",
+            "-c",
+            str(artifact_path),
+            "-o",
+            str(output_path),
+        ],
+        log_dir=log_dir,
+        check=False,
+    )
+    _require(
+        result.returncode == 0,
+        "native Metal validation failed for the generated MLX fence round-trip "
+        f"artifact; see {result.stdout_path} and {result.stderr_path}",
+    )
+    _require(
+        output_path.is_file() and output_path.stat().st_size > 0,
+        "native Metal validation did not produce the expected AIR artifact",
+    )
+    return {
+        **probe,
+        "status": "validated",
+        "required": required,
+        "artifactCompiled": True,
+        "sourceArtifact": _relpath(artifact_path, mlx_root),
+        "compiledArtifact": _relpath(output_path, mlx_root),
+        "compileStdout": _relpath(result.stdout_path, mlx_root),
+        "compileStderr": _relpath(result.stderr_path, mlx_root),
+    }
+
+
 def _write_project_config(
     path: Path,
     *,
@@ -524,68 +703,487 @@ def _scan_metal_kernels(
     }
 
 
-def _vulkan_frontier_semantic_evidence(
+def _check_metal_roundtrip(
     mlx_root: Path,
-    payload: Mapping[str, Any],
+    work_dir: Path,
+    config_dir: Path,
+    report_dir: Path,
+    log_dir: Path,
+    python: str,
+    *,
+    require_metal_toolchain: bool,
 ) -> dict[str, Any]:
-    fence_artifacts = [
-        artifact
-        for artifact in payload.get("artifacts", [])
-        if isinstance(artifact, Mapping)
-        and artifact.get("source") == MLX_FENCE_SOURCE
-        and artifact.get("target") == "vulkan"
-        and artifact.get("status") == "translated"
+    config_path = config_dir / "metal-roundtrip.toml"
+    report_path = report_dir / "metal-roundtrip.json"
+    output_dir = work_dir / "out-metal-roundtrip"
+    _write_project_config(
+        config_path,
+        include=MLX_METAL_ROUNDTRIP_SOURCE,
+        targets=("metal",),
+        output_dir=_relpath(output_dir, mlx_root),
+    )
+    _run_command(
+        "translate-metal-roundtrip",
+        [
+            python,
+            "-m",
+            "crosstl",
+            "translate-project",
+            str(mlx_root),
+            "--config",
+            str(config_path),
+            "--report",
+            str(report_path),
+            "--validate",
+        ],
+        log_dir=log_dir,
+    )
+
+    payload = _load_json(report_path)
+    summary = payload.get("summary", {})
+    _require(isinstance(summary, dict), "Metal round-trip summary must be an object")
+    _require(
+        summary.get("unitCount") == 1,
+        "Metal round-trip translation must scan exactly one pinned MLX source",
+    )
+    _require(
+        summary.get("artifactCount") == 1
+        and summary.get("translatedCount") == 1
+        and summary.get("failedCount") == 0,
+        "Metal round-trip translation must emit one clean artifact",
+    )
+    diagnostic_counts = summary.get("diagnosticCounts", {})
+    diagnostics = payload.get("diagnostics", [])
+    _require(
+        isinstance(diagnostics, list), "Metal round-trip diagnostics must be a list"
+    )
+    allowed_unavailable = [
+        diagnostic
+        for diagnostic in diagnostics
+        if isinstance(diagnostic, dict)
+        and diagnostic.get("severity") == "warning"
+        and diagnostic.get("code") == "project.validate.toolchain-unavailable"
+        and diagnostic.get("target") == "metal"
+        and not require_metal_toolchain
+    ]
+    unexpected_diagnostics = [
+        diagnostic
+        for diagnostic in diagnostics
+        if isinstance(diagnostic, dict)
+        and diagnostic.get("severity") in {"error", "warning"}
+        and diagnostic not in allowed_unavailable
     ]
     _require(
-        len(fence_artifacts) == 1,
-        "Vulkan frontier report must contain one translated fence artifact",
+        isinstance(diagnostic_counts, dict)
+        and diagnostic_counts.get("error", 0) == 0
+        and diagnostic_counts.get("warning", 0) == len(allowed_unavailable)
+        and not unexpected_diagnostics,
+        "Metal round-trip translation reported unexpected diagnostics",
     )
-    artifact_path = fence_artifacts[0].get("path")
-    _require(
-        isinstance(artifact_path, str),
-        "Vulkan frontier fence artifact path is missing",
-    )
-    generated_path = mlx_root / artifact_path
-    _require(
-        generated_path.is_file(),
-        f"Vulkan frontier fence artifact is missing: {artifact_path}",
-    )
-    generated = generated_path.read_text(encoding="utf-8")
-    scope_names = re.findall(
-        r'(?m)^\s*OpName\s+(?P<id>%\S+)\s+"thread_scope_system"\s*$',
-        generated,
-    )
-    scope_variable_count = 0
-    if len(scope_names) == 1:
-        scope_variable_count = len(
-            re.findall(
-                rf"(?m)^\s*{re.escape(scope_names[0])}\s*=\s*OpVariable\b.*\bPrivate\b",
-                generated,
-            )
-        )
-    memory_barrier_count = len(re.findall(r"(?m)^\s*OpMemoryBarrier\b", generated))
-    expected = {
-        "scopeConstantCount": 1,
-        "scopeVariableCount": 1,
-        "memoryBarrierCount": VULKAN_FRONTIER_FENCE_EXPECTED_MEMORY_BARRIERS,
-    }
-    found = {
-        "scopeConstantCount": len(scope_names),
-        "scopeVariableCount": scope_variable_count,
-        "memoryBarrierCount": memory_barrier_count,
-    }
-    _require(
-        found == expected,
-        "Vulkan frontier fence semantic evidence changed: expected {}, found {}".format(
-            expected,
-            found,
+
+    artifacts = payload.get("artifacts", [])
+    _require(isinstance(artifacts, list), "Metal round-trip artifacts must be a list")
+    artifact = next(
+        (
+            item
+            for item in artifacts
+            if isinstance(item, dict)
+            and item.get("source") == MLX_METAL_ROUNDTRIP_SOURCE
+            and item.get("sourceBackend") == "metal"
+            and item.get("target") == "metal"
         ),
+        None,
+    )
+    _require(isinstance(artifact, dict), "Metal round-trip artifact is missing")
+    _require(
+        artifact.get("status") == "translated",
+        "Metal round-trip artifact was not translated",
+    )
+    expected_path = output_dir / "metal" / MLX_METAL_ROUNDTRIP_SOURCE
+    expected_report_path = _relpath(expected_path, mlx_root)
+    _require(
+        artifact.get("path") == expected_report_path,
+        "Metal round-trip artifact path does not match the bounded project output",
+    )
+    _require(
+        artifact.get("provenance")
+        == {
+            "pipeline": "single-file-translate",
+            "intermediate": "crossgl",
+        },
+        "Metal round-trip artifact did not traverse the CrossGL project pipeline",
+    )
+    _require(
+        expected_path.is_file() and expected_path.stat().st_size > 0,
+        f"Metal round-trip artifact is missing or empty: {expected_report_path}",
+    )
+
+    source_path = mlx_root / MLX_METAL_ROUNDTRIP_SOURCE
+    source_hash = artifact.get("sourceHash", {})
+    generated_hash = artifact.get("generatedHash", {})
+    _require(
+        source_hash.get("algorithm") == "sha256"
+        and source_hash.get("value") == _sha256(source_path),
+        "Metal round-trip source hash does not match the pinned MLX source",
+    )
+    _require(
+        generated_hash.get("algorithm") == "sha256"
+        and generated_hash.get("value") == _sha256(expected_path),
+        "Metal round-trip generated hash does not match the emitted artifact",
+    )
+    _require(
+        artifact.get("sourceSizeBytes") == source_path.stat().st_size
+        and artifact.get("generatedSizeBytes") == expected_path.stat().st_size,
+        "Metal round-trip source or generated byte-size metadata is inconsistent",
+    )
+    _require(
+        source_hash.get("value") != generated_hash.get("value"),
+        "Metal round-trip unexpectedly copied the source without translation",
+    )
+
+    generated = expected_path.read_text(encoding="utf-8")
+    for fragment in (
+        "#include <metal_stdlib>",
+        "kernel void input_coherent",
+        "kernel void fence_update",
+        "kernel void fence_wait",
+        "[[buffer(0)]]",
+        "[[thread_position_in_grid]]",
+        "metal::mem_flags::mem_device",
+        "metal::memory_order_seq_cst",
+        "metal::thread_scope_system",
+    ):
+        _require(
+            fragment in generated,
+            f"Metal round-trip artifact is missing expected generated form: {fragment}",
+        )
+    _require(
+        generated.count("metal::atomic_thread_fence(")
+        == MLX_FENCE_EXPECTED_ATOMIC_FENCE_COUNT,
+        "Metal round-trip artifact did not preserve every source atomic fence",
+    )
+    for forbidden in ("threadgroup_barrier(", "unsupported", "fallback"):
+        _require(
+            forbidden not in generated,
+            f"Metal round-trip artifact contains forbidden generated form: {forbidden}",
+        )
+
+    validation = payload.get("validation", {})
+    _require(isinstance(validation, dict), "Metal round-trip validation is missing")
+    validation_summary = validation.get("summary", {})
+    _require(
+        isinstance(validation_summary, dict)
+        and validation_summary.get("artifactCount") == 1
+        and validation_summary.get("okCount") == 1
+        and validation_summary.get("failedCount") == 0,
+        "Metal round-trip generated-artifact validation was not clean",
+    )
+    validation_artifact = next(
+        (
+            item
+            for item in validation.get("artifacts", [])
+            if isinstance(item, dict) and item.get("path") == expected_report_path
+        ),
+        None,
+    )
+    _require(
+        isinstance(validation_artifact, dict)
+        and validation_artifact.get("status") == "ok"
+        and validation_artifact.get("sourceHashStatus") == "ok"
+        and validation_artifact.get("generatedHashStatus") == "ok"
+        and validation_artifact.get("sourceSizeStatus") == "ok"
+        and validation_artifact.get("generatedSizeStatus") == "ok"
+        and validation_artifact.get("sourceMapStatus") == "ok"
+        and validation_artifact.get("sourceRemapStatus") == "ok",
+        "Metal round-trip artifact metadata did not pass project validation",
+    )
+
+    native_validation = _validate_native_metal_artifact(
+        mlx_root=mlx_root,
+        work_dir=work_dir,
+        log_dir=log_dir,
+        artifact_path=expected_path,
+        required=require_metal_toolchain,
     )
     return {
-        "issue": VULKAN_FRONTIER_SEMANTIC_TRACKED_ISSUES[0],
+        "name": "metal-roundtrip",
+        "status": "passed",
+        "report": _relpath(report_path, mlx_root),
+        "source": MLX_METAL_ROUNDTRIP_SOURCE,
+        "target": "metal",
+        "roundTripStages": ["metal", "crossgl", "metal"],
+        "unitCount": 1,
+        "artifactCount": 1,
+        "artifact": expected_report_path,
+        "generatedHash": generated_hash,
+        "generatedSizeBytes": artifact.get("generatedSizeBytes"),
+        "diagnosticCounts": diagnostic_counts,
+        "artifactValidationStatus": "validated",
+        "nativeMetalValidation": native_validation,
+        "fenceContract": {
+            "memoryFlags": ["mem_device"],
+            "memoryOrder": "memory_order_seq_cst",
+            "threadScope": "thread_scope_system",
+            "occurrences": MLX_FENCE_EXPECTED_ATOMIC_FENCE_COUNT,
+            "preserved": True,
+        },
+        "semanticReadinessStatus": "blocked",
+        "semanticTrackedIssues": list(METAL_ROUNDTRIP_SEMANTIC_TRACKED_ISSUES),
+        "shaderArtifactsOnly": True,
+        "runtimeIntegrationIncluded": False,
+        "runtimeParityClaimed": False,
+    }
+
+
+def _atomic_fence_expected_message(target_contract: Mapping[str, str]) -> str:
+    memory_flags = " | ".join(MLX_FENCE_REQUESTED_CONTRACT["memoryFlags"])
+    return (
+        "Cannot lower CrossGL atomicThreadFence to "
+        f"{target_contract['targetDescription']} without changing its semantics "
+        f"(flags={memory_flags}, "
+        f"order={MLX_FENCE_REQUESTED_CONTRACT['memoryOrder']}, "
+        f"scope={MLX_FENCE_REQUESTED_CONTRACT['threadScope']}): "
+        "unsupported system thread scope"
+    )
+
+
+def _validate_atomic_fence_contract_report(
+    mlx_root: Path,
+    output_dir: Path,
+    payload: Mapping[str, Any],
+    *,
+    exact_report: bool,
+) -> dict[str, dict[str, Any]]:
+    targets = tuple(MLX_FENCE_TARGET_CONTRACTS)
+    summary = payload.get("summary", {})
+    _require(isinstance(summary, Mapping), "fence contract summary must be an object")
+    expected_diagnostic_codes = {
+        contract["diagnosticCode"]: 1
+        for contract in MLX_FENCE_TARGET_CONTRACTS.values()
+    }
+    expected_missing_capabilities = {
+        contract["missingCapability"]: 1
+        for contract in MLX_FENCE_TARGET_CONTRACTS.values()
+    }
+    diagnostics_by_code = summary.get("diagnosticsByCode", {})
+    missing_capability_counts = summary.get("missingCapabilityCounts", {})
+    _require(
+        isinstance(diagnostics_by_code, Mapping),
+        "fence contract diagnostic code counts must be an object",
+    )
+    _require(
+        isinstance(missing_capability_counts, Mapping),
+        "fence contract missing capability counts must be an object",
+    )
+    if exact_report:
+        _require(
+            summary.get("unitCount") == 1
+            and summary.get("artifactCount") == len(targets)
+            and summary.get("translatedCount") == 0
+            and summary.get("failedCount") == len(targets),
+            "fence contract translation must report one failed artifact per target",
+        )
+        _require(
+            summary.get("diagnosticCounts")
+            == {"error": len(targets), "note": 0, "warning": 0},
+            "fence contract translation reported unexpected diagnostic severities",
+        )
+        _require(
+            diagnostics_by_code == expected_diagnostic_codes,
+            "fence contract translation diagnostic codes changed",
+        )
+        _require(
+            missing_capability_counts == expected_missing_capabilities,
+            "fence contract translation missing capabilities changed",
+        )
+    else:
+        _require(
+            all(
+                diagnostics_by_code.get(code) == count
+                for code, count in expected_diagnostic_codes.items()
+            ),
+            "full-corpus fence contract diagnostic codes changed",
+        )
+        _require(
+            all(
+                missing_capability_counts.get(capability) == count
+                for capability, count in expected_missing_capabilities.items()
+            ),
+            "full-corpus fence contract missing capabilities changed",
+        )
+
+    diagnostics = payload.get("diagnostics", [])
+    artifacts = payload.get("artifacts", [])
+    _require(isinstance(diagnostics, list), "fence contract diagnostics must be a list")
+    _require(isinstance(artifacts, list), "fence contract artifacts must be a list")
+    if exact_report:
+        _require(
+            len(diagnostics) == len(targets) and len(artifacts) == len(targets),
+            "fence contract report must contain one diagnostic and artifact per target",
+        )
+
+    target_results: dict[str, dict[str, Any]] = {}
+    output_root = output_dir.resolve()
+    for target, contract in MLX_FENCE_TARGET_CONTRACTS.items():
+        target_diagnostics = [
+            diagnostic
+            for diagnostic in diagnostics
+            if isinstance(diagnostic, Mapping)
+            and diagnostic.get("target") == target
+            and str(diagnostic.get("message", "")).startswith(
+                "Cannot lower CrossGL atomicThreadFence"
+            )
+        ]
+        _require(
+            len(target_diagnostics) == 1,
+            f"fence contract report must contain one {target} diagnostic",
+        )
+        diagnostic = target_diagnostics[0]
+        expected_message = _atomic_fence_expected_message(contract)
+        _require(
+            {
+                "severity": diagnostic.get("severity"),
+                "code": diagnostic.get("code"),
+                "message": diagnostic.get("message"),
+                "target": diagnostic.get("target"),
+                "sourceBackend": diagnostic.get("sourceBackend"),
+                "missingCapabilities": diagnostic.get("missingCapabilities"),
+            }
+            == {
+                "severity": "error",
+                "code": contract["diagnosticCode"],
+                "message": expected_message,
+                "target": target,
+                "sourceBackend": "metal",
+                "missingCapabilities": [contract["missingCapability"]],
+            },
+            f"fence contract {target} structured diagnostic changed",
+        )
+        location = diagnostic.get("location", {})
+        _require(
+            isinstance(location, Mapping) and location.get("file") == MLX_FENCE_SOURCE,
+            f"fence contract {target} diagnostic source changed",
+        )
+        if exact_report:
+            target_summary = summary.get("artifactsByTarget", {}).get(target, {})
+            _require(
+                target_summary.get("artifactCount") == 1
+                and target_summary.get("translatedCount") == 0
+                and target_summary.get("failedCount") == 1,
+                f"fence contract {target} artifact summary changed",
+            )
+
+        target_artifacts = [
+            artifact
+            for artifact in artifacts
+            if isinstance(artifact, Mapping)
+            and artifact.get("source") == MLX_FENCE_SOURCE
+            and artifact.get("target") == target
+        ]
+        _require(
+            len(target_artifacts) == 1,
+            f"fence contract report must contain one {target} artifact record",
+        )
+        artifact = target_artifacts[0]
+        _require(
+            artifact.get("sourceBackend") == "metal"
+            and artifact.get("status") == "failed"
+            and artifact.get("error") == expected_message,
+            f"fence contract {target} failed artifact record changed",
+        )
+        artifact_path = artifact.get("path")
+        _require(
+            isinstance(artifact_path, str) and bool(artifact_path),
+            f"fence contract {target} artifact path is missing",
+        )
+        generated_path = (mlx_root / artifact_path).resolve()
+        _require(
+            _is_relative_to(generated_path, output_root),
+            f"fence contract {target} artifact path escaped its output directory",
+        )
+        _require(
+            not generated_path.exists(),
+            f"fence contract {target} unexpectedly emitted {artifact_path}",
+        )
+        _require(
+            "generatedHash" not in artifact and "generatedSizeBytes" not in artifact,
+            f"fence contract {target} recorded generated artifact metadata",
+        )
+        target_results[target] = {
+            "diagnosticCode": contract["diagnosticCode"],
+            "missingCapability": contract["missingCapability"],
+            "requestedContract": dict(MLX_FENCE_REQUESTED_CONTRACT),
+            "artifactStatus": "failed",
+            "artifactEmitted": False,
+        }
+    return target_results
+
+
+def _check_atomic_fence_contract(
+    mlx_root: Path,
+    work_dir: Path,
+    config_dir: Path,
+    report_dir: Path,
+    log_dir: Path,
+    python: str,
+) -> dict[str, Any]:
+    config_path = config_dir / "fence-contract.toml"
+    report_path = report_dir / "fence-contract.json"
+    output_dir = work_dir / "out-fence-contract"
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    targets = tuple(MLX_FENCE_TARGET_CONTRACTS)
+    _write_project_config(
+        config_path,
+        include=MLX_FENCE_SOURCE,
+        targets=targets,
+        output_dir=_relpath(output_dir, mlx_root),
+    )
+    result = _run_command(
+        "translate-fence-contract",
+        [
+            python,
+            "-m",
+            "crosstl",
+            "translate-project",
+            str(mlx_root),
+            "--config",
+            str(config_path),
+            "--report",
+            str(report_path),
+        ],
+        log_dir=log_dir,
+        check=False,
+    )
+    _require(
+        result.returncode == 1,
+        "atomic fence contract translation must fail with exit code 1",
+    )
+
+    payload = _load_json(report_path)
+    target_results = _validate_atomic_fence_contract_report(
+        mlx_root,
+        output_dir,
+        payload,
+        exact_report=True,
+    )
+
+    return {
+        "name": "atomic-fence-contract",
+        "status": "blocked-as-expected",
+        "report": _relpath(report_path, mlx_root),
         "source": MLX_FENCE_SOURCE,
-        "artifact": artifact_path,
-        **found,
+        "targets": list(targets),
+        "artifactRecordCount": len(targets),
+        "failedArtifactCount": len(targets),
+        "emittedArtifactCount": 0,
+        "requestedContract": dict(MLX_FENCE_REQUESTED_CONTRACT),
+        "targetContracts": target_results,
+        "semanticReadinessStatus": "blocked",
+        "semanticTrackedIssues": list(FENCE_CONTRACT_TRACKED_ISSUES),
+        "shaderArtifactsOnly": True,
+        "runtimeIntegrationIncluded": False,
+        "runtimeParityClaimed": False,
     }
 
 
@@ -659,11 +1257,12 @@ def _scaled_attention_local_alias_evidence(
             generated_by_target["vulkan"],
         )
     )
-    expected_entry_count = 36
+    expected_entry_count = 42
     _require(
         directx_entry_count == expected_entry_count
         and vulkan_entry_count == expected_entry_count,
-        "scaled-attention artifacts did not retain all 36 materialized entries",
+        "scaled-attention artifacts did not retain all "
+        f"{expected_entry_count} materialized entries",
     )
 
     return {
@@ -673,9 +1272,9 @@ def _scaled_attention_local_alias_evidence(
             "directx": directx_entry_count,
             "vulkan": vulkan_entry_count,
         },
-        "resolvedDeclarationTypeCount": 336,
-        "resolvedCastCount": 72,
-        "resolvedStaticMemberCount": 36,
+        "resolvedDeclarationTypeCount": 402,
+        "resolvedCastCount": 87,
+        "resolvedStaticMemberCount": 42,
         "vulkanProjectWarningCount": 0,
         "remainingAliasShapesTrackedBy": (
             "https://github.com/CrossGL/crosstl/issues/1567"
@@ -763,7 +1362,6 @@ def _translate_directx_vulkan_frontier(
         artifact_validation.get("failedCount") == 0,
         "artifact validation reported failures for DirectX/Vulkan frontier outputs",
     )
-    vulkan_semantic_evidence = _vulkan_frontier_semantic_evidence(mlx_root, payload)
     scaled_attention_alias_evidence = _scaled_attention_local_alias_evidence(
         mlx_root, payload
     )
@@ -884,7 +1482,8 @@ def _translate_directx_vulkan_frontier(
             )
     return {
         "name": "directx-vulkan-frontier",
-        "status": "blocked-by-semantic-contract",
+        "status": "passed",
+        "scope": "clean-frontier",
         "report": _relpath(report_path, mlx_root),
         "sources": list(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
         "unitCount": frontier_count,
@@ -901,13 +1500,10 @@ def _translate_directx_vulkan_frontier(
             if vulkan_runs
             else ("not-run" if run_toolchains else "blocked-by-tracked-issues")
         ),
-        "vulkanSemanticReadinessStatus": "blocked",
-        "semanticBlockers": list(VULKAN_FRONTIER_SEMANTIC_TRACKED_ISSUES),
-        "semanticEvidence": [
-            vulkan_semantic_evidence,
-            scaled_attention_alias_evidence,
-        ],
+        "semanticReadinessStatus": "not-established",
+        "regressionEvidence": [scaled_attention_alias_evidence],
         "trackedIssues": list(FRONTIER_VALIDATION_TRACKED_ISSUES),
+        "runtimeParityClaimed": False,
     }
 
 
@@ -1230,6 +1826,12 @@ def _check_opengl_frontier(
         "OpenGL frontier artifacts must be a list",
     )
     frontier_count = len(MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES)
+    diagnostic_counts = summary.get("diagnosticCounts", {})
+    diagnostics = payload.get("diagnostics", [])
+    _require(
+        isinstance(diagnostic_counts, Mapping) and isinstance(diagnostics, list),
+        "OpenGL frontier diagnostics must be reported as structured collections",
+    )
     _require(
         summary.get("unitCount") == frontier_count
         and summary.get("artifactCount") == frontier_count
@@ -1237,6 +1839,14 @@ def _check_opengl_frontier(
         and summary.get("failedCount") == 0
         and len(artifacts) == frontier_count,
         "OpenGL frontier report did not contain every clean translated artifact",
+    )
+    _require(
+        not diagnostics
+        and all(
+            diagnostic_counts.get(severity) == 0
+            for severity in ("note", "warning", "error")
+        ),
+        "OpenGL frontier translation must complete with zero project diagnostics",
     )
     artifacts_by_source = {
         artifact.get("source"): artifact
@@ -1266,6 +1876,7 @@ def _check_opengl_frontier(
 
     validation_status = "not-required"
     validation_outputs: dict[str, str] = {}
+    toolchain_validated_sources: list[str] = []
     if require_toolchain:
         required_tools = {
             "glslangValidator": shutil.which("glslangValidator"),
@@ -1331,6 +1942,11 @@ def _check_opengl_frontier(
                 ),
             )
             validation_outputs[source] = _relpath(output_path, mlx_root)
+            toolchain_validated_sources.append(source)
+        _require(
+            toolchain_validated_sources == list(MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES),
+            "OpenGL frontier toolchain did not validate every configured source",
+        )
         validation_status = "validated"
 
     return {
@@ -1338,9 +1954,13 @@ def _check_opengl_frontier(
         "status": "passed",
         "report": _relpath(report_path, mlx_root),
         "sources": list(MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES),
+        "sourceCount": frontier_count,
         "target": "opengl",
         "artifactCount": frontier_count,
+        "projectDiagnosticCount": 0,
         "toolchainRequired": require_toolchain,
+        "toolchainValidatedSources": toolchain_validated_sources,
+        "toolchainValidatedArtifactCount": len(toolchain_validated_sources),
         "nativeValidationStatus": validation_status,
         "nativeValidator": "glslangValidator",
         "spirvValidator": "spirv-val",
@@ -2489,11 +3109,12 @@ def _translate_full_corpus(
 ) -> dict[str, Any]:
     config_path = config_dir / "full-corpus.toml"
     report_path = report_dir / "full-corpus.json"
+    output_dir = work_dir / "out-full-corpus"
     _write_project_config(
         config_path,
         include=f"{MLX_METAL_KERNEL_ROOT}/**/*.metal",
         targets=FULL_CORPUS_TARGETS,
-        output_dir=_relpath(work_dir / "out-full-corpus", mlx_root),
+        output_dir=_relpath(output_dir, mlx_root),
         metal_source_options={
             "max_template_specializations": FULL_CORPUS_MAX_TEMPLATE_SPECIALIZATIONS,
             "max_template_materialization_work": (
@@ -2556,7 +3177,6 @@ def _translate_full_corpus(
         "full-corpus diagnostic counts must be an object",
     )
     failed_count = summary.get("failedCount")
-    error_count = diagnostic_counts.get("error", 0)
     _require(
         summary.get("unitCount") == EXPECTED_METAL_KERNEL_COUNT,
         "full-corpus translation must scan {} units; found {}".format(
@@ -2594,12 +3214,57 @@ def _translate_full_corpus(
         isinstance(artifact_validation, dict),
         "full-corpus validation summary must be an object",
     )
-    has_translation_failures = bool(failed_count or error_count or result.returncode)
-    if has_translation_failures:
+    fence_contracts = _validate_atomic_fence_contract_report(
+        mlx_root,
+        output_dir,
+        payload,
+        exact_report=False,
+    )
+    diagnostics = payload.get("diagnostics", [])
+    _require(isinstance(diagnostics, list), "full-corpus diagnostics must be a list")
+    error_diagnostics_by_code = Counter(
+        diagnostic.get("code")
+        for diagnostic in diagnostics
+        if isinstance(diagnostic, Mapping)
+        and diagnostic.get("severity") == "error"
+        and isinstance(diagnostic.get("code"), str)
+    )
+    expected_error_diagnostics_by_code = Counter(
+        {
+            **{
+                contract["diagnosticCode"]: 1
+                for contract in MLX_FENCE_TARGET_CONTRACTS.values()
+            },
+            "project.validate.failed-artifact": (
+                FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT
+            ),
+        }
+    )
+    expected_target_counts = {
+        target: {
+            "translatedCount": EXPECTED_METAL_KERNEL_COUNT - 1,
+            "failedCount": 1,
+        }
+        for target in FULL_CORPUS_TARGETS
+    }
+    expected_fence_only_result = (
+        failed_count == FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT
+        and summary.get("translatedCount")
+        == FULL_CORPUS_EXPECTED_TRANSLATED_ARTIFACT_COUNT
+        and result.returncode == 1
+        and target_counts == expected_target_counts
+        and artifact_validation.get("failedCount")
+        == FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT
+        and error_diagnostics_by_code == expected_error_diagnostics_by_code
+    )
+    if not expected_fence_only_result:
         _require(
             FULL_CORPUS_TRANSLATION_TRACKED_ISSUES,
-            "full-corpus translation reported failed artifacts or errors "
-            "without tracked issue references",
+            "full-corpus translation reported failures beyond the expected fence "
+            "contract without tracked issue references",
+        )
+        unexpected_error_diagnostics = (
+            error_diagnostics_by_code - expected_error_diagnostics_by_code
         )
         return {
             "name": "full-corpus",
@@ -2614,6 +3279,21 @@ def _translate_full_corpus(
             "targets": list(FULL_CORPUS_TARGETS),
             "targetCounts": target_counts,
             "validationFailedCount": artifact_validation.get("failedCount", 0),
+            "expectedFenceFailureCount": FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT,
+            "unexpectedFailedCount": max(
+                int(summary.get("failedCount", 0))
+                - FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT,
+                0,
+            ),
+            "unexpectedErrorDiagnosticsByCode": dict(
+                sorted(unexpected_error_diagnostics.items())
+            ),
+            "fenceContract": {
+                "status": "blocked-as-expected",
+                "source": MLX_FENCE_SOURCE,
+                "targetContracts": fence_contracts,
+                "trackedIssues": list(FENCE_CONTRACT_TRACKED_ISSUES),
+            },
             "shaderArtifactsOnly": True,
             "runtimeIntegrationIncluded": False,
             "trackedTranslationIssues": list(FULL_CORPUS_TRANSLATION_TRACKED_ISSUES),
@@ -2622,30 +3302,26 @@ def _translate_full_corpus(
                 FULL_CORPUS_MAX_TEMPLATE_MATERIALIZATION_WORK
             ),
         }
-    _require(
-        summary.get("translatedCount") == FULL_CORPUS_EXPECTED_ARTIFACT_COUNT,
-        "full-corpus translation did not emit every expected artifact",
-    )
-    _require(
-        artifact_validation.get("failedCount") == 0,
-        "artifact validation reported failures for full-corpus outputs",
-    )
-    for target, target_count in target_counts.items():
-        _require(
-            target_count["translatedCount"] == EXPECTED_METAL_KERNEL_COUNT
-            and target_count["failedCount"] == 0,
-            f"full-corpus {target} artifacts were not translated cleanly",
-        )
     return {
         "name": "full-corpus",
-        "status": "passed",
+        "status": "passed-with-expected-fence-blockers",
         "report": _relpath(report_path, mlx_root),
         "unitCount": EXPECTED_METAL_KERNEL_COUNT,
         "artifactCount": FULL_CORPUS_EXPECTED_ARTIFACT_COUNT,
+        "translatedCount": FULL_CORPUS_EXPECTED_TRANSLATED_ARTIFACT_COUNT,
+        "failedCount": FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT,
         "targets": list(FULL_CORPUS_TARGETS),
         "targetCounts": target_counts,
+        "validationFailedCount": artifact_validation.get("failedCount", 0),
+        "fenceContract": {
+            "status": "blocked-as-expected",
+            "source": MLX_FENCE_SOURCE,
+            "targetContracts": fence_contracts,
+            "trackedIssues": list(FENCE_CONTRACT_TRACKED_ISSUES),
+        },
         "shaderArtifactsOnly": True,
         "runtimeIntegrationIncluded": False,
+        "runtimeParityClaimed": False,
         "trackedTranslationIssues": list(FULL_CORPUS_TRANSLATION_TRACKED_ISSUES),
         "maxTemplateSpecializations": FULL_CORPUS_MAX_TEMPLATE_SPECIALIZATIONS,
         "maxTemplateMaterializationWork": FULL_CORPUS_MAX_TEMPLATE_MATERIALIZATION_WORK,
@@ -2654,6 +3330,7 @@ def _translate_full_corpus(
 
 def run_checks(args: argparse.Namespace) -> dict[str, Any]:
     mlx_root = Path(args.mlx_root).resolve()
+    require_metal_toolchain = bool(getattr(args, "require_metal_toolchain", False))
     require_opengl_frontier_toolchain = bool(
         getattr(args, "require_opengl_frontier_toolchain", False)
     )
@@ -2695,7 +3372,28 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             args.python,
         ),
     ]
+    checks.append(
+        _check_metal_roundtrip(
+            mlx_root,
+            work_dir,
+            config_dir,
+            report_dir,
+            log_dir,
+            args.python,
+            require_metal_toolchain=require_metal_toolchain,
+        )
+    )
     if args.mode == REDUCED_FRONTIER_MODE:
+        checks.append(
+            _check_atomic_fence_contract(
+                mlx_root,
+                work_dir,
+                config_dir,
+                report_dir,
+                log_dir,
+                args.python,
+            )
+        )
         checks.append(
             _translate_directx_vulkan_frontier(
                 mlx_root,
@@ -2781,12 +3479,22 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
         "scope": {
             "mode": args.mode,
             "sourceRoot": MLX_METAL_KERNEL_ROOT,
+            "metalRoundTripSource": MLX_METAL_ROUNDTRIP_SOURCE,
+            "metalRoundTripIncluded": True,
+            "metalToolchainRequired": require_metal_toolchain,
             "frontierSources": list(MLX_REDUCED_FRONTIER_SOURCES),
             "cleanFrontierSources": list(MLX_CLEAN_REDUCED_FRONTIER_SOURCES),
-            "blockedFrontierSources": [],
+            "blockedFrontierSources": list(MLX_BLOCKED_REDUCED_FRONTIER_SOURCES),
+            "blockedFrontierIssues": list(FENCE_CONTRACT_TRACKED_ISSUES),
             "fullCorpusTargets": list(FULL_CORPUS_TARGETS),
             "fullCorpusExpectedUnitCount": EXPECTED_METAL_KERNEL_COUNT,
             "fullCorpusExpectedArtifactCount": FULL_CORPUS_EXPECTED_ARTIFACT_COUNT,
+            "fullCorpusExpectedTranslatedArtifactCount": (
+                FULL_CORPUS_EXPECTED_TRANSLATED_ARTIFACT_COUNT
+            ),
+            "fullCorpusExpectedFenceFailureCount": (
+                FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT
+            ),
             "shaderArtifactsOnly": True,
             "runtimeIntegrationIncluded": False,
             "runtimeReadinessIncluded": args.mode == REDUCED_FRONTIER_MODE,
@@ -2829,6 +3537,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--python",
         default=sys.executable,
         help="Python executable used to invoke `python -m crosstl`.",
+    )
+    parser.add_argument(
+        "--require-metal-toolchain",
+        action="store_true",
+        help=(
+            "Fail unless the generated Metal round-trip artifact compiles "
+            "natively with the macOS Metal compiler."
+        ),
     )
     parser.add_argument(
         "--require-directx-toolchain",

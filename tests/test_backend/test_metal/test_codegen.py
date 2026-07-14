@@ -7,17 +7,25 @@ import pytest
 
 import crosstl
 from crosstl.backend.Metal.MetalCrossGLCodeGen import (
+    MetalAtomicFenceLoweringError,
     MetalBuiltinOverloadResolutionError,
+    MetalCallableAliasLoweringError,
     MetalCallableLoweringError,
     MetalSizeofResolutionError,
     MetalStageEntryArrayResourceError,
     MetalStaticConstantResolutionError,
+    MetalStructMethodCallResolutionError,
+    MetalTemplateArgumentResolutionError,
     MetalToCrossGLConverter,
     MetalWideVectorLoweringError,
 )
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
-from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+from crosstl.backend.Metal.preprocessor import (
+    MetalPreprocessor,
+    MetalTemplateSpecializationError,
+)
+from crosstl.translator.ast import ResourceMemoryQualifierNode
 from crosstl.translator.codegen.directx_codegen import (
     HLSLCodeGen as TranslatorHLSLCodeGen,
 )
@@ -46,6 +54,12 @@ def generate_code(ast_node):
 def convert(code: str) -> str:
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
+    return generate_code(ast)
+
+
+def convert_without_preprocessing(code: str, file_path=None) -> str:
+    tokens = MetalLexer(code, preprocess=False).tokenize()
+    ast = MetalParser(tokens, file_path=file_path).parse()
     return generate_code(ast)
 
 
@@ -984,6 +998,172 @@ def test_codegen_struct_method_receiver_directions_reach_native_targets():
         assert "self.scalar += amount;" in generated
         assert "self.values[1] = amount;" in generated
         assert "self.nested.value += amount;" in generated
+
+
+def test_codegen_rebinds_lowered_struct_sibling_overload_with_resources():
+    source = """
+    struct ReadWriter_float2_float2 {
+        const device float* input;
+        device float* output;
+        int bias;
+
+        ReadWriter_float2_float2(
+            const device float* input_, device float* output_, int bias_)
+            : input(input_), output(output_), bias(bias_) {}
+
+        float post_in(float elem) const {
+            return elem + input[0] + float(bias);
+        }
+
+        int post_in(int elem) const {
+            return elem + int(input[0]) + bias;
+        }
+
+        float load(float elem) const {
+            return post_in(elem);
+        }
+    };
+
+    kernel void k(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+        ReadWriter_float2_float2 rw(input, output, 2);
+        output[0] = rw.load(1.0f);
+    }
+    """
+
+    lowered = MetalPreprocessor().preprocess(source)
+    assert "return post_in(elem);" in lowered
+
+    crossgl = convert(lowered)
+    load_body = crossgl.rsplit("ReadWriter_float2_float2__load", 1)[1].split("}", 1)[0]
+
+    assert (
+        "ReadWriter_float2_float2__post_in(self, crosstl_ptr_input, "
+        "crosstl_ptr_output, elem)" in load_body
+    )
+    assert "return post_in(elem);" not in load_body
+    assert (
+        "float ReadWriter_float2_float2__load(in thread "
+        "ReadWriter_float2_float2& self" in normalize(crossgl)
+    )
+
+
+def test_codegen_does_not_rebind_global_call_from_lowered_struct_method():
+    lowered = """
+    struct Reader { int bias; };
+
+    float post_in(float elem) {
+        return elem * 2.0f;
+    }
+
+    float Reader__post_in(thread const Reader& self, float elem) {
+        return elem + float(self.bias);
+    }
+
+    float Reader__load(thread const Reader& self, float elem) {
+        return post_in(elem);
+    }
+    """
+
+    crossgl = convert(lowered)
+    load_body = crossgl.split("Reader__load", 1)[1].split("}", 1)[0]
+
+    assert "return post_in(elem);" in load_body
+    assert "Reader__post_in(self" not in load_body
+
+
+def test_codegen_does_not_rebind_lexically_shadowed_callable():
+    lowered = """
+    struct Reader { int bias; };
+    struct Callable { int tag; };
+
+    float Reader__post_in(thread const Reader& self, float elem) {
+        return elem + float(self.bias);
+    }
+
+    float Reader__load(
+        thread const Reader& self, Callable post_in, float elem) {
+        return post_in(elem);
+    }
+    """
+
+    crossgl = convert(lowered)
+    load_body = crossgl.split("Reader__load", 1)[1].split("}", 1)[0]
+
+    assert "return post_in(elem);" in load_body
+    assert "Reader__post_in(self" not in load_body
+
+
+def test_codegen_fails_closed_for_ambiguous_lowered_sibling_overload():
+    lowered = """
+    struct Reader { int bias; };
+
+    long Reader__post_in(thread const Reader& self, long elem) {
+        return elem;
+    }
+
+    int64_t Reader__post_in(thread const Reader& self, int64_t elem) {
+        return elem;
+    }
+
+    long Reader__load(thread const Reader& self, long elem) {
+        return post_in(elem);
+    }
+    """
+
+    with pytest.raises(MetalStructMethodCallResolutionError) as exc_info:
+        convert(lowered)
+
+    error = exc_info.value
+    assert error.owner == "Reader"
+    assert error.method_name == "post_in"
+    assert error.argument_types == ("int64",)
+    assert error.reason == "multiple exact overloads remain after type matching"
+    assert error.candidates == (
+        "Reader__post_in(long)",
+        "Reader__post_in(int64_t)",
+    )
+    assert "qualify the intended call" in str(error)
+
+
+def test_codegen_rebinds_nested_lowered_sibling_calls():
+    source = """
+    struct Reader {
+        const device float* input;
+
+        Reader(const device float* input_) : input(input_) {}
+
+        float post_in(float elem) const {
+            return elem + input[0];
+        }
+
+        int post_in(int elem) const {
+            return elem + int(input[0]);
+        }
+
+        float load(float elem) const {
+            return float(post_in(post_in(int(elem)))) + post_in(elem);
+        }
+    };
+
+    kernel void k(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+        Reader reader(input);
+        output[0] = reader.load(1.0f);
+    }
+    """
+
+    crossgl = convert(MetalPreprocessor().preprocess(source))
+    load_body = normalize(crossgl.rsplit("Reader__load", 1)[1].split("}", 1)[0])
+
+    assert (
+        "Reader__post_in(self, crosstl_ptr_input, "
+        "Reader__post_in(self, crosstl_ptr_input, int(elem)))" in load_body
+    )
+    assert "Reader__post_in(self, crosstl_ptr_input, elem)" in load_body
+    assert "post_in(post_in" not in load_body
 
 
 def test_codegen_fragment_early_tests_attribute_becomes_stage_layout():
@@ -2041,7 +2221,12 @@ def test_codegen_stage_entry_arrays_lower_to_non_conflicting_resources(tmp_path)
     assert "StructuredBuffer<int> strides : register(t1);" in hlsl
     assert "RWStructuredBuffer<float> values : register(u2);" in hlsl
     assert "StructuredBuffer<float> source : register(t0);" in hlsl
-    assert "void copy_pair(int offsets[2], inout float scratch[2])" in hlsl
+    assert (
+        "void copy_pair(StructuredBuffer<int> offsets, "
+        "inout RWStructuredBuffer<float> scratch)"
+    ) in hlsl
+    assert "const int*" not in hlsl
+    assert "float*" not in hlsl
     assert "uint index = uint(strides.Load((gid % 3)));" in hlsl
     assert "values[gid] = (source.Load(index) + values.Load(gid));" in hlsl
 
@@ -2195,6 +2380,52 @@ def test_codegen_address_of_device_buffer_element_preserves_lvalue():
     assert "load_one((&values[gid]), result);" in crossgl
     assert "&buffer_load(values, gid)" not in crossgl
     assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_preserves_readonly_device_helper_parameters_for_hlsl(tmp_path):
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void copy_one(const device float* src, device float* dst, uint index) {
+        dst[index] = src[index];
+    }
+
+    kernel void copy_kernel(
+        device const float* src [[buffer(0)]],
+        device float* dst [[buffer(1)]],
+        uint index [[thread_position_in_grid]]) {
+        copy_one(src, dst, index);
+    }
+    """
+
+    crossgl = convert(code)
+
+    assert (
+        "void copy_one(const device float* src, device float* dst, uint index)"
+        in crossgl
+    )
+    assert "StructuredBuffer<float> src @buffer(0)" in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert (
+        "void copy_one(StructuredBuffer<float> src, "
+        "RWStructuredBuffer<float> dst, uint index)" in hlsl
+    )
+    assert "StructuredBuffer<float> src : register(t0);" in hlsl
+    assert "copy_one(src, dst, index);" in hlsl
+
+    dxc = shutil.which("dxc")
+    if dxc is not None:
+        hlsl_path = tmp_path / "readonly-device-helper.hlsl"
+        hlsl_path.write_text(hlsl, encoding="utf-8")
+        result = subprocess.run(
+            [dxc, "-T", "cs_6_0", "-E", "CSMain", str(hlsl_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_directx_codegen_lowers_native_metal_entry_buffer_parameters_to_resources():
@@ -2708,13 +2939,25 @@ def test_codegen_lowers_static_cast_from_apple_compute_sample():
 def test_codegen_scoped_atomic_thread_fence_from_mlx_kernel_roundtrips():
     # Reduced from:
     # Repo: https://github.com/ml-explore/mlx
-    # Commit: 6ea7a00d05d548219864d10ff6c013b7544b13ea
+    # Commit: 4367c73b60541ddd5a266ce4644fd93d20223b6e
     # Path: mlx/backend/metal/kernels/fence.metal
     code = """
-    #include <metal_stdlib>
-    using namespace metal;
+    #pragma METAL internals : enable
 
-    kernel void fence() {
+    #ifndef __METAL_MEMORY_SCOPE_SYSTEM__
+    #define __METAL_MEMORY_SCOPE_SYSTEM__ 3
+    #endif
+    namespace metal {
+    constexpr constant metal::thread_scope thread_scope_system =
+        static_cast<thread_scope>(__METAL_MEMORY_SCOPE_SYSTEM__);
+    }
+
+    #include <metal_atomic>
+
+    [[kernel]] void fence(
+        volatile coherent(system) device uint* timestamp [[buffer(0)]],
+        constant uint& value [[buffer(1)]]) {
+        timestamp[0] = value;
         metal::atomic_thread_fence(metal::mem_flags::mem_device,
                                    metal::memory_order_seq_cst,
                                    metal::thread_scope_system);
@@ -2722,11 +2965,192 @@ def test_codegen_scoped_atomic_thread_fence_from_mlx_kernel_roundtrips():
     """
     crossgl = convert(code)
 
-    assert "memoryBarrier();" in crossgl
+    assert (
+        "atomicThreadFence(mem_device, memory_order_seq_cst, " "thread_scope_system);"
+    ) in crossgl
+    assert (
+        "volatile coherent(system) RWStructuredBuffer<uint> timestamp @buffer(0)"
+        in crossgl
+    )
+    assert "memoryBarrier();" not in crossgl
+    assert "constant thread_scope thread_scope_system" not in crossgl
     assert "metal_u3a_u3aatomic_thread_fence" not in crossgl
     assert "metal::atomic_thread_fence" not in crossgl
     metal = MetalCodeGen().generate(parse_crossgl(crossgl))
-    assert "threadgroup_barrier(mem_flags::mem_device);" in metal
+    assert (
+        "metal::atomic_thread_fence(metal::mem_flags::mem_device, "
+        "metal::memory_order_seq_cst, metal::thread_scope_system);"
+    ) in metal
+    assert "volatile coherent(system) device uint* timestamp [[buffer(0)]]" in metal
+    assert "device uint* volatile" not in metal
+    assert "threadgroup_barrier(mem_flags::mem_device);" not in metal
+    assert "#pragma METAL internals : enable" in metal
+    assert "__METAL_MEMORY_SCOPE_SYSTEM__ 3" in metal
+
+
+def test_codegen_resource_memory_qualifiers_survive_aliases_without_leaking():
+    code = """
+    using FencePointer = volatile coherent(system) device atomic_uint*;
+
+    [[kernel]] void qualify(
+        FencePointer aliased [[buffer(0)]],
+        volatile device uint* volatile_only [[buffer(1)]],
+        coherent(device) device uint* device_scoped [[buffer(2)]],
+        device uint* plain [[buffer(3)]],
+        uint index [[thread_position_in_grid]]) {
+      uint local = index;
+    }
+    """
+
+    crossgl = convert(code)
+    assert (
+        "volatile coherent(system) RWStructuredBuffer<atomic_uint> aliased "
+        "@buffer(0)" in crossgl
+    )
+    assert "volatile RWStructuredBuffer<uint> volatile_only @buffer(1)" in crossgl
+    assert (
+        "coherent(device) RWStructuredBuffer<uint> device_scoped @buffer(2)" in crossgl
+    )
+    assert "RWStructuredBuffer<uint> plain @buffer(3)" in crossgl
+    assert "volatile uint index" not in crossgl
+    assert "coherent(device) uint index" not in crossgl
+
+    shared_ast = parse_crossgl(crossgl)
+    function = next(iter(shared_ast.stages.values())).entry_point
+    aliased, volatile_only, device_scoped, plain, index = function.parameters
+
+    assert all(
+        isinstance(qualifier, ResourceMemoryQualifierNode)
+        for qualifier in aliased.resource_qualifiers
+    )
+    assert [
+        (qualifier.kind, qualifier.scope) for qualifier in aliased.resource_qualifiers
+    ] == [("volatile", None), ("coherent", "system")]
+    assert [str(qualifier) for qualifier in volatile_only.resource_qualifiers] == [
+        "volatile"
+    ]
+    assert [str(qualifier) for qualifier in device_scoped.resource_qualifiers] == [
+        "coherent(device)"
+    ]
+    assert plain.resource_qualifiers == []
+    assert index.resource_qualifiers == []
+    assert function.body.statements[0].resource_qualifiers == []
+
+    metal = MetalCodeGen().generate(shared_ast)
+    assert (
+        "volatile coherent(system) device atomic_uint* aliased [[buffer(0)]]" in metal
+    )
+    assert "volatile device uint* volatile_only [[buffer(1)]]" in metal
+    assert "coherent(device) device uint* device_scoped [[buffer(2)]]" in metal
+    assert "device uint* plain [[buffer(3)]]" in metal
+    assert "uint index [[thread_position_in_grid]]" in metal
+    assert "device atomic_uint* volatile" not in metal
+    assert "uint local = index;" in metal
+    assert "volatile uint local" not in metal
+    assert "coherent(device) uint local" not in metal
+
+
+def test_codegen_scopes_local_resource_alias_qualifiers_and_shadowing():
+    code = """
+    void aliases(uint index) {
+      using FencePointer = volatile coherent(system) device uint*;
+      FencePointer qualified = nullptr;
+      {
+        using FencePointer = device uint*;
+        FencePointer shadowed = nullptr;
+      }
+      FencePointer restored = nullptr;
+    }
+
+    void later(uint index) {
+      uint local = index;
+    }
+    """
+
+    crossgl = convert(code)
+
+    assert crossgl.count("volatile coherent(system) device uint*") == 2
+    assert "device uint* shadowed = nullptr;" in crossgl
+    assert "volatile device uint* shadowed" not in crossgl
+    assert "coherent(system) device uint* shadowed" not in crossgl
+    assert "uint local = index;" in crossgl
+    assert "volatile uint local" not in crossgl
+    assert "coherent(system) uint local" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_preserves_atomic_thread_fence_contract_matrix():
+    code = """
+    kernel void fence_contracts() {
+        metal::atomic_thread_fence(metal::mem_flags::mem_threadgroup,
+                                   metal::memory_order_relaxed,
+                                   metal::thread_scope_threadgroup);
+        metal::atomic_thread_fence(metal::mem_flags::mem_device,
+                                   metal::memory_order_acquire,
+                                   metal::thread_scope_device);
+        metal::atomic_thread_fence(metal::mem_flags::mem_texture,
+                                   metal::memory_order_release,
+                                   metal::thread_scope_threadgroup);
+        metal::atomic_thread_fence(
+            metal::mem_flags::mem_device | metal::mem_flags::mem_threadgroup,
+            metal::memory_order_acq_rel,
+            metal::thread_scope_device);
+        metal::atomic_thread_fence(metal::mem_flags::mem_device,
+                                   metal::memory_order_seq_cst,
+                                   metal::thread_scope_system);
+    }
+    """
+
+    crossgl = convert(code)
+    expected_contracts = (
+        "atomicThreadFence(mem_threadgroup, memory_order_relaxed, "
+        "thread_scope_threadgroup);",
+        "atomicThreadFence(mem_device, memory_order_acquire, " "thread_scope_device);",
+        "atomicThreadFence(mem_texture, memory_order_release, "
+        "thread_scope_threadgroup);",
+        "atomicThreadFence(mem_device | mem_threadgroup, "
+        "memory_order_acq_rel, thread_scope_device);",
+        "atomicThreadFence(mem_device, memory_order_seq_cst, " "thread_scope_system);",
+    )
+    for contract in expected_contracts:
+        assert contract in crossgl
+
+    metal = MetalCodeGen().generate(parse_crossgl(crossgl))
+    assert metal.count("metal::atomic_thread_fence(") == len(expected_contracts)
+    assert "metal::memory_order_relaxed" in metal
+    assert "metal::memory_order_acquire" in metal
+    assert "metal::memory_order_release" in metal
+    assert "metal::memory_order_acq_rel" in metal
+    assert "metal::memory_order_seq_cst" in metal
+    assert "metal::thread_scope_threadgroup" in metal
+    assert "metal::thread_scope_device" in metal
+    assert "metal::thread_scope_system" in metal
+    assert "threadgroup_barrier(" not in metal
+
+
+def test_codegen_rejects_unknown_atomic_thread_fence_order():
+    code = """
+    kernel void fence() {
+        metal::atomic_thread_fence(metal::mem_flags::mem_device,
+                                   metal::memory_order_consume,
+                                   metal::thread_scope_device);
+    }
+    """
+
+    with pytest.raises(MetalAtomicFenceLoweringError) as exc_info:
+        convert(code)
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.metal-atomic-fence-unsupported"
+    )
+    assert diagnostic.missing_capabilities == (
+        "metal.atomic-thread-fence-contract-lowering",
+    )
+    assert diagnostic.reason == "unsupported-memory-order"
+    assert diagnostic.memory_flags == "mem_device"
+    assert diagnostic.memory_order == "memory_order_consume"
+    assert diagnostic.thread_scope == "thread_scope_device"
 
 
 def test_codegen_lowers_combined_threadgroup_barrier_flags_from_blender_builtin():
@@ -5436,6 +5860,188 @@ def test_codegen_visible_function_table_using_signature_alias_from_apple_wwdc():
     assert parse_crossgl(result) is not None
 
 
+def test_codegen_materializes_callable_alias_without_runtime_typedef():
+    code = """
+    typedef void (*RadixFunc)(thread float2*, thread float2*);
+
+    void radix2(thread float2* values, thread float2* scratch) {
+        values[0] = scratch[0];
+    }
+
+    void radix4(thread float2* values, thread float2* scratch) {
+        values[0] = scratch[0] + scratch[1];
+    }
+
+    template <int Radix, RadixFunc Function>
+    void apply_radix(thread float2* values, thread float2* scratch) {
+        Function(values, scratch);
+    }
+
+    kernel void fft(device float2* out [[buffer(0)]]) {
+        float2 values[2];
+        float2 scratch[2];
+        apply_radix<2, radix2>(values, scratch);
+        apply_radix<4, radix4>(values, scratch);
+        out[0] = values[0];
+    }
+    """
+    result = convert(code)
+
+    assert "typedef void RadixFunc;" not in result
+    assert "void RadixFunc;" not in result
+    assert "apply_radix_2_radix2(values, scratch);" in result
+    assert "apply_radix_4_radix4(values, scratch);" in result
+    assert "radix2(values, scratch);" in result
+    assert "radix4(values, scratch);" in result
+    assert parse_crossgl(result) is not None
+
+
+def test_codegen_callable_alias_materializations_reach_directx_and_opengl(
+    tmp_path,
+):
+    code = """
+    typedef float (*UnaryFunc)(float);
+
+    float plus_one(float value) {
+        return value + 1.0;
+    }
+
+    float times_two(float value) {
+        return value * 2.0;
+    }
+
+    template <UnaryFunc Function>
+    float apply(float value) {
+        return Function(value);
+    }
+
+    kernel void callable_kernel(device float* out [[buffer(0)]]) {
+        out[0] = apply<plus_one>(1.0) + apply<times_two>(2.0);
+    }
+    """
+    ast = parse_crossgl(convert(code))
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+    glsl = GLSLCodeGen().generate(ast)
+
+    for artifact in (hlsl, glsl):
+        assert "apply_plus_one(1.0)" in artifact
+        assert "apply_times_two(2.0)" in artifact
+        assert "return plus_one(value);" in artifact
+        assert "return times_two(value);" in artifact
+        assert "UnaryFunc" not in artifact
+        assert "Function(" not in artifact
+
+    glslang = shutil.which("glslangValidator")
+    if glslang:
+        hlsl_path = tmp_path / "callable_alias.hlsl"
+        hlsl_path.write_text(hlsl, encoding="utf-8")
+        hlsl_result = subprocess.run(
+            [
+                glslang,
+                "-D",
+                "-S",
+                "comp",
+                "-e",
+                "CSMain",
+                "-V",
+                str(hlsl_path),
+                "-o",
+                str(tmp_path / "callable_alias_hlsl.spv"),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert hlsl_result.returncode == 0, hlsl_result.stdout + hlsl_result.stderr
+
+        glsl_path = tmp_path / "callable_alias.comp"
+        glsl_path.write_text(glsl, encoding="utf-8")
+        glsl_result = subprocess.run(
+            [
+                glslang,
+                "-S",
+                "comp",
+                "-V",
+                str(glsl_path),
+                "-o",
+                str(tmp_path / "callable_alias_glsl.spv"),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert glsl_result.returncode == 0, glsl_result.stdout + glsl_result.stderr
+
+    dxc = shutil.which("dxc")
+    if dxc:
+        hlsl_path = tmp_path / "callable_alias.hlsl"
+        hlsl_path.write_text(hlsl, encoding="utf-8")
+        dxc_result = subprocess.run(
+            [
+                dxc,
+                "-T",
+                "cs_6_0",
+                "-E",
+                "CSMain",
+                str(hlsl_path),
+                "-Fo",
+                str(tmp_path / "callable_alias.dxil"),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert dxc_result.returncode == 0, dxc_result.stdout + dxc_result.stderr
+
+
+def test_codegen_rejects_runtime_callable_alias_value():
+    code = """
+    typedef void (*RadixFunc)(thread float2*, thread float2*);
+    typedef RadixFunc SelectedRadixFunc;
+
+    void invoke(SelectedRadixFunc function,
+                thread float2* values,
+                thread float2* scratch) {
+        function(values, scratch);
+    }
+    """
+
+    with pytest.raises(MetalCallableAliasLoweringError) as excinfo:
+        convert(code)
+
+    error = excinfo.value
+    assert error.alias_name == "SelectedRadixFunc"
+    assert error.signature == (
+        "void (*SelectedRadixFunc)(thread float2*, thread float2*)"
+    )
+    assert error.usage == "VariableNode 'function' vtype"
+    assert error.project_diagnostic_code == (
+        "project.translate.metal-callable-alias-unsupported"
+    )
+    assert error.missing_capabilities == ("metal.runtime-callable-alias-lowering",)
+    assert error.source_location["line"] == 3
+
+
+def test_codegen_callable_alias_does_not_match_shadowing_value_names():
+    code = """
+    typedef void (*RadixFunc)(thread float2*, thread float2*);
+
+    void consume_scalar(int RadixFunc) {
+        int value = RadixFunc;
+    }
+
+    void ordinary_void_function(thread float2* value) {
+        value[0] = float2(0.0);
+    }
+    """
+    result = convert(code)
+
+    assert "void consume_scalar(int RadixFunc)" in result
+    assert "void ordinary_void_function(thread vec2* value)" in result
+    assert "typedef void RadixFunc;" not in result
+    assert parse_crossgl(result) is not None
+
+
 def test_codegen_icb_extended_methods():
     code = """
     #include <metal_stdlib>
@@ -6763,3 +7369,901 @@ def test_metal_cooperative_matrix_operations_round_trip_through_shared_ir():
     )
     assert "simdgroup_store(accumulator, output, 8, 0, true);" in regenerated
     assert "cooperative_matrix_" not in regenerated
+
+
+def test_codegen_materializes_defaulted_bool_and_explicit_specialization():
+    code = """
+    template <bool UseAlternate = false>
+    float select_value(float primary, float alternate) {
+        return UseAlternate ? alternate : primary;
+    }
+
+    float select_both(float primary, float alternate) {
+        return select_value(primary, alternate)
+            + select_value<true>(primary, alternate);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(code)
+
+    assert "float select_value(float primary, float alternate)" in crossgl
+    assert "return false ? alternate : primary;" in crossgl
+    assert "float select_value_true(float primary, float alternate)" in crossgl
+    assert "return true ? alternate : primary;" in crossgl
+    assert "select_value(primary, alternate)" in crossgl
+    assert "select_value_true(primary, alternate)" in crossgl
+    assert not re.search(r"\bUseAlternate\b", crossgl)
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert not re.search(r"\bUseAlternate\b", hlsl)
+    assert "select_value_true" in hlsl
+    assert "false ? alternate : primary" in hlsl
+    assert "true ? alternate : primary" in hlsl
+
+
+def test_codegen_materializes_pinned_mlx_perform_fft_bool_specializations():
+    # Reduced from mlx/backend/metal/kernels/fft.h at
+    # 4367c73b60541ddd5a266ce4644fd93d20223b6e.
+    code = """
+    template <bool rader = false>
+    int perform_fft(int value) {
+        return rader ? value + 11 : value + 2;
+    }
+
+    int run_fft_modes(int value) {
+        return perform_fft(value) + perform_fft<true>(value);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(code)
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    for output in (crossgl, hlsl):
+        assert not re.search(r"\brader\b", output)
+        assert "perform_fft" in output
+        assert "perform_fft_true" in output
+        assert "false ?" in output
+        assert "true ?" in output
+        assert "value + 11" in output
+        assert "value + 2" in output
+
+
+def test_codegen_propagates_nested_value_template_specializations():
+    code = """
+    template <bool Inner = false>
+    float leaf(float value) {
+        return Inner ? value : -value;
+    }
+
+    template <bool Outer = false>
+    float branch(float value) {
+        return leaf<Outer>(value);
+    }
+
+    float run_branches(float value) {
+        return branch(value) + branch<true>(value);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(code)
+
+    assert "return leaf_false(value);" in crossgl
+    assert "return leaf_true(value);" in crossgl
+    assert "return false ? value : (-value);" in crossgl
+    assert "return true ? value : (-value);" in crossgl
+    assert "branch(value) + branch_true(value)" in crossgl
+    assert not re.search(r"\b(?:Inner|Outer)\b", crossgl)
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_resolves_later_value_default_from_earlier_binding_in_extent():
+    code = """
+    template <int Base = 2, int Width = Base + 1>
+    int extent_value(int index) {
+        int values[Width];
+        values[0] = Base;
+        return values[index] + Width;
+    }
+
+    int run_extent() {
+        return extent_value(0);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(code)
+
+    assert "int[3] values;" in crossgl
+    assert "values[0] = 2;" in crossgl
+    assert "return values[index] + 3;" in crossgl
+    assert not re.search(r"\b(?:Base|Width)\b", crossgl)
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_folds_owner_dependent_constexpr_static_member_chains():
+    code = """
+    template <typename Scalar, int Bits, int Word = 8>
+    inline constexpr short pack_factor() {
+        return Word / Bits;
+    }
+
+    template <int Bits, int Word = 8>
+    inline constexpr short bytes_per_pack() {
+        constexpr int power_of_two = (Bits & (Bits - 1)) == 0;
+        return power_of_two ? (Word / 8) : (Bits == 5 ? 5 : 3);
+    }
+
+    template <typename T, int Bits>
+    struct Loader {
+        static constexpr short factor = pack_factor<T, Bits>();
+        static constexpr short bytes = bytes_per_pack<Bits>();
+        static constexpr short reads = 32 / factor;
+    };
+
+    kernel void load_factors(device int* out [[buffer(0)]]) {
+        Loader<float, 2> two_bit;
+        Loader<float, 3> three_bit;
+        Loader<float, 4> four_bit;
+        out[0] = two_bit.reads;
+        out[1] = three_bit.bytes;
+        out[2] = four_bit.reads;
+    }
+    """
+
+    crossgl = convert(code)
+    compact = normalize(crossgl)
+
+    assert "struct Loader_float_2 { static int16 factor = 4;" in compact
+    assert "static int16 bytes = 1;" in compact
+    assert "static int16 reads = 8;" in compact
+    assert "struct Loader_float_3 { static int16 factor = 2;" in compact
+    assert "static int16 bytes = 3;" in compact
+    assert "struct Loader_float_4 { static int16 factor = 2;" in compact
+    assert "static int16 reads = 16;" in compact
+    assert "pack_factor_float_2_8" not in crossgl
+    assert "pack_factor_float_4_8" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_owner_constexpr_diagnostic_names_static_member_context():
+    code = """
+    template <int Bits, int Word = 8>
+    constexpr short pack_factor() {
+        return Word / Bits;
+    }
+
+    struct Loader_4 {
+        static constexpr short factor = pack_factor<RuntimeBits>();
+    };
+    """
+
+    with pytest.raises(MetalTemplateArgumentResolutionError) as exc_info:
+        convert_without_preprocessing(code, file_path="owner-constexpr.metal")
+
+    diagnostic = exc_info.value
+    assert diagnostic.owner == "Loader_4"
+    assert diagnostic.member == "factor"
+    assert diagnostic.function_name == "pack_factor"
+    assert diagnostic.parameter_name == "Bits"
+    assert diagnostic.argument_expression == "RuntimeBits"
+    assert diagnostic.requested_specialization == "pack_factor<RuntimeBits>"
+    assert diagnostic.reason == "remains dependent on RuntimeBits"
+    assert diagnostic.source_location["file"] == "owner-constexpr.metal"
+    assert "while resolving Loader_4::factor" in str(diagnostic)
+
+
+def test_codegen_reuses_equivalent_owner_constexpr_helper_requests():
+    code = """
+    template <int Bits, int Word = 8>
+    constexpr short pack_factor() {
+        return Word / Bits;
+    }
+
+    struct LeftLoader {
+        static constexpr short factor = pack_factor<4>();
+    };
+
+    struct RightLoader {
+        static constexpr short factor = pack_factor<4>();
+    };
+    """
+    ast = MetalParser(MetalLexer(code, preprocess=False).tokenize()).parse()
+    converter = MetalToCrossGLConverter()
+
+    crossgl = converter.generate(ast)
+
+    assert len(converter.constexpr_helper_values) == 1
+    assert crossgl.count("static int16 factor = 2;") == 2
+    assert "pack_factor_4_8" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_rejects_cyclic_owner_constexpr_helper_requests():
+    code = """
+    template <int Bits = 4>
+    constexpr short first_factor() {
+        return second_factor<Bits>();
+    }
+
+    template <int Bits = 4>
+    constexpr short second_factor() {
+        return first_factor<Bits>();
+    }
+
+    struct Loader_4 {
+        static constexpr short factor = first_factor<4>();
+    };
+    """
+
+    with pytest.raises(MetalTemplateArgumentResolutionError) as exc_info:
+        convert_without_preprocessing(code, file_path="cyclic-owner.metal")
+
+    diagnostic = exc_info.value
+    assert diagnostic.owner == "Loader_4"
+    assert diagnostic.member == "factor"
+    assert diagnostic.function_name == "first_factor"
+    assert diagnostic.requested_specialization == "first_factor<4>"
+    assert diagnostic.reason == "has a cyclic constexpr helper dependency"
+    assert diagnostic.source_location["file"] == "cyclic-owner.metal"
+
+
+def test_codegen_folds_constexpr_helpers_in_materialized_function_bodies():
+    code = """
+    template <int Bits, int Word = 32>
+    constexpr int get_pack_factor() {
+        constexpr int factor = Word / Bits;
+        return factor;
+    }
+
+    template <int Bits = 4, int Word = 32>
+    int load_pack() {
+        constexpr int explicit_factor = get_pack_factor<Bits, Word>();
+        constexpr int default_factor = get_pack_factor<Bits>();
+        return explicit_factor + default_factor +
+            get_pack_factor<Bits, Word>();
+    }
+
+    int run_packs() {
+        return load_pack<4>() + load_pack<8>();
+    }
+    """
+    ast = MetalParser(MetalLexer(code, preprocess=False).tokenize()).parse()
+    converter = MetalToCrossGLConverter()
+
+    crossgl = converter.generate(ast)
+    compact = normalize(crossgl)
+
+    assert "int load_pack_4_32()" in crossgl
+    assert "int explicit_factor = 8;" in crossgl
+    assert "int default_factor = 8;" in crossgl
+    assert "return explicit_factor + default_factor + 8;" in crossgl
+    assert "int load_pack_8_32()" in crossgl
+    assert "int explicit_factor = 4;" in crossgl
+    assert "int default_factor = 4;" in crossgl
+    assert "return load_pack_4_32() + load_pack_8_32();" in crossgl
+    assert len(converter.constexpr_helper_values) == 2
+    assert "get_pack_factor_4_32" not in compact
+    assert "get_pack_factor_8_32" not in compact
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_selects_constexpr_helper_overload_in_materialized_body():
+    code = """
+    template <int Scale>
+    constexpr int scaled_value(int value) {
+        return value * Scale;
+    }
+
+    template <int Scale>
+    constexpr int scaled_value(float value) {
+        return int(value) + Scale;
+    }
+
+    template <int Scale = 3>
+    int load_scaled() {
+        constexpr int value = scaled_value<Scale>(4);
+        return value;
+    }
+
+    int run_scaled() {
+        return load_scaled<3>();
+    }
+    """
+
+    crossgl = convert_without_preprocessing(code)
+
+    assert "int value = 12;" in crossgl
+    assert "scaled_value_3" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_preserves_runtime_constexpr_calls_in_materialized_returns():
+    code = """
+    template <int Scale = 2>
+    constexpr int scaled_runtime_value(int value) {
+        int scaled = value * Scale;
+        return scaled;
+    }
+
+    template <int Scale = 2>
+    int forward_scaled_value(int value) {
+        return scaled_runtime_value<Scale>(value);
+    }
+
+    int run_scaled_value(int value) {
+        return forward_scaled_value<2>(value);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(code)
+
+    assert "return scaled_runtime_value_2(value);" in crossgl
+    assert "int scaled_runtime_value_2(int value)" in crossgl
+    assert "int scaled = value * 2;" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_materialized_constexpr_diagnostic_respects_shadowing():
+    code = """
+    template <int Bits, int Word = 32>
+    constexpr int get_pack_factor() {
+        return Word / Bits;
+    }
+
+    template <int Bits = 4>
+    int load_factor(int runtime_bits) {
+        {
+            int Bits = runtime_bits;
+            constexpr int factor = get_pack_factor<Bits>();
+            return factor;
+        }
+    }
+
+    int run_factor() {
+        return load_factor<4>(4);
+    }
+    """
+
+    with pytest.raises(MetalTemplateArgumentResolutionError) as exc_info:
+        convert_without_preprocessing(
+            code,
+            file_path="materialized-shadow.metal",
+        )
+
+    diagnostic = exc_info.value
+    assert diagnostic.enclosing_function == "load_factor"
+    assert diagnostic.enclosing_specialization == "load_factor_4"
+    assert diagnostic.nested_helper == "get_pack_factor<Bits>"
+    assert diagnostic.function_name == "get_pack_factor"
+    assert diagnostic.parameter_name == "Bits"
+    assert diagnostic.requested_specialization == "get_pack_factor<Bits>"
+    assert diagnostic.reason == "remains dependent on Bits"
+    assert diagnostic.source_location["file"] == "materialized-shadow.metal"
+    assert "in specialization 'load_factor_4'" in str(diagnostic)
+
+
+@pytest.mark.parametrize(
+    ("helper_declarations", "expected_kind", "expected_reason"),
+    [
+        (
+            """
+            template <int Bits>
+            constexpr int resolve_factor() {
+                int factor = 32 / Bits;
+                return factor;
+            }
+            """,
+            "constexpr_body",
+            "contains statements outside the supported constexpr local "
+            "declaration and return subset",
+        ),
+        (
+            """
+            template <int Bits>
+            constexpr int resolve_factor() {
+                return next_factor<Bits>();
+            }
+
+            template <int Bits>
+            constexpr int next_factor() {
+                return resolve_factor<Bits>();
+            }
+            """,
+            "constexpr_body",
+            "has a cyclic constexpr helper dependency",
+        ),
+    ],
+)
+def test_codegen_materialized_constexpr_failures_are_structured(
+    helper_declarations,
+    expected_kind,
+    expected_reason,
+):
+    code = helper_declarations + """
+        template <int Bits = 4>
+        int load_factor() {
+            constexpr int factor = resolve_factor<Bits>();
+            return factor;
+        }
+
+        int run_factor() {
+            return load_factor<4>();
+        }
+        """
+
+    with pytest.raises(MetalTemplateArgumentResolutionError) as exc_info:
+        convert_without_preprocessing(
+            code,
+            file_path="materialized-constexpr.metal",
+        )
+
+    diagnostic = exc_info.value
+    assert diagnostic.enclosing_function == "load_factor"
+    assert diagnostic.enclosing_specialization == "load_factor_4"
+    assert diagnostic.argument_kind == expected_kind
+    assert diagnostic.reason == expected_reason
+    assert diagnostic.source_location["file"] == "materialized-constexpr.metal"
+
+
+def test_codegen_rejects_ambiguous_materialized_constexpr_helper_overload():
+    code = """
+    template <int Bits>
+    constexpr int resolve_factor() {
+        return 32 / Bits;
+    }
+
+    template <int Bits>
+    constexpr short resolve_factor() {
+        return 16 / Bits;
+    }
+
+    template <int Bits = 4>
+    int load_factor() {
+        constexpr int factor = resolve_factor<Bits>();
+        return factor;
+    }
+
+    int run_factor() {
+        return load_factor<4>();
+    }
+    """
+
+    with pytest.raises(MetalTemplateArgumentResolutionError) as exc_info:
+        convert_without_preprocessing(code)
+
+    diagnostic = exc_info.value
+    assert diagnostic.enclosing_function == "load_factor"
+    assert diagnostic.enclosing_specialization == "load_factor_4"
+    assert diagnostic.argument_kind == "overload"
+    assert diagnostic.reason == (
+        "does not identify one unique value-template declaration"
+    )
+
+
+def test_codegen_value_template_substitution_respects_lexical_shadowing():
+    code = """
+    template <bool Flag = false>
+    float shadowed(float value) {
+        float selected = Flag ? value : -value;
+        {
+            bool Flag = true;
+            if (Flag) {
+                selected += 2.0f;
+            }
+        }
+        return Flag ? selected : -selected;
+    }
+
+    float run_shadowed(float value) {
+        return shadowed(value);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(code)
+
+    assert "float selected = false ? value : (-value);" in crossgl
+    assert "bool Flag = true;" in crossgl
+    assert "if (Flag)" in crossgl
+    assert "return false ? selected : (-selected);" in crossgl
+    assert "generic<Flag>" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+@pytest.mark.parametrize(
+    ("code", "argument_kind", "parameter_name", "expression", "reason", "message"),
+    [
+        (
+            "template<typename T, int Count = T::extent> "
+            "int count_value() { return Count; } "
+            "int run() { return count_value(); }",
+            "default",
+            "Count",
+            "T::extent",
+            "remains dependent on T, extent",
+            "Cannot materialize Metal function template 'count_value' for call "
+            "'count_value(...)': default argument for 'Count' (T::extent) "
+            "remains dependent on T, extent",
+        ),
+        (
+            "template<bool Flag = false> int choose() { return Flag; } "
+            "int run(bool Runtime) { return choose<Runtime>(); }",
+            "explicit",
+            "Flag",
+            "Runtime",
+            "remains dependent on Runtime",
+            "Cannot materialize Metal function template 'choose' for call "
+            "'choose<Runtime>': explicit argument for 'Flag' (Runtime) "
+            "remains dependent on Runtime",
+        ),
+        (
+            "template<int Count, bool Enabled = false> "
+            "int count_value() { return Enabled ? Count : Count; } "
+            "int run() { return count_value<>(); }",
+            "missing",
+            "Count",
+            None,
+            "was not supplied and has no declaration default",
+            "Cannot materialize Metal function template 'count_value' for call "
+            "'count_value<>': required argument for 'Count' was not supplied "
+            "and has no declaration default",
+        ),
+    ],
+)
+def test_codegen_value_template_resolution_diagnostics_are_structured(
+    code, argument_kind, parameter_name, expression, reason, message
+):
+    with pytest.raises(MetalTemplateArgumentResolutionError) as exc_info:
+        convert_without_preprocessing(code, file_path="template-diagnostic.metal")
+
+    diagnostic = exc_info.value
+    assert str(diagnostic) == message
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.metal-template-argument-unresolved"
+    )
+    assert diagnostic.missing_capabilities == (
+        "metal.value-template-argument-materialization",
+    )
+    assert diagnostic.argument_kind == argument_kind
+    assert diagnostic.parameter_name == parameter_name
+    assert diagnostic.argument_expression == expression
+    assert diagnostic.reason == reason
+    assert diagnostic.source_location["file"] == "template-diagnostic.metal"
+    assert diagnostic.source_location["line"] == 1
+    assert diagnostic.source_location["column"] == 1
+    assert diagnostic.default_expression == (
+        expression if argument_kind == "default" else None
+    )
+    assert diagnostic.explicit_argument == (
+        expression if argument_kind == "explicit" else None
+    )
+
+
+@pytest.mark.parametrize("template_first", [True, False])
+def test_codegen_same_name_template_and_overload_is_declaration_order_independent(
+    template_first,
+):
+    template = """
+    template <bool Alternate = false>
+    float pick(float value) {
+        return Alternate ? value : -value;
+    }
+    """
+    overload = """
+    int pick(int value) {
+        return value + 1;
+    }
+    """
+    declarations = template + overload if template_first else overload + template
+    code = declarations + """
+    float run_picks() {
+        return pick(1.0f) + float(pick(1));
+    }
+    """
+
+    crossgl = convert_without_preprocessing(code)
+
+    assert "float pick(float value)" in crossgl
+    assert "return false ? value : (-value);" in crossgl
+    assert "int pick(int value)" in crossgl
+    assert "return value + 1;" in crossgl
+    assert not re.search(r"\bAlternate\b", crossgl)
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_fails_closed_for_ambiguous_same_name_value_templates():
+    code = """
+    template <bool Alternate = false>
+    float pick(float value) {
+        return Alternate ? value : -value;
+    }
+
+    template <int Offset = 0>
+    float pick(float value) {
+        return value + Offset;
+    }
+
+    float run_pick() {
+        return pick(1.0f);
+    }
+    """
+
+    with pytest.raises(MetalTemplateArgumentResolutionError) as exc_info:
+        convert_without_preprocessing(code)
+
+    diagnostic = exc_info.value
+    assert diagnostic.argument_kind == "overload"
+    assert diagnostic.function_name == "pick"
+    assert diagnostic.reason == (
+        "does not identify one unique value-template declaration"
+    )
+    assert "pick<Alternate>(float)" in diagnostic.argument_expression
+    assert "pick<Offset>(float)" in diagnostic.argument_expression
+
+
+def test_codegen_allocates_specialization_name_around_unrelated_collision():
+    code = """
+    float leaf_false(float value) {
+        return 99.0f;
+    }
+
+    template <bool Inner>
+    float leaf(float value) {
+        return Inner ? value : -value;
+    }
+
+    template <bool Outer = false>
+    float branch(float value) {
+        return leaf<Outer>(value);
+    }
+
+    float run_collision(float value) {
+        return leaf_false(value) + branch(value);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(code)
+
+    assert "float leaf_false(float value)" in crossgl
+    assert "return 99.0f;" in crossgl
+    assert "float leaf_false_2(float value)" in crossgl
+    assert "return leaf_false_2(value);" in crossgl
+    assert "return leaf_false(value) + branch(value);" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_mixed_type_value_template_keeps_inferred_type_parameter():
+    code = """
+    template <typename T, bool Alternate = false>
+    T mixed(T value) {
+        return Alternate ? value : -value;
+    }
+
+    float run_mixed(float value) {
+        return mixed(value);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(code)
+
+    assert "generic<T> T mixed(T value)" in crossgl
+    assert "return false ? value : (-value);" in crossgl
+    assert not re.search(r"\bAlternate\b", crossgl)
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_materializes_explicit_mixed_type_value_arguments():
+    code = """
+    template <typename T, bool Alternate = false>
+    T mixed(T value) {
+        return Alternate ? T(1) : -value;
+    }
+
+    float run_mixed(float value) {
+        return mixed<float, true>(value);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(code)
+
+    assert "float mixed_float_true(float value)" in crossgl
+    assert "return true ? float(1) : (-value);" in crossgl
+    assert "return mixed_float_true(value);" in crossgl
+    assert "generic<T>" not in crossgl
+    assert not re.search(r"\b(?:T|Alternate)\b", crossgl)
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_materializes_transitive_mixed_template_graph(tmp_path):
+    code = """
+    template <typename T, int Width>
+    T leaf(T value) {
+        return value + T(Width);
+    }
+
+    template <typename T, int Width>
+    T middle(T value) {
+        return leaf<T, Width>(value);
+    }
+
+    kernel void run_materialized(
+        device float* out [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {
+        out[gid] = middle<float, 4>(out[gid])
+            + middle<float, 4>(out[gid])
+            + middle<float, 8>(out[gid]);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(code)
+
+    assert crossgl.count("float leaf_float_4(float value)") == 1
+    assert crossgl.count("float middle_float_4(float value)") == 1
+    assert crossgl.count("float leaf_float_8(float value)") == 1
+    assert crossgl.count("float middle_float_8(float value)") == 1
+    assert crossgl.index("float leaf_float_4") < crossgl.index("float middle_float_4")
+    assert crossgl.index("float leaf_float_8") < crossgl.index("float middle_float_8")
+    assert crossgl.index("float middle_float_8") < crossgl.index("run_materialized")
+    assert crossgl.count("middle_float_4(buffer_load(out_, gid))") == 2
+    assert not re.search(r"\b(?:T|Width)\b", crossgl)
+
+    ast = parse_crossgl(crossgl)
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+    glsl = GLSLCodeGen().generate(ast)
+    assert "middle_float_4(out_.Load(gid))" in hlsl
+    assert "middle_float_8(out_.Load(gid))" in hlsl
+    assert "middle_float_4(out_[gid])" in glsl
+    assert "middle_float_8(out_[gid])" in glsl
+
+    dxc = shutil.which("dxc")
+    if dxc is not None:
+        hlsl_path = tmp_path / "transitive-materialization.hlsl"
+        hlsl_path.write_text(hlsl, encoding="utf-8")
+        subprocess.run(
+            [dxc, "-T", "cs_6_0", "-E", "CSMain", str(hlsl_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    glslang = shutil.which("glslangValidator")
+    if glslang is not None:
+        glsl_path = tmp_path / "transitive-materialization.comp"
+        glsl_path.write_text(glsl, encoding="utf-8")
+        subprocess.run(
+            [
+                glslang,
+                "--target-env",
+                "opengl",
+                "-S",
+                "comp",
+                str(glsl_path),
+                "-o",
+                str(tmp_path / "transitive-materialization.spv"),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+
+def test_codegen_preserves_overload_selection_in_transitive_materialization():
+    code = """
+    template <int Width>
+    float leaf(float value) {
+        return value + float(Width);
+    }
+
+    template <int Width>
+    int leaf(int value) {
+        return value + Width;
+    }
+
+    template <typename T, int Width>
+    T middle(T value) {
+        return leaf<Width>(value);
+    }
+
+    float run_materialized(float value) {
+        return middle<float, 4>(value);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(code)
+
+    assert "float leaf_4_float(float value)" in crossgl
+    assert "return leaf_4_float(value);" in crossgl
+    assert "int leaf_4_int" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_rejects_partial_transitive_template_request():
+    code = """
+    template <typename T, int Width>
+    T leaf(T value) {
+        return value;
+    }
+
+    template <typename T, int Width>
+    T middle(T value) {
+        return leaf<T>(value);
+    }
+
+    float run_materialized(float value) {
+        return middle<float, 4>(value);
+    }
+    """
+
+    with pytest.raises(MetalTemplateArgumentResolutionError) as exc_info:
+        convert_without_preprocessing(code, file_path="partial-template.metal")
+
+    diagnostic = exc_info.value
+    assert diagnostic.enclosing_function == "middle"
+    assert diagnostic.enclosing_specialization == "middle_float_4"
+    assert diagnostic.nested_helper == "leaf<T>"
+    assert diagnostic.function_name == "leaf"
+    assert diagnostic.parameter_name == "Width"
+    assert diagnostic.argument_kind == "missing"
+    assert diagnostic.reason == "was not supplied and has no declaration default"
+    assert diagnostic.source_location["file"] == "partial-template.metal"
+
+
+def test_codegen_rejects_recursive_transitive_template_graph():
+    code = """
+    template <typename T, int Width>
+    T first(T value) {
+        return second<T, Width>(value);
+    }
+
+    template <typename T, int Width>
+    T second(T value) {
+        return first<T, Width>(value);
+    }
+
+    float run_materialized(float value) {
+        return first<float, 4>(value);
+    }
+    """
+
+    with pytest.raises(MetalTemplateSpecializationError) as exc_info:
+        convert_without_preprocessing(code)
+
+    diagnostic = exc_info.value
+    assert diagnostic.caller_specialization == "second_float_4"
+    assert diagnostic.callee_template == "first"
+    assert diagnostic.requested_arguments == ("float", "4")
+    assert diagnostic.requested_signature == "first<float, 4>"
+    assert str(diagnostic) == (
+        "Metal template specialization graph is recursive: "
+        "first_float_4 -> second_float_4 -> first_float_4"
+    )
+
+
+def test_codegen_honors_transitive_template_specialization_budget():
+    code = """
+    template <typename T, int Width>
+    T leaf(T value) {
+        return value + T(Width);
+    }
+
+    float run_materialized(float value) {
+        return leaf<float, 4>(value) + leaf<float, 8>(value);
+    }
+    """
+    tokens = MetalLexer(code, preprocess=False).tokenize()
+    ast = MetalParser(
+        tokens,
+        file_path="template-budget.metal",
+        max_template_specializations=1,
+        template_specialization_limit_source="focused test budget",
+    ).parse()
+
+    with pytest.raises(MetalTemplateSpecializationError) as exc_info:
+        MetalToCrossGLConverter().generate(ast)
+
+    diagnostic = exc_info.value
+    assert diagnostic.limit == 1
+    assert diagnostic.limit_source == "focused test budget"
+    assert diagnostic.unique_specialization_count == 2
+    assert diagnostic.caller_specialization == "run_materialized"
+    assert diagnostic.callee_template == "leaf"
+    assert diagnostic.requested_arguments == ("float", "8")
+    assert diagnostic.requested_signature == "leaf<float, 8>"

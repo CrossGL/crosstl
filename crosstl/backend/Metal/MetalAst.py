@@ -72,6 +72,44 @@ class LambdaNode(ASTNode):
         )
 
 
+class CallableTypeAliasNode(TypeAliasNode):
+    """Metal function or function-pointer type alias."""
+
+    def __init__(
+        self,
+        return_type,
+        name,
+        parameters,
+        *,
+        indirection="",
+        qualifiers=None,
+        array_sizes=None,
+        declarator_type_suffix_grouped=False,
+        source_location=None,
+    ):
+        super().__init__(
+            return_type,
+            name,
+            qualifiers=qualifiers,
+            array_sizes=array_sizes,
+            declarator_type_suffix=indirection,
+            declarator_type_suffix_grouped=declarator_type_suffix_grouped,
+            source_location=source_location,
+        )
+        self.return_type = return_type
+        self.parameters = list(parameters or [])
+        self.indirection = indirection
+        self.is_function_type = True
+        self.is_function_pointer = "*" in indirection
+
+    def __repr__(self):
+        return (
+            "CallableTypeAliasNode("
+            f"return_type={self.return_type}, name={self.name}, "
+            f"parameters={self.parameters}, indirection={self.indirection!r})"
+        )
+
+
 _COMMON_NODES = (
     ASTNode,
     ArrayAccessNode,
@@ -83,6 +121,7 @@ _COMMON_NODES = (
     CallNode,
     CaseNode,
     CastNode,
+    CallableTypeAliasNode,
     ConstantBufferNode,
     ContinueNode,
     DeleteNode,

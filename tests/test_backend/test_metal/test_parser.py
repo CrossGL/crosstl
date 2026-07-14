@@ -24,6 +24,7 @@ from crosstl.backend.common_ast import (
 )
 from crosstl.backend.Metal.MetalAst import (
     BlockNode,
+    CallableTypeAliasNode,
     EnumNode,
     LambdaNode,
     TypeAliasNode,
@@ -87,6 +88,41 @@ def test_parse_numeric_heavy_generated_identifier_function_and_call():
     assert helper.name == "nvfp4_quantize_float_gs_16_b_4"
     assert isinstance(call, FunctionCallNode)
     assert call.name == "nvfp4_quantize_float_gs_16_b_4"
+
+
+def test_parse_owner_dependent_constexpr_static_helper_contract():
+    code = """
+    template <typename Scalar, int Bits, int Word = 8>
+    inline constexpr short pack_factor() {
+        return Word / Bits;
+    }
+
+    template <typename T, int Bits>
+    struct Loader {
+        static constexpr short factor = pack_factor<T, Bits>();
+    };
+    """
+
+    ast = parse_ok(code)
+    helper = ast.functions[0]
+    owner = ast.structs[0]
+    factor = owner.members[0]
+
+    assert helper.name == "pack_factor"
+    assert helper.template_parameters == [
+        ("typename", "Scalar"),
+        ("value", "Bits"),
+        ("value", "Word"),
+    ]
+    assert helper.template_parameter_defaults == {"Word": "8"}
+    assert helper.declaration_qualifiers == ["inline", "constexpr"]
+    assert owner.template_parameters == [
+        ("typename", "T"),
+        ("value", "Bits"),
+    ]
+    assert isinstance(factor.default_value, FunctionCallNode)
+    assert factor.default_value.name == "pack_factor<T,Bits>"
+    assert factor.default_value.args == []
 
 
 def test_numeric_leading_generated_identifier_reports_specific_error():
@@ -845,6 +881,34 @@ def test_parse_coherent_memory_qualifier_from_mlx_fence_kernel():
     assert param.qualifiers == ["volatile", "coherent(system)", "device"]
     assert param.attributes[0].name == "buffer"
     assert param.attributes[0].args == ["0"]
+
+
+def test_parse_resource_memory_qualifiers_on_alias_and_post_pointer_declarations():
+    code = """
+    using FencePointer = volatile coherent(system) device atomic_uint*;
+
+    kernel void qualify(
+        FencePointer aliased [[buffer(0)]],
+        device atomic_uint* volatile coherent(device) direct [[buffer(1)]],
+        device uint* plain [[buffer(2)]],
+        uint index [[thread_position_in_grid]]) {
+      uint local = index;
+    }
+    """
+
+    ast = parse_ok(code)
+    alias = ast.typedefs[0]
+    aliased, direct, plain, index = ast.functions[0].params
+
+    assert alias.name == "FencePointer"
+    assert alias.alias_type == "atomic_uint*"
+    assert alias.qualifiers == ["volatile", "coherent(system)", "device"]
+    assert aliased.vtype == "FencePointer"
+    assert aliased.qualifiers == []
+    assert direct.qualifiers == ["device", "volatile", "coherent(device)"]
+    assert plain.qualifiers == ["device"]
+    assert index.qualifiers == []
+    assert ast.functions[0].body[0].left.qualifiers == []
 
 
 def test_parse_scoped_atomic_thread_fence_call_from_mlx_kernel():
@@ -2828,8 +2892,53 @@ def test_parse_function_pointer_typedef_from_llama_cpp():
     """
     ast = parse_ok(code)
 
-    assert ast.typedefs[0].name == "im2col_t"
-    assert ast.typedefs[0].alias_type == "void"
+    alias = ast.typedefs[0]
+    assert isinstance(alias, CallableTypeAliasNode)
+    assert alias.name == "im2col_t"
+    assert alias.alias_type == "void"
+    assert alias.indirection == ""
+    assert [parameter.vtype for parameter in alias.parameters] == [
+        "ggml_metal_kargs_im2col&",
+        "float*",
+        "char*",
+        "uint3",
+    ]
+    assert [parameter.qualifiers for parameter in alias.parameters] == [
+        ["constant"],
+        ["device", "const"],
+        ["device"],
+        [],
+    ]
+
+
+def test_parse_mlx_callable_pointer_typedef_preserves_signature_contract():
+    code = """
+    typedef void (*RadixFunc)(thread float2*, thread float2*);
+    using AlternateRadixFunc = void (*)(thread float2* lhs,
+                                        thread float2* rhs);
+    """
+    ast = parse_ok(code)
+
+    pointer_typedef, using_alias = ast.typedefs
+    assert isinstance(pointer_typedef, CallableTypeAliasNode)
+    assert pointer_typedef.name == "RadixFunc"
+    assert pointer_typedef.return_type == "void"
+    assert pointer_typedef.indirection == "*"
+    assert pointer_typedef.is_function_pointer is True
+    assert [parameter.vtype for parameter in pointer_typedef.parameters] == [
+        "float2*",
+        "float2*",
+    ]
+    assert [parameter.qualifiers for parameter in pointer_typedef.parameters] == [
+        ["thread"],
+        ["thread"],
+    ]
+    assert pointer_typedef.source_location["line"] == 2
+
+    assert isinstance(using_alias, CallableTypeAliasNode)
+    assert using_alias.name == "AlternateRadixFunc"
+    assert using_alias.indirection == "*"
+    assert [parameter.name for parameter in using_alias.parameters] == ["lhs", "rhs"]
 
 
 def test_parse_enum_return_prototype_from_llama_cpp_context_header():
@@ -2915,6 +3024,72 @@ def test_parse_variadic_function_parameter_pack_from_mlx_integral_constant():
     assert isinstance(pack_call.args[0], UnaryOpNode)
     assert pack_call.args[0].op == "post..."
     assert pack_call.args[0].operand.name == "us"
+
+
+def test_parse_defaulted_value_template_parameters_and_source_location():
+    code = """
+    template <bool UseAlternate = false, int Width = 2 + 1>
+    float select_value(float primary, float alternate) {
+        return UseAlternate ? alternate : primary + Width;
+    }
+    """
+    function = parse_ok(code).functions[0]
+
+    assert function.template_parameters == [
+        ("value", "UseAlternate"),
+        ("value", "Width"),
+    ]
+    assert function.template_parameter_defaults == {
+        "UseAlternate": "false",
+        "Width": "2+1",
+    }
+    assert function.template_source_location == function.source_location
+    assert function.source_location["line"] == 2
+    assert function.source_location["end_line"] == 5
+    assert function.source_location["length"] > 0
+
+
+def test_parse_template_declaration_preserves_existing_source_location(monkeypatch):
+    existing_location = {
+        "file": "existing.metal",
+        "line": 40,
+        "column": 7,
+        "end_line": 42,
+        "end_column": 2,
+    }
+    original_parse_function = MetalParser.parse_function
+
+    def parse_function_with_existing_location(parser):
+        function = original_parse_function(parser)
+        function.source_location = existing_location
+        return function
+
+    monkeypatch.setattr(
+        MetalParser, "parse_function", parse_function_with_existing_location
+    )
+
+    source = """template <bool Enabled = false>
+bool selected() { return Enabled; }
+"""
+    function = parse_ok(source).functions[0]
+
+    assert function.source_location is existing_location
+    assert function.template_source_location["line"] == 1
+    assert function.template_source_location["column"] == 1
+    assert function.template_source_location["end_line"] == 2
+
+
+def test_parse_dependent_value_template_default_keeps_declared_parameter_name():
+    code = """
+    template <typename T, int Count = T::extent>
+    int count_value() {
+        return Count;
+    }
+    """
+    function = parse_ok(code).functions[0]
+
+    assert function.template_parameters == [("typename", "T"), ("value", "Count")]
+    assert function.template_parameter_defaults == {"Count": "T::extent"}
 
 
 def test_parse_dependent_enable_if_return_type_from_tinygrad_metal():
@@ -3371,7 +3546,7 @@ def test_parse_template_id_value_expression_with_member_args_from_mlx_gemm_gathe
 def test_parse_raw_string_view_shader_template_from_mlx_jit_indexing_header():
     # Reduced from:
     # Repo: https://github.com/ml-explore/mlx
-    # Commit: 968d264f2903d578e699c4452a4dbf48633921aa
+    # Commit: 4367c73b60541ddd5a266ce4644fd93d20223b6e
     # Path: mlx/backend/metal/jit/indexing.h
     code = """
     constexpr std::string_view masked_assign_kernel = R"(

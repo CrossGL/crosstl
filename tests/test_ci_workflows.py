@@ -2114,7 +2114,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     harness = (
         ROOT / "demos" / "integrations" / "mlx" / "run_mlx_porting.py"
     ).read_text(encoding="utf-8")
-    mlx_commit = "968d264f2903d578e699c4452a4dbf48633921aa"
+    mlx_commit = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
 
     assert mlx_porting, "mlx-project-porting.yml must exist"
     assert "demos/integrations/mlx/run_mlx_porting.py" in mlx_porting
@@ -2124,7 +2124,9 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert 'cron: "31 4 * * 1"' in mlx_porting
     assert "github.event_name != 'schedule'" in mlx_porting
     assert "--mode reduced-frontier" in mlx_porting
+    assert "--require-metal-toolchain" in mlx_porting
     assert "--require-directx-toolchain" in mlx_porting
+    assert "--require-opengl-frontier-toolchain" in mlx_porting
     assert "--require-opengl-gemv-toolchain" in mlx_porting
     assert "--require-vulkan-gemv-toolchain" in mlx_porting
     assert "--require-vulkan-native-runtime" in mlx_porting
@@ -2133,9 +2135,27 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "dxc --version" in mlx_porting
     assert "glslang-tools" in mlx_porting
     assert "glslangValidator --version" in mlx_porting
-    assert "Validate OpenGL scalar conversions" in mlx_porting
+    assert "Validate OpenGL lowering contracts" in mlx_porting
     assert "opengl_lowers_expected_scalar_and_vector_conversions" in mlx_porting
     assert "opengl_preserves_metal_arithmetic_conversion_order" in mlx_porting
+    assert "glsl_atomic_thread_fence" in mlx_porting
+    assert "translate_project_reports_unrepresentable_atomic_fence_contract" in (
+        mlx_porting
+    )
+    assert '"tests/test_mlx_porting_harness.py"' in mlx_porting
+    assert '"tests/test_translator/test_codegen/test_SPIRV_codegen.py"' in mlx_porting
+    assert '"tests/test_translator/test_codegen/test_directx_codegen.py"' in mlx_porting
+    assert '"tests/test_translator/test_project_translation.py"' in mlx_porting
+    assert "Verify MLX frontier accounting" in mlx_porting
+    assert "expected 11 clean MLX frontier sources" in mlx_porting
+    assert "fence contract accounting must be 3 failed, 0 emitted" in mlx_porting
+    assert "expected 4 OpenGL toolchain frontier sources" in mlx_porting
+    assert (
+        "OpenGL frontier accounting must be 4 sources, 4 artifacts, "
+        "and 0 project diagnostics"
+    ) in mlx_porting
+    assert "OpenGL frontier toolchain must validate all 4 source paths" in mlx_porting
+    assert "mlx/backend/metal/kernels/binary_two.metal" in mlx_porting
     assert "mesa-vulkan-drivers" in mlx_porting
     assert "python -m pip install vulkan==1.3.275.1" in mlx_porting
     assert "vulkaninfo --summary" in mlx_porting
@@ -2156,6 +2176,8 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert '"--run-toolchains"' in harness
     assert '"--validate"' in harness
     assert "FULL_CORPUS_EXPECTED_ARTIFACT_COUNT" in harness
+    assert "FULL_CORPUS_EXPECTED_TRANSLATED_ARTIFACT_COUNT" in harness
+    assert "FULL_CORPUS_EXPECTED_FENCE_FAILURE_COUNT" in harness
     assert "FULL_CORPUS_MAX_TEMPLATE_SPECIALIZATIONS = 4096" in harness
     assert "FULL_CORPUS_MAX_TEMPLATE_MATERIALIZATION_WORK = 131072" in harness
     assert "FULL_CORPUS_TRANSLATION_TIMEOUT_SECONDS = 900" in harness
@@ -2177,6 +2199,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
             harness
         )
     for resolved_issue_number in (
+        1661,
         1184,
         1203,
         1204,
@@ -2229,6 +2252,14 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
             in harness
         )
     assert "MLX_DIRECTX_VULKAN_FRONTIER_SOURCES" in harness
+    assert "MLX_BLOCKED_REDUCED_FRONTIER_SOURCES" in harness
+    assert "_check_atomic_fence_contract" in harness
+    assert "project.translate.directx-atomic-fence-unsupported" in harness
+    assert "project.translate.opengl-atomic-fence-unsupported" in harness
+    assert "project.translate.vulkan-atomic-fence-unsupported" in harness
+    assert "directx.atomic-thread-fence-contract-lowering" in harness
+    assert "opengl.atomic-thread-fence-contract-lowering" in harness
+    assert "spirv.atomic-thread-fence-contract-lowering" in harness
     assert "mlx/backend/metal/kernels/binary_two.metal" in harness
     assert "mlx/backend/metal/kernels/fence.metal" in harness
     assert "mlx/backend/metal/kernels/random.metal" in harness

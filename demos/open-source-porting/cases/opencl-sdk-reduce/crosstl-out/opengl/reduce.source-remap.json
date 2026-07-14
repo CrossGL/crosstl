@@ -270,9 +270,9 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 43,
-        "endOffset": 1182,
+        "endOffset": 1187,
         "file": "crosstl-out/opengl/reduce.glsl",
-        "length": 43,
+        "length": 48,
         "line": 42,
         "offset": 1139
       },
@@ -292,11 +292,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 45,
-        "endOffset": 1344,
+        "endOffset": 1349,
         "file": "crosstl-out/opengl/reduce.glsl",
         "length": 137,
         "line": 44,
-        "offset": 1207
+        "offset": 1212
       },
       "original": {
         "column": 1,

@@ -6,7 +6,36 @@ from ...translator.codegen.array_utils import evaluate_literal_int_expression
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
+from .preprocessor import (
+    DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT,
+    MetalTemplateSpecializationError,
+)
 from .type_layout import metal_type_layout
+
+
+class MetalCallableAliasLoweringError(ValueError):
+    """Raised when a callable alias survives as a runtime value."""
+
+    project_diagnostic_code = "project.translate.metal-callable-alias-unsupported"
+    missing_capabilities = ("metal.runtime-callable-alias-lowering",)
+
+    def __init__(
+        self,
+        alias_name,
+        signature,
+        usage,
+        reason,
+        source_location=None,
+    ):
+        self.alias_name = alias_name
+        self.signature = signature
+        self.usage = usage
+        self.reason = reason
+        self.source_location = source_location
+        super().__init__(
+            f"Cannot lower Metal callable alias '{alias_name}' ({signature}) "
+            f"used by {usage}: {reason}"
+        )
 
 
 class MetalStaticConstantResolutionError(ValueError):
@@ -42,6 +71,37 @@ class MetalBuiltinOverloadResolutionError(ValueError):
         )
 
 
+class MetalStructMethodCallResolutionError(ValueError):
+    """Raised when a lowered sibling method call cannot be rebound safely."""
+
+    project_diagnostic_code = "project.translate.metal-struct-method-call-unresolved"
+    missing_capabilities = ("metal.struct-method-call-lowering",)
+
+    def __init__(
+        self,
+        owner,
+        method_name,
+        argument_types,
+        candidates,
+        reason,
+        source_location=None,
+    ):
+        self.owner = owner
+        self.method_name = method_name
+        self.argument_types = tuple(argument_types)
+        self.candidates = tuple(candidates)
+        self.reason = reason
+        self.source_location = source_location
+        signature = ", ".join(self.argument_types)
+        candidate_text = ", ".join(self.candidates) or "<none>"
+        super().__init__(
+            "Cannot resolve lowered Metal struct method call "
+            f"{owner}::{method_name}({signature}): {reason}; candidates are "
+            f"{candidate_text}; qualify the intended call before lowering or "
+            "make the overload argument types exact."
+        )
+
+
 class MetalSizeofResolutionError(ValueError):
     """Raised when a concrete Metal object size cannot be represented safely."""
 
@@ -53,6 +113,83 @@ class MetalSizeofResolutionError(ValueError):
         self.reason = reason
         self.source_location = source_location
         super().__init__(f"Cannot materialize Metal sizeof({operand}): {reason}")
+
+
+class MetalTemplateArgumentResolutionError(ValueError):
+    """Raised when a required non-type template argument is not concrete."""
+
+    project_diagnostic_code = "project.translate.metal-template-argument-unresolved"
+    missing_capabilities = ("metal.value-template-argument-materialization",)
+
+    def __init__(
+        self,
+        function_name,
+        parameter_name,
+        argument_expression,
+        selected_call,
+        reason,
+        argument_kind,
+        source_location=None,
+        owner=None,
+        member=None,
+        requested_specialization=None,
+        enclosing_function=None,
+        enclosing_specialization=None,
+        nested_helper=None,
+        enclosing_context=None,
+    ):
+        self.function_name = function_name
+        self.parameter_name = parameter_name
+        self.argument_expression = argument_expression
+        self.argument_kind = argument_kind
+        self.default_expression = (
+            argument_expression if argument_kind == "default" else None
+        )
+        self.explicit_argument = (
+            argument_expression
+            if argument_kind in {"explicit", "explicit_type"}
+            else None
+        )
+        self.selected_call = selected_call
+        self.owner = owner
+        self.member = member
+        self.requested_specialization = requested_specialization or selected_call
+        self.enclosing_function = enclosing_function
+        self.enclosing_specialization = enclosing_specialization
+        self.nested_helper = nested_helper
+        self.enclosing_context = enclosing_context
+        self.reason = reason
+        self.source_location = source_location
+        if argument_kind == "missing":
+            argument = f"required argument for '{parameter_name}'"
+        elif argument_kind == "overload":
+            argument = f"overload set for '{function_name}'"
+        elif argument_kind == "explicit_type":
+            argument = (
+                f"explicit type argument for '{parameter_name}' "
+                f"({argument_expression})"
+            )
+        elif argument_kind == "constexpr_body":
+            argument = f"constexpr body ({argument_expression})"
+        else:
+            argument = (
+                f"{argument_kind} argument for '{parameter_name}' "
+                f"({argument_expression})"
+            )
+        message = (
+            "Cannot materialize Metal function template "
+            f"'{function_name}' for call '{selected_call}': {argument} {reason}"
+        )
+        if owner is not None and member is not None:
+            message += f" while resolving {owner}::{member}"
+        if enclosing_specialization is not None:
+            helper = nested_helper or selected_call
+            context = enclosing_context or "constexpr call"
+            message += (
+                f" while resolving {context} '{helper}' in specialization "
+                f"'{enclosing_specialization}'"
+            )
+        super().__init__(message)
 
 
 class MetalCallableLoweringError(ValueError):
@@ -122,6 +259,37 @@ class MetalStageEntryArrayResourceError(ValueError):
         super().__init__(
             "Cannot lower Metal stage-entry array resource "
             f"'{parameter_name}': {reason.replace('-', ' ')}"
+        )
+
+
+class MetalAtomicFenceLoweringError(ValueError):
+    """Raised when a Metal fence contract cannot be preserved in CrossGL."""
+
+    project_diagnostic_code = "project.translate.metal-atomic-fence-unsupported"
+    missing_capabilities = ("metal.atomic-thread-fence-contract-lowering",)
+
+    def __init__(
+        self,
+        reason,
+        *,
+        memory_flags=None,
+        memory_order=None,
+        thread_scope=None,
+        source_location=None,
+    ):
+        self.reason = reason
+        self.memory_flags = memory_flags
+        self.memory_order = memory_order
+        self.thread_scope = thread_scope
+        self.source_location = source_location
+        contract = (
+            f"flags={memory_flags or '<missing>'}, "
+            f"order={memory_order or '<missing>'}, "
+            f"scope={thread_scope or '<missing>'}"
+        )
+        super().__init__(
+            "Cannot lower Metal atomic_thread_fence without changing its "
+            f"semantics ({contract}): {reason.replace('-', ' ')}"
         )
 
 
@@ -413,6 +581,35 @@ class MetalToCrossGLConverter:
         "atomic_exchange_explicit": "atomicExchange",
     }
 
+    metal_atomic_fence_memory_flags = frozenset(
+        {
+            "mem_none",
+            "mem_device",
+            "mem_threadgroup",
+            "mem_texture",
+            "mem_threadgroup_imageblock",
+            "mem_object_data",
+        }
+    )
+    metal_atomic_fence_memory_orders = frozenset(
+        {
+            "memory_order_relaxed",
+            "memory_order_acquire",
+            "memory_order_release",
+            "memory_order_acq_rel",
+            "memory_order_seq_cst",
+        }
+    )
+    metal_atomic_fence_thread_scopes = frozenset(
+        {
+            "thread_scope_thread",
+            "thread_scope_simdgroup",
+            "thread_scope_threadgroup",
+            "thread_scope_device",
+            "thread_scope_system",
+        }
+    )
+
     def __init__(self):
         self.rt_qualifiers = {
             "intersection",
@@ -664,6 +861,9 @@ class MetalToCrossGLConverter:
             "sampler": "sampler",
         }
         self.type_aliases = {}
+        self.type_alias_qualifiers = {}
+        self.callable_type_aliases = {}
+        self.callable_alias_declarations = {}
         self.global_variable_types = {}
         self.current_variable_types = {}
         self.storage_texture_declaration_ids = set()
@@ -681,11 +881,37 @@ class MetalToCrossGLConverter:
         self.struct_static_constants = {}
         self.struct_static_constant_members = {}
         self.struct_static_constant_resolution_stack = []
+        self.struct_static_constexpr_member_keys = set()
         self.current_struct_static_constant_owner = None
+        self.struct_template_parameters = {}
         self.local_struct_type_aliases = {}
         self.integral_constant_bindings = []
+        self.template_value_bindings = []
+        self.template_type_bindings = []
+        self.template_binding_shadow_scopes = []
+        self.value_template_functions = {}
+        self.constexpr_value_template_functions = {}
+        self.constexpr_helper_values = {}
+        self.constexpr_helper_resolution_stack = []
+        self.default_value_template_bindings = {}
+        self.value_template_specializations = {}
+        self.pending_value_template_specializations = []
+        self.value_template_specialization_dependencies = {}
+        self.current_function_specialization_key = None
+        self.max_template_specializations = (
+            DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT
+        )
+        self.template_specialization_limit_source = "max_template_specializations"
+        self.materialized_template_specialization_count = 0
+        self.preserve_unmaterialized_template_calls = False
+        self.suppressed_value_template_function_ids = set()
+        self.metal_atomic_fence_transport_declaration_ids = set()
         self.current_function_name = None
         self.current_function_return_type = None
+        self.current_function = None
+        self.current_function_specialization = None
+        self.current_function_materialization_bindings = {}
+        self.materialized_constexpr_expression_contexts = []
         self.wide_vector_types = {}
         self.wide_vector_binary_helpers = set()
         self.wide_vector_compound_helpers = set()
@@ -843,6 +1069,10 @@ class MetalToCrossGLConverter:
     def declare_identifier(self, name):
         if not name:
             return name
+        if self.template_binding_shadow_scopes and any(
+            name in bindings for bindings in self.template_value_bindings
+        ):
+            self.template_binding_shadow_scopes[-1].add(name)
         current_map = self.identifier_maps[-1]
         if name in current_map:
             return current_map[name]
@@ -859,6 +1089,9 @@ class MetalToCrossGLConverter:
         return candidate
 
     def render_identifier(self, name):
+        template_value = self.template_value_binding(name)
+        if template_value is not None:
+            return template_value
         name = self.substitute_integral_constant_members(name)
         for scope in reversed(self.identifier_maps):
             if name in scope:
@@ -893,6 +1126,7 @@ class MetalToCrossGLConverter:
         key = (owner, name)
         if key not in self.struct_static_constant_members:
             return None
+        self.propagate_struct_static_constexpr_dependency(key)
         return self.render_resolved_static_constant(key)
 
     def render_static_struct_member_identifier(self, name, require_constant=False):
@@ -922,6 +1156,7 @@ class MetalToCrossGLConverter:
         mapped_struct = self.map_struct_name(resolved_struct)
         key = (mapped_struct, member_name)
         if key in self.struct_static_constant_members:
+            self.propagate_struct_static_constexpr_dependency(key)
             return self.render_resolved_static_constant(key)
         if require_constant:
             raise MetalStaticConstantResolutionError(
@@ -930,6 +1165,15 @@ class MetalToCrossGLConverter:
                 "the selected declaration has no compile-time static member",
             )
         return self.sanitize_identifier(f"{mapped_struct}::{member_name}")
+
+    def propagate_struct_static_constexpr_dependency(self, dependency_key):
+        if (
+            dependency_key in self.struct_static_constexpr_member_keys
+            and self.struct_static_constant_resolution_stack
+        ):
+            self.struct_static_constexpr_member_keys.add(
+                self.struct_static_constant_resolution_stack[-1]
+            )
 
     def render_decltype_static_struct_member(self, expr):
         owner = getattr(expr, "object", None)
@@ -1577,6 +1821,114 @@ class MetalToCrossGLConverter:
         lod = next(iter(lods), None)
         return self.resource_size_query_call(first, lod)
 
+    def prepare_metal_atomic_fence_transport_constants(self, ast):
+        """Identify enum constants that exist only to name a fence operand."""
+        self.metal_atomic_fence_transport_declaration_ids = set()
+        globals_list = getattr(ast, "global_variables", []) or getattr(
+            ast, "global_vars", []
+        )
+        values_by_type = {
+            "mem_flags": self.metal_atomic_fence_memory_flags,
+            "memory_order": self.metal_atomic_fence_memory_orders,
+            "thread_scope": self.metal_atomic_fence_thread_scopes,
+        }
+        candidates = {}
+        for declaration in globals_list:
+            if not isinstance(declaration, AssignmentNode) or not isinstance(
+                declaration.left, VariableNode
+            ):
+                continue
+            variable = declaration.left
+            enum_type = self.normalized_metal_type(variable.vtype)
+            name = self.metal_atomic_fence_operand_identifier(variable)
+            qualifiers = {
+                str(qualifier).lower()
+                for qualifier in getattr(variable, "qualifiers", []) or []
+            }
+            if (
+                enum_type not in values_by_type
+                or name not in values_by_type[enum_type]
+                or "constexpr" not in qualifiers
+            ):
+                continue
+            candidates.setdefault(name, []).append(declaration)
+
+        if not candidates:
+            return
+
+        uses = {name: set() for name in candidates}
+        candidate_names = set(candidates)
+        for function in getattr(ast, "functions", []) or []:
+            self.record_metal_atomic_fence_constant_uses(
+                getattr(function, "body", []), candidate_names, uses
+            )
+        for declaration in globals_list:
+            if isinstance(declaration, AssignmentNode):
+                self.record_metal_atomic_fence_constant_uses(
+                    declaration.right, candidate_names, uses
+                )
+            elif isinstance(declaration, VariableNode):
+                self.record_metal_atomic_fence_constant_uses(
+                    getattr(declaration, "value", None), candidate_names, uses
+                )
+        for declarations in (
+            getattr(ast, "structs", []) or [],
+            getattr(ast, "enums", []) or [],
+        ):
+            self.record_metal_atomic_fence_constant_uses(
+                declarations, candidate_names, uses
+            )
+
+        self.metal_atomic_fence_transport_declaration_ids = {
+            id(declarations[0])
+            for name, declarations in candidates.items()
+            if len(declarations) == 1 and uses[name] == {"fence"}
+        }
+
+    def record_metal_atomic_fence_constant_uses(
+        self, value, candidate_names, uses, fence_operand=False
+    ):
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return
+        if isinstance(value, dict):
+            for item in value.values():
+                self.record_metal_atomic_fence_constant_uses(
+                    item, candidate_names, uses, fence_operand
+                )
+            return
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                self.record_metal_atomic_fence_constant_uses(
+                    item, candidate_names, uses, fence_operand
+                )
+            return
+        if isinstance(value, FunctionCallNode) and self.is_metal_atomic_fence_call(
+            value.name
+        ):
+            for argument in value.args:
+                self.record_metal_atomic_fence_constant_uses(
+                    argument, candidate_names, uses, True
+                )
+            return
+        if isinstance(value, VariableNode):
+            name = self.metal_atomic_fence_operand_identifier(value)
+            if name in candidate_names:
+                use = (
+                    "fence"
+                    if fence_operand and not getattr(value, "vtype", None)
+                    else "other"
+                )
+                uses[name].add(use)
+            return
+        if not hasattr(value, "__dict__"):
+            return
+        for key, child in vars(value).items():
+            if key in {"parent", "annotations", "source_location"}:
+                continue
+            self.record_metal_atomic_fence_constant_uses(
+                child, candidate_names, uses, fence_operand
+            )
+
     def generate(self, ast):
         wide_vector_marker = "    // __crossgl_metal_wide_vector_support__\n"
         self.wide_vector_types = {}
@@ -1584,10 +1936,19 @@ class MetalToCrossGLConverter:
         self.wide_vector_compound_helpers = set()
         self.wide_vector_reserved_names = set()
         typedefs = getattr(ast, "typedefs", []) or []
+        self.collect_callable_type_aliases(typedefs)
+        self.validate_runtime_callable_alias_usage(ast)
         self.type_aliases = {
             alias.name: alias.alias_type
             for alias in typedefs
             if isinstance(alias, TypeAliasNode)
+            and alias.name not in self.callable_type_aliases
+        }
+        self.type_alias_qualifiers = {
+            alias.name: list(getattr(alias, "qualifiers", []) or [])
+            for alias in typedefs
+            if isinstance(alias, TypeAliasNode)
+            and alias.name not in self.callable_type_aliases
         }
         # Body-local ``using`` and ``typedef`` aliases discovered while emitting
         # function bodies; these are inlined at their use sites rather than
@@ -1610,6 +1971,8 @@ class MetalToCrossGLConverter:
                 self.user_function_overloads_by_name.setdefault(
                     function.name, []
                 ).append(function)
+        self.prepare_value_template_materializations(ast, functions)
+        self.prepare_metal_atomic_fence_transport_constants(ast)
         code = ""
         includes = getattr(ast, "includes", []) or []
         for inc in includes:
@@ -1735,13 +2098,20 @@ class MetalToCrossGLConverter:
                         else:
                             code += f"        static_assert({cond});\n"
                         continue
-                    decl = self.format_struct_member_decl(member)
+                    decl = self.format_struct_member_decl(
+                        member,
+                        owner=self.map_struct_name(struct_node.name),
+                    )
                     code += f"        {decl};\n"
                 code += "    }\n\n"
 
-        globals_list = getattr(ast, "global_variables", []) or getattr(
-            ast, "global_vars", []
-        )
+        globals_list = [
+            glob
+            for glob in getattr(ast, "global_variables", []) or getattr(
+                ast, "global_vars", []
+            )
+            if id(glob) not in self.metal_atomic_fence_transport_declaration_ids
+        ]
         if globals_list:
             code += "    // Globals\n"
             for glob in globals_list:
@@ -1800,31 +2170,65 @@ class MetalToCrossGLConverter:
                     code += f"    {decl};\n"
             code += "\n"
 
+        ordinary_function_code = []
+        deferred_template_functions = []
         for f in functions:
-            qualifier = getattr(f, "qualifier", None)
-            if qualifier == "vertex":
-                code += "    // Vertex Shader\n"
-                code += "    vertex {\n"
-                code += self.generate_function(f, stage_entry=f.name != "main")
-                code += "    }\n\n"
-            elif qualifier == "fragment":
-                code += "    // Fragment Shader\n"
-                code += "    fragment {\n"
-                code += self.generate_fragment_execution_layouts(f)
-                code += self.generate_function(f, stage_entry=f.name != "main")
-                code += "    }\n\n"
-            elif qualifier == "kernel":
-                code += "    // Compute Shader\n"
-                code += "    compute {\n"
-                code += self.generate_function(
-                    f, stage_entry=self.should_emit_kernel_stage_entry(f)
+            default_bindings = self.default_value_template_bindings.get(id(f))
+            if self.value_template_parameter_names(f) and default_bindings is None:
+                deferred_template_functions.append(f)
+                continue
+            if (
+                id(f) in self.suppressed_value_template_function_ids
+                and default_bindings is None
+            ):
+                continue
+            ordinary_function_code.append(
+                self.generate_top_level_function(
+                    f,
+                    template_value_bindings=default_bindings,
                 )
-                code += "    }\n\n"
-            elif qualifier in self.rt_qualifiers:
-                code += f"    // {qualifier} function\n"
-                code += self.generate_function(f)
-            else:
-                code += self.generate_function(f)
+            )
+
+        specialization_code = {}
+        specialization_entries = {}
+        specialization_index = 0
+        while specialization_index < len(self.pending_value_template_specializations):
+            function, value_bindings, type_bindings, specialized_name, key = (
+                self.pending_value_template_specializations[specialization_index]
+            )
+            specialization_index += 1
+            specialization_entries[key] = (
+                function,
+                value_bindings,
+                type_bindings,
+                specialized_name,
+            )
+            specialization_code[key] = self.generate_top_level_function(
+                function,
+                template_value_bindings=value_bindings,
+                template_type_bindings=type_bindings,
+                output_name=specialized_name,
+                specialization_key=key,
+            )
+
+        deferred_template_code = []
+        self.preserve_unmaterialized_template_calls = True
+        try:
+            for function in deferred_template_functions:
+                if id(function) in self.suppressed_value_template_function_ids:
+                    continue
+                deferred_template_code.append(
+                    self.generate_top_level_function(function)
+                )
+        finally:
+            self.preserve_unmaterialized_template_calls = False
+
+        code += "".join(deferred_template_code)
+        for key in self.ordered_value_template_specialization_keys(
+            specialization_entries
+        ):
+            code += specialization_code[key]
+        code += "".join(ordinary_function_code)
 
         code += "}\n"
         code = code.replace(
@@ -1833,6 +2237,75 @@ class MetalToCrossGLConverter:
             1,
         )
         return code
+
+    def generate_top_level_function(
+        self,
+        function,
+        *,
+        template_value_bindings=None,
+        template_type_bindings=None,
+        output_name=None,
+        specialization_key=None,
+    ):
+        qualifier = getattr(function, "qualifier", None)
+        if qualifier == "vertex":
+            return (
+                "    // Vertex Shader\n"
+                "    vertex {\n"
+                + self.generate_function(
+                    function,
+                    stage_entry=function.name != "main",
+                    template_value_bindings=template_value_bindings,
+                    template_type_bindings=template_type_bindings,
+                    output_name=output_name,
+                    specialization_key=specialization_key,
+                )
+                + "    }\n\n"
+            )
+        if qualifier == "fragment":
+            return (
+                "    // Fragment Shader\n"
+                "    fragment {\n"
+                + self.generate_fragment_execution_layouts(function)
+                + self.generate_function(
+                    function,
+                    stage_entry=function.name != "main",
+                    template_value_bindings=template_value_bindings,
+                    template_type_bindings=template_type_bindings,
+                    output_name=output_name,
+                    specialization_key=specialization_key,
+                )
+                + "    }\n\n"
+            )
+        if qualifier == "kernel":
+            return (
+                "    // Compute Shader\n"
+                "    compute {\n"
+                + self.generate_function(
+                    function,
+                    stage_entry=self.should_emit_kernel_stage_entry(function),
+                    template_value_bindings=template_value_bindings,
+                    template_type_bindings=template_type_bindings,
+                    output_name=output_name,
+                    specialization_key=specialization_key,
+                )
+                + "    }\n\n"
+            )
+        if qualifier in self.rt_qualifiers:
+            return f"    // {qualifier} function\n" + self.generate_function(
+                function,
+                template_value_bindings=template_value_bindings,
+                template_type_bindings=template_type_bindings,
+                output_name=output_name,
+                specialization_key=specialization_key,
+            )
+        return self.generate_function(
+            function,
+            template_value_bindings=template_value_bindings,
+            template_type_bindings=template_type_bindings,
+            output_name=output_name,
+            specialization_key=specialization_key,
+        )
 
     def process_constant_struct(self, node):
         constants = (
@@ -1862,11 +2335,19 @@ class MetalToCrossGLConverter:
 
     def collect_struct_static_constants(self, structs):
         members = {}
+        template_parameters = {}
         for struct_node in structs or []:
             struct_name = getattr(struct_node, "name", None)
             if not struct_name:
                 continue
             mapped_name = self.map_struct_name(struct_name)
+            template_parameters[mapped_name] = {
+                name: kind
+                for kind, name in (
+                    getattr(struct_node, "template_parameters", None) or []
+                )
+                if name
+            }
             for member in getattr(struct_node, "members", []) or []:
                 if not self.is_compile_time_static_member(member):
                     continue
@@ -1877,6 +2358,8 @@ class MetalToCrossGLConverter:
         self.struct_static_constants = {}
         self.struct_static_constant_members = members
         self.struct_static_constant_resolution_stack = []
+        self.struct_static_constexpr_member_keys = set()
+        self.struct_template_parameters = template_parameters
         for key in members:
             self.resolve_struct_static_constant(key)
 
@@ -1911,26 +2394,60 @@ class MetalToCrossGLConverter:
             )
 
         owner, _member_name = key
-        local_integer_values = self.struct_static_integer_values(owner)
-        integer_value = evaluate_literal_int_expression(
-            default_value,
-            local_integer_values,
-        )
-        if integer_value is not None:
-            rendered = str(integer_value)
-        else:
-            self.struct_static_constant_resolution_stack.append(key)
-            previous_owner = self.current_struct_static_constant_owner
-            self.current_struct_static_constant_owner = owner
-            try:
+        self.struct_static_constant_resolution_stack.append(key)
+        previous_owner = self.current_struct_static_constant_owner
+        self.current_struct_static_constant_owner = owner
+        try:
+            local_integer_values = self.struct_static_integer_values(owner)
+            integer_value = evaluate_literal_int_expression(
+                default_value,
+                local_integer_values,
+            )
+            if integer_value is not None:
+                rendered = self.render_static_integral_value(member, integer_value)
+            else:
                 rendered = self.generate_expression(default_value, False)
-            finally:
-                self.current_struct_static_constant_owner = previous_owner
-                self.struct_static_constant_resolution_stack.pop()
+                folded_value = self.evaluate_value_template_constant_expression(
+                    rendered
+                )
+                if folded_value is not None:
+                    rendered = self.render_static_integral_value(member, folded_value)
+        except MetalTemplateArgumentResolutionError as error:
+            raise self.contextualize_static_template_resolution_error(
+                error,
+                key,
+                member,
+            ) from error
+        finally:
+            self.current_struct_static_constant_owner = previous_owner
+            self.struct_static_constant_resolution_stack.pop()
         if not rendered:
             return None
         self.struct_static_constants[key] = rendered
         return rendered
+
+    def render_static_integral_value(self, member, value):
+        member_type = self.normalized_metal_type(getattr(member, "vtype", None))
+        if member_type == "bool":
+            return "true" if value else "false"
+        return str(value)
+
+    def contextualize_static_template_resolution_error(self, error, key, member):
+        owner, member_name = key
+        return MetalTemplateArgumentResolutionError(
+            error.function_name,
+            error.parameter_name,
+            error.argument_expression,
+            error.selected_call,
+            error.reason,
+            error.argument_kind,
+            getattr(member, "source_location", None) or error.source_location,
+            owner=owner,
+            member=member_name,
+            requested_specialization=(
+                getattr(error, "requested_specialization", None) or error.selected_call
+            ),
+        )
 
     def struct_static_integer_values(self, owner):
         values = {}
@@ -1966,13 +2483,14 @@ class MetalToCrossGLConverter:
             mapped_names[raw_name] = candidate
         return mapped_names
 
-    def format_generic_prefix(self, node):
+    def format_generic_prefix(self, node, bound_parameter_names=None):
         defaults = getattr(node, "template_parameter_defaults", {}) or {}
         template_parameters = getattr(node, "template_parameters", None)
+        bound_parameter_names = set(bound_parameter_names or ())
         if template_parameters:
             generics = []
             for kind, name in template_parameters:
-                if not name:
+                if not name or name in bound_parameter_names:
                     continue
                 rendered = self.sanitize_identifier(name)
                 default_type = defaults.get(name)
@@ -2004,6 +2522,1534 @@ class MetalToCrossGLConverter:
             yield from node
             return
         yield from getattr(node, "__dict__", {}).values()
+
+    def collect_callable_type_aliases(self, aliases):
+        alias_nodes = {
+            alias.name: alias
+            for alias in aliases or []
+            if isinstance(alias, TypeAliasNode) and getattr(alias, "name", None)
+        }
+        callable_aliases = {
+            name: alias
+            for name, alias in alias_nodes.items()
+            if isinstance(alias, CallableTypeAliasNode)
+            or getattr(alias, "is_function_type", False)
+        }
+
+        changed = True
+        while changed:
+            changed = False
+            for name, alias in alias_nodes.items():
+                if name in callable_aliases:
+                    continue
+                referenced_name = self.plain_type_alias_reference(alias.alias_type)
+                if referenced_name not in callable_aliases:
+                    continue
+                callable_aliases[name] = callable_aliases[referenced_name]
+                changed = True
+
+        self.callable_type_aliases = callable_aliases
+        self.callable_alias_declarations = {
+            name: alias_nodes[name] for name in callable_aliases
+        }
+
+    def plain_type_alias_reference(self, type_name):
+        text = str(type_name or "").strip()
+        while text.endswith(("*", "&")):
+            text = text[:-1].rstrip()
+        qualifier_pattern = (
+            r"^(?:(?:const|volatile|thread|threadgroup|device|constant|"
+            r"restrict|__restrict|__restrict__)\s+)+"
+        )
+        text = re.sub(qualifier_pattern, "", text).strip()
+        if self.crossgl_identifier_pattern.fullmatch(text):
+            return text
+        return None
+
+    def validate_runtime_callable_alias_usage(self, ast):
+        if not self.callable_type_aliases:
+            return
+
+        for node in self.iter_runtime_ast_nodes(ast):
+            for attribute in ("vtype", "return_type", "target_type", "vector_type"):
+                type_name = getattr(node, attribute, None)
+                alias_name = self.callable_alias_reference(type_name)
+                if alias_name is None:
+                    continue
+                alias = self.callable_type_aliases[alias_name]
+                declaration = self.callable_alias_declarations[alias_name]
+                raise MetalCallableAliasLoweringError(
+                    alias_name,
+                    self.format_callable_alias_signature(alias, alias_name),
+                    self.callable_alias_usage(node, attribute),
+                    "runtime callable values are not representable in CrossGL; "
+                    "materialize the callback as a non-type template argument "
+                    "or use a supported Metal function-table resource",
+                    source_location=(
+                        getattr(node, "source_location", None)
+                        or getattr(declaration, "source_location", None)
+                        or getattr(alias, "source_location", None)
+                    ),
+                )
+
+    def iter_runtime_ast_nodes(self, ast):
+        pending = [
+            value
+            for name, value in getattr(ast, "__dict__", {}).items()
+            if name not in {"typedefs", "includes"}
+        ]
+        seen = set()
+        while pending:
+            node = pending.pop()
+            if node is None or isinstance(node, (str, int, float, bool)):
+                continue
+            if isinstance(node, dict):
+                pending.extend(node.values())
+                continue
+            if isinstance(node, (list, tuple, set)):
+                pending.extend(node)
+                continue
+            node_id = id(node)
+            if node_id in seen:
+                continue
+            seen.add(node_id)
+            if isinstance(node, TypeAliasNode):
+                continue
+            yield node
+            pending.extend(self.iter_ast_children(node))
+
+    def callable_alias_reference(self, type_name):
+        text = str(type_name or "").strip()
+        if not text:
+            return None
+
+        carrier = text
+        while carrier.endswith(("*", "&")):
+            carrier = carrier[:-1].rstrip()
+        base_name, generic_args = self.generic_type_parts(carrier)
+        if base_name in {
+            "visible_function_table",
+            "intersection_function_table",
+        } and any(
+            self.plain_type_alias_reference(argument) in self.callable_type_aliases
+            for argument in generic_args
+        ):
+            return None
+
+        for alias_name in sorted(self.callable_type_aliases, key=len, reverse=True):
+            if re.search(
+                rf"(?<![A-Za-z0-9_]){re.escape(alias_name)}(?![A-Za-z0-9_])",
+                text,
+            ):
+                return alias_name
+        return None
+
+    def callable_alias_usage(self, node, attribute):
+        name = getattr(node, "name", None)
+        node_name = type(node).__name__
+        if name:
+            return f"{node_name} '{name}' {attribute}"
+        return f"{node_name} {attribute}"
+
+    def format_callable_alias_signature(self, alias, alias_name):
+        return_type = str(
+            getattr(alias, "return_type", None) or alias.alias_type
+        ).strip()
+        qualifiers = [
+            str(value).strip()
+            for value in getattr(alias, "qualifiers", []) or []
+            if str(value).strip()
+        ]
+        if qualifiers:
+            return_type = " ".join(qualifiers + [return_type])
+
+        parameters = getattr(alias, "parameters", None)
+        if parameters is None:
+            parameter_text = "..."
+        else:
+            rendered_parameters = []
+            for parameter in parameters:
+                parts = [
+                    str(value).strip()
+                    for value in getattr(parameter, "qualifiers", []) or []
+                    if str(value).strip()
+                ]
+                parts.append(str(getattr(parameter, "vtype", "")).strip())
+                rendered_parameters.append(" ".join(part for part in parts if part))
+            parameter_text = ", ".join(rendered_parameters)
+
+        indirection = str(getattr(alias, "indirection", "") or "")
+        declarator = f"({indirection}{alias_name})" if indirection else alias_name
+        return f"{return_type} {declarator}({parameter_text})"
+
+    def value_template_parameter_names(self, function):
+        return [
+            entry[1]
+            for entry in getattr(function, "template_parameters", None) or []
+            if isinstance(entry, (tuple, list))
+            and len(entry) >= 2
+            and entry[0] == "value"
+            and entry[1]
+        ]
+
+    def split_value_template_call_name(self, name, function_index=None):
+        text = str(name).strip()
+        if "<" not in text or not text.endswith(">"):
+            return None
+        angle = text.find("<")
+        base = text[:angle].strip()
+        if not base:
+            return None
+        arguments = self.split_generic_arguments(text[angle + 1 : -1])
+        function_name = base.rsplit("::", 1)[-1]
+        functions = (
+            self.value_template_functions if function_index is None else function_index
+        )
+        if function_name not in functions:
+            return None
+        return function_name, arguments
+
+    def value_template_overload_signature(self, function):
+        parameters = ", ".join(self.metal_function_source_signature(function))
+        template_parameters = ", ".join(
+            name
+            for _kind, name in getattr(function, "template_parameters", None) or []
+            if name
+        )
+        return f"{function.name}<{template_parameters}>({parameters})"
+
+    def resolve_value_template_function(
+        self,
+        function_name,
+        call_arguments,
+        explicit_template_arguments=None,
+        function_index=None,
+    ):
+        functions = (
+            self.value_template_functions if function_index is None else function_index
+        )
+        value_candidates = [
+            function
+            for function in functions.get(function_name, [])
+            if len(getattr(function, "params", []) or []) == len(call_arguments)
+        ]
+        if not value_candidates:
+            return None
+
+        explicit_call = explicit_template_arguments is not None
+        if explicit_call:
+            explicit_count = len(explicit_template_arguments)
+            value_candidates = [
+                function
+                for function in value_candidates
+                if explicit_count
+                <= len(getattr(function, "template_parameters", None) or [])
+            ]
+            overloads = value_candidates
+        else:
+            overloads = [
+                function
+                for function in self.user_function_overloads_by_name.get(
+                    function_name, []
+                )
+                if len(getattr(function, "params", []) or []) == len(call_arguments)
+            ]
+
+        if not overloads:
+            return None
+        if len(overloads) == 1:
+            return overloads[0] if overloads[0] in value_candidates else None
+
+        argument_types = [
+            self.expression_mapped_type(argument) for argument in call_arguments
+        ]
+        matching = []
+        if all(argument_type is not None for argument_type in argument_types):
+            matching = [
+                function
+                for function in overloads
+                if self.metal_function_mapped_signature(function)
+                == tuple(argument_types)
+            ]
+        if len(matching) == 1:
+            return matching[0] if matching[0] in value_candidates else None
+
+        # A non-template exact match wins over a same-signature function
+        # template in C++. Leave that call on the ordinary overload.
+        non_template_matches = [
+            function
+            for function in matching
+            if not self.value_template_parameter_names(function)
+        ]
+        if len(non_template_matches) == 1:
+            return None
+
+        ambiguous = matching or overloads
+        ambiguous_value_candidates = [
+            function for function in ambiguous if function in value_candidates
+        ]
+        if len(ambiguous_value_candidates) <= 1 and not explicit_call:
+            # Unknown argument types plus an unrelated overload are not enough
+            # evidence to select the template. Preserve the call unchanged.
+            return None
+        signatures = ", ".join(
+            self.value_template_overload_signature(function)
+            for function in ambiguous_value_candidates
+        )
+        representative = ambiguous_value_candidates[0]
+        raise MetalTemplateArgumentResolutionError(
+            function_name,
+            "<overload>",
+            signatures,
+            f"{function_name}(...)",
+            "does not identify one unique value-template declaration",
+            "overload",
+            getattr(representative, "template_source_location", None)
+            or getattr(representative, "source_location", None),
+        )
+
+    def prepare_value_template_materializations(self, ast, functions):
+        self.value_template_functions = {}
+        for function in functions:
+            if (
+                isinstance(function, FunctionNode)
+                and getattr(function, "name", None)
+                and self.value_template_parameter_names(function)
+            ):
+                self.value_template_functions.setdefault(function.name, []).append(
+                    function
+                )
+        self.constexpr_value_template_functions = {
+            name: [
+                function
+                for function in candidates
+                if self.function_is_constexpr(function)
+            ]
+            for name, candidates in self.value_template_functions.items()
+            if any(self.function_is_constexpr(function) for function in candidates)
+        }
+        self.constexpr_helper_values = {}
+        self.constexpr_helper_resolution_stack = []
+        self.default_value_template_bindings = {}
+        self.value_template_specializations = {}
+        self.pending_value_template_specializations = []
+        self.value_template_specialization_dependencies = {}
+        self.current_function_specialization_key = None
+        self.max_template_specializations = getattr(
+            ast,
+            "max_template_specializations",
+            DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT,
+        )
+        self.template_specialization_limit_source = getattr(
+            ast,
+            "template_specialization_limit_source",
+            "max_template_specializations",
+        )
+        self.materialized_template_specialization_count = 0
+        self.preserve_unmaterialized_template_calls = False
+        self.suppressed_value_template_function_ids = set()
+        self.existing_function_names = {
+            function.name
+            for function in functions
+            if isinstance(function, FunctionNode) and getattr(function, "name", None)
+        }
+        if not self.value_template_functions:
+            return
+
+        omitted_calls = []
+        seen = set()
+
+        def visit(node):
+            if node is None or isinstance(node, (str, int, float, bool)):
+                return
+            if not isinstance(node, (dict, list, tuple, set)):
+                node_id = id(node)
+                if node_id in seen:
+                    return
+                seen.add(node_id)
+            if isinstance(node, FunctionCallNode):
+                call_name = str(getattr(node, "name", ""))
+                unscoped_name = call_name.rsplit("::", 1)[-1]
+                if unscoped_name in self.value_template_functions:
+                    omitted_calls.append((unscoped_name, node.args))
+            for child in self.iter_ast_children(node):
+                visit(child)
+
+        visit(ast)
+        for function_name, call_arguments in omitted_calls:
+            function = self.resolve_value_template_function(
+                function_name, call_arguments
+            )
+            if function is None or id(function) in self.default_value_template_bindings:
+                continue
+            bindings = self.bind_value_template_arguments(
+                function,
+                [],
+                selected_call=f"{function_name}(...)",
+                require_defaults=False,
+            )
+            if bindings is None:
+                continue
+            self.default_value_template_bindings[id(function)] = bindings
+            self.suppressed_value_template_function_ids.add(id(function))
+            if all(
+                kind == "value"
+                for kind, name in getattr(function, "template_parameters", None) or []
+                if name
+            ):
+                key = self.concrete_template_specialization_key(
+                    function,
+                    bindings,
+                    {},
+                )
+                self.value_template_specializations[key] = function.name
+
+    def function_is_constexpr(self, function):
+        return "constexpr" in {
+            str(qualifier).lower()
+            for qualifier in getattr(function, "declaration_qualifiers", []) or []
+        }
+
+    def push_materialized_constexpr_expression_context(
+        self,
+        expression,
+        *,
+        required,
+    ):
+        if not self.current_function_materialization_bindings:
+            return False
+        self.materialized_constexpr_expression_contexts.append(
+            {
+                "function": self.current_function_name,
+                "specialization": self.current_function_specialization,
+                "required": required,
+                "source_location": (
+                    getattr(expression, "source_location", None)
+                    or getattr(self.current_function, "source_location", None)
+                ),
+            }
+        )
+        return True
+
+    def render_constexpr_helper_call(self, call, is_main=False):
+        owner = self.current_struct_static_constant_owner
+        resolving_static_member = bool(
+            owner is not None and self.struct_static_constant_resolution_stack
+        )
+        materialization_context = (
+            self.materialized_constexpr_expression_contexts[-1]
+            if self.materialized_constexpr_expression_contexts
+            else None
+        )
+        if not resolving_static_member and materialization_context is None:
+            return None
+
+        call_name = str(getattr(call, "name", ""))
+        parsed = self.split_value_template_call_name(
+            call_name,
+            function_index=self.constexpr_value_template_functions,
+        )
+        if parsed is None:
+            function_name = call_name.rsplit("::", 1)[-1]
+            if function_name not in self.constexpr_value_template_functions:
+                return None
+            explicit_arguments = None
+        else:
+            function_name, explicit_arguments = parsed
+
+        try:
+            function = self.resolve_value_template_function(
+                function_name,
+                getattr(call, "args", []) or [],
+                explicit_template_arguments=explicit_arguments,
+                function_index=self.constexpr_value_template_functions,
+            )
+            if function is None:
+                return None
+            rendered = self.evaluate_struct_static_constexpr_helper(
+                function,
+                explicit_arguments,
+                getattr(call, "args", []) or [],
+                selected_call=call_name,
+                is_main=is_main,
+            )
+        except MetalTemplateArgumentResolutionError as error:
+            if (
+                materialization_context is not None
+                and not materialization_context["required"]
+                and error.argument_kind in {"call", "constexpr_body"}
+            ):
+                return None
+            if materialization_context is None or getattr(
+                error, "enclosing_specialization", None
+            ):
+                raise
+            raise self.contextualize_materialized_constexpr_resolution_error(
+                error,
+                call,
+                materialization_context,
+            ) from error
+        if resolving_static_member:
+            self.struct_static_constexpr_member_keys.add(
+                self.struct_static_constant_resolution_stack[-1]
+            )
+        return rendered
+
+    def contextualize_materialized_constexpr_resolution_error(
+        self,
+        error,
+        call,
+        context,
+    ):
+        return MetalTemplateArgumentResolutionError(
+            error.function_name,
+            error.parameter_name,
+            error.argument_expression,
+            error.selected_call,
+            error.reason,
+            error.argument_kind,
+            getattr(call, "source_location", None)
+            or error.source_location
+            or context["source_location"],
+            requested_specialization=(
+                getattr(error, "requested_specialization", None) or error.selected_call
+            ),
+            enclosing_function=context["function"],
+            enclosing_specialization=context["specialization"],
+            nested_helper=str(getattr(call, "name", error.function_name)),
+        )
+
+    def evaluate_struct_static_constexpr_helper(
+        self,
+        function,
+        explicit_arguments,
+        call_arguments,
+        *,
+        selected_call,
+        is_main,
+    ):
+        (
+            template_bindings,
+            value_bindings,
+            type_bindings,
+        ) = self.bind_struct_static_constexpr_template_arguments(
+            function,
+            explicit_arguments,
+            selected_call=selected_call,
+        )
+        runtime_bindings = self.bind_struct_static_constexpr_call_arguments(
+            function,
+            call_arguments,
+            selected_call=selected_call,
+            is_main=is_main,
+        )
+        requested_specialization = self.constexpr_helper_specialization_name(
+            function,
+            template_bindings,
+        )
+        cache_key = (
+            id(function),
+            tuple(
+                template_bindings.get(name)
+                for _kind, name in getattr(function, "template_parameters", None) or []
+                if name
+            ),
+            tuple(
+                runtime_bindings.get(getattr(parameter, "name", None))
+                for parameter in getattr(function, "params", []) or []
+            ),
+        )
+        cached = self.constexpr_helper_values.get(cache_key)
+        if cached is not None:
+            return cached
+        if cache_key in self.constexpr_helper_resolution_stack:
+            raise MetalTemplateArgumentResolutionError(
+                function.name,
+                "<return>",
+                requested_specialization,
+                selected_call,
+                "has a cyclic constexpr helper dependency",
+                "constexpr_body",
+                getattr(function, "template_source_location", None)
+                or getattr(function, "source_location", None),
+                requested_specialization=requested_specialization,
+            )
+
+        body = list(getattr(function, "body", None) or [])
+        local_declarations = body[:-1]
+        if (
+            not body
+            or not isinstance(body[-1], ReturnNode)
+            or any(
+                not self.is_supported_constexpr_local_declaration(statement)
+                for statement in local_declarations
+            )
+        ):
+            raise MetalTemplateArgumentResolutionError(
+                function.name,
+                "<return>",
+                requested_specialization,
+                selected_call,
+                "contains statements outside the supported constexpr local "
+                "declaration and return subset",
+                "constexpr_body",
+                getattr(function, "template_source_location", None)
+                or getattr(function, "source_location", None),
+                requested_specialization=requested_specialization,
+            )
+
+        return_type = self.substitute_template_value_text(
+            getattr(function, "return_type", ""),
+            bindings=type_bindings,
+            honor_shadowing=False,
+        )
+        if not self.is_integral_constexpr_type(return_type):
+            raise MetalTemplateArgumentResolutionError(
+                function.name,
+                "<return>",
+                return_type,
+                selected_call,
+                "does not have an integral or boolean return type",
+                "constexpr_body",
+                getattr(function, "template_source_location", None)
+                or getattr(function, "source_location", None),
+                requested_specialization=requested_specialization,
+            )
+
+        previous_type_aliases = dict(self.type_aliases)
+        previous_shadow_scopes = self.template_binding_shadow_scopes
+        self.type_aliases.update(type_bindings)
+        active_value_bindings = dict(value_bindings)
+        active_value_bindings.update(runtime_bindings)
+        self.template_value_bindings.append(active_value_bindings)
+        self.template_binding_shadow_scopes = []
+        self.constexpr_helper_resolution_stack.append(cache_key)
+        try:
+            for declaration in local_declarations:
+                local_name = declaration.left.name
+                local_expression = self.generate_expression(
+                    declaration.right,
+                    is_main,
+                )
+                local_value = self.normalize_struct_static_constexpr_expression(
+                    local_expression,
+                    function,
+                    local_name,
+                    selected_call,
+                    requested_specialization,
+                )
+                active_value_bindings[local_name] = local_value
+            rendered = self.generate_expression(body[-1].value, is_main)
+        finally:
+            self.constexpr_helper_resolution_stack.pop()
+            self.template_binding_shadow_scopes = previous_shadow_scopes
+            self.template_value_bindings.pop()
+            self.type_aliases = previous_type_aliases
+
+        result = self.normalize_struct_static_constexpr_expression(
+            rendered,
+            function,
+            "<return>",
+            selected_call,
+            requested_specialization,
+        )
+
+        self.constexpr_helper_values[cache_key] = result
+        return result
+
+    def is_supported_constexpr_local_declaration(self, statement):
+        if (
+            not isinstance(statement, AssignmentNode)
+            or getattr(statement, "operator", None) != "="
+            or not isinstance(getattr(statement, "left", None), VariableNode)
+            or not getattr(statement.left, "name", None)
+        ):
+            return False
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(statement.left, "qualifiers", []) or []
+        }
+        return "constexpr" in qualifiers and self.is_integral_constexpr_type(
+            getattr(statement.left, "vtype", None)
+        )
+
+    def normalize_struct_static_constexpr_expression(
+        self,
+        rendered,
+        function,
+        expression_name,
+        selected_call,
+        requested_specialization,
+    ):
+        folded = self.evaluate_value_template_constant_expression(rendered)
+        if folded is not None:
+            return str(folded)
+
+        dependencies = set(re.findall(r"\b[A-Za-z_]\w*\b", rendered))
+        owner_parameters = self.current_struct_template_value_parameters()
+        allowed = set(owner_parameters)
+        allowed.update(self.constexpr_integral_type_names())
+        allowed.update({"true", "false"})
+        unresolved = sorted(dependencies - allowed)
+        if unresolved or not dependencies.intersection(owner_parameters):
+            reason = (
+                f"remains dependent on {', '.join(unresolved)}"
+                if unresolved
+                else "cannot be evaluated as a supported integral constant expression"
+            )
+            raise MetalTemplateArgumentResolutionError(
+                function.name,
+                expression_name,
+                rendered,
+                selected_call,
+                reason,
+                "constexpr_body",
+                getattr(function, "template_source_location", None)
+                or getattr(function, "source_location", None),
+                requested_specialization=requested_specialization,
+            )
+        return f"({rendered})"
+
+    def bind_struct_static_constexpr_template_arguments(
+        self,
+        function,
+        explicit_arguments,
+        *,
+        selected_call,
+    ):
+        parameters = getattr(function, "template_parameters", None) or []
+        defaults = getattr(function, "template_parameter_defaults", {}) or {}
+        explicit_arguments = list(explicit_arguments or [])
+        template_bindings = {}
+        value_bindings = {}
+        type_bindings = {}
+        argument_index = 0
+
+        for kind, name in parameters:
+            if not name:
+                continue
+            explicit = argument_index < len(explicit_arguments)
+            if explicit:
+                expression = explicit_arguments[argument_index]
+                argument_index += 1
+                argument_kind = "explicit" if kind == "value" else "explicit_type"
+            else:
+                expression = defaults.get(name)
+                argument_kind = "default" if kind == "value" else "default_type"
+                if expression is None:
+                    raise MetalTemplateArgumentResolutionError(
+                        function.name,
+                        name,
+                        None,
+                        selected_call,
+                        "was not supplied and has no declaration default",
+                        "missing",
+                        getattr(function, "template_source_location", None)
+                        or getattr(function, "source_location", None),
+                    )
+
+            if kind == "value":
+                resolved = self.resolve_struct_static_constexpr_value_argument(
+                    expression,
+                    template_bindings,
+                    function,
+                    name,
+                    selected_call,
+                    argument_kind,
+                )
+                value_bindings[name] = resolved
+            else:
+                resolved = self.resolve_struct_static_constexpr_type_argument(
+                    expression,
+                    template_bindings,
+                    function,
+                    name,
+                    selected_call,
+                    argument_kind,
+                )
+                type_bindings[name] = resolved
+            template_bindings[name] = resolved
+
+        if argument_index != len(explicit_arguments):
+            return {}, {}, {}
+        return template_bindings, value_bindings, type_bindings
+
+    def resolve_struct_static_constexpr_value_argument(
+        self,
+        expression,
+        earlier_bindings,
+        function,
+        parameter_name,
+        selected_call,
+        argument_kind,
+    ):
+        text = self.struct_static_constexpr_argument_text(
+            expression,
+            earlier_bindings,
+        )
+        normalized = re.sub(r"\s+", " ", text).strip()
+        if normalized in {"true", "false"}:
+            return normalized
+        integer = re.fullmatch(r"([-+]?\d+)(?:[uUlL]+)?", normalized)
+        if integer is not None:
+            return integer.group(1)
+        value = self.evaluate_value_template_constant_expression(normalized)
+        if value is not None:
+            return str(value)
+
+        identifiers = sorted(set(re.findall(r"\b[A-Za-z_]\w*\b", normalized)))
+        unresolved = sorted(
+            set(identifiers) - self.current_struct_template_value_parameters()
+        )
+        if identifiers and not unresolved:
+            return normalized
+        reason = (
+            f"remains dependent on {', '.join(unresolved or identifiers)}"
+            if identifiers
+            else "cannot be evaluated as a supported integral constant expression"
+        )
+        raise MetalTemplateArgumentResolutionError(
+            function.name,
+            parameter_name,
+            str(expression),
+            selected_call,
+            reason,
+            argument_kind,
+            getattr(function, "template_source_location", None)
+            or getattr(function, "source_location", None),
+        )
+
+    def resolve_struct_static_constexpr_type_argument(
+        self,
+        expression,
+        earlier_bindings,
+        function,
+        parameter_name,
+        selected_call,
+        argument_kind,
+    ):
+        text = self.struct_static_constexpr_argument_text(
+            expression,
+            earlier_bindings,
+        )
+        identifiers = set(re.findall(r"\b[A-Za-z_]\w*\b", text))
+        helper_parameters = {
+            name
+            for _kind, name in getattr(function, "template_parameters", None) or []
+            if name
+        }
+        owner_parameters = set(
+            self.struct_template_parameters.get(
+                self.current_struct_static_constant_owner,
+                {},
+            )
+        )
+        unresolved = sorted((identifiers & helper_parameters) - owner_parameters)
+        if unresolved:
+            raise MetalTemplateArgumentResolutionError(
+                function.name,
+                parameter_name,
+                str(expression),
+                selected_call,
+                f"remains dependent on {', '.join(unresolved)}",
+                argument_kind,
+                getattr(function, "template_source_location", None)
+                or getattr(function, "source_location", None),
+            )
+        return text.strip()
+
+    def struct_static_constexpr_argument_text(self, expression, earlier_bindings):
+        if self.materialized_constexpr_expression_contexts:
+            bindings = {
+                name: value
+                for scope in self.template_value_bindings
+                for name, value in scope.items()
+                if not self.template_value_binding_is_shadowed(name)
+            }
+        else:
+            bindings = dict(self.struct_static_owner_member_bindings())
+            for scope in self.template_value_bindings:
+                bindings.update(scope)
+        bindings.update(earlier_bindings)
+        return self.substitute_template_value_text(
+            str(expression),
+            bindings=bindings,
+            honor_shadowing=False,
+        )
+
+    def struct_static_owner_member_bindings(self):
+        owner = self.current_struct_static_constant_owner
+        return {
+            member_name: value
+            for (
+                candidate_owner,
+                member_name,
+            ), value in self.struct_static_constants.items()
+            if candidate_owner == owner
+        }
+
+    def current_struct_template_value_parameters(self):
+        return {
+            name
+            for name, kind in self.struct_template_parameters.get(
+                self.current_struct_static_constant_owner,
+                {},
+            ).items()
+            if kind == "value"
+        }
+
+    def bind_struct_static_constexpr_call_arguments(
+        self,
+        function,
+        call_arguments,
+        *,
+        selected_call,
+        is_main,
+    ):
+        bindings = {}
+        allowed = self.current_struct_template_value_parameters()
+        for parameter, argument in zip(
+            getattr(function, "params", []) or [],
+            call_arguments,
+        ):
+            rendered = self.generate_expression(argument, is_main)
+            folded = self.evaluate_value_template_constant_expression(rendered)
+            if folded is not None:
+                rendered = str(folded)
+            else:
+                identifiers = set(re.findall(r"\b[A-Za-z_]\w*\b", rendered))
+                unresolved = sorted(identifiers - allowed)
+                if unresolved or not identifiers:
+                    reason = (
+                        f"remains dependent on {', '.join(unresolved)}"
+                        if unresolved
+                        else "cannot be evaluated as a supported integral "
+                        "constant expression"
+                    )
+                    raise MetalTemplateArgumentResolutionError(
+                        function.name,
+                        getattr(parameter, "name", None) or "<argument>",
+                        rendered,
+                        selected_call,
+                        reason,
+                        "call",
+                        getattr(argument, "source_location", None)
+                        or getattr(function, "source_location", None),
+                    )
+            bindings[getattr(parameter, "name", None)] = rendered
+        return bindings
+
+    def constexpr_helper_specialization_name(self, function, bindings):
+        parameters = [
+            name
+            for _kind, name in getattr(function, "template_parameters", None) or []
+            if name
+        ]
+        if not parameters:
+            return function.name
+        arguments = ",".join(str(bindings[name]) for name in parameters)
+        return f"{function.name}<{arguments}>"
+
+    def is_integral_constexpr_type(self, type_name):
+        resolved = self.normalized_metal_type(self.resolve_type_alias(type_name))
+        return resolved in self.constexpr_integral_type_names()
+
+    @staticmethod
+    def constexpr_integral_type_names():
+        return {
+            "bool",
+            "char",
+            "uchar",
+            "short",
+            "ushort",
+            "int",
+            "uint",
+            "long",
+            "ulong",
+            "size_t",
+            "ptrdiff_t",
+            "int8_t",
+            "uint8_t",
+            "int16_t",
+            "uint16_t",
+            "int32_t",
+            "uint32_t",
+            "int64_t",
+            "uint64_t",
+        }
+
+    def bind_value_template_arguments(
+        self,
+        function,
+        explicit_arguments,
+        *,
+        selected_call,
+        require_defaults=True,
+    ):
+        parameters = getattr(function, "template_parameters", None) or []
+        defaults = getattr(function, "template_parameter_defaults", {}) or {}
+        explicit_arguments = list(explicit_arguments or [])
+        bindings = {}
+        argument_index = 0
+        for entry in parameters:
+            if not isinstance(entry, (tuple, list)) or len(entry) < 2:
+                continue
+            kind, name = entry[0], entry[1]
+            if not name:
+                continue
+            explicit = argument_index < len(explicit_arguments)
+            if explicit:
+                argument = explicit_arguments[argument_index]
+                argument_index += 1
+                if kind != "value":
+                    raise MetalTemplateArgumentResolutionError(
+                        function.name,
+                        name,
+                        argument,
+                        selected_call,
+                        (
+                            "cannot be preserved by the value-template "
+                            "specialization identity"
+                        ),
+                        "explicit_type",
+                        getattr(function, "template_source_location", None)
+                        or getattr(function, "source_location", None),
+                    )
+                bindings[name] = self.resolve_value_template_constant(
+                    argument,
+                    bindings,
+                    function,
+                    name,
+                    selected_call,
+                    is_default=False,
+                )
+                continue
+            if kind != "value":
+                continue
+            default = defaults.get(name)
+            if default is None:
+                if require_defaults:
+                    raise MetalTemplateArgumentResolutionError(
+                        function.name,
+                        name,
+                        None,
+                        selected_call,
+                        "was not supplied and has no declaration default",
+                        "missing",
+                        getattr(function, "template_source_location", None)
+                        or getattr(function, "source_location", None),
+                    )
+                return None
+            bindings[name] = self.resolve_value_template_constant(
+                default,
+                bindings,
+                function,
+                name,
+                selected_call,
+                is_default=True,
+            )
+
+        if argument_index != len(explicit_arguments):
+            return None
+        value_names = self.value_template_parameter_names(function)
+        if any(name not in bindings for name in value_names):
+            return None
+        return bindings
+
+    def resolve_value_template_constant(
+        self,
+        expression,
+        earlier_bindings,
+        function,
+        parameter_name,
+        selected_call,
+        *,
+        is_default,
+    ):
+        text = self.substitute_template_value_text(
+            str(expression), bindings=earlier_bindings, honor_shadowing=False
+        ).strip()
+        active_bindings = {
+            name: value
+            for scope in self.template_value_bindings
+            for name, value in scope.items()
+            if not self.template_value_binding_is_shadowed(name)
+        }
+        if active_bindings:
+            text = self.substitute_template_value_text(
+                text, bindings=active_bindings, honor_shadowing=False
+            ).strip()
+        normalized = re.sub(r"\s+", " ", text)
+        if normalized in {"true", "false"}:
+            return normalized
+        integer = re.fullmatch(r"([-+]?\d+)(?:[uUlL]+)?", normalized)
+        if integer is not None:
+            return integer.group(1)
+
+        value = self.evaluate_value_template_constant_expression(normalized)
+        if value is not None:
+            return str(value)
+
+        identifiers = sorted(set(re.findall(r"\b[A-Za-z_]\w*\b", normalized)))
+        dependency = (
+            f"remains dependent on {', '.join(identifiers)}"
+            if identifiers
+            else "cannot be evaluated as a supported integral constant expression"
+        )
+        raise MetalTemplateArgumentResolutionError(
+            function.name,
+            parameter_name,
+            str(expression),
+            selected_call,
+            dependency,
+            "default" if is_default else "explicit",
+            getattr(function, "template_source_location", None)
+            or getattr(function, "source_location", None),
+        )
+
+    def evaluate_value_template_constant_expression(self, expression):
+        try:
+            lexer = MetalLexer(expression, preprocess=False)
+            parser = MetalParser(lexer.tokenize())
+            node = parser.parse_expression()
+            if parser.current_token[0] != "EOF":
+                return None
+        except (SyntaxError, ValueError, TypeError):
+            return None
+        return evaluate_literal_int_expression(node)
+
+    def bind_concrete_function_template_arguments(
+        self,
+        function,
+        explicit_arguments,
+        *,
+        selected_call,
+    ):
+        parameters = [
+            entry
+            for entry in getattr(function, "template_parameters", None) or []
+            if isinstance(entry, (tuple, list)) and len(entry) >= 2 and entry[1]
+        ]
+        defaults = getattr(function, "template_parameter_defaults", {}) or {}
+        explicit_arguments = list(explicit_arguments or [])
+        if len(explicit_arguments) > len(parameters):
+            raise MetalTemplateArgumentResolutionError(
+                function.name,
+                "<arguments>",
+                ", ".join(str(argument) for argument in explicit_arguments),
+                selected_call,
+                "supplies more arguments than the selected template declares",
+                "explicit",
+                getattr(function, "template_source_location", None)
+                or getattr(function, "source_location", None),
+            )
+
+        all_bindings = {}
+        value_bindings = {}
+        type_bindings = {}
+        for index, (kind, name) in enumerate(parameters):
+            explicit = index < len(explicit_arguments)
+            expression = explicit_arguments[index] if explicit else defaults.get(name)
+            if expression is None:
+                raise MetalTemplateArgumentResolutionError(
+                    function.name,
+                    name,
+                    None,
+                    selected_call,
+                    "was not supplied and has no declaration default",
+                    "missing",
+                    getattr(function, "template_source_location", None)
+                    or getattr(function, "source_location", None),
+                )
+            if kind == "value":
+                resolved = self.resolve_value_template_constant(
+                    expression,
+                    all_bindings,
+                    function,
+                    name,
+                    selected_call,
+                    is_default=not explicit,
+                )
+                value_bindings[name] = resolved
+            else:
+                resolved = self.resolve_concrete_template_type_argument(
+                    expression,
+                    all_bindings,
+                    function,
+                    name,
+                    selected_call,
+                    is_default=not explicit,
+                )
+                type_bindings[name] = resolved
+            all_bindings[name] = resolved
+        return value_bindings, type_bindings
+
+    def resolve_concrete_template_type_argument(
+        self,
+        expression,
+        earlier_bindings,
+        function,
+        parameter_name,
+        selected_call,
+        *,
+        is_default,
+    ):
+        text = self.substitute_template_value_text(
+            str(expression),
+            bindings=earlier_bindings,
+            honor_shadowing=False,
+        ).strip()
+        active_type_bindings = {
+            name: value
+            for scope in self.template_type_bindings
+            for name, value in scope.items()
+        }
+        type_bindings = dict(active_type_bindings)
+        type_bindings.update(earlier_bindings)
+        for name in sorted(type_bindings, key=len, reverse=True):
+            text = re.sub(
+                rf"\b{re.escape(name)}\b",
+                str(type_bindings[name]),
+                text,
+            )
+        text = re.sub(r"^typename\s+", "", text).strip()
+        text = self.resolve_local_type_aliases(text)
+        if text in self.local_struct_type_aliases:
+            text = self.local_struct_type_aliases[text]
+        text = self.resolve_type_alias(text)
+
+        dependent_names = {
+            name
+            for candidate in (self.current_function, function)
+            for _kind, name in getattr(candidate, "template_parameters", None) or []
+            if name
+        }
+        identifiers = set(re.findall(r"\b[A-Za-z_]\w*\b", str(text)))
+        unresolved = sorted(identifiers.intersection(dependent_names))
+        if not text or unresolved:
+            reason = (
+                f"remains dependent on {', '.join(unresolved)}"
+                if unresolved
+                else "does not identify a concrete type"
+            )
+            raise MetalTemplateArgumentResolutionError(
+                function.name,
+                parameter_name,
+                str(expression),
+                selected_call,
+                reason,
+                "default_type" if is_default else "explicit_type",
+                getattr(function, "template_source_location", None)
+                or getattr(function, "source_location", None),
+            )
+        return re.sub(r"\s+", " ", str(text)).strip()
+
+    def concrete_template_specialization_key(
+        self,
+        function,
+        value_bindings,
+        type_bindings,
+    ):
+        return (
+            id(function),
+            tuple(
+                (
+                    kind,
+                    (value_bindings[name] if kind == "value" else type_bindings[name]),
+                )
+                for kind, name in getattr(function, "template_parameters", None) or []
+                if name
+            ),
+        )
+
+    def concrete_template_specialization_arguments(
+        self,
+        function,
+        value_bindings,
+        type_bindings,
+    ):
+        return [
+            value_bindings[name] if kind == "value" else type_bindings[name]
+            for kind, name in getattr(function, "template_parameters", None) or []
+            if name
+        ]
+
+    def value_template_specialization_identifier(
+        self,
+        function,
+        value_bindings,
+        type_bindings,
+    ):
+        values = self.concrete_template_specialization_arguments(
+            function,
+            value_bindings,
+            type_bindings,
+        )
+        parts = [function.name, *values]
+        identifier = "_".join(
+            part
+            for part in (
+                re.sub(r"[^A-Za-z0-9_]+", "_", str(value)).strip("_") for value in parts
+            )
+            if part
+        )
+        identifier = identifier or function.name
+        if len(self.value_template_functions.get(function.name, [])) > 1:
+            signature = "_".join(self.metal_function_source_signature(function))
+            if signature:
+                identifier = f"{identifier}_{signature}"
+        return self.sanitize_identifier(identifier)
+
+    def reserve_value_template_specialization_identifier(
+        self,
+        function,
+        value_bindings,
+        type_bindings,
+    ):
+        base = self.value_template_specialization_identifier(
+            function,
+            value_bindings,
+            type_bindings,
+        )
+        candidate = base
+        suffix = 2
+        while candidate in self.existing_function_names:
+            candidate = f"{base}_{suffix}"
+            suffix += 1
+        self.existing_function_names.add(candidate)
+        return candidate
+
+    def materialized_value_template_call_name(
+        self,
+        name,
+        call_arguments,
+        source_location=None,
+    ):
+        if self.preserve_unmaterialized_template_calls:
+            return name
+        parsed = self.split_value_template_call_name(name)
+        if parsed is None:
+            return name
+        function_name, arguments = parsed
+        try:
+            function = self.resolve_value_template_function(
+                function_name,
+                call_arguments,
+                explicit_template_arguments=arguments,
+            )
+            if function is None:
+                return name
+            value_bindings, type_bindings = (
+                self.bind_concrete_function_template_arguments(
+                    function,
+                    arguments,
+                    selected_call=str(name),
+                )
+            )
+        except MetalTemplateArgumentResolutionError as error:
+            raise self.contextualize_template_call_resolution_error(
+                error,
+                name,
+                source_location,
+            ) from error
+        key = self.concrete_template_specialization_key(
+            function,
+            value_bindings,
+            type_bindings,
+        )
+        self.record_value_template_specialization_dependency(key)
+        existing = self.value_template_specializations.get(key)
+        if existing is not None:
+            return existing
+
+        requested_arguments = tuple(
+            str(argument)
+            for argument in self.concrete_template_specialization_arguments(
+                function,
+                value_bindings,
+                type_bindings,
+            )
+        )
+        next_count = self.materialized_template_specialization_count + 1
+        if next_count > self.max_template_specializations:
+            requested_signature = f"{function.name}<{', '.join(requested_arguments)}>"
+            raise MetalTemplateSpecializationError(
+                "Metal template specialization limit exceeded while "
+                f"materializing '{requested_signature}'; {next_count} unique "
+                f"concrete signatures requested, limit "
+                f"{self.max_template_specializations} from "
+                f"{self.template_specialization_limit_source}.",
+                limit=self.max_template_specializations,
+                limit_source=self.template_specialization_limit_source,
+                unique_specialization_count=next_count,
+                requested_signature=requested_signature,
+                source_location=source_location,
+                caller_specialization=self.current_function_specialization,
+                callee_template=function.name,
+                requested_arguments=requested_arguments,
+            )
+        specialized_name = self.reserve_value_template_specialization_identifier(
+            function,
+            value_bindings,
+            type_bindings,
+        )
+        self.materialized_template_specialization_count = next_count
+        self.value_template_specializations[key] = specialized_name
+        self.suppressed_value_template_function_ids.add(id(function))
+        self.pending_value_template_specializations.append(
+            (
+                function,
+                value_bindings,
+                type_bindings,
+                specialized_name,
+                key,
+            )
+        )
+        self.user_function_names.add(specialized_name)
+        self.user_function_overloads_by_name.setdefault(specialized_name, []).append(
+            function
+        )
+        return specialized_name
+
+    def contextualize_template_call_resolution_error(
+        self,
+        error,
+        call_name,
+        source_location,
+    ):
+        if (
+            getattr(error, "enclosing_specialization", None)
+            or self.current_function_specialization_key is None
+        ):
+            return error
+        return MetalTemplateArgumentResolutionError(
+            error.function_name,
+            error.parameter_name,
+            error.argument_expression,
+            error.selected_call,
+            error.reason,
+            error.argument_kind,
+            source_location or error.source_location,
+            requested_specialization=(
+                getattr(error, "requested_specialization", None) or error.selected_call
+            ),
+            enclosing_function=self.current_function_name,
+            enclosing_specialization=self.current_function_specialization,
+            nested_helper=str(call_name),
+            enclosing_context="template call",
+        )
+
+    def record_value_template_specialization_dependency(self, callee_key):
+        caller_key = self.current_function_specialization_key
+        if caller_key is None:
+            return
+        dependencies = self.value_template_specialization_dependencies.setdefault(
+            caller_key,
+            [],
+        )
+        if callee_key not in dependencies:
+            dependencies.append(callee_key)
+
+    def ordered_value_template_specialization_keys(self, entries):
+        states = {}
+        ordered = []
+        stack = []
+
+        def visit(key):
+            state = states.get(key, 0)
+            if state == 2:
+                return
+            if state == 1:
+                cycle_start = stack.index(key)
+                cycle = stack[cycle_start:] + [key]
+                cycle_names = [
+                    self.value_template_specializations.get(item, "<specialization>")
+                    for item in cycle
+                ]
+                function, value_bindings, type_bindings, _name = entries[key]
+                requested_arguments = tuple(
+                    str(argument)
+                    for argument in self.concrete_template_specialization_arguments(
+                        function,
+                        value_bindings,
+                        type_bindings,
+                    )
+                )
+                raise MetalTemplateSpecializationError(
+                    "Metal template specialization graph is recursive: "
+                    + " -> ".join(cycle_names),
+                    requested_signature=(
+                        f"{function.name}<{', '.join(requested_arguments)}>"
+                    ),
+                    caller_specialization=cycle_names[-2],
+                    callee_template=function.name,
+                    requested_arguments=requested_arguments,
+                )
+
+            states[key] = 1
+            stack.append(key)
+            for dependency in self.value_template_specialization_dependencies.get(
+                key,
+                [],
+            ):
+                if dependency in entries:
+                    visit(dependency)
+            stack.pop()
+            states[key] = 2
+            ordered.append(key)
+
+        for key in entries:
+            visit(key)
+        return ordered
+
+    def template_value_binding_is_shadowed(self, name):
+        return any(
+            name in scope for scope in reversed(self.template_binding_shadow_scopes)
+        )
+
+    def template_value_binding(self, name):
+        if self.template_value_binding_is_shadowed(name):
+            return None
+        for bindings in reversed(self.template_value_bindings):
+            if name in bindings:
+                return bindings[name]
+        return None
+
+    def substitute_template_value_text(
+        self, text, *, bindings=None, honor_shadowing=True
+    ):
+        text = str(text)
+        if bindings is None:
+            bindings = {
+                name: value
+                for scope in self.template_value_bindings
+                for name, value in scope.items()
+                if not honor_shadowing
+                or not self.template_value_binding_is_shadowed(name)
+            }
+        if not bindings:
+            return text
+        return re.sub(
+            r"\b[A-Za-z_]\w*\b",
+            lambda match: str(bindings.get(match.group(0), match.group(0))),
+            text,
+        )
+
+    def substitute_template_type_text(self, text, *, bindings=None):
+        text = str(text)
+        if bindings is None:
+            bindings = {
+                name: value
+                for scope in self.template_type_bindings
+                for name, value in scope.items()
+            }
+        if not bindings:
+            return text
+        return re.sub(
+            r"\b[A-Za-z_]\w*\b",
+            lambda match: str(bindings.get(match.group(0), match.group(0))),
+            text,
+        )
 
     def collect_storage_texture_declaration_ids(self, root):
         storage_ids = set()
@@ -2068,10 +4114,36 @@ class MetalToCrossGLConverter:
         self.struct_static_constants = {}
         self.struct_static_constant_members = {}
         self.struct_static_constant_resolution_stack = []
+        self.struct_static_constexpr_member_keys = set()
         self.current_struct_static_constant_owner = None
+        self.struct_template_parameters = {}
         self.local_struct_type_aliases = {}
         self.integral_constant_bindings = []
+        self.template_value_bindings = []
+        self.template_type_bindings = []
+        self.template_binding_shadow_scopes = []
+        self.value_template_functions = {}
+        self.constexpr_value_template_functions = {}
+        self.constexpr_helper_values = {}
+        self.constexpr_helper_resolution_stack = []
+        self.default_value_template_bindings = {}
+        self.value_template_specializations = {}
+        self.pending_value_template_specializations = []
+        self.value_template_specialization_dependencies = {}
+        self.current_function_specialization_key = None
+        self.max_template_specializations = (
+            DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT
+        )
+        self.template_specialization_limit_source = "max_template_specializations"
+        self.materialized_template_specialization_count = 0
+        self.preserve_unmaterialized_template_calls = False
+        self.suppressed_value_template_function_ids = set()
         self.current_function_name = None
+        self.current_function_return_type = None
+        self.current_function = None
+        self.current_function_specialization = None
+        self.current_function_materialization_bindings = {}
+        self.materialized_constexpr_expression_contexts = []
 
     def format_array_suffix(self, var, include_declarator_arrays=True):
         array_type = self.metal_array_type_parts(getattr(var, "vtype", None))
@@ -2095,7 +4167,7 @@ class MetalToCrossGLConverter:
         if not isinstance(size, str):
             return self.generate_expression(size, False)
 
-        extent = size.strip()
+        extent = self.substitute_template_value_text(size).strip()
         if self.is_scoped_identifier(extent.lstrip(":")):
             extent = extent.lstrip(":")
             return self.sanitize_identifier(extent)
@@ -2157,9 +4229,7 @@ class MetalToCrossGLConverter:
         ) or self.structured_buffer_pointer_type(var):
             return ""
 
-        qualifiers = [
-            str(qualifier).lower() for qualifier in getattr(var, "qualifiers", []) or []
-        ]
+        qualifiers = self.effective_declaration_qualifiers(var)
         address_spaces = []
         for qualifier in (
             "threadgroup_imageblock",
@@ -2171,6 +4241,66 @@ class MetalToCrossGLConverter:
             if qualifier in qualifiers and qualifier not in address_spaces:
                 address_spaces.append(qualifier)
         return f"{' '.join(address_spaces)} " if address_spaces else ""
+
+    def effective_declaration_qualifiers(self, var):
+        """Return direct qualifiers plus those carried by a resolved type alias."""
+        qualifiers = [
+            str(qualifier).lower() for qualifier in getattr(var, "qualifiers", []) or []
+        ]
+        metal_type = str(getattr(var, "vtype", "") or "").strip()
+        while metal_type.endswith(("*", "&")):
+            metal_type = metal_type[:-1].strip()
+
+        seen = set()
+        while metal_type in self.type_aliases and metal_type not in seen:
+            seen.add(metal_type)
+            qualifiers.extend(
+                str(qualifier).lower()
+                for qualifier in self.type_alias_qualifiers.get(metal_type, [])
+            )
+            metal_type = str(self.type_aliases[metal_type]).strip()
+            while metal_type.endswith(("*", "&")):
+                metal_type = metal_type[:-1].strip()
+
+        return list(dict.fromkeys(qualifiers))
+
+    def resource_memory_qualifiers(self, var):
+        """Return ordered Metal resource-memory qualifiers for a declaration."""
+        if not self.declaration_has_resource_storage(var):
+            return []
+        qualifiers = []
+        for qualifier in self.effective_declaration_qualifiers(var):
+            if qualifier == "volatile" or re.fullmatch(
+                r"coherent(?:\([A-Za-z_][A-Za-z_0-9]*\))?", qualifier
+            ):
+                qualifiers.append(qualifier)
+        return qualifiers
+
+    def declaration_has_resource_storage(self, var):
+        resolved_type = self.resolve_type_alias(getattr(var, "vtype", None))
+        return bool(
+            self.pointer_element_type(resolved_type)
+            or self.reference_element_type(resolved_type)
+            or self.is_metal_resource_type(resolved_type)
+        )
+
+    def resource_memory_qualifier_prefix(self, var):
+        qualifiers = self.resource_memory_qualifiers(var)
+        return f"{' '.join(qualifiers)} " if qualifiers else ""
+
+    def map_resource_pointer_element_type(self, var, element_type):
+        """Keep atomic pointer identity when resource qualifiers make it contractual."""
+        normalized = self.normalized_metal_type(element_type)
+        if self.resource_memory_qualifiers(var) and self.atomic_element_type(
+            normalized
+        ):
+            if normalized.startswith("atomic<") and normalized.endswith(">"):
+                inner = normalized[len("atomic<") : -1]
+                return f"atomic<{self.map_type(inner)}>"
+            if normalized.startswith("metal::"):
+                return normalized[len("metal::") :]
+            return normalized
+        return self.map_type(element_type)
 
     def address_space_qualifier_annotations(self, var):
         qualifiers = {
@@ -2248,10 +4378,19 @@ class MetalToCrossGLConverter:
             type_array_suffix = self.format_array_suffix(var, include_declarator_arrays)
             type_str = f"{mapped_type}{type_array_suffix}"
         address_space = self.address_space_qualifier_prefix(var)
+        qualifiers = set(self.effective_declaration_qualifiers(var))
+        lowered_buffer_type = self.constant_buffer_pointer_type(
+            var
+        ) or self.structured_buffer_pointer_type(var)
+        const_device_pointer = bool(
+            "const" in qualifiers
+            and "device" in qualifiers
+            and self.pointer_element_type(getattr(var, "vtype", None)) is not None
+        )
         const_str = (
             "const "
-            if hasattr(var, "is_const")
-            and var.is_const
+            if (getattr(var, "is_const", False) or const_device_pointer)
+            and lowered_buffer_type is None
             and address_space.strip() != "constant"
             else ""
         )
@@ -2275,7 +4414,11 @@ class MetalToCrossGLConverter:
         )
         if name_array_suffix:
             name = f"{name}{name_array_suffix}"
-        parts = [alignas_prefix + const_str + address_space + type_str, name]
+        memory_qualifiers = self.resource_memory_qualifier_prefix(var)
+        parts = [
+            alignas_prefix + memory_qualifiers + const_str + address_space + type_str,
+            name,
+        ]
         if semantic:
             parts.append(semantic)
         if access:
@@ -2284,7 +4427,7 @@ class MetalToCrossGLConverter:
             parts.append(storage_format)
         return " ".join(part for part in parts if part)
 
-    def format_struct_member_decl(self, member):
+    def format_struct_member_decl(self, member, owner=None):
         """Render a struct field while preserving compile-time member constants."""
         declaration = self.format_decl(member, include_semantic=True)
         qualifiers = {
@@ -2297,7 +4440,12 @@ class MetalToCrossGLConverter:
         declaration = f"static {declaration}"
         default_value = getattr(member, "default_value", None)
         if default_value is not None and not getattr(member, "array_sizes", None):
-            declaration += f" = {self.generate_expression(default_value, False)}"
+            key = (owner, getattr(member, "name", None))
+            if owner is not None and key in self.struct_static_constexpr_member_keys:
+                rendered_default = self.render_resolved_static_constant(key)
+            else:
+                rendered_default = self.generate_expression(default_value, False)
+            declaration += f" = {rendered_default}"
         return declaration
 
     def format_parameter_decl(self, var, index, semantic_context=None):
@@ -2412,7 +4560,16 @@ class MetalToCrossGLConverter:
             declaration = re.sub(r"(?<=\S)&\s+(\w+)", r" \1", declaration, count=1)
         return declaration
 
-    def generate_function(self, func, indent=2, stage_entry=False):
+    def generate_function(
+        self,
+        func,
+        indent=2,
+        stage_entry=False,
+        template_value_bindings=None,
+        template_type_bindings=None,
+        output_name=None,
+        specialization_key=None,
+    ):
         """Render one Metal function node as a CrossGL function block."""
         code = ""
         if stage_entry:
@@ -2425,6 +4582,7 @@ class MetalToCrossGLConverter:
         previous_variable_types = self.current_variable_types
         self.current_variable_types = dict(self.global_variable_types)
         previous_type_aliases = dict(self.type_aliases)
+        previous_type_alias_qualifiers = dict(self.type_alias_qualifiers)
         previous_local_type_alias_names = set(self.local_type_alias_names)
         previous_local_struct_type_aliases = dict(self.local_struct_type_aliases)
         previous_storage_texture_names = self.current_storage_texture_names
@@ -2436,11 +4594,26 @@ class MetalToCrossGLConverter:
         )
         previous_function_name = self.current_function_name
         previous_function_return_type = self.current_function_return_type
+        previous_function = self.current_function
+        previous_function_specialization = self.current_function_specialization
+        previous_function_materialization_bindings = (
+            self.current_function_materialization_bindings
+        )
+        previous_function_specialization_key = self.current_function_specialization_key
         self.current_function_name = func.name
         self.current_function_return_type = func.return_type
+        self.current_function = func
         self.current_stage_entry_resource_parameter_ids = (
             {id(param) for param in func.params} if stage_entry else set()
         )
+        active_value_bindings = dict(template_value_bindings or {})
+        active_type_bindings = dict(template_type_bindings or {})
+        self.type_aliases.update(active_type_bindings)
+        if active_value_bindings:
+            self.template_value_bindings.append(active_value_bindings)
+        if active_type_bindings:
+            self.template_type_bindings.append(active_type_bindings)
+        self.template_binding_shadow_scopes.append(set())
         self.push_identifier_scope()
         try:
             for param in func.params:
@@ -2461,18 +4634,35 @@ class MetalToCrossGLConverter:
             )
             fn_semantic = self.map_semantic(self.function_semantic_attributes(func))
             suffix = f" {fn_semantic}" if fn_semantic else ""
-            function_name = self.sanitize_identifier(self.function_output_name(func))
+            function_name = self.sanitize_identifier(
+                output_name or self.function_output_name(func)
+            )
+            self.current_function_specialization = function_name
+            self.current_function_materialization_bindings = {
+                **active_type_bindings,
+                **active_value_bindings,
+            }
+            self.current_function_specialization_key = specialization_key
             return_type = self.map_function_return_type(func.return_type)
             generic_prefix = (
                 ""
                 if getattr(func, "qualifier", None)
-                else self.format_generic_prefix(func)
+                else self.format_generic_prefix(
+                    func,
+                    bound_parameter_names={
+                        *active_type_bindings,
+                        *active_value_bindings,
+                    },
+                )
             )
             value_param_decls = (
                 ""
                 if generic_prefix
                 else self.format_value_template_parameter_declarations(
-                    func, indent + 1, body=func.body
+                    func,
+                    indent + 1,
+                    body=func.body,
+                    bound_value_names=active_value_bindings,
                 )
             )
             code += (
@@ -2486,8 +4676,14 @@ class MetalToCrossGLConverter:
             for param, attributes in implicit_buffer_bindings:
                 param.attributes = attributes
             self.pop_identifier_scope()
+            self.template_binding_shadow_scopes.pop()
+            if active_type_bindings:
+                self.template_type_bindings.pop()
+            if active_value_bindings:
+                self.template_value_bindings.pop()
             self.current_variable_types = previous_variable_types
             self.type_aliases = previous_type_aliases
+            self.type_alias_qualifiers = previous_type_alias_qualifiers
             self.local_type_alias_names = previous_local_type_alias_names
             self.local_struct_type_aliases = previous_local_struct_type_aliases
             self.current_storage_texture_names = previous_storage_texture_names
@@ -2497,9 +4693,19 @@ class MetalToCrossGLConverter:
             )
             self.current_function_name = previous_function_name
             self.current_function_return_type = previous_function_return_type
+            self.current_function = previous_function
+            self.current_function_specialization = previous_function_specialization
+            self.current_function_materialization_bindings = (
+                previous_function_materialization_bindings
+            )
+            self.current_function_specialization_key = (
+                previous_function_specialization_key
+            )
         return code
 
-    def format_value_template_parameter_declarations(self, func, indent, body=None):
+    def format_value_template_parameter_declarations(
+        self, func, indent, body=None, bound_value_names=None
+    ):
         """Declare non-type (value) template parameters that a body consumes with
         a bitwise/shift operator.
 
@@ -2516,13 +4722,14 @@ class MetalToCrossGLConverter:
         as array extents such as ``shared[tg_mem_size]`` - are left untouched so
         array sizing is not disturbed by an injected runtime local."""
         template_parameters = getattr(func, "template_parameters", None) or []
+        bound_value_names = set(bound_value_names or ())
         value_names = []
         seen = set()
         for entry in template_parameters:
             if not isinstance(entry, (tuple, list)) or len(entry) < 2:
                 continue
             kind, name = entry[0], entry[1]
-            if kind != "value" or not name or name in seen:
+            if kind != "value" or not name or name in seen or name in bound_value_names:
                 continue
             seen.add(name)
             value_names.append(name)
@@ -2734,20 +4941,30 @@ class MetalToCrossGLConverter:
                     if stmt.value is None:
                         code += "return;\n"
                     else:
-                        if (
-                            self.wide_vector_type_info(
-                                self.current_function_return_type,
-                                getattr(stmt, "source_location", None),
-                            )
-                            is not None
-                        ):
-                            value = self.generate_initializer_value(
+                        pushed_context = (
+                            self.push_materialized_constexpr_expression_context(
                                 stmt.value,
-                                is_main,
-                                self.current_function_return_type,
+                                required=False,
                             )
-                        else:
-                            value = self.generate_expression(stmt.value, is_main)
+                        )
+                        try:
+                            if (
+                                self.wide_vector_type_info(
+                                    self.current_function_return_type,
+                                    getattr(stmt, "source_location", None),
+                                )
+                                is not None
+                            ):
+                                value = self.generate_initializer_value(
+                                    stmt.value,
+                                    is_main,
+                                    self.current_function_return_type,
+                                )
+                            else:
+                                value = self.generate_expression(stmt.value, is_main)
+                        finally:
+                            if pushed_context:
+                                self.materialized_constexpr_expression_contexts.pop()
                         code += f"return {value};\n"
             elif isinstance(stmt, BinaryOpNode):
                 code += f"{self.generate_expression(stmt.left, is_main)} {stmt.op} {self.generate_expression(stmt.right, is_main)};\n"
@@ -2817,12 +5034,16 @@ class MetalToCrossGLConverter:
     def generate_scoped_function_body(self, body, indent=0, is_main=False):
         """Render a nested lexical block without leaking local type aliases."""
         previous_type_aliases = dict(self.type_aliases)
+        previous_type_alias_qualifiers = dict(self.type_alias_qualifiers)
         previous_local_type_alias_names = set(self.local_type_alias_names)
         previous_local_struct_type_aliases = dict(self.local_struct_type_aliases)
+        self.template_binding_shadow_scopes.append(set())
         try:
             return self.generate_function_body(body, indent, is_main)
         finally:
+            self.template_binding_shadow_scopes.pop()
             self.type_aliases = previous_type_aliases
+            self.type_alias_qualifiers = previous_type_alias_qualifiers
             self.local_type_alias_names = previous_local_type_alias_names
             self.local_struct_type_aliases = previous_local_struct_type_aliases
 
@@ -2906,6 +5127,7 @@ class MetalToCrossGLConverter:
     ):
         previous_variable_types = self.current_variable_types
         previous_type_aliases = dict(self.type_aliases)
+        previous_type_alias_qualifiers = dict(self.type_alias_qualifiers)
         previous_local_type_alias_names = set(self.local_type_alias_names)
         previous_local_struct_type_aliases = dict(self.local_struct_type_aliases)
         previous_storage_texture_names = self.current_storage_texture_names
@@ -2922,6 +5144,7 @@ class MetalToCrossGLConverter:
             self.integral_constant_bindings.pop()
             self.current_variable_types = previous_variable_types
             self.type_aliases = previous_type_aliases
+            self.type_alias_qualifiers = previous_type_alias_qualifiers
             self.local_type_alias_names = previous_local_type_alias_names
             self.local_struct_type_aliases = previous_local_struct_type_aliases
             self.current_storage_texture_names = previous_storage_texture_names
@@ -2955,6 +5178,7 @@ class MetalToCrossGLConverter:
         alias_type = getattr(alias, "alias_type", None)
         if not name or not alias_type:
             return
+        alias_qualifiers = list(getattr(alias, "qualifiers", None) or [])
         # Struct aliases remain uninlined, but scoped static-member references
         # need their concrete owner to resolve constants and backing globals.
         self.local_struct_type_aliases[name] = alias_type
@@ -2965,6 +5189,16 @@ class MetalToCrossGLConverter:
             is not None
         ):
             self.type_aliases[name] = alias_type
+            self.type_alias_qualifiers[name] = alias_qualifiers
+            self.local_type_alias_names.add(name)
+            return
+        if alias_qualifiers and (
+            self.pointer_element_type(alias_type) is not None
+            or self.reference_element_type(alias_type) is not None
+            or self.is_metal_resource_type(alias_type)
+        ):
+            self.type_aliases[name] = alias_type
+            self.type_alias_qualifiers[name] = alias_qualifiers
             self.local_type_alias_names.add(name)
             return
         # Inline body-local aliases that resolve to scalar/vector primitives or
@@ -2988,6 +5222,7 @@ class MetalToCrossGLConverter:
         ):
             return
         self.type_aliases[name] = alias_type
+        self.type_alias_qualifiers[name] = alias_qualifiers
         self.local_type_alias_names.add(name)
 
     def resolve_local_type_aliases(self, metal_type):
@@ -3027,6 +5262,7 @@ class MetalToCrossGLConverter:
     def generate_for_loop(self, node, indent, is_main):
         previous_variable_types = self.current_variable_types
         self.current_variable_types = dict(previous_variable_types)
+        self.template_binding_shadow_scopes.append(set())
         try:
             for declaration in self.for_initializer_declarations(node.init):
                 self.current_variable_types[declaration.name] = declaration.vtype
@@ -3040,6 +5276,7 @@ class MetalToCrossGLConverter:
             code += "    " * indent + "}\n"
             return code
         finally:
+            self.template_binding_shadow_scopes.pop()
             self.current_variable_types = previous_variable_types
 
     def for_initializer_declarations(self, initializer):
@@ -3063,11 +5300,16 @@ class MetalToCrossGLConverter:
 
     def generate_range_for_loop(self, node, indent, is_main):
         iterable = self.generate_expression(node.iterable, is_main)
-
-        code = f"for {node.name} in {iterable} {{\n"
-        code += self.generate_scoped_function_body(node.body, indent + 1, is_main)
-        code += "    " * indent + "}\n"
-        return code
+        self.template_binding_shadow_scopes.append(set())
+        try:
+            if any(node.name in bindings for bindings in self.template_value_bindings):
+                self.template_binding_shadow_scopes[-1].add(node.name)
+            code = f"for {node.name} in {iterable} {{\n"
+            code += self.generate_scoped_function_body(node.body, indent + 1, is_main)
+            code += "    " * indent + "}\n"
+            return code
+        finally:
+            self.template_binding_shadow_scopes.pop()
 
     def generate_while_loop(self, node, indent, is_main):
         condition = self.generate_expression(node.condition, is_main)
@@ -3117,20 +5359,31 @@ class MetalToCrossGLConverter:
                 return structured_store
         lhs_info = self.wide_vector_expression_info(node.left)
         lhs = self.generate_expression(node.left, is_main)
-        rhs = self.generate_initializer_value(
-            node.right,
-            is_main,
-            (
-                getattr(node.left, "vtype", None)
-                if isinstance(node.left, VariableNode)
-                else None
-            ),
-            (
-                self.variable_has_array_initializer_shape(node.left)
-                if isinstance(node.left, VariableNode)
-                else False
-            ),
+        pushed_context = bool(
+            self.is_supported_constexpr_local_declaration(node)
+            and self.push_materialized_constexpr_expression_context(
+                node.right,
+                required=True,
+            )
         )
+        try:
+            rhs = self.generate_initializer_value(
+                node.right,
+                is_main,
+                (
+                    getattr(node.left, "vtype", None)
+                    if isinstance(node.left, VariableNode)
+                    else None
+                ),
+                (
+                    self.variable_has_array_initializer_shape(node.left)
+                    if isinstance(node.left, VariableNode)
+                    else False
+                ),
+            )
+        finally:
+            if pushed_context:
+                self.materialized_constexpr_expression_contexts.pop()
         op = node.operator
         if lhs_info is not None and op != "=":
             binary_operator = op[:-1] if op.endswith("=") else None
@@ -3304,6 +5557,11 @@ class MetalToCrossGLConverter:
             right = self.generate_binary_operand(expr.right, expr.op, True, is_main)
             return f"{left} {expr.op} {right}"
         elif isinstance(expr, FunctionCallNode):
+            lowered_method_call = self.generate_lowered_struct_method_call(
+                expr, is_main
+            )
+            if lowered_method_call is not None:
+                return lowered_method_call
             cooperative_matrix_call = self.generate_cooperative_matrix_function_call(
                 expr, is_main
             )
@@ -3342,7 +5600,11 @@ class MetalToCrossGLConverter:
             )
             if uniform_value is not None:
                 return uniform_value
-            sync_call = self.metal_synchronization_function_call(expr.name, expr.args)
+            sync_call = self.metal_synchronization_function_call(
+                expr.name,
+                expr.args,
+                getattr(expr, "source_location", None),
+            )
             if sync_call is not None:
                 return sync_call
             atomic_call = self.metal_atomic_function_call(expr.name, expr.args, is_main)
@@ -3354,7 +5616,18 @@ class MetalToCrossGLConverter:
             if callback is not None:
                 raise self.unsupported_callback_error(expr.name, callback)
             self.reject_unsupported_wide_vector_call(expr)
-            function_name = self.map_function_call_name(expr.name, expr.args)
+            constexpr_value = self.render_constexpr_helper_call(
+                expr,
+                is_main,
+            )
+            if constexpr_value is not None:
+                return constexpr_value
+            materialized_name = self.materialized_value_template_call_name(
+                expr.name,
+                expr.args,
+                getattr(expr, "source_location", None),
+            )
+            function_name = self.map_function_call_name(materialized_name, expr.args)
             if function_name == "sampler":
                 args = ", ".join(
                     self.generate_sampler_constructor_arg(arg, is_main)
@@ -3669,8 +5942,94 @@ class MetalToCrossGLConverter:
             ),
         )
 
-    def metal_synchronization_function_call(self, name, args):
+    def is_metal_atomic_fence_call(self, name):
+        function_name = str(name).lstrip(":")
+        if function_name == "metal::atomic_thread_fence":
+            return True
+        return (
+            function_name == "atomic_thread_fence"
+            and function_name not in self.user_function_names
+        )
+
+    @staticmethod
+    def metal_atomic_fence_operand_identifier(expr):
+        if isinstance(expr, VariableNode):
+            name = getattr(expr, "name", None)
+        elif isinstance(expr, str):
+            name = expr
+        else:
+            return None
+        return str(name).lstrip(":").rsplit("::", 1)[-1]
+
+    def metal_atomic_fence_operand_text(self, expr):
+        if isinstance(expr, BinaryOpNode) and expr.op == "|":
+            return (
+                f"{self.metal_atomic_fence_operand_text(expr.left)} | "
+                f"{self.metal_atomic_fence_operand_text(expr.right)}"
+            )
+        name = self.metal_atomic_fence_operand_identifier(expr)
+        return name if name is not None else type(expr).__name__
+
+    def collect_metal_atomic_fence_flags(self, expr):
+        if isinstance(expr, BinaryOpNode) and expr.op == "|":
+            left = self.collect_metal_atomic_fence_flags(expr.left)
+            right = self.collect_metal_atomic_fence_flags(expr.right)
+            if left is None or right is None:
+                return None
+            return left + right
+        name = self.metal_atomic_fence_operand_identifier(expr)
+        if name in self.metal_atomic_fence_memory_flags:
+            return (name,)
+        return None
+
+    def metal_atomic_thread_fence_call(self, args, source_location=None):
+        if len(args) not in {2, 3}:
+            raise MetalAtomicFenceLoweringError(
+                "invalid-argument-count",
+                memory_flags=(
+                    self.metal_atomic_fence_operand_text(args[0]) if args else None
+                ),
+                memory_order=(
+                    self.metal_atomic_fence_operand_text(args[1])
+                    if len(args) > 1
+                    else None
+                ),
+                thread_scope=(
+                    self.metal_atomic_fence_operand_text(args[2])
+                    if len(args) > 2
+                    else None
+                ),
+                source_location=source_location,
+            )
+
+        flags = self.collect_metal_atomic_fence_flags(args[0])
+        order = self.metal_atomic_fence_operand_identifier(args[1])
+        scope = (
+            self.metal_atomic_fence_operand_identifier(args[2])
+            if len(args) == 3
+            else "thread_scope_device"
+        )
+        contract = {
+            "memory_flags": self.metal_atomic_fence_operand_text(args[0]),
+            "memory_order": order,
+            "thread_scope": scope,
+            "source_location": source_location,
+        }
+        if flags is None:
+            raise MetalAtomicFenceLoweringError("unsupported-memory-flags", **contract)
+        if order not in self.metal_atomic_fence_memory_orders:
+            raise MetalAtomicFenceLoweringError("unsupported-memory-order", **contract)
+        if scope not in self.metal_atomic_fence_thread_scopes:
+            raise MetalAtomicFenceLoweringError("unsupported-thread-scope", **contract)
+
+        rendered_flags = " | ".join(flags)
+        return f"atomicThreadFence({rendered_flags}, {order}, {scope})"
+
+    def metal_synchronization_function_call(self, name, args, source_location=None):
         unscoped_name = str(name).split("::")[-1]
+
+        if self.is_metal_atomic_fence_call(name):
+            return self.metal_atomic_thread_fence_call(args, source_location)
 
         if unscoped_name in {"threadgroup_barrier", "simdgroup_barrier"}:
             flags = self.metal_mem_flag_names(args)
@@ -3686,16 +6045,6 @@ class MetalToCrossGLConverter:
                 return "memoryBarrierImage()"
             if flags == {"mem_device", "mem_threadgroup", "mem_texture"}:
                 return "allMemoryBarrier()"
-            return None
-
-        if unscoped_name == "atomic_thread_fence":
-            flags = self.metal_mem_flag_names(args[:1])
-            if flags == {"mem_device"}:
-                return "memoryBarrier()"
-            if flags == {"mem_threadgroup"}:
-                return "memoryBarrierShared()"
-            if flags == {"mem_texture"}:
-                return "memoryBarrierImage()"
             return None
 
         return None
@@ -3765,6 +6114,263 @@ class MetalToCrossGLConverter:
             if name.startswith("mem_"):
                 return {name}
         return None
+
+    def lowered_struct_method_context(self, function):
+        """Return the concrete receiver contract for a lowered instance helper."""
+        if not isinstance(function, FunctionNode):
+            return None
+        params = list(getattr(function, "params", []) or [])
+        if not params:
+            return None
+        receiver = params[0]
+        if getattr(receiver, "name", None) != "self" or not self.reference_parameter(
+            receiver
+        ):
+            return None
+
+        owner = self.normalized_metal_type(
+            self.resolve_type_alias(getattr(receiver, "vtype", None))
+        )
+        if not owner or (
+            owner not in self.struct_declarations
+            and owner not in self.struct_name_map
+            and owner not in self.struct_name_map.values()
+        ):
+            return None
+
+        helper_name = str(getattr(function, "name", ""))
+        prefixes = list(
+            dict.fromkeys(
+                (owner, self.map_struct_name(owner), self.sanitize_identifier(owner))
+            )
+        )
+        helper_prefix = next(
+            (prefix for prefix in prefixes if helper_name.startswith(f"{prefix}__")),
+            None,
+        )
+        if helper_prefix is None:
+            return None
+        return {
+            "owner": owner,
+            "helper_prefix": helper_prefix,
+            "receiver": receiver,
+        }
+
+    @staticmethod
+    def lowered_method_transport_parameters(function):
+        transported = []
+        for param in list(getattr(function, "params", []) or [])[1:]:
+            if not str(getattr(param, "name", "")).startswith("crosstl_ptr_"):
+                break
+            transported.append(param)
+        return transported
+
+    def lowered_method_parameter_contract(self, parameter):
+        metal_type = self.resolve_type_alias(
+            self.metal_declaration_expression_type(parameter)
+        )
+        qualifiers = tuple(self.effective_declaration_qualifiers(parameter))
+        return re.sub(r"\s+", " ", str(metal_type).strip()), qualifiers
+
+    def lowered_method_explicit_parameter_types(self, function, transport_count):
+        params = list(getattr(function, "params", []) or [])
+        explicit = params[1 + transport_count :]
+        mapped = tuple(
+            self.map_type(
+                self.resolve_type_alias(self.metal_declaration_expression_type(param))
+            )
+            for param in explicit
+        )
+        source = tuple(
+            self.normalized_metal_parameter_type(param) for param in explicit
+        )
+        return mapped, source
+
+    def normalized_metal_parameter_type(self, parameter):
+        return re.sub(
+            r"\s+",
+            " ",
+            str(
+                self.resolve_type_alias(
+                    self.metal_declaration_expression_type(parameter)
+                )
+            ).strip(),
+        )
+
+    def lowered_method_candidate_signature(self, function, transport_count):
+        _mapped, source = self.lowered_method_explicit_parameter_types(
+            function, transport_count
+        )
+        return f"{function.name}({', '.join(source)})"
+
+    def resolve_lowered_struct_method_call(self, expression):
+        """Bind one retained implicit-this call to a concrete lowered helper."""
+        context = self.lowered_struct_method_context(self.current_function)
+        if context is None:
+            return None
+
+        method_name = str(getattr(expression, "name", ""))
+        if not self.crossgl_identifier_pattern.fullmatch(method_name):
+            return None
+        # A value/callable or an ordinary free function with this name wins over
+        # the structural lowered-helper inference.
+        if (
+            method_name in self.current_variable_types
+            or method_name in self.global_variable_types
+            or method_name in self.user_function_overloads_by_name
+        ):
+            return None
+
+        helper_name = f"{context['helper_prefix']}__{method_name}"
+        all_candidates = list(self.user_function_overloads_by_name.get(helper_name, []))
+        if not all_candidates:
+            return None
+
+        current_transport = self.lowered_method_transport_parameters(
+            self.current_function
+        )
+        current_transport_names = [param.name for param in current_transport]
+        current_transport_contracts = {
+            param.name: self.lowered_method_parameter_contract(param)
+            for param in current_transport
+        }
+        current_receiver_readonly = self.readonly_parameter(
+            context["receiver"],
+            self.effective_declaration_qualifiers(context["receiver"]),
+        )
+        argument_types = tuple(
+            self.expression_mapped_type(argument) for argument in expression.args
+        )
+        diagnostic_argument_types = tuple(
+            argument_type or "<unknown>" for argument_type in argument_types
+        )
+
+        viable = []
+        rejected_receiver = False
+        for candidate in all_candidates:
+            candidate_context = self.lowered_struct_method_context(candidate)
+            params = list(getattr(candidate, "params", []) or [])
+            if (
+                candidate_context is None
+                or candidate_context["owner"] != context["owner"]
+                or len(params) != 1 + len(current_transport) + len(expression.args)
+            ):
+                continue
+            candidate_transport = params[1 : 1 + len(current_transport)]
+            candidate_transport_names = [param.name for param in candidate_transport]
+            if candidate_transport_names != current_transport_names:
+                continue
+            if any(
+                self.lowered_method_parameter_contract(param)
+                != current_transport_contracts.get(param.name)
+                for param in candidate_transport
+            ):
+                continue
+            candidate_readonly = self.readonly_parameter(
+                candidate_context["receiver"],
+                self.effective_declaration_qualifiers(candidate_context["receiver"]),
+            )
+            if current_receiver_readonly and not candidate_readonly:
+                rejected_receiver = True
+                continue
+            mapped_types, source_types = self.lowered_method_explicit_parameter_types(
+                candidate, len(current_transport)
+            )
+            viable.append((candidate, mapped_types, source_types, candidate_readonly))
+
+        candidate_signatures = tuple(
+            self.lowered_method_candidate_signature(candidate, len(current_transport))
+            for candidate in all_candidates
+        )
+        if not viable:
+            reason = (
+                "a read-only receiver cannot call a mutating sibling helper"
+                if rejected_receiver
+                else "no helper preserves the receiver and transported-resource contract"
+            )
+            raise MetalStructMethodCallResolutionError(
+                context["owner"],
+                method_name,
+                diagnostic_argument_types,
+                candidate_signatures,
+                reason,
+                getattr(expression, "source_location", None),
+            )
+
+        if any(argument_type is None for argument_type in argument_types):
+            matches = viable
+        else:
+            matches = [
+                candidate for candidate in viable if candidate[1] == argument_types
+            ]
+            if not matches:
+                raise MetalStructMethodCallResolutionError(
+                    context["owner"],
+                    method_name,
+                    diagnostic_argument_types,
+                    tuple(
+                        self.lowered_method_candidate_signature(
+                            candidate, len(current_transport)
+                        )
+                        for candidate, _mapped, _source, _readonly in viable
+                    ),
+                    "no exact overload matches the available argument types",
+                    getattr(expression, "source_location", None),
+                )
+
+        source_groups = {}
+        for candidate in matches:
+            source_groups.setdefault((candidate[2], candidate[3]), []).append(candidate)
+        if len(source_groups) != 1:
+            raise MetalStructMethodCallResolutionError(
+                context["owner"],
+                method_name,
+                diagnostic_argument_types,
+                tuple(
+                    self.lowered_method_candidate_signature(
+                        candidates[0][0], len(current_transport)
+                    )
+                    for candidates in source_groups.values()
+                ),
+                "multiple exact overloads remain after type matching",
+                getattr(expression, "source_location", None),
+            )
+
+        declarations = next(iter(source_groups.values()))
+        selected = next(
+            (
+                candidate
+                for candidate, _mapped, _source, _readonly in declarations
+                if getattr(candidate, "body", None)
+            ),
+            declarations[0][0],
+        )
+        if self.reference_element_type(getattr(selected, "return_type", None)):
+            raise MetalStructMethodCallResolutionError(
+                context["owner"],
+                method_name,
+                diagnostic_argument_types,
+                (
+                    self.lowered_method_candidate_signature(
+                        selected, len(current_transport)
+                    ),
+                ),
+                "reference-returning sibling helpers require lvalue-preserving lowering",
+                getattr(expression, "source_location", None),
+            )
+        return selected, current_transport
+
+    def generate_lowered_struct_method_call(self, expression, is_main=False):
+        resolved = self.resolve_lowered_struct_method_call(expression)
+        if resolved is None:
+            return None
+        selected, transported = resolved
+        arguments = [self.render_identifier("self")]
+        arguments.extend(self.render_identifier(param.name) for param in transported)
+        arguments.extend(
+            self.generate_expression(argument, is_main) for argument in expression.args
+        )
+        return f"{self.sanitize_identifier(selected.name)}({', '.join(arguments)})"
 
     def map_function_call_name(self, name, args=None):
         match = re.fullmatch(r"(?:metal::)?as_type<(.+)>", name)
@@ -4045,13 +6651,19 @@ class MetalToCrossGLConverter:
     def map_metal_type_constructor_name(self, name):
         text = str(name)
         is_local_alias = text in self.local_type_alias_names
+        is_materialized_type = any(
+            text in bindings for bindings in self.template_type_bindings
+        )
         if (
             "::" not in text
             and text not in self.unscoped_metal_type_constructors
             and not is_local_alias
+            and not is_materialized_type
         ):
             return None
-        normalized = self.normalized_metal_type(self.resolve_local_type_aliases(text))
+        normalized = self.normalized_metal_type(
+            self.substitute_template_type_text(self.resolve_local_type_aliases(text))
+        )
         mapped = self.map_type(normalized)
         if (
             normalized in self.type_map
@@ -4120,6 +6732,9 @@ class MetalToCrossGLConverter:
         """Map a Metal type name to the closest CrossGL type name."""
         if not metal_type:
             return metal_type
+
+        metal_type = self.substitute_template_type_text(metal_type)
+        metal_type = self.substitute_template_value_text(metal_type)
 
         resolved_local_type = self.resolve_local_type_aliases(metal_type)
         if resolved_local_type != str(metal_type).strip():
@@ -4337,8 +6952,10 @@ class MetalToCrossGLConverter:
         return argument
 
     def format_type_alias_declaration(self, alias):
-        if getattr(alias, "is_function_type", False) or self.is_resource_type_alias(
-            alias
+        if (
+            alias.name in self.callable_type_aliases
+            or getattr(alias, "is_function_type", False)
+            or self.is_resource_type_alias(alias)
         ):
             return None
         if (
@@ -5527,6 +8144,10 @@ class MetalToCrossGLConverter:
             constructor_type = self.metal_constructor_result_type(expr.name)
             if constructor_type is not None:
                 return constructor_type
+            lowered_method = self.resolve_lowered_struct_method_call(expr)
+            if lowered_method is not None:
+                function, _transported = lowered_method
+                return getattr(function, "return_type", None)
             binding, function = self.resolve_metal_user_function_overload(
                 str(expr.name), expr.args
             )
@@ -5614,14 +8235,12 @@ class MetalToCrossGLConverter:
     def is_stage_entry_buffer_resource_parameter(self, var):
         if not getattr(var, "name", None):
             return False
-        qualifiers = {
-            str(qualifier).lower() for qualifier in getattr(var, "qualifiers", []) or []
-        }
+        qualifiers = set(self.effective_declaration_qualifiers(var))
         if not qualifiers.intersection({"device", "constant"}):
             return False
         if self.stage_entry_array_resource_element_type(var) is not None:
             return True
-        raw_type = getattr(var, "vtype", None)
+        raw_type = self.resolve_type_alias(getattr(var, "vtype", None))
         if self.pointer_element_type(raw_type):
             return True
         return bool(self.reference_element_type(raw_type))
@@ -5630,9 +8249,7 @@ class MetalToCrossGLConverter:
         array_dimensions = list(getattr(var, "array_sizes", None) or [])
         if not array_dimensions:
             return None
-        qualifiers = {
-            str(qualifier).lower() for qualifier in getattr(var, "qualifiers", []) or []
-        }
+        qualifiers = set(self.effective_declaration_qualifiers(var))
         if not qualifiers.intersection({"device", "constant"}):
             return None
         element_type = str(getattr(var, "vtype", "") or "").strip()
@@ -5682,13 +8299,13 @@ class MetalToCrossGLConverter:
         ):
             return None
 
-        qualifiers = {
-            str(qualifier).lower() for qualifier in getattr(var, "qualifiers", []) or []
-        }
+        qualifiers = set(self.effective_declaration_qualifiers(var))
         if not qualifiers.intersection({"device", "constant"}):
             return None
 
-        element_type = self.pointer_element_type(getattr(var, "vtype", None))
+        element_type = self.pointer_element_type(
+            self.resolve_type_alias(getattr(var, "vtype", None))
+        )
         array_element_type = self.stage_entry_array_resource_element_type(var)
         if element_type is None:
             element_type = array_element_type
@@ -5707,19 +8324,20 @@ class MetalToCrossGLConverter:
             if qualifiers.intersection({"constant", "const"})
             else "RWStructuredBuffer"
         )
-        return f"{buffer_type}<{self.map_type(element_type)}>"
+        mapped_element_type = self.map_resource_pointer_element_type(var, element_type)
+        return f"{buffer_type}<{mapped_element_type}>"
 
     def constant_buffer_pointer_type(self, var):
         if not self.has_attribute(var, "buffer"):
             return None
 
-        qualifiers = {
-            str(qualifier).lower() for qualifier in getattr(var, "qualifiers", []) or []
-        }
+        qualifiers = set(self.effective_declaration_qualifiers(var))
         if "constant" not in qualifiers:
             return None
 
-        element_type = self.pointer_element_type(getattr(var, "vtype", None))
+        element_type = self.pointer_element_type(
+            self.resolve_type_alias(getattr(var, "vtype", None))
+        )
         if not element_type:
             return None
         element_type = self.resolve_type_alias(element_type)
@@ -5992,6 +8610,7 @@ class MetalToCrossGLConverter:
 
     def generate_switch_statement(self, node, indent, is_main):
         previous_type_aliases = dict(self.type_aliases)
+        previous_type_alias_qualifiers = dict(self.type_alias_qualifiers)
         previous_local_type_alias_names = set(self.local_type_alias_names)
         previous_local_struct_type_aliases = dict(self.local_struct_type_aliases)
         expression = self.generate_expression(node.expression, is_main)
@@ -6016,6 +8635,7 @@ class MetalToCrossGLConverter:
             return code
         finally:
             self.type_aliases = previous_type_aliases
+            self.type_alias_qualifiers = previous_type_alias_qualifiers
             self.local_type_alias_names = previous_local_type_alias_names
             self.local_struct_type_aliases = previous_local_struct_type_aliases
 

@@ -8358,6 +8358,514 @@ def test_translate_project_reports_unsupported_opengl_struct_construction(tmp_pa
     )
 
 
+def test_translate_project_reports_opengl_fixed_array_resource_contract(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "fixed_array_resource.cgl").write_text(
+        textwrap.dedent("""
+            shader FixedArrayResourceContract {
+                int first(constant int[COUNT] values) {
+                    return values[0];
+                }
+
+                StructuredBuffer<int> sourceValues @ binding(0);
+                RWStructuredBuffer<int> result @ binding(1);
+
+                compute {
+                    void main() {
+                        result[0] = first(sourceValues);
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="translated",
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.opengl-fixed-array-resource-unsupported": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "opengl.fixed-array-resource-specialization": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["target"] == "opengl"
+    assert diagnostic["sourceBackend"] == "cgl"
+    assert diagnostic["location"]["file"] == "fixed_array_resource.cgl"
+    assert diagnostic["missingCapabilities"] == [
+        "opengl.fixed-array-resource-specialization"
+    ]
+    assert diagnostic["details"] == {
+        "fixedArrayResource": {
+            "actualAccess": "read",
+            "fixedExtent": "COUNT",
+            "function": "first",
+            "parameter": "values",
+            "reason": "unknown-fixed-extent",
+            "requiredAccess": "read",
+            "resources": ["sourceValues"],
+        },
+        "sourcePath": "fixed_array_resource.cgl",
+        "targetArtifact": "translated/opengl/fixed_array_resource.glsl",
+    }
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+
+    report_path = repo / "translated" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert {diagnostic["code"] for diagnostic in validation["diagnostics"]}.isdisjoint(
+        {"project.validate.invalid-report"}
+    )
+
+
+def test_translate_project_reports_opengl_resource_memory_qualifier_contract(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "resource_memory_qualifier.cgl").write_text(
+        textwrap.dedent("""
+            shader ResourceMemoryQualifierContract {
+                compute {
+                    void main(
+                        coherent(system) RWStructuredBuffer<uint> values @binding(0)
+                    ) {
+                        values[0] = 1;
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="translated",
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.opengl-resource-memory-qualifier-unsupported": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "opengl.resource-memory-qualifier-lowering": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == (
+        "project.translate.opengl-resource-memory-qualifier-unsupported"
+    )
+    assert diagnostic["target"] == "opengl"
+    assert diagnostic["sourceBackend"] == "cgl"
+    assert diagnostic["location"]["file"] == "resource_memory_qualifier.cgl"
+    assert diagnostic["missingCapabilities"] == [
+        "opengl.resource-memory-qualifier-lowering"
+    ]
+    assert diagnostic["details"] == {
+        "resourceMemoryQualifier": {
+            "qualifierKind": "coherent",
+            "reason": "unsupported-system-coherence-scope",
+            "requestedContract": "coherent(system)",
+            "requestedScope": "system",
+            "resourceName": "values",
+            "targetMapping": "coherent(device)",
+            "targetQualifier": "coherent",
+            "targetScope": "device",
+        },
+        "sourcePath": "resource_memory_qualifier.cgl",
+        "targetArtifact": "translated/opengl/resource_memory_qualifier.glsl",
+    }
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["target"] == "opengl"
+    assert not (repo / artifact["path"]).exists()
+
+    report_path = repo / "translated" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert {diagnostic["code"] for diagnostic in validation["diagnostics"]}.isdisjoint(
+        {"project.validate.invalid-report"}
+    )
+
+
+def test_translate_project_reports_directx_private_pointer_contract(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "private_pointer.cgl").write_text(
+        textwrap.dedent("""
+            shader PrivatePointerContract {
+                void fill5(thread float* values) {
+                    values[4] = 1.0;
+                }
+
+                compute {
+                    void main() {
+                        float backing[5];
+                        fill5(backing + 1);
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="translated",
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.directx-private-pointer-unsupported": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "directx.private-pointer-parameter-lowering": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.directx-private-pointer-unsupported"
+    assert diagnostic["target"] == "directx"
+    assert diagnostic["sourceBackend"] == "cgl"
+    assert diagnostic["location"]["file"] == "private_pointer.cgl"
+    assert diagnostic["missingCapabilities"] == [
+        "directx.private-pointer-parameter-lowering"
+    ]
+    assert diagnostic["details"] == {
+        "privatePointer": {
+            "function": "fill5",
+            "parameter": "values",
+            "reason": "view-out-of-bounds",
+        },
+        "sourcePath": "private_pointer.cgl",
+        "targetArtifact": "translated/directx/private_pointer.hlsl",
+    }
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+
+
+def test_translate_project_reports_directx_resource_pointer_array_contract(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "pointer_array.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            void select_row(
+                const device float* input,
+                device float* output,
+                int selected) {
+              const device float* rows[2];
+              for (int i = 0; i < 2; ++i) {
+                rows[i] = input + i * 4;
+              }
+              output[0] = rows[selected][0];
+            }
+
+            kernel void pointer_array(
+                const device float* input [[buffer(0)]],
+                device float* output [[buffer(1)]],
+                constant int& selected [[buffer(2)]]) {
+              select_row(input, output, selected);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="translated",
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.directx-resource-pointer-array-unsupported": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "directx.resource-pointer-array-lowering": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == (
+        "project.translate.directx-resource-pointer-array-unsupported"
+    )
+    assert diagnostic["target"] == "directx"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["location"]["file"] == "pointer_array.metal"
+    assert diagnostic["missingCapabilities"] == [
+        "directx.resource-pointer-array-lowering"
+    ]
+    assert diagnostic["details"] == {
+        "resourcePointerArray": {
+            "addressSpace": "device",
+            "array": "rows",
+            "backingRoot": "input",
+            "function": "select_row",
+            "reason": "index-unproven",
+        },
+        "sourcePath": "pointer_array.metal",
+        "targetArtifact": "translated/directx/pointer_array.hlsl",
+    }
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+
+
+def test_translate_project_lowers_bounded_directx_resource_pointer_array(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "pointer_array.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            void read_rows(
+                const device float* input,
+                device float* output,
+                int row_stride) {
+              const device float* rows[2];
+              for (int i = 0; i < 2; ++i) {
+                rows[i] = input + i * row_stride;
+              }
+              for (int i = 0; i < 2; ++i) {
+                output[i] = rows[i][0];
+              }
+            }
+
+            kernel void pointer_array(
+                const device float* input [[buffer(0)]],
+                device float* output [[buffer(1)]],
+                constant int& row_stride [[buffer(2)]]) {
+              read_rows(input, output, row_stride);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="translated",
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "int64_t rows_offsets[2];" in generated
+    assert "rows_offsets[uint(i)] = int64_t((i * row_stride));" in generated
+    assert "output[i] = input[uint(rows_offsets[uint(i)])];" in generated
+    assert "float* rows" not in generated
+
+
+def test_translate_project_reports_opengl_private_pointer_contract(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "private_pointer.cgl").write_text(
+        textwrap.dedent("""
+            shader PrivatePointerContract {
+                void fill5(thread float* values) {
+                    values[4] = 1.0;
+                }
+
+                compute {
+                    void main() {
+                        float backing[5];
+                        fill5(backing + 1);
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="translated",
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.opengl-private-pointer-unsupported": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "opengl.private-pointer-parameter-lowering": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.opengl-private-pointer-unsupported"
+    assert diagnostic["target"] == "opengl"
+    assert diagnostic["sourceBackend"] == "cgl"
+    assert diagnostic["location"]["file"] == "private_pointer.cgl"
+    assert diagnostic["missingCapabilities"] == [
+        "opengl.private-pointer-parameter-lowering"
+    ]
+    assert diagnostic["details"] == {
+        "privatePointer": {
+            "function": "fill5",
+            "parameter": "values",
+            "reason": "view-out-of-bounds",
+        },
+        "sourcePath": "private_pointer.cgl",
+        "targetArtifact": "translated/opengl/private_pointer.glsl",
+    }
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["target"] == "opengl"
+    assert not (repo / artifact["path"]).exists()
+
+    report_path = repo / "translated" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert {diagnostic["code"] for diagnostic in validation["diagnostics"]}.isdisjoint(
+        {"project.validate.invalid-report"}
+    )
+
+
+def test_translate_project_reports_directx_dynamic_workgroup_pointer_backing(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "dynamic_workgroup_pointer.cgl").write_text(
+        textwrap.dedent("""
+            shader DynamicWorkgroupPointerBacking {
+                compute {
+                    layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+                    void main(uint lid @ gl_LocalInvocationIndex) {
+                        threadgroup float left[8];
+                        threadgroup float right[8];
+                        threadgroup float* selected = (lid == 0u) ? left : right;
+                        selected[0] = 1.0;
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="translated",
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.directx-workgroup-pointer-unsupported": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "directx.workgroup-pointer-lowering": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == (
+        "project.translate.directx-workgroup-pointer-unsupported"
+    )
+    assert diagnostic["target"] == "directx"
+    assert diagnostic["sourceBackend"] == "cgl"
+    assert diagnostic["missingCapabilities"] == ["directx.workgroup-pointer-lowering"]
+    assert diagnostic["location"] == {
+        "file": "dynamic_workgroup_pointer.cgl",
+        "line": 1,
+        "column": 1,
+        "offset": 0,
+        "length": 0,
+        "endLine": 1,
+        "endColumn": 1,
+        "endOffset": 0,
+    }
+    assert diagnostic["details"] == {
+        "sourcePath": "dynamic_workgroup_pointer.cgl",
+        "targetArtifact": "translated/directx/dynamic_workgroup_pointer.hlsl",
+        "workgroupPointer": {
+            "function": "main",
+            "reason": "conditional-backing-unresolved",
+        },
+    }
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["target"] == "directx"
+    assert not (repo / artifact["path"]).exists()
+
+
+def test_translate_project_reports_directx_trailing_zero_builtin_contract(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "trailing_zero.cgl").write_text(
+        textwrap.dedent("""
+            shader InvalidTrailingZeroOperand {
+                int probe(float value) {
+                    return __builtin_ctz(value);
+                }
+
+                compute {
+                    void main() {}
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="translated",
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.directx-trailing-zero-unsupported": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "directx.trailing-zero-builtin-lowering": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == ("project.translate.directx-trailing-zero-unsupported")
+    assert diagnostic["target"] == "directx"
+    assert diagnostic["sourceBackend"] == "cgl"
+    assert diagnostic["location"]["file"] == "trailing_zero.cgl"
+    assert diagnostic["missingCapabilities"] == [
+        "directx.trailing-zero-builtin-lowering"
+    ]
+    assert diagnostic["details"] == {
+        "sourcePath": "trailing_zero.cgl",
+        "targetArtifact": "translated/directx/trailing_zero.hlsl",
+        "trailingZeroBuiltin": {
+            "builtin": "__builtin_ctz",
+            "operandType": "float",
+            "reason": "unsupported-operand-type",
+        },
+    }
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["target"] == "directx"
+    assert not (repo / artifact["path"]).exists()
+
+
 def test_translate_project_reports_unsupported_opengl_index_type(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
@@ -15468,8 +15976,8 @@ def test_translate_project_parenthesized_metal_scoped_constant_to_all_gpu_target
         target: (repo / artifact["path"]).read_text(encoding="utf-8")
         for target, artifact in artifacts.items()
     }
-    assert "float((4 * 8))" in outputs["directx"]
-    assert "float((4 * 8))" in outputs["opengl"]
+    assert "float(32)" in outputs["directx"]
+    assert "float(32)" in outputs["opengl"]
     assert_compute_glsl_validates_if_available(outputs["opengl"], tmp_path)
     assert_spirv_asm_validates_if_available(outputs["vulkan"], tmp_path)
 
@@ -16091,6 +16599,62 @@ def test_translate_project_opengl_allows_defaulted_template_type_static_member(
     )
 
     assert [record for record in records if record["name"] == "GEMMKernel"] == []
+
+
+def test_post_materialization_template_diagnostics_reuse_function_index(
+    tmp_path,
+    monkeypatch,
+):
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    function_count = 64
+    source = (
+        "template <int Width> struct WidthTag { float values[Width]; };\n"
+        + "\n".join(textwrap.dedent(f"""
+                void helper_{index}() {{
+                    constexpr int Width = 4;
+                    thread float values[Width];
+                }}
+                """).strip() for index in range(function_count))
+        + "\n"
+    )
+    source_path = tmp_path / "shader.metal"
+    source_path.write_text(source, encoding="utf-8")
+    unit = project_pipeline.ProjectTranslationUnit(
+        path=source_path,
+        relative_path="shader.metal",
+        source_backend="metal",
+        extension=".metal",
+        source_hash=project_pipeline._source_hash(source_path),
+        source_size_bytes=source_path.stat().st_size,
+    )
+    preprocessor = MetalPreprocessor()
+    find_functions = preprocessor._find_non_template_function_definitions
+    scan_count = 0
+
+    def counted_find_functions(source_text, excluded_spans):
+        nonlocal scan_count
+        scan_count += 1
+        return find_functions(source_text, excluded_spans)
+
+    monkeypatch.setattr(
+        preprocessor,
+        "_find_non_template_function_definitions",
+        counted_find_functions,
+    )
+
+    records = (
+        project_pipeline._post_materialization_unresolved_metal_template_type_records(
+            preprocessor=preprocessor,
+            unit=unit,
+            source=source,
+            target="opengl",
+        )
+    )
+
+    assert records == []
+    assert scan_count == 1
+    assert len(preprocessor._containing_span_cache) <= 2
 
 
 def test_translate_project_forwards_metal_template_specialization_limit(tmp_path):
@@ -30964,6 +31528,82 @@ def test_translate_project_reports_directx_unresolved_source_type_diagnostic(
     assert not (repo / artifact["path"]).exists()
 
 
+@pytest.mark.parametrize(
+    ("target", "diagnostic_code", "missing_capability"),
+    [
+        (
+            "directx",
+            "project.translate.directx-atomic-fence-unsupported",
+            "directx.atomic-thread-fence-contract-lowering",
+        ),
+        (
+            "opengl",
+            "project.translate.opengl-atomic-fence-unsupported",
+            "opengl.atomic-thread-fence-contract-lowering",
+        ),
+        (
+            "vulkan",
+            "project.translate.vulkan-atomic-fence-unsupported",
+            "spirv.atomic-thread-fence-contract-lowering",
+        ),
+    ],
+)
+def test_translate_project_reports_unrepresentable_atomic_fence_contract(
+    tmp_path,
+    target,
+    diagnostic_code,
+    missing_capability,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "atomic_fence.cgl").write_text(
+        textwrap.dedent("""
+            shader AtomicFenceContract {
+                compute {
+                    void main() {
+                        atomicThreadFence(
+                            mem_device,
+                            memory_order_seq_cst,
+                            thread_scope_system
+                        );
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=[target],
+        output_dir="out",
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {diagnostic_code: 1}
+    assert payload["summary"]["missingCapabilityCounts"] == {missing_capability: 1}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == diagnostic_code
+    assert diagnostic["target"] == target
+    assert diagnostic["sourceBackend"] == "cgl"
+    assert diagnostic["location"]["file"] == "atomic_fence.cgl"
+    assert diagnostic["missingCapabilities"] == [missing_capability]
+    for contract_operand in (
+        "mem_device",
+        "memory_order_seq_cst",
+        "thread_scope_system",
+    ):
+        assert contract_operand in diagnostic["message"]
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["target"] == target
+    assert diagnostic_code not in artifact["error"]
+    assert "thread_scope_system" in artifact["error"]
+    assert not (repo / artifact["path"]).exists()
+
+
 def test_translate_project_rewrites_directx_nontype_startswith_failure(
     tmp_path,
     monkeypatch,
@@ -45091,6 +45731,89 @@ def test_translate_project_metal_reference_return_reports_struct_method_details(
     assert "templateMaterialization" not in diagnostic["details"]
 
 
+def test_translate_project_reports_unresolved_metal_struct_sibling_call(
+    tmp_path,
+    monkeypatch,
+):
+    from crosstl.backend.Metal.MetalCrossGLCodeGen import (
+        MetalStructMethodCallResolutionError,
+    )
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "reader.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            kernel void read_value(device int* out [[buffer(0)]]) {
+                out[0] = 1;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    def raise_unresolved_sibling_call(*_args, **_kwargs):
+        raise MetalStructMethodCallResolutionError(
+            "Reader",
+            "post_in",
+            ("int64",),
+            ("Reader__post_in(long)", "Reader__post_in(int64_t)"),
+            "multiple exact overloads remain after type matching",
+            {"line": 5, "column": 14},
+        )
+
+    monkeypatch.setattr(
+        project_pipeline,
+        "translate",
+        raise_unresolved_sibling_call,
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-struct-method-call-unresolved": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "metal.struct-method-call-lowering": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == (
+        "project.translate.metal-struct-method-call-unresolved"
+    )
+    assert diagnostic["target"] == "directx"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["location"]["file"] == "reader.metal"
+    assert diagnostic["location"]["line"] == 5
+    assert diagnostic["location"]["column"] == 14
+    assert diagnostic["missingCapabilities"] == ["metal.struct-method-call-lowering"]
+    assert diagnostic["details"] == {
+        "sourcePath": "reader.metal",
+        "structMethodCall": {
+            "argumentTypes": ["int64"],
+            "candidates": [
+                "Reader__post_in(long)",
+                "Reader__post_in(int64_t)",
+            ],
+            "methodName": "post_in",
+            "owner": "Reader",
+            "reason": "multiple exact overloads remain after type matching",
+        },
+        "targetArtifact": "out/directx/reader.hlsl",
+    }
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["target"] == "directx"
+    assert not (repo / artifact["path"]).exists()
+
+
 def test_translate_project_metal_implicit_type_environment_cache_bounds_repeated_work(
     tmp_path,
 ):
@@ -47019,6 +47742,68 @@ def test_translate_project_reports_unsupported_captured_callback_shape(tmp_path)
         ),
     }
     assert diagnostic["details"]["sourcePath"] == "dispatch_bool.metal"
+
+
+def test_translate_project_reports_escaping_metal_callable_alias(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "runtime_callable.metal").write_text(
+        textwrap.dedent("""
+            typedef void (*RadixFunc)(thread float2*, thread float2*);
+            typedef RadixFunc SelectedRadixFunc;
+
+            void invoke(
+                SelectedRadixFunc function,
+                thread float2* values,
+                thread float2* scratch
+            ) {
+                function(values, scratch);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-callable-alias-unsupported": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "metal.runtime-callable-alias-lowering": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == ("project.translate.metal-callable-alias-unsupported")
+    assert diagnostic["target"] == "directx"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["location"]["file"] == "runtime_callable.metal"
+    assert diagnostic["location"]["line"] == 2
+    assert diagnostic["missingCapabilities"] == [
+        "metal.runtime-callable-alias-lowering"
+    ]
+    assert diagnostic["details"] == {
+        "callableAlias": {
+            "aliasName": "SelectedRadixFunc",
+            "reason": (
+                "runtime callable values are not representable in CrossGL; "
+                "materialize the callback as a non-type template argument or "
+                "use a supported Metal function-table resource"
+            ),
+            "signature": "void (*SelectedRadixFunc)(thread float2*, thread float2*)",
+            "usage": "VariableNode 'function' vtype",
+        },
+        "sourcePath": "runtime_callable.metal",
+        "targetArtifact": "out/directx/runtime_callable.hlsl",
+    }
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
 
 
 def test_translate_project_preserves_unverified_dispatch_bool_helper(tmp_path):
@@ -49941,3 +50726,76 @@ def test_translate_project_reports_unresolved_function_local_template_argument(
         },
     }
     assert "function-local constant 'Width' unresolved" in diagnostic["message"]
+
+
+def test_translate_project_reports_unresolved_metal_value_template_default(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "dependent_default.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T, int Count = T::extent>
+            int count_value() {
+                return Count;
+            }
+
+            kernel void use_count(device int* out [[buffer(0)]]) {
+                out[0] = count_value();
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["cgl"],
+        output_dir="out",
+        format_output=False,
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-template-argument-unresolved": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "metal.value-template-argument-materialization": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == (
+        "project.translate.metal-template-argument-unresolved"
+    )
+    assert diagnostic["target"] == "cgl"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["location"]["file"] == "dependent_default.metal"
+    assert diagnostic["location"]["line"] == 4
+    assert diagnostic["location"]["column"] == 1
+    assert diagnostic["missingCapabilities"] == [
+        "metal.value-template-argument-materialization"
+    ]
+    assert diagnostic["details"] == {
+        "sourcePath": "dependent_default.metal",
+        "targetArtifact": "out/cgl/dependent_default.cgl",
+        "valueTemplateArgument": {
+            "argumentKind": "default",
+            "defaultExpression": "T::extent",
+            "expression": "T::extent",
+            "function": "count_value",
+            "parameter": "Count",
+            "reason": "remains dependent on T, extent",
+            "selectedCall": "count_value(...)",
+        },
+    }
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert {item["code"] for item in validation["diagnostics"]}.isdisjoint(
+        {"project.validate.invalid-report"}
+    )

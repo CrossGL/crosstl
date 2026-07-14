@@ -1,5 +1,9 @@
 
 RWStructuredBuffer<int> outputBuffer : register(u0);
+int helper(int val, int a);
+
+int test(int val);
+
 int helper(int val, int a) {
     return (val + a);
 }

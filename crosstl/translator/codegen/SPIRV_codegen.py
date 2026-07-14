@@ -162,6 +162,39 @@ class UnsupportedSPIRVFeatureError(ValueError):
         self.source_location = source_location
 
 
+class SPIRVAtomicFenceLoweringError(UnsupportedSPIRVFeatureError):
+    """Raised when Vulkan SPIR-V cannot preserve an atomic fence contract."""
+
+    project_diagnostic_code = "project.translate.vulkan-atomic-fence-unsupported"
+    missing_capabilities = ("spirv.atomic-thread-fence-contract-lowering",)
+
+    def __init__(
+        self,
+        reason: str,
+        *,
+        memory_flags=None,
+        memory_order=None,
+        thread_scope=None,
+        source_location=None,
+    ):
+        self.reason = reason
+        self.memory_flags = memory_flags
+        self.memory_order = memory_order
+        self.thread_scope = thread_scope
+        contract = (
+            f"flags={memory_flags or '<missing>'}, "
+            f"order={memory_order or '<missing>'}, "
+            f"scope={thread_scope or '<missing>'}"
+        )
+        super().__init__(
+            "atomic-thread-fence-contract",
+            "Cannot lower CrossGL atomicThreadFence to Vulkan SPIR-V without "
+            f"changing its semantics ({contract}): {reason.replace('-', ' ')}",
+            missing_capabilities=self.missing_capabilities,
+            source_location=source_location,
+        )
+
+
 class VulkanSPIRVCodeGen:
     """Generates SPIR-V code from a CrossGL shader AST."""
 
@@ -192,6 +225,34 @@ class VulkanSPIRVCodeGen:
         1: "matrix_b",
         2: "accumulator",
     }
+    ATOMIC_FENCE_MEMORY_FLAGS = frozenset(
+        {
+            "mem_none",
+            "mem_device",
+            "mem_threadgroup",
+            "mem_texture",
+            "mem_threadgroup_imageblock",
+            "mem_object_data",
+        }
+    )
+    ATOMIC_FENCE_MEMORY_ORDERS = frozenset(
+        {
+            "memory_order_relaxed",
+            "memory_order_acquire",
+            "memory_order_release",
+            "memory_order_acq_rel",
+            "memory_order_seq_cst",
+        }
+    )
+    ATOMIC_FENCE_THREAD_SCOPES = frozenset(
+        {
+            "thread_scope_thread",
+            "thread_scope_simdgroup",
+            "thread_scope_threadgroup",
+            "thread_scope_device",
+            "thread_scope_system",
+        }
+    )
 
     SIGNED_INT32_MIN = -(1 << 31)
     SIGNED_INT32_MAX = (1 << 31) - 1
@@ -10137,6 +10198,97 @@ class VulkanSPIRVCodeGen:
         }
         return bool(execution_models) and execution_models.issubset(
             workgroup_execution_models
+        )
+
+    def atomic_fence_operand_identifier(self, expr) -> Optional[str]:
+        name = self.expression_name(expr)
+        if name is None:
+            return None
+        return str(name).lstrip(":").rsplit("::", 1)[-1]
+
+    def atomic_fence_operand_text(self, expr) -> str:
+        if isinstance(expr, BinaryOpNode) and expr.op == "|":
+            return (
+                f"{self.atomic_fence_operand_text(expr.left)} | "
+                f"{self.atomic_fence_operand_text(expr.right)}"
+            )
+        name = self.atomic_fence_operand_identifier(expr)
+        return name if name is not None else self.diagnostic_expression(expr)
+
+    def collect_atomic_fence_memory_flags(self, expr) -> Optional[frozenset]:
+        if isinstance(expr, BinaryOpNode) and expr.op == "|":
+            left = self.collect_atomic_fence_memory_flags(expr.left)
+            right = self.collect_atomic_fence_memory_flags(expr.right)
+            if left is None or right is None:
+                return None
+            return left | right
+        name = self.atomic_fence_operand_identifier(expr)
+        if name in self.ATOMIC_FENCE_MEMORY_FLAGS:
+            return frozenset({name})
+        return None
+
+    def atomic_fence_contract_error(
+        self,
+        reason: str,
+        args: List,
+        *,
+        source_location=None,
+    ) -> SPIRVAtomicFenceLoweringError:
+        rendered = [self.atomic_fence_operand_text(arg) for arg in args]
+        return SPIRVAtomicFenceLoweringError(
+            reason,
+            memory_flags=rendered[0] if rendered else None,
+            memory_order=rendered[1] if len(rendered) > 1 else None,
+            thread_scope=rendered[2] if len(rendered) > 2 else None,
+            source_location=source_location,
+        )
+
+    def reject_atomic_thread_fence(self, call_node):
+        args = list(getattr(call_node, "args", ()) or ())
+        source_location = getattr(call_node, "source_location", None)
+        if len(args) != 3:
+            raise self.atomic_fence_contract_error(
+                "invalid-argument-count",
+                args,
+                source_location=source_location,
+            )
+
+        flags = self.collect_atomic_fence_memory_flags(args[0])
+        order = self.atomic_fence_operand_identifier(args[1])
+        scope = self.atomic_fence_operand_identifier(args[2])
+        if flags is None:
+            raise self.atomic_fence_contract_error(
+                "unknown-memory-flags",
+                args,
+                source_location=source_location,
+            )
+        if order not in self.ATOMIC_FENCE_MEMORY_ORDERS:
+            raise self.atomic_fence_contract_error(
+                "unknown-memory-order",
+                args,
+                source_location=source_location,
+            )
+        if scope not in self.ATOMIC_FENCE_THREAD_SCOPES:
+            raise self.atomic_fence_contract_error(
+                "unknown-thread-scope",
+                args,
+                source_location=source_location,
+            )
+
+        reason = (
+            "unsupported-system-thread-scope"
+            if scope == "thread_scope_system"
+            else "atomic-fence-lowering-deferred"
+        )
+        raise self.atomic_fence_contract_error(
+            reason,
+            args,
+            source_location=source_location,
+        )
+
+    def is_canonical_atomic_thread_fence_call(self, function_name: str) -> bool:
+        return function_name == "atomicThreadFence" and not self.has_function_reference(
+            function_name
         )
 
     def call_synchronization_function(
@@ -28267,6 +28419,9 @@ class VulkanSPIRVCodeGen:
                 callee_name = callee_expr.name
             elif isinstance(callee_expr, str):
                 callee_name = callee_expr
+
+            if self.is_canonical_atomic_thread_fence_call(callee_name):
+                return self.reject_atomic_thread_fence(expr)
 
             if (
                 isinstance(callee_name, str)

@@ -14726,18 +14726,14 @@ def _source_offset_in_spans(offset: int, spans: Sequence[tuple[int, int]]) -> bo
 
 
 def _metal_template_arguments_are_local_constants(
-    preprocessor: Any,
     source: str,
     offset: int,
     names: Sequence[str],
-    template_spans: Sequence[tuple[int, int]],
+    functions: Sequence[Any],
 ) -> bool:
     if not names:
         return False
-    for function in preprocessor._find_non_template_function_definitions(
-        source,
-        list(template_spans),
-    ):
+    for function in functions:
         body_start, body_end = function.body_span
         if not (body_start <= offset < body_end):
             continue
@@ -14817,6 +14813,8 @@ def _unresolved_metal_template_type_records(
     unit: ProjectTranslationUnit,
     source: str,
     target: str,
+    declaration_spans: Sequence[tuple[int, int]] | None = None,
+    functions: Sequence[Any] | None = None,
 ) -> list[dict[str, Any]]:
     declarations = _metal_template_type_declarations(preprocessor, unit, source)
     if not declarations:
@@ -14833,7 +14831,13 @@ def _unresolved_metal_template_type_records(
     if not template_parameter_names:
         return []
 
-    declaration_spans = preprocessor._find_template_declaration_spans(source)
+    if declaration_spans is None:
+        declaration_spans = preprocessor._find_template_declaration_spans(source)
+    if functions is None:
+        functions = preprocessor._find_non_template_function_definitions(
+            source,
+            declaration_spans,
+        )
     masked_source = _masked_metal_non_code_text(source)
     names_pattern = "|".join(
         re.escape(name) for name in sorted(declarations_by_name, key=len, reverse=True)
@@ -14865,11 +14869,10 @@ def _unresolved_metal_template_type_records(
             template_parameter_names,
         )
         if _metal_template_arguments_are_local_constants(
-            preprocessor,
             source,
             match.start(),
             missing,
-            declaration_spans,
+            functions,
         ):
             continue
         if not missing:
@@ -15151,16 +15154,13 @@ def _unresolved_metal_standalone_template_type_records(
     unit: ProjectTranslationUnit,
     source: str,
     target: str,
+    template_spans: Sequence[tuple[int, int]],
+    functions: Sequence[Any],
 ) -> list[dict[str, Any]]:
     template_parameter_names = _metal_template_parameter_name_set(
         preprocessor,
         unit,
         source,
-    )
-    template_spans = preprocessor._find_template_declaration_spans(source)
-    functions = preprocessor._find_non_template_function_definitions(
-        source,
-        list(template_spans),
     )
     records: list[dict[str, Any]] = []
     seen_records: set[tuple[str, tuple[str, ...], str]] = set()
@@ -15205,11 +15205,10 @@ def _unresolved_metal_standalone_template_type_records(
         # array extents (MLX conv `TGH`/`TGW`/`TGC`/`TH`/`TW`, sdpa `BN`/`BD`) as
         # unresolved template parameters and wrongly blocks translatable kernels.
         if _metal_template_arguments_are_local_constants(
-            preprocessor,
             source,
             offset,
             missing,
-            template_spans,
+            functions,
         ):
             return
         concrete_type_record = _metal_concrete_template_type_record(
@@ -15306,18 +15305,27 @@ def _post_materialization_unresolved_metal_template_type_records(
     source: str,
     target: str,
 ) -> list[dict[str, Any]]:
+    template_spans = preprocessor._find_template_declaration_spans(source)
+    functions = preprocessor._find_non_template_function_definitions(
+        source,
+        template_spans,
+    )
     return [
         *_unresolved_metal_template_type_records(
             preprocessor=preprocessor,
             unit=unit,
             source=source,
             target=target,
+            declaration_spans=template_spans,
+            functions=functions,
         ),
         *_unresolved_metal_standalone_template_type_records(
             preprocessor=preprocessor,
             unit=unit,
             source=source,
             target=target,
+            template_spans=template_spans,
+            functions=functions,
         ),
     ]
 
@@ -16650,6 +16658,39 @@ def _metal_sizeof_failure_details(
     return dict(sorted(details.items()))
 
 
+def _metal_template_argument_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.metal-template-argument-unresolved"
+    ):
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    argument = {}
+    fields = {
+        "function": getattr(exc, "function_name", None),
+        "parameter": getattr(exc, "parameter_name", None),
+        "selectedCall": getattr(exc, "selected_call", None),
+        "argumentKind": getattr(exc, "argument_kind", None),
+        "expression": getattr(exc, "argument_expression", None),
+        "defaultExpression": getattr(exc, "default_expression", None),
+        "explicitArgument": getattr(exc, "explicit_argument", None),
+        "reason": getattr(exc, "reason", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            argument[name] = value
+    if argument:
+        details["valueTemplateArgument"] = dict(sorted(argument.items()))
+    return dict(sorted(details.items()))
+
+
 def _metal_callable_failure_details(
     exc: Exception,
     unit: ProjectTranslationUnit,
@@ -16682,6 +16723,35 @@ def _metal_callable_failure_details(
         callback["suggestedAction"] = suggested_action
     if callback:
         details["capturedCallback"] = dict(sorted(callback.items()))
+    return dict(sorted(details.items()))
+
+
+def _metal_callable_alias_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.metal-callable-alias-unsupported"
+    ):
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    callable_alias = {}
+    fields = {
+        "aliasName": getattr(exc, "alias_name", None),
+        "signature": getattr(exc, "signature", None),
+        "usage": getattr(exc, "usage", None),
+        "reason": getattr(exc, "reason", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            callable_alias[name] = value
+    if callable_alias:
+        details["callableAlias"] = dict(sorted(callable_alias.items()))
     return dict(sorted(details.items()))
 
 
@@ -16864,6 +16934,233 @@ def _opengl_struct_construction_failure_details(
         construction["reason"] = reason
     if construction:
         details["structConstruction"] = dict(sorted(construction.items()))
+    return dict(sorted(details.items()))
+
+
+def _opengl_fixed_array_resource_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.opengl-fixed-array-resource-unsupported"
+    ):
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    contract = {}
+    function_name = getattr(exc, "function_name", None)
+    parameter_name = getattr(exc, "parameter_name", None)
+    resource_names = getattr(exc, "resource_names", None)
+    fixed_extent = getattr(exc, "fixed_extent", None)
+    required_access = getattr(exc, "required_access", None)
+    actual_access = getattr(exc, "actual_access", None)
+    reason = getattr(exc, "reason", None)
+    if _is_non_empty_string(function_name):
+        contract["function"] = function_name
+    if _is_non_empty_string(parameter_name):
+        contract["parameter"] = parameter_name
+    if resource_names:
+        contract["resources"] = [str(name) for name in resource_names]
+    if fixed_extent is not None:
+        contract["fixedExtent"] = fixed_extent
+    if _is_non_empty_string(required_access):
+        contract["requiredAccess"] = required_access
+    if _is_non_empty_string(actual_access):
+        contract["actualAccess"] = actual_access
+    if _is_non_empty_string(reason):
+        contract["reason"] = reason
+    if contract:
+        details["fixedArrayResource"] = dict(sorted(contract.items()))
+    return dict(sorted(details.items()))
+
+
+def _opengl_resource_memory_qualifier_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.opengl-resource-memory-qualifier-unsupported"
+    ):
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    contract = {}
+    resource_name = getattr(exc, "resource_name", None)
+    qualifier_kind = getattr(exc, "qualifier_kind", None)
+    if not _is_non_empty_string(qualifier_kind):
+        qualifier_kind = getattr(exc, "qualifier", None)
+    requested_scope = getattr(exc, "requested_scope", None)
+    if not _is_non_empty_string(requested_scope):
+        requested_scope = getattr(exc, "scope", None)
+    fields = {
+        "resourceName": resource_name,
+        "qualifierKind": qualifier_kind,
+        "requestedScope": requested_scope,
+        "requestedContract": getattr(exc, "requested_contract", None),
+        "targetQualifier": getattr(exc, "target_qualifier", None),
+        "targetScope": getattr(exc, "target_scope", None),
+        "targetMapping": getattr(exc, "target_mapping", None),
+        "reason": getattr(exc, "reason", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            contract[name] = value
+    if contract:
+        details["resourceMemoryQualifier"] = dict(sorted(contract.items()))
+    return dict(sorted(details.items()))
+
+
+def _directx_private_pointer_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.directx-private-pointer-unsupported"
+    ):
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    contract = {}
+    function_name = getattr(exc, "function_name", None)
+    parameter_name = getattr(exc, "parameter_name", None)
+    reason = getattr(exc, "reason", None)
+    if _is_non_empty_string(function_name):
+        contract["function"] = function_name
+    if _is_non_empty_string(parameter_name):
+        contract["parameter"] = parameter_name
+    if _is_non_empty_string(reason):
+        contract["reason"] = reason
+    if contract:
+        details["privatePointer"] = dict(sorted(contract.items()))
+    return dict(sorted(details.items()))
+
+
+def _directx_resource_pointer_array_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.directx-resource-pointer-array-unsupported"
+    ):
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    pointer_array = {}
+    fields = {
+        "function": getattr(exc, "function_name", None),
+        "array": getattr(exc, "array_name", None),
+        "addressSpace": getattr(exc, "address_space", None),
+        "backingRoot": getattr(exc, "backing_root", None),
+        "conflictingRoot": getattr(exc, "conflicting_root", None),
+        "reason": getattr(exc, "reason", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            pointer_array[name] = value
+    if pointer_array:
+        details["resourcePointerArray"] = dict(sorted(pointer_array.items()))
+    return dict(sorted(details.items()))
+
+
+def _directx_trailing_zero_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.directx-trailing-zero-unsupported"
+    ):
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    builtin = {}
+    fields = {
+        "builtin": getattr(exc, "builtin_name", None),
+        "operandType": getattr(exc, "operand_type", None),
+        "reason": getattr(exc, "reason", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            builtin[name] = value
+    if builtin:
+        details["trailingZeroBuiltin"] = dict(sorted(builtin.items()))
+    return dict(sorted(details.items()))
+
+
+def _opengl_private_pointer_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.opengl-private-pointer-unsupported"
+    ):
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    contract = {}
+    function_name = getattr(exc, "function_name", None)
+    parameter_name = getattr(exc, "parameter_name", None)
+    reason = getattr(exc, "reason", None)
+    if _is_non_empty_string(function_name):
+        contract["function"] = function_name
+    if _is_non_empty_string(parameter_name):
+        contract["parameter"] = parameter_name
+    if _is_non_empty_string(reason):
+        contract["reason"] = reason
+    if contract:
+        details["privatePointer"] = dict(sorted(contract.items()))
+    return dict(sorted(details.items()))
+
+
+def _directx_workgroup_pointer_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.directx-workgroup-pointer-unsupported"
+    ):
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    pointer = {}
+    function_name = getattr(exc, "function_name", None)
+    parameter_name = getattr(exc, "parameter_name", None)
+    reason = getattr(exc, "reason", None)
+    if _is_non_empty_string(function_name):
+        pointer["function"] = function_name
+    if _is_non_empty_string(parameter_name):
+        pointer["parameter"] = parameter_name
+    if _is_non_empty_string(reason):
+        pointer["reason"] = reason
+    if pointer:
+        details["workgroupPointer"] = dict(sorted(pointer.items()))
     return dict(sorted(details.items()))
 
 
@@ -17088,6 +17385,43 @@ def _metal_struct_method_failure_details(
     return dict(sorted(details.items()))
 
 
+def _metal_struct_method_call_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.metal-struct-method-call-unresolved"
+    ):
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    struct_method_call = {}
+    fields = {
+        "owner": getattr(exc, "owner", None),
+        "methodName": getattr(exc, "method_name", None),
+        "reason": getattr(exc, "reason", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            struct_method_call[name] = value
+    for field_name, detail_name in (
+        ("argument_types", "argumentTypes"),
+        ("candidates", "candidates"),
+    ):
+        values = getattr(exc, field_name, None)
+        if isinstance(values, (list, tuple)):
+            rendered = [value for value in values if _is_non_empty_string(value)]
+            if rendered:
+                struct_method_call[detail_name] = rendered
+    if struct_method_call:
+        details["structMethodCall"] = dict(sorted(struct_method_call.items()))
+    return dict(sorted(details.items()))
+
+
 def _translation_failure_details(
     exc: Exception,
     target: str,
@@ -17104,6 +17438,13 @@ def _translation_failure_details(
         **_opengl_scalar_conversion_failure_details(exc, unit, artifact_path),
         **_opengl_complex_arithmetic_failure_details(exc, unit, artifact_path),
         **_opengl_struct_construction_failure_details(exc, unit, artifact_path),
+        **_opengl_fixed_array_resource_failure_details(exc, unit, artifact_path),
+        **_opengl_resource_memory_qualifier_failure_details(exc, unit, artifact_path),
+        **_directx_private_pointer_failure_details(exc, unit, artifact_path),
+        **_directx_resource_pointer_array_failure_details(exc, unit, artifact_path),
+        **_directx_trailing_zero_failure_details(exc, unit, artifact_path),
+        **_opengl_private_pointer_failure_details(exc, unit, artifact_path),
+        **_directx_workgroup_pointer_failure_details(exc, unit, artifact_path),
         **_opengl_index_type_failure_details(exc, unit, artifact_path),
         **_opengl_workgroup_pointer_failure_details(exc, unit, artifact_path),
         **_opengl_storage_pointer_failure_details(exc, unit, artifact_path),
@@ -17111,9 +17452,12 @@ def _translation_failure_details(
         **_pointer_reinterpret_failure_details(exc, unit, artifact_path),
         **_generic_member_call_failure_details(exc, unit, artifact_path),
         **_metal_struct_method_failure_details(exc, unit, artifact_path),
+        **_metal_struct_method_call_failure_details(exc, unit, artifact_path),
         **_metal_static_constant_failure_details(exc, unit, artifact_path),
         **_metal_sizeof_failure_details(exc, unit, artifact_path),
+        **_metal_template_argument_failure_details(exc, unit, artifact_path),
         **_metal_callable_failure_details(exc, unit, artifact_path),
+        **_metal_callable_alias_failure_details(exc, unit, artifact_path),
         **_template_materialization_failure_details(exc),
     }
 

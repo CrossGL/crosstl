@@ -144,6 +144,8 @@ def collect_resource_array_size_hints(
     format_size,
     initial_literal_int_constants=None,
     strict_fixed_local_array_sizes=False,
+    propagate_argument_sizes_to_callee=True,
+    validate_fixed_argument_sizes=True,
 ):
     """Infer resource-array sizes from literal accesses and call propagation."""
     fixed_global_array_sizes = fixed_global_array_sizes or {}
@@ -2282,7 +2284,8 @@ def collect_resource_array_size_hints(
                     if arg_scope_key is not None:
                         register_fixed_requirement(arg_scope_key, fixed_size, arg_size)
                     if (
-                        callee_param_name in callee_param_hints
+                        propagate_argument_sizes_to_callee
+                        and callee_param_name in callee_param_hints
                         and arg_size
                         and arg_size > callee_param_hints[callee_param_name]
                     ):
@@ -2308,7 +2311,12 @@ def collect_resource_array_size_hints(
                         )
                         caller_param_hints[arg_name] = required_size
                         changed = True
-                    if arg_is_fixed and arg_size and required_size > arg_size:
+                    if (
+                        validate_fixed_argument_sizes
+                        and arg_is_fixed
+                        and arg_size
+                        and required_size > arg_size
+                    ):
                         raise ValueError(
                             "Conflicting fixed resource array sizes for "
                             f"'{arg_name}': {arg_size} and {required_size}"
@@ -2335,6 +2343,9 @@ def collect_private_pointer_array_size_hints(
     visible_literal_int_constants,
     function_call_name,
     initial_literal_int_constants=None,
+    strict_fixed_local_array_sizes=True,
+    propagate_argument_sizes_to_callee=True,
+    validate_fixed_argument_sizes=True,
 ):
     """Infer exact target array extents for private pointer parameters."""
     function_arrays = collect_private_pointer_parameters(functions)
@@ -2352,6 +2363,8 @@ def collect_private_pointer_array_size_hints(
         initial_size=0,
         format_size=lambda size: str(size) if size > 0 else "",
         initial_literal_int_constants=initial_literal_int_constants,
-        strict_fixed_local_array_sizes=True,
+        strict_fixed_local_array_sizes=strict_fixed_local_array_sizes,
+        propagate_argument_sizes_to_callee=propagate_argument_sizes_to_callee,
+        validate_fixed_argument_sizes=validate_fixed_argument_sizes,
     )
     return function_hints

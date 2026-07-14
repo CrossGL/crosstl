@@ -7,6 +7,12 @@ struct FragmentInput {
 };
 Texture2D tex : register(t1);
 SamplerState texSampler : register(s0);
+float linearToSrgb(float linear_);
+
+float4 linearToSrgb(float4 linear_);
+
+float3 linearToSrgb(float3 linear_);
+
 float linearToSrgb(float linear_) {
     if (linear_ <= 0.0031308) {
         return (linear_ * 12.92);
@@ -16,12 +22,12 @@ float linearToSrgb(float linear_) {
     return float(0);
 }
 
-float3 linearToSrgb(float3 linear_) {
-    return float3(linearToSrgb(linear_.r), linearToSrgb(linear_.g), linearToSrgb(linear_.b));
-}
-
 float4 linearToSrgb(float4 linear_) {
     return float4(linearToSrgb(linear_.rgb), linear_.a);
+}
+
+float3 linearToSrgb(float3 linear_) {
+    return float3(linearToSrgb(linear_.r), linearToSrgb(linear_.g), linearToSrgb(linear_.b));
 }
 
 // Fragment Shader

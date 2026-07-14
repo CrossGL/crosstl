@@ -18,7 +18,9 @@ from crosstl.translator.ast import (
     FunctionNode,
     IdentifierNode,
     LiteralNode,
+    PointerType,
     PrimitiveType,
+    ResourceMemoryQualifierNode,
     ShaderNode,
     ShaderStage,
     StageNode,
@@ -1444,6 +1446,192 @@ def test_metal_synchronization_builtins_lower_to_threadgroup_barriers():
     assert "deviceMemoryBarrier();" not in generated_code
     assert "memoryBarrierImage();" not in generated_code
     assert "allMemoryBarrier();" not in generated_code
+
+
+def test_metal_atomic_thread_fence_preserves_seq_cst_system_contract():
+    shader = """
+    shader AtomicThreadFence {
+        compute {
+            void main() {
+                atomicThreadFence(mem_device, memory_order_seq_cst,
+                                  thread_scope_system);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "#pragma METAL internals : enable" in generated_code
+    assert "#include <metal_atomic>" in generated_code
+    assert "__METAL_MEMORY_SCOPE_SYSTEM__ 3" in generated_code
+    assert (
+        "metal::atomic_thread_fence(metal::mem_flags::mem_device, "
+        "metal::memory_order_seq_cst, metal::thread_scope_system);"
+    ) in generated_code
+    assert "threadgroup_barrier(mem_flags::mem_device);" not in generated_code
+    compile_with_metal_if_available(generated_code)
+
+
+def test_crossgl_resource_memory_qualifiers_attach_to_each_pointer_contract():
+    shader = """
+    shader ResourceMemoryQualifierIR {
+        void qualify(
+            volatile device atomic_uint* volatile_only,
+            coherent(system) device atomic_uint* system_scoped,
+            volatile coherent(device) device atomic_uint& referenced,
+            device uint* plain,
+            uint index
+        ) {
+            uint local = index;
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(shader))
+    function = ast.functions[0]
+    volatile_only, system_scoped, referenced, plain, index = function.parameters
+
+    assert isinstance(volatile_only.param_type, PointerType)
+    assert volatile_only.param_type.address_space == "device"
+    assert all(
+        isinstance(qualifier, ResourceMemoryQualifierNode)
+        for qualifier in volatile_only.param_type.resource_qualifiers
+    )
+    assert [
+        (qualifier.kind, qualifier.scope)
+        for qualifier in volatile_only.param_type.resource_qualifiers
+    ] == [("volatile", None)]
+    assert [
+        (qualifier.kind, qualifier.scope)
+        for qualifier in system_scoped.param_type.resource_qualifiers
+    ] == [("coherent", "system")]
+    assert [
+        (qualifier.kind, qualifier.scope)
+        for qualifier in referenced.param_type.resource_qualifiers
+    ] == [("volatile", None), ("coherent", "device")]
+    assert plain.param_type.resource_qualifiers == []
+    assert index.resource_qualifiers == []
+    assert function.body.statements[0].resource_qualifiers == []
+    assert (
+        volatile_only.param_type.resource_qualifiers
+        is not system_scoped.param_type.resource_qualifiers
+    )
+
+
+@pytest.mark.parametrize("scope", ["threadgroup", "device", "system"])
+def test_metal_resource_memory_qualifiers_precede_pointer_address_space(scope):
+    shader = f"""
+    shader ResourceMemoryQualifierTarget {{
+        compute {{
+            void main(
+                volatile RWStructuredBuffer<uint> volatile_only @buffer(0),
+                coherent({scope}) RWStructuredBuffer<atomic_uint> scoped @buffer(1),
+                RWStructuredBuffer<uint> plain @buffer(2),
+                volatile coherent(device) device atomic_uint& referenced @buffer(3),
+                uint index @gl_GlobalInvocationID
+            ) {{
+                volatile coherent(system) device uint* qualified_local;
+                uint local = index;
+            }}
+        }}
+    }}
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "volatile device uint* volatile_only [[buffer(0)]]" in generated_code
+    assert (
+        f"coherent({scope}) device atomic_uint* scoped [[buffer(1)]]" in generated_code
+    )
+    assert "device uint* plain [[buffer(2)]]" in generated_code
+    assert (
+        "volatile coherent(device) device atomic_uint& referenced [[buffer(3)]]"
+        in generated_code
+    )
+    assert "uint index [[thread_position_in_grid]]" in generated_code
+    assert "device uint* volatile volatile_only" not in generated_code
+    assert f"device atomic_uint* coherent({scope}) scoped" not in generated_code
+    assert "device atomic_uint& volatile referenced" not in generated_code
+    assert "volatile coherent(system) device uint* qualified_local;" in generated_code
+    assert "volatile uint local" not in generated_code
+    assert f"coherent({scope}) uint local" not in generated_code
+    assert "#pragma METAL internals : enable" in generated_code
+
+
+def test_metal_resource_memory_qualifiers_survive_inout_reference_lowering():
+    shader = """
+    shader ResourceMemoryQualifierReference {
+        struct Data {
+            uint value;
+        };
+
+        compute {
+            void main(
+                inout volatile coherent(system) device Data referenced @buffer(0)
+            ) {
+                referenced.value = 1;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "volatile coherent(system) device Data& referenced" in generated_code
+    assert "device Data& volatile referenced" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("call", "reason", "capability"),
+    [
+        (
+            "atomicThreadFence(mem_global, memory_order_seq_cst, "
+            "thread_scope_device)",
+            "unsupported-memory-flags",
+            "metal.atomic-thread-fence.memory-flags",
+        ),
+        (
+            "atomicThreadFence(mem_device, memory_order_consume, "
+            "thread_scope_device)",
+            "unsupported-memory-order",
+            "metal.atomic-thread-fence.memory-order",
+        ),
+        (
+            "atomicThreadFence(mem_device, memory_order_seq_cst, "
+            "thread_scope_queue_family)",
+            "unsupported-thread-scope",
+            "metal.atomic-thread-fence.thread-scope",
+        ),
+        (
+            "atomicThreadFence(mem_device, memory_order_seq_cst)",
+            "invalid-argument-count",
+            "metal.atomic-thread-fence.contract",
+        ),
+    ],
+)
+def test_metal_atomic_thread_fence_rejects_unrepresentable_contracts(
+    call, reason, capability
+):
+    shader = f"""
+    shader UnsupportedAtomicThreadFence {{
+        compute {{
+            void main() {{
+                {call};
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(UnsupportedMetalFeatureError) as exc_info:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    diagnostic = exc_info.value
+    assert diagnostic.feature == "atomic-thread-fence-contract"
+    assert diagnostic.operation == "atomicThreadFence"
+    assert diagnostic.reason == reason
+    assert diagnostic.missing_capabilities == (capability,)
+    assert "cannot represent" in str(diagnostic)
 
 
 def test_metal_workgroup_execution_barrier_lowers_without_intrinsic_leak():

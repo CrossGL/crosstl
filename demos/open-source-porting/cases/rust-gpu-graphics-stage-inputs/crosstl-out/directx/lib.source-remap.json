@@ -6,9 +6,9 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 3,
-        "endOffset": 32,
+        "endOffset": 31,
         "file": "crosstl-out/directx/lib.hlsl",
-        "length": 31,
+        "length": 30,
         "line": 2,
         "offset": 1
       },
@@ -27,12 +27,34 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 8,
-        "endOffset": 117,
+        "endLine": 5,
+        "endOffset": 63,
+        "file": "crosstl-out/directx/lib.hlsl",
+        "length": 31,
+        "line": 4,
+        "offset": 32
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 5,
+        "endOffset": 104,
+        "file": "lib.rs",
+        "length": 34,
+        "line": 4,
+        "offset": 70
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 148,
         "file": "crosstl-out/directx/lib.hlsl",
         "length": 45,
-        "line": 7,
-        "offset": 72
+        "line": 9,
+        "offset": 103
       },
       "original": {
         "column": 1,
@@ -49,12 +71,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 9,
-        "endOffset": 160,
+        "endLine": 11,
+        "endOffset": 191,
         "file": "crosstl-out/directx/lib.hlsl",
         "length": 43,
-        "line": 8,
-        "offset": 117
+        "line": 10,
+        "offset": 148
       },
       "original": {
         "column": 1,
@@ -71,12 +93,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 10,
-        "endOffset": 202,
+        "endLine": 12,
+        "endOffset": 233,
         "file": "crosstl-out/directx/lib.hlsl",
         "length": 42,
-        "line": 9,
-        "offset": 160
+        "line": 11,
+        "offset": 191
       },
       "original": {
         "column": 1,
@@ -93,12 +115,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 14,
-        "endOffset": 298,
+        "endLine": 16,
+        "endOffset": 329,
         "file": "crosstl-out/directx/lib.hlsl",
         "length": 76,
-        "line": 13,
-        "offset": 222
+        "line": 15,
+        "offset": 253
       },
       "original": {
         "column": 1,
@@ -115,12 +137,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 15,
-        "endOffset": 347,
+        "endLine": 17,
+        "endOffset": 378,
         "file": "crosstl-out/directx/lib.hlsl",
         "length": 49,
-        "line": 14,
-        "offset": 298
+        "line": 16,
+        "offset": 329
       },
       "original": {
         "column": 1,

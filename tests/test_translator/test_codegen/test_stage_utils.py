@@ -455,3 +455,19 @@ def test_order_functions_by_dependencies_places_callees_first():
     )
 
     assert ordered == [second, first]
+
+
+def test_order_functions_by_dependencies_places_overload_set_before_caller():
+    caller = DummyFunction("caller", [DummyCall("helper")])
+    first_helper = DummyFunction("helper")
+    second_helper = DummyFunction("helper")
+
+    ordered = order_functions_by_dependencies(
+        [caller, first_helper, second_helper],
+        walk_dummy_nodes,
+        dummy_call_name,
+        DummyCall,
+        include_overloads=True,
+    )
+
+    assert ordered == [first_helper, second_helper, caller]
