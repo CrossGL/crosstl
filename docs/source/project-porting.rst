@@ -912,6 +912,31 @@ whole-source ``source instantiations x template declarations`` Cartesian
 estimate, and repeated scans of progressively expanded source text are not work
 items merely because the text was scanned again.
 
+During project translation, Metal template-member inference preserves a
+generic pointer template parameter as a pointer rather than reducing it to its
+pointee type. For a parameter such as ``Pointer src``, a bare tracked pointer,
+legal pointer-plus-integral or pointer-minus-integral expression, or the address
+of a directly subscripted pointer or array element binds ``Pointer`` to the
+complete pointer type. Pointer identity, the proven Metal address space, and
+``const``/``volatile`` qualification are retained. Legal offset forms include
+``ptr + offset``, ``offset + ptr``, and ``ptr - offset`` when ``offset`` has a
+known integral type.
+
+This does not change deduction for a parameter declared as ``device U*`` or
+``threadgroup U*``: after pointer compatibility is established, ``U`` is still
+deduced as the pointee type. Inference remains conservative. An unknown base or
+address space, a non-integral offset, pointer-pointer arithmetic, an offset
+minus a pointer, or address-taking outside a proven ``&base[index]`` shape
+fails closed with ``project.translate.metal-struct-method``. Addressed-element
+indices must also be known integral expressions without unsupported calls,
+assignments, side effects, nested subscripts, or ambiguous expression forms.
+
+The contract applies generally to Metal sources handled by project translation.
+The pinned MLX ``BaseMMAFrag::load(&(src[index]))`` call shape is a focused
+acceptance example for retaining the qualified pointer through nested template-
+member materialization; it is not evidence of runtime parity or completion of
+the pinned or full MLX corpus.
+
 Metal struct-method lowering preserves direct mutable and read-only reference
 accessors when the returned lvalue is receiver-owned scalar storage or an
 exactly indexed fixed-array element. Simple receiver declarations can use a
