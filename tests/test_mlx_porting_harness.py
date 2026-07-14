@@ -1310,6 +1310,9 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         "spirv1.3",
     ]
     assert opengl_frontier["spirv_val_target_environment"] == "spv1.3"
+    assert opengl_frontier["specialization_constants"] == (
+        module.MLX_OPENGL_SPECIALIZATION_CONSTANT_IDS
+    )
     assert opengl_frontier["runtime_integration_included"] is False
     assert opengl_frontier["runtime_parity_claimed"] is False
 
@@ -2200,18 +2203,38 @@ def _prepare_opengl_frontier_check(module, tmp_path):
     for source in module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES:
         generated_path = work_dir / "out" / "opengl" / f"{Path(source).stem}.glsl"
         generated_path.parent.mkdir(parents=True, exist_ok=True)
+        expected_constants = module.MLX_OPENGL_SPECIALIZATION_CONSTANT_IDS.get(
+            source, {}
+        )
+        declarations = [
+            "layout(constant_id = {}) const {} {} = {};".format(
+                constant_id,
+                "int" if name == "blocks" else "bool",
+                name,
+                "1" if name == "blocks" else "false",
+            )
+            for name, constant_id in expected_constants.items()
+        ]
         generated_path.write_text(
-            "#version 450 core\nvoid main() {}\n",
+            "\n".join(["#version 450 core", *declarations, "void main() {}", ""]),
             encoding="utf-8",
         )
-        artifacts.append(
-            {
-                "source": source,
-                "target": "opengl",
-                "path": generated_path.relative_to(mlx_root).as_posix(),
-                "status": "translated",
+        artifact = {
+            "source": source,
+            "target": "opengl",
+            "path": generated_path.relative_to(mlx_root).as_posix(),
+            "status": "translated",
+        }
+        if expected_constants:
+            artifact["specializationConstants"] = [
+                {"name": name, "id": constant_id}
+                for name, constant_id in expected_constants.items()
+            ]
+            artifact["specializationMaterialization"] = {
+                "mode": "deferred",
+                "targetSupportsDeferredSpecialization": True,
             }
-        )
+        artifacts.append(artifact)
     frontier_count = len(module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES)
     report = {
         "summary": {
@@ -2278,6 +2301,9 @@ def test_opengl_frontier_required_toolchain_compiles_and_validates_artifacts(
     )
     assert result["nativeValidationStatus"] == "validated"
     assert result["spirvValidator"] == "spirv-val"
+    assert result["specializationConstants"] == (
+        module.MLX_OPENGL_SPECIALIZATION_CONSTANT_IDS
+    )
     assert result["runtimeIntegrationIncluded"] is False
     assert [name for name, _command in commands] == [
         "translate-opengl-frontier",
@@ -3713,6 +3739,9 @@ def test_reduced_frontier_requires_directx_toolchain_runs_per_artifact(
         encoding="utf-8"
     )
     assert 'targets = ["directx"]' in toolchain_config
+    assert "[project.specialization_constants]" in toolchain_config
+    for selector, value in module.MLX_FRONTIER_SPECIALIZATION_CONSTANTS.items():
+        assert f'{json.dumps(selector)} = {json.dumps(value)}' in toolchain_config
     # The DXC compile gate is scoped to the verified subset, not the whole
     # frontier, so only those sources appear in the toolchain config.
     for source in module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES:
@@ -3730,6 +3759,9 @@ def test_directx_toolchain_frontier_includes_rope_and_gap_ledger_matches():
     assert module.MLX_ROPE_SOURCE in module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
     assert module.MLX_ROPE_SOURCE in module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
     directx_status = gaps["directx_toolchain_status"]
+    assert directx_status["specialization_constants"] == (
+        module.MLX_FRONTIER_SPECIALIZATION_CONSTANTS
+    )
     assert module.MLX_ROPE_SOURCE in directx_status["dxc_validated_sources"]
     assert module.MLX_ROPE_SOURCE not in directx_status["directx_toolchain_gaps"]
 
