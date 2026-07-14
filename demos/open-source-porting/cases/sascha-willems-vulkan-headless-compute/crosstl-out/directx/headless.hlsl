@@ -2,6 +2,8 @@
 static const uint BUFFER_ELEMENTS = 32;
 
 RWByteAddressBuffer pos : register(u0);
+uint fibonacci(uint n);
+
 uint fibonacci(uint n) {
     if (n <= 1) {
         return n;

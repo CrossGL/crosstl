@@ -6,9 +6,9 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 7,
-        "endOffset": 118,
+        "endOffset": 117,
         "file": "crosstl-out/directx/grid.hlsl",
-        "length": 26,
+        "length": 25,
         "line": 6,
         "offset": 92
       },
@@ -27,12 +27,34 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 144,
+        "file": "crosstl-out/directx/grid.hlsl",
+        "length": 26,
+        "line": 8,
+        "offset": 118
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
         "endLine": 8,
-        "endOffset": 145,
+        "endOffset": 156,
+        "file": "grid.frag",
+        "length": 22,
+        "line": 7,
+        "offset": 134
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 10,
+        "endOffset": 171,
         "file": "crosstl-out/directx/grid.hlsl",
         "length": 27,
-        "line": 7,
-        "offset": 118
+        "line": 9,
+        "offset": 144
       },
       "original": {
         "column": 1,
@@ -49,12 +71,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 9,
-        "endOffset": 184,
+        "endLine": 11,
+        "endOffset": 210,
         "file": "crosstl-out/directx/grid.hlsl",
         "length": 39,
-        "line": 8,
-        "offset": 145
+        "line": 10,
+        "offset": 171
       },
       "original": {
         "column": 1,
@@ -71,12 +93,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 10,
-        "endOffset": 255,
+        "endLine": 12,
+        "endOffset": 281,
         "file": "crosstl-out/directx/grid.hlsl",
         "length": 71,
-        "line": 9,
-        "offset": 184
+        "line": 11,
+        "offset": 210
       },
       "original": {
         "column": 1,
@@ -93,12 +115,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 11,
-        "endOffset": 302,
+        "endLine": 13,
+        "endOffset": 328,
         "file": "crosstl-out/directx/grid.hlsl",
         "length": 47,
-        "line": 10,
-        "offset": 255
+        "line": 12,
+        "offset": 281
       },
       "original": {
         "column": 1,
@@ -115,12 +137,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 12,
-        "endOffset": 361,
+        "endLine": 14,
+        "endOffset": 387,
         "file": "crosstl-out/directx/grid.hlsl",
         "length": 59,
-        "line": 11,
-        "offset": 302
+        "line": 13,
+        "offset": 328
       },
       "original": {
         "column": 1,
@@ -137,12 +159,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 17,
-        "endOffset": 453,
+        "endLine": 19,
+        "endOffset": 479,
         "file": "crosstl-out/directx/grid.hlsl",
         "length": 21,
-        "line": 16,
-        "offset": 432
+        "line": 18,
+        "offset": 458
       },
       "original": {
         "column": 1,
@@ -159,12 +181,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 18,
-        "endOffset": 530,
+        "endLine": 20,
+        "endOffset": 556,
         "file": "crosstl-out/directx/grid.hlsl",
         "length": 77,
-        "line": 17,
-        "offset": 453
+        "line": 19,
+        "offset": 479
       },
       "original": {
         "column": 1,
@@ -181,12 +203,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 19,
-        "endOffset": 609,
+        "endLine": 21,
+        "endOffset": 635,
         "file": "crosstl-out/directx/grid.hlsl",
         "length": 79,
-        "line": 18,
-        "offset": 530
+        "line": 20,
+        "offset": 556
       },
       "original": {
         "column": 1,
@@ -203,12 +225,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 20,
-        "endOffset": 635,
+        "endLine": 22,
+        "endOffset": 661,
         "file": "crosstl-out/directx/grid.hlsl",
         "length": 26,
-        "line": 19,
-        "offset": 609
+        "line": 21,
+        "offset": 635
       },
       "original": {
         "column": 1,

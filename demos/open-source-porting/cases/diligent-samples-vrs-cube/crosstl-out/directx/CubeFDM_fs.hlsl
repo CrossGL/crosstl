@@ -21,6 +21,8 @@ uint2 CrossGLFragmentSizeFromShadingRate(uint shadingRate) {
     return uint2(width, height);
 }
 
+float4 FragmentDensityToColor(uint2 _crossglFragSize);
+
 float4 FragmentDensityToColor(uint2 _crossglFragSize) {
     float h = (clamp((1.0 - (1.0 / float((_crossglFragSize.x * _crossglFragSize.y)))), 0.0, 1.0) / 1.35);
     float3 col = float3((abs(((h * 6.0) - 3.0)) - 1.0), (2.0 - abs(((h * 6.0) - 2.0))), (2.0 - abs(((h * 6.0) - 4.0))));

@@ -28,9 +28,9 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 4,
-        "endOffset": 83,
+        "endOffset": 82,
         "file": "crosstl-out/directx/default-parameter.hlsl",
-        "length": 29,
+        "length": 28,
         "line": 3,
         "offset": 54
       },
@@ -49,12 +49,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 8,
-        "endOffset": 128,
+        "endLine": 6,
+        "endOffset": 102,
         "file": "crosstl-out/directx/default-parameter.hlsl",
-        "length": 20,
-        "line": 7,
-        "offset": 108
+        "length": 19,
+        "line": 5,
+        "offset": 83
       },
       "original": {
         "column": 1,
@@ -71,12 +71,56 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 13,
-        "endOffset": 220,
+        "endLine": 8,
+        "endOffset": 132,
+        "file": "crosstl-out/directx/default-parameter.hlsl",
+        "length": 29,
+        "line": 7,
+        "offset": 103
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 9,
+        "endOffset": 338,
+        "file": "default-parameter.slang",
+        "length": 32,
+        "line": 8,
+        "offset": 306
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 177,
+        "file": "crosstl-out/directx/default-parameter.hlsl",
+        "length": 20,
+        "line": 11,
+        "offset": 157
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 14,
+        "endOffset": 381,
+        "file": "default-parameter.slang",
+        "length": 18,
+        "line": 13,
+        "offset": 363
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 17,
+        "endOffset": 269,
         "file": "crosstl-out/directx/default-parameter.hlsl",
         "length": 22,
-        "line": 12,
-        "offset": 198
+        "line": 16,
+        "offset": 247
       },
       "original": {
         "column": 1,
@@ -93,12 +137,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 14,
-        "endOffset": 280,
+        "endLine": 18,
+        "endOffset": 329,
         "file": "crosstl-out/directx/default-parameter.hlsl",
         "length": 60,
-        "line": 13,
-        "offset": 220
+        "line": 17,
+        "offset": 269
       },
       "original": {
         "column": 1,
@@ -115,12 +159,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 15,
-        "endOffset": 321,
+        "endLine": 19,
+        "endOffset": 370,
         "file": "crosstl-out/directx/default-parameter.hlsl",
         "length": 41,
-        "line": 14,
-        "offset": 280
+        "line": 18,
+        "offset": 329
       },
       "original": {
         "column": 1,
@@ -137,12 +181,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 16,
-        "endOffset": 351,
+        "endLine": 20,
+        "endOffset": 400,
         "file": "crosstl-out/directx/default-parameter.hlsl",
         "length": 30,
-        "line": 15,
-        "offset": 321
+        "line": 19,
+        "offset": 370
       },
       "original": {
         "column": 1,
@@ -159,12 +203,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 17,
-        "endOffset": 398,
+        "endLine": 21,
+        "endOffset": 447,
         "file": "crosstl-out/directx/default-parameter.hlsl",
         "length": 47,
-        "line": 16,
-        "offset": 351
+        "line": 20,
+        "offset": 400
       },
       "original": {
         "column": 1,

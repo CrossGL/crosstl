@@ -22,6 +22,10 @@ Option_u32 Option_u32_Absent_make() {
 }
 
 RWStructuredBuffer<uint> prime_indices : register(u0);
+Option_u32 collatz(uint n);
+
+uint collatz_unwrap_or(uint n, uint _rust_option_fallback);
+
 Option_u32 collatz(uint n) {
     int i = 0;
     if (n == 0) {

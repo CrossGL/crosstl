@@ -12,6 +12,10 @@ cbuffer Uniforms : register(b0) {
     float timeValY;
     float2 mouse;
 };
+float4 rand(float2 A, float2 B, float2 C, float2 D);
+
+float noise(float2 coord, float d);
+
 float4 rand(float2 A, float2 B, float2 C, float2 D) {
     float2 s = float2(12.9898, 78.233);
     float4 tmp = float4(dot(A, s), dot(B, s), dot(C, s), dot(D, s));

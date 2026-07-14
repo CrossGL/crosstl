@@ -1,4 +1,6 @@
 
+float3 tonemap(float3 color);
+
 float3 tonemap(float3 color) {
     return color;
 }
