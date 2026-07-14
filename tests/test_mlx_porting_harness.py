@@ -434,7 +434,12 @@ def test_reference_accessor_fixture_translates_through_public_project_surface(
     source = source_path.read_text(encoding="utf-8")
     assert "constexpr thread float& frag_at" in source
     assert "return val_frags[i * width + j];" in source
-    assert "tile.frag_at(1, 1) = 73.25f;" in source
+    alias_declaration = "using tile_t = ReferenceAccessorTile;"
+    receiver_declaration = "tile_t tile;"
+    accessor_write = "tile.frag_at(1, 1) = 73.25f;"
+    assert source.index(alias_declaration) < source.index(receiver_declaration)
+    assert source.index(receiver_declaration) < source.index(accessor_write)
+    assert "ReferenceAccessorTile tile;" not in source
 
     payload = translate_project(
         project_dir,

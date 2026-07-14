@@ -4659,6 +4659,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             field_variable_types,
             field_structs_by_name,
             local_integral_constants,
+            struct_type_aliases,
         )
         if nested_member_rewrite is not None:
             return nested_member_rewrite
@@ -4829,6 +4830,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                     struct_type,
                     ident,
                     ident_start,
+                    type_aliases=struct_type_aliases,
                 )
                 method = self._select_direct_reference_method(
                     code,
@@ -4945,6 +4947,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         local_integral_constants: Optional[
             Dict[str, List[_MetalIntegralConstantBinding]]
         ],
+        struct_type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]],
     ) -> Optional[Tuple[int, str]]:
         """Rewrite a method call whose receiver is a nested struct field."""
         if self._is_member_identifier_context(code, ident_start):
@@ -5019,6 +5022,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                             current_struct_name,
                             ident,
                             ident_start,
+                            type_aliases=struct_type_aliases,
                         ),
                     )
                     return self._build_direct_reference_accessor_rewrite(
@@ -7765,24 +7769,46 @@ class MetalPreprocessor(HLSLPreprocessor):
         struct_name: str,
         receiver: str,
         call_start: int,
+        *,
+        type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]] = None,
     ) -> Optional[bool]:
         if re.fullmatch(r"[A-Za-z_]\w*", receiver) is None:
             return None
         ignored = self._find_comment_and_literal_spans(code)
+        lexical_scopes = self._find_lexical_brace_scopes(code)
         pattern = re.compile(
             rf"(?P<leading>(?:(?:const|constant|device|thread|threadgroup|volatile)\s+)*)"
-            rf"\b{re.escape(struct_name)}\b"
+            rf"\b(?P<type>[A-Za-z_]\w*)\b"
             rf"(?P<trailing>\s+const\b)?\s*(?:[&*]\s*)*"
-            rf"\b{re.escape(receiver)}\b"
+            rf"\b{re.escape(receiver)}\b\s*(?=[,;)=\[{{(])"
         )
-        matches = [
-            match
-            for match in pattern.finditer(code, 0, call_start)
-            if self._containing_span(match.start(), ignored) is None
-        ]
+        matches = []
+        for match in pattern.finditer(code, 0, call_start):
+            if self._containing_span(match.start(), ignored) is not None:
+                continue
+            scope = self._innermost_lexical_scope(
+                lexical_scopes,
+                match.start(),
+                len(code),
+            )
+            if scope[0] <= call_start < scope[1]:
+                matches.append(match)
         if not matches:
             return None
         declaration = matches[-1]
+        declared_type = declaration.group("type")
+        if declared_type != struct_name:
+            declared_type = (
+                self._resolve_struct_type_alias_at(
+                    type_aliases,
+                    declared_type,
+                    declaration.start("type"),
+                )
+                if type_aliases is not None
+                else None
+            )
+        if declared_type != struct_name:
+            return None
         leading = declaration.group("leading") or ""
         return bool(
             re.search(r"\b(?:const|constant)\b", leading)

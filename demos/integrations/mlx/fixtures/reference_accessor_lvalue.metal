@@ -11,7 +11,8 @@ struct ReferenceAccessorTile {
 };
 
 kernel void reference_accessor_write(device float* out [[buffer(0)]]) {
-  ReferenceAccessorTile tile;
+  using tile_t = ReferenceAccessorTile;
+  tile_t tile;
   tile.frag_at(1, 1) = 73.25f;
   out[0] = tile.val_frags[(1 * 2) + 1];
 }
