@@ -79,6 +79,52 @@ class MetalCallableLoweringError(ValueError):
         super().__init__(f"Cannot lower Metal callback passed to {helper}: {reason}")
 
 
+class MetalWideVectorLoweringError(ValueError):
+    """Raised when a concrete Metal vector cannot be lowered as an aggregate."""
+
+    project_diagnostic_code = "project.translate.metal-wide-vector-unsupported"
+    missing_capabilities = ("metal.wide-vector-aggregate-lowering",)
+
+    def __init__(
+        self,
+        vector_type,
+        reason,
+        source_location=None,
+        operation=None,
+    ):
+        self.vector_type = vector_type
+        self.reason = reason
+        self.source_location = source_location
+        self.operation = operation
+        detail = f" for operation '{operation}'" if operation else ""
+        super().__init__(
+            f"Cannot lower Metal wide vector '{vector_type}'{detail}: {reason}"
+        )
+
+
+class MetalStageEntryArrayResourceError(ValueError):
+    """Raised when a Metal entry array has no faithful resource contract."""
+
+    project_diagnostic_code = "project.translate.metal-entry-array-resource-invalid"
+    missing_capabilities = ("metal.stage-entry-array-resource-lowering",)
+
+    def __init__(
+        self,
+        parameter_name,
+        array_dimensions,
+        reason,
+        source_location=None,
+    ):
+        self.parameter_name = parameter_name
+        self.array_dimensions = tuple(array_dimensions or ())
+        self.reason = reason
+        self.source_location = source_location
+        super().__init__(
+            "Cannot lower Metal stage-entry array resource "
+            f"'{parameter_name}': {reason.replace('-', ' ')}"
+        )
+
+
 class MetalToCrossGLConverter:
     """Serialize Metal backend AST nodes back into CrossGL source."""
 
@@ -639,6 +685,11 @@ class MetalToCrossGLConverter:
         self.local_struct_type_aliases = {}
         self.integral_constant_bindings = []
         self.current_function_name = None
+        self.current_function_return_type = None
+        self.wide_vector_types = {}
+        self.wide_vector_binary_helpers = set()
+        self.wide_vector_compound_helpers = set()
+        self.wide_vector_reserved_names = set()
         self.identifier_maps = [{}]
         self.used_identifier_names = [set()]
         self.texture_method_functions = {
@@ -1527,6 +1578,11 @@ class MetalToCrossGLConverter:
         return self.resource_size_query_call(first, lod)
 
     def generate(self, ast):
+        wide_vector_marker = "    // __crossgl_metal_wide_vector_support__\n"
+        self.wide_vector_types = {}
+        self.wide_vector_binary_helpers = set()
+        self.wide_vector_compound_helpers = set()
+        self.wide_vector_reserved_names = set()
         typedefs = getattr(ast, "typedefs", []) or []
         self.type_aliases = {
             alias.name: alias.alias_type
@@ -1538,8 +1594,11 @@ class MetalToCrossGLConverter:
         # emitted as typedefs.
         self.local_type_alias_names = set()
         self.local_struct_type_aliases = {}
-        self.prepare_texture_usage(ast)
         functions = getattr(ast, "functions", []) or []
+        self.prepare_texture_usage(ast)
+        self.wide_vector_reserved_names.update(
+            self.collect_declared_identifier_names(ast)
+        )
         self.user_function_names = {
             function.name
             for function in functions
@@ -1564,6 +1623,7 @@ class MetalToCrossGLConverter:
             code += "\n"
         code += "shader main {\n"
         code += "\n"
+        code += wide_vector_marker
         self.constant_struct_name = []
 
         # Get constants - support both 'constant' and 'constants' attributes
@@ -1583,6 +1643,17 @@ class MetalToCrossGLConverter:
         }
         self.struct_member_types = self.collect_struct_member_types(structs)
         self.collect_struct_static_constants(structs)
+        self.wide_vector_reserved_names.update(
+            self.map_struct_name(struct_node.name)
+            for struct_node in structs
+            if isinstance(struct_node, StructNode)
+            and getattr(struct_node, "name", None)
+        )
+        self.wide_vector_reserved_names.update(
+            self.sanitize_identifier(alias.name)
+            for alias in typedefs
+            if isinstance(alias, TypeAliasNode) and getattr(alias, "name", None)
+        )
         enums = getattr(ast, "enums", []) or []
         emitted_typedefs = [
             declaration
@@ -1691,7 +1762,9 @@ class MetalToCrossGLConverter:
                         if self.is_sampler_variable(glob.left):
                             self.global_sampler_names.add(glob.left.name)
                             continue
-                        self.global_variable_types[glob.left.name] = glob.left.vtype
+                        self.global_variable_types[glob.left.name] = (
+                            self.metal_declaration_expression_type(glob.left)
+                        )
                     left = (
                         self.format_decl(glob.left, include_semantic=True)
                         if isinstance(glob.left, VariableNode)
@@ -1716,7 +1789,9 @@ class MetalToCrossGLConverter:
                     if self.is_sampler_variable(glob):
                         self.global_sampler_names.add(glob.name)
                         continue
-                    self.global_variable_types[glob.name] = glob.vtype
+                    self.global_variable_types[glob.name] = (
+                        self.metal_declaration_expression_type(glob)
+                    )
                     if id(glob) in self.storage_texture_declaration_ids:
                         self.global_storage_texture_names.add(glob.name)
                     if self.structured_buffer_pointer_type(glob):
@@ -1752,6 +1827,11 @@ class MetalToCrossGLConverter:
                 code += self.generate_function(f)
 
         code += "}\n"
+        code = code.replace(
+            wide_vector_marker,
+            self.generate_wide_vector_support_code(indent=1),
+            1,
+        )
         return code
 
     def process_constant_struct(self, node):
@@ -1774,7 +1854,7 @@ class MetalToCrossGLConverter:
             members = {}
             for member in getattr(struct_node, "members", []) or []:
                 member_name = getattr(member, "name", None)
-                member_type = getattr(member, "vtype", None)
+                member_type = self.metal_declaration_expression_type(member)
                 if member_name and member_type:
                     members[member_name] = member_type
             member_types[struct_name] = members
@@ -1941,6 +2021,30 @@ class MetalToCrossGLConverter:
         visit(root)
         return storage_ids
 
+    def collect_declared_identifier_names(self, root):
+        names = set()
+        seen = set()
+
+        def visit(node):
+            if node is None or isinstance(node, (str, int, float, bool)):
+                return
+            if not isinstance(node, (dict, list, tuple, set)):
+                node_id = id(node)
+                if node_id in seen:
+                    return
+                seen.add(node_id)
+            if isinstance(
+                node, (VariableNode, FunctionNode, StructNode, TypeAliasNode)
+            ):
+                name = getattr(node, "name", None)
+                if name:
+                    names.add(self.sanitize_identifier(name))
+            for child in self.iter_ast_children(node):
+                visit(child)
+
+        visit(root)
+        return names
+
     def prepare_texture_usage(self, ast):
         self.global_variable_types = {}
         self.current_variable_types = {}
@@ -2105,6 +2209,7 @@ class MetalToCrossGLConverter:
     def format_decl(
         self, var, include_semantic=False, declare_name=True, semantic_context=None
     ):
+        self.reject_abi_visible_wide_vector_declaration(var)
         alignas_prefix = ""
         if hasattr(var, "alignas") and var.alignas:
             parts = []
@@ -2122,7 +2227,14 @@ class MetalToCrossGLConverter:
             if getattr(var, "declarator_type_suffix_grouped", False)
             else ""
         )
-        if grouped_type_suffix and getattr(var, "array_sizes", None):
+        decayed_stage_entry_array = bool(
+            getattr(var, "array_sizes", None)
+            and self.structured_buffer_pointer_type(var) is not None
+            and self.pointer_element_type(getattr(var, "vtype", None)) is None
+        )
+        if decayed_stage_entry_array:
+            type_str = mapped_type
+        elif grouped_type_suffix and getattr(var, "array_sizes", None):
             include_declarator_arrays = False
             base_type = mapped_type
             if base_type.endswith(grouped_type_suffix):
@@ -2223,12 +2335,41 @@ class MetalToCrossGLConverter:
         qualifiers = [
             str(qualifier).lower() for qualifier in getattr(var, "qualifiers", []) or []
         ]
+        is_reference = self.reference_parameter(var)
         for qualifier in self.parameter_direction_qualifiers:
             if qualifier in qualifiers:
+                if is_reference:
+                    declaration = re.sub(r"(?<=\S)&(?=\s)", "", declaration, count=1)
                 return f"{qualifier} {declaration}"
+        if is_reference and not self.readonly_parameter(var, qualifiers):
+            declaration = re.sub(r"(?<=\S)&(?=\s)", "", declaration, count=1)
+            return f"inout {declaration}"
+        if (
+            is_reference
+            and self.readonly_parameter(var, qualifiers)
+            and getattr(var, "name", None) == "self"
+            and "thread" in qualifiers
+        ):
+            return f"in {declaration}"
         if self.writable_c_array_parameter(var, semantic_context):
             return f"inout {declaration}"
         return declaration
+
+    @staticmethod
+    def reference_parameter(var):
+        raw_type = str(getattr(var, "vtype", "")).strip()
+        return raw_type.endswith("&") or (
+            getattr(var, "declarator_type_suffix_grouped", False)
+            and getattr(var, "declarator_type_suffix", "") == "&"
+        )
+
+    @staticmethod
+    def readonly_parameter(var, qualifiers=None):
+        qualifier_set = set(qualifiers or ())
+        return bool(
+            qualifier_set & {"const", "constant", "readonly", "in"}
+            or getattr(var, "is_const", False)
+        )
 
     def lower_c_array_parameter_reference(self, var, declaration):
         if not getattr(var, "array_sizes", None):
@@ -2294,14 +2435,18 @@ class MetalToCrossGLConverter:
             self.current_stage_entry_resource_parameter_ids
         )
         previous_function_name = self.current_function_name
+        previous_function_return_type = self.current_function_return_type
         self.current_function_name = func.name
+        self.current_function_return_type = func.return_type
         self.current_stage_entry_resource_parameter_ids = (
             {id(param) for param in func.params} if stage_entry else set()
         )
         self.push_identifier_scope()
         try:
             for param in func.params:
-                self.current_variable_types[param.name] = param.vtype
+                self.current_variable_types[param.name] = (
+                    self.metal_declaration_expression_type(param)
+                )
                 if id(param) in self.storage_texture_declaration_ids:
                     self.current_storage_texture_names.add(param.name)
                 if self.structured_buffer_pointer_type(param):
@@ -2351,6 +2496,7 @@ class MetalToCrossGLConverter:
                 previous_stage_entry_resource_parameter_ids
             )
             self.current_function_name = previous_function_name
+            self.current_function_return_type = previous_function_return_type
         return code
 
     def format_value_template_parameter_declarations(self, func, indent, body=None):
@@ -2561,7 +2707,9 @@ class MetalToCrossGLConverter:
                 code = code[: len(code) - 4 * indent]
                 continue
             if isinstance(stmt, VariableNode):
-                self.current_variable_types[stmt.name] = stmt.vtype
+                self.current_variable_types[stmt.name] = (
+                    self.metal_declaration_expression_type(stmt)
+                )
                 if id(stmt) in self.storage_texture_declaration_ids:
                     self.current_storage_texture_names.add(stmt.name)
                 if self.structured_buffer_pointer_type(stmt):
@@ -2573,7 +2721,9 @@ class MetalToCrossGLConverter:
                 if isinstance(declaration, VariableNode) and getattr(
                     declaration, "vtype", None
                 ):
-                    self.current_variable_types[declaration.name] = declaration.vtype
+                    self.current_variable_types[declaration.name] = (
+                        self.metal_declaration_expression_type(declaration)
+                    )
                     if id(declaration) in self.storage_texture_declaration_ids:
                         self.current_storage_texture_names.add(declaration.name)
                     if self.structured_buffer_pointer_type(declaration):
@@ -2584,9 +2734,21 @@ class MetalToCrossGLConverter:
                     if stmt.value is None:
                         code += "return;\n"
                     else:
-                        code += (
-                            f"return {self.generate_expression(stmt.value, is_main)};\n"
-                        )
+                        if (
+                            self.wide_vector_type_info(
+                                self.current_function_return_type,
+                                getattr(stmt, "source_location", None),
+                            )
+                            is not None
+                        ):
+                            value = self.generate_initializer_value(
+                                stmt.value,
+                                is_main,
+                                self.current_function_return_type,
+                            )
+                        else:
+                            value = self.generate_expression(stmt.value, is_main)
+                        code += f"return {value};\n"
             elif isinstance(stmt, BinaryOpNode):
                 code += f"{self.generate_expression(stmt.left, is_main)} {stmt.op} {self.generate_expression(stmt.right, is_main)};\n"
             elif (
@@ -2796,18 +2958,33 @@ class MetalToCrossGLConverter:
         # Struct aliases remain uninlined, but scoped static-member references
         # need their concrete owner to resolve constants and backing globals.
         self.local_struct_type_aliases[name] = alias_type
-        # Only inline body-local aliases that resolve to a scalar/vector
-        # primitive (e.g. ``using OutType = conditional_t<...>;`` -> uint). Such
-        # aliases are otherwise dangling type names that default to float and
-        # break bitwise math. Struct / resource / user-template aliases (e.g.
-        # ``using rw_t = ReadWriter<...>;``) keep their historical handling and
-        # are neither recorded nor substituted, so their declarations and
-        # constructor calls are emitted unchanged.
+        if (
+            self.wide_vector_type_info(
+                alias_type, getattr(alias, "source_location", None)
+            )
+            is not None
+        ):
+            self.type_aliases[name] = alias_type
+            self.local_type_alias_names.add(name)
+            return
+        # Inline body-local aliases that resolve to scalar/vector primitives or
+        # to a concrete struct emitted in this module. Both forms would otherwise
+        # become dangling CrossGL type names and default to float downstream.
+        # Unresolved user-template aliases remain untouched until their template
+        # arguments have been materialized by the Metal frontend.
+        mapped_alias_type = self.map_type(alias_type)
+        concrete_struct_alias = (
+            alias_type in self.struct_name_map
+            and mapped_alias_type in self.struct_name_map.values()
+        )
         if (
             getattr(alias, "qualifiers", None)
             or getattr(alias, "array_sizes", None)
             or getattr(alias, "declarator_type_suffix", "")
-            or self.map_type(alias_type) not in self.crossgl_typedef_source_types()
+            or (
+                mapped_alias_type not in self.crossgl_typedef_source_types()
+                and not concrete_struct_alias
+            )
         ):
             return
         self.type_aliases[name] = alias_type
@@ -2938,6 +3115,7 @@ class MetalToCrossGLConverter:
             )
             if structured_store is not None:
                 return structured_store
+        lhs_info = self.wide_vector_expression_info(node.left)
         lhs = self.generate_expression(node.left, is_main)
         rhs = self.generate_initializer_value(
             node.right,
@@ -2954,6 +3132,42 @@ class MetalToCrossGLConverter:
             ),
         )
         op = node.operator
+        if lhs_info is not None and op != "=":
+            binary_operator = op[:-1] if op.endswith("=") else None
+            if self.wide_vector_binary_operation_name(binary_operator) is None:
+                raise MetalWideVectorLoweringError(
+                    lhs_info["source_type"],
+                    "the compound operator has no semantics-preserving "
+                    "aggregate lowering",
+                    getattr(node, "source_location", None),
+                    operation=op,
+                )
+            right_info = self.wide_vector_expression_info(node.right)
+            if right_info is not None and right_info["key"] != lhs_info["key"]:
+                raise MetalWideVectorLoweringError(
+                    lhs_info["source_type"],
+                    "compound-assignment operands have different element types "
+                    "or widths",
+                    getattr(node, "source_location", None),
+                    operation=op,
+                )
+            if right_info is None and not (
+                self.wide_vector_constructor_argument_is_scalar(node.right)
+            ):
+                raise MetalWideVectorLoweringError(
+                    lhs_info["source_type"],
+                    "the compound-assignment right operand is not scalar",
+                    getattr(node, "source_location", None),
+                    operation=op,
+                )
+            right_kind = "vector" if right_info is not None else "scalar"
+            self.wide_vector_compound_helpers.add(
+                (lhs_info["key"], binary_operator, right_kind)
+            )
+            helper_name = self.wide_vector_compound_helper_name(
+                lhs_info, binary_operator, right_kind
+            )
+            return f"{helper_name}({lhs}, {rhs})"
         return f"{lhs} {op} {rhs}"
 
     def generate_initializer_value(
@@ -2968,6 +3182,17 @@ class MetalToCrossGLConverter:
     def generate_initializer_list(
         self, node, is_main=False, expected_type=None, expected_array=False
     ):
+        wide_vector = self.wide_vector_type_info(
+            expected_type, getattr(node, "source_location", None)
+        )
+        if wide_vector is not None:
+            return self.generate_wide_vector_constructor(
+                expected_type,
+                node.elements,
+                is_main,
+                getattr(node, "source_location", None),
+                braced=True,
+            )
         mapped_type = self.map_type(expected_type) if expected_type else None
         member_types = {}
         if expected_type:
@@ -3058,10 +3283,48 @@ class MetalToCrossGLConverter:
         elif isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr, is_main)
         elif isinstance(expr, BinaryOpNode):
+            cooperative_matrix_operation = {
+                "*": "cooperative_matrix_multiply",
+                "+": "cooperative_matrix_add",
+                "-": "cooperative_matrix_subtract",
+            }.get(expr.op)
+            if cooperative_matrix_operation is not None and all(
+                self.is_metal_cooperative_matrix_expression(operand)
+                for operand in (expr.left, expr.right)
+            ):
+                left = self.generate_expression(expr.left, is_main)
+                right = self.generate_expression(expr.right, is_main)
+                return f"{cooperative_matrix_operation}({left}, {right})"
+            wide_vector_binary = self.generate_wide_vector_binary_expression(
+                expr, is_main
+            )
+            if wide_vector_binary is not None:
+                return wide_vector_binary
             left = self.generate_binary_operand(expr.left, expr.op, False, is_main)
             right = self.generate_binary_operand(expr.right, expr.op, True, is_main)
             return f"{left} {expr.op} {right}"
         elif isinstance(expr, FunctionCallNode):
+            cooperative_matrix_call = self.generate_cooperative_matrix_function_call(
+                expr, is_main
+            )
+            if cooperative_matrix_call is not None:
+                return cooperative_matrix_call
+            constructor_arguments = expr.args
+            if (
+                getattr(expr, "is_braced_constructor", False)
+                and len(expr.args) == 1
+                and isinstance(expr.args[0], InitializerListNode)
+            ):
+                constructor_arguments = expr.args[0].elements
+            wide_vector_constructor = self.generate_wide_vector_constructor(
+                expr.name,
+                constructor_arguments,
+                is_main,
+                getattr(expr, "source_location", None),
+                braced=getattr(expr, "is_braced_constructor", False),
+            )
+            if wide_vector_constructor is not None:
+                return wide_vector_constructor
             if getattr(expr, "is_braced_constructor", False) and expr.args:
                 initializer = expr.args[0]
                 if isinstance(initializer, InitializerListNode):
@@ -3090,6 +3353,7 @@ class MetalToCrossGLConverter:
             )
             if callback is not None:
                 raise self.unsupported_callback_error(expr.name, callback)
+            self.reject_unsupported_wide_vector_call(expr)
             function_name = self.map_function_call_name(expr.name, expr.args)
             if function_name == "sampler":
                 args = ", ".join(
@@ -3110,6 +3374,14 @@ class MetalToCrossGLConverter:
             )
             return f"{callee}({args})"
         elif isinstance(expr, MethodCallNode):
+            wide_vector = self.wide_vector_expression_info(expr.object)
+            if wide_vector is not None:
+                raise MetalWideVectorLoweringError(
+                    wide_vector["source_type"],
+                    "the method has no semantics-preserving aggregate overload",
+                    getattr(expr, "source_location", None),
+                    operation=f"method {expr.method}",
+                )
             obj = self.generate_expression(expr.object, is_main)
             args = ", ".join(
                 self.generate_expression(arg, is_main) for arg in expr.args
@@ -3195,17 +3467,54 @@ class MetalToCrossGLConverter:
             if static_member is not None:
                 return static_member
             obj = self.generate_expression(expr.object, is_main)
+            wide_vector = self.wide_vector_expression_info(expr.object)
+            if wide_vector is not None:
+                lane = self.wide_vector_lane_index(
+                    str(expr.member), wide_vector["width"]
+                )
+                if lane is None:
+                    raise MetalWideVectorLoweringError(
+                        wide_vector["source_type"],
+                        f"member selector '{expr.member}' is not a single lane",
+                        getattr(expr, "source_location", None),
+                        operation="member-access",
+                    )
+                return f"{obj}.lanes[{lane}]"
             return f"{obj}.{expr.member}"
         elif isinstance(expr, ArrayAccessNode):
+            cooperative_matrix_element = self.metal_cooperative_matrix_element_access(
+                expr
+            )
+            if cooperative_matrix_element is not None:
+                matrix, element_index = cooperative_matrix_element
+                matrix_text = self.generate_expression(matrix, is_main)
+                index_text = self.generate_expression(element_index, is_main)
+                return f"cooperative_matrix_element({matrix_text}, {index_text})"
             if (
                 not self.suppress_structured_buffer_index_lowering
                 and self.is_structured_buffer_element_access(expr)
             ):
                 return self.generate_structured_buffer_load(expr, is_main)
+            wide_vector = self.wide_vector_expression_info(expr.array)
             array = self.generate_expression(expr.array, is_main)
             index = self.generate_expression(expr.index, is_main)
+            if wide_vector is not None:
+                return f"{array}.lanes[{index}]"
             return f"{array}[{index}]"
         elif isinstance(expr, UnaryOpNode):
+            if expr.op == "-" and self.is_metal_cooperative_matrix_expression(
+                expr.operand
+            ):
+                operand = self.generate_expression(expr.operand, is_main)
+                return f"cooperative_matrix_negate({operand})"
+            wide_vector = self.wide_vector_expression_info(expr.operand)
+            if wide_vector is not None and expr.op != "&":
+                raise MetalWideVectorLoweringError(
+                    wide_vector["source_type"],
+                    "the unary operator has no semantics-preserving aggregate lowering",
+                    getattr(expr, "source_location", None),
+                    operation=expr.op,
+                )
             if expr.op == "&" and self.is_structured_buffer_element_access(
                 expr.operand
             ):
@@ -3220,11 +3529,37 @@ class MetalToCrossGLConverter:
                 operand = f"({operand})"
             return f"({expr.op}{operand})"
         elif isinstance(expr, PostfixOpNode):
+            wide_vector = self.wide_vector_expression_info(expr.operand)
+            if wide_vector is not None:
+                raise MetalWideVectorLoweringError(
+                    wide_vector["source_type"],
+                    "the postfix operator has no semantics-preserving aggregate lowering",
+                    getattr(expr, "source_location", None),
+                    operation=expr.op,
+                )
             operand = self.generate_expression(expr.operand, is_main)
             return f"{operand}{expr.op}"
         elif isinstance(expr, TernaryOpNode):
+            wide_vector = self.wide_vector_expression_info(
+                expr.true_expr
+            ) or self.wide_vector_expression_info(expr.false_expr)
+            if wide_vector is not None:
+                raise MetalWideVectorLoweringError(
+                    wide_vector["source_type"],
+                    "conditional selection has no semantics-preserving aggregate lowering",
+                    getattr(expr, "source_location", None),
+                    operation="?:",
+                )
             return f"{self.generate_expression(expr.condition, is_main)} ? {self.generate_expression(expr.true_expr, is_main)} : {self.generate_expression(expr.false_expr, is_main)}"
         elif isinstance(expr, CastNode):
+            wide_vector_cast = self.generate_wide_vector_constructor(
+                expr.target_type,
+                [expr.expression],
+                is_main,
+                getattr(expr, "source_location", None),
+            )
+            if wide_vector_cast is not None:
+                return wide_vector_cast
             mapped_type = self.map_type(expr.target_type)
             value = self.generate_expression(expr.expression, is_main)
             if not self.cast_uses_constructor_syntax(mapped_type):
@@ -3237,6 +3572,14 @@ class MetalToCrossGLConverter:
             size_query = self.texture_size_constructor_expression(expr, is_main)
             if size_query is not None:
                 return size_query
+            wide_vector_constructor = self.generate_wide_vector_constructor(
+                expr.type_name,
+                expr.args,
+                is_main,
+                getattr(expr, "source_location", None),
+            )
+            if wide_vector_constructor is not None:
+                return wide_vector_constructor
             mapped_type = self.map_type(expr.type_name)
             if mapped_type == "sampler":
                 args = ", ".join(
@@ -3710,7 +4053,11 @@ class MetalToCrossGLConverter:
             return None
         normalized = self.normalized_metal_type(self.resolve_local_type_aliases(text))
         mapped = self.map_type(normalized)
-        if normalized in self.type_map or mapped != normalized:
+        if (
+            normalized in self.type_map
+            or normalized in self.struct_name_map
+            or mapped != normalized
+        ):
             return mapped
         return None
 
@@ -3778,6 +4125,17 @@ class MetalToCrossGLConverter:
         if resolved_local_type != str(metal_type).strip():
             return self.map_type(resolved_local_type)
 
+        alias_base = str(metal_type).strip()
+        alias_suffix = ""
+        while alias_base.endswith("*") or alias_base.endswith("&"):
+            alias_suffix = alias_base[-1] + alias_suffix
+            alias_base = alias_base[:-1].strip()
+        resolved_alias = self.resolve_type_alias(alias_base)
+        if resolved_alias != alias_base:
+            wide_vector_alias = self.wide_vector_type_info(resolved_alias)
+            if wide_vector_alias is not None:
+                return f"{wide_vector_alias['type_name']}{alias_suffix}"
+
         array_type = self.metal_array_type_parts(metal_type)
         if array_type:
             element_type, size = array_type
@@ -3803,6 +4161,10 @@ class MetalToCrossGLConverter:
             base = base.split("metal::", 1)[1]
         if base.startswith("raytracing::"):
             base = base.split("raytracing::", 1)[1]
+
+        cooperative_matrix = self.map_metal_cooperative_matrix_type(base)
+        if cooperative_matrix is not None:
+            return f"{cooperative_matrix}{suffix}"
 
         conditional_type = self.resolve_conditional_type(base)
         if conditional_type is not None:
@@ -3855,6 +4217,67 @@ class MetalToCrossGLConverter:
             return f"{mapped}{suffix}"
         mapped = self.map_scoped_type_name(base)
         return f"{mapped}{suffix}"
+
+    def metal_cooperative_matrix_type_parts(self, metal_type):
+        candidate = self.normalized_metal_type(self.resolve_type_alias(metal_type))
+        base_name, generic_args = self.generic_type_parts(candidate)
+        if not base_name or base_name.rsplit("::", 1)[-1] != "simdgroup_matrix":
+            return None
+        return generic_args if len(generic_args) == 3 else None
+
+    def map_metal_cooperative_matrix_type(self, metal_type):
+        generic_args = self.metal_cooperative_matrix_type_parts(metal_type)
+        if generic_args is None:
+            return None
+        element_type, rows, cols = generic_args
+        return (
+            f"CooperativeMatrix<{self.map_type(element_type)},"
+            f"{self.map_generic_type_argument(rows)},"
+            f"{self.map_generic_type_argument(cols)},"
+            "subgroup,unspecified,unspecified>"
+        )
+
+    def is_metal_cooperative_matrix_expression(self, expression):
+        return (
+            self.metal_cooperative_matrix_type_parts(
+                self.expression_metal_type(expression)
+            )
+            is not None
+        )
+
+    def metal_cooperative_matrix_element_access(self, expression):
+        if not isinstance(expression, ArrayAccessNode):
+            return None
+        thread_elements = expression.array
+        if not (
+            isinstance(thread_elements, MethodCallNode)
+            and thread_elements.method == "thread_elements"
+            and not thread_elements.args
+            and self.is_metal_cooperative_matrix_expression(thread_elements.object)
+        ):
+            return None
+        return thread_elements.object, expression.index
+
+    def generate_cooperative_matrix_function_call(self, expression, is_main):
+        function_name = str(expression.name).rsplit("::", 1)[-1]
+        operation = {
+            "simdgroup_load": "cooperative_matrix_load",
+            "simdgroup_store": "cooperative_matrix_store",
+            "simdgroup_multiply_accumulate": "cooperative_matrix_multiply_accumulate",
+        }.get(function_name)
+        if operation is None:
+            return None
+        source_arguments = list(expression.args)
+        if function_name == "simdgroup_store" and len(source_arguments) >= 2:
+            source_arguments = [
+                source_arguments[1],
+                source_arguments[0],
+                *source_arguments[2:],
+            ]
+        arguments = ", ".join(
+            self.generate_expression(argument, is_main) for argument in source_arguments
+        )
+        return f"{operation}({arguments})"
 
     def resolve_conditional_type(self, base):
         """Resolve ``conditional_t<C, A, B>`` / ``conditional<C, A, B>::type`` to
@@ -3918,6 +4341,13 @@ class MetalToCrossGLConverter:
             alias
         ):
             return None
+        if (
+            self.wide_vector_type_info(
+                alias.alias_type, getattr(alias, "source_location", None)
+            )
+            is not None
+        ):
+            return None
 
         mapped_type = self.crossgl_typedef_source_type(self.map_type_alias(alias))
         alias_name = self.sanitize_identifier(alias.name)
@@ -3937,6 +4367,10 @@ class MetalToCrossGLConverter:
         mapped_type = str(mapped_type).strip()
         if not mapped_type or "::" in mapped_type:
             return None
+        if mapped_type in {
+            info["type_name"] for info in self.wide_vector_types.values()
+        }:
+            return mapped_type
         if any(char in mapped_type for char in "*&[]"):
             return None
 
@@ -4202,6 +4636,517 @@ class MetalToCrossGLConverter:
         base_name, inner = base.split("<", 1)
         return base_name.strip(), self.split_generic_arguments(inner[:-1])
 
+    def concrete_generic_vector_width(self, size):
+        width_text = str(size).strip()
+        while width_text.startswith("(") and width_text.endswith(")"):
+            width_text = width_text[1:-1].strip()
+        try:
+            width = int(width_text, 0)
+        except ValueError:
+            return None
+        return width if width > 0 else None
+
+    def wide_vector_type_info(self, metal_type, source_location=None):
+        if metal_type is None:
+            return None
+
+        resolved_type = self.resolve_local_type_aliases(metal_type)
+        resolved_type = self.resolve_type_alias(resolved_type)
+        candidate = str(resolved_type).strip()
+        candidate = re.sub(r"^typename\s+", "", candidate)
+        candidate = re.sub(
+            r"^(?:(?:const|volatile|thread|threadgroup|device|constant)\s+)+",
+            "",
+            candidate,
+        )
+        while candidate.endswith("*") or candidate.endswith("&"):
+            candidate = candidate[:-1].strip()
+
+        vector_parts = self.metal_vector_type_parts(candidate)
+        if vector_parts is None:
+            return None
+        element_type, size = vector_parts
+        width = self.concrete_generic_vector_width(size)
+        if width is None or width <= 4:
+            return None
+
+        mapped_element = self.map_type(self.resolve_type_alias(element_type))
+        supported_elements = self.wide_vector_supported_scalar_types()
+        if mapped_element not in supported_elements:
+            raise MetalWideVectorLoweringError(
+                candidate,
+                f"element type '{element_type}' is not a supported scalar type",
+                source_location,
+            )
+
+        key = (mapped_element, width)
+        info = self.wide_vector_types.get(key)
+        if info is not None:
+            return info
+
+        element_name = re.sub(r"[^A-Za-z0-9_]", "_", mapped_element).strip("_")
+        base_name = f"CrossGLMetalVector_{element_name}_{width}"
+        type_name = base_name
+        suffix = 1
+        while type_name in self.wide_vector_reserved_names or (
+            self.wide_vector_generated_name_conflicts(type_name)
+        ):
+            type_name = f"{base_name}_{suffix}"
+            suffix += 1
+        self.wide_vector_reserved_names.add(type_name)
+        info = {
+            "key": key,
+            "source_type": candidate,
+            "element_type": mapped_element,
+            "width": width,
+            "type_name": type_name,
+        }
+        self.wide_vector_types[key] = info
+        return info
+
+    def wide_vector_supported_scalar_types(self):
+        return {
+            "bool",
+            "int8",
+            "uint8",
+            "int16",
+            "uint16",
+            "int",
+            "uint",
+            "int64",
+            "uint64",
+            "float16",
+            "bfloat16",
+            "float",
+            "double",
+        }
+
+    def wide_vector_generated_name_conflicts(self, type_name):
+        generated_names = {
+            type_name,
+            f"{type_name}_splat",
+            f"{type_name}_make",
+        }
+        operation_names = {
+            operation_name
+            for operator in ("+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>")
+            for operation_name in [self.wide_vector_binary_operation_name(operator)]
+        }
+        generated_names.update(
+            f"{type_name}_{operation_name}_{left_kind}_{right_kind}"
+            for operation_name in operation_names
+            for left_kind in ("scalar", "vector")
+            for right_kind in ("scalar", "vector")
+        )
+        generated_names.update(
+            f"{type_name}_{operation_name}_assign_{right_kind}"
+            for operation_name in operation_names
+            for right_kind in ("scalar", "vector")
+        )
+        return bool(
+            generated_names.intersection(
+                self.user_function_names | self.wide_vector_reserved_names
+            )
+        )
+
+    def wide_vector_constructor_argument_is_scalar(self, argument):
+        argument_type = self.expression_metal_type(argument)
+        if argument_type is None:
+            return True
+        mapped_type = self.map_type(self.resolve_type_alias(argument_type))
+        return mapped_type in self.wide_vector_supported_scalar_types()
+
+    def wide_vector_type_info_from_parts(
+        self, element_type, size, source_location=None
+    ):
+        width = self.concrete_generic_vector_width(size)
+        if width is None or width <= 4:
+            return None
+        return self.wide_vector_type_info(
+            f"metal::vec<{element_type},{width}>", source_location
+        )
+
+    def wide_vector_default_value(self, info):
+        return "false" if info["element_type"] == "bool" else "0"
+
+    def wide_vector_helper_name(self, info, operation):
+        return f"{info['type_name']}_{operation}"
+
+    def wide_vector_binary_operation_name(self, operator):
+        return {
+            "+": "add",
+            "-": "sub",
+            "*": "mul",
+            "/": "div",
+            "%": "mod",
+            "&": "bit_and",
+            "|": "bit_or",
+            "^": "bit_xor",
+            "<<": "shift_left",
+            ">>": "shift_right",
+        }.get(operator)
+
+    def wide_vector_binary_helper_name(self, info, operator, left_kind, right_kind):
+        operation_name = self.wide_vector_binary_operation_name(operator)
+        return self.wide_vector_helper_name(
+            info, f"{operation_name}_{left_kind}_{right_kind}"
+        )
+
+    def wide_vector_compound_helper_name(self, info, operator, right_kind):
+        operation_name = self.wide_vector_binary_operation_name(operator)
+        return self.wide_vector_helper_name(
+            info, f"{operation_name}_assign_{right_kind}"
+        )
+
+    def generate_wide_vector_support_code(self, indent=0):
+        if not self.wide_vector_types:
+            return ""
+
+        pad = "    " * indent
+        body_pad = "    " * (indent + 1)
+        code = f"{pad}// Concrete Metal vectors wider than four lanes\n"
+        for info in sorted(
+            self.wide_vector_types.values(), key=lambda item: item["type_name"]
+        ):
+            type_name = info["type_name"]
+            element_type = info["element_type"]
+            width = info["width"]
+            code += f"{pad}struct {type_name} {{\n"
+            code += f"{body_pad}{element_type} lanes[{width}];\n"
+            code += f"{pad}}};\n\n"
+
+            splat_name = self.wide_vector_helper_name(info, "splat")
+            code += f"{pad}{type_name} {splat_name}({element_type} value) {{\n"
+            code += f"{body_pad}{type_name} result;\n"
+            for lane in range(width):
+                code += f"{body_pad}result.lanes[{lane}] = value;\n"
+            code += f"{body_pad}return result;\n"
+            code += f"{pad}}}\n\n"
+
+            make_name = self.wide_vector_helper_name(info, "make")
+            parameters = ", ".join(
+                f"{element_type} value{lane}" for lane in range(width)
+            )
+            code += f"{pad}{type_name} {make_name}({parameters}) {{\n"
+            code += f"{body_pad}{type_name} result;\n"
+            for lane in range(width):
+                code += f"{body_pad}result.lanes[{lane}] = value{lane};\n"
+            code += f"{body_pad}return result;\n"
+            code += f"{pad}}}\n\n"
+
+        for key, operator, left_kind, right_kind in sorted(
+            self.wide_vector_binary_helpers,
+            key=lambda item: (item[0], item[1], item[2], item[3]),
+        ):
+            info = self.wide_vector_types[key]
+            type_name = info["type_name"]
+            element_type = info["element_type"]
+            width = info["width"]
+            helper_name = self.wide_vector_binary_helper_name(
+                info, operator, left_kind, right_kind
+            )
+            left_type = type_name if left_kind == "vector" else element_type
+            right_type = type_name if right_kind == "vector" else element_type
+            code += (
+                f"{pad}{type_name} {helper_name}"
+                f"({left_type} left, {right_type} right) {{\n"
+            )
+            code += f"{body_pad}{type_name} result;\n"
+            for lane in range(width):
+                left = f"left.lanes[{lane}]" if left_kind == "vector" else "left"
+                right = f"right.lanes[{lane}]" if right_kind == "vector" else "right"
+                code += (
+                    f"{body_pad}result.lanes[{lane}] = " f"{left} {operator} {right};\n"
+                )
+            code += f"{body_pad}return result;\n"
+            code += f"{pad}}}\n\n"
+
+        for key, operator, right_kind in sorted(
+            self.wide_vector_compound_helpers,
+            key=lambda item: (item[0], item[1], item[2]),
+        ):
+            info = self.wide_vector_types[key]
+            type_name = info["type_name"]
+            element_type = info["element_type"]
+            width = info["width"]
+            helper_name = self.wide_vector_compound_helper_name(
+                info, operator, right_kind
+            )
+            right_type = type_name if right_kind == "vector" else element_type
+            code += (
+                f"{pad}void {helper_name}"
+                f"(inout {type_name} value, {right_type} right) {{\n"
+            )
+            for lane in range(width):
+                right = f"right.lanes[{lane}]" if right_kind == "vector" else "right"
+                code += (
+                    f"{body_pad}value.lanes[{lane}] = value.lanes[{lane}] "
+                    f"{operator} {right};\n"
+                )
+            code += f"{pad}}}\n\n"
+        return code
+
+    def generate_wide_vector_constructor(
+        self,
+        metal_type,
+        arguments,
+        is_main=False,
+        source_location=None,
+        braced=False,
+    ):
+        info = self.wide_vector_type_info(metal_type, source_location)
+        if info is None:
+            return None
+
+        arguments = list(arguments or [])
+        if braced:
+            if len(arguments) > info["width"] or not all(
+                self.wide_vector_constructor_argument_is_scalar(argument)
+                for argument in arguments
+            ):
+                raise MetalWideVectorLoweringError(
+                    info["source_type"],
+                    "braced construction requires at most one scalar value per lane",
+                    source_location,
+                    operation="constructor",
+                )
+            arguments.extend(
+                self.wide_vector_default_value(info)
+                for _lane in range(info["width"] - len(arguments))
+            )
+            rendered = ", ".join(
+                self.generate_expression(argument, is_main) for argument in arguments
+            )
+            return f"{self.wide_vector_helper_name(info, 'make')}({rendered})"
+
+        if not arguments:
+            arguments = [self.wide_vector_default_value(info)]
+
+        if len(arguments) == 1:
+            argument = arguments[0]
+            argument_info = self.wide_vector_type_info(
+                self.expression_metal_type(argument),
+                getattr(argument, "source_location", None),
+            )
+            rendered = self.generate_expression(argument, is_main)
+            if argument_info is not None:
+                if argument_info["key"] != info["key"]:
+                    raise MetalWideVectorLoweringError(
+                        info["source_type"],
+                        "copy construction requires the same element type and width",
+                        source_location,
+                    )
+                return rendered
+            if not self.wide_vector_constructor_argument_is_scalar(argument):
+                raise MetalWideVectorLoweringError(
+                    info["source_type"],
+                    "single-argument construction requires a scalar or one "
+                    "matching wide vector",
+                    source_location,
+                    operation="constructor",
+                )
+            return f"{self.wide_vector_helper_name(info, 'splat')}({rendered})"
+
+        if len(arguments) == info["width"]:
+            if not all(
+                self.wide_vector_constructor_argument_is_scalar(argument)
+                for argument in arguments
+            ):
+                raise MetalWideVectorLoweringError(
+                    info["source_type"],
+                    "full construction requires one scalar value per lane",
+                    source_location,
+                    operation="constructor",
+                )
+            rendered = ", ".join(
+                self.generate_expression(argument, is_main) for argument in arguments
+            )
+            return f"{self.wide_vector_helper_name(info, 'make')}({rendered})"
+
+        raise MetalWideVectorLoweringError(
+            info["source_type"],
+            "constructor arguments must be one scalar, one matching vector, "
+            f"or exactly {info['width']} scalar lanes",
+            source_location,
+            operation="constructor",
+        )
+
+    def wide_vector_expression_info(self, expression):
+        expression_type = self.expression_metal_type(expression)
+        if self.metal_pointer_pointee_type_once(expression_type) is not None:
+            return None
+        return self.wide_vector_type_info(
+            expression_type,
+            getattr(expression, "source_location", None),
+        )
+
+    def metal_pointer_pointee_type_once(self, metal_type):
+        if metal_type is None:
+            return None
+        resolved_type = str(self.resolve_type_alias(metal_type)).strip()
+        while resolved_type.endswith("&"):
+            resolved_type = resolved_type[:-1].strip()
+        if not resolved_type.endswith("*"):
+            return None
+        return resolved_type[:-1].strip()
+
+    def generate_wide_vector_binary_expression(self, expression, is_main=False):
+        left_info = self.wide_vector_expression_info(expression.left)
+        right_info = self.wide_vector_expression_info(expression.right)
+        if left_info is None and right_info is None:
+            return None
+
+        info = left_info or right_info
+        if left_info is not None and right_info is not None:
+            if left_info["key"] != right_info["key"]:
+                raise MetalWideVectorLoweringError(
+                    info["source_type"],
+                    "binary operands have different element types or widths",
+                    getattr(expression, "source_location", None),
+                    operation=expression.op,
+                )
+        if self.wide_vector_binary_operation_name(expression.op) is None:
+            raise MetalWideVectorLoweringError(
+                info["source_type"],
+                "the operator has no semantics-preserving aggregate lowering",
+                getattr(expression, "source_location", None),
+                operation=expression.op,
+            )
+        scalar_operand = expression.right if left_info is not None else expression.left
+        if (left_info is None or right_info is None) and not (
+            self.wide_vector_constructor_argument_is_scalar(scalar_operand)
+        ):
+            raise MetalWideVectorLoweringError(
+                info["source_type"],
+                "the non-vector operand is not scalar",
+                getattr(expression, "source_location", None),
+                operation=expression.op,
+            )
+
+        left_kind = "vector" if left_info is not None else "scalar"
+        right_kind = "vector" if right_info is not None else "scalar"
+        self.wide_vector_binary_helpers.add(
+            (info["key"], expression.op, left_kind, right_kind)
+        )
+        helper_name = self.wide_vector_binary_helper_name(
+            info, expression.op, left_kind, right_kind
+        )
+        left = self.generate_expression(expression.left, is_main)
+        right = self.generate_expression(expression.right, is_main)
+        return f"{helper_name}({left}, {right})"
+
+    def reject_unsupported_wide_vector_call(self, expression):
+        wide_arguments = [
+            info
+            for argument in expression.args
+            for info in [self.wide_vector_expression_info(argument)]
+            if info is not None
+        ]
+        if not wide_arguments:
+            return
+
+        if str(expression.name) in self.user_function_names:
+            return
+
+        binding, _function = self.resolve_metal_user_function_overload(
+            str(expression.name), expression.args
+        )
+        if binding == "user":
+            return
+        result_type = self.metal_constructor_result_type(expression.name)
+        if result_type in self.struct_member_types:
+            return
+
+        raise MetalWideVectorLoweringError(
+            wide_arguments[0]["source_type"],
+            "the call has no semantics-preserving aggregate overload",
+            getattr(expression, "source_location", None),
+            operation=f"call {expression.name}",
+        )
+
+    def wide_vector_lane_index(self, member, width):
+        direct_members = {
+            "x": 0,
+            "r": 0,
+            "y": 1,
+            "g": 1,
+            "z": 2,
+            "b": 2,
+            "w": 3,
+            "a": 3,
+        }
+        if member in direct_members:
+            index = direct_members[member]
+        else:
+            selector = re.fullmatch(r"s([0-9a-fA-F])", str(member))
+            if selector is None:
+                return None
+            index = int(selector.group(1), 16)
+        return index if index < width else None
+
+    def metal_declaration_expression_type(self, declaration):
+        metal_type = getattr(declaration, "vtype", None)
+        if metal_type is None:
+            return None
+        suffix = "".join(
+            "[]" if size is None else f"[{self.format_array_extent(size)}]"
+            for size in getattr(declaration, "array_sizes", []) or []
+        )
+        return f"{metal_type}{suffix}"
+
+    def metal_type_contains_wide_vector(self, metal_type, seen_structs=None):
+        if metal_type is None:
+            return False
+        resolved_type = str(self.resolve_type_alias(metal_type)).strip()
+        while True:
+            array_element = self.split_outer_metal_declarator_array_type(resolved_type)
+            if array_element is None:
+                break
+            resolved_type = array_element
+        while resolved_type.endswith("*") or resolved_type.endswith("&"):
+            resolved_type = resolved_type[:-1].strip()
+        if self.wide_vector_type_info(resolved_type) is not None:
+            return True
+
+        struct_name = self.normalized_metal_type(resolved_type)
+        if struct_name not in self.struct_member_types:
+            return False
+        seen_structs = set(seen_structs or set())
+        if struct_name in seen_structs:
+            return False
+        seen_structs.add(struct_name)
+        return any(
+            self.metal_type_contains_wide_vector(member_type, seen_structs)
+            for member_type in self.struct_member_types[struct_name].values()
+        )
+
+    def reject_abi_visible_wide_vector_declaration(self, declaration):
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(declaration, "qualifiers", []) or []
+        }
+        if not qualifiers.intersection({"device", "constant"}):
+            return
+        metal_type = self.metal_declaration_expression_type(declaration)
+        if not self.metal_type_contains_wide_vector(metal_type):
+            return
+        raise MetalWideVectorLoweringError(
+            self.resolve_type_alias(metal_type),
+            "aggregate lowering does not preserve Metal ABI alignment in "
+            "device- or constant-address-space storage",
+            getattr(declaration, "source_location", None),
+            operation="resource-layout",
+        )
+
+    def split_outer_metal_declarator_array_type(self, metal_type):
+        if metal_type is None:
+            return None
+        match = re.fullmatch(r"(.+?)(\[[^\[\]]*\])((?:\[[^\[\]]*\])*)", str(metal_type))
+        if match is None:
+            return None
+        base_type, _outer_extent, remaining_extents = match.groups()
+        return f"{base_type}{remaining_extents}"
+
     def metal_array_type_parts(self, metal_type):
         base_name, generic_args = self.generic_type_parts(metal_type)
         if not self.is_metal_array_type_name(base_name) or len(generic_args) < 2:
@@ -4236,6 +5181,9 @@ class MetalToCrossGLConverter:
         prefix = prefixes.get(mapped_element)
         if prefix and size in {"2", "3", "4"}:
             return f"{prefix}{size}"
+        wide_vector = self.wide_vector_type_info_from_parts(element_type, size)
+        if wide_vector is not None:
+            return wide_vector["type_name"]
         return f"vec<{mapped_element}, {size}>"
 
     def normalized_metal_type(self, metal_type):
@@ -4455,6 +5403,19 @@ class MetalToCrossGLConverter:
         right_type = self.expression_metal_type(expr.right)
         if left_type is None or right_type is None:
             return None
+        left_wide = self.wide_vector_expression_info(expr.left)
+        right_wide = self.wide_vector_expression_info(expr.right)
+        if left_wide is not None or right_wide is not None:
+            wide_type = left_wide or right_wide
+            if (
+                left_wide is not None
+                and right_wide is not None
+                and left_wide["key"] != right_wide["key"]
+            ):
+                return None
+            if self.wide_vector_binary_operation_name(expr.op) is not None:
+                return wide_type["source_type"]
+            return None
         left_info = self.metal_scalar_arithmetic_type_info(left_type)
         right_info = self.metal_scalar_arithmetic_type_info(right_type)
 
@@ -4508,19 +5469,42 @@ class MetalToCrossGLConverter:
             name = getattr(expr, "name", None)
             if not name:
                 return None
+            if getattr(expr, "vtype", None):
+                return self.metal_declaration_expression_type(expr)
             return self.current_variable_types.get(
                 name, self.global_variable_types.get(name)
             )
         if isinstance(expr, ArrayAccessNode):
             array_type = self.expression_metal_type(expr.array)
+            declarator_element_type = self.split_outer_metal_declarator_array_type(
+                array_type
+            )
+            if declarator_element_type is not None:
+                return declarator_element_type
+            pointer_element_type = self.metal_pointer_pointee_type_once(array_type)
+            if pointer_element_type is not None:
+                return pointer_element_type
             array_parts = self.metal_array_type_parts(array_type)
             if array_parts:
                 return array_parts[0]
+            wide_vector = self.wide_vector_type_info(
+                array_type, getattr(expr, "source_location", None)
+            )
+            if wide_vector is not None:
+                return wide_vector["element_type"]
             return array_type
         if isinstance(expr, MemberAccessNode):
             object_type = self.expression_metal_type(expr.object)
             if object_type is None:
                 return None
+            wide_vector = self.wide_vector_type_info(
+                object_type, getattr(expr, "source_location", None)
+            )
+            if wide_vector is not None:
+                lane = self.wide_vector_lane_index(
+                    str(expr.member), wide_vector["width"]
+                )
+                return wide_vector["element_type"] if lane is not None else None
             object_type = self.normalized_metal_type(object_type)
             member_types = self.struct_member_types.get(object_type)
             if not member_types:
@@ -4635,10 +5619,33 @@ class MetalToCrossGLConverter:
         }
         if not qualifiers.intersection({"device", "constant"}):
             return False
+        if self.stage_entry_array_resource_element_type(var) is not None:
+            return True
         raw_type = getattr(var, "vtype", None)
         if self.pointer_element_type(raw_type):
             return True
         return bool(self.reference_element_type(raw_type))
+
+    def stage_entry_array_resource_element_type(self, var):
+        array_dimensions = list(getattr(var, "array_sizes", None) or [])
+        if not array_dimensions:
+            return None
+        qualifiers = {
+            str(qualifier).lower() for qualifier in getattr(var, "qualifiers", []) or []
+        }
+        if not qualifiers.intersection({"device", "constant"}):
+            return None
+        element_type = str(getattr(var, "vtype", "") or "").strip()
+        if not element_type or element_type.endswith(("*", "&")):
+            return None
+        if len(array_dimensions) != 1:
+            raise MetalStageEntryArrayResourceError(
+                getattr(var, "name", None),
+                array_dimensions,
+                "multidimensional-parameter-array",
+                getattr(var, "source_location", None),
+            )
+        return element_type
 
     def apply_implicit_stage_entry_buffer_bindings(self, func):
         params = list(getattr(func, "params", []) or [])
@@ -4682,10 +5689,17 @@ class MetalToCrossGLConverter:
             return None
 
         element_type = self.pointer_element_type(getattr(var, "vtype", None))
+        array_element_type = self.stage_entry_array_resource_element_type(var)
+        if element_type is None:
+            element_type = array_element_type
         if not element_type:
             return None
         element_type = self.resolve_type_alias(element_type)
-        if "constant" in qualifiers and element_type in self.struct_member_types:
+        if (
+            array_element_type is None
+            and "constant" in qualifiers
+            and element_type in self.struct_member_types
+        ):
             return None
 
         buffer_type = (

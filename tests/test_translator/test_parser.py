@@ -12,6 +12,8 @@ from crosstl.translator.ast import (
     ConstantNode,
     ConstructorNode,
     ConstructorPatternNode,
+    CooperativeMatrixOpNode,
+    CooperativeMatrixType,
     DoWhileNode,
     ExpressionStatementNode,
     ForInNode,
@@ -4432,6 +4434,205 @@ def test_method_calls_and_shorthand_path_constructors_parse():
     assert clear_constructor.named_arguments["color"].name == "color"
 
 
+def test_mlx_shaped_generic_member_call_preserves_call_structure():
+    code = """
+    shader GenericMemberCall {
+        void kernel() {
+            Btile.load<T, BK_padded, 1>(Ws + tn * BK_padded + kk1);
+        }
+    }
+    """
+
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    statement = ast.functions[0].body.statements[0]
+    call = statement.expression
+
+    assert isinstance(statement, ExpressionStatementNode)
+    assert isinstance(call, FunctionCallNode)
+    assert isinstance(call.function, MemberAccessNode)
+    assert call.function.object_expr.name == "Btile"
+    assert call.function.member == "load"
+    assert [argument.name for argument in call.generic_args[:2]] == [
+        "T",
+        "BK_padded",
+    ]
+    assert isinstance(call.generic_args[2], LiteralNode)
+    assert call.generic_args[2].value == 1
+    assert isinstance(call.arguments[0], BinaryOpNode)
+
+
+def test_fp_quantized_generic_member_calls_preserve_ordered_arguments():
+    code = """
+    shader FPQuantizedMemberCalls {
+        void kernel() {
+            self.Atile.load<float, 1, 1, (36), (1)>(As);
+            self.Btile.load<float, 1, 2, (1), (36)>(Bs);
+        }
+    }
+    """
+
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    calls = [statement.expression for statement in ast.functions[0].body.statements]
+
+    assert [call.function.member for call in calls] == ["load", "load"]
+    assert [call.function.object_expr.member for call in calls] == ["Atile", "Btile"]
+    assert [call.function.object_expr.object_expr.name for call in calls] == [
+        "self",
+        "self",
+    ]
+    assert [
+        [
+            (
+                argument.name
+                if getattr(argument, "name", None) is not None
+                else argument.value
+            )
+            for argument in call.generic_args
+        ]
+        for call in calls
+    ] == [
+        ["float", 1, 1, 36, 1],
+        ["float", 1, 2, 1, 36],
+    ]
+
+
+def test_generic_member_call_parses_nested_type_and_value_arguments():
+    code = """
+    shader NestedGenericMemberCall {
+        void kernel() {
+            receiver.transform<Outer<Inner<float>, 4>, Rows * Cols, 2 + 1>(source);
+        }
+    }
+    """
+
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    call = ast.functions[0].body.statements[0].expression
+    outer = call.generic_args[0]
+
+    assert isinstance(call, FunctionCallNode)
+    assert isinstance(call.function, MemberAccessNode)
+    assert isinstance(outer, NamedType)
+    assert outer.name == "Outer"
+    assert isinstance(outer.generic_args[0], NamedType)
+    assert outer.generic_args[0].name == "Inner"
+    assert outer.generic_args[0].generic_args[0].name == "float"
+    assert isinstance(outer.generic_args[1], LiteralNode)
+    assert outer.generic_args[1].value == 4
+    assert isinstance(call.generic_args[1], BinaryOpNode)
+    assert call.generic_args[1].operator == "*"
+    assert isinstance(call.generic_args[2], BinaryOpNode)
+    assert call.generic_args[2].operator == "+"
+
+
+def test_generic_pointer_member_call_preserves_pointer_access():
+    code = """
+    shader GenericPointerMemberCall {
+        void kernel() {
+            tile_ptr->load<T, Width, 1>(source);
+        }
+    }
+    """
+
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    call = ast.functions[0].body.statements[0].expression
+
+    assert isinstance(call, FunctionCallNode)
+    assert isinstance(call.function, PointerAccessNode)
+    assert call.function.pointer_expr.name == "tile_ptr"
+    assert call.function.member == "load"
+    assert [argument.name for argument in call.generic_args[:2]] == ["T", "Width"]
+    assert call.generic_args[2].value == 1
+
+
+def test_empty_generic_member_call_preserves_explicit_suffix():
+    code = """
+    shader EmptyGenericMemberCall {
+        void kernel() {
+            tile.reset<>();
+            tile.reset();
+        }
+    }
+    """
+
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    generic_call = ast.functions[0].body.statements[0].expression
+    ordinary_call = ast.functions[0].body.statements[1].expression
+
+    assert isinstance(generic_call, FunctionCallNode)
+    assert generic_call.generic_args == []
+    assert generic_call.generic_suffix_present is True
+    assert ordinary_call.generic_args == []
+    assert ordinary_call.generic_suffix_present is False
+
+
+def test_single_generic_parameter_member_call_uses_active_type_scope():
+    code = """
+    shader ScopedGenericMemberCall {
+        generic<T> fn convert(value: T) -> T {
+            return object.convert<T>(value);
+        }
+    }
+    """
+
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    call = ast.functions[0].body.statements[0].value
+
+    assert isinstance(call, FunctionCallNode)
+    assert isinstance(call.function, MemberAccessNode)
+    assert call.generic_suffix_present is True
+    assert [argument.name for argument in call.generic_args] == ["T"]
+
+
+def test_single_declared_type_member_call_uses_type_declaration_context():
+    code = """
+    shader DeclaredTypeGenericMemberCall {
+        struct Payload { float value; };
+
+        void kernel() {
+            receiver.load<Payload>(source);
+        }
+    }
+    """
+
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    call = ast.functions[0].body.statements[0].expression
+
+    assert isinstance(call, FunctionCallNode)
+    assert call.generic_suffix_present is True
+    assert [argument.name for argument in call.generic_args] == ["Payload"]
+
+
+def test_member_comparisons_are_not_parsed_as_generic_call_suffixes():
+    code = """
+    shader MemberComparisons {
+        void kernel() {
+            bool less = object.member < limit;
+            bool ordered = object.member < upper > lower;
+            bool parenthesized = object.member < limit > (threshold);
+        }
+    }
+    """
+
+    ast = Parser(tokenize_code(code), strict_function_bodies=True).parse()
+    less = ast.functions[0].body.statements[0].initial_value
+    ordered = ast.functions[0].body.statements[1].initial_value
+    parenthesized = ast.functions[0].body.statements[2].initial_value
+
+    assert isinstance(less, BinaryOpNode)
+    assert less.operator == "<"
+    assert isinstance(less.left, MemberAccessNode)
+    assert isinstance(ordered, BinaryOpNode)
+    assert ordered.operator == ">"
+    assert isinstance(ordered.left, BinaryOpNode)
+    assert ordered.left.operator == "<"
+    assert isinstance(ordered.left.left, MemberAccessNode)
+    assert isinstance(parenthesized, BinaryOpNode)
+    assert parenthesized.operator == ">"
+    assert isinstance(parenthesized.left, BinaryOpNode)
+    assert parenthesized.left.operator == "<"
+    assert isinstance(parenthesized.left.left, MemberAccessNode)
+
+
 def test_matrix_type_keywords_parse():
     code = """
     shader Matrices {
@@ -5761,6 +5962,200 @@ def test_global_shader_attribute_values_do_not_require_stage_block_context():
 
     assert ast.functions[0].attributes[0].name == "shader"
     assert ast.functions[0].attributes[0].arguments[0].value == "fragment"
+
+
+def test_cooperative_matrix_type_three_argument_form_uses_canonical_defaults():
+    code = """
+    shader CooperativeMatrixDefaults {
+        void consume(CooperativeMatrix<float, 16, 8> matrix) {}
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    matrix_type = ast.functions[0].parameters[0].param_type
+
+    assert isinstance(matrix_type, CooperativeMatrixType)
+    assert isinstance(matrix_type.element_type, PrimitiveType)
+    assert matrix_type.element_type.name == "float"
+    assert (matrix_type.rows, matrix_type.cols) == (16, 8)
+    assert (matrix_type.scope, matrix_type.use, matrix_type.layout) == (
+        "subgroup",
+        "unspecified",
+        "unspecified",
+    )
+    assert matrix_type.name == "CooperativeMatrix"
+    assert matrix_type.generic_args == [
+        matrix_type.element_type,
+        16,
+        8,
+        "subgroup",
+        "unspecified",
+        "unspecified",
+    ]
+
+
+def test_cooperative_matrix_type_six_argument_form_preserves_metadata():
+    code = """
+    shader CooperativeMatrixMetadata {
+        void consume(
+            CooperativeMatrix<
+                f16, 32, 16, workgroup, accumulator, column_major
+            > matrix
+        ) {}
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    matrix_type = ast.functions[0].parameters[0].param_type
+
+    assert isinstance(matrix_type, CooperativeMatrixType)
+    assert matrix_type.element_type.name == "f16"
+    assert (matrix_type.rows, matrix_type.cols) == (32, 16)
+    assert (matrix_type.scope, matrix_type.use, matrix_type.layout) == (
+        "workgroup",
+        "accumulator",
+        "column_major",
+    )
+    assert matrix_type.generic_args[3:] == [
+        "workgroup",
+        "accumulator",
+        "column_major",
+    ]
+
+
+def test_cooperative_matrix_type_preserves_symbolic_dimensions():
+    code = """
+    shader CooperativeMatrixDimensions {
+        void consume(CooperativeMatrix<float, TILE_ROWS, TILE_COLS> matrix) {}
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    matrix_type = ast.functions[0].parameters[0].param_type
+
+    assert isinstance(matrix_type, CooperativeMatrixType)
+    assert isinstance(matrix_type.rows, NamedType)
+    assert isinstance(matrix_type.cols, NamedType)
+    assert (matrix_type.rows.name, matrix_type.cols.name) == (
+        "TILE_ROWS",
+        "TILE_COLS",
+    )
+    assert matrix_type.generic_args[1:3] == [matrix_type.rows, matrix_type.cols]
+
+
+@pytest.mark.parametrize(
+    ("intrinsic", "operation"),
+    [
+        ("cooperative_matrix_element", "element"),
+        ("cooperative_matrix_load", "load"),
+        ("cooperative_matrix_store", "store"),
+        ("cooperative_matrix_multiply", "multiply"),
+        ("cooperative_matrix_multiply_accumulate", "multiply_accumulate"),
+        ("cooperative_matrix_add", "elementwise_add"),
+        ("cooperative_matrix_subtract", "elementwise_subtract"),
+        (
+            "cooperative_matrix_elementwise_multiply",
+            "elementwise_multiply",
+        ),
+        ("cooperative_matrix_negate", "negate"),
+    ],
+)
+def test_cooperative_matrix_intrinsics_parse_to_canonical_operations(
+    intrinsic, operation
+):
+    code = f"""
+    shader CooperativeMatrixOperations {{
+        void main() {{
+            auto result = {intrinsic}(left, right, accumulator);
+        }}
+    }}
+    """
+
+    ast = parse_code(tokenize_code(code))
+    matrix_op = ast.functions[0].body.statements[0].initial_value
+
+    assert isinstance(matrix_op, CooperativeMatrixOpNode)
+    assert matrix_op.operation == operation
+    assert [argument.name for argument in matrix_op.arguments] == [
+        "left",
+        "right",
+        "accumulator",
+    ]
+    assert matrix_op.args is matrix_op.arguments
+
+
+def test_cooperative_matrix_nodes_participate_in_walk_and_parent_binding():
+    rows = IdentifierNode("ROWS")
+    cols = IdentifierNode("COLS")
+    result_type = CooperativeMatrixType(
+        PrimitiveType("f16"),
+        rows,
+        cols,
+        use="accumulator",
+        layout="row_major",
+    )
+    arguments = [IdentifierNode("left"), IdentifierNode("right")]
+    matrix_op = CooperativeMatrixOpNode(
+        "multiply",
+        arguments,
+        result_type=result_type,
+    )
+
+    matrix_op.bind_parent_links()
+
+    assert list(matrix_op.walk()) == [
+        matrix_op,
+        result_type,
+        result_type.element_type,
+        rows,
+        cols,
+        *arguments,
+    ]
+    assert matrix_op.expression_type is result_type
+    assert matrix_op.vtype is result_type
+    assert matrix_op.result_type is result_type
+    assert matrix_op.args is arguments
+    assert result_type.parent is matrix_op
+    assert result_type.element_type.parent is result_type
+    assert rows.parent is result_type
+    assert cols.parent is result_type
+    assert all(argument.parent is matrix_op for argument in arguments)
+
+
+@pytest.mark.parametrize(
+    "generic_arguments",
+    [
+        "float, 16",
+        "float, 16, 8, subgroup, matrix_a, row_major, extra",
+    ],
+)
+def test_cooperative_matrix_type_rejects_invalid_arity(generic_arguments):
+    code = f"""
+    shader InvalidCooperativeMatrixArity {{
+        void consume(CooperativeMatrix<{generic_arguments}> matrix) {{}}
+    }}
+    """
+
+    with pytest.raises(SyntaxError) as exc_info:
+        parse_code(tokenize_code(code))
+
+    assert str(exc_info.value) == (
+        "CooperativeMatrix expects 3 to 6 generic arguments: "
+        "element type, rows, columns, scope, use, and layout"
+    )
+
+
+def test_cooperative_matrix_type_rejects_non_type_element_argument():
+    code = """
+    shader InvalidCooperativeMatrixElement {
+        void consume(CooperativeMatrix<1, 16, 8> matrix) {}
+    }
+    """
+
+    with pytest.raises(SyntaxError) as exc_info:
+        parse_code(tokenize_code(code))
+
+    assert str(exc_info.value) == "CooperativeMatrix element argument must be a type"
 
 
 def test_wave_intrinsic_parses_to_node():

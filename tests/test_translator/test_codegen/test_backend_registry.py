@@ -283,6 +283,50 @@ def test_directx_target_profile_aliases_are_target_only():
     assert SOURCE_REGISTRY.get("dx12") is None
 
 
+def test_vulkan_cooperative_matrix_target_profile_is_advertised_and_enabled():
+    target_profile = "vulkan-khr-cooperative-matrix"
+
+    assert codegen.target_profiles("vulkan") == (target_profile,)
+    assert codegen.normalize_backend_name(target_profile) == "vulkan"
+
+    generator = codegen.get_codegen(target_profile)
+
+    assert isinstance(generator, codegen.VulkanSPIRVCodeGen)
+    assert generator.target_profile == target_profile
+    assert generator.cooperative_matrix_khr_enabled is True
+
+
+def test_vulkan_cooperative_matrix_target_profile_translate_api(tmp_path):
+    import crosstl
+
+    source = tmp_path / "cooperative_matrix.cgl"
+    source.write_text(
+        """
+        shader CooperativeMatrixProfile {
+            compute {
+                void main() {
+                    CooperativeMatrix<
+                        float, 8, 8, subgroup, matrix_a, unspecified
+                    > tile;
+                }
+            }
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    output = crosstl.translate(
+        str(source),
+        backend="vulkan-khr-cooperative-matrix",
+        format_output=False,
+    )
+
+    assert "; Version: 1.3" in output
+    assert "OpTypeCooperativeMatrixKHR" in output
+    assert 'OpExtension "SPV_KHR_cooperative_matrix"' in output
+    assert "OpMemoryModel Logical VulkanKHR" in output
+
+
 def test_directx_target_profile_alias_translate_api_roundtrip(tmp_path):
     import crosstl
 

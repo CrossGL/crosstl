@@ -10,6 +10,8 @@ from crosstl.translator.ast import (
     AttributeNode,
     BinaryOpNode,
     BlockNode,
+    CooperativeMatrixOpNode,
+    CooperativeMatrixType,
     EnumNode,
     ExecutionModel,
     ExpressionStatementNode,
@@ -116,6 +118,17 @@ def spirv_integer_constant_values(spv_code):
     }
 
 
+def assert_spirv_has_no_zero_length_arrays(spv_code):
+    integer_constants = spirv_integer_constant_values(spv_code)
+    array_lengths = re.findall(r"OpTypeArray %\d+ (%\d+)\b", spv_code)
+
+    assert not {
+        length_id
+        for length_id in array_lengths
+        if integer_constants.get(length_id) == 0
+    }
+
+
 def spirv_storage_buffer_store_operands(spv_code, variable_name):
     variable = spirv_named_variable(spv_code, variable_name, storage_class="Uniform")
     integer_constants = spirv_integer_constant_values(spv_code)
@@ -133,6 +146,123 @@ def spirv_storage_buffer_store_operands(spv_code, variable_name):
         for pointer_id, value_id in re.findall(r"OpStore (%\d+) (%\d+)\b", spv_code)
         if pointer_id in access_indexes
     ]
+
+
+def spirv_basic_blocks(spv_code):
+    blocks = {}
+    current_label = None
+    for line in spv_code.splitlines():
+        label = re.fullmatch(r"(%\d+) = OpLabel", line)
+        if label is not None:
+            current_label = label.group(1)
+            blocks[current_label] = []
+        elif line == "OpFunctionEnd":
+            current_label = None
+        elif current_label is not None:
+            blocks[current_label].append(line)
+    return blocks
+
+
+def spirv_basic_block_successors(spv_code):
+    successors = {}
+    for label, instructions in spirv_basic_blocks(spv_code).items():
+        successors[label] = set()
+        for instruction in reversed(instructions):
+            branch = re.fullmatch(r"OpBranch (%\d+)", instruction)
+            if branch is not None:
+                successors[label].add(branch.group(1))
+                break
+
+            conditional = re.fullmatch(
+                r"OpBranchConditional %\d+ (%\d+) (%\d+)", instruction
+            )
+            if conditional is not None:
+                successors[label].update(conditional.groups())
+                break
+
+            switch = re.fullmatch(r"OpSwitch (%\d+) (%\d+)(.*)", instruction)
+            if switch is not None:
+                successors[label].add(switch.group(2))
+                successors[label].update(re.findall(r"-?\d+ (%\d+)", switch.group(3)))
+                break
+
+            if re.fullmatch(
+                r"Op(?:Return|ReturnValue|Kill|Unreachable).*", instruction
+            ):
+                break
+    return successors
+
+
+def spirv_reachable_blocks(successors, start):
+    reachable = set()
+    pending = [start]
+    while pending:
+        label = pending.pop()
+        if label in reachable:
+            continue
+        reachable.add(label)
+        pending.extend(successors.get(label, ()))
+    return reachable
+
+
+def spirv_storage_buffer_store_blocks(spv_code, variable_name, target_index):
+    variable = spirv_named_variable(spv_code, variable_name, storage_class="Uniform")
+    integer_constants = spirv_integer_constant_values(spv_code)
+    access_indexes = {}
+    for result_id, operands in re.findall(
+        rf"(%\d+) = Op(?:InBounds)?AccessChain %\d+ " rf"{re.escape(variable)}([^\n]*)",
+        spv_code,
+    ):
+        operand_ids = re.findall(r"%\d+", operands)
+        if operand_ids and operand_ids[-1] in integer_constants:
+            access_indexes[result_id] = integer_constants[operand_ids[-1]]
+
+    store_blocks = set()
+    for label, instructions in spirv_basic_blocks(spv_code).items():
+        for pointer_id in re.findall(r"OpStore (%\d+) %\d+\b", "\n".join(instructions)):
+            if access_indexes.get(pointer_id) == target_index:
+                store_blocks.add(label)
+    return store_blocks
+
+
+def spirv_integer_values_feeding_value(spv_code, value_id):
+    integer_constants = spirv_integer_constant_values(spv_code)
+    instructions = {
+        result_id: instruction
+        for result_id, instruction in re.findall(r"^(%\d+) = (.+)$", spv_code, re.M)
+    }
+    stores_by_pointer = {}
+    for pointer_id, stored_value in re.findall(
+        r"^OpStore (%\d+) (%\d+)\b", spv_code, re.M
+    ):
+        stores_by_pointer.setdefault(pointer_id, set()).add(stored_value)
+
+    visited = set()
+
+    def collect(candidate):
+        if candidate in integer_constants:
+            return {integer_constants[candidate]}
+        if candidate in visited:
+            return set()
+        visited.add(candidate)
+
+        instruction = instructions.get(candidate, "")
+        load = re.fullmatch(r"OpLoad %\d+ (%\d+)", instruction)
+        if load is not None:
+            return set().union(
+                *(
+                    collect(stored)
+                    for stored in stores_by_pointer.get(load.group(1), ())
+                )
+            )
+
+        if instruction.startswith(("OpPhi ", "OpSelect ", "OpCopyObject ")):
+            return set().union(
+                *(collect(operand) for operand in re.findall(r"%\d+", instruction)[1:])
+            )
+        return set()
+
+    return collect(value_id)
 
 
 def spirv_vector_type_widths(spv_code):
@@ -381,6 +511,99 @@ def assert_spirv_module_validates(spv_code, tmp_path, target_env=None):
         check=False,
     )
     assert validate.returncode == 0, validate.stderr
+
+
+def cooperative_matrix_type_source(component, rows, cols, use, layout="unspecified"):
+    return (
+        f"CooperativeMatrix<{component}, {rows}, {cols}, " f"subgroup, {use}, {layout}>"
+    )
+
+
+def cooperative_matrix_multiply_profile_source(
+    left_type,
+    right_type,
+    result_type,
+    expression="cooperative_matrix_multiply(left, right)",
+):
+    return f"""
+    shader CooperativeMatrixMultiplyProfile {{
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {{
+                {left_type} left;
+                {right_type} right;
+                {result_type} product = {expression};
+            }}
+        }}
+    }}
+    """
+
+
+def assert_cooperative_matrix_multiply_rejected(
+    profile_source, message, feature, capability
+):
+    generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+
+    with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
+        generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+    assert message in str(exc_info.value)
+    assert exc_info.value.feature == feature
+    assert exc_info.value.missing_capabilities == (capability,)
+    emitted = "\n".join(generator.code_lines)
+    assert "OpCooperativeMatrixMulAddKHR" not in emitted
+    assert "WARNING" not in emitted
+
+
+def assert_cooperative_matrix_element_rejected(
+    profile_source, message, feature, capability
+):
+    generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+
+    with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
+        generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+    assert message in str(exc_info.value)
+    assert exc_info.value.feature == feature
+    assert exc_info.value.missing_capabilities == (capability,)
+    emitted = "\n".join(generator.code_lines)
+    assert "WARNING" not in emitted
+
+
+def assert_cooperative_matrix_role_specialization_rejected(
+    profile_source, message, reason
+):
+    generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+
+    with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
+        generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+    assert message in str(exc_info.value)
+    assert exc_info.value.feature == (
+        f"cooperative-matrix-role-specialization-{reason}"
+    )
+    assert exc_info.value.missing_capabilities == (
+        f"spirv.cooperative_matrix.role-specialization-{reason}",
+    )
+    emitted = "\n".join(generator.code_lines)
+    assert "OpCooperativeMatrixMulAddKHR" not in emitted
+    assert "WARNING" not in emitted
+
+
+def assert_cooperative_matrix_memory_rejected(
+    profile_source, message, feature, capability
+):
+    generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+
+    with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
+        generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+    assert message in str(exc_info.value)
+    assert exc_info.value.feature == feature
+    assert exc_info.value.missing_capabilities == (capability,)
+    emitted = "\n".join(generator.code_lines)
+    assert "WARNING" not in emitted
 
 
 def test_spirv_storage_pointer_reinterpret_reads_byte_lanes(tmp_path):
@@ -2751,6 +2974,187 @@ class TestVulkanSPIRVCodeGen:
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_inout_struct_parameter_aliases_caller_storage(self, tmp_path):
+        source_code = """
+        shader WritableStructParameter {
+            struct Counter {
+                int value;
+            }
+
+            void add(inout thread Counter self, const int amount) {
+                self.value += amount;
+            }
+
+            compute {
+                void main() {
+                    Counter counter;
+                    counter.value = 1;
+                    add(counter, 4);
+                    int observed = counter.value;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        counter = spirv_named_variable(spv_code, "counter", storage_class="Function")
+        counter_members = set(
+            re.findall(
+                rf"(%\d+) = OpAccessChain %\d+ {re.escape(counter)} %\d+",
+                spv_code,
+            )
+        )
+        add_results = set(spirv_result_ids_for_opcode(spv_code, "OpIAdd"))
+        stores = set(re.findall(r"OpStore (%\d+) (%\d+)", spv_code))
+
+        assert counter_members
+        caller_add_results = {
+            value
+            for pointer, value in stores
+            if pointer in counter_members and value in add_results
+        }
+        assert caller_add_results
+        assert "OpFunctionCall" not in spv_code
+
+        int_type = re.search(r"(%\d+) = OpTypeInt 32 1\b", spv_code)
+        assert int_type is not None
+        assert spirv_named_parameters(spv_code, "amount", int_type.group(1))
+        integer_constants = spirv_integer_constant_values(spv_code)
+        caller_add_operands = {
+            operand
+            for result in caller_add_results
+            for operand in re.findall(
+                rf"{re.escape(result)} = OpIAdd %\d+ (%\d+) (%\d+)",
+                spv_code,
+            )[0]
+        }
+        assert 4 in {integer_constants.get(operand) for operand in caller_add_operands}
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_out_scalar_parameter_aliases_caller_storage(self, tmp_path):
+        source_code = """
+        shader WritableScalarParameter {
+            void assign(out int value) {
+                value = 7;
+            }
+
+            compute {
+                void main() {
+                    int result = 1;
+                    assign(result);
+                    int observed = result;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        result = spirv_named_variable(spv_code, "result", storage_class="Function")
+        integer_constants = spirv_integer_constant_values(spv_code)
+        stored_values = [
+            stored_value
+            for pointer, stored_value in re.findall(r"OpStore (%\d+) (%\d+)", spv_code)
+            if pointer == result
+        ]
+
+        assert 7 in {integer_constants.get(stored) for stored in stored_values}
+        assert "OpFunctionCall" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_nested_inout_arguments_are_evaluated_before_parameter_binding(
+        self, tmp_path
+    ):
+        source_code = """
+        shader NestedWritableParameters {
+            struct State {
+                int value;
+            }
+
+            void leaf(inout float self, inout State target) {
+                self = 7.0;
+                target.value = 9;
+            }
+
+            void relay(inout State self, inout float value) {
+                leaf(value, self);
+            }
+
+            compute {
+                void main() {
+                    State state;
+                    state.value = 1;
+                    float scalar = 2.0;
+                    relay(state, scalar);
+                    int observed_state = state.value;
+                    float observed_scalar = scalar;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        state = spirv_named_variable(spv_code, "state", storage_class="Function")
+        scalar = spirv_named_variable(spv_code, "scalar", storage_class="Function")
+        state_members = set(
+            re.findall(
+                rf"(%\d+) = OpAccessChain %\d+ {re.escape(state)} %\d+",
+                spv_code,
+            )
+        )
+        integer_constants = spirv_integer_constant_values(spv_code)
+        stores = re.findall(r"OpStore (%\d+) (%\d+)", spv_code)
+        assert any(
+            pointer in state_members and integer_constants.get(value) == 9
+            for pointer, value in stores
+        )
+
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32\b", spv_code)
+        assert float_type is not None
+        seven = re.search(
+            rf"(%\d+) = OpConstant {re.escape(float_type.group(1))} 7(?:\.0)?\b",
+            spv_code,
+        )
+        assert seven is not None
+        assert (scalar, seven.group(1)) in stores
+        assert "OpFunctionCall" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_inout_parameter_rejects_non_addressable_argument(self):
+        source_code = """
+        shader NonAddressableReferenceArgument {
+            void increment(inout int value) {
+                value += 1;
+            }
+
+            compute {
+                void main() {
+                    increment(4);
+                }
+            }
+        }
+        """
+
+        with pytest.raises(UnsupportedSPIRVFeatureError) as excinfo:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        error = excinfo.value
+        assert error.feature == "non-addressable-reference-argument"
+        assert error.missing_capabilities == ("spirv.reference_parameter_aliasing",)
+        assert "argument 1" in str(error)
+        assert "not addressable" in str(error)
+
     def test_inlined_storage_buffer_helper_aliases_inout_fixed_array(self, tmp_path):
         source_code = """
         shader WritableArrayInline {
@@ -3002,6 +3406,119 @@ class TestVulkanSPIRVCodeGen:
         assert "OpFunctionCall" in spv_code
         assert "SPIR-V codegen does not support generic functions" not in spv_code
         assert "WARNING" not in spv_code
+
+    def test_unused_dependent_generic_helper_does_not_block_compute(self, tmp_path):
+        source_code = """
+        shader UnusedDependentGenericHelper {
+            generic<T, N> fn unused_copy(
+                source: StructuredBuffer<T>,
+                target: RWStructuredBuffer<T>,
+                value: vec<T, N>
+            ) -> vec<T, N> {
+                StructuredBuffer<T> source_alias = source;
+                RWStructuredBuffer<T> target_alias = target;
+                T first = source_alias.Load(0u);
+                target_alias.Store(0u, first);
+                vec<T, N> local = value;
+                return local;
+            }
+
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                void main() {}
+            }
+        }
+        """
+
+        generator = VulkanSPIRVCodeGen()
+        spv_code = generator.generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert generator.generic_function_specializations == {}
+        assert "OpEntryPoint GLCompute %" in spv_code
+        assert "generic-vector" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_materialized_generic_resource_specialization_uses_substitutions(
+        self, tmp_path
+    ):
+        source_code = """
+        shader MaterializedGenericResourceSpecialization {
+            RWStructuredBuffer<float> output @binding(0);
+
+            generic<T> fn store_pair(value: T) -> vec<T, 2> {
+                RWStructuredBuffer<T> target_alias = output;
+                vec<T, 2> local;
+                local.x = value;
+                local.y = value + 1.0;
+                target_alias.Store(0u, local.x);
+                return local;
+            }
+
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                void main() {
+                    vec<float, 2> pair = store_pair(1.0);
+                    output.Store(1u, pair.y);
+                }
+            }
+        }
+        """
+
+        generator = VulkanSPIRVCodeGen()
+        spv_code = generator.generate(Parser(Lexer(source_code).tokens).parse())
+
+        specializations = list(generator.generic_function_specializations.values())
+        assert len(specializations) == 1
+        assert specializations[0]._generic_substitutions == {"T": "float"}
+
+        output_var = spirv_named_variable(spv_code, "output", storage_class="Uniform")
+        assert (
+            len(
+                re.findall(
+                    rf"OpAccessChain %\d+ {re.escape(output_var)} %\d+ %\d+",
+                    spv_code,
+                )
+            )
+            >= 2
+        )
+        assert "OpCompositeInsert" in spv_code
+        assert "OpFAdd" in spv_code
+        assert "OpFunctionCall" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_reachable_unresolved_generic_call_preserves_structured_diagnostic(self):
+        source_code = """
+        shader ReachableUnresolvedGenericCall {
+            generic<T> fn make_zero() -> T {
+                return T::zero();
+            }
+
+            compute {
+                void main() {
+                    float value = make_zero();
+                }
+            }
+        }
+        """
+        ast = Parser(Lexer(source_code).tokens).parse()
+        ast.functions[0].source_location = {"line": 3, "column": 13}
+
+        with pytest.raises(
+            UnsupportedSPIRVFeatureError,
+            match=(
+                r"unspecialized generic helper 'make_zero' with generic parameters "
+                r"\(T\) at line 3, column 13"
+            ),
+        ) as exc_info:
+            VulkanSPIRVCodeGen().generate(ast)
+
+        assert exc_info.value.feature == "generic-helper-specialization"
+        assert exc_info.value.missing_capabilities == (
+            "spirv.generic_function_specialization",
+        )
+        assert exc_info.value.source_location == {"line": 3, "column": 13}
 
     def test_unspecialized_generic_function_reports_helper_context(self):
         source_code = """
@@ -17640,7 +18157,7 @@ class TestVulkanSPIRVCodeGen:
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
-    def test_inlined_storage_buffer_helper_rejects_nested_return(self):
+    def test_inlined_void_conditional_return_bypasses_later_write(self, tmp_path):
         source_code = """
         shader NestedInlineReturn {
             RWStructuredBuffer<int> values @binding(0);
@@ -17656,40 +18173,438 @@ class TestVulkanSPIRVCodeGen:
 
             compute {
                 void main() {
-                    writeMaybe(values, 1);
+                    int enabled = values.Load(3);
+                    writeMaybe(values, enabled);
+                    values.Store(1, 2);
                 }
             }
         }
         """
 
-        with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
-            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
-
-        assert exc_info.value.feature == (
-            "nested-return-storage-buffer-function-inline"
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
         )
-        assert exc_info.value.missing_capabilities == (
-            "spirv.nested_return_storage_buffer_function",
-        )
-        assert "helper 'writeMaybe' contains a nested return" in str(exc_info.value)
 
-    def test_nested_inline_return_detection_ignores_caller_constant_scope(self):
+        successors = spirv_basic_block_successors(spv_code)
+        helper_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 0)
+        caller_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 1)
+        conditional_successors = [
+            tuple(targets) for targets in successors.values() if len(targets) == 2
+        ]
+        assert helper_write_blocks
+        assert caller_write_blocks
+        assert any(
+            bool(spirv_reachable_blocks(successors, left) & helper_write_blocks)
+            != bool(spirv_reachable_blocks(successors, right) & helper_write_blocks)
+            and all(
+                spirv_reachable_blocks(successors, target) & caller_write_blocks
+                for target in (left, right)
+            )
+            for left, right in conditional_successors
+        )
+        assert len(re.findall(r"^OpReturn$", spv_code, re.M)) == 1
+        assert "writeMaybe" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_inlined_non_void_return_merges_with_tail_expression(self, tmp_path):
         source_code = """
-        shader NestedInlineReturnShadow {
-            const int ENABLED = 0;
+        shader NestedInlineValueReturn {
             RWStructuredBuffer<int> values @binding(0);
 
-            void writeMaybe(RWStructuredBuffer<int> data) {
-                const int ENABLED = 1;
-                if (ENABLED) {
-                    return;
+            int selectValue(RWStructuredBuffer<int> data, int enabled) {
+                if (enabled != 0) {
+                    return 7;
                 }
-                data.Store(0, 1);
+                data.Store(0, 3);
+                3
             }
 
             compute {
                 void main() {
-                    writeMaybe(values);
+                    int enabled = values.Load(3);
+                    int selected = selectValue(values, enabled);
+                    values.Store(1, selected);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        output_stores = dict(spirv_storage_buffer_store_operands(spv_code, "values"))
+        integer_constants = spirv_integer_constant_values(spv_code)
+        assert integer_constants[output_stores[0]] == 3
+        assert spirv_integer_values_feeding_value(spv_code, output_stores[1]) == {3, 7}
+        assert "OpSelectionMerge" in spv_code
+        assert "OpReturnValue" not in spv_code
+        assert "selectValue" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_inlined_non_void_fallthrough_is_unreachable(self, tmp_path):
+        source_code = """
+        shader NestedInlineValueFallthrough {
+            RWStructuredBuffer<int> values @binding(0);
+
+            int selectValue(RWStructuredBuffer<int> data, int enabled) {
+                if (enabled != 0) {
+                    return 7;
+                }
+                data.Store(0, 3);
+            }
+
+            compute {
+                void main() {
+                    int enabled = values.Load(3);
+                    int selected = selectValue(values, enabled);
+                    values.Store(1, selected);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        output_stores = dict(spirv_storage_buffer_store_operands(spv_code, "values"))
+        assert spirv_integer_values_feeding_value(spv_code, output_stores[1]) == {7}
+        assert "OpUnreachable" in spv_code
+        assert "OpReturnValue" not in spv_code
+        assert "selectValue" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_inlined_non_void_without_reachable_return_is_unreachable(self, tmp_path):
+        source_code = """
+        shader InlineValueWithoutReachableReturn {
+            RWStructuredBuffer<int> values @binding(0);
+
+            int selectValue(RWStructuredBuffer<int> data) {
+                if (false) {
+                    return 7;
+                }
+                data.Store(0, 3);
+            }
+
+            compute {
+                void main() {
+                    int selected = selectValue(values);
+                    values.Store(1, selected);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        output_stores = dict(spirv_storage_buffer_store_operands(spv_code, "values"))
+        integer_constants = spirv_integer_constant_values(spv_code)
+        assert integer_constants[output_stores[0]] == 3
+        assert spirv_integer_values_feeding_value(spv_code, output_stores[1]) == set()
+        assert "OpUnreachable" in spv_code
+        assert "OpReturnValue" not in spv_code
+        assert "selectValue" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_inline_return_does_not_exit_caller_owned_loop(self, tmp_path):
+        source_code = """
+        shader CallerLoopInlineReturn {
+            RWStructuredBuffer<int> values @binding(0);
+
+            void writeMaybe(RWStructuredBuffer<int> data, int enabled) {
+                if (enabled != 0) {
+                    return;
+                }
+                data.Store(0, 10);
+            }
+
+            compute {
+                void main() {
+                    int enabled = values.Load(4);
+                    for (int i = 0; i < 2; i = i + 1) {
+                        writeMaybe(values, enabled);
+                        values.Store(1, i);
+                    }
+                    values.Store(2, 12);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        successors = spirv_basic_block_successors(spv_code)
+        helper_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 0)
+        loop_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 1)
+        post_loop_write_blocks = spirv_storage_buffer_store_blocks(
+            spv_code, "values", 2
+        )
+        assert helper_write_blocks
+        assert loop_write_blocks
+        assert post_loop_write_blocks
+        return_flag = spirv_named_variable(
+            spv_code, "__inline_returned", storage_class="Function"
+        )
+        flag_load = re.search(
+            rf"(%\d+) = OpLoad %\d+ {re.escape(return_flag)}\b", spv_code
+        )
+        assert flag_load is not None
+        fallthrough_condition = re.search(
+            rf"(%\d+) = OpLogicalNot %\d+ {re.escape(flag_load.group(1))}\b",
+            spv_code,
+        )
+        assert fallthrough_condition is not None
+        true_values = set(re.findall(r"(%\d+) = OpConstantTrue %\d+", spv_code))
+        return_blocks = {
+            block
+            for block, instructions in spirv_basic_blocks(spv_code).items()
+            if any(
+                re.fullmatch(
+                    rf"OpStore {re.escape(return_flag)} "
+                    rf"({'|'.join(map(re.escape, true_values))})",
+                    instruction,
+                )
+                for instruction in instructions
+            )
+        }
+        caller_loop_merges = set(re.findall(r"OpLoopMerge (%\d+) %\d+ None", spv_code))
+        assert return_blocks
+        assert caller_loop_merges
+        assert all(
+            not (successors[block] & caller_loop_merges) for block in return_blocks
+        )
+        guarded_branch = re.search(
+            rf"OpBranchConditional {re.escape(fallthrough_condition.group(1))} "
+            r"(%\d+) (%\d+)",
+            spv_code,
+        )
+        assert guarded_branch is not None
+        assert guarded_branch.group(1) in helper_write_blocks
+        assert guarded_branch.group(2) in loop_write_blocks
+        assert all(
+            spirv_reachable_blocks(successors, target) & loop_write_blocks
+            for target in guarded_branch.groups()
+        )
+        assert "OpLoopMerge" in spv_code
+        assert len(re.findall(r"^OpReturn$", spv_code, re.M)) == 1
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_inline_return_does_not_exit_caller_owned_switch(self, tmp_path):
+        source_code = """
+        shader CallerSwitchInlineReturn {
+            RWStructuredBuffer<int> values @binding(0);
+
+            void writeMaybe(RWStructuredBuffer<int> data, int enabled) {
+                if (enabled != 0) {
+                    return;
+                }
+                data.Store(0, 10);
+            }
+
+            compute {
+                void main() {
+                    int mode = values.Load(4);
+                    int enabled = values.Load(5);
+                    switch (mode) {
+                        case 0:
+                            writeMaybe(values, enabled);
+                            values.Store(1, 11);
+                            break;
+                        default:
+                            values.Store(2, 12);
+                    }
+                    values.Store(3, 13);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        blocks = spirv_basic_blocks(spv_code)
+        successors = spirv_basic_block_successors(spv_code)
+        helper_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 0)
+        case_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 1)
+        caller_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 3)
+        return_flag = spirv_named_variable(
+            spv_code, "__inline_returned", storage_class="Function"
+        )
+        true_values = set(re.findall(r"(%\d+) = OpConstantTrue %\d+", spv_code))
+        return_blocks = {
+            block
+            for block, instructions in blocks.items()
+            if any(
+                re.fullmatch(
+                    rf"OpStore {re.escape(return_flag)} "
+                    rf"({'|'.join(map(re.escape, true_values))})",
+                    instruction,
+                )
+                for instruction in instructions
+            )
+        }
+        switch_merges = {
+            match.group(1)
+            for instructions in blocks.values()
+            if any(instruction.startswith("OpSwitch ") for instruction in instructions)
+            for instruction in instructions
+            if (match := re.fullmatch(r"OpSelectionMerge (%\d+) None", instruction))
+        }
+        assert helper_write_blocks
+        assert case_write_blocks
+        assert caller_write_blocks
+        assert return_blocks
+        assert switch_merges
+        assert all(not (successors[block] & switch_merges) for block in return_blocks)
+        assert all(
+            spirv_reachable_blocks(successors, block) & case_write_blocks
+            for block in return_blocks
+        )
+        assert all(
+            spirv_reachable_blocks(successors, merge) & caller_write_blocks
+            for merge in switch_merges
+        )
+        assert "OpSwitch" in spv_code
+        assert len(re.findall(r"^OpReturn$", spv_code, re.M)) == 1
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_void_inline_return_expression_preserves_side_effects(self, tmp_path):
+        source_code = """
+        shader InlineVoidReturnExpression {
+            RWStructuredBuffer<int> values @binding(0);
+
+            void record(RWStructuredBuffer<int> data) {
+                data.Store(0, 10);
+            }
+
+            void writeMaybe(RWStructuredBuffer<int> data, int enabled) {
+                if (enabled != 0) {
+                    return record(data);
+                }
+                data.Store(1, 11);
+            }
+
+            compute {
+                void main() {
+                    int enabled = values.Load(3);
+                    writeMaybe(values, enabled);
+                    values.Store(2, 12);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        stores = spirv_storage_buffer_store_operands(spv_code, "values")
+        integer_constants = spirv_integer_constant_values(spv_code)
+        constant_stores = [
+            (index, integer_constants[value_id])
+            for index, value_id in stores
+            if value_id in integer_constants
+        ]
+        assert sorted(constant_stores) == [(0, 10), (1, 11), (2, 12)]
+        assert sum(index == 0 for index, _value in constant_stores) == 1
+        assert "record" not in spv_code
+        assert "writeMaybe" not in spv_code
+        assert len(re.findall(r"^OpReturn$", spv_code, re.M)) == 1
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_void_inline_return_match_preserves_arm_side_effects(self, tmp_path):
+        source_code = """
+        shader InlineVoidReturnMatch {
+            RWStructuredBuffer<int> values @binding(0);
+
+            void recordFirst(RWStructuredBuffer<int> data) {
+                data.Store(0, 10);
+            }
+
+            void recordSecond(RWStructuredBuffer<int> data) {
+                data.Store(1, 11);
+            }
+
+            void writeMode(RWStructuredBuffer<int> data, int mode) {
+                return match mode {
+                    0 => recordFirst(data),
+                    _ => recordSecond(data),
+                };
+                data.Store(2, 12);
+            }
+
+            compute {
+                void main() {
+                    int mode = values.Load(4);
+                    writeMode(values, mode);
+                    values.Store(3, 13);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        stores = spirv_storage_buffer_store_operands(spv_code, "values")
+        integer_constants = spirv_integer_constant_values(spv_code)
+        constant_stores = [
+            (index, integer_constants[value_id])
+            for index, value_id in stores
+            if value_id in integer_constants
+        ]
+        assert sorted(constant_stores) == [
+            (0, 10),
+            (1, 11),
+            (2, 12),
+            (3, 13),
+        ]
+        assert sum(index == 0 for index, _value in constant_stores) == 1
+        assert sum(index == 1 for index, _value in constant_stores) == 1
+        assert "recordFirst" not in spv_code
+        assert "recordSecond" not in spv_code
+        assert "writeMode" not in spv_code
+        assert "OpSelectionMerge" in spv_code
+        assert len(re.findall(r"^OpReturn$", spv_code, re.M)) == 1
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_inline_return_nested_in_match_arm_is_rejected(self):
+        source_code = """
+        shader NestedInlineMatchReturn {
+            RWStructuredBuffer<int> values @binding(0);
+
+            int selectValue(RWStructuredBuffer<int> data, int mode) {
+                return match mode {
+                    0 => {
+                        if (data.Load(0) != 0) {
+                            return 7;
+                        }
+                        3
+                    },
+                    _ => 4,
+                };
+            }
+
+            compute {
+                void main() {
+                    int mode = values.Load(1);
+                    int selected = selectValue(values, mode);
+                    values.Store(2, selected);
                 }
             }
         }
@@ -17699,11 +18614,415 @@ class TestVulkanSPIRVCodeGen:
             VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
         assert exc_info.value.feature == (
-            "nested-return-storage-buffer-function-inline"
+            "nested-match-return-storage-buffer-function-inline"
         )
         assert exc_info.value.missing_capabilities == (
-            "spirv.nested_return_storage_buffer_function",
+            "spirv.nested_match_return_storage_buffer_function",
         )
+        assert "helper 'selectValue' requires match-aware return control flow" in str(
+            exc_info.value
+        )
+
+    def test_inlined_return_nested_in_loop_exits_inline_helper(self, tmp_path):
+        source_code = """
+        shader NestedInlineLoopReturn {
+            RWStructuredBuffer<int> values @binding(0);
+
+            void writeUntil(RWStructuredBuffer<int> data, int stop) {
+                for (int i = 0; i < 3; i = i + 1) {
+                    if (i == stop) {
+                        return;
+                    }
+                    data.Store(i, i + 10);
+                }
+                data.Store(3, 13);
+            }
+
+            compute {
+                void main() {
+                    int stop = values.Load(5);
+                    writeUntil(values, stop);
+                    values.Store(4, 14);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        successors = spirv_basic_block_successors(spv_code)
+        post_loop_write_blocks = spirv_storage_buffer_store_blocks(
+            spv_code, "values", 3
+        )
+        caller_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 4)
+        assert post_loop_write_blocks
+        assert caller_write_blocks
+        assert any(
+            bool(spirv_reachable_blocks(successors, left) & post_loop_write_blocks)
+            != bool(spirv_reachable_blocks(successors, right) & post_loop_write_blocks)
+            and all(
+                spirv_reachable_blocks(successors, target) & caller_write_blocks
+                for target in (left, right)
+            )
+            for targets in successors.values()
+            if len(targets) == 2
+            for left, right in [tuple(targets)]
+        )
+        assert "OpLoopMerge" in spv_code
+        assert len(re.findall(r"^OpReturn$", spv_code, re.M)) == 1
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_inlined_return_unwinds_nested_loops_structurally(self, tmp_path):
+        source_code = """
+        shader NestedInlineTwoLoopReturn {
+            RWStructuredBuffer<int> values @binding(0);
+
+            void writeNested(RWStructuredBuffer<int> data, int stop) {
+                for (int outer = 0; outer < 2; outer = outer + 1) {
+                    for (int inner = 0; inner < 2; inner = inner + 1) {
+                        if (inner == stop) {
+                            return;
+                        }
+                        data.Store(0, inner);
+                    }
+                    data.Store(1, outer);
+                }
+                data.Store(2, 12);
+            }
+
+            compute {
+                void main() {
+                    int stop = values.Load(4);
+                    writeNested(values, stop);
+                    values.Store(3, 13);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert spv_code.count("OpLoopMerge") >= 2
+        assert spirv_storage_buffer_store_blocks(spv_code, "values", 1)
+        assert spirv_storage_buffer_store_blocks(spv_code, "values", 2)
+        assert spirv_storage_buffer_store_blocks(spv_code, "values", 3)
+        assert len(re.findall(r"^OpReturn$", spv_code, re.M)) == 1
+        assert "writeNested" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_inlined_return_unwinds_switch_nested_in_while(self, tmp_path):
+        source_code = """
+        shader NestedInlineSwitchLoopReturn {
+            RWStructuredBuffer<int> values @binding(0);
+
+            void writeModes(RWStructuredBuffer<int> data, int stop) {
+                int i = 0;
+                while (i < 2) {
+                    switch (i) {
+                        case 0:
+                            if (stop != 0) {
+                                return;
+                            }
+                            data.Store(0, 10);
+                            break;
+                        default:
+                            data.Store(1, 11);
+                    }
+                    data.Store(2, 12);
+                    i = i + 1;
+                }
+                data.Store(3, 13);
+            }
+
+            compute {
+                void main() {
+                    int stop = values.Load(5);
+                    writeModes(values, stop);
+                    values.Store(4, 14);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        successors = spirv_basic_block_successors(spv_code)
+        post_loop_write_blocks = spirv_storage_buffer_store_blocks(
+            spv_code, "values", 3
+        )
+        caller_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 4)
+        assert post_loop_write_blocks
+        assert caller_write_blocks
+        assert any(
+            bool(spirv_reachable_blocks(successors, left) & post_loop_write_blocks)
+            != bool(spirv_reachable_blocks(successors, right) & post_loop_write_blocks)
+            and all(
+                spirv_reachable_blocks(successors, target) & caller_write_blocks
+                for target in (left, right)
+            )
+            for targets in successors.values()
+            if len(targets) == 2
+            for left, right in [tuple(targets)]
+        )
+        assert "OpSwitch" in spv_code
+        assert "OpLoopMerge" in spv_code
+        assert len(re.findall(r"^OpReturn$", spv_code, re.M)) == 1
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_nested_inlined_helpers_keep_independent_return_state(self, tmp_path):
+        source_code = """
+        shader NestedInlineHelperReturn {
+            RWStructuredBuffer<int> values @binding(0);
+
+            void writeInner(RWStructuredBuffer<int> data, int enabled) {
+                if (enabled != 0) {
+                    return;
+                }
+                data.Store(0, 10);
+            }
+
+            void writeOuter(
+                RWStructuredBuffer<int> data,
+                int innerEnabled,
+                int outerEnabled
+            ) {
+                if (outerEnabled != 0) {
+                    return;
+                }
+                writeInner(data, innerEnabled);
+                data.Store(1, 11);
+            }
+
+            compute {
+                void main() {
+                    int innerEnabled = values.Load(3);
+                    int outerEnabled = values.Load(4);
+                    writeOuter(values, innerEnabled, outerEnabled);
+                    values.Store(2, 12);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        successors = spirv_basic_block_successors(spv_code)
+        inner_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 0)
+        outer_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 1)
+        caller_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 2)
+        assert inner_write_blocks
+        assert outer_write_blocks
+        assert caller_write_blocks
+        assert any(
+            bool(spirv_reachable_blocks(successors, left) & inner_write_blocks)
+            != bool(spirv_reachable_blocks(successors, right) & inner_write_blocks)
+            and all(
+                spirv_reachable_blocks(successors, target) & outer_write_blocks
+                for target in (left, right)
+            )
+            for targets in successors.values()
+            if len(targets) == 2
+            for left, right in [tuple(targets)]
+        )
+        assert len(re.findall(r'OpName %\d+ "__inline_returned[^"]*"', spv_code)) == 2
+        assert len(re.findall(r"^OpReturn$", spv_code, re.M)) == 1
+        assert "writeInner" not in spv_code
+        assert "writeOuter" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_inlined_return_nested_in_switch_preserves_prior_write(self, tmp_path):
+        source_code = """
+        shader NestedInlineSwitchReturn {
+            RWStructuredBuffer<int> values @binding(0);
+
+            void writeMode(RWStructuredBuffer<int> data, int mode) {
+                switch (mode) {
+                    case 0:
+                        data.Store(0, 10);
+                        return;
+                    case 1:
+                        data.Store(1, 11);
+                        break;
+                    default:
+                        data.Store(2, 12);
+                }
+                data.Store(3, 13);
+            }
+
+            compute {
+                void main() {
+                    int mode = values.Load(5);
+                    writeMode(values, mode);
+                    values.Store(4, 14);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        successors = spirv_basic_block_successors(spv_code)
+        prior_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 0)
+        post_switch_write_blocks = spirv_storage_buffer_store_blocks(
+            spv_code, "values", 3
+        )
+        caller_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 4)
+        assert prior_write_blocks
+        assert post_switch_write_blocks
+        assert caller_write_blocks
+        return_flag = spirv_named_variable(
+            spv_code, "__inline_returned", storage_class="Function"
+        )
+        true_values = set(re.findall(r"(%\d+) = OpConstantTrue %\d+", spv_code))
+        assert any(
+            any(
+                re.fullmatch(
+                    rf"OpStore {re.escape(return_flag)} ({'|'.join(map(re.escape, true_values))})",
+                    instruction,
+                )
+                for instruction in spirv_basic_blocks(spv_code)[block]
+            )
+            for block in prior_write_blocks
+        )
+        flag_load = re.search(
+            rf"(%\d+) = OpLoad %\d+ {re.escape(return_flag)}\b", spv_code
+        )
+        assert flag_load is not None
+        fallthrough_condition = re.search(
+            rf"(%\d+) = OpLogicalNot %\d+ {re.escape(flag_load.group(1))}\b",
+            spv_code,
+        )
+        assert fallthrough_condition is not None
+        guarded_branch = re.search(
+            rf"OpBranchConditional {re.escape(fallthrough_condition.group(1))} "
+            r"(%\d+) (%\d+)",
+            spv_code,
+        )
+        assert guarded_branch is not None
+        assert guarded_branch.group(1) in post_switch_write_blocks
+        assert not (
+            spirv_reachable_blocks(successors, guarded_branch.group(2))
+            & post_switch_write_blocks
+        )
+        assert all(
+            spirv_reachable_blocks(successors, target) & caller_write_blocks
+            for target in guarded_branch.groups()
+        )
+        assert "OpSwitch" in spv_code
+        assert len(re.findall(r"^OpReturn$", spv_code, re.M)) == 1
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_inlined_return_nested_in_lexical_block_exits_helper(self, tmp_path):
+        source_code = """
+        shader NestedInlineBlockReturn {
+            RWStructuredBuffer<int> values @binding(0);
+
+            void writeBlock(RWStructuredBuffer<int> data, int enabled) {
+                {
+                    if (enabled != 0) {
+                        return;
+                    }
+                    data.Store(0, 20);
+                }
+                data.Store(1, 21);
+            }
+
+            compute {
+                void main() {
+                    int enabled = values.Load(3);
+                    writeBlock(values, enabled);
+                    values.Store(2, 22);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        successors = spirv_basic_block_successors(spv_code)
+        helper_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 1)
+        caller_write_blocks = spirv_storage_buffer_store_blocks(spv_code, "values", 2)
+        assert helper_write_blocks
+        assert caller_write_blocks
+        assert any(
+            bool(spirv_reachable_blocks(successors, left) & helper_write_blocks)
+            != bool(spirv_reachable_blocks(successors, right) & helper_write_blocks)
+            and all(
+                spirv_reachable_blocks(successors, target) & caller_write_blocks
+                for target in (left, right)
+            )
+            for targets in successors.values()
+            if len(targets) == 2
+            for left, right in [tuple(targets)]
+        )
+        assert len(re.findall(r"^OpReturn$", spv_code, re.M)) == 1
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_repeated_inlined_returns_do_not_share_return_state(self, tmp_path):
+        source_code = """
+        shader RepeatedNestedInlineReturn {
+            RWStructuredBuffer<int> values @binding(0);
+
+            void writeOnce(
+                RWStructuredBuffer<int> data,
+                int index,
+                int enabled
+            ) {
+                if (enabled != 0) {
+                    return;
+                }
+                data.Store(index, 9);
+            }
+
+            compute {
+                void main() {
+                    int first = values.Load(4);
+                    int second = values.Load(5);
+                    writeOnce(values, 0, first);
+                    values.Store(2, 6);
+                    writeOnce(values, 1, second);
+                    values.Store(3, 7);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        integer_constants = spirv_integer_constant_values(spv_code)
+        stores = [
+            (index, integer_constants[value_id])
+            for index, value_id in spirv_storage_buffer_store_operands(
+                spv_code, "values"
+            )
+            if value_id in integer_constants
+        ]
+        assert sorted(stores) == [(0, 9), (1, 9), (2, 6), (3, 7)]
+        assert spv_code.count("OpBranchConditional") >= 2
+        assert len(re.findall(r"^OpReturn$", spv_code, re.M)) == 1
+        assert "writeOnce" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_ordered_argument_alignment_rejects_side_effectful_skipped_argument(self):
         source_code = """
@@ -23910,6 +25229,261 @@ class TestVulkanSPIRVCodeGen:
         assert spv_code.count("OpCompositeConstruct") >= 4
         assert "ArrayLiteralNode" not in spv_code
         assert "WARNING" not in spv_code
+
+    def test_empty_initializer_uses_declared_scalar_type(self):
+        source_code = """
+        float initializedValue() {
+            float value = {};
+            return value;
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpTypeArray" not in spv_code
+        assert re.search(r"OpConstant %\d+ 0\.0\b", spv_code)
+        assert "WARNING" not in spv_code
+
+    def test_direct_empty_aggregate_call_arguments_use_parameter_types(self, tmp_path):
+        source_code = """
+        struct Payload {
+            float weight;
+            int count;
+        };
+
+        struct NestedPayload {
+            Payload payload;
+            float values[2];
+        };
+
+        shader EmptyAggregateCalls {
+            float readScalar(float value) {
+                return value;
+            }
+
+            float readVector(vec4 value) {
+                return value.x;
+            }
+
+            float readMatrix(mat2 value) {
+                return value[0].x;
+            }
+
+            float readArray(float values[3]) {
+                return values[0];
+            }
+
+            float readPayload(Payload value) {
+                return value.weight;
+            }
+
+            float readNested(NestedPayload value) {
+                return value.payload.weight + value.values[1];
+            }
+
+            compute {
+                void main() {
+                    float scalar = readScalar({});
+                    float vectorValue = readVector({});
+                    float matrixValue = readMatrix({});
+                    float arrayValue = readArray({});
+                    float payloadValue = readPayload({});
+                    float nestedValue = readNested({});
+                    float nestedMembers = readNested({{}, {}});
+                    float partialNested = readNested({{}});
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert spv_code.count("OpFunctionCall") == 8
+        assert spv_code.count("OpTypeArray") >= 2
+        assert_spirv_function_calls_use_declared_parameter_types(spv_code)
+        assert_struct_constructs_have_matching_member_operands(spv_code)
+        assert_spirv_has_no_zero_length_arrays(spv_code)
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_inlined_storage_buffer_call_contextualizes_empty_aggregate(self, tmp_path):
+        source_code = """
+        struct Payload {
+            float weight;
+            int count;
+        };
+
+        shader InlinedEmptyAggregateCall {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                layout(set = 0, binding = 0) buffer float* values;
+
+                float readTagged(float* input, Payload tag) {
+                    return input[0] + tag.weight;
+                }
+
+                void main() {
+                    values[1] = readTagged(values, {});
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpFunctionCall" not in spv_code
+        assert_spirv_has_no_zero_length_arrays(spv_code)
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_overloaded_empty_aggregate_call_uses_selected_parameter_type(
+        self, tmp_path
+    ):
+        source_code = """
+        struct Payload {
+            float weight;
+            int count;
+        };
+
+        shader EmptyAggregateOverload {
+            float readEmpty(float selector, float value) {
+                return value;
+            }
+
+            float readEmpty(int selector, Payload value) {
+                return value.weight;
+            }
+
+            compute {
+                void main() {
+                    float selected = readEmpty(1, {});
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        payload_type = spirv_named_id(spv_code, "Payload")
+        int_type = re.search(r"(%\d+) = OpTypeInt 32 1\b", spv_code)
+        call = re.search(r"%\d+ = OpFunctionCall %\d+ (%\d+) (%\d+) (%\d+)", spv_code)
+
+        assert int_type is not None
+        assert call is not None
+        callee_id, selector_id, payload_id = call.groups()
+        result_types = {
+            result_id: result_type
+            for result_id, result_type in re.findall(
+                r"(%\d+) = Op\w+ (%\d+)\b", spv_code
+            )
+        }
+        function_type = re.search(
+            rf"{re.escape(callee_id)} = OpFunction %\d+ None (%\d+)\b", spv_code
+        )
+
+        assert function_type is not None
+        assert re.search(
+            rf"{re.escape(function_type.group(1))} = OpTypeFunction %\d+ "
+            rf"{re.escape(int_type.group(1))} {re.escape(payload_type)}\b",
+            spv_code,
+        )
+        assert result_types[selector_id] == int_type.group(1)
+        assert result_types[payload_id] == payload_type
+        assert_spirv_function_calls_use_declared_parameter_types(spv_code)
+        assert_spirv_has_no_zero_length_arrays(spv_code)
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_ambiguous_empty_aggregate_call_fails_before_invalid_spirv(self):
+        source_code = """
+        struct Payload {
+            float weight;
+        };
+
+        shader AmbiguousEmptyAggregateOverload {
+            float readEmpty(float selector, float value) {
+                return value;
+            }
+
+            float readEmpty(float selector, Payload value) {
+                return value.weight;
+            }
+
+            compute {
+                void main() {
+                    float selected = readEmpty(1.0, {});
+                }
+            }
+        }
+        """
+
+        with pytest.raises(UnsupportedSPIRVFeatureError) as error:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert error.value.feature == "contextual empty initializer"
+        assert error.value.missing_capabilities == (
+            "spirv.empty_initializer_type_inference",
+        )
+        assert "ambiguous call 'readEmpty', argument 2" in str(error.value)
+
+    def test_reference_array_rejects_empty_aggregate_temporary(self):
+        source_code = """
+        shader ReferenceEmptyAggregateCall {
+            void fill(inout float[2] values) {
+                values[0] = 1.0;
+            }
+
+            compute {
+                void main() {
+                    fill({});
+                }
+            }
+        }
+        """
+
+        with pytest.raises(UnsupportedSPIRVFeatureError) as error:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert error.value.feature == "reference-bound empty initializer"
+        assert error.value.missing_capabilities == (
+            "spirv.aggregate_initializer_reference_binding",
+        )
+
+    def test_unresolved_empty_initializer_fails_before_invalid_spirv(self):
+        source_code = """
+        void exercise() {
+            unresolved({});
+        }
+        """
+
+        with pytest.raises(UnsupportedSPIRVFeatureError) as error:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert error.value.feature == "contextual empty initializer"
+        assert error.value.missing_capabilities == (
+            "spirv.empty_initializer_type_inference",
+        )
+
+    def test_nonpositive_fixed_array_extent_fails_before_invalid_spirv(self):
+        source_code = """
+        void exercise() {
+            float values[0];
+        }
+        """
+
+        with pytest.raises(UnsupportedSPIRVFeatureError) as error:
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert error.value.feature == "non-positive fixed array extent"
+        assert error.value.missing_capabilities == ("spirv.nonpositive_array_extent",)
 
     def test_array_literals_convert_elements_to_declared_element_type(self):
         source_code = """
@@ -32419,7 +33993,8 @@ class TestSpirvShaderValidation:
             UnsupportedSPIRVFeatureError,
             match=(
                 "SPIR-V cooperative-matrix lowering is not available for "
-                "'simdgroup_matrix<float,8,8>'; scalar substitution would change "
+                "'CooperativeMatrix<float,8,8,subgroup,unspecified,unspecified>'; "
+                "scalar substitution would change "
                 "subgroup-distributed matrix semantics"
             ),
         ) as exc_info:
@@ -32431,6 +34006,2272 @@ class TestSpirvShaderValidation:
 
         assert exc_info.value.feature == "cooperative-matrix-lowering"
         assert exc_info.value.missing_capabilities == ("spirv.cooperative_matrix.khr",)
+
+    def test_default_profile_rejects_cooperative_matrix_ast_type_with_diagnostic(
+        self,
+    ):
+        source_location = {"line": 7, "column": 13}
+        matrix_type = CooperativeMatrixType(
+            PrimitiveType("float"),
+            16,
+            8,
+            scope="subgroup",
+            use="accumulator",
+            layout="row_major",
+            source_location=source_location,
+        )
+        generator = VulkanSPIRVCodeGen()
+
+        assert generator.cooperative_matrix_khr_enabled is False
+
+        with pytest.raises(
+            UnsupportedSPIRVFeatureError,
+            match=(
+                "SPIR-V cooperative-matrix lowering is not available for "
+                "'CooperativeMatrix<float,16,8,subgroup,accumulator,row_major>'; "
+                "scalar substitution would change subgroup-distributed matrix "
+                "semantics"
+            ),
+        ) as exc_info:
+            generator.map_crossgl_type(matrix_type)
+
+        assert exc_info.value.feature == "cooperative-matrix-lowering"
+        assert exc_info.value.missing_capabilities == ("spirv.cooperative_matrix.khr",)
+        assert exc_info.value.source_location is source_location
+
+    def test_opt_in_profile_emits_valid_cooperative_matrix_type_module(self, tmp_path):
+        profile_source = """
+        shader CooperativeMatrixTypeProfile {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+                void main() {
+                    CooperativeMatrix<
+                        float, 8, 8, subgroup, matrix_a, unspecified
+                    > tile;
+                }
+            }
+        }
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        cooperative_type = re.search(
+            r"(?P<type>%\d+) = OpTypeCooperativeMatrixKHR "
+            r"(?P<component>%\d+) (?P<scope>%\d+) (?P<rows>%\d+) "
+            r"(?P<columns>%\d+) (?P<use>%\d+)\b",
+            spv_code,
+        )
+        assert cooperative_type is not None
+        assert re.search(
+            rf"{re.escape(cooperative_type.group('component'))} = OpTypeFloat 32\b",
+            spv_code,
+        )
+
+        constant_values = spirv_integer_constant_values(spv_code)
+        assert constant_values[cooperative_type.group("scope")] == 3
+        assert constant_values[cooperative_type.group("rows")] == 8
+        assert constant_values[cooperative_type.group("columns")] == 8
+        assert constant_values[cooperative_type.group("use")] == 0
+
+        pointer_type = spirv_pointer_type(
+            spv_code, cooperative_type.group("type"), "Function"
+        )
+        spirv_named_variable(
+            spv_code,
+            "tile",
+            pointer_type=pointer_type,
+            storage_class="Function",
+        )
+
+        assert "; Version: 1.3" in spv_code
+        assert "OpCapability CooperativeMatrixKHR" in spv_code
+        assert "OpCapability VulkanMemoryModel" in spv_code
+        assert 'OpExtension "SPV_KHR_cooperative_matrix"' in spv_code
+        assert 'OpExtension "SPV_KHR_vulkan_memory_model"' in spv_code
+        assert "OpMemoryModel Logical VulkanKHR" in spv_code
+        assert "OpMemoryModel Logical GLSL450" not in spv_code
+        assert "OpTypeMatrix" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    @pytest.mark.parametrize(
+        ("component", "use"),
+        (("float", "matrix_a"), ("i32", "matrix_b"), ("u32", "accumulator")),
+    )
+    def test_opt_in_profile_lowers_lane_local_matrix_element_reads_and_writes(
+        self, tmp_path, component, use
+    ):
+        matrix_source = cooperative_matrix_type_source(component, 8, 8, use)
+        profile_source = f"""
+        shader CooperativeMatrixElementProfile {{
+            compute {{
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+                void main() {{
+                    {matrix_source} tile;
+                    {component} lane_value = cooperative_matrix_element(tile, 0);
+                    cooperative_matrix_element(tile, 1) = lane_value;
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        matrix_declaration = re.search(
+            r"(?P<type>%\d+) = OpTypeCooperativeMatrixKHR "
+            r"(?P<component>%\d+) %\d+ %\d+ %\d+ %\d+\b",
+            spv_code,
+        )
+        assert matrix_declaration is not None
+        matrix_variable = spirv_named_variable(
+            spv_code, "tile", storage_class="Function"
+        )
+        component_pointer = spirv_pointer_type(
+            spv_code, matrix_declaration.group("component"), "Function"
+        )
+        accesses = re.findall(
+            rf"(?P<access>%\d+) = OpAccessChain "
+            rf"{re.escape(component_pointer)} {re.escape(matrix_variable)} "
+            rf"(?P<index>%\d+)\b",
+            spv_code,
+        )
+
+        assert len(accesses) == 2
+        assert any(
+            re.search(
+                rf"%\d+ = OpLoad "
+                rf"{re.escape(matrix_declaration.group('component'))} "
+                rf"{re.escape(access)}\b",
+                spv_code,
+            )
+            for access, _ in accesses
+        )
+        assert any(
+            re.search(rf"OpStore {re.escape(access)} %\d+\b", spv_code)
+            for access, _ in accesses
+        )
+        assert not re.search(
+            rf"OpLoad {re.escape(matrix_declaration.group('type'))}\b", spv_code
+        )
+        assert "OpCompositeExtract" not in spv_code
+        assert "OpCompositeInsert" not in spv_code
+        assert "OpTypeArray" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_lowers_dynamic_lane_local_matrix_element_index(
+        self, tmp_path
+    ):
+        matrix_source = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixDynamicElementProfile {{
+            compute {{
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+                void main() {{
+                    {matrix_source} tile;
+                    int index = 1;
+                    float lane_value = cooperative_matrix_element(tile, index);
+                    cooperative_matrix_element(tile, index) = lane_value;
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        matrix_declaration = re.search(
+            r"(?P<type>%\d+) = OpTypeCooperativeMatrixKHR "
+            r"(?P<component>%\d+) %\d+ %\d+ %\d+ %\d+\b",
+            spv_code,
+        )
+        assert matrix_declaration is not None
+        matrix_variable = spirv_named_variable(
+            spv_code, "tile", storage_class="Function"
+        )
+        index_variable = spirv_named_variable(
+            spv_code, "index", storage_class="Function"
+        )
+        index_loads = re.findall(
+            rf"(?P<value>%\d+) = OpLoad %\d+ {re.escape(index_variable)}\b",
+            spv_code,
+        )
+        assert len(index_loads) == 2
+        component_pointer = spirv_pointer_type(
+            spv_code, matrix_declaration.group("component"), "Function"
+        )
+        for index_load in index_loads:
+            assert re.search(
+                rf"%\d+ = OpAccessChain {re.escape(component_pointer)} "
+                rf"{re.escape(matrix_variable)} "
+                rf"{re.escape(index_load)}\b",
+                spv_code,
+            )
+        assert "OpCooperativeMatrixLengthKHR" not in spv_code
+        assert "OpTypeArray" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_lowers_matrix_element_increment_and_decrement(
+        self, tmp_path
+    ):
+        matrix_source = cooperative_matrix_type_source("float", 8, 8, "accumulator")
+        profile_source = f"""
+        shader CooperativeMatrixElementIncrement {{
+            compute {{
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+                void main() {{
+                    {matrix_source} tile;
+                    float before = cooperative_matrix_element(tile, 0)++;
+                    float after = --cooperative_matrix_element(tile, 1);
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        assert spv_code.count("OpAccessChain") == 2
+        assert spv_code.count("OpLoad") >= 2
+        assert spv_code.count("OpStore") >= 2
+        assert "OpFAdd" in spv_code
+        assert "OpFSub" in spv_code
+        assert "increment target is not assignable" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_matrix_element_assignment_evaluates_rhs_before_dynamic_index(
+        self, tmp_path
+    ):
+        matrix_source = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixElementEvaluationOrder {{
+            compute {{
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+                float rhs_value() {{
+                    return 1.0;
+                }}
+
+                int next_index() {{
+                    return 0;
+                }}
+
+                void main() {{
+                    {matrix_source} tile;
+                    cooperative_matrix_element(tile, next_index()) = rhs_value();
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        float_type = re.search(r"(?P<type>%\d+) = OpTypeFloat 32\b", spv_code)
+        int_type = re.search(r"(?P<type>%\d+) = OpTypeInt 32 1\b", spv_code)
+        assert float_type is not None
+        assert int_type is not None
+        calls = list(
+            re.finditer(r"%\d+ = OpFunctionCall (?P<type>%\d+) %\d+\b", spv_code)
+        )
+        access = re.search(r"%\d+ = OpAccessChain %\d+ %\d+ %\d+\b", spv_code)
+
+        assert [call.group("type") for call in calls] == [
+            float_type.group("type"),
+            int_type.group("type"),
+        ]
+        assert access is not None
+        assert calls[0].start() < calls[1].start() < access.start()
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_preserves_private_matrix_element_storage(self, tmp_path):
+        matrix_source = cooperative_matrix_type_source("float", 8, 8, "accumulator")
+        profile_source = f"""
+        shader CooperativeMatrixPrivateElementProfile {{
+            {matrix_source} tile;
+
+            compute {{
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+                void main() {{
+                    float lane_value = cooperative_matrix_element(tile, 0);
+                    cooperative_matrix_element(tile, 1) = lane_value;
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        matrix_declaration = re.search(
+            r"(?P<type>%\d+) = OpTypeCooperativeMatrixKHR "
+            r"(?P<component>%\d+) %\d+ %\d+ %\d+ %\d+\b",
+            spv_code,
+        )
+        assert matrix_declaration is not None
+        matrix_variable = spirv_named_variable(
+            spv_code, "tile", storage_class="Private"
+        )
+        component_pointer = spirv_pointer_type(
+            spv_code, matrix_declaration.group("component"), "Private"
+        )
+        assert (
+            len(
+                re.findall(
+                    rf"%\d+ = OpAccessChain {re.escape(component_pointer)} "
+                    rf"{re.escape(matrix_variable)} %\d+\b",
+                    spv_code,
+                )
+            )
+            == 2
+        )
+        assert "OpTypeArray" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    @pytest.mark.parametrize(
+        ("expression", "count"),
+        (
+            ("cooperative_matrix_element(tile)", 1),
+            ("cooperative_matrix_element(tile, 0, 1)", 3),
+        ),
+    )
+    def test_opt_in_profile_rejects_matrix_element_argument_count(
+        self, expression, count
+    ):
+        matrix_source = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixElementArity {{
+            compute {{
+                void main() {{
+                    {matrix_source} tile;
+                    float lane_value = {expression};
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_element_rejected(
+            profile_source,
+            f"requires exactly two operands; got {count}",
+            "cooperative-matrix-element-arity",
+            "spirv.cooperative_matrix.element-arity",
+        )
+
+    def test_opt_in_profile_rejects_non_matrix_element_operand(self):
+        profile_source = """
+        shader CooperativeMatrixElementOperand {
+            compute {
+                void main() {
+                    float scalar = 1.0;
+                    float lane_value = cooperative_matrix_element(scalar, 0);
+                }
+            }
+        }
+        """
+
+        assert_cooperative_matrix_element_rejected(
+            profile_source,
+            "requires an addressable cooperative-matrix operand",
+            "cooperative-matrix-element-operand-type",
+            "spirv.cooperative_matrix.element-operand-type",
+        )
+
+    def test_opt_in_profile_rejects_non_addressable_matrix_element_operand(self):
+        matrix_source = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixTemporaryElement {{
+            compute {{
+                {matrix_source} make_tile() {{
+                    {matrix_source} tile;
+                    return tile;
+                }}
+
+                void main() {{
+                    float lane_value = cooperative_matrix_element(make_tile(), 0);
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_element_rejected(
+            profile_source,
+            "temporary matrix values are not yet addressable",
+            "cooperative-matrix-element-addressability",
+            "spirv.cooperative_matrix.element-addressability",
+        )
+
+    def test_opt_in_profile_rejects_value_matrix_parameter_element_access(self):
+        matrix_source = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixParameterElement {{
+            compute {{
+                float read_lane({matrix_source} tile) {{
+                    return cooperative_matrix_element(tile, 0);
+                }}
+
+                void main() {{
+                    {matrix_source} tile;
+                    float lane_value = read_lane(tile);
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_element_rejected(
+            profile_source,
+            "temporary matrix values are not yet addressable",
+            "cooperative-matrix-element-addressability",
+            "spirv.cooperative_matrix.element-addressability",
+        )
+
+    @pytest.mark.parametrize(
+        ("index", "type_name"), (("1.0", "float"), ("true", "bool"))
+    )
+    def test_opt_in_profile_rejects_non_integer_matrix_element_index(
+        self, index, type_name
+    ):
+        matrix_source = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixElementIndexType {{
+            compute {{
+                void main() {{
+                    {matrix_source} tile;
+                    float lane_value = cooperative_matrix_element(tile, {index});
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_element_rejected(
+            profile_source,
+            f"requires a scalar integer index; got {type_name}",
+            "cooperative-matrix-element-index-type",
+            "spirv.cooperative_matrix.element-index-type",
+        )
+
+    def test_opt_in_profile_rejects_negative_matrix_element_index(self):
+        matrix_source = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixElementIndexRange {{
+            compute {{
+                void main() {{
+                    {matrix_source} tile;
+                    float lane_value = cooperative_matrix_element(tile, -1);
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_element_rejected(
+            profile_source,
+            "lane-local element indices cannot be negative; got -1",
+            "cooperative-matrix-element-index-range",
+            "spirv.cooperative_matrix.element-index-range",
+        )
+
+    @pytest.mark.parametrize(
+        "value_expression",
+        (
+            "vec2(1.0, 2.0)",
+            "other",
+        ),
+    )
+    def test_opt_in_profile_rejects_non_scalar_matrix_element_assignment(
+        self, value_expression
+    ):
+        matrix_source = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixElementValueType {{
+            compute {{
+                void main() {{
+                    {matrix_source} tile;
+                    {matrix_source} other;
+                    cooperative_matrix_element(tile, 0) = {value_expression};
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_element_rejected(
+            profile_source,
+            "element assignment requires a scalar component value",
+            "cooperative-matrix-element-value-type",
+            "spirv.cooperative_matrix.element-value-type",
+        )
+
+    def test_opt_in_profile_rejects_matrix_element_compound_assignment(self):
+        matrix_source = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixElementCompoundAssignment {{
+            compute {{
+                void main() {{
+                    {matrix_source} tile;
+                    cooperative_matrix_element(tile, 0) += 1.0;
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_element_rejected(
+            profile_source,
+            "compound assignment is not implemented for operator '+='",
+            "cooperative-matrix-element-compound-assignment",
+            "spirv.cooperative_matrix.element-compound-assignment",
+        )
+
+    def test_default_profile_rejects_matrix_element_write_without_warning(self):
+        matrix_source = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixElementDefaultProfile {{
+            compute {{
+                void main() {{
+                    {matrix_source} tile;
+                    cooperative_matrix_element(tile, 0) = 1.0;
+                }}
+            }}
+        }}
+        """
+        generator = VulkanSPIRVCodeGen()
+
+        with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
+            generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        assert exc_info.value.feature == "cooperative-matrix-lowering"
+        assert exc_info.value.missing_capabilities == ("spirv.cooperative_matrix.khr",)
+        emitted = "\n".join(generator.code_lines)
+        assert "Unsupported LHS type" not in emitted
+        assert "WARNING" not in emitted
+
+    def test_opt_in_profile_lowers_float_matrix_multiply_with_zero_accumulator(
+        self, tmp_path
+    ):
+        left_type = cooperative_matrix_type_source("float", 8, 4, "matrix_a")
+        right_type = cooperative_matrix_type_source("float", 4, 8, "matrix_b")
+        result_type = cooperative_matrix_type_source("float", 8, 8, "accumulator")
+        profile_source = cooperative_matrix_multiply_profile_source(
+            left_type,
+            right_type,
+            result_type,
+        )
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        constant_values = spirv_integer_constant_values(spv_code)
+        matrix_types = {}
+        matrix_component_types = {}
+        for declaration in re.finditer(
+            r"(?P<type>%\d+) = OpTypeCooperativeMatrixKHR "
+            r"(?P<component>%\d+) (?P<scope>%\d+) (?P<rows>%\d+) "
+            r"(?P<columns>%\d+) (?P<use>%\d+)\b",
+            spv_code,
+        ):
+            contract = (
+                constant_values[declaration.group("rows")],
+                constant_values[declaration.group("columns")],
+                constant_values[declaration.group("use")],
+            )
+            matrix_types[contract] = declaration.group("type")
+            matrix_component_types[contract] = declaration.group("component")
+            assert re.search(
+                rf"{re.escape(declaration.group('component'))} = " r"OpTypeFloat 32\b",
+                spv_code,
+            )
+
+        matrix_a_type = matrix_types[(8, 4, 0)]
+        matrix_b_type = matrix_types[(4, 8, 1)]
+        accumulator_type = matrix_types[(8, 8, 2)]
+        accumulator_component_type = matrix_component_types[(8, 8, 2)]
+        left_variable = spirv_named_variable(spv_code, "left", storage_class="Function")
+        right_variable = spirv_named_variable(
+            spv_code, "right", storage_class="Function"
+        )
+        product_variable = spirv_named_variable(
+            spv_code, "product", storage_class="Function"
+        )
+        left_value = re.search(
+            rf"(?P<value>%\d+) = OpLoad {re.escape(matrix_a_type)} "
+            rf"{re.escape(left_variable)}\b",
+            spv_code,
+        )
+        right_value = re.search(
+            rf"(?P<value>%\d+) = OpLoad {re.escape(matrix_b_type)} "
+            rf"{re.escape(right_variable)}\b",
+            spv_code,
+        )
+        zero_scalar = re.search(
+            rf"(?P<value>%\d+) = OpConstant "
+            rf"{re.escape(accumulator_component_type)} 0\.0\b",
+            spv_code,
+        )
+
+        assert left_value is not None
+        assert right_value is not None
+        assert zero_scalar is not None
+        zero_accumulator = re.search(
+            rf"(?P<value>%\d+) = OpConstantComposite "
+            rf"{re.escape(accumulator_type)} "
+            rf"{re.escape(zero_scalar.group('value'))}\b",
+            spv_code,
+        )
+        assert zero_accumulator is not None
+        multiply = re.search(
+            rf"(?P<value>%\d+) = OpCooperativeMatrixMulAddKHR "
+            rf"{re.escape(accumulator_type)} "
+            rf"{re.escape(left_value.group('value'))} "
+            rf"{re.escape(right_value.group('value'))} "
+            rf"{re.escape(zero_accumulator.group('value'))}\b",
+            spv_code,
+        )
+        assert multiply is not None
+        assert re.search(
+            rf"OpStore {re.escape(product_variable)} "
+            rf"{re.escape(multiply.group('value'))}\b",
+            spv_code,
+        )
+        assert "OpMatrixTimesMatrix" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_lowers_default_row_major_matrix_memory(self, tmp_path):
+        left_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        right_type = cooperative_matrix_type_source("float", 8, 8, "matrix_b")
+        result_type = cooperative_matrix_type_source("float", 8, 8, "accumulator")
+        profile_source = f"""
+        shader CooperativeMatrixMemory {{
+            compute {{
+                layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+                layout(set = 0, binding = 0) buffer float* input;
+                layout(set = 0, binding = 1) buffer float* output;
+
+                void main() {{
+                    {left_type} left;
+                    {right_type} right;
+                    {result_type} result;
+                    cooperative_matrix_load(left, input, 8);
+                    cooperative_matrix_load(right, input + 64, 8);
+                    result = cooperative_matrix_multiply(left, right);
+                    cooperative_matrix_store(output, result, 8);
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        assert spv_code.count("OpCooperativeMatrixLoadKHR") == 2
+        assert spv_code.count("OpCooperativeMatrixStoreKHR") == 1
+        assert spv_code.count("OpCooperativeMatrixMulAddKHR") == 1
+        assert spv_code.count("Aligned 16") == 3
+        assert "OpTypePointer StorageBuffer" in spv_code
+        assert re.search(r"OpDecorate %\d+ Block\b", spv_code)
+        assert "BufferBlock" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_lowers_workgroup_matrix_memory(self, tmp_path):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixWorkgroupMemory {{
+            compute {{
+                layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+                void main() {{
+                    threadgroup float[64] scratch;
+                    {matrix_type} matrix;
+                    cooperative_matrix_load(matrix, scratch, 8);
+                    cooperative_matrix_store(scratch, matrix, 8);
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        assert spv_code.count("OpCooperativeMatrixLoadKHR") == 1
+        assert spv_code.count("OpCooperativeMatrixStoreKHR") == 1
+        assert "OpTypePointer Workgroup" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_uses_power_of_two_memory_operand_alignment(self, tmp_path):
+        matrix_type = cooperative_matrix_type_source("float", 8, 3, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixNaturalAlignment {{
+            compute {{
+                layout(set = 0, binding = 0) buffer float* input;
+                layout(set = 0, binding = 1) buffer float* output;
+
+                void main() {{
+                    {matrix_type} matrix;
+                    cooperative_matrix_load(matrix, input, 3);
+                    cooperative_matrix_store(output, matrix, 3);
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        assert spv_code.count("Aligned 4") == 2
+        assert "Aligned 12" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_lowers_workgroup_vector_array_matrix_memory(self, tmp_path):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixWorkgroupVectorArray {{
+            compute {{
+                void main() {{
+                    threadgroup vec4[16] scratch;
+                    {matrix_type} matrix;
+                    cooperative_matrix_load(matrix, scratch, 2);
+                    cooperative_matrix_store(scratch, matrix, 2);
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        scratch = spirv_named_variable(spv_code, "scratch", storage_class="Workgroup")
+        assert re.search(
+            rf"%\d+ = OpAccessChain %\d+ {re.escape(scratch)} %\d+",
+            spv_code,
+        )
+        assert spv_code.count("Aligned 16") == 2
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    @pytest.mark.parametrize(
+        "pointer_expression",
+        (
+            pytest.param("scratch", id="standalone-vector"),
+            pytest.param("scratch[0]", id="vector-lane"),
+        ),
+    )
+    def test_opt_in_profile_rejects_non_array_workgroup_matrix_memory(
+        self, pointer_expression
+    ):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixWorkgroupVector {{
+            compute {{
+                void main() {{
+                    threadgroup vec4 scratch;
+                    {matrix_type} matrix;
+                    cooperative_matrix_load(matrix, {pointer_expression}, 2);
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_memory_rejected(
+            profile_source,
+            "only storage-buffer and workgroup array elements",
+            "cooperative-matrix-load-storage-class",
+            "spirv.cooperative_matrix.load-storage-class",
+        )
+
+    def test_opt_in_profile_accepts_zero_matrix_load_stride(self, tmp_path):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixZeroLoadStride {{
+            compute {{
+                layout(set = 0, binding = 0) buffer float* input;
+
+                void main() {{
+                    {matrix_type} matrix;
+                    cooperative_matrix_load(matrix, input, 0);
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        constant_values = spirv_integer_constant_values(spv_code)
+        load = re.search(
+            r"OpCooperativeMatrixLoadKHR %\d+ %\d+ %\d+ (?P<stride>%\d+) "
+            r"Aligned 16",
+            spv_code,
+        )
+        assert load is not None
+        assert constant_values[load.group("stride")] == 0
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_rejects_column_major_matrix_memory_after_row_major_type(
+        self,
+    ):
+        row_type = cooperative_matrix_type_source(
+            "float", 8, 8, "matrix_a", "row_major"
+        )
+        column_type = cooperative_matrix_type_source(
+            "float", 8, 8, "matrix_a", "column_major"
+        )
+        profile_source = f"""
+        shader CooperativeMatrixColumnMajorMemory {{
+            compute {{
+                layout(set = 0, binding = 0) buffer float* input;
+
+                void main() {{
+                    {row_type} row_matrix;
+                    {column_type} column_matrix;
+                    cooperative_matrix_load(column_matrix, input, 8);
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_memory_rejected(
+            profile_source,
+            "only default row-major layout; got 'column_major'",
+            "cooperative-matrix-load-layout",
+            "spirv.cooperative_matrix.load-row-major-layout",
+        )
+
+    @pytest.mark.parametrize(
+        ("operation", "message", "feature", "capability"),
+        (
+            pytest.param(
+                "cooperative_matrix_load(matrix, input + 1, 8);",
+                "pointer offset for load to be aligned to 16 bytes; got 4 bytes",
+                "cooperative-matrix-load-alignment",
+                "spirv.cooperative_matrix.load-alignment",
+                id="unaligned-pointer-offset",
+            ),
+            pytest.param(
+                "cooperative_matrix_load(matrix, input, 1);",
+                "byte stride for load to be aligned to 16 bytes; got 4 bytes",
+                "cooperative-matrix-load-alignment",
+                "spirv.cooperative_matrix.load-alignment",
+                id="unaligned-load-stride",
+            ),
+            pytest.param(
+                "cooperative_matrix_load(matrix, input, -1);",
+                "non-negative, compile-time 32-bit integer stride",
+                "cooperative-matrix-load-stride",
+                "spirv.cooperative_matrix.load-stride",
+                id="negative-load-stride",
+            ),
+            pytest.param(
+                "cooperative_matrix_store(output, matrix, 0);",
+                "positive, compile-time 32-bit integer stride",
+                "cooperative-matrix-store-stride",
+                "spirv.cooperative_matrix.store-stride",
+                id="zero-store-stride",
+            ),
+            pytest.param(
+                "cooperative_matrix_load(matrix, input, 4294967296);",
+                "non-negative, compile-time 32-bit integer stride",
+                "cooperative-matrix-load-stride",
+                "spirv.cooperative_matrix.load-stride",
+                id="oversized-load-stride",
+            ),
+        ),
+    )
+    def test_opt_in_profile_rejects_invalid_matrix_memory_alignment_and_stride(
+        self, operation, message, feature, capability
+    ):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixMemoryAlignment {{
+            compute {{
+                layout(set = 0, binding = 0) buffer float* input;
+                layout(set = 0, binding = 1) buffer float* output;
+
+                void main() {{
+                    {matrix_type} matrix;
+                    {operation}
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_memory_rejected(
+            profile_source, message, feature, capability
+        )
+
+    def test_opt_in_profile_preserves_storage_buffer_descriptor_arrays(self, tmp_path):
+        profile_source = """
+        shader CooperativeMatrixStorageBufferArrays {
+            StructuredBuffer<float> inputs[2] @binding(0);
+            RWStructuredBuffer<float> outputs[2] @binding(1);
+
+            compute {
+                void main() {
+                    float value = inputs[1].Load(0u);
+                    outputs[0].Store(1u, value);
+                }
+            }
+        }
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        inputs_block = spirv_named_id(spv_code, "inputsBuffer")
+        outputs_block = spirv_named_id(spv_code, "outputsBuffer")
+        inputs_var = spirv_named_variable(
+            spv_code, "inputs", storage_class="StorageBuffer"
+        )
+        outputs_var = spirv_named_variable(
+            spv_code, "outputs", storage_class="StorageBuffer"
+        )
+        assert f"OpDecorate {inputs_block} Block" in spv_code
+        assert f"OpDecorate {outputs_block} Block" in spv_code
+        assert f"OpDecorate {inputs_var} Binding 0" in spv_code
+        assert f"OpDecorate {outputs_var} Binding 1" in spv_code
+        assert "BufferBlock" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_preserves_structured_buffer_counters(self, tmp_path):
+        profile_source = """
+        shader CooperativeMatrixStorageBufferCounter {
+            RWStructuredBuffer<uint> counters @binding(0);
+
+            compute {
+                void main() {
+                    uint index = counters.IncrementCounter();
+                    counters.Store(index, index);
+                }
+            }
+        }
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        counters_var = spirv_named_variable(
+            spv_code, "counters", storage_class="StorageBuffer"
+        )
+        counter_var = spirv_named_variable(
+            spv_code, "countersCounter", storage_class="StorageBuffer"
+        )
+        assert f"OpDecorate {counters_var} Binding 0" in spv_code
+        assert f"OpDecorate {counter_var} Binding 1" in spv_code
+        assert "OpAtomicIAdd" in spv_code
+        assert "BufferBlock" not in spv_code
+        assert "; Version: 1.3" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_enables_device_scope_vulkan_memory_model_for_counters(
+        self, tmp_path
+    ):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixDeviceScopeCounter {{
+            RWStructuredBuffer<uint> counters @binding(0);
+
+            compute {{
+                void main() {{
+                    {matrix_type} matrix;
+                    uint index = counters.IncrementCounter();
+                    cooperative_matrix_element(matrix, 0) = float(index);
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        assert "OpCapability VulkanMemoryModel" in spv_code
+        assert "OpCapability VulkanMemoryModelDeviceScopeKHR" in spv_code
+        assert 'OpExtension "SPV_KHR_vulkan_memory_model"' in spv_code
+        assert "OpMemoryModel Logical VulkanKHR" in spv_code
+        assert "OpAtomicIAdd" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_spirv_1_4_profile_lists_storage_buffer_counter_array_interfaces(
+        self, tmp_path
+    ):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixCounterArrayInterfaces {{
+            RWStructuredBuffer<uint> counters[2] @binding(0);
+
+            compute {{
+                void main() {{
+                    {matrix_type} matrix;
+                    uint index = counters[1].IncrementCounter();
+                    cooperative_matrix_element(matrix, 0) = float(index);
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(
+            target_profile="vulkan-khr-cooperative-matrix",
+            include_resource_interface_variables=True,
+        )
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        counters_var = spirv_named_variable(
+            spv_code, "counters", storage_class="StorageBuffer"
+        )
+        counter_var = spirv_named_variable(
+            spv_code, "countersCounter", storage_class="StorageBuffer"
+        )
+        entry_point = next(
+            line for line in spv_code.splitlines() if line.startswith("OpEntryPoint")
+        )
+        assert counters_var in entry_point.split()
+        assert counter_var in entry_point.split()
+        assert "; Version: 1.4" in spv_code
+        assert "OpCapability VulkanMemoryModelDeviceScopeKHR" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.2")
+
+    def test_opt_in_profile_rejects_matrix_memory_in_dynamic_control_flow(self):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixDynamicControlFlow {{
+            compute {{
+                layout(set = 0, binding = 0) buffer float* input;
+
+                void main() {{
+                    {matrix_type} matrix;
+                    if (gl_LocalInvocationIndex == 0u) {{
+                        cooperative_matrix_load(matrix, input, 8);
+                    }}
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_memory_rejected(
+            profile_source,
+            "statically unconditional subgroup participation for load",
+            "cooperative-matrix-load-control-flow",
+            "spirv.cooperative_matrix.load-uniform-control-flow",
+        )
+
+    @pytest.mark.parametrize(
+        "control_flow",
+        (
+            pytest.param(
+                "if (gl_LocalInvocationIndex == 0u) { return; }",
+                id="if-return",
+            ),
+            pytest.param(
+                "match gl_LocalInvocationIndex { " "0u => { return; } " "_ => { } " "}",
+                id="match-return",
+            ),
+            pytest.param(
+                "for (uint i = 0u; i < gl_LocalInvocationIndex; i++) { return; }",
+                id="loop-return",
+            ),
+        ),
+    )
+    def test_opt_in_profile_rejects_matrix_memory_after_divergent_exit(
+        self, control_flow
+    ):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixDivergentExit {{
+            compute {{
+                layout(set = 0, binding = 0) buffer float* input;
+
+                void main() {{
+                    {matrix_type} matrix;
+                    {control_flow}
+                    cooperative_matrix_load(matrix, input, 8);
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_memory_rejected(
+            profile_source,
+            "statically unconditional subgroup participation for load",
+            "cooperative-matrix-load-control-flow",
+            "spirv.cooperative_matrix.load-uniform-control-flow",
+        )
+
+    def test_opt_in_profile_rejects_matrix_load_in_for_update(self):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixForUpdate {{
+            compute {{
+                layout(set = 0, binding = 0) buffer float* input;
+
+                void main() {{
+                    {matrix_type} matrix;
+                    for (
+                        uint i = 0u;
+                        i < gl_LocalInvocationIndex;
+                        matrix = cooperative_matrix_load(matrix, input, 8)
+                    ) {{
+                        i++;
+                    }}
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_memory_rejected(
+            profile_source,
+            "statically unconditional subgroup participation for load",
+            "cooperative-matrix-load-control-flow",
+            "spirv.cooperative_matrix.load-uniform-control-flow",
+        )
+
+    @pytest.mark.parametrize("loop_kind", ("while", "do-while"))
+    def test_opt_in_profile_rejects_matrix_store_in_loop_condition(self, loop_kind):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        if loop_kind == "while":
+            loop = "while (cooperative_matrix_store(output, matrix, 8)) { }"
+        else:
+            loop = "do { } while (cooperative_matrix_store(output, matrix, 8));"
+        profile_source = f"""
+        shader CooperativeMatrixLoopCondition {{
+            compute {{
+                layout(set = 0, binding = 0) buffer float* output;
+
+                void main() {{
+                    {matrix_type} matrix;
+                    {loop}
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_memory_rejected(
+            profile_source,
+            "statically unconditional subgroup participation for store",
+            "cooperative-matrix-store-control-flow",
+            "spirv.cooperative_matrix.store-uniform-control-flow",
+        )
+
+    def test_opt_in_profile_rejects_matrix_memory_in_helper_function(self):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixHelperControlFlow {{
+            compute {{
+                layout(set = 0, binding = 0) buffer float* input;
+
+                void load_matrix() {{
+                    {matrix_type} matrix;
+                    cooperative_matrix_load(matrix, input, 8);
+                }}
+
+                void main() {{
+                    load_matrix();
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_memory_rejected(
+            profile_source,
+            "load directly in an entry point so subgroup participation can be proven",
+            "cooperative-matrix-load-control-flow",
+            "spirv.cooperative_matrix.load-uniform-control-flow",
+        )
+
+    @pytest.mark.parametrize(
+        "pointer_setup",
+        (
+            pytest.param("input += 4;", id="resource-pointer"),
+            pytest.param(
+                "device float* cursor = input; cursor += 4;",
+                id="copied-pointer",
+            ),
+            pytest.param(
+                "device float* cursor = input[1];",
+                id="literal-element-alias",
+            ),
+            pytest.param(
+                "device float* cursor = input[gl_LocalInvocationIndex];",
+                id="nonuniform-element-alias",
+            ),
+        ),
+    )
+    def test_opt_in_profile_rejects_mutable_matrix_memory_pointer_offsets(
+        self, pointer_setup
+    ):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        pointer_name = "cursor" if "cursor" in pointer_setup else "input"
+        profile_source = f"""
+        shader CooperativeMatrixMutablePointerOffset {{
+            compute {{
+                layout(set = 0, binding = 0) buffer float* input;
+
+                void main() {{
+                    {matrix_type} matrix;
+                    {pointer_setup}
+                    cooperative_matrix_load(matrix, {pointer_name}, 8);
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_memory_rejected(
+            profile_source,
+            "statically provable subgroup-uniform offset",
+            "cooperative-matrix-load-uniformity",
+            "spirv.cooperative_matrix.load-uniformity",
+        )
+
+    @pytest.mark.parametrize(
+        ("operation", "feature", "capability", "message"),
+        (
+            pytest.param(
+                "cooperative_matrix_load(matrix, input, 8, 0);",
+                "cooperative-matrix-load-memory-contract",
+                "spirv.cooperative_matrix.load-memory-contract",
+                "default row-major form",
+                id="load-origin-or-layout",
+            ),
+            pytest.param(
+                "cooperative_matrix_store(output, matrix, 8, 0);",
+                "cooperative-matrix-store-memory-contract",
+                "spirv.cooperative_matrix.store-memory-contract",
+                "default row-major form",
+                id="store-origin-or-layout",
+            ),
+            pytest.param(
+                "cooperative_matrix_load(matrix, input, stride);",
+                "cooperative-matrix-load-stride",
+                "spirv.cooperative_matrix.load-stride",
+                "non-negative, compile-time 32-bit integer stride",
+                id="dynamic-load-stride",
+            ),
+            pytest.param(
+                "cooperative_matrix_load(matrix, input + offset, 8);",
+                "cooperative-matrix-load-uniformity",
+                "spirv.cooperative_matrix.load-uniformity",
+                "statically provable subgroup-uniform offset",
+                id="dynamic-load-pointer-offset",
+            ),
+        ),
+    )
+    def test_opt_in_profile_rejects_unrepresented_matrix_memory_contracts(
+        self, operation, feature, capability, message
+    ):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixMemoryContract {{
+            compute {{
+                layout(set = 0, binding = 0) buffer float* input;
+                layout(set = 0, binding = 1) buffer float* output;
+
+                void main() {{
+                    {matrix_type} matrix;
+                    int stride = 8;
+                    int offset = 0;
+                    {operation}
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_memory_rejected(
+            profile_source, message, feature, capability
+        )
+
+    @pytest.mark.parametrize(
+        ("element_type", "stride"),
+        (
+            pytest.param("int", 8, id="scalar"),
+            pytest.param("vec4", 2, id="vector"),
+        ),
+    )
+    def test_opt_in_profile_accepts_different_matrix_memory_pointee_types(
+        self, tmp_path, element_type, stride
+    ):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixMemoryComponent {{
+            compute {{
+                layout(set = 0, binding = 0) buffer {element_type}* input;
+
+                void main() {{
+                    {matrix_type} matrix;
+                    cooperative_matrix_load(matrix, input, {stride});
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        assert "OpCooperativeMatrixLoadKHR" in spv_code
+        assert "Aligned 16" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    @pytest.mark.parametrize(
+        ("declaration", "operation", "feature", "capability", "message"),
+        (
+            pytest.param(
+                "RWStructuredBuffer<float> data @writeonly;",
+                "cooperative_matrix_load(matrix, data, 8);",
+                "cooperative-matrix-load-buffer-access",
+                "spirv.cooperative_matrix.load-buffer-access",
+                "requires a readable source buffer",
+                id="load-writeonly",
+            ),
+            pytest.param(
+                "StructuredBuffer<float> data;",
+                "cooperative_matrix_store(data, matrix, 8);",
+                "cooperative-matrix-store-buffer-access",
+                "spirv.cooperative_matrix.store-buffer-access",
+                "requires a writable destination buffer",
+                id="store-readonly",
+            ),
+            pytest.param(
+                "RWStructuredBuffer<float> data @coherent;",
+                "cooperative_matrix_load(matrix, data, 8);",
+                "cooperative-matrix-load-memory-operands",
+                "spirv.cooperative_matrix.load-memory-operands",
+                "does not yet preserve volatile or coherent memory operands",
+                id="load-coherent",
+            ),
+            pytest.param(
+                "RWStructuredBuffer<float> data @volatile;",
+                "cooperative_matrix_store(data, matrix, 8);",
+                "cooperative-matrix-store-memory-operands",
+                "spirv.cooperative_matrix.store-memory-operands",
+                "does not yet preserve volatile or coherent memory operands",
+                id="store-volatile",
+            ),
+        ),
+    )
+    def test_opt_in_profile_rejects_unpreserved_matrix_memory_access_contracts(
+        self, declaration, operation, feature, capability, message
+    ):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixMemoryAccess {{
+            {declaration}
+
+            compute {{
+                void main() {{
+                    {matrix_type} matrix;
+                    {operation}
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_memory_rejected(
+            profile_source, message, feature, capability
+        )
+
+    def test_opt_in_profile_rejects_function_matrix_memory(self):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixFunctionMemory {{
+            compute {{
+                void main() {{
+                    float values[64];
+                    {matrix_type} matrix;
+                    cooperative_matrix_load(matrix, values, 8);
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_memory_rejected(
+            profile_source,
+            "only storage-buffer and workgroup array elements",
+            "cooperative-matrix-load-storage-class",
+            "spirv.cooperative_matrix.load-storage-class",
+        )
+
+    def test_opt_in_profile_rejects_scalar_storage_block_matrix_memory(self):
+        matrix_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixScalarStorageBlock {{
+            struct ScalarBlock {{
+                float value;
+            }};
+
+            ScalarBlock data @glsl_buffer_block(std430) @binding(0);
+
+            compute {{
+                void main() {{
+                    {matrix_type} matrix;
+                    cooperative_matrix_load(matrix, data.value, 8);
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_memory_rejected(
+            profile_source,
+            "only storage-buffer and workgroup array elements",
+            "cooperative-matrix-load-storage-class",
+            "spirv.cooperative_matrix.load-storage-class",
+        )
+
+    def test_metal_matrix_memory_translates_to_valid_spirv(self, tmp_path):
+        source_path = tmp_path / "matrix_memory.metal"
+        source_path.write_text(
+            """
+            #include <metal_stdlib>
+            #include <metal_simdgroup_matrix>
+            using namespace metal;
+
+            kernel void matrix_memory(
+                device float* input [[buffer(0)]],
+                device float* output [[buffer(1)]]) {
+              simdgroup_matrix<float, 8, 8> left;
+              simdgroup_matrix<float, 8, 8> right;
+              simdgroup_matrix<float, 8, 8> result;
+              simdgroup_load(left, input, 8);
+              simdgroup_load(right, input + 64, 8);
+              result = left * right;
+              simdgroup_store(result, output, 8);
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        spv_code = crosstl.translate(
+            str(source_path),
+            backend="vulkan-khr-cooperative-matrix",
+            format_output=False,
+        )
+
+        assert spv_code.count("OpCooperativeMatrixLoadKHR") == 2
+        assert spv_code.count("OpCooperativeMatrixStoreKHR") == 1
+        assert spv_code.count("OpCooperativeMatrixMulAddKHR") == 1
+        assert "OpTypePointer StorageBuffer" in spv_code
+        assert "cooperative-matrix-use-role" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_specializes_unique_neutral_local_matrix_roles(
+        self, tmp_path
+    ):
+        neutral_type = cooperative_matrix_type_source("float", 8, 8, "unspecified")
+        profile_source = f"""
+        shader CooperativeMatrixRoleSpecialization {{
+            compute {{
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+                void main() {{
+                    {neutral_type} left;
+                    {neutral_type} right;
+                    {neutral_type} result =
+                        cooperative_matrix_multiply(left, right);
+                    cooperative_matrix_element(result, 0) =
+                        cooperative_matrix_element(left, 0);
+                }}
+            }}
+        }}
+        """
+        ast = Parser(Lexer(profile_source).tokens).parse()
+        source_types = [
+            node
+            for node in ast.walk()
+            if isinstance(node, CooperativeMatrixType) and node.use == "unspecified"
+        ]
+        multiply = next(
+            node
+            for node in ast.walk()
+            if isinstance(node, CooperativeMatrixOpNode)
+            and node.operation == "multiply"
+        )
+        multiply.result_type = source_types[0]
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(ast)
+
+        constant_values = spirv_integer_constant_values(spv_code)
+        roles = {
+            constant_values[declaration.group("use")]
+            for declaration in re.finditer(
+                r"%\d+ = OpTypeCooperativeMatrixKHR "
+                r"%\d+ %\d+ %\d+ %\d+ (?P<use>%\d+)\b",
+                spv_code,
+            )
+        }
+        assert roles == {0, 1, 2}
+        assert spv_code.count("OpCooperativeMatrixMulAddKHR") == 1
+        assert spv_code.count("OpAccessChain") == 2
+        assert all(matrix_type.use == "unspecified" for matrix_type in source_types)
+        assert multiply.result_type.use == "unspecified"
+        assert all(
+            matrix_type.generic_args[4] == "unspecified" for matrix_type in source_types
+        )
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_specializes_neutral_assignment_result_role(self, tmp_path):
+        neutral_type = cooperative_matrix_type_source("float", 8, 8, "unspecified")
+        profile_source = f"""
+        shader CooperativeMatrixAssignmentRoleSpecialization {{
+            compute {{
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+                void main() {{
+                    {neutral_type} left;
+                    {neutral_type} right;
+                    {neutral_type} result;
+                    result = cooperative_matrix_multiply(left, right);
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        assert spv_code.count("OpCooperativeMatrixMulAddKHR") == 1
+        assert "cooperative-matrix-use-role" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_specializes_sibling_scope_roles_by_declaration(
+        self, tmp_path
+    ):
+        neutral_type = cooperative_matrix_type_source("float", 8, 8, "unspecified")
+        profile_source = f"""
+        shader CooperativeMatrixSiblingRoleScopes {{
+            compute {{
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+                void main() {{
+                    if (true) {{
+                        {neutral_type} left;
+                        {neutral_type} right;
+                        {neutral_type} result =
+                            cooperative_matrix_multiply(left, right);
+                    }}
+                    if (true) {{
+                        {neutral_type} left;
+                        {neutral_type} right;
+                        {neutral_type} result =
+                            cooperative_matrix_multiply(left, right);
+                    }}
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        assert spv_code.count("OpCooperativeMatrixMulAddKHR") == 2
+        assert "cooperative-matrix-role-specialization-shadowing" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_specializes_roles_in_inlined_buffer_helper(self, tmp_path):
+        neutral_type = cooperative_matrix_type_source("float", 8, 8, "unspecified")
+        profile_source = f"""
+        shader CooperativeMatrixInlineRoleSpecialization {{
+            compute {{
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                layout(set = 0, binding = 0) buffer float* output;
+
+                void write_product(float* values) {{
+                    {neutral_type} left;
+                    {neutral_type} right;
+                    {neutral_type} result =
+                        cooperative_matrix_multiply(left, right);
+                    values[0] = cooperative_matrix_element(result, 0);
+                }}
+
+                void main() {{
+                    write_product(output);
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        assert spv_code.count("OpCooperativeMatrixMulAddKHR") == 1
+        assert "OpFunctionCall" not in spv_code
+        assert "cooperative-matrix-use-role" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_opt_in_profile_rejects_conflicting_neutral_local_matrix_roles(self):
+        neutral_type = cooperative_matrix_type_source("float", 8, 8, "unspecified")
+        profile_source = f"""
+        shader CooperativeMatrixRoleConflict {{
+            compute {{
+                void main() {{
+                    {neutral_type} value;
+                    {neutral_type} left;
+                    {neutral_type} right;
+                    {neutral_type} first =
+                        cooperative_matrix_multiply(value, right);
+                    {neutral_type} second =
+                        cooperative_matrix_multiply(left, value);
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_role_specialization_rejected(
+            profile_source,
+            "conflicting roles for local 'value': matrix_a, matrix_b",
+            "conflict",
+        )
+
+    def test_opt_in_profile_rejects_unresolved_neutral_local_matrix_role(self):
+        neutral_type = cooperative_matrix_type_source("float", 8, 8, "unspecified")
+        profile_source = f"""
+        shader CooperativeMatrixRoleUnresolved {{
+            compute {{
+                void main() {{
+                    {neutral_type} value;
+                    cooperative_matrix_element(value, 0) = 1.0;
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_role_specialization_rejected(
+            profile_source,
+            "could not infer a MatrixA, MatrixB, or accumulator role for local 'value'",
+            "unresolved",
+        )
+
+    def test_opt_in_profile_rejects_neutral_matrix_value_alias(self):
+        neutral_type = cooperative_matrix_type_source("float", 8, 8, "unspecified")
+        profile_source = f"""
+        shader CooperativeMatrixRoleEscape {{
+            compute {{
+                void main() {{
+                    {neutral_type} left;
+                    {neutral_type} right;
+                    {neutral_type} alias = left;
+                    {neutral_type} result =
+                        cooperative_matrix_multiply(left, right);
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_role_specialization_rejected(
+            profile_source,
+            "value aliases or non-multiply initializers for local 'alias'",
+            "alias",
+        )
+
+    def test_opt_in_profile_rejects_escaping_neutral_local_matrix_role(self):
+        neutral_type = cooperative_matrix_type_source("float", 8, 8, "unspecified")
+        explicit_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixRoleEscape {{
+            compute {{
+                void consume({explicit_type} value) {{}}
+
+                void main() {{
+                    {neutral_type} left;
+                    {neutral_type} right;
+                    {neutral_type} result =
+                        cooperative_matrix_multiply(left, right);
+                    consume(left);
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_role_specialization_rejected(
+            profile_source,
+            "local 'left' because it escapes direct matrix multiply",
+            "escape",
+        )
+
+    def test_opt_in_profile_rejects_wrapped_neutral_multiply_operand(self):
+        neutral_type = cooperative_matrix_type_source("float", 8, 8, "unspecified")
+        explicit_type = cooperative_matrix_type_source("float", 8, 8, "matrix_a")
+        profile_source = f"""
+        shader CooperativeMatrixWrappedRoleEscape {{
+            compute {{
+                {explicit_type} passthrough({explicit_type} value) {{
+                    return value;
+                }}
+
+                void main() {{
+                    {neutral_type} left;
+                    {neutral_type} right;
+                    {neutral_type} result = cooperative_matrix_multiply(
+                        passthrough(left), right);
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_role_specialization_rejected(
+            profile_source,
+            "local 'left' because it escapes direct matrix multiply",
+            "escape",
+        )
+
+    def test_opt_in_profile_rejects_shadowed_neutral_local_matrix_role(self):
+        neutral_type = cooperative_matrix_type_source("float", 8, 8, "unspecified")
+        profile_source = f"""
+        shader CooperativeMatrixRoleShadowing {{
+            compute {{
+                void main() {{
+                    {neutral_type} value;
+                    {{
+                        {neutral_type} value;
+                    }}
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_role_specialization_rejected(
+            profile_source,
+            "unique unshadowed local declaration for 'value'",
+            "shadowing",
+        )
+
+    def test_opt_in_profile_rejects_neutral_matrix_parameter_role(self):
+        neutral_type = cooperative_matrix_type_source("float", 8, 8, "unspecified")
+        profile_source = f"""
+        shader CooperativeMatrixParameterRole {{
+            compute {{
+                float read_value({neutral_type} value) {{
+                    return cooperative_matrix_element(value, 0);
+                }}
+
+                void main() {{}}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_role_specialization_rejected(
+            profile_source,
+            "role-neutral parameter 'value' requires an explicit role",
+            "parameter",
+        )
+
+    def test_opt_in_profile_keeps_neutral_chained_result_conversion_closed(self):
+        neutral_type = cooperative_matrix_type_source("float", 8, 8, "unspecified")
+        profile_source = f"""
+        shader CooperativeMatrixNeutralRoleChain {{
+            compute {{
+                void main() {{
+                    {neutral_type} left;
+                    {neutral_type} middle;
+                    {neutral_type} right;
+                    {neutral_type} result = cooperative_matrix_multiply(
+                        cooperative_matrix_multiply(left, middle), right);
+                }}
+            }}
+        }}
+        """
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+
+        with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
+            generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        assert exc_info.value.feature == "cooperative-matrix-role-conversion"
+        assert exc_info.value.missing_capabilities == (
+            "spirv.cooperative_matrix.role-conversion",
+        )
+        emitted = "\n".join(generator.code_lines)
+        assert "cooperative-matrix-use-role" not in emitted
+        assert "OpTypeCooperativeMatrixKHR" in emitted
+        assert "OpCooperativeMatrixMulAddKHR" not in emitted
+        assert "WARNING" not in emitted
+
+    def test_metal_neutral_matrix_roles_translate_to_valid_spirv(self, tmp_path):
+        source_path = tmp_path / "role_single.metal"
+        source_path.write_text(
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            kernel void role_single(device float* output [[buffer(0)]]) {
+              simdgroup_matrix<float, 8, 8> left;
+              simdgroup_matrix<float, 8, 8> right;
+              left.thread_elements()[0] = 1.0f;
+              right.thread_elements()[0] = 2.0f;
+              simdgroup_matrix<float, 8, 8> result = left * right;
+              output[0] = result.thread_elements()[0];
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        spv_code = crosstl.translate(
+            str(source_path),
+            backend="vulkan-khr-cooperative-matrix",
+            format_output=False,
+        )
+
+        assert spv_code.count("OpTypeCooperativeMatrixKHR") == 3
+        assert spv_code.count("OpCooperativeMatrixMulAddKHR") == 1
+        assert spv_code.count("OpAccessChain") >= 4
+        assert "cooperative-matrix-use-role" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    def test_metal_neutral_matrix_chain_reaches_role_conversion_diagnostic(
+        self, tmp_path
+    ):
+        source_path = tmp_path / "role_chain.metal"
+        source_path.write_text(
+            """
+            #include <metal_stdlib>
+            using namespace metal;
+
+            kernel void role_chain(device float* output [[buffer(0)]]) {
+              simdgroup_matrix<float, 8, 8> left;
+              simdgroup_matrix<float, 8, 8> middle;
+              simdgroup_matrix<float, 8, 8> right;
+              simdgroup_matrix<float, 8, 8> result = (left * middle) * right;
+              output[0] = result.thread_elements()[0];
+            }
+            """,
+            encoding="utf-8",
+        )
+
+        with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
+            crosstl.translate(
+                str(source_path),
+                backend="vulkan-khr-cooperative-matrix",
+                format_output=False,
+            )
+
+        assert exc_info.value.feature == "cooperative-matrix-role-conversion"
+        assert exc_info.value.missing_capabilities == (
+            "spirv.cooperative_matrix.role-conversion",
+        )
+
+    def test_opt_in_profile_propagates_matrix_multiply_assignment_result_contract(
+        self, tmp_path
+    ):
+        left_type = cooperative_matrix_type_source("float", 8, 4, "matrix_a")
+        right_type = cooperative_matrix_type_source("float", 4, 8, "matrix_b")
+        result_type = cooperative_matrix_type_source("float", 8, 8, "accumulator")
+        profile_source = f"""
+        shader CooperativeMatrixMultiplyAssignment {{
+            compute {{
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+                void main() {{
+                    {left_type} left;
+                    {right_type} right;
+                    {result_type} product;
+                    product = cooperative_matrix_multiply(left, right);
+                }}
+            }}
+        }}
+        """
+
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        spv_code = generator.generate(Parser(Lexer(profile_source).tokens).parse())
+
+        assert spv_code.count("OpCooperativeMatrixMulAddKHR") == 1
+        assert "OpConstantComposite" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path, target_env="vulkan1.1")
+
+    @pytest.mark.parametrize(
+        ("left_use", "right_use", "message"),
+        (
+            (
+                "accumulator",
+                "matrix_b",
+                "left value to use role matrix_a; got accumulator",
+            ),
+            (
+                "matrix_a",
+                "matrix_a",
+                "right value to use role matrix_b; got matrix_a",
+            ),
+        ),
+    )
+    def test_opt_in_profile_rejects_wrong_matrix_multiply_input_use_roles(
+        self, left_use, right_use, message
+    ):
+        profile_source = cooperative_matrix_multiply_profile_source(
+            cooperative_matrix_type_source("float", 8, 4, left_use),
+            cooperative_matrix_type_source("float", 4, 8, right_use),
+            cooperative_matrix_type_source("float", 8, 8, "accumulator"),
+        )
+
+        assert_cooperative_matrix_multiply_rejected(
+            profile_source,
+            message,
+            "cooperative-matrix-multiply-use-role",
+            "spirv.cooperative_matrix.multiply-use-role",
+        )
+
+    def test_opt_in_profile_rejects_non_accumulator_matrix_multiply_result(self):
+        profile_source = cooperative_matrix_multiply_profile_source(
+            cooperative_matrix_type_source("float", 8, 4, "matrix_a"),
+            cooperative_matrix_type_source("float", 4, 8, "matrix_b"),
+            cooperative_matrix_type_source("float", 8, 8, "matrix_a"),
+        )
+
+        assert_cooperative_matrix_multiply_rejected(
+            profile_source,
+            "result value to use role accumulator; got matrix_a",
+            "cooperative-matrix-multiply-use-role",
+            "spirv.cooperative_matrix.multiply-use-role",
+        )
+
+    def test_opt_in_profile_rejects_matrix_multiply_without_result_contract(self):
+        left_type = cooperative_matrix_type_source("float", 8, 4, "matrix_a")
+        right_type = cooperative_matrix_type_source("float", 4, 8, "matrix_b")
+        profile_source = f"""
+        shader CooperativeMatrixMultiplyProfile {{
+            compute {{
+                void main() {{
+                    {left_type} left;
+                    {right_type} right;
+                    auto product = cooperative_matrix_multiply(left, right);
+                }}
+            }}
+        }}
+        """
+
+        assert_cooperative_matrix_multiply_rejected(
+            profile_source,
+            "require an explicit result type",
+            "cooperative-matrix-result-contract",
+            "spirv.cooperative_matrix.result-contract",
+        )
+
+    @pytest.mark.parametrize(
+        ("right_rows", "result_rows"),
+        (
+            (5, 8),
+            (4, 7),
+        ),
+    )
+    def test_opt_in_profile_rejects_matrix_multiply_shape_mismatch(
+        self, right_rows, result_rows
+    ):
+        profile_source = cooperative_matrix_multiply_profile_source(
+            cooperative_matrix_type_source("float", 8, 4, "matrix_a"),
+            cooperative_matrix_type_source("float", right_rows, 8, "matrix_b"),
+            cooperative_matrix_type_source("float", result_rows, 8, "accumulator"),
+        )
+
+        assert_cooperative_matrix_multiply_rejected(
+            profile_source,
+            "requires compatible MxK and KxN operands and an MxN result",
+            "cooperative-matrix-multiply-shape",
+            "spirv.cooperative_matrix.multiply-shape",
+        )
+
+    def test_opt_in_profile_rejects_matrix_multiply_component_mismatch(self):
+        profile_source = cooperative_matrix_multiply_profile_source(
+            cooperative_matrix_type_source("float", 8, 4, "matrix_a"),
+            cooperative_matrix_type_source("i32", 4, 8, "matrix_b"),
+            cooperative_matrix_type_source("float", 8, 8, "accumulator"),
+        )
+
+        assert_cooperative_matrix_multiply_rejected(
+            profile_source,
+            "currently requires matching 32-bit floating-point",
+            "cooperative-matrix-multiply-component-type",
+            "spirv.cooperative_matrix.multiply-component-type",
+        )
+
+    @pytest.mark.parametrize("component", ("i32", "u32"))
+    def test_opt_in_profile_rejects_integer_matrix_multiply_components(self, component):
+        profile_source = cooperative_matrix_multiply_profile_source(
+            cooperative_matrix_type_source(component, 8, 4, "matrix_a"),
+            cooperative_matrix_type_source(component, 4, 8, "matrix_b"),
+            cooperative_matrix_type_source(component, 8, 8, "accumulator"),
+        )
+
+        assert_cooperative_matrix_multiply_rejected(
+            profile_source,
+            "currently requires matching 32-bit floating-point",
+            "cooperative-matrix-multiply-component-type",
+            "spirv.cooperative_matrix.multiply-component-type",
+        )
+
+    @pytest.mark.parametrize(
+        ("expression", "message"),
+        (
+            (
+                "cooperative_matrix_multiply(left)",
+                "requires exactly two operands",
+            ),
+            (
+                "cooperative_matrix_multiply(left, right, right)",
+                "requires exactly two operands",
+            ),
+        ),
+    )
+    def test_opt_in_profile_rejects_matrix_multiply_argument_count(
+        self, expression, message
+    ):
+        profile_source = cooperative_matrix_multiply_profile_source(
+            cooperative_matrix_type_source("float", 8, 4, "matrix_a"),
+            cooperative_matrix_type_source("float", 4, 8, "matrix_b"),
+            cooperative_matrix_type_source("float", 8, 8, "accumulator"),
+            expression=expression,
+        )
+
+        assert_cooperative_matrix_multiply_rejected(
+            profile_source,
+            message,
+            "cooperative-matrix-multiply-arity",
+            "spirv.cooperative_matrix.multiply-arity",
+        )
+
+    def test_opt_in_profile_keeps_chained_matrix_multiply_role_conversion_closed(
+        self,
+    ):
+        profile_source = cooperative_matrix_multiply_profile_source(
+            cooperative_matrix_type_source("float", 8, 4, "matrix_a"),
+            cooperative_matrix_type_source("float", 4, 8, "matrix_b"),
+            cooperative_matrix_type_source("float", 8, 8, "accumulator"),
+            expression=(
+                "cooperative_matrix_multiply("
+                "cooperative_matrix_multiply(left, right), right)"
+            ),
+        )
+
+        assert_cooperative_matrix_multiply_rejected(
+            profile_source,
+            "cannot be consumed as the outer left matrix_a operand",
+            "cooperative-matrix-role-conversion",
+            "spirv.cooperative_matrix.role-conversion",
+        )
+
+    @pytest.mark.parametrize(
+        ("use", "expected_value"),
+        (("matrix_a", 0), ("matrix_b", 1), ("accumulator", 2)),
+    )
+    def test_opt_in_profile_preserves_cooperative_matrix_use(self, use, expected_value):
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        matrix_type = generator.map_crossgl_type(
+            CooperativeMatrixType(
+                PrimitiveType("float"), 8, 8, scope="subgroup", use=use
+            )
+        )
+        emitted = "\n".join(generator.code_lines)
+        declaration = re.search(
+            rf"%{matrix_type.id} = OpTypeCooperativeMatrixKHR "
+            r"%\d+ %\d+ %\d+ %\d+ (?P<use>%\d+)",
+            emitted,
+        )
+
+        assert declaration is not None
+        assert spirv_integer_constant_values(emitted)[declaration.group("use")] == (
+            expected_value
+        )
+
+    @pytest.mark.parametrize(
+        ("component", "expected_type"),
+        (
+            ("float", "OpTypeFloat 32"),
+            ("i32", "OpTypeInt 32 1"),
+            ("u32", "OpTypeInt 32 0"),
+        ),
+    )
+    def test_opt_in_profile_preserves_supported_component_types(
+        self, component, expected_type
+    ):
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        matrix_type = generator.map_crossgl_type(
+            CooperativeMatrixType(
+                PrimitiveType(component), 8, 8, scope="subgroup", use="matrix_a"
+            )
+        )
+        emitted = "\n".join(generator.code_lines)
+        declaration = re.search(
+            rf"%{matrix_type.id} = OpTypeCooperativeMatrixKHR " r"(?P<component>%\d+)",
+            emitted,
+        )
+
+        assert declaration is not None
+        assert f"{declaration.group('component')} = {expected_type}" in emitted
+
+    @pytest.mark.parametrize(
+        ("matrix_type", "feature", "capability", "message"),
+        (
+            pytest.param(
+                CooperativeMatrixType(
+                    PrimitiveType("float"),
+                    8,
+                    8,
+                    scope="subgroup",
+                    use="unspecified",
+                ),
+                "cooperative-matrix-use-role",
+                "spirv.cooperative_matrix.use-role",
+                "require an explicit matrix_a, matrix_b, or accumulator use role",
+                id="unspecified-use",
+            ),
+            pytest.param(
+                CooperativeMatrixType(
+                    PrimitiveType("float"),
+                    IdentifierNode("ROWS"),
+                    8,
+                    scope="subgroup",
+                    use="matrix_a",
+                ),
+                "cooperative-matrix-shape",
+                "spirv.cooperative_matrix.static-shape",
+                "requires positive literal row and column dimensions",
+                id="symbolic-shape",
+            ),
+            pytest.param(
+                CooperativeMatrixType(
+                    PrimitiveType("float"),
+                    8,
+                    8,
+                    scope="workgroup",
+                    use="matrix_a",
+                ),
+                "cooperative-matrix-scope",
+                "spirv.cooperative_matrix.subgroup-scope",
+                "supports only subgroup scope",
+                id="non-subgroup-scope",
+            ),
+            pytest.param(
+                CooperativeMatrixType(
+                    PrimitiveType("f16"),
+                    8,
+                    8,
+                    scope="subgroup",
+                    use="matrix_a",
+                ),
+                "cooperative-matrix-component-type",
+                "spirv.cooperative_matrix.component-type",
+                "require a 32-bit float, signed integer, or unsigned integer component",
+                id="f16-component",
+            ),
+        ),
+    )
+    def test_opt_in_profile_rejects_unsupported_cooperative_matrix_contracts(
+        self, matrix_type, feature, capability, message
+    ):
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+
+        with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
+            generator.map_crossgl_type(matrix_type)
+
+        assert message in str(exc_info.value)
+        assert exc_info.value.feature == feature
+        assert exc_info.value.missing_capabilities == (capability,)
+        emitted = "\n".join(generator.code_lines)
+        assert "OpTypeCooperativeMatrixKHR" not in emitted
+        assert "OpTypeMatrix" not in emitted
+        assert "WARNING" not in emitted
+
+    def test_opt_in_profile_rejects_invalid_cooperative_matrix_storage_classes(
+        self,
+    ):
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+        matrix_type = generator.map_crossgl_type(
+            CooperativeMatrixType(
+                PrimitiveType("float"),
+                8,
+                8,
+                scope="subgroup",
+                use="matrix_a",
+            )
+        )
+        containing_types = (
+            matrix_type,
+            generator.register_array_type(matrix_type, 2),
+            generator.register_struct_type("MatrixContainer", [(matrix_type, "tile")]),
+        )
+
+        for containing_type in containing_types:
+            with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
+                generator.register_pointer_type(containing_type, "Workgroup")
+
+            assert exc_info.value.feature == "cooperative-matrix-storage-class"
+            assert exc_info.value.missing_capabilities == (
+                "spirv.cooperative_matrix.storage-class",
+            )
+
+        assert generator.register_pointer_type(matrix_type, "Function") is not None
+        assert generator.register_pointer_type(matrix_type, "Private") is not None
+
+    def test_canonical_cooperative_matrix_type_string_is_rejected(self):
+        type_name = (
+            "CooperativeMatrix<half, 16, 8, subgroup, multiplicand_a, row_major>"
+        )
+
+        with pytest.raises(UnsupportedSPIRVFeatureError) as exc_info:
+            VulkanSPIRVCodeGen().map_crossgl_type(type_name)
+
+        assert type_name.replace(" ", "") in str(exc_info.value)
+        assert exc_info.value.feature == "cooperative-matrix-lowering"
+        assert exc_info.value.missing_capabilities == ("spirv.cooperative_matrix.khr",)
+        assert exc_info.value.source_location is None
+
+    def test_cooperative_matrix_operation_is_rejected_with_operation_context(self):
+        source_location = (21, 9)
+        operation = CooperativeMatrixOpNode(
+            "multiply_accumulate",
+            [IdentifierNode("left"), IdentifierNode("right")],
+            source_location=source_location,
+        )
+
+        with pytest.raises(
+            UnsupportedSPIRVFeatureError,
+            match=(
+                "SPIR-V cooperative-matrix lowering is not available for operation "
+                "'multiply_accumulate'; scalar substitution would change "
+                "subgroup-distributed matrix semantics"
+            ),
+        ) as exc_info:
+            VulkanSPIRVCodeGen().process_expression(operation)
+
+        assert exc_info.value.feature == "cooperative-matrix-lowering"
+        assert exc_info.value.missing_capabilities == ("spirv.cooperative_matrix.khr",)
+        assert exc_info.value.source_location is source_location
+
+    def test_opt_in_profile_keeps_unimplemented_operations_fail_closed(self):
+        operation = CooperativeMatrixOpNode(
+            "elementwise_multiply",
+            [IdentifierNode("left"), IdentifierNode("right")],
+        )
+        generator = VulkanSPIRVCodeGen(target_profile="vulkan-khr-cooperative-matrix")
+
+        with pytest.raises(
+            UnsupportedSPIRVFeatureError,
+            match=(
+                "SPIR-V KHR cooperative-matrix type support is enabled, but "
+                "operation 'elementwise_multiply' is not implemented"
+            ),
+        ) as exc_info:
+            generator.process_expression(operation)
+
+        assert exc_info.value.feature == "cooperative-matrix-operation-lowering"
+        assert exc_info.value.missing_capabilities == (
+            "spirv.cooperative_matrix.operation-lowering",
+        )
 
     @pytest.mark.parametrize(
         "type_name",

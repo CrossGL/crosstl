@@ -15,6 +15,8 @@ from ..ast import (
     BreakNode,
     ConstructorNode,
     ContinueNode,
+    CooperativeMatrixOpNode,
+    CooperativeMatrixType,
     DoWhileNode,
     ExpressionNode,
     ForInNode,
@@ -111,6 +113,7 @@ from .generic_function_utils import (
     generic_function_parameters,
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
+    reject_unresolved_generic_member_call,
 )
 from .generic_struct_utils import (
     build_generic_struct_specialization,
@@ -372,6 +375,18 @@ class DirectXPrivatePointerParameterError(ValueError):
         self.function_name = function_name
         self.parameter_name = parameter_name
         self.reason = reason
+        self.source_location = source_location
+
+
+class DirectXCooperativeMatrixUnsupportedError(ValueError):
+    """Raised when cooperative matrix semantics cannot be preserved in HLSL."""
+
+    project_diagnostic_code = "project.translate.directx-cooperative-matrix-unsupported"
+    missing_capabilities = ("directx.cooperative-matrix-lowering",)
+
+    def __init__(self, message, *, operation=None, source_location=None):
+        super().__init__(message)
+        self.operation = operation
         self.source_location = source_location
 
 
@@ -2428,7 +2443,13 @@ class HLSLCodeGen:
         }
         self.current_hlsl_available_functions = global_functions_by_name
         functions_code = ""
-        for func in functions:
+        ordered_functions = order_functions_by_dependencies(
+            functions,
+            self.walk_ast,
+            self.function_call_name,
+            FunctionCallNode,
+        )
+        for func in ordered_functions:
             qualifier_name = function_stage_name(func)
 
             if not should_emit_qualified_function(target_stage, qualifier_name):
@@ -7180,6 +7201,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         """Render a CrossGL AST expression into HLSL expression syntax."""
         if expr is None:
             return ""
+        elif isinstance(expr, CooperativeMatrixOpNode):
+            operation = expr.operation
+            raise DirectXCooperativeMatrixUnsupportedError(
+                "DirectX cooperative matrix lowering is unavailable for "
+                f"operation '{operation}'; emitting a regular HLSL expression "
+                "would not preserve distributed matrix semantics",
+                operation=operation,
+                source_location=getattr(expr, "source_location", None),
+            )
         elif isinstance(expr, str):
             if self.is_hlsl_builtin_option_none_expression(expr):
                 none_value = self.generate_hlsl_builtin_option_none_value()
@@ -7378,6 +7408,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return constructor
             return str(expr)
         elif hasattr(expr, "__class__") and "FunctionCall" in str(expr.__class__):
+            reject_unresolved_generic_member_call(expr, "DirectX")
             func_expr = getattr(expr, "function", getattr(expr, "name", "unknown"))
             args = getattr(expr, "arguments", getattr(expr, "args", []))
             numeric_trait_call = generate_numeric_trait_method_call(
@@ -11989,10 +12020,23 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         parameter_type = getattr(
             parameter, "param_type", getattr(parameter, "vtype", None)
         )
+        source_qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(parameter, "qualifiers", []) or []
+        }
         if (
             is_private_pointer_parameter(parameter)
             and getattr(parameter_type, "is_mutable", True)
             and not set(qualifiers).intersection({"const", "in", "out", "inout"})
+        ):
+            qualifiers.append("inout")
+        if (
+            isinstance(parameter_type, ReferenceType)
+            and getattr(parameter_type, "is_mutable", False)
+            and not set(qualifiers).intersection({"const", "in", "out", "inout"})
+            and not source_qualifiers.intersection(
+                {"const", "constant", "readonly", "in"}
+            )
         ):
             qualifiers.append("inout")
 
@@ -25252,6 +25296,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if vtype is None:
             return "float"
 
+        if isinstance(vtype, CooperativeMatrixType):
+            raise DirectXCooperativeMatrixUnsupportedError(
+                "DirectX cooperative matrix type lowering is unavailable; "
+                "emitting a regular HLSL matrix type would not preserve "
+                "distributed matrix semantics",
+                operation="type",
+                source_location=getattr(vtype, "source_location", None),
+            )
+
         if isinstance(vtype, PointerType) or hasattr(vtype, "pointee_type"):
             return f"{self.map_type(vtype.pointee_type)}*"
 
@@ -25262,6 +25315,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             vtype_str = self.convert_type_node_to_string(vtype)
         else:
             vtype_str = str(vtype)
+
+        cooperative_base, cooperative_args = generic_type_parts(vtype_str)
+        if (
+            cooperative_args
+            and cooperative_base.rsplit("::", 1)[-1] == "CooperativeMatrix"
+        ):
+            raise DirectXCooperativeMatrixUnsupportedError(
+                "DirectX cooperative matrix type lowering is unavailable; "
+                f"'{vtype_str}' cannot be represented as a regular HLSL matrix "
+                "without changing distributed matrix semantics",
+                operation="type",
+                source_location=getattr(vtype, "source_location", None),
+            )
 
         if "[" in vtype_str and "]" in vtype_str:
             base_type, array_suffix = split_array_type_suffix(vtype_str)

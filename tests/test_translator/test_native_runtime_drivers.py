@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import crosstl.project as project_api
+from crosstl._crosstl import translate
 from crosstl.project.native_runtime_drivers import (
     VulkanComputeRuntime,
     _first_vulkan_handle,
@@ -687,6 +688,153 @@ def test_runtime_parity_vulkan_array_aliases_and_offsets_execute_on_device(tmp_p
                             "dtype": "float32",
                             "shape": [4],
                             "values": [1.0, 2.0, 3.0, 6.0],
+                        }
+                    ],
+                }
+            ],
+        },
+        executors={
+            "vulkan": VulkanRuntimeParityAdapter(
+                runtime=VulkanComputeRuntime(),
+                required_tools=("spirv-val",),
+            )
+        },
+    )
+
+    result = report["results"][0]
+    failure_context = json.dumps(report, indent=2, sort_keys=True)
+    assert report["success"] is True, failure_context
+    assert result["status"] == "passed"
+    assert result["comparisons"][0]["status"] == "passed", failure_context
+
+
+def test_runtime_parity_metal_mutating_struct_method_executes_on_vulkan(tmp_path):
+    if os.environ.get("CROSTL_RUN_VULKAN_DEVICE_TEST") != "1":
+        pytest.skip("set CROSTL_RUN_VULKAN_DEVICE_TEST=1 to run Vulkan device test")
+    pytest.importorskip("vulkan")
+    spirv_as = shutil.which("spirv-as")
+    if spirv_as is None:
+        pytest.skip("spirv-as is required to build the Vulkan fixture")
+    spirv_val = shutil.which("spirv-val")
+    if spirv_val is None:
+        pytest.skip("spirv-val is required to validate the Vulkan fixture")
+
+    source_code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct Counter {
+        float value;
+
+        void add(float delta) {
+            value += delta;
+        }
+    };
+
+    kernel void main(
+        device const float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+        Counter counter;
+        counter.value = input[0];
+        counter.add(4.0f);
+        output[0] = counter.value;
+    }
+    """
+    source_path = tmp_path / "metal-mutating-receiver.metal"
+    source_path.write_text(source_code, encoding="utf-8")
+    spv_assembly = translate(
+        source_path,
+        backend="vulkan",
+        format_output=False,
+    )
+    assembly_path = tmp_path / "metal-mutating-receiver.spvasm"
+    artifact_path = tmp_path / "out" / "vulkan" / "metal-mutating-receiver.spv"
+    artifact_path.parent.mkdir(parents=True)
+    assembly_path.write_text(spv_assembly, encoding="utf-8")
+    subprocess.run(
+        [
+            spirv_as,
+            "--target-env",
+            "vulkan1.1",
+            str(assembly_path),
+            "-o",
+            str(artifact_path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [spirv_val, "--target-env", "vulkan1.1", str(artifact_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    report = verify_runtime_test_manifest(
+        {
+            "kind": "crosstl-project-portability-report",
+            "project": {"root": str(tmp_path), "targets": ["vulkan"]},
+            "artifacts": [
+                {
+                    "source": "kernels/metal-mutating-receiver.metal",
+                    "path": "out/vulkan/metal-mutating-receiver.spv",
+                    "target": "vulkan",
+                    "status": "translated",
+                    "entryPoints": [{"name": "main", "stage": "compute"}],
+                    "resourceBindings": [
+                        {
+                            "name": "input",
+                            "kind": "buffer",
+                            "set": 0,
+                            "binding": 0,
+                        },
+                        {
+                            "name": "output",
+                            "kind": "buffer",
+                            "set": 0,
+                            "binding": 1,
+                        },
+                    ],
+                    "dispatch": {
+                        "entryPoint": "main",
+                        "workgroupCount": [1, 1, 1],
+                    },
+                }
+            ],
+        },
+        {
+            "kind": "crosstl-project-runtime-test-manifest",
+            "adapters": [
+                {
+                    "id": "native-vulkan",
+                    "executor": "vulkan",
+                    "adapterKind": "vulkan-native-runtime",
+                    "platformRequirements": {"requiredTools": []},
+                }
+            ],
+            "tests": [
+                {
+                    "id": "metal-mutating-receiver-device",
+                    "selector": {
+                        "source": "kernels/metal-mutating-receiver.metal",
+                        "target": "vulkan",
+                    },
+                    "adapter": "native-vulkan",
+                    "inputs": [
+                        {
+                            "name": "input",
+                            "dtype": "float32",
+                            "shape": [1],
+                            "values": [1.0],
+                        }
+                    ],
+                    "expectedOutputs": [
+                        {
+                            "name": "output",
+                            "dtype": "float32",
+                            "shape": [1],
+                            "values": [5.0],
                         }
                     ],
                 }

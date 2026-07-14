@@ -17,6 +17,8 @@ from ..ast import (
     ConstructorNode,
     ConstructorPatternNode,
     ContinueNode,
+    CooperativeMatrixOpNode,
+    CooperativeMatrixType,
     DoWhileNode,
     EnumNode,
     ForInNode,
@@ -72,7 +74,9 @@ from .generic_function_utils import (
     generic_function_value_arguments,
     iter_function_nodes,
     prepare_generic_function_specializations,
+    reject_unresolved_generic_member_call,
 )
+from .generic_struct_utils import generic_struct_specialization_name
 from .image_access_contracts import (
     collect_function_image_access_requirements,
     collect_function_parameter_names,
@@ -129,6 +133,16 @@ class PointerOffsetState:
     reset_marker: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class InlineReturnContext:
+    """Return flag and optional result storage for one inline call."""
+
+    return_type: SpirvId
+    returned_pointer: SpirvId
+    result_pointer: Optional[SpirvId]
+    merge_stack_depth: int
+
+
 class UnsupportedSPIRVFeatureError(ValueError):
     """Raised when SPIR-V codegen sees a feature it cannot safely lower."""
 
@@ -152,6 +166,32 @@ class VulkanSPIRVCodeGen:
     """Generates SPIR-V code from a CrossGL shader AST."""
 
     POINTER_OFFSET_RESET_MARKER_PREFIX = "; __crosstl_pointer_offset_reset_"
+    COOPERATIVE_MATRIX_KHR_PROFILE = "vulkan-khr-cooperative-matrix"
+    COOPERATIVE_MATRIX_SCOPE_VALUES = {"subgroup": 3}
+    COOPERATIVE_MATRIX_USE_VALUES = {
+        "matrix_a": 0,
+        "matrixa": 0,
+        "matrix_a_khr": 0,
+        "matrixakhr": 0,
+        "multiplicand_a": 0,
+        "matrix_b": 1,
+        "matrixb": 1,
+        "matrix_b_khr": 1,
+        "matrixbkhr": 1,
+        "multiplicand_b": 1,
+        "accumulator": 2,
+        "matrix_accumulator": 2,
+        "matrix_accumulator_khr": 2,
+        "matrixaccumulatorkhr": 2,
+        "matrix_c": 2,
+        "result": 2,
+        "matrix_result": 2,
+    }
+    COOPERATIVE_MATRIX_USE_NAMES = {
+        0: "matrix_a",
+        1: "matrix_b",
+        2: "accumulator",
+    }
 
     SIGNED_INT32_MIN = -(1 << 31)
     SIGNED_INT32_MAX = (1 << 31) - 1
@@ -170,10 +210,31 @@ class VulkanSPIRVCodeGen:
     INTEGER_TYPE_NAMES = SIGNED_INTEGER_TYPES | UNSIGNED_INTEGER_TYPES
     BFLOAT16_TYPE_NAME = "bfloat16"
 
-    def __init__(self, *, include_resource_interface_variables: bool = False):
+    def __init__(
+        self,
+        *,
+        include_resource_interface_variables: bool = False,
+        target_profile: Optional[str] = None,
+    ):
         """Initialize an empty SPIR-V module-generation state."""
         self.include_resource_interface_variables = include_resource_interface_variables
+        self.target_profile = self.normalize_target_profile(target_profile)
+        self.cooperative_matrix_khr_enabled = (
+            self.target_profile == self.COOPERATIVE_MATRIX_KHR_PROFILE
+        )
         self.reset_generation_state()
+
+    def normalize_target_profile(self, target_profile: Optional[str]) -> Optional[str]:
+        if target_profile is None:
+            return None
+        normalized = str(target_profile).strip().lower().replace("_", "-")
+        if normalized in {"", "vulkan", "spirv", "spv"}:
+            return None
+        if normalized == self.COOPERATIVE_MATRIX_KHR_PROFILE:
+            return normalized
+        raise ValueError(
+            "Vulkan target profile must be " f"'{self.COOPERATIVE_MATRIX_KHR_PROFILE}'"
+        )
 
     def reset_generation_state(self):
         """Reset per-module SPIR-V ids, declarations, and symbol caches."""
@@ -185,6 +246,9 @@ class VulkanSPIRVCodeGen:
         self.primitive_types = {}
         self.vector_types = {}
         self.matrix_types = {}
+        self.cooperative_matrix_types = {}
+        self.cooperative_matrix_type_metadata = {}
+        self.cooperative_matrix_containing_type_ids = set()
         self.struct_types = {}
         self.pointer_types = {}
         self.function_types = {}
@@ -264,6 +328,8 @@ class VulkanSPIRVCodeGen:
         self.inline_storage_buffer_functions = {}
         self.stage_local_inline_storage_buffer_functions = {}
         self.inline_storage_buffer_call_stack = []
+        self.inline_return_context_stack = []
+        self.inline_return_presence_by_node_id = {}
         self.generic_function_definitions = {}
         self.generic_function_definition_ordinals = {}
         self.generic_function_specializations = {}
@@ -276,6 +342,7 @@ class VulkanSPIRVCodeGen:
         self.function_stage_output_dependencies = {}
         self.function_resource_array_params = {}
         self.stage_local_function_resource_array_params = {}
+        self.function_value_array_parameter_indices_by_id = {}
         self.function_resource_array_type_hints = {}
         self.stage_local_function_resource_array_type_hints = {}
         self.function_storage_image_pointer_params = {}
@@ -292,6 +359,11 @@ class VulkanSPIRVCodeGen:
         self.current_entry_point_return_outputs = None
         self.current_expression_expected_type = None
         self.current_generic_type_substitutions = {}
+        self.current_cooperative_matrix_role_overrides = {}
+        self.cooperative_matrix_selection_depth = 0
+        self.cooperative_matrix_loop_control_depth = 0
+        self.cooperative_matrix_control_flow_diverged = False
+        self.uses_device_scope_memory_operation = False
         self.mesh_output_counts_by_function = {}
         self.mesh_vertex_output_variable = None
         self.mesh_vertex_output_limit = None
@@ -471,6 +543,17 @@ class VulkanSPIRVCodeGen:
         self, pointed_type: SpirvId, storage_class: str
     ) -> SpirvId:
         """Create and register a pointer type."""
+        if (
+            pointed_type.id in self.cooperative_matrix_containing_type_ids
+            and storage_class not in {"Function", "Private"}
+        ):
+            raise UnsupportedSPIRVFeatureError(
+                "cooperative-matrix-storage-class",
+                "SPIR-V KHR cooperative-matrix values and containing types can "
+                "only be allocated in Function or Private storage; got "
+                f"{storage_class}",
+                missing_capabilities=("spirv.cooperative_matrix.storage-class",),
+            )
         key = (pointed_type.id, storage_class)
         if key in self.pointer_types:
             return self.pointer_types[key]
@@ -637,6 +720,11 @@ class VulkanSPIRVCodeGen:
         self.struct_types[name] = spirv_id
 
         self.current_struct_members[name] = members
+        if any(
+            member_type.id in self.cooperative_matrix_containing_type_ids
+            for member_type, _member_name in members
+        ):
+            self.cooperative_matrix_containing_type_ids.add(spirv_id.id)
 
         return spirv_id
 
@@ -694,6 +782,11 @@ class VulkanSPIRVCodeGen:
         self.layout_struct_types[key] = spirv_id
         self.layout_struct_source_types[id_value] = source_type
         self.current_struct_members[type_name] = members
+        if any(
+            member_type.id in self.cooperative_matrix_containing_type_ids
+            for member_type, _member_name in members
+        ):
+            self.cooperative_matrix_containing_type_ids.add(spirv_id.id)
         return spirv_id
 
     def register_function_type(
@@ -4365,10 +4458,14 @@ class VulkanSPIRVCodeGen:
         return self.load_from_variable(result_variable, result_type)
 
     def call_function(
-        self, function_name: str, args: List[SpirvId]
+        self,
+        function_name: str,
+        args: List[SpirvId],
+        function_reference=None,
     ) -> Optional[SpirvId]:
         """Call a function with arguments."""
-        function_reference = self.resolve_function_reference(function_name, args)
+        if function_reference is None:
+            function_reference = self.resolve_function_reference(function_name, args)
         if function_reference is None:
             return self.call_builtin_function(function_name, args)
 
@@ -6878,7 +6975,153 @@ class VulkanSPIRVCodeGen:
             return None
         return value
 
-    def process_call_argument(self, function_name, arg, arg_index):
+    def expression_contains_empty_array_literal(self, expr) -> bool:
+        if not isinstance(expr, ArrayLiteralNode):
+            return False
+        if not expr.elements:
+            return True
+        return any(
+            self.expression_contains_empty_array_literal(element)
+            for element in expr.elements
+        )
+
+    def static_function_argument_match_score(
+        self, expected_type: SpirvId, arg
+    ) -> Optional[int]:
+        actual_type = self.infer_expression_result_type(arg)
+        score = self.function_argument_type_match_score(expected_type, actual_type)
+        if score is not None or actual_type is None:
+            return score
+
+        expected_pointee = self.pointer_type_pointee_type(expected_type)
+        if expected_pointee is None:
+            return None
+        return self.function_argument_type_match_score(expected_pointee, actual_type)
+
+    def contextual_call_parameter_types(
+        self,
+        function_name: str,
+        call_args,
+        skipped_arg_indices,
+        mesh_output_arg_indices,
+    ):
+        emitted_arguments = [
+            (arg_index, arg)
+            for arg_index, arg in enumerate(call_args)
+            if arg_index not in skipped_arg_indices
+            and arg_index not in mesh_output_arg_indices
+        ]
+        implicit_parameter_count = len(
+            self.required_function_stage_object_argument_names(function_name)
+        )
+        scored_candidates = []
+        for function_reference in self.function_reference_candidates(function_name):
+            _function_id, (_return_type, param_types) = function_reference
+            if len(param_types) != len(emitted_arguments) + implicit_parameter_count:
+                continue
+
+            score = 0
+            compatible = True
+            for parameter_index, (_arg_index, arg) in enumerate(emitted_arguments):
+                argument_score = self.static_function_argument_match_score(
+                    param_types[parameter_index], arg
+                )
+                if argument_score is None:
+                    compatible = False
+                    break
+                score += argument_score
+            if compatible:
+                scored_candidates.append((score, function_reference))
+
+        if not scored_candidates:
+            return {}, set(), None, set()
+
+        best_score = max(score for score, _candidate in scored_candidates)
+        best_candidates = [
+            candidate for score, candidate in scored_candidates if score == best_score
+        ]
+        if len(best_candidates) != 1:
+            return (
+                {},
+                {arg_index for arg_index, _arg in emitted_arguments},
+                None,
+                set(),
+            )
+
+        selected_reference = best_candidates[0]
+        function_id, (_return_type, selected_parameter_types) = selected_reference
+        value_array_parameter_indices = (
+            self.function_value_array_parameter_indices_by_id.get(function_id.id, set())
+        )
+        contextual_types = {}
+        temporary_array_arguments = set()
+        for parameter_index, (arg_index, _arg) in enumerate(emitted_arguments):
+            contextual_types[arg_index] = selected_parameter_types[parameter_index]
+            if parameter_index in value_array_parameter_indices:
+                temporary_array_arguments.add(arg_index)
+        return (
+            contextual_types,
+            set(),
+            selected_reference,
+            temporary_array_arguments,
+        )
+
+    def unsupported_call_initializer_type_error(
+        self, function_name: str, arg_index: int, arg, ambiguous: bool
+    ):
+        source_location = getattr(arg, "source_location", None)
+        reason = "ambiguous" if ambiguous else "unresolved"
+        return UnsupportedSPIRVFeatureError(
+            "contextual empty initializer",
+            "SPIR-V cannot infer the destination type for an empty aggregate "
+            f"initializer in {reason} call '{function_name}', argument "
+            f"{arg_index + 1}; resolve the callee overload and preserve its "
+            "concrete parameter type before code generation.",
+            missing_capabilities=("spirv.empty_initializer_type_inference",),
+            source_location=source_location,
+        )
+
+    def unsupported_call_initializer_binding_error(
+        self, function_name: str, arg_index: int, arg
+    ):
+        source_location = getattr(arg, "source_location", None)
+        return UnsupportedSPIRVFeatureError(
+            "reference-bound empty initializer",
+            "SPIR-V cannot bind an empty aggregate temporary to reference or "
+            f"resource parameter {arg_index + 1} in call '{function_name}'; "
+            "preserve an addressable source object before code generation.",
+            missing_capabilities=("spirv.aggregate_initializer_reference_binding",),
+            source_location=source_location,
+        )
+
+    def unsupported_reference_argument_error(
+        self,
+        function_name: str,
+        arg_index: int,
+        param_name: str,
+        arg,
+        *,
+        feature: str,
+        reason: str,
+    ):
+        return UnsupportedSPIRVFeatureError(
+            feature,
+            "SPIR-V pointer-preserving function inlining cannot bind "
+            f"argument {arg_index + 1} in call '{function_name}' to reference "
+            f"parameter '{param_name}': {reason}; preserve an addressable "
+            "source object with the parameter's declared type.",
+            missing_capabilities=("spirv.reference_parameter_aliasing",),
+            source_location=getattr(arg, "source_location", None),
+        )
+
+    def process_call_argument(
+        self,
+        function_name,
+        arg,
+        arg_index,
+        expected_type=None,
+        allow_array_temporary=False,
+    ):
         if arg_index in self.resource_offset_argument_indices(function_name):
             offset_constant = self.literal_integer_vector_constant(arg)
             if offset_constant is not None:
@@ -6913,6 +7156,27 @@ class VulkanSPIRVCodeGen:
             pointer_arg = self.variable_pointer_from_expression(arg)
             if pointer_arg is not None:
                 return pointer_arg
+
+        if isinstance(arg, ArrayLiteralNode) and expected_type is not None:
+            target_type = expected_type
+            expected_pointee = self.pointer_type_pointee_type(expected_type)
+            if expected_pointee is not None:
+                if (
+                    not allow_array_temporary
+                    or expected_type.type.storage_class != "Function"
+                    or self.array_type_info_from_type(expected_pointee) is None
+                ):
+                    raise self.unsupported_call_initializer_binding_error(
+                        function_name, arg_index, arg
+                    )
+                value = self.process_array_literal(arg, expected_pointee)
+                if value is None:
+                    return None
+                temporary = self.create_variable(expected_pointee, "Function")
+                self.store_to_variable(temporary, value)
+                return temporary
+
+            return self.process_array_literal(arg, target_type)
 
         return self.process_expression(arg)
 
@@ -9818,6 +10082,10 @@ class VulkanSPIRVCodeGen:
             "Subgroup": 3,
             "Invocation": 4,
         }
+        if scope == "Device":
+            self.uses_device_scope_memory_operation = True
+            if "VulkanMemoryModel" in self.required_capabilities:
+                self.require_capability("VulkanMemoryModelDeviceScopeKHR")
         return self.register_constant(
             scope_values[scope], self.register_primitive_type("uint")
         )
@@ -14196,8 +14464,6 @@ class VulkanSPIRVCodeGen:
             return None
 
         type_name = self.normalize_reference_type_name(type_name)
-        type_name = self.normalize_generic_vector_type(type_name)
-        type_name = self.normalize_hlsl_matrix_type(type_name)
         type_name = re.sub(r"\s+", "", str(type_name))
         if not type_name:
             return None
@@ -14313,30 +14579,16 @@ class VulkanSPIRVCodeGen:
     def function_has_storage_buffer_parameters(self, function_node) -> bool:
         return bool(self.function_storage_buffer_parameters(function_node))
 
-    def function_has_aliasing_array_parameters(self, function_node) -> bool:
-        for param in self.function_parameters(function_node):
-            qualifiers = self.parameter_qualifier_names(param)
-            param_type = getattr(param, "param_type", getattr(param, "vtype", None))
-            type_name = self.type_name_from_value(param_type)
-            explicit_reference = bool(
-                type_name
-                and (
-                    str(type_name).strip().startswith("&")
-                    or str(type_name).strip().endswith("&")
-                )
-            )
-            if "inout" not in qualifiers and not explicit_reference:
-                continue
-            type_name = self.function_parameter_type_name(param)
-            type_name = self.normalize_reference_type_name(type_name)
-            if type_name is not None and self.split_outer_array_type(type_name):
-                return True
-        return False
+    def function_has_aliasing_parameters(self, function_node) -> bool:
+        return any(
+            self.function_parameter_requires_pointer_alias(param)
+            for param in self.function_parameters(function_node)
+        )
 
     def function_requires_pointer_preserving_inlining(self, function_node) -> bool:
         return self.function_has_storage_buffer_parameters(
             function_node
-        ) or self.function_has_aliasing_array_parameters(function_node)
+        ) or self.function_has_aliasing_parameters(function_node)
 
     def format_array_size(self, size, constants=None):
         if size is None:
@@ -14419,6 +14671,7 @@ class VulkanSPIRVCodeGen:
             self.primitive_types,
             self.vector_types,
             self.matrix_types,
+            self.cooperative_matrix_types,
             self.struct_types,
             self.array_types,
             self.layout_struct_types,
@@ -14437,6 +14690,7 @@ class VulkanSPIRVCodeGen:
             self.primitive_types,
             self.vector_types,
             self.matrix_types,
+            self.cooperative_matrix_types,
             self.struct_types,
             self.array_types,
             self.layout_struct_types,
@@ -14468,6 +14722,12 @@ class VulkanSPIRVCodeGen:
 
     def map_crossgl_type(self, type_name) -> SpirvId:
         """Map a CrossGL type name to a SPIR-V type ID."""
+        if isinstance(type_name, CooperativeMatrixType):
+            type_str = self.type_name_from_value(type_name)
+            if self.cooperative_matrix_khr_enabled:
+                return self.register_cooperative_matrix_type(type_name, type_str)
+            raise self.unsupported_cooperative_matrix_type_error(type_name, type_str)
+
         type_str = self.type_name_from_value(type_name)
         if type_str is None:
             type_str = "None"
@@ -14477,15 +14737,12 @@ class VulkanSPIRVCodeGen:
         type_str = self.normalize_hlsl_matrix_type(type_str)
         if type_str.startswith("&"):
             return self.map_crossgl_type(type_str[1:].strip())
+        if self.is_cooperative_matrix_type_name(type_str):
+            if self.cooperative_matrix_khr_enabled:
+                return self.register_cooperative_matrix_type(type_name, type_str)
+            raise self.unsupported_cooperative_matrix_type_error(type_name, type_str)
         if self.is_metal_simdgroup_matrix_type(type_str):
-            raise UnsupportedSPIRVFeatureError(
-                "cooperative-matrix-lowering",
-                "SPIR-V cooperative-matrix lowering is not available for "
-                f"'{type_str}'; scalar substitution would change "
-                "subgroup-distributed matrix semantics",
-                missing_capabilities=("spirv.cooperative_matrix.khr",),
-                source_location=getattr(type_name, "source_location", None),
-            )
+            raise self.unsupported_cooperative_matrix_type_error(type_name, type_str)
 
         array_type = self.split_outer_array_type(type_str)
         if array_type is not None:
@@ -14542,6 +14799,11 @@ class VulkanSPIRVCodeGen:
 
         generic_base_name, generic_args = generic_type_parts(type_str)
         if generic_args:
+            specialized_struct_type = self.ensure_declared_struct_type(
+                generic_struct_specialization_name(type_str)
+            )
+            if specialized_struct_type is not None:
+                return specialized_struct_type
             declared_generic_struct_type = self.ensure_declared_struct_type(
                 generic_base_name
             )
@@ -14581,6 +14843,1215 @@ class VulkanSPIRVCodeGen:
         else:
             self.emit(f"; WARNING: Unknown type {type_str}, using float as default")
             return self.register_primitive_type("float")
+
+    def unsupported_cooperative_matrix_type_error(
+        self, type_source, type_name: str
+    ) -> UnsupportedSPIRVFeatureError:
+        compact_type_name = re.sub(r"\s+", "", str(type_name))
+        return UnsupportedSPIRVFeatureError(
+            "cooperative-matrix-lowering",
+            "SPIR-V cooperative-matrix lowering is not available for "
+            f"'{compact_type_name}'; scalar substitution would change "
+            "subgroup-distributed matrix semantics",
+            missing_capabilities=("spirv.cooperative_matrix.khr",),
+            source_location=getattr(type_source, "source_location", None),
+        )
+
+    def cooperative_matrix_contract(self, type_source, type_name):
+        if isinstance(type_source, CooperativeMatrixType):
+            return (
+                type_source.element_type,
+                type_source.rows,
+                type_source.cols,
+                type_source.scope,
+                type_source.use,
+                type_source.layout,
+            )
+
+        compact_type_name = re.sub(r"\s+", "", str(type_name))
+        generic_base, generic_args = generic_type_parts(compact_type_name)
+        if generic_base.rsplit("::", 1)[-1] != "CooperativeMatrix" or not (
+            3 <= len(generic_args) <= 6
+        ):
+            return None
+        defaults = ("subgroup", "unspecified", "unspecified")
+        generic_args = [*generic_args, *defaults[len(generic_args) - 3 :]]
+        return tuple(generic_args)
+
+    def cooperative_matrix_literal_dimension(self, value):
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value if value > 0 else None
+        if isinstance(value, LiteralNode):
+            return self.cooperative_matrix_literal_dimension(value.value)
+        text = self.type_name_from_value(value)
+        if text is not None and re.fullmatch(r"[1-9]\d*", text.strip()):
+            return int(text)
+        return None
+
+    def cooperative_matrix_component_name(self, component_type):
+        raw_name = self.type_name_from_value(component_type)
+        if raw_name is None:
+            return None
+        compact_name = re.sub(r"\s+", "", raw_name).lower()
+        if compact_name in {"float", "f32", "float32", "float32_t"}:
+            return "float"
+        if compact_name in {"int", "i32", "int32", "int32_t"}:
+            return "int"
+        if compact_name in {"uint", "u32", "uint32", "uint32_t"}:
+            return "uint"
+        return None
+
+    def cooperative_matrix_contract_error(
+        self, type_source, feature, message, capability
+    ):
+        return UnsupportedSPIRVFeatureError(
+            feature,
+            message,
+            missing_capabilities=(capability,),
+            source_location=getattr(type_source, "source_location", None),
+        )
+
+    def register_cooperative_matrix_type(self, type_source, type_name) -> SpirvId:
+        contract = self.cooperative_matrix_contract(type_source, type_name)
+        if contract is None:
+            raise self.unsupported_cooperative_matrix_type_error(type_source, type_name)
+
+        component_source, rows_source, cols_source, scope, use, layout = contract
+        component_name = self.cooperative_matrix_component_name(component_source)
+        if component_name is None:
+            component_label = self.type_name_from_value(component_source)
+            raise self.cooperative_matrix_contract_error(
+                type_source,
+                "cooperative-matrix-component-type",
+                "SPIR-V KHR cooperative matrices currently require a 32-bit "
+                f"float, signed integer, or unsigned integer component; got "
+                f"'{component_label}'",
+                "spirv.cooperative_matrix.component-type",
+            )
+
+        rows = self.cooperative_matrix_literal_dimension(rows_source)
+        cols = self.cooperative_matrix_literal_dimension(cols_source)
+        if rows is None or cols is None:
+            raise self.cooperative_matrix_contract_error(
+                type_source,
+                "cooperative-matrix-shape",
+                "SPIR-V KHR cooperative-matrix type registration currently "
+                "requires positive literal row and column dimensions",
+                "spirv.cooperative_matrix.static-shape",
+            )
+
+        scope_name = str(scope).strip().lower().replace("-", "_")
+        scope_value = self.COOPERATIVE_MATRIX_SCOPE_VALUES.get(scope_name)
+        if scope_value is None:
+            raise self.cooperative_matrix_contract_error(
+                type_source,
+                "cooperative-matrix-scope",
+                "The Vulkan cooperative-matrix target profile currently supports "
+                f"only subgroup scope; got '{scope}'",
+                "spirv.cooperative_matrix.subgroup-scope",
+            )
+
+        use_name = str(use).strip().lower().replace("-", "_")
+        use_value = self.COOPERATIVE_MATRIX_USE_VALUES.get(use_name)
+        if use_value is None:
+            raise self.cooperative_matrix_contract_error(
+                type_source,
+                "cooperative-matrix-use-role",
+                "SPIR-V KHR cooperative-matrix types require an explicit "
+                "matrix_a, matrix_b, or accumulator use role; "
+                f"got '{use}'",
+                "spirv.cooperative_matrix.use-role",
+            )
+
+        layout_name = str(layout or "unspecified").strip().lower().replace("-", "_")
+        component_type = self.register_primitive_type(component_name)
+        key = (component_type.id, scope_value, rows, cols, use_value, layout_name)
+        existing = self.cooperative_matrix_types.get(key)
+        if existing is not None:
+            return existing
+
+        self.require_capability("CooperativeMatrixKHR")
+        self.require_capability("VulkanMemoryModel")
+        self.require_extension("SPV_KHR_cooperative_matrix")
+        self.require_extension("SPV_KHR_vulkan_memory_model")
+        if self.uses_device_scope_memory_operation:
+            self.require_capability("VulkanMemoryModelDeviceScopeKHR")
+
+        uint_type = self.register_primitive_type("uint")
+        scope_id = self.register_constant(scope_value, uint_type)
+        rows_id = self.register_constant(rows, uint_type)
+        cols_id = self.register_constant(cols, uint_type)
+        use_id = self.register_constant(use_value, uint_type)
+        type_id = self.get_id()
+        self.emit(
+            f"%{type_id} = OpTypeCooperativeMatrixKHR %{component_type.id} "
+            f"%{scope_id.id} %{rows_id.id} %{cols_id.id} %{use_id.id}"
+        )
+        canonical_name = re.sub(r"\s+", "", str(type_name))
+        matrix_id = SpirvId(type_id, SpirvType(canonical_name), canonical_name)
+        self.cooperative_matrix_types[key] = matrix_id
+        self.cooperative_matrix_type_metadata[matrix_id.id] = {
+            "component_type": component_type,
+            "component_name": component_name,
+            "scope": scope_name,
+            "scope_value": scope_value,
+            "rows": rows,
+            "cols": cols,
+            "use": self.COOPERATIVE_MATRIX_USE_NAMES[use_value],
+            "use_value": use_value,
+            "layout": layout_name,
+        }
+        self.cooperative_matrix_containing_type_ids.add(matrix_id.id)
+        return matrix_id
+
+    def cooperative_matrix_type_info(self, type_id: SpirvId):
+        """Return the registered KHR cooperative-matrix contract for a type."""
+        if type_id is None:
+            return None
+        registered_type = self.ensure_registered_type(type_id)
+        return self.cooperative_matrix_type_metadata.get(registered_type.id)
+
+    def cooperative_matrix_operation_error(
+        self, expr, feature: str, message: str, capability: str
+    ):
+        return UnsupportedSPIRVFeatureError(
+            feature,
+            message,
+            missing_capabilities=(capability,),
+            source_location=getattr(expr, "source_location", None),
+        )
+
+    def cooperative_matrix_role_specialization_error(
+        self, node, reason: str, message: str
+    ):
+        return UnsupportedSPIRVFeatureError(
+            f"cooperative-matrix-role-specialization-{reason}",
+            message,
+            missing_capabilities=(
+                f"spirv.cooperative_matrix.role-specialization-{reason}",
+            ),
+            source_location=getattr(node, "source_location", None),
+        )
+
+    def neutral_cooperative_matrix_type(self, type_source):
+        if not isinstance(type_source, CooperativeMatrixType):
+            return None
+        use = str(getattr(type_source, "use", "unspecified"))
+        normalized_use = use.strip().lower().replace("-", "_")
+        return type_source if normalized_use == "unspecified" else None
+
+    def cooperative_matrix_type_with_use(self, type_source, use: str):
+        return CooperativeMatrixType(
+            type_source.element_type,
+            type_source.rows,
+            type_source.cols,
+            scope=type_source.scope,
+            use=use,
+            layout=type_source.layout,
+            source_location=getattr(type_source, "source_location", None),
+            annotations=dict(getattr(type_source, "annotations", {}) or {}),
+        )
+
+    def cooperative_matrix_direct_identifier_name(self, expr):
+        if isinstance(expr, (IdentifierNode, VariableNode)):
+            return expr.name
+        if isinstance(expr, str):
+            return expr
+        return None
+
+    def cooperative_matrix_role_binding(self, expr, scopes):
+        name = self.cooperative_matrix_direct_identifier_name(expr)
+        if name is None:
+            return None
+        for scope in reversed(scopes):
+            if name in scope:
+                return scope[name]
+        return None
+
+    def record_cooperative_matrix_role_demand(
+        self, binding, role: str, source, analysis
+    ):
+        if binding is None or binding[0] != "neutral":
+            return
+        declaration = binding[1]
+        analysis["demands"][id(declaration)].setdefault(role, []).append(source)
+
+    def scan_cooperative_matrix_direct_role_operand(
+        self, value, scopes, analysis, role: str
+    ):
+        if self.cooperative_matrix_direct_identifier_name(value) is not None:
+            binding = self.cooperative_matrix_role_binding(value, scopes)
+            if role != "element":
+                self.record_cooperative_matrix_role_demand(
+                    binding, role, value, analysis
+                )
+            return
+        self.scan_cooperative_matrix_role_expression(value, scopes, analysis)
+
+    def scan_cooperative_matrix_role_expression(self, value, scopes, analysis):
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return
+        if isinstance(value, dict):
+            for item in value.values():
+                self.scan_cooperative_matrix_role_expression(item, scopes, analysis)
+            return
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                self.scan_cooperative_matrix_role_expression(item, scopes, analysis)
+            return
+        if isinstance(value, BlockNode):
+            self.scan_cooperative_matrix_role_block(value, scopes, analysis)
+            return
+        if isinstance(value, VariableNode):
+            self.scan_cooperative_matrix_role_declaration(value, scopes, analysis)
+            return
+        if isinstance(value, AssignmentNode):
+            self.scan_cooperative_matrix_role_assignment(value, scopes, analysis)
+            return
+        if isinstance(value, IdentifierNode):
+            binding = self.cooperative_matrix_role_binding(value, scopes)
+            if binding is None or binding[0] != "neutral":
+                return
+            declaration = binding[1]
+            raise self.cooperative_matrix_role_specialization_error(
+                declaration,
+                "escape",
+                "SPIR-V cooperative-matrix role specialization cannot prove the "
+                f"role of local '{declaration.name}' because it escapes direct "
+                "matrix multiply and lane-element operations",
+            )
+        if isinstance(value, CooperativeMatrixOpNode):
+            if value.operation == "multiply":
+                for index, role in ((0, "matrix_a"), (1, "matrix_b")):
+                    if index >= len(value.arguments):
+                        continue
+                    self.scan_cooperative_matrix_direct_role_operand(
+                        value.arguments[index], scopes, analysis, role
+                    )
+                for argument in value.arguments[2:]:
+                    self.scan_cooperative_matrix_role_expression(
+                        argument, scopes, analysis
+                    )
+                return
+            if value.operation == "element":
+                if value.arguments:
+                    self.scan_cooperative_matrix_direct_role_operand(
+                        value.arguments[0], scopes, analysis, "element"
+                    )
+                for argument in value.arguments[1:]:
+                    self.scan_cooperative_matrix_role_expression(
+                        argument, scopes, analysis
+                    )
+                return
+            if value.operation == "load":
+                if value.arguments:
+                    self.scan_cooperative_matrix_direct_role_operand(
+                        value.arguments[0], scopes, analysis, "element"
+                    )
+                for argument in value.arguments[1:]:
+                    self.scan_cooperative_matrix_role_expression(
+                        argument, scopes, analysis
+                    )
+                return
+            if value.operation == "store":
+                if value.arguments:
+                    self.scan_cooperative_matrix_role_expression(
+                        value.arguments[0], scopes, analysis
+                    )
+                if len(value.arguments) >= 2:
+                    self.scan_cooperative_matrix_direct_role_operand(
+                        value.arguments[1], scopes, analysis, "element"
+                    )
+                for argument in value.arguments[2:]:
+                    self.scan_cooperative_matrix_role_expression(
+                        argument, scopes, analysis
+                    )
+                return
+
+        if isinstance(value, ForNode):
+            scopes.append({})
+            try:
+                self.scan_cooperative_matrix_role_expression(
+                    value.init, scopes, analysis
+                )
+                self.scan_cooperative_matrix_role_expression(
+                    value.condition, scopes, analysis
+                )
+                self.scan_cooperative_matrix_role_expression(
+                    value.update, scopes, analysis
+                )
+                self.scan_cooperative_matrix_role_expression(
+                    value.body, scopes, analysis
+                )
+            finally:
+                scopes.pop()
+            return
+
+        if hasattr(value, "child_nodes"):
+            visited_children = set()
+            for child in value.child_nodes():
+                child_id = id(child)
+                if child_id in visited_children:
+                    continue
+                visited_children.add(child_id)
+                self.scan_cooperative_matrix_role_expression(child, scopes, analysis)
+
+    def scan_cooperative_matrix_role_declaration(self, node, scopes, analysis):
+        source_type = getattr(node, "var_type", getattr(node, "vtype", None))
+        neutral_type = self.neutral_cooperative_matrix_type(source_type)
+        existing_binding = self.cooperative_matrix_role_binding(node.name, scopes)
+        if existing_binding is not None and (
+            neutral_type is not None or existing_binding[0] == "neutral"
+        ):
+            raise self.cooperative_matrix_role_specialization_error(
+                node,
+                "shadowing",
+                "SPIR-V cooperative-matrix role specialization requires a "
+                f"unique unshadowed local declaration for '{node.name}'",
+            )
+        if neutral_type is not None and getattr(node, "is_type_alias", False):
+            raise self.cooperative_matrix_role_specialization_error(
+                node,
+                "alias",
+                "SPIR-V cooperative-matrix role specialization does not support "
+                f"role-neutral type alias '{node.name}'",
+            )
+
+        binding_kind = "neutral" if neutral_type is not None else "other"
+        binding = (binding_kind, node)
+        scopes[-1][node.name] = binding
+        if neutral_type is not None:
+            analysis["declarations"][id(node)] = node
+            analysis["demands"][id(node)] = {}
+
+        initial_value = getattr(node, "initial_value", None)
+        if (
+            neutral_type is not None
+            and initial_value is not None
+            and not (
+                isinstance(initial_value, CooperativeMatrixOpNode)
+                and initial_value.operation == "multiply"
+            )
+        ):
+            raise self.cooperative_matrix_role_specialization_error(
+                node,
+                "alias",
+                "SPIR-V cooperative-matrix role specialization does not support "
+                f"value aliases or non-multiply initializers for local '{node.name}'",
+            )
+        if (
+            neutral_type is not None
+            and isinstance(initial_value, CooperativeMatrixOpNode)
+            and initial_value.operation == "multiply"
+        ):
+            self.record_cooperative_matrix_role_demand(
+                binding, "accumulator", initial_value, analysis
+            )
+        self.scan_cooperative_matrix_role_expression(initial_value, scopes, analysis)
+
+    def scan_cooperative_matrix_role_assignment(self, node, scopes, analysis):
+        value = getattr(node, "value", None)
+        target = getattr(node, "target", None)
+        if (
+            getattr(node, "operator", "=") == "="
+            and isinstance(value, CooperativeMatrixOpNode)
+            and value.operation == "multiply"
+        ):
+            binding = self.cooperative_matrix_role_binding(target, scopes)
+            if binding is not None and binding[0] == "neutral":
+                self.record_cooperative_matrix_role_demand(
+                    binding, "accumulator", value, analysis
+                )
+            else:
+                self.scan_cooperative_matrix_role_expression(target, scopes, analysis)
+            self.scan_cooperative_matrix_role_expression(value, scopes, analysis)
+            return
+
+        self.scan_cooperative_matrix_role_expression(target, scopes, analysis)
+        self.scan_cooperative_matrix_role_expression(value, scopes, analysis)
+
+    def scan_cooperative_matrix_role_block(self, block, scopes, analysis):
+        scopes.append({})
+        try:
+            statements = getattr(block, "statements", block)
+            for statement in statements or []:
+                self.scan_cooperative_matrix_role_expression(
+                    statement, scopes, analysis
+                )
+        finally:
+            scopes.pop()
+
+    def cooperative_matrix_role_overrides_for_function(self, function_node):
+        if not self.cooperative_matrix_khr_enabled:
+            return {}
+
+        body = getattr(function_node, "body", None)
+        if body is None:
+            return {}
+        neutral_parameters = [
+            parameter
+            for parameter in self.function_parameters(function_node)
+            if self.neutral_cooperative_matrix_type(
+                getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+            )
+            is not None
+        ]
+        if neutral_parameters:
+            parameter = neutral_parameters[0]
+            raise self.cooperative_matrix_role_specialization_error(
+                parameter,
+                "parameter",
+                "SPIR-V cooperative-matrix role specialization currently "
+                "supports only local declarations; role-neutral parameter "
+                f"'{parameter.name}' requires an explicit role",
+            )
+        parameter_scope = {
+            getattr(parameter, "name", f"param{index}"): ("parameter", parameter)
+            for index, parameter in enumerate(self.function_parameters(function_node))
+        }
+        analysis = {"declarations": {}, "demands": {}}
+        self.scan_cooperative_matrix_role_block(body, [parameter_scope], analysis)
+
+        overrides = {}
+        for declaration_id, declaration in analysis["declarations"].items():
+            roles = analysis["demands"][declaration_id]
+            if not roles:
+                raise self.cooperative_matrix_role_specialization_error(
+                    declaration,
+                    "unresolved",
+                    "SPIR-V cooperative-matrix role specialization could not "
+                    "infer a MatrixA, MatrixB, or accumulator role for local "
+                    f"'{declaration.name}'",
+                )
+            if len(roles) != 1:
+                role_names = ", ".join(sorted(roles))
+                raise self.cooperative_matrix_role_specialization_error(
+                    declaration,
+                    "conflict",
+                    "SPIR-V cooperative-matrix role specialization found "
+                    f"conflicting roles for local '{declaration.name}': {role_names}",
+                )
+            role = next(iter(roles))
+            source_type = getattr(
+                declaration, "var_type", getattr(declaration, "vtype", None)
+            )
+            overrides[declaration_id] = self.cooperative_matrix_type_with_use(
+                source_type, role
+            )
+        return overrides
+
+    def cooperative_matrix_operation_value(self, expr, operand, label: str):
+        value = self.process_expression(operand)
+        if value is None:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-operand-type",
+                f"SPIR-V cooperative-matrix {expr.operation} could not evaluate "
+                f"the {label} operand",
+                "spirv.cooperative_matrix.operand-type",
+            )
+        value_type = self.registered_value_type(value) or self.ensure_registered_type(
+            value.type
+        )
+        contract = self.cooperative_matrix_type_info(value_type)
+        if contract is None:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-operand-type",
+                f"SPIR-V cooperative-matrix {expr.operation} requires a "
+                f"cooperative-matrix {label} operand",
+                "spirv.cooperative_matrix.operand-type",
+            )
+        return value, contract
+
+    def cooperative_matrix_element_contract(self, expr):
+        if len(expr.arguments) != 2:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-element-arity",
+                "SPIR-V cooperative-matrix element access requires exactly "
+                f"two operands; got {len(expr.arguments)}",
+                "spirv.cooperative_matrix.element-arity",
+            )
+
+        matrix_expr, _ = expr.arguments
+        matrix_pointer = self.variable_pointer_from_expression(matrix_expr)
+        if matrix_pointer is None or not matrix_pointer.type.storage_class:
+            matrix_value = (
+                matrix_pointer
+                if matrix_pointer is not None
+                else self.process_expression(matrix_expr)
+            )
+            matrix_type = (
+                self.registered_value_type(matrix_value)
+                if matrix_value is not None
+                else None
+            )
+            if self.cooperative_matrix_type_info(matrix_type) is None:
+                raise self.cooperative_matrix_operation_error(
+                    expr,
+                    "cooperative-matrix-element-operand-type",
+                    "SPIR-V cooperative-matrix element access requires an "
+                    "addressable cooperative-matrix operand",
+                    "spirv.cooperative_matrix.element-operand-type",
+                )
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-element-addressability",
+                "SPIR-V cooperative-matrix element access requires Function "
+                "or Private storage; temporary matrix values are not yet "
+                "addressable",
+                "spirv.cooperative_matrix.element-addressability",
+            )
+
+        matrix_type = self.pointer_pointee_type(matrix_pointer)
+        contract = self.cooperative_matrix_type_info(matrix_type)
+        if contract is None:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-element-operand-type",
+                "SPIR-V cooperative-matrix element access requires an "
+                "addressable cooperative-matrix operand",
+                "spirv.cooperative_matrix.element-operand-type",
+            )
+
+        storage_class = matrix_pointer.type.storage_class
+        if storage_class not in {"Function", "Private"}:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-storage-class",
+                "SPIR-V KHR cooperative-matrix element access requires "
+                "Function or Private storage; "
+                f"got {storage_class or 'unknown'}",
+                "spirv.cooperative_matrix.storage-class",
+            )
+
+        return matrix_pointer, contract
+
+    def cooperative_matrix_element_pointer(self, expr):
+        matrix_pointer, contract = self.cooperative_matrix_element_contract(expr)
+        index_expr = expr.arguments[1]
+
+        index = self.process_expression(index_expr)
+        index_type = self.registered_value_type(index) if index is not None else None
+        index_type_name = (
+            self.normalize_primitive_name(index_type.type.base_type)
+            if index_type is not None
+            else None
+        )
+        if index_type_name not in self.INTEGER_TYPE_NAMES:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-element-index-type",
+                "SPIR-V cooperative-matrix element access requires a scalar "
+                f"integer index; got {index_type_name or 'unknown'}",
+                "spirv.cooperative_matrix.element-index-type",
+            )
+
+        # The lane-local upper bound is implementation-defined and must not be
+        # inferred from the logical row and column counts.
+        literal_index = evaluate_literal_int_expression(
+            index_expr, self.active_literal_int_constants()
+        )
+        if literal_index is not None and literal_index < 0:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-element-index-range",
+                "SPIR-V cooperative-matrix lane-local element indices cannot "
+                f"be negative; got {literal_index}",
+                "spirv.cooperative_matrix.element-index-range",
+            )
+
+        component_type = contract["component_type"]
+        storage_class = matrix_pointer.type.storage_class
+        pointer_type = self.register_pointer_type(component_type, storage_class)
+        element_pointer = self.access_chain(matrix_pointer, [index], pointer_type)
+        self.variable_value_types[element_pointer.id] = component_type
+        return element_pointer, component_type
+
+    def process_cooperative_matrix_element(self, expr):
+        element_pointer, component_type = self.cooperative_matrix_element_pointer(expr)
+        return self.load_from_variable(element_pointer, component_type)
+
+    def process_cooperative_matrix_element_assignment(
+        self, expr, value_expr, target_is_precise: bool
+    ):
+        value = self.process_expression_with_precision(value_expr, target_is_precise)
+        if value is None:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-element-value-type",
+                "SPIR-V cooperative-matrix element assignment could not "
+                "evaluate a scalar component value",
+                "spirv.cooperative_matrix.element-value-type",
+            )
+
+        element_pointer, component_type = self.cooperative_matrix_element_pointer(expr)
+        value_type = self.registered_value_type(value) or self.ensure_registered_type(
+            value.type
+        )
+        value_type_name = self.normalize_primitive_name(value_type.type.base_type)
+        scalar_types = {"bool", "float", "double"} | self.INTEGER_TYPE_NAMES
+        if value_type_name not in scalar_types:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-element-value-type",
+                "SPIR-V cooperative-matrix element assignment requires a scalar "
+                f"component value; got {value_type_name}",
+                "spirv.cooperative_matrix.element-value-type",
+            )
+
+        value = self.convert_value_to_type(value, component_type)
+        converted_type = self.registered_value_type(value)
+        if converted_type is None or converted_type.id != component_type.id:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-element-value-type",
+                "SPIR-V cooperative-matrix element assignment could not convert "
+                f"{value_type_name} to {component_type.type.base_type}",
+                "spirv.cooperative_matrix.element-value-type",
+            )
+        self.store_to_variable(element_pointer, value)
+
+    def cooperative_matrix_operation_result_type(self, expr):
+        result_source = getattr(expr, "result_type", None)
+        if (
+            self.neutral_cooperative_matrix_type(result_source) is not None
+            and self.current_expression_expected_type is not None
+        ):
+            result_source = self.current_expression_expected_type
+        if result_source is None:
+            result_source = self.current_expression_expected_type
+        if result_source is None:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-result-contract",
+                "SPIR-V cooperative-matrix operations require an explicit result "
+                "type until shared result-contract inference is available",
+                "spirv.cooperative_matrix.result-contract",
+            )
+        result_type = self.map_crossgl_type(result_source)
+        contract = self.cooperative_matrix_type_info(result_type)
+        if contract is None:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-result-contract",
+                "SPIR-V cooperative-matrix operations require a cooperative-matrix "
+                "result type",
+                "spirv.cooperative_matrix.result-contract",
+            )
+        return result_type, contract
+
+    def process_cooperative_matrix_operation(self, expr):
+        if expr.operation == "element":
+            return self.process_cooperative_matrix_element(expr)
+        if expr.operation == "load":
+            return self.process_cooperative_matrix_load(expr)
+        if expr.operation == "store":
+            return self.process_cooperative_matrix_store(expr)
+        if expr.operation != "multiply":
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-operation-lowering",
+                "SPIR-V KHR cooperative-matrix type support is enabled, but "
+                f"operation '{expr.operation}' is not implemented",
+                "spirv.cooperative_matrix.operation-lowering",
+            )
+        return self.process_cooperative_matrix_multiply(expr)
+
+    def cooperative_matrix_memory_control_flow(self, expr, operation: str):
+        if self.current_function_node is not None and not self.function_is_entry_point(
+            self.current_function_node, self.current_stage
+        ):
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                f"cooperative-matrix-{operation}-control-flow",
+                "SPIR-V cooperative-matrix memory lowering currently requires "
+                f"{operation} directly in an entry point so subgroup participation "
+                "can be proven",
+                f"spirv.cooperative_matrix.{operation}-uniform-control-flow",
+            )
+        if (
+            not self.loop_merge_labels
+            and self.cooperative_matrix_selection_depth == 0
+            and self.cooperative_matrix_loop_control_depth == 0
+            and not self.cooperative_matrix_control_flow_diverged
+        ):
+            return
+        raise self.cooperative_matrix_operation_error(
+            expr,
+            f"cooperative-matrix-{operation}-control-flow",
+            "SPIR-V cooperative-matrix memory lowering currently requires "
+            f"statically unconditional subgroup participation for {operation}",
+            f"spirv.cooperative_matrix.{operation}-uniform-control-flow",
+        )
+
+    def process_loop_control_expression(self, expr):
+        self.cooperative_matrix_loop_control_depth += 1
+        try:
+            return self.process_expression(expr)
+        finally:
+            self.cooperative_matrix_loop_control_depth -= 1
+
+    def process_loop_control_statement(self, statement):
+        self.cooperative_matrix_loop_control_depth += 1
+        try:
+            return self.process_statement(statement)
+        finally:
+            self.cooperative_matrix_loop_control_depth -= 1
+
+    def cooperative_matrix_memory_layout(self, expr, contract, operation: str):
+        layout_name = str(contract.get("layout") or "unspecified")
+        layout_name = layout_name.strip().lower().replace("-", "_")
+        if layout_name not in {"row_major", "rowmajor", "unspecified"}:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                f"cooperative-matrix-{operation}-layout",
+                "SPIR-V cooperative-matrix memory lowering currently supports "
+                f"only default row-major layout; got '{layout_name}'",
+                f"spirv.cooperative_matrix.{operation}-row-major-layout",
+            )
+        uint_type = self.register_primitive_type("uint")
+        return self.register_constant(0, uint_type)
+
+    def cooperative_matrix_memory_alignment(self, contract) -> int:
+        component_size = self.uniform_scalar_size(contract["component_type"])
+        return min(16, contract["cols"] * component_size)
+
+    def cooperative_matrix_memory_operand_alignment(
+        self, required_alignment: int
+    ) -> int:
+        return required_alignment & -required_alignment
+
+    def cooperative_matrix_memory_pointee_size(self, pointee) -> Optional[int]:
+        vector_info = self.vector_type_info_from_type(pointee)
+        if vector_info is not None:
+            component_type, component_count = vector_info
+        else:
+            component_type, component_count = pointee, 1
+        component_name = self.normalize_primitive_name(component_type.type.base_type)
+        if component_name not in {"float", "int", "uint"}:
+            return None
+        return self.uniform_scalar_size(component_type) * component_count
+
+    def cooperative_matrix_memory_base_has_static_offset(self, base_source) -> bool:
+        base_pointer = self.variable_pointer_from_expression(base_source)
+        if base_pointer is None:
+            return False
+        offset_state = self.storage_buffer_pointer_offset_aliases.get(
+            self.storage_buffer_pointer_alias_key(base_pointer)
+        )
+        return offset_state is None
+
+    def cooperative_matrix_memory_static_offset(self, pointer_source) -> Optional[int]:
+        if self.cooperative_matrix_direct_identifier_name(pointer_source) is not None:
+            if self.cooperative_matrix_memory_base_has_static_offset(pointer_source):
+                return 0
+            return None
+        if isinstance(pointer_source, ArrayAccessNode):
+            if self.cooperative_matrix_direct_identifier_name(
+                pointer_source.array
+            ) is None or not self.cooperative_matrix_memory_base_has_static_offset(
+                pointer_source.array
+            ):
+                return None
+            offset = evaluate_literal_int_expression(
+                pointer_source.index, self.active_literal_int_constants()
+            )
+            return offset if offset is not None and offset >= 0 else None
+        if isinstance(pointer_source, BinaryOpNode) and pointer_source.op == "+":
+            for base, offset_source in (
+                (pointer_source.left, pointer_source.right),
+                (pointer_source.right, pointer_source.left),
+            ):
+                if self.cooperative_matrix_direct_identifier_name(
+                    base
+                ) is None or not self.cooperative_matrix_memory_base_has_static_offset(
+                    base
+                ):
+                    continue
+                offset = evaluate_literal_int_expression(
+                    offset_source, self.active_literal_int_constants()
+                )
+                if offset is not None and offset >= 0:
+                    return offset
+        return None
+
+    def cooperative_matrix_memory_stride(
+        self,
+        expr,
+        stride_source,
+        operation: str,
+        pointee_size: int,
+        required_alignment: int,
+    ):
+        stride = evaluate_literal_int_expression(
+            stride_source, self.active_literal_int_constants()
+        )
+        minimum_stride = 0 if operation == "load" else 1
+        if (
+            stride is None
+            or isinstance(stride, bool)
+            or stride < minimum_stride
+            or stride > self.UNSIGNED_INT32_MAX
+        ):
+            requirement = "non-negative" if operation == "load" else "positive"
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                f"cooperative-matrix-{operation}-stride",
+                "SPIR-V cooperative-matrix memory lowering currently requires "
+                f"a {requirement}, compile-time 32-bit integer stride for "
+                f"{operation}",
+                f"spirv.cooperative_matrix.{operation}-stride",
+            )
+        if (stride * pointee_size) % required_alignment != 0:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                f"cooperative-matrix-{operation}-alignment",
+                "SPIR-V cooperative-matrix memory lowering requires the byte "
+                f"stride for {operation} to be aligned to {required_alignment} "
+                f"bytes; got {stride * pointee_size} bytes",
+                f"spirv.cooperative_matrix.{operation}-alignment",
+            )
+        uint_type = self.register_primitive_type("uint")
+        return self.register_constant(stride, uint_type)
+
+    def cooperative_matrix_memory_pointer(
+        self, expr, pointer_source, contract, operation: str
+    ):
+        static_offset = self.cooperative_matrix_memory_static_offset(pointer_source)
+        pointer = self.variable_pointer_from_expression(pointer_source)
+        if pointer is None:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                f"cooperative-matrix-{operation}-pointer",
+                "SPIR-V cooperative-matrix memory lowering requires an "
+                f"addressable scalar or vector pointer for {operation}",
+                f"spirv.cooperative_matrix.{operation}-pointer",
+            )
+
+        root_pointee = self.pointer_pointee_type(pointer)
+        pointee = root_pointee
+        if (
+            pointee is None
+            or self.cooperative_matrix_memory_pointee_size(pointee) is None
+        ):
+            int_type = self.register_primitive_type("int")
+            zero = self.register_constant(0, int_type)
+            pointer, pointee = self.create_array_element_access(pointer_source, zero, 0)
+        pointee_size = (
+            self.cooperative_matrix_memory_pointee_size(pointee)
+            if pointee is not None
+            else None
+        )
+        if pointer is None or pointee is None or pointee_size is None:
+            pointee_name = None if pointee is None else pointee.type.base_type
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                f"cooperative-matrix-{operation}-pointee-type",
+                "SPIR-V cooperative-matrix memory lowering currently requires a "
+                "32-bit scalar or vector pointer element; got "
+                f"'{pointee_name}'",
+                f"spirv.cooperative_matrix.{operation}-pointee-type",
+            )
+
+        storage_class = pointer.type.storage_class
+        access_metadata = self.storage_buffer_access_metadata_for_pointer(pointer)
+        if storage_class == "StorageBuffer":
+            legal_storage = (
+                access_metadata is not None
+                and access_metadata.get("_access_path") == "element"
+                and not access_metadata.get("descriptor_array")
+            )
+        elif storage_class == "Workgroup":
+            workgroup_array_type = root_pointee
+            if isinstance(pointer_source, ArrayAccessNode):
+                workgroup_array = self.variable_pointer_from_expression(
+                    pointer_source.array
+                )
+                workgroup_array_type = (
+                    self.pointer_pointee_type(workgroup_array)
+                    if workgroup_array is not None
+                    else None
+                )
+            legal_storage = (
+                workgroup_array_type is not None
+                and self.array_type_info_from_type(workgroup_array_type) is not None
+            )
+        else:
+            legal_storage = False
+        if not legal_storage:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                f"cooperative-matrix-{operation}-storage-class",
+                "SPIR-V cooperative-matrix memory lowering currently supports "
+                "only storage-buffer and workgroup array elements; got storage "
+                f"class '{storage_class}'",
+                f"spirv.cooperative_matrix.{operation}-storage-class",
+            )
+
+        if access_metadata is not None:
+            if operation == "load" and access_metadata.get("writeonly"):
+                access_error = "a readable source buffer"
+            elif operation == "store" and access_metadata.get("readonly"):
+                access_error = "a writable destination buffer"
+            else:
+                access_error = None
+            if access_error is not None:
+                raise self.cooperative_matrix_operation_error(
+                    expr,
+                    f"cooperative-matrix-{operation}-buffer-access",
+                    "SPIR-V cooperative-matrix memory lowering requires "
+                    f"{access_error}",
+                    f"spirv.cooperative_matrix.{operation}-buffer-access",
+                )
+            if access_metadata.get("volatile") or access_metadata.get("coherent"):
+                raise self.cooperative_matrix_operation_error(
+                    expr,
+                    f"cooperative-matrix-{operation}-memory-operands",
+                    "SPIR-V cooperative-matrix memory lowering does not yet "
+                    "preserve volatile or coherent memory operands",
+                    f"spirv.cooperative_matrix.{operation}-memory-operands",
+                )
+
+        if static_offset is None:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                f"cooperative-matrix-{operation}-uniformity",
+                "SPIR-V cooperative-matrix memory pointer operands must have a "
+                "statically provable subgroup-uniform offset",
+                f"spirv.cooperative_matrix.{operation}-uniformity",
+            )
+        if self.is_non_uniform_value(pointer):
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                f"cooperative-matrix-{operation}-uniformity",
+                "SPIR-V cooperative-matrix memory pointer operands must be "
+                "dynamically uniform within the subgroup",
+                f"spirv.cooperative_matrix.{operation}-uniformity",
+            )
+        required_alignment = self.cooperative_matrix_memory_alignment(contract)
+        pointer_byte_offset = static_offset * pointee_size
+        if pointer_byte_offset % required_alignment != 0:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                f"cooperative-matrix-{operation}-alignment",
+                "SPIR-V cooperative-matrix memory lowering requires the pointer "
+                f"offset for {operation} to be aligned to {required_alignment} "
+                f"bytes; got {pointer_byte_offset} bytes",
+                f"spirv.cooperative_matrix.{operation}-alignment",
+            )
+        memory_operand_alignment = self.cooperative_matrix_memory_operand_alignment(
+            required_alignment
+        )
+        return pointer, pointee_size, required_alignment, memory_operand_alignment
+
+    def process_cooperative_matrix_load(self, expr):
+        self.cooperative_matrix_memory_control_flow(expr, "load")
+        if len(expr.arguments) != 3:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-load-memory-contract",
+                "SPIR-V cooperative-matrix load currently supports the default "
+                "row-major form with destination, pointer, and stride operands; "
+                f"got {len(expr.arguments)} operands",
+                "spirv.cooperative_matrix.load-memory-contract",
+            )
+
+        destination_source, pointer_source, stride_source = expr.arguments
+        if self.cooperative_matrix_direct_identifier_name(destination_source) is None:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-load-destination",
+                "SPIR-V cooperative-matrix load requires a direct local matrix "
+                "destination",
+                "spirv.cooperative_matrix.load-destination",
+            )
+        destination = self.variable_pointer_from_expression(destination_source)
+        destination_type = (
+            self.pointer_pointee_type(destination) if destination is not None else None
+        )
+        contract = self.cooperative_matrix_type_info(destination_type)
+        if (
+            destination is None
+            or destination.type.storage_class != "Function"
+            or contract is None
+        ):
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-load-destination",
+                "SPIR-V cooperative-matrix load requires a function-local "
+                "cooperative-matrix destination",
+                "spirv.cooperative_matrix.load-destination",
+            )
+
+        layout = self.cooperative_matrix_memory_layout(expr, contract, "load")
+        pointer, pointee_size, required_alignment, memory_operand_alignment = (
+            self.cooperative_matrix_memory_pointer(
+                expr, pointer_source, contract, "load"
+            )
+        )
+        stride = self.cooperative_matrix_memory_stride(
+            expr,
+            stride_source,
+            "load",
+            pointee_size,
+            required_alignment,
+        )
+        result_id = self.get_id()
+        self.emit(
+            f"%{result_id} = OpCooperativeMatrixLoadKHR %{destination_type.id} "
+            f"%{pointer.id} %{layout.id} %{stride.id} Aligned "
+            f"{memory_operand_alignment}"
+        )
+        result = SpirvId(result_id, destination_type.type)
+        self.value_types[result_id] = destination_type
+        self.store_to_variable(destination, result)
+        return result
+
+    def process_cooperative_matrix_store(self, expr):
+        self.cooperative_matrix_memory_control_flow(expr, "store")
+        if len(expr.arguments) != 3:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-store-memory-contract",
+                "SPIR-V cooperative-matrix store currently supports the default "
+                "row-major form with pointer, matrix, and stride operands; got "
+                f"{len(expr.arguments)} operands",
+                "spirv.cooperative_matrix.store-memory-contract",
+            )
+
+        pointer_source, matrix_source, stride_source = expr.arguments
+        matrix, contract = self.cooperative_matrix_operation_value(
+            expr, matrix_source, "stored"
+        )
+        layout = self.cooperative_matrix_memory_layout(expr, contract, "store")
+        pointer, pointee_size, required_alignment, memory_operand_alignment = (
+            self.cooperative_matrix_memory_pointer(
+                expr, pointer_source, contract, "store"
+            )
+        )
+        stride = self.cooperative_matrix_memory_stride(
+            expr,
+            stride_source,
+            "store",
+            pointee_size,
+            required_alignment,
+        )
+        self.emit(
+            f"OpCooperativeMatrixStoreKHR %{pointer.id} %{matrix.id} "
+            f"%{layout.id} %{stride.id} Aligned {memory_operand_alignment}"
+        )
+        return None
+
+    def process_cooperative_matrix_multiply(self, expr):
+        if len(expr.arguments) != 2:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-multiply-arity",
+                "SPIR-V cooperative-matrix multiply requires exactly two operands; "
+                f"got {len(expr.arguments)}",
+                "spirv.cooperative_matrix.multiply-arity",
+            )
+
+        for label, operand, required_use in (
+            ("left", expr.arguments[0], "matrix_a"),
+            ("right", expr.arguments[1], "matrix_b"),
+        ):
+            if (
+                isinstance(operand, CooperativeMatrixOpNode)
+                and operand.operation == "multiply"
+            ):
+                raise self.cooperative_matrix_operation_error(
+                    expr,
+                    "cooperative-matrix-role-conversion",
+                    "SPIR-V cooperative-matrix multiply produces an accumulator "
+                    f"result, which cannot be consumed as the outer {label} "
+                    f"{required_use} operand without a semantics-preserving role "
+                    "conversion",
+                    "spirv.cooperative_matrix.role-conversion",
+                )
+
+        left, left_contract = self.cooperative_matrix_operation_value(
+            expr, expr.arguments[0], "left"
+        )
+        right, right_contract = self.cooperative_matrix_operation_value(
+            expr, expr.arguments[1], "right"
+        )
+        result_type, result_contract = self.cooperative_matrix_operation_result_type(
+            expr
+        )
+
+        required_uses = (
+            ("left", left_contract, "matrix_a"),
+            ("right", right_contract, "matrix_b"),
+            ("result", result_contract, "accumulator"),
+        )
+        for label, contract, required_use in required_uses:
+            if contract["use"] != required_use:
+                raise self.cooperative_matrix_operation_error(
+                    expr,
+                    "cooperative-matrix-multiply-use-role",
+                    "SPIR-V cooperative-matrix multiply requires the "
+                    f"{label} value to use role {required_use}; got "
+                    f"{contract['use']}",
+                    "spirv.cooperative_matrix.multiply-use-role",
+                )
+
+        contracts = (left_contract, right_contract, result_contract)
+        if len({contract["scope_value"] for contract in contracts}) != 1:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-multiply-scope",
+                "SPIR-V cooperative-matrix multiply requires all operands and the "
+                "result to use the same execution scope",
+                "spirv.cooperative_matrix.multiply-scope",
+            )
+
+        expected_shape = (left_contract["rows"], right_contract["cols"])
+        if (
+            left_contract["cols"] != right_contract["rows"]
+            or (result_contract["rows"], result_contract["cols"]) != expected_shape
+        ):
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-multiply-shape",
+                "SPIR-V cooperative-matrix multiply requires compatible MxK and "
+                "KxN operands and an MxN result; got "
+                f"{left_contract['rows']}x{left_contract['cols']}, "
+                f"{right_contract['rows']}x{right_contract['cols']}, and "
+                f"{result_contract['rows']}x{result_contract['cols']}",
+                "spirv.cooperative_matrix.multiply-shape",
+            )
+
+        component_names = {contract["component_name"] for contract in contracts}
+        if component_names != {"float"}:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-multiply-component-type",
+                "SPIR-V cooperative-matrix multiply currently requires matching "
+                "32-bit floating-point A, B, accumulator, and result components",
+                "spirv.cooperative_matrix.multiply-component-type",
+            )
+
+        zero_scalar = self.register_constant(0.0, result_contract["component_type"])
+        zero_accumulator = self.register_composite_constant(result_type, [zero_scalar])
+        result_id = self.get_id()
+        self.emit(
+            f"%{result_id} = OpCooperativeMatrixMulAddKHR %{result_type.id} "
+            f"%{left.id} %{right.id} %{zero_accumulator.id}"
+        )
+        result = SpirvId(result_id, result_type.type)
+        self.value_types[result_id] = result_type
+        return result
+
+    def is_cooperative_matrix_type_name(self, type_name: str) -> bool:
+        """Return whether a type uses the canonical cooperative-matrix spelling."""
+        compact = re.sub(r"\s+", "", str(type_name))
+        generic_base, generic_args = generic_type_parts(compact)
+        return bool(
+            generic_args and generic_base.rsplit("::", 1)[-1] == "CooperativeMatrix"
+        )
 
     def is_metal_simdgroup_matrix_type(self, type_name: str) -> bool:
         """Return whether a type names a Metal subgroup-distributed matrix."""
@@ -15447,14 +16918,18 @@ class VulkanSPIRVCodeGen:
             self.unique_struct_type_name(block_name, block_members),
             block_members,
         )
-        self.decorations.append(f"OpDecorate %{block_type.id} BufferBlock")
+        self.decorations.append(
+            f"OpDecorate %{block_type.id} {self.storage_buffer_block_decoration()}"
+        )
         self.decorations.append(f"OpMemberDecorate %{block_type.id} 0 Offset 0")
         self.decorate_storage_buffer_member_memory_qualifiers(block_type, memory_flags)
 
         variable_type, is_descriptor_array = (
             self.structured_buffer_descriptor_variable_type(type_name, block_type)
         )
-        var_id = self.create_variable(variable_type, "Uniform", node.name)
+        var_id = self.create_variable(
+            variable_type, self.storage_buffer_storage_class(), node.name
+        )
         descriptor_set, binding = self.resource_descriptor_slot(node)
         self.decorations.append(
             f"OpDecorate %{var_id.id} DescriptorSet {descriptor_set}"
@@ -15492,14 +16967,18 @@ class VulkanSPIRVCodeGen:
         uint_type = self.register_primitive_type("uint")
         block_name = f"{node.name}CounterBuffer"
         block_type = self.register_struct_type(block_name, [(uint_type, "counter")])
-        self.decorations.append(f"OpDecorate %{block_type.id} BufferBlock")
+        self.decorations.append(
+            f"OpDecorate %{block_type.id} {self.storage_buffer_block_decoration()}"
+        )
         self.decorations.append(f"OpMemberDecorate %{block_type.id} 0 Offset 0")
 
         variable_type, is_descriptor_array = (
             self.structured_buffer_descriptor_variable_type(type_name, block_type)
         )
         counter_name = f"{node.name}Counter"
-        var_id = self.create_variable(variable_type, "Uniform", counter_name)
+        var_id = self.create_variable(
+            variable_type, self.storage_buffer_storage_class(), counter_name
+        )
         descriptor_set = self.resource_descriptor_set(node)
         binding = self.next_available_resource_binding(descriptor_set)
         self.used_resource_bindings.add((descriptor_set, binding))
@@ -15649,7 +17128,9 @@ class VulkanSPIRVCodeGen:
         memory_flags = self.storage_buffer_memory_flags(node)
         self.decorate_storage_buffer_member_memory_qualifiers(block_type, memory_flags)
 
-        var_id = self.create_variable(value_type, "Uniform", node.name)
+        var_id = self.create_variable(
+            value_type, self.storage_buffer_storage_class(), node.name
+        )
         descriptor_set, binding = self.resource_descriptor_slot(
             node, allow_binding_reassignment=allow_binding_reassignment
         )
@@ -16173,7 +17654,9 @@ class VulkanSPIRVCodeGen:
     ):
         if self.type_contains_bfloat16(block_type):
             self.require_bfloat16_storage()
-        self.decorations.append(f"OpDecorate %{block_type.id} BufferBlock")
+        self.decorations.append(
+            f"OpDecorate %{block_type.id} {self.storage_buffer_block_decoration()}"
+        )
         members = self.current_struct_members.get(block_type.type.base_type, [])
         self.validate_specialization_sized_member_layout(
             block_type.type.base_type, members
@@ -16193,6 +17676,12 @@ class VulkanSPIRVCodeGen:
                     f"MatrixStride {matrix_stride}"
                 )
             self.decorate_storage_buffer_nested_type(member_type, layout)
+
+    def storage_buffer_storage_class(self) -> str:
+        return "StorageBuffer" if self.cooperative_matrix_khr_enabled else "Uniform"
+
+    def storage_buffer_block_decoration(self) -> str:
+        return "Block" if self.cooperative_matrix_khr_enabled else "BufferBlock"
 
     def decorate_storage_buffer_nested_type(
         self, type_id: SpirvId, layout: str = "std430"
@@ -16435,6 +17924,17 @@ class VulkanSPIRVCodeGen:
 
     def process_function_node(self, function_node, stage=None):
         """Process a CrossGL function definition."""
+        previous_cooperative_matrix_control_state = (
+            self.cooperative_matrix_selection_depth,
+            self.cooperative_matrix_loop_control_depth,
+            self.cooperative_matrix_control_flow_diverged,
+        )
+        self.cooperative_matrix_selection_depth = 0
+        self.cooperative_matrix_loop_control_depth = 0
+        self.cooperative_matrix_control_flow_diverged = False
+        previous_cooperative_matrix_role_overrides = (
+            self.current_cooperative_matrix_role_overrides
+        )
         previous_storage_buffer_pointer_offset_aliases = (
             self.storage_buffer_pointer_offset_aliases
         )
@@ -16448,6 +17948,9 @@ class VulkanSPIRVCodeGen:
         )
         self.current_generic_function_substitutions = (
             getattr(function_node, "_generic_substitutions", {}) or {}
+        )
+        self.current_cooperative_matrix_role_overrides = (
+            self.cooperative_matrix_role_overrides_for_function(function_node)
         )
         previous_function_literal_int_constant_shadows = (
             self.current_function_literal_int_constant_shadows
@@ -16623,6 +18126,7 @@ class VulkanSPIRVCodeGen:
                     self.is_resource_array_type(param_type)
                     or is_storage_image_param
                     or is_stage_object_pointer_param
+                    or self.function_parameter_is_reference_like(param)
                 ):
                     value_array_param_indices.add(len(param_types))
                 storage_class = (
@@ -16673,6 +18177,9 @@ class VulkanSPIRVCodeGen:
             self.stage_local_function_mesh_output_parameter_indices[key] = (
                 mesh_output_parameter_indices
             )
+        self.function_value_array_parameter_indices_by_id[function_id.id] = set(
+            value_array_param_indices
+        )
 
         for i, (param, param_type, param_value_type) in enumerate(runtime_parameters):
             if entry_point_uses_void_signature:
@@ -16792,6 +18299,14 @@ class VulkanSPIRVCodeGen:
         self.current_function_literal_int_constant_shadows = (
             previous_function_literal_int_constant_shadows
         )
+        self.current_cooperative_matrix_role_overrides = (
+            previous_cooperative_matrix_role_overrides
+        )
+        (
+            self.cooperative_matrix_selection_depth,
+            self.cooperative_matrix_loop_control_depth,
+            self.cooperative_matrix_control_flow_diverged,
+        ) = previous_cooperative_matrix_control_state
         if previous_entry_resource_binding_state is not None:
             self.restore_resource_binding_state(previous_entry_resource_binding_state)
         self.local_variables.clear()
@@ -16817,10 +18332,64 @@ class VulkanSPIRVCodeGen:
         else:
             stmt_list = [statements]
 
+        if self.inline_return_context_stack:
+            self.process_inline_statement_sequence(stmt_list)
+            return
+
         for stmt in stmt_list:
             if self.current_block_has_terminator():
                 break
             self.process_statement(stmt)
+
+    def process_inline_statement_sequence(self, statements):
+        """Guard a statement suffix after its first possible inline return."""
+        for index, stmt in enumerate(statements):
+            if self.current_block_has_terminator():
+                break
+            self.process_statement(stmt)
+            if not self.statement_contains_return(stmt):
+                continue
+
+            remaining = statements[index + 1 :]
+            if remaining and not self.current_block_has_terminator():
+                self.process_inline_fallthrough_statements(remaining)
+            break
+
+    def statement_contains_return(self, statement) -> bool:
+        statement_id = id(statement)
+        cached = self.inline_return_presence_by_node_id.get(statement_id)
+        if cached is not None and cached[0] is statement:
+            return cached[1]
+        contains_return = any(
+            isinstance(node, ReturnNode) or getattr(node, "is_tail_expression", False)
+            for node in self.walk_ast_nodes(statement)
+        )
+        self.inline_return_presence_by_node_id[statement_id] = (
+            statement,
+            contains_return,
+        )
+        return contains_return
+
+    def process_inline_fallthrough_statements(self, statements):
+        """Run a statement suffix only when the inline call has not returned."""
+        context = self.inline_return_context_stack[-1]
+        bool_type = self.register_primitive_type("bool")
+        returned = self.load_from_variable(context.returned_pointer, bool_type)
+        should_continue = self.unary_operation("!", bool_type, returned)
+        body_label = SpirvId(self.get_id(), SpirvType("label"))
+        merge_label = SpirvId(self.get_id(), SpirvType("label"))
+
+        self.create_selection_merge(merge_label)
+        self.create_conditional_branch(should_continue, body_label, merge_label)
+
+        self.emit(f"%{body_label.id} = OpLabel")
+        self.current_label = body_label.id
+        self.process_inline_statement_sequence(statements)
+        if not self.current_block_has_terminator():
+            self.create_branch(merge_label)
+
+        self.emit(f"%{merge_label.id} = OpLabel")
+        self.current_label = merge_label.id
 
     def process_statement(self, stmt):
         """Process a single CrossGL statement."""
@@ -16869,13 +18438,16 @@ class VulkanSPIRVCodeGen:
                 and self.current_return_type is not None
                 and self.current_return_type.type.base_type != "void"
             ):
-                return_value = self.process_expression_with_expected_type(
-                    expression, self.current_return_type_source
-                )
-                if return_value is not None:
-                    self.create_return_value(return_value)
+                if self.inline_return_context_stack:
+                    self.process_inline_return(ReturnNode(expression))
                 else:
-                    self.create_return()
+                    return_value = self.process_expression_with_expected_type(
+                        expression, self.current_return_type_source
+                    )
+                    if return_value is not None:
+                        self.create_return_value(return_value)
+                    else:
+                        self.create_return()
             else:
                 self.process_expression(expression)
 
@@ -17268,7 +18840,9 @@ class VulkanSPIRVCodeGen:
 
     def process_variable_declaration(self, node: VariableNode):
         """Process a local CrossGL variable declaration."""
-        var_type_source = getattr(node, "var_type", getattr(node, "vtype", "float"))
+        var_type_source = self.current_cooperative_matrix_role_overrides.get(
+            id(node), getattr(node, "var_type", getattr(node, "vtype", "float"))
+        )
         storage_class = self.local_variable_storage_class(node)
         self.current_function_literal_int_constant_shadows.add(node.name)
         self.current_function_literal_int_constants.pop(node.name, None)
@@ -19120,10 +20694,17 @@ class VulkanSPIRVCodeGen:
         )
 
     def process_expression_with_expected_type(self, expr, expected_type):
+        return self.process_expression_with_expected_type_and_precision(
+            expr, expected_type, precise=False
+        )
+
+    def process_expression_with_expected_type_and_precision(
+        self, expr, expected_type, precise: bool
+    ):
         previous_expected_type = self.current_expression_expected_type
         self.current_expression_expected_type = self.type_name_string(expected_type)
         try:
-            return self.process_expression(expr)
+            return self.process_expression_with_precision(expr, precise)
         finally:
             self.current_expression_expected_type = previous_expected_type
 
@@ -19157,6 +20738,35 @@ class VulkanSPIRVCodeGen:
 
         walk(root)
         return functions
+
+    def concrete_function_prepass_list(self, root):
+        """Return concrete functions, replacing generic definitions with emissions."""
+        functions = []
+        seen = set()
+        for function_node in self.collect_ast_functions(root):
+            candidates = (
+                generic_function_emission_list(self, function_node)
+                if generic_function_parameters(function_node)
+                else [function_node]
+            )
+            for candidate in candidates:
+                candidate_id = id(candidate)
+                if candidate_id in seen:
+                    continue
+                seen.add(candidate_id)
+                functions.append(candidate)
+        return functions
+
+    def run_function_prepass(self, function_node, operation):
+        """Evaluate one function analysis with materialized generic substitutions."""
+        previous_substitutions = self.current_generic_function_substitutions
+        self.current_generic_function_substitutions = (
+            getattr(function_node, "_generic_substitutions", {}) or {}
+        )
+        try:
+            return operation()
+        finally:
+            self.current_generic_function_substitutions = previous_substitutions
 
     def collect_functions_by_name(self, functions):
         functions_by_name = {}
@@ -19275,6 +20885,11 @@ class VulkanSPIRVCodeGen:
 
         type_name = str(type_name).strip()
         return type_name.startswith("&") or type_name.endswith("&")
+
+    def function_parameter_requires_pointer_alias(self, param) -> bool:
+        return self.function_parameter_is_reference_like(
+            param
+        ) and not self.is_mesh_output_parameter(param)
 
     def storage_buffer_argument_rejection_reason(
         self, param, arg, arg_index, substitutions=None
@@ -20476,7 +22091,7 @@ class VulkanSPIRVCodeGen:
     def collect_function_storage_buffer_access_requirements_for_functions(
         self, functions
     ):
-        functions = list(functions)
+        functions = self.concrete_function_prepass_list(functions)
         functions_by_name = self.collect_functions_by_name(functions)
         function_parameter_names_by_id = {
             id(func): [
@@ -20495,8 +22110,11 @@ class VulkanSPIRVCodeGen:
             id(func): {} for func in functions if getattr(func, "name", None)
         }
         storage_buffer_parameter_roots = {
-            id(func): self.function_storage_buffer_alias_roots(
-                func, self.function_storage_buffer_parameters(func)
+            id(func): self.run_function_prepass(
+                func,
+                lambda func=func: self.function_storage_buffer_alias_roots(
+                    func, self.function_storage_buffer_parameters(func)
+                ),
             )
             for func in functions
             if getattr(func, "name", None)
@@ -20507,7 +22125,12 @@ class VulkanSPIRVCodeGen:
             if not func_name:
                 continue
             storage_buffer_parameter_indices.setdefault(func_name, set()).update(
-                self.function_storage_buffer_parameter_indices(func)
+                self.run_function_prepass(
+                    func,
+                    lambda func=func: self.function_storage_buffer_parameter_indices(
+                        func
+                    ),
+                )
             )
 
         for func in functions:
@@ -20516,13 +22139,18 @@ class VulkanSPIRVCodeGen:
                 continue
             func_key = id(func)
 
-            self.scan_storage_buffer_requirement_node(
-                getattr(func, "body", []),
-                func_key,
-                storage_buffer_parameter_roots.get(func_key, {}),
-                storage_buffer_parameter_indices,
-                requirements,
-                set(),
+            self.run_function_prepass(
+                func,
+                lambda func=func, func_key=func_key: (
+                    self.scan_storage_buffer_requirement_node(
+                        getattr(func, "body", []),
+                        func_key,
+                        storage_buffer_parameter_roots.get(func_key, {}),
+                        storage_buffer_parameter_indices,
+                        requirements,
+                        set(),
+                    )
+                ),
             )
 
         changed = True
@@ -20571,9 +22199,12 @@ class VulkanSPIRVCodeGen:
                             if index >= len(args):
                                 continue
 
-                            target_name = self.storage_buffer_pointer_root_name(
-                                args[index],
-                                storage_buffer_parameter_roots.get(func_key, {}),
+                            target_name = self.run_function_prepass(
+                                func,
+                                lambda: self.storage_buffer_pointer_root_name(
+                                    args[index],
+                                    storage_buffer_parameter_roots.get(func_key, {}),
+                                ),
                             )
                             if target_name not in parameter_set:
                                 continue
@@ -20884,23 +22515,16 @@ class VulkanSPIRVCodeGen:
                 return nested_return
         return None
 
-    def validate_inline_function_returns(self, function_node, call_node=None):
-        nested_return = self.nested_inline_return_node(function_node)
-        if nested_return is None:
-            return
-
-        function_name = getattr(function_node, "name", "unknown")
-        source_location = getattr(nested_return, "source_location", None) or getattr(
-            call_node, "source_location", None
-        )
-        raise UnsupportedSPIRVFeatureError(
-            "nested-return-storage-buffer-function-inline",
-            "SPIR-V pointer-preserving function inlining requires returns to be "
-            f"top-level statements; helper '{function_name}' contains a nested "
-            "return",
-            missing_capabilities=("spirv.nested_return_storage_buffer_function",),
-            source_location=source_location,
-        )
+    def nested_match_inline_return_node(self, function_node):
+        """Return the first inline return owned by a match arm, if any."""
+        body = getattr(function_node, "body", [])
+        for node in self.walk_ast_nodes(body):
+            if not isinstance(node, MatchNode):
+                continue
+            for match_node in self.walk_ast_nodes(node):
+                if isinstance(match_node, ReturnNode):
+                    return match_node
+        return None
 
     def validate_skipped_storage_buffer_call_arguments(
         self, function_node, call_args, match, call_node=None
@@ -20931,7 +22555,21 @@ class VulkanSPIRVCodeGen:
         self, function_node, call_args, call_node=None
     ):
         func_name = getattr(function_node, "name", "unknown")
-        self.validate_inline_function_returns(function_node, call_node)
+        nested_match_return = self.nested_match_inline_return_node(function_node)
+        if nested_match_return is not None:
+            source_location = getattr(
+                nested_match_return, "source_location", None
+            ) or getattr(call_node, "source_location", None)
+            raise UnsupportedSPIRVFeatureError(
+                "nested-match-return-storage-buffer-function-inline",
+                "SPIR-V pointer-preserving function inlining does not yet "
+                f"support returns nested in match arms; helper '{func_name}' "
+                "requires match-aware return control flow",
+                missing_capabilities=(
+                    "spirv.nested_match_return_storage_buffer_function",
+                ),
+                source_location=source_location,
+            )
         if not self.validate_function_storage_buffer_access_arguments(
             function_node, call_args
         ):
@@ -20980,21 +22618,42 @@ class VulkanSPIRVCodeGen:
                 missing_capabilities=("spirv.recursive_storage_buffer_function",),
             )
 
-        previous_declaration_state = self.local_declaration_scope_state()
-        previous_return_type = self.current_return_type
-        previous_generic_type_substitutions = self.current_generic_type_substitutions
         generic_type_substitutions = self.generic_storage_function_type_bindings(
             function_node, call_args
         )
         if generic_type_substitutions is None:
             generic_type_substitutions = {}
+        prepared_bindings = self.prepare_pointer_preserving_inline_bindings(
+            function_node,
+            call_args,
+            generic_type_substitutions,
+        )
+        if prepared_bindings is None:
+            return self.default_value_for_function(function_node)
+
+        # Argument evaluation can materialize caller variables and pointer aliases.
+        # Preserve that post-evaluation state, then overlay every callee parameter
+        # together so an early parameter cannot shadow a later argument expression.
+        previous_declaration_state = self.local_declaration_scope_state()
+        previous_return_type = self.current_return_type
+        previous_return_type_source = self.current_return_type_source
+        previous_generic_type_substitutions = self.current_generic_type_substitutions
         self.current_generic_type_substitutions = generic_type_substitutions
         previous_generic_function_substitutions = (
             self.current_generic_function_substitutions
         )
-        self.current_return_type = self.map_crossgl_type(function_node.return_type)
         self.current_generic_function_substitutions = (
             getattr(function_node, "_generic_substitutions", {}) or {}
+        )
+        previous_cooperative_matrix_role_overrides = (
+            self.current_cooperative_matrix_role_overrides
+        )
+        self.current_cooperative_matrix_role_overrides = (
+            self.cooperative_matrix_role_overrides_for_function(function_node)
+        )
+        self.current_return_type = self.map_crossgl_type(function_node.return_type)
+        self.current_return_type_source = self.type_name_from_value(
+            function_node.return_type
         )
         self.current_function_literal_int_constant_shadows = {
             param.name
@@ -21005,110 +22664,17 @@ class VulkanSPIRVCodeGen:
         self.inline_storage_buffer_call_stack.append((function_key, func_name))
 
         try:
-            for index, param, arg in self.storage_buffer_effective_call_bindings(
-                function_node, call_args
-            ):
-                param_name = getattr(param, "name", f"param{index}")
-                if not self.function_parameter_has_reachable_use(
-                    function_node, param_name
-                ):
-                    if not self.side_effect_free_call_argument(arg):
-                        self.process_call_argument(func_name, arg, index)
-                    continue
-                storage_buffer_type_name = self.storage_buffer_parameter_type_name(
-                    param
-                )
-                if storage_buffer_type_name is not None:
-                    if self.pointer_ternary_statically_selects_null(arg):
-                        if not self.function_parameter_has_reachable_use(
-                            function_node,
-                            param_name,
-                        ):
-                            continue
-                        raise self.unsupported_null_pointer_argument_error(arg)
-                    pointer_arg = self.variable_pointer_from_expression(arg)
-                    if pointer_arg is None:
-                        self.emit(
-                            f"; WARNING: function call '{func_name}' requires a "
-                            f"storage buffer argument for parameter {param_name}"
-                        )
-                        return self.default_value_for_function(function_node)
-                    actual_type_name = self.storage_buffer_expression_type_name(arg)
-                    if (
-                        actual_type_name is not None
-                        and not self.storage_buffer_parameter_type_is_compatible(
-                            storage_buffer_type_name, actual_type_name
-                        )
-                    ):
-                        self.emit(
-                            f"; WARNING: function call '{func_name}' requires "
-                            f"{storage_buffer_type_name} storage buffer type for "
-                            "argument "
-                            f"{self.expression_debug_name(arg)} "
-                            f"passed to parameter {param_name}: got {actual_type_name}"
-                        )
-                        return self.default_value_for_function(function_node)
-                    if self.function_parameter_is_reference_like(param):
-                        parameter_pointer = pointer_arg
-                    else:
-                        parameter_pointer = self.copy_storage_buffer_pointer_alias(
-                            pointer_arg,
+            for binding in prepared_bindings:
+                param_name = binding["name"]
+                parameter_value = binding["value"]
+                if binding["kind"] == "storage_buffer":
+                    if binding["copy_pointer"]:
+                        parameter_value = self.copy_storage_buffer_pointer_alias(
+                            parameter_value,
                             param_name,
                         )
-                    self.local_variables[param_name] = parameter_pointer
                     self.resource_alias_variables.add(param_name)
-                    continue
-
-                if self.function_parameter_is_reference_like(param):
-                    param_type_name = self.function_parameter_type_name(param)
-                    param_value_type = (
-                        self.map_crossgl_type(param_type_name)
-                        if param_type_name is not None
-                        else None
-                    )
-                    if (
-                        param_value_type is not None
-                        and self.array_type_info_from_type(param_value_type) is not None
-                    ):
-                        pointer_arg = self.variable_pointer_from_expression(arg)
-                        source_value_type = (
-                            self.pointer_pointee_type(pointer_arg)
-                            if pointer_arg is not None
-                            else None
-                        )
-                        if pointer_arg is None or source_value_type is None:
-                            self.emit(
-                                f"; WARNING: function call '{func_name}' requires "
-                                f"an array storage argument for parameter {param_name}"
-                            )
-                            return self.default_value_for_function(function_node)
-                        if (
-                            source_value_type.id != param_value_type.id
-                            and not self.aggregate_types_are_layout_compatible(
-                                source_value_type, param_value_type
-                            )
-                        ):
-                            self.emit(
-                                f"; WARNING: function call '{func_name}' requires "
-                                f"{param_type_name} array storage for argument "
-                                f"{self.expression_debug_name(arg)} passed to "
-                                f"parameter {param_name}"
-                            )
-                            return self.default_value_for_function(function_node)
-                        self.local_variables[param_name] = pointer_arg
-                        continue
-
-                arg_value = self.process_call_argument(func_name, arg, index)
-                if arg_value is None:
-                    self.emit(f"; WARNING: Failed to evaluate argument for {func_name}")
-                    return self.default_value_for_function(function_node)
-                param_type_name = self.function_parameter_type_name(param)
-                if param_type_name is not None:
-                    arg_value = self.convert_value_to_type(
-                        arg_value,
-                        self.map_crossgl_type(param_type_name),
-                    )
-                self.local_variables[param_name] = arg_value
+                self.local_variables[param_name] = parameter_value
 
             result = self.inline_function_body(function_node)
             if result is not None:
@@ -21118,12 +22684,162 @@ class VulkanSPIRVCodeGen:
             self.inline_storage_buffer_call_stack.pop()
             self.restore_local_declaration_scope_state(previous_declaration_state)
             self.current_return_type = previous_return_type
+            self.current_return_type_source = previous_return_type_source
             self.current_generic_type_substitutions = (
                 previous_generic_type_substitutions
             )
             self.current_generic_function_substitutions = (
                 previous_generic_function_substitutions
             )
+            self.current_cooperative_matrix_role_overrides = (
+                previous_cooperative_matrix_role_overrides
+            )
+
+    def prepare_pointer_preserving_inline_bindings(
+        self,
+        function_node,
+        call_args,
+        generic_type_substitutions,
+    ):
+        """Evaluate actual arguments under caller scope before binding parameters."""
+        func_name = getattr(function_node, "name", "unknown")
+        prepared = []
+        for index, param, arg in self.storage_buffer_effective_call_bindings(
+            function_node, call_args
+        ):
+            param_name = getattr(param, "name", f"param{index}")
+            if not self.function_parameter_has_reachable_use(function_node, param_name):
+                if not self.side_effect_free_call_argument(arg):
+                    self.process_call_argument(func_name, arg, index)
+                continue
+
+            storage_buffer_type_name = self.storage_buffer_parameter_type_name(param)
+            if storage_buffer_type_name is not None:
+                storage_buffer_type_name = self.substitute_generic_signature_type(
+                    storage_buffer_type_name,
+                    generic_type_substitutions,
+                )
+                if self.expression_contains_empty_array_literal(arg):
+                    raise self.unsupported_call_initializer_binding_error(
+                        func_name, index, arg
+                    )
+                if self.pointer_ternary_statically_selects_null(arg):
+                    raise self.unsupported_null_pointer_argument_error(arg)
+                pointer_arg = self.variable_pointer_from_expression(arg)
+                if pointer_arg is None:
+                    self.emit(
+                        f"; WARNING: function call '{func_name}' requires a "
+                        f"storage buffer argument for parameter {param_name}"
+                    )
+                    return None
+                actual_type_name = self.storage_buffer_expression_type_name(arg)
+                if (
+                    actual_type_name is not None
+                    and not self.storage_buffer_parameter_type_is_compatible(
+                        storage_buffer_type_name, actual_type_name
+                    )
+                ):
+                    self.emit(
+                        f"; WARNING: function call '{func_name}' requires "
+                        f"{storage_buffer_type_name} storage buffer type for "
+                        "argument "
+                        f"{self.expression_debug_name(arg)} "
+                        f"passed to parameter {param_name}: got {actual_type_name}"
+                    )
+                    return None
+                prepared.append(
+                    {
+                        "kind": "storage_buffer",
+                        "name": param_name,
+                        "value": pointer_arg,
+                        "copy_pointer": not self.function_parameter_is_reference_like(
+                            param
+                        ),
+                    }
+                )
+                continue
+
+            param_type_name = self.substitute_generic_signature_type(
+                self.function_parameter_type_name(param),
+                generic_type_substitutions,
+            )
+            if self.function_parameter_requires_pointer_alias(param):
+                if self.expression_contains_empty_array_literal(arg):
+                    raise self.unsupported_call_initializer_binding_error(
+                        func_name, index, arg
+                    )
+                param_value_type = (
+                    self.map_crossgl_type(param_type_name)
+                    if param_type_name is not None
+                    else None
+                )
+                pointer_arg = self.assignable_pointer_from_expression(arg)
+                source_value_type = (
+                    self.pointer_pointee_type(pointer_arg)
+                    if pointer_arg is not None
+                    else None
+                )
+                if pointer_arg is None or source_value_type is None:
+                    raise self.unsupported_reference_argument_error(
+                        func_name,
+                        index,
+                        param_name,
+                        arg,
+                        feature="non-addressable-reference-argument",
+                        reason="the argument is not addressable",
+                    )
+                if param_value_type is not None and (
+                    source_value_type.id != param_value_type.id
+                    and not self.aggregate_types_are_layout_compatible(
+                        source_value_type, param_value_type
+                    )
+                ):
+                    raise self.unsupported_reference_argument_error(
+                        func_name,
+                        index,
+                        param_name,
+                        arg,
+                        feature="incompatible-reference-argument",
+                        reason=(
+                            f"argument type {source_value_type.type.base_type} "
+                            f"is incompatible with {param_type_name}"
+                        ),
+                    )
+                prepared.append(
+                    {
+                        "kind": "reference",
+                        "name": param_name,
+                        "value": pointer_arg,
+                        "copy_pointer": False,
+                    }
+                )
+                continue
+
+            expected_type = (
+                self.map_crossgl_type(param_type_name)
+                if param_type_name is not None
+                else None
+            )
+            arg_value = self.process_call_argument(
+                func_name,
+                arg,
+                index,
+                expected_type=expected_type,
+            )
+            if arg_value is None:
+                self.emit(f"; WARNING: Failed to evaluate argument for {func_name}")
+                return None
+            if expected_type is not None:
+                arg_value = self.convert_value_to_type(arg_value, expected_type)
+            prepared.append(
+                {
+                    "kind": "value",
+                    "name": param_name,
+                    "value": arg_value,
+                    "copy_pointer": False,
+                }
+            )
+        return prepared
 
     def inline_function_body(self, function_node) -> Optional[SpirvId]:
         body = getattr(function_node, "body", [])
@@ -21133,6 +22849,27 @@ class VulkanSPIRVCodeGen:
             else body if isinstance(body, list) else [body]
         )
 
+        has_tail_expression = any(
+            getattr(node, "is_tail_expression", False)
+            for node in self.walk_ast_nodes(statements)
+        )
+        has_top_level_value_return = any(
+            isinstance(statement, ReturnNode)
+            and getattr(statement, "value", None) is not None
+            for statement in statements
+        )
+        non_void_fallthrough = (
+            self.current_return_type is not None
+            and self.current_return_type.type.base_type != "void"
+            and not has_top_level_value_return
+        )
+        if (
+            self.nested_inline_return_node(function_node) is not None
+            or has_tail_expression
+            or non_void_fallthrough
+        ):
+            return self.inline_function_body_with_return_state(statements)
+
         for stmt in statements:
             if isinstance(stmt, ReturnNode):
                 if getattr(stmt, "value", None) is None:
@@ -21141,11 +22878,69 @@ class VulkanSPIRVCodeGen:
                     return self.process_array_literal(
                         stmt.value, self.current_return_type
                     )
+                if isinstance(stmt.value, MatchNode):
+                    return self.process_match_expression_return(stmt.value)
                 return self.process_expression(stmt.value)
 
             self.process_statement(stmt)
 
         return None
+
+    def inline_function_body_with_return_state(self, statements) -> Optional[SpirvId]:
+        """Lower inline returns through invocation-local state."""
+        return_type = self.current_return_type
+        bool_type = self.register_primitive_type("bool")
+        returned_pointer = self.create_variable(
+            bool_type, "Function", "__inline_returned"
+        )
+        self.store_to_variable(
+            returned_pointer, self.register_constant(False, bool_type)
+        )
+        result_pointer = None
+
+        if return_type is not None and return_type.type.base_type != "void":
+            result_pointer = self.create_variable(
+                return_type, "Function", "__inline_return_value"
+            )
+
+        context = InlineReturnContext(
+            return_type,
+            returned_pointer,
+            result_pointer,
+            len(self.loop_merge_labels),
+        )
+        self.inline_return_context_stack.append(context)
+        try:
+            self.process_statements(statements)
+        finally:
+            self.inline_return_context_stack.pop()
+
+        if result_pointer is None:
+            return None
+        self.require_inline_return_value(context)
+        return self.load_from_variable(result_pointer, return_type)
+
+    def require_inline_return_value(self, context: InlineReturnContext):
+        """Terminate a non-void inline fallthrough path as unreachable."""
+        bool_type = self.register_primitive_type("bool")
+        returned = self.load_from_variable(context.returned_pointer, bool_type)
+        value_label = SpirvId(self.get_id(), SpirvType("label"))
+        unreachable_label = SpirvId(self.get_id(), SpirvType("label"))
+        merge_label = SpirvId(self.get_id(), SpirvType("label"))
+
+        self.create_selection_merge(merge_label)
+        self.create_conditional_branch(returned, value_label, unreachable_label)
+
+        self.emit(f"%{value_label.id} = OpLabel")
+        self.current_label = value_label.id
+        self.create_branch(merge_label)
+
+        self.emit(f"%{unreachable_label.id} = OpLabel")
+        self.current_label = unreachable_label.id
+        self.create_unreachable()
+
+        self.emit(f"%{merge_label.id} = OpLabel")
+        self.current_label = merge_label.id
 
     def collect_function_execution_models(self, ast, all_functions=None):
         ast_functions = self.collect_ast_functions(ast)
@@ -22380,6 +24175,8 @@ class VulkanSPIRVCodeGen:
         counter_block_type = metadata.get("counter_block_type")
         if counter_pointer is None or counter_block_type is None:
             return None
+        if self.include_resource_interface_variables:
+            self.mark_function_interface_variable(counter_pointer)
 
         counter_value_type = self.variable_value_types.get(counter_pointer.id)
         for index in metadata.get("_descriptor_indices", []):
@@ -22387,7 +24184,9 @@ class VulkanSPIRVCodeGen:
             if counter_element_type is None:
                 return None
 
-            ptr_type = self.register_pointer_type(counter_element_type, "Uniform")
+            ptr_type = self.register_pointer_type(
+                counter_element_type, self.storage_buffer_storage_class()
+            )
             counter_pointer = self.access_chain(counter_pointer, [index], ptr_type)
             self.variable_value_types[counter_pointer.id] = counter_element_type
             counter_value_type = counter_element_type
@@ -22399,7 +24198,9 @@ class VulkanSPIRVCodeGen:
         member_index = self.register_constant(
             metadata.get("counter_member_index", 0), self.primitive_types["int"]
         )
-        ptr_type = self.register_pointer_type(uint_type, "Uniform")
+        ptr_type = self.register_pointer_type(
+            uint_type, self.storage_buffer_storage_class()
+        )
         access = self.access_chain(counter_pointer, [member_index], ptr_type)
         self.variable_value_types[access.id] = uint_type
         self.storage_buffer_access_metadata[access.id] = {
@@ -23716,9 +25517,38 @@ class VulkanSPIRVCodeGen:
         target_type: Optional[SpirvId] = None,
         constant: bool = False,
     ) -> Optional[SpirvId]:
+        if not expr.elements:
+            if target_type is None:
+                raise UnsupportedSPIRVFeatureError(
+                    "untyped empty initializer",
+                    "SPIR-V cannot infer a value type from an empty initializer; "
+                    "preserve its declared or parameter type before code generation.",
+                    missing_capabilities=("spirv.empty_initializer_type_inference",),
+                    source_location=getattr(expr, "source_location", None),
+                )
+            target_type = self.ensure_registered_type(target_type)
+            if self.type_contains_runtime_array(target_type):
+                raise UnsupportedSPIRVFeatureError(
+                    "runtime-sized empty initializer",
+                    "SPIR-V cannot materialize an empty aggregate value for a "
+                    "type containing a runtime-sized array.",
+                    missing_capabilities=("spirv.runtime_array_aggregate_initializer",),
+                    source_location=getattr(expr, "source_location", None),
+                )
+            if self.type_contains_specialization_sized_array(target_type):
+                raise UnsupportedSPIRVFeatureError(
+                    "specialization-sized array initializer",
+                    "SPIR-V aggregate initializers require a fixed constituent "
+                    "count; the destination contains a specialization-sized array.",
+                    missing_capabilities=("spirv.specialization_array_initializer",),
+                    source_location=getattr(expr, "source_location", None),
+                )
+            return self.default_value_for_type(target_type)
+
         array_type = target_type
         element_type = None
         target_size = None
+        constituent_types = None
 
         if array_type is not None:
             array_type = self.ensure_registered_type(array_type)
@@ -23734,10 +25564,16 @@ class VulkanSPIRVCodeGen:
                             "spirv.specialization_array_initializer",
                         ),
                     )
+            constituent_types = self.composite_member_types(array_type)
 
         values = []
-        for element in expr.elements:
-            value = self.process_array_literal_element(element, element_type, constant)
+        for element_index, element in enumerate(expr.elements):
+            constituent_type = element_type
+            if constituent_types is not None and element_index < len(constituent_types):
+                constituent_type = constituent_types[element_index]
+            value = self.process_array_literal_element(
+                element, constituent_type, constant
+            )
             if value is None:
                 return None
             values.append(value)
@@ -23755,7 +25591,13 @@ class VulkanSPIRVCodeGen:
                 self.convert_value_to_type(value, element_type) for value in values
             ]
 
-        if target_size is not None:
+        if constituent_types is not None:
+            values = values[: len(constituent_types)]
+            while len(values) < len(constituent_types):
+                values.append(
+                    self.default_value_for_type(constituent_types[len(values)])
+                )
+        elif target_size is not None:
             values = values[:target_size]
             if element_type is not None:
                 while len(values) < target_size:
@@ -24331,6 +26173,25 @@ class VulkanSPIRVCodeGen:
         target_is_precise = self.assignment_target_is_precise(target)
         operator = getattr(node, "operator", "=")
 
+        if (
+            isinstance(target, CooperativeMatrixOpNode)
+            and target.operation == "element"
+        ):
+            if not self.cooperative_matrix_khr_enabled:
+                self.process_expression(target)
+            if operator != "=":
+                raise self.cooperative_matrix_operation_error(
+                    target,
+                    "cooperative-matrix-element-compound-assignment",
+                    "SPIR-V cooperative-matrix element compound assignment is "
+                    f"not implemented for operator '{operator}'",
+                    "spirv.cooperative_matrix.element-compound-assignment",
+                )
+            self.process_cooperative_matrix_element_assignment(
+                target, node.value, target_is_precise
+            )
+            return
+
         if operator != "=":
             self.process_compound_assignment(node, target, operator, target_is_precise)
             return
@@ -24362,9 +26223,22 @@ class VulkanSPIRVCodeGen:
             )
             rhs_value = self.process_array_literal(node.value, target_type)
         else:
-            rhs_value = self.process_expression_with_precision(
-                node.value, target_is_precise
-            )
+            target_type = None
+            if isinstance(node.value, CooperativeMatrixOpNode) and isinstance(
+                target, (IdentifierNode, VariableNode, str)
+            ):
+                target_name = target if isinstance(target, str) else target.name
+                target_pointer = self.ensure_assignable_pointer_for_name(target_name)
+                if target_pointer is not None:
+                    target_type = self.variable_value_types.get(target_pointer.id)
+            if target_type is not None:
+                rhs_value = self.process_expression_with_expected_type_and_precision(
+                    node.value, target_type, target_is_precise
+                )
+            else:
+                rhs_value = self.process_expression_with_precision(
+                    node.value, target_is_precise
+                )
 
         if rhs_value is None:
             return
@@ -24845,6 +26719,11 @@ class VulkanSPIRVCodeGen:
 
     def process_return(self, node: ReturnNode):
         """Process a CrossGL return statement."""
+        if self.loop_merge_labels or self.cooperative_matrix_selection_depth > 0:
+            self.cooperative_matrix_control_flow_diverged = True
+        if self.inline_return_context_stack:
+            self.process_inline_return(node)
+            return
         if hasattr(node, "value") and node.value:
             if isinstance(node.value, list) and node.value:
                 return_value = self.process_expression_with_expected_type(
@@ -24871,6 +26750,49 @@ class VulkanSPIRVCodeGen:
                     self.create_return()
         else:
             self.create_return()
+
+    def process_inline_return(self, node: ReturnNode):
+        """Exit the active inline invocation without returning from its caller."""
+        context = self.inline_return_context_stack[-1]
+        value_expression = getattr(node, "value", None)
+        if isinstance(value_expression, list):
+            value_expression = value_expression[0] if value_expression else None
+
+        if context.result_pointer is not None:
+            if value_expression is None:
+                raise ValueError("non-void inline return requires a value")
+            if isinstance(value_expression, ArrayLiteralNode):
+                return_value = self.process_array_literal(
+                    value_expression, context.return_type
+                )
+            elif isinstance(value_expression, MatchNode):
+                return_value = self.process_match_expression_return(value_expression)
+            else:
+                expected_type = (
+                    self.current_return_type_source
+                    or context.return_type.type.base_type
+                )
+                return_value = self.process_expression_with_expected_type(
+                    value_expression, expected_type
+                )
+            if return_value is None:
+                raise ValueError("non-void inline return value could not be lowered")
+            self.store_to_variable(
+                context.result_pointer,
+                self.convert_value_to_type(return_value, context.return_type),
+            )
+        elif isinstance(value_expression, MatchNode):
+            self.process_match(value_expression)
+        elif value_expression is not None:
+            self.process_expression(value_expression)
+
+        bool_type = self.register_primitive_type("bool")
+        self.store_to_variable(
+            context.returned_pointer,
+            self.register_constant(True, bool_type),
+        )
+        if len(self.loop_merge_labels) > context.merge_stack_depth:
+            self.create_branch(self.loop_merge_labels[-1])
 
     def process_match_expression_return(self, node: MatchNode) -> Optional[SpirvId]:
         """Lower return-position matches through a temporary selected value."""
@@ -24917,21 +26839,52 @@ class VulkanSPIRVCodeGen:
         self.create_selection_merge(merge_label)
         self.create_conditional_branch(condition, then_label, else_label)
 
-        self.emit(f"%{then_label.id} = OpLabel")
-        self.current_label = then_label.id
-        self.process_statements(node.if_body)
-        if not self.current_block_has_terminator():
-            self.create_branch(merge_label)
+        self.cooperative_matrix_selection_depth += 1
+        try:
+            self.emit(f"%{then_label.id} = OpLabel")
+            self.current_label = then_label.id
+            self.process_statements(node.if_body)
+            then_terminated = self.current_block_has_terminator()
+            if not then_terminated:
+                self.create_branch(merge_label)
 
-        self.emit(f"%{else_label.id} = OpLabel")
-        self.current_label = else_label.id
-        if node.else_body:
-            self.process_statements(node.else_body)
-        if not self.current_block_has_terminator():
-            self.create_branch(merge_label)
+            self.emit(f"%{else_label.id} = OpLabel")
+            self.current_label = else_label.id
+            if node.else_body:
+                self.process_statements(node.else_body)
+            else_terminated = self.current_block_has_terminator()
+            if not else_terminated:
+                self.create_branch(merge_label)
+        finally:
+            self.cooperative_matrix_selection_depth -= 1
+
+        if then_terminated or else_terminated:
+            self.cooperative_matrix_control_flow_diverged = True
 
         self.emit(f"%{merge_label.id} = OpLabel")
         self.current_label = merge_label.id
+
+    def branch_after_loop_body(
+        self, body, merge_label: SpirvId, continue_label: SpirvId
+    ):
+        """Exit an enclosing loop when a nested inline call path returned."""
+        if not self.inline_return_context_stack or not self.statement_contains_return(
+            body
+        ):
+            self.create_branch(continue_label)
+            return
+
+        context = self.inline_return_context_stack[-1]
+        bool_type = self.register_primitive_type("bool")
+        returned = self.load_from_variable(context.returned_pointer, bool_type)
+        fallthrough_label = SpirvId(self.get_id(), SpirvType("label"))
+
+        self.create_selection_merge(fallthrough_label)
+        self.create_conditional_branch(returned, merge_label, fallthrough_label)
+
+        self.emit(f"%{fallthrough_label.id} = OpLabel")
+        self.current_label = fallthrough_label.id
+        self.create_branch(continue_label)
 
     def process_for(self, node: ForNode):
         """Process a CrossGL for loop."""
@@ -24948,7 +26901,7 @@ class VulkanSPIRVCodeGen:
         self.emit(f"%{header_label.id} = OpLabel")
         self.current_label = header_label.id
 
-        condition = self.process_expression(node.condition)
+        condition = self.process_loop_control_expression(node.condition)
         if condition is None:
             condition = self.register_constant(True, self.primitive_types["bool"])
         condition = self.ensure_bool_value(condition)
@@ -24964,7 +26917,7 @@ class VulkanSPIRVCodeGen:
             if node.body:
                 self.process_statements(node.body)
             if not self.current_block_has_terminator():
-                self.create_branch(continue_label)
+                self.branch_after_loop_body(node.body, merge_label, continue_label)
         finally:
             self.loop_continue_labels.pop()
             self.loop_merge_labels.pop()
@@ -24972,7 +26925,7 @@ class VulkanSPIRVCodeGen:
         self.emit(f"%{continue_label.id} = OpLabel")
         self.current_label = continue_label.id
         if node.update:
-            self.process_statement(node.update)
+            self.process_loop_control_statement(node.update)
         if not self.current_block_has_terminator():
             self.create_branch(header_label)
 
@@ -25083,7 +27036,7 @@ class VulkanSPIRVCodeGen:
             if node.body:
                 self.process_statements(node.body)
             if not self.current_block_has_terminator():
-                self.create_branch(continue_label)
+                self.branch_after_loop_body(node.body, merge_label, continue_label)
         finally:
             self.loop_continue_labels.pop()
             self.loop_merge_labels.pop()
@@ -25124,7 +27077,7 @@ class VulkanSPIRVCodeGen:
         int_type = self.register_primitive_type("int")
 
         if isinstance(iterable, RangeNode):
-            start = self.process_expression(iterable.start)
+            start = self.process_loop_control_expression(iterable.start)
             end_expr = iterable.end
             comparator = "<=" if iterable.inclusive else "<"
         elif self.process_sequence_for_in(node, pattern, iterable):
@@ -25153,7 +27106,7 @@ class VulkanSPIRVCodeGen:
         self.current_label = header_label.id
 
         loop_value = self.get_variable_value(loop_variable)
-        end_value = self.process_expression(end_expr)
+        end_value = self.process_loop_control_expression(end_expr)
         if end_value is None:
             end_value = self.register_constant(0, int_type)
         condition = self.binary_operation(comparator, int_type, loop_value, end_value)
@@ -25169,7 +27122,7 @@ class VulkanSPIRVCodeGen:
             if node.body:
                 self.process_statements(node.body)
             if not self.current_block_has_terminator():
-                self.create_branch(continue_label)
+                self.branch_after_loop_body(node.body, merge_label, continue_label)
         finally:
             self.loop_continue_labels.pop()
             self.loop_merge_labels.pop()
@@ -25252,8 +27205,15 @@ class VulkanSPIRVCodeGen:
 
                 self.emit(f"%{body_label.id} = OpLabel")
                 self.current_label = body_label.id
-                process_arm_body(arm)
-                if not self.current_block_has_terminator():
+                self.cooperative_matrix_selection_depth += 1
+                try:
+                    process_arm_body(arm)
+                finally:
+                    self.cooperative_matrix_selection_depth -= 1
+                arm_terminated = self.current_block_has_terminator()
+                if arm_terminated:
+                    self.cooperative_matrix_control_flow_diverged = True
+                else:
                     self.store_to_variable(matched_variable, matched_true)
                     self.create_branch(next_label)
 
@@ -25680,7 +27640,7 @@ class VulkanSPIRVCodeGen:
         self.emit(f"%{header_label.id} = OpLabel")
         self.current_label = header_label.id
 
-        condition = self.process_expression(node.condition)
+        condition = self.process_loop_control_expression(node.condition)
         if condition is None:
             condition = self.register_constant(True, self.primitive_types["bool"])
         condition = self.ensure_bool_value(condition)
@@ -25696,7 +27656,7 @@ class VulkanSPIRVCodeGen:
             if node.body:
                 self.process_statements(node.body)
             if not self.current_block_has_terminator():
-                self.create_branch(continue_label)
+                self.branch_after_loop_body(node.body, merge_label, continue_label)
         finally:
             self.loop_continue_labels.pop()
             self.loop_merge_labels.pop()
@@ -25730,7 +27690,7 @@ class VulkanSPIRVCodeGen:
             if node.body:
                 self.process_statements(node.body)
             if not self.current_block_has_terminator():
-                self.create_branch(continue_label)
+                self.branch_after_loop_body(node.body, merge_label, continue_label)
         finally:
             self.loop_continue_labels.pop()
             self.loop_merge_labels.pop()
@@ -25738,7 +27698,7 @@ class VulkanSPIRVCodeGen:
         self.emit(f"%{continue_label.id} = OpLabel")
         self.current_label = continue_label.id
 
-        condition = self.process_expression(node.condition)
+        condition = self.process_loop_control_expression(node.condition)
         if condition is None:
             condition = self.register_constant(True, self.primitive_types["bool"])
         condition = self.ensure_bool_value(condition)
@@ -25770,7 +27730,7 @@ class VulkanSPIRVCodeGen:
             if node.body:
                 self.process_statements(node.body)
             if not self.current_block_has_terminator():
-                self.create_branch(continue_label)
+                self.branch_after_loop_body(node.body, merge_label, continue_label)
         finally:
             self.loop_continue_labels.pop()
             self.loop_merge_labels.pop()
@@ -25798,7 +27758,15 @@ class VulkanSPIRVCodeGen:
 
     def process_increment_expression(self, node: UnaryOpNode) -> SpirvId:
         """Process prefix/postfix ++ and -- as load/update/store operations."""
-        variable_id = self.variable_pointer_from_expression(node.operand)
+        if (
+            isinstance(node.operand, CooperativeMatrixOpNode)
+            and node.operand.operation == "element"
+        ):
+            if not self.cooperative_matrix_khr_enabled:
+                self.process_expression(node.operand)
+            variable_id, _ = self.cooperative_matrix_element_pointer(node.operand)
+        else:
+            variable_id = self.variable_pointer_from_expression(node.operand)
         if variable_id is None:
             self.emit("; WARNING: increment target is not assignable")
             int_type = self.register_primitive_type("int")
@@ -26237,6 +28205,23 @@ class VulkanSPIRVCodeGen:
                 result_type, condition, true_value, false_value
             )
 
+        elif isinstance(expr, CooperativeMatrixOpNode):
+            if self.cooperative_matrix_khr_enabled:
+                return self.process_cooperative_matrix_operation(expr)
+            feature = "cooperative-matrix-lowering"
+            missing_capabilities = ("spirv.cooperative_matrix.khr",)
+            message = (
+                "SPIR-V cooperative-matrix lowering is not available for "
+                f"operation '{expr.operation}'; scalar substitution would "
+                "change subgroup-distributed matrix semantics"
+            )
+            raise UnsupportedSPIRVFeatureError(
+                feature,
+                message,
+                missing_capabilities=missing_capabilities,
+                source_location=getattr(expr, "source_location", None),
+            )
+
         elif isinstance(expr, WaveOpNode):
             return self.call_wave_operation(expr.operation, expr.arguments)
 
@@ -26259,6 +28244,7 @@ class VulkanSPIRVCodeGen:
             return None
 
         elif isinstance(expr, FunctionCallNode):
+            reject_unresolved_generic_member_call(expr, "Vulkan SPIR-V")
             ray_query_call = self.ray_query_call_from_function_call(expr)
             if ray_query_call is not None:
                 return self.process_ray_query_operation(ray_query_call)
@@ -26384,12 +28370,43 @@ class VulkanSPIRVCodeGen:
             mesh_output_arg_indices = (
                 self.resolve_function_mesh_output_parameter_indices(callee_name)
             )
+            contextual_parameter_types = {}
+            ambiguous_contextual_arguments = set()
+            selected_function_reference = None
+            temporary_array_arguments = set()
+            if any(isinstance(arg, ArrayLiteralNode) for arg in call_args):
+                (
+                    contextual_parameter_types,
+                    ambiguous_contextual_arguments,
+                    selected_function_reference,
+                    temporary_array_arguments,
+                ) = self.contextual_call_parameter_types(
+                    callee_name,
+                    call_args,
+                    skipped_arg_indices,
+                    mesh_output_arg_indices,
+                )
             for arg_index, arg in enumerate(call_args):
                 if arg_index in skipped_arg_indices:
                     continue
                 if arg_index in mesh_output_arg_indices:
                     continue
-                arg_value = self.process_call_argument(callee_name, arg, arg_index)
+                if self.expression_contains_empty_array_literal(arg):
+                    if arg_index in ambiguous_contextual_arguments:
+                        raise self.unsupported_call_initializer_type_error(
+                            callee_name, arg_index, arg, ambiguous=True
+                        )
+                    if arg_index not in contextual_parameter_types:
+                        raise self.unsupported_call_initializer_type_error(
+                            callee_name, arg_index, arg, ambiguous=False
+                        )
+                arg_value = self.process_call_argument(
+                    callee_name,
+                    arg,
+                    arg_index,
+                    expected_type=contextual_parameter_types.get(arg_index),
+                    allow_array_temporary=arg_index in temporary_array_arguments,
+                )
                 if arg_value is None:
                     self.emit(
                         f"; WARNING: Failed to evaluate argument for {callee_name or callee_expr}"
@@ -26454,7 +28471,11 @@ class VulkanSPIRVCodeGen:
             ):
                 return self.call_resource_function(callee_name, args)
 
-            return self.call_function(callee_name, args)
+            return self.call_function(
+                callee_name,
+                args,
+                function_reference=selected_function_reference,
+            )
 
         elif isinstance(expr, MemberAccessNode):
             member_name = expr.member
@@ -26938,7 +28959,8 @@ class VulkanSPIRVCodeGen:
                 return
         if (
             self.include_resource_interface_variables
-            and variable.type.storage_class in {"Uniform", "UniformConstant"}
+            and variable.type.storage_class
+            in {"StorageBuffer", "Uniform", "UniformConstant"}
             and any(
                 global_variable.id == variable.id
                 for global_variable in self.global_variables.values()
@@ -27149,6 +29171,7 @@ class VulkanSPIRVCodeGen:
         self, element_type: SpirvId, size: Optional[int] = None
     ) -> SpirvId:
         """Create and register an array type."""
+        self.reject_nonpositive_array_length(size)
         key = (element_type.id, size)
         if key in self.array_types:
             return self.array_types[key]
@@ -27165,12 +29188,15 @@ class VulkanSPIRVCodeGen:
         spirv_type = SpirvType(type_name)
         spirv_id = SpirvId(id_value, spirv_type, type_name)
         self.array_types[key] = spirv_id
+        if element_type.id in self.cooperative_matrix_containing_type_ids:
+            self.cooperative_matrix_containing_type_ids.add(spirv_id.id)
         return spirv_id
 
     def register_layout_array_type(
         self, element_type: SpirvId, size: Optional[int], layout: str
     ) -> SpirvId:
         """Create a layout-specific array clone for distinct ArrayStride values."""
+        self.reject_nonpositive_array_length(size)
         key = (element_type.id, size, layout)
         if key in self.layout_array_types:
             return self.layout_array_types[key]
@@ -27187,7 +29213,30 @@ class VulkanSPIRVCodeGen:
         )
         spirv_id = SpirvId(id_value, SpirvType(type_name), type_name)
         self.layout_array_types[key] = spirv_id
+        if element_type.id in self.cooperative_matrix_containing_type_ids:
+            self.cooperative_matrix_containing_type_ids.add(spirv_id.id)
         return spirv_id
+
+    def reject_nonpositive_array_length(self, size) -> None:
+        """Reject fixed array extents that SPIR-V cannot represent."""
+        if size is None:
+            return
+        specialization_length = self.named_specialization_array_length(size)
+        if specialization_length is not None:
+            resolved_size = self.specialization_constant_default_values.get(
+                specialization_length.id
+            )
+        else:
+            resolved_size = evaluate_literal_int_expression(
+                size, self.active_literal_int_constants()
+            )
+        if not isinstance(resolved_size, int) or resolved_size >= 1:
+            return
+        raise UnsupportedSPIRVFeatureError(
+            "non-positive fixed array extent",
+            f"SPIR-V fixed arrays require an extent of at least one; got " f"'{size}'.",
+            missing_capabilities=("spirv.nonpositive_array_extent",),
+        )
 
     def named_specialization_array_length(self, name: str) -> Optional[SpirvId]:
         """Return an integer specialization constant usable as an array length."""
@@ -27899,6 +29948,8 @@ class VulkanSPIRVCodeGen:
             return "1.4"
         if "RayTracingKHR" in self.required_capabilities:
             return "1.4"
+        if self.cooperative_matrix_khr_enabled:
+            return "1.3"
         if any(
             capability.startswith("GroupNonUniform")
             for capability in self.required_capabilities
@@ -27944,7 +29995,10 @@ class VulkanSPIRVCodeGen:
             elif " = OpExtInstImport " in line:
                 imports.append(line)
             elif line.startswith("OpMemoryModel "):
-                memory_model.append(line)
+                if "VulkanMemoryModel" in self.required_capabilities:
+                    memory_model.append("OpMemoryModel Logical VulkanKHR")
+                else:
+                    memory_model.append(line)
             elif line.startswith("OpEntryPoint "):
                 entry_points.append(line)
             elif line.startswith("OpExecutionMode"):

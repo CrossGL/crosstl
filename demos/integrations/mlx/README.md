@@ -39,12 +39,11 @@ The current harness verifies:
 - on Linux CI, full project materialization of `gemv.metal` to OpenGL followed
   by native GLSL compilation and SPIR-V 1.3 validation for all 225 source
   specializations represented by the generated artifact;
-- on Linux CI, full project translation of `gemv.metal` to Vulkan with
-  `spirv-as` and `spirv-val` available. The current gate requires the exact
-  structured nested-return diagnostic tracked in
-  [#1561](https://github.com/CrossGL/crosstl/issues/1561) and confirms that no
-  artifact reaches structural validation while pointer-preserving inlining is
-  unsafe;
+- on Linux CI, full project materialization and translation of `gemv.metal` to
+  Vulkan produces 225 specializations and 224 `GLCompute` entry points. The
+  generated artifact passes both `spirv-as` and `spirv-val` for `vulkan1.1`
+  with zero semantic warnings and no known codegen fallbacks. This is structural
+  validation, not numerical runtime parity;
 - runtime artifact manifest, runtime-test manifest, and runtime-test plan
   generation for reduced `arange` readiness probes across DirectX, OpenGL, and
   Vulkan;
@@ -221,14 +220,11 @@ translation successes.
 The full GEMV OpenGL gate accepts only the reserved double-underscore identifier
 warnings tracked in CrossGL/crosstl#1513; any other native compiler warning
 fails the check.
-The full GEMV Vulkan gate keeps `spirv-as` and `spirv-val` available but now
-stops before artifact emission. Pointer-preserving inlining rejects the nested
-return in the materialized GEMV helper under CrossGL/crosstl#1561; the gate
-accepts only that diagnostic and fails on any untracked translation error. The
-previous 225-specialization, 224-entry structural result is not treated as
-current proof because validating an artifact with incorrect return semantics
-would be misleading. Assembly and validation resume only after the nested
-return contract is implemented. No numerical runtime execution claim is made.
+The full GEMV Vulkan gate materializes all 225 source specializations and emits
+224 `GLCompute` entry points. The generated artifact passes both `spirv-as` and
+`spirv-val` for `vulkan1.1`, with zero semantic warnings and no known codegen
+fallbacks. This is structural validation only: runtime integration is not
+included, and the result does not establish numerical runtime parity.
 
 Read-only scalar storage-pointer reinterpretation now has a shared AST contract
 and target lowering for DirectX, OpenGL, and Vulkan. A 32-bit scalar storage
@@ -295,31 +291,62 @@ implementation of CrossGL/crosstl#1490; dependent function-local aliases and
 value expressions outside this contract remain tracked there.
 
 The isolated high-budget `quantized_nax.metal` run still completes 722
-specializations with no unsupported records and now resolves the NAX fragment
-aliases to concrete `vec<scalar, 8>` types. SPIR-V generation rejects the first
-`vec<float, 8>` with `project.translate.unsupported-feature` and the
-`spirv.generic_vector_width` capability instead of substituting a scalar. No
-Vulkan artifact or validator result is claimed. Generic vectors with supported
-widths 2, 3, and 4 now map to SPIR-V vector types; a signed 64-bit three-component
-construction and component update passes `spirv-val`. Aggregate lowering for
-the eight-component NAX representation remains tracked in CrossGL/crosstl#1569.
+specializations with no unsupported records and resolves the NAX fragment
+aliases to concrete eight-lane float, half, and bfloat vectors. Metal reverse
+translation now represents those local values as fixed aggregate wrappers with
+explicit lane storage and element-wise helpers. Reduced DirectX, OpenGL, and
+Vulkan fixtures preserve lane reads, writes, arithmetic, and mutable helper
+parameters; their generated artifacts pass the available native validators.
+The lowering rejects unsupported operators, member selections, mixed vector
+shapes, and ABI-visible device or constant storage instead of changing the
+source contract. Direct generic-vector canonicalization outside the Metal
+frontend remains tracked in CrossGL/crosstl#1569.
+
+Generic member calls now retain their receiver, method, and ordered type and
+value arguments in the shared AST, including pointer-member calls and nested
+generic types. Metal materialization resolves concrete template methods on
+direct and nested struct-field receivers before target generation. Reduced
+fixtures containing the five-argument `Atile.load` and `Btile.load` forms from
+`fp_quantized.metal` pass the available DirectX, OpenGL, and Vulkan validators.
+Calls that reach a target without a concrete specialization fail with a
+structured diagnostic instead of losing the generic suffix or computation.
+
+Pinned Vulkan replays confirm that both affected kernels advance past this
+contract without producing a full artifact. `fp_quantized.metal` next stops at
+type inference for the reference-returning `frag_at(i, j)` argument tracked in
+CrossGL/crosstl#1557. `quantized_nax.metal` next stops because the dependent
+static owner of `mma` is absent, so its empty tag argument has no selected
+parameter type. Dependent static-owner materialization remains tracked in
+CrossGL/crosstl#1574. These results establish translation-frontier progress
+only; they do not include runtime integration or numerical parity.
+
+The full pinned Vulkan run now advances beyond the generic-vector-width
+diagnostic. The contextual initializer contract implemented for
+CrossGL/crosstl#1573 now rejects the empty `metal::bool_constant<...>{}` argument
+instead of inferring a zero-length array. The selected parameter type is still
+unavailable because the captured intermediate drops the dependent static owner
+from `CTile::NAXFrag_t::mma`; CrossGL/crosstl#1574 tracks that remaining
+materialization contract. The intermediate also retains unresolved
+reference-returning `frag_at` calls, whose receiver identity remains tracked in
+CrossGL/crosstl#1557. No full-kernel artifact or validator result is claimed.
 Complete address-space, const, pointer-provenance, and
 unresolved-alias diagnostic transport remains tracked in CrossGL/crosstl#1566.
-Generic member calls with explicit type or value arguments in the shared parser
-remain tracked in CrossGL/crosstl#1555, pointer-bearing aggregate propagation
-remains tracked in CrossGL/crosstl#1544, and lowered receiver/reference semantics
-must satisfy CrossGL/crosstl#1557 before the kernel can be considered
-semantically ready.
+Pointer-bearing aggregate propagation remains tracked in CrossGL/crosstl#1544,
+and lowered receiver/reference semantics must satisfy CrossGL/crosstl#1557
+before the kernel can be considered semantically ready.
 Lazy logical and conditional evaluation in SPIR-V remains tracked in
 CrossGL/crosstl#1560 for full-corpus semantic coverage.
-Nested returns and side-effectful compatibility arguments in pointer-preserving
-SPIR-V inlining now fail explicitly; complete lowering remains tracked in
-CrossGL/crosstl#1561 and CrossGL/crosstl#1562.
+Nested-return lowering in pointer-preserving SPIR-V inlining is covered by the
+passing full GEMV Vulkan gate. Side-effectful compatibility arguments remain
+rejected explicitly and tracked in CrossGL/crosstl#1562.
 
 ## Resolved Frontier Issues
 
 The current reduced frontier no longer depends on the previously tracked issues:
-CrossGL/crosstl#1551, CrossGL/crosstl#1498, CrossGL/crosstl#1394,
+CrossGL/crosstl#1573, CrossGL/crosstl#1555, CrossGL/crosstl#1561,
+CrossGL/crosstl#1551,
+CrossGL/crosstl#1498,
+CrossGL/crosstl#1394,
 CrossGL/crosstl#1317,
 CrossGL/crosstl#939, CrossGL/crosstl#940,
 CrossGL/crosstl#941, CrossGL/crosstl#943, CrossGL/crosstl#944,

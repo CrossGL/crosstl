@@ -80,13 +80,13 @@ class BackendRegistry:
                 raise ValueError(f"Backend alias '{alias_key}' already registered")
             self._by_alias[alias_key] = name
 
-        for alias in spec.target_aliases:
+        for alias in (*spec.target_aliases, *spec.target_profiles):
             alias_key = _normalize_backend_name(alias)
             if alias_key in self._by_alias and not overwrite:
                 if self._by_alias[alias_key] == name:
                     continue
                 raise ValueError(
-                    f"Backend target alias '{alias_key}' already registered"
+                    f"Backend target name '{alias_key}' already registered"
                 )
             self._by_alias[alias_key] = name
 

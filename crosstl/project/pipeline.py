@@ -15052,6 +15052,99 @@ def _metal_prune_unused_placeholder_concrete_structs(
     return preprocessor._apply_text_replacements(source, replacements)
 
 
+def _metal_coalesce_default_equivalent_struct_specializations(
+    preprocessor: Any,
+    source: str,
+) -> str:
+    """Unify materialized names that differ only by expanded defaults."""
+    provenance = getattr(
+        preprocessor,
+        "_materialized_struct_specializations",
+        {},
+    )
+    if len(provenance) < 2:
+        return source
+
+    declarations = {}
+    for declaration in preprocessor._find_template_structs(source):
+        if preprocessor._template_struct_specialization_arguments(declaration) is None:
+            declarations.setdefault(declaration.name, declaration)
+
+    aliases: dict[str, str] = {}
+    for short_name, (source_name, short_arguments) in provenance.items():
+        declaration = declarations.get(source_name)
+        if declaration is None:
+            continue
+        short_arguments = tuple(short_arguments)
+        candidates: list[tuple[str, tuple[str, ...]]] = []
+        for candidate_name, (
+            candidate_source,
+            candidate_arguments,
+        ) in provenance.items():
+            candidate_arguments = tuple(candidate_arguments)
+            if (
+                candidate_name == short_name
+                or candidate_source != source_name
+                or len(candidate_arguments) <= len(short_arguments)
+            ):
+                continue
+            if any(
+                _normalize_metal_type_text(
+                    _metal_expand_materialized_struct_type(preprocessor, left)
+                )
+                != _normalize_metal_type_text(
+                    _metal_expand_materialized_struct_type(preprocessor, right)
+                )
+                for left, right in zip(short_arguments, candidate_arguments)
+            ):
+                continue
+            if not _metal_trailing_struct_arguments_match_defaults(
+                preprocessor,
+                declaration=declaration,
+                actual_arguments=candidate_arguments,
+                explicit_argument_count=len(short_arguments),
+            ):
+                continue
+            candidates.append((candidate_name, candidate_arguments))
+
+        if not candidates:
+            continue
+        fullest_argument_count = max(len(arguments) for _name, arguments in candidates)
+        fullest = [
+            (name, arguments)
+            for name, arguments in candidates
+            if len(arguments) == fullest_argument_count
+        ]
+        expanded_signatures = {
+            tuple(
+                _normalize_metal_type_text(
+                    _metal_expand_materialized_struct_type(preprocessor, argument)
+                )
+                for argument in arguments
+            )
+            for _name, arguments in fullest
+        }
+        if len(expanded_signatures) != 1:
+            continue
+        aliases[short_name] = min(name for name, _arguments in fullest)
+
+    if not aliases:
+        return source
+
+    concrete_structs = {
+        struct.name: struct
+        for struct in preprocessor._find_concrete_struct_definitions(source)
+    }
+    removals = [
+        (int(concrete_structs[name].span[0]), int(concrete_structs[name].span[1]), "")
+        for name in aliases
+        if name in concrete_structs
+    ]
+    if removals:
+        source = preprocessor._apply_text_replacements(source, removals)
+    return preprocessor._replace_identifiers(source, aliases)
+
+
 def _unresolved_metal_standalone_template_type_records(
     *,
     preprocessor: Any,
@@ -16227,6 +16320,10 @@ def _project_template_materialization_for_artifact(
         preprocessor,
         materialized,
     )
+    materialized = _metal_coalesce_default_equivalent_struct_specializations(
+        preprocessor,
+        materialized,
+    )
     materialized = _metal_prune_unused_placeholder_concrete_structs(
         preprocessor,
         materialized,
@@ -16374,6 +16471,13 @@ def _translation_failure_missing_capabilities(
 
 
 def _template_materialization_failure_details(exc: Exception) -> dict[str, Any]:
+    if (
+        _translation_failure_diagnostic_code(exc)
+        == "project.translate.metal-struct-method"
+        and getattr(exc, "reason", None) == "reference-return-identity-unsupported"
+    ):
+        return {}
+
     limit = getattr(exc, "limit", None)
     limit_source = getattr(exc, "limit_source", None)
     required_work_items = getattr(exc, "required_work_items", None)
@@ -16919,6 +17023,71 @@ def _pointer_reinterpret_failure_details(
     return dict(sorted(details.items()))
 
 
+def _generic_member_call_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.generic-member-call-unresolved"
+    ):
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    call = {}
+    fields = {
+        "receiver": getattr(exc, "receiver", None),
+        "method": getattr(exc, "method_name", None),
+        "targetBackend": getattr(exc, "target_name", None),
+        "suggestedAction": getattr(exc, "suggested_action", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            call[name] = value
+    generic_arguments = getattr(exc, "generic_arguments", None)
+    if generic_arguments is not None:
+        call["genericArguments"] = [str(value) for value in generic_arguments]
+    if call:
+        details["genericMemberCall"] = dict(sorted(call.items()))
+    return dict(sorted(details.items()))
+
+
+def _metal_struct_method_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if (
+        _translation_failure_diagnostic_code(exc)
+        != "project.translate.metal-struct-method"
+        or getattr(exc, "reason", None) != "reference-return-identity-unsupported"
+    ):
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    struct_method = {}
+    fields = {
+        "reason": getattr(exc, "reason", None),
+        "structName": getattr(exc, "struct_name", None),
+        "methodName": getattr(exc, "method_name", None),
+        "returnType": getattr(exc, "return_type", None),
+        "requestedSignature": getattr(exc, "requested_signature", None),
+        "suggestedAction": getattr(exc, "suggested_action", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            struct_method[name] = value
+    if struct_method:
+        details["structMethod"] = dict(sorted(struct_method.items()))
+    return dict(sorted(details.items()))
+
+
 def _translation_failure_details(
     exc: Exception,
     target: str,
@@ -16940,6 +17109,8 @@ def _translation_failure_details(
         **_opengl_storage_pointer_failure_details(exc, unit, artifact_path),
         **_opengl_reference_parameter_failure_details(exc, unit, artifact_path),
         **_pointer_reinterpret_failure_details(exc, unit, artifact_path),
+        **_generic_member_call_failure_details(exc, unit, artifact_path),
+        **_metal_struct_method_failure_details(exc, unit, artifact_path),
         **_metal_static_constant_failure_details(exc, unit, artifact_path),
         **_metal_sizeof_failure_details(exc, unit, artifact_path),
         **_metal_callable_failure_details(exc, unit, artifact_path),

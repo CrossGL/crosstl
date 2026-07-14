@@ -17,6 +17,8 @@ from ..ast import (
     BreakNode,
     ConstructorNode,
     ContinueNode,
+    CooperativeMatrixOpNode,
+    CooperativeMatrixType,
     DoWhileNode,
     ForInNode,
     ForNode,
@@ -329,10 +331,22 @@ class UnsupportedMetalFeatureError(ValueError):
 
     project_diagnostic_code = "project.translate.unsupported-feature"
 
-    def __init__(self, feature, message, *, missing_capabilities=()):
+    def __init__(
+        self,
+        feature,
+        message,
+        *,
+        missing_capabilities=(),
+        operation=None,
+        reason=None,
+        source_location=None,
+    ):
         super().__init__(message)
         self.feature = feature
         self.missing_capabilities = tuple(missing_capabilities)
+        self.operation = operation
+        self.reason = reason
+        self.source_location = source_location
 
 
 class CharTypeMapper:
@@ -378,6 +392,11 @@ class MetalCodeGen:
         "%": 10,
     }
     ASSOCIATIVE_BINARY_OPS = {"+", "*", "&&", "||", "&", "|", "^"}
+    METAL_COOPERATIVE_MATRIX_FUNCTIONS = {
+        "load": "simdgroup_load",
+        "store": "simdgroup_store",
+        "multiply_accumulate": "simdgroup_multiply_accumulate",
+    }
     METAL_RESERVED_LOCAL_IDENTIFIERS = {
         "kernel",
         "vertex",
@@ -1737,6 +1756,10 @@ class MetalCodeGen:
             code += "\n".join(pre_lines) + "\n"
         if not any("metal_stdlib" in line for line in pre_lines):
             code += "#include <metal_stdlib>\n"
+        if self.uses_cooperative_matrix(ast) and not any(
+            "metal_simdgroup_matrix" in line for line in pre_lines
+        ):
+            code += "#include <metal_simdgroup_matrix>\n"
         code += "using namespace metal;\n"
         if self.uses_metal_raytracing_namespace(ast, global_vars, all_functions):
             code += "using namespace metal::raytracing;\n"
@@ -2362,6 +2385,16 @@ class MetalCodeGen:
         code += self.generate_metal_inverse_helpers()
         code += functions_code
         return code
+
+    def uses_cooperative_matrix(self, ast):
+        """Return whether a canonical cooperative-matrix node is present."""
+        walk = getattr(ast, "walk", None)
+        if not callable(walk):
+            return False
+        return any(
+            isinstance(node, (CooperativeMatrixType, CooperativeMatrixOpNode))
+            for node in walk()
+        )
 
     def generate_preprocessor_directive(self, directive):
         if isinstance(directive, PreprocessorNode):
@@ -8879,6 +8912,8 @@ class MetalCodeGen:
         elif isinstance(expr, UnaryOpNode):
             operand = self.generate_unary_operand(expr.operand)
             return f"{self.map_operator(expr.op)}{operand}"
+        elif isinstance(expr, CooperativeMatrixOpNode):
+            return self.generate_cooperative_matrix_operation(expr)
         elif isinstance(expr, WaveOpNode):
             return self.generate_metal_wave_op_expression(expr)
         elif isinstance(expr, RayTracingOpNode):
@@ -9657,6 +9692,65 @@ class MetalCodeGen:
                 "mem_flags::mem_threadgroup | mem_flags::mem_texture)"
             ),
         }.get(func_name)
+
+    def generate_cooperative_matrix_operation(self, node):
+        """Render a canonical cooperative-matrix operation with Metal semantics."""
+        operation = node.operation
+        arguments = list(node.arguments)
+        exact_arities = {
+            "element": 2,
+            "multiply": 2,
+            "multiply_accumulate": 4,
+            "elementwise_add": 2,
+            "elementwise_subtract": 2,
+            "negate": 1,
+        }
+        expected_arity = exact_arities.get(operation)
+        if expected_arity is not None and len(arguments) != expected_arity:
+            raise UnsupportedMetalFeatureError(
+                "cooperative-matrix-operation-arity",
+                f"Metal cooperative-matrix operation '{operation}' expects "
+                f"{expected_arity} arguments, got {len(arguments)}",
+                operation=operation,
+                reason="invalid-argument-count",
+                source_location=getattr(node, "source_location", None),
+            )
+        if operation in {"load", "store"} and len(arguments) < 2:
+            raise UnsupportedMetalFeatureError(
+                "cooperative-matrix-operation-arity",
+                f"Metal cooperative-matrix operation '{operation}' expects at "
+                f"least 2 arguments, got {len(arguments)}",
+                operation=operation,
+                reason="invalid-argument-count",
+                source_location=getattr(node, "source_location", None),
+            )
+
+        rendered = [self.generate_expression(argument) for argument in arguments]
+        if operation == "element":
+            return f"{rendered[0]}.thread_elements()[{rendered[1]}]"
+        if operation == "multiply":
+            return f"({rendered[0]} * {rendered[1]})"
+        if operation == "elementwise_add":
+            return f"({rendered[0]} + {rendered[1]})"
+        if operation == "elementwise_subtract":
+            return f"({rendered[0]} - {rendered[1]})"
+        if operation == "negate":
+            return f"(-{rendered[0]})"
+        if operation == "store":
+            rendered = [rendered[1], rendered[0], *rendered[2:]]
+        intrinsic = self.METAL_COOPERATIVE_MATRIX_FUNCTIONS.get(operation)
+        if intrinsic is not None:
+            return f"{intrinsic}({', '.join(rendered)})"
+
+        raise UnsupportedMetalFeatureError(
+            "cooperative-matrix-operation-lowering",
+            f"Metal codegen cannot lower cooperative-matrix operation "
+            f"'{operation}' without changing its semantics",
+            missing_capabilities=("metal.cooperative-matrix-operation-lowering",),
+            operation=operation,
+            reason="operation-not-representable",
+            source_location=getattr(node, "source_location", None),
+        )
 
     def generate_metal_wave_op_expression(self, node):
         return self.generate_metal_wave_operation(node.operation, node.arguments)
@@ -13064,6 +13158,20 @@ class MetalCodeGen:
                 return f"{address_space} {element_type}* {name}"
             declaration = format_c_style_array_declaration(mapped_type, name)
             return f"{address_space} {declaration}"
+
+        qualifiers = self.parameter_qualifier_names(node)
+        address_space = self.effective_parameter_address_space(
+            raw_param_type,
+            node,
+            shader_type,
+            default_for_stage_binding=bool(qualifiers & {"out", "inout"}),
+        )
+        if address_space is not None:
+            address_space = self.readonly_qualified_address_space(
+                address_space,
+                node,
+            )
+            return f"{address_space} {mapped_type}& {name}"
 
         return None
 
@@ -22984,6 +23092,9 @@ class MetalCodeGen:
         if vtype is None:
             return "float"
 
+        cooperative_matrix = self.cooperative_matrix_contract(vtype)
+        if cooperative_matrix is not None:
+            return self.map_cooperative_matrix_type(vtype, cooperative_matrix)
         if isinstance(vtype, PointerType):
             return f"{self.map_type(vtype.pointee_type)}*"
         if isinstance(vtype, ReferenceType):
@@ -23040,6 +23151,47 @@ class MetalCodeGen:
             return vtype_str
 
         return self.type_mapping.get(vtype_str, vtype_str)
+
+    def cooperative_matrix_contract(self, matrix_type):
+        if isinstance(matrix_type, CooperativeMatrixType):
+            return (
+                matrix_type.element_type,
+                matrix_type.rows,
+                matrix_type.cols,
+                matrix_type.scope,
+                matrix_type.use,
+                matrix_type.layout,
+            )
+
+        type_name = str(matrix_type).strip()
+        base_name, generic_args = generic_type_parts(type_name)
+        if base_name.rsplit("::", 1)[-1] != "CooperativeMatrix" or not (
+            3 <= len(generic_args) <= 6
+        ):
+            return None
+        defaults = ("subgroup", "unspecified", "unspecified")
+        generic_args = [*generic_args, *defaults[len(generic_args) - 3 :]]
+        return tuple(generic_args)
+
+    def map_cooperative_matrix_type(self, matrix_type, contract):
+        """Map the native subset of the canonical cooperative-matrix contract."""
+        element_type, rows, cols, scope, use, layout = contract
+        metadata = (scope, use, layout)
+        if metadata != ("subgroup", "unspecified", "unspecified"):
+            raise UnsupportedMetalFeatureError(
+                "cooperative-matrix-type-contract",
+                "Metal simdgroup_matrix cannot preserve cooperative-matrix "
+                "scope/use/layout contract "
+                f"{metadata!r}",
+                missing_capabilities=("metal.cooperative-matrix-contract-mapping",),
+                reason="unsupported-type-contract",
+                source_location=getattr(matrix_type, "source_location", None),
+            )
+
+        mapped_element_type = self.map_type(element_type)
+        rows_text = self.convert_type_node_to_string(rows)
+        cols_text = self.convert_type_node_to_string(cols)
+        return f"simdgroup_matrix<{mapped_element_type}, {rows_text}, {cols_text}>"
 
     def metal_geometry_stream_info(self, vtype):
         if vtype is None:

@@ -22,7 +22,7 @@
         "path": "crosstl/backend/DirectX"
       },
       "signals": {
-        "unsupported_marker_count": 301,
+        "unsupported_marker_count": 306,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/directx_codegen.py",
@@ -123,7 +123,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1173
+        "test_count": 1179
       },
       "translator_codegen": {
         "exists": true,
@@ -152,7 +152,7 @@
         "path": "crosstl/backend/GLSL"
       },
       "signals": {
-        "unsupported_marker_count": 217,
+        "unsupported_marker_count": 221,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
@@ -247,7 +247,7 @@
           "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1299
+        "test_count": 1333
       },
       "translator_codegen": {
         "exists": true,
@@ -524,7 +524,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 524,
+        "unsupported_marker_count": 533,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
@@ -617,7 +617,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 1269
+        "test_count": 1301
       },
       "translator_codegen": {
         "exists": true,
@@ -637,6 +637,10 @@
         {
           "name": "Khronos SPIR-V headers",
           "url": "https://github.com/KhronosGroup/SPIRV-Headers"
+        },
+        {
+          "name": "SPV_KHR_cooperative_matrix specification",
+          "url": "https://github.khronos.org/SPIRV-Registry/extensions/KHR/SPV_KHR_cooperative_matrix.html"
         }
       ],
       "id": "vulkan",
@@ -646,7 +650,7 @@
         "path": "crosstl/backend/SPIRV"
       },
       "signals": {
-        "unsupported_marker_count": 82,
+        "unsupported_marker_count": 112,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
@@ -655,6 +659,10 @@
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
             "text": "project_diagnostic_code = \"project.translate.unsupported-feature\""
+          },
+          {
+            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
+            "text": "raise UnsupportedSPIRVFeatureError("
           },
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
@@ -706,40 +714,38 @@
           },
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "def unsupported_lambda_default_value("
+            "text": "def unsupported_call_initializer_type_error("
           },
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "\"; WARNING: SPIR-V backend does not support CrossGL \""
+            "text": "return UnsupportedSPIRVFeatureError("
           },
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "self.emit(f\"; WARNING: {operation} is not supported by the SPIR-V backend yet\")"
+            "text": "def unsupported_call_initializer_binding_error("
           },
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "raise UnsupportedSPIRVFeatureError("
+            "text": "return UnsupportedSPIRVFeatureError("
           },
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "raise UnsupportedSPIRVFeatureError("
-          },
-          {
-            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "raise UnsupportedSPIRVFeatureError("
+            "text": "def unsupported_reference_argument_error("
           }
         ]
       },
       "source_kind": "native",
       "target_aliases": [],
       "target_extension": ".spvasm",
-      "target_profiles": [],
+      "target_profiles": [
+        "vulkan-khr-cooperative-matrix"
+      ],
       "tests": {
         "paths": [
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 1130
+        "test_count": 1230
       },
       "translator_codegen": {
         "exists": true,

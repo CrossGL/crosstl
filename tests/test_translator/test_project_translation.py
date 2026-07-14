@@ -15137,6 +15137,8 @@ def test_metal_project_materialization_deduces_tile_helper_from_struct_fields(
         materialized.text,
     )
     assert "D.value = A.value + B.value + C.value;" in materialized.text
+    assert "struct Tile_float_2_3 {" not in materialized.text
+    assert "thread Tile_float_2_3_BaseFragment_float_8_8& D" in materialized.text
     assert not re.search(r"\btile_matmad\s*\(", materialized.text)
 
     payload = translate_project(
@@ -15157,7 +15159,9 @@ def test_metal_project_materialization_deduces_tile_helper_from_struct_fields(
     assert artifact_tile_specializations == [tile_specialization]
     output = (repo / artifact["path"]).read_text(encoding="utf-8")
     if target == "vulkan":
-        assert "OpFunctionCall" in output
+        assert "OpFunctionCall" not in output
+        assert "OpAccessChain" in output
+        assert "OpStore" in output
     else:
         assert tile_specialization["materializedName"] in output
 
@@ -44232,7 +44236,7 @@ def test_translate_project_metal_template_member_infers_pointer_struct_field(
         artifact for artifact in payload["artifacts"] if artifact["target"] == "directx"
     )
     directx = (repo / directx_artifact["path"]).read_text(encoding="utf-8")
-    assert "int Identity__apply__int(Identity self, int value)" in directx
+    assert "int Identity__apply__int(inout Identity self, int value)" in directx
     assert "forward_value_int(Identity__apply__int(op, params.stride))" in directx
     assert "apply_Params" not in directx
 
@@ -45023,6 +45027,68 @@ def test_translate_project_metal_struct_method_diagnostic_uses_call_location(
         diagnostic["details"]["templateMaterialization"]["requestedSignature"]
         == "op.simd_reduce(total)"
     )
+
+
+def test_translate_project_metal_reference_return_reports_struct_method_details(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source = textwrap.dedent("""
+        struct Counter {
+            int value;
+            thread int& value_ref() { return value; }
+        };
+
+        kernel void increment(device int* out [[buffer(0)]]) {
+            Counter counter;
+            counter.value = 1;
+            counter.value_ref() = 5;
+            out[0] = counter.value;
+        }
+        """).strip()
+    (repo / "reference_return.metal").write_text(source, encoding="utf-8")
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+    ).to_json()
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-struct-method": 1
+    }
+
+    diagnostic = payload["diagnostics"][0]
+    call_offset = source.index("value_ref()", source.index("kernel void"))
+    call_line_start = source.rfind("\n", 0, call_offset)
+    assert diagnostic["code"] == "project.translate.metal-struct-method"
+    assert diagnostic["target"] == "directx"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["location"]["file"] == "reference_return.metal"
+    assert diagnostic["location"]["line"] == source.count("\n", 0, call_offset) + 1
+    assert diagnostic["location"]["column"] == call_offset - call_line_start
+    assert diagnostic["missingCapabilities"] == ["struct.reference-return"]
+    assert diagnostic["details"] == {
+        "sourcePath": "reference_return.metal",
+        "structMethod": {
+            "methodName": "value_ref",
+            "reason": "reference-return-identity-unsupported",
+            "requestedSignature": "Counter::value_ref()",
+            "returnType": "thread int&",
+            "structName": "Counter",
+            "suggestedAction": (
+                "rewrite the accessor as a direct operation on the underlying "
+                "storage, or avoid binding or assigning through its returned "
+                "reference until reference identity lowering is available"
+            ),
+        },
+        "targetArtifact": "out/directx/reference_return.hlsl",
+    }
+    assert "templateMaterialization" not in diagnostic["details"]
 
 
 def test_translate_project_metal_implicit_type_environment_cache_bounds_repeated_work(
@@ -46593,7 +46659,7 @@ def test_translate_project_resolves_struct_owned_alias_template_vectors(tmp_path
     assert_spirv_asm_validates_if_available(outputs["vulkan"], tmp_path)
 
 
-def test_translate_project_rejects_unsupported_struct_alias_vector_width(tmp_path):
+def test_translate_project_lowers_struct_alias_wide_vector(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "wide_owner_alias.metal").write_text(
@@ -46608,10 +46674,71 @@ def test_translate_project_rejects_unsupported_struct_alias_vector_width(tmp_pat
             };
 
             [[kernel]] void wide_owner_alias(
-                device float* output [[buffer(0)]],
+                device float* out_buffer [[buffer(0)]],
                 uint gid [[thread_position_in_grid]]) {
-                BaseFrag::value_t<float> value;
-                output[gid] = value[0];
+                BaseFrag::value_t<float> value =
+                    BaseFrag::value_t<float>(1.0f);
+                value[gid & 7u] += 2.0f;
+                out_buffer[gid] = value[gid & 7u];
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx", "opengl", "vulkan"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+    artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
+    assert set(artifacts) == {"directx", "opengl", "vulkan"}
+    outputs = {
+        target: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for target, artifact in artifacts.items()
+    }
+    for output in outputs.values():
+        assert "vec<float,8>" not in output.replace(" ", "")
+        assert "WARNING" not in output
+    assert "struct CrossGLMetalVector_float_8" in outputs["directx"]
+    assert "struct CrossGLMetalVector_float_8" in outputs["opengl"]
+    assert "OpTypeStruct" in outputs["vulkan"]
+    assert "OpTypeArray" in outputs["vulkan"]
+    assert "OpFAdd" in outputs["vulkan"]
+    fadd_results = re.findall(r"^(%\d+) = OpFAdd\b", outputs["vulkan"], re.MULTILINE)
+    assert fadd_results
+    assert any(
+        re.search(
+            rf"^OpStore %\d+ {re.escape(result)}$", outputs["vulkan"], re.MULTILINE
+        )
+        for result in fadd_results
+    )
+    assert_directx_compute_validates_if_available(outputs["directx"], tmp_path)
+    assert_compute_glsl_validates_if_available(outputs["opengl"], tmp_path)
+    assert_spirv_asm_validates_if_available(outputs["vulkan"], tmp_path)
+
+
+def test_translate_project_rejects_unsupported_wide_vector_operation(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "wide_vector_negate.metal").write_text(
+        textwrap.dedent("""
+            using Wide = metal::vec<float, 8>;
+
+            Wide negate(Wide value) {
+                return -value;
+            }
+
+            [[kernel]] void wide_vector_negate(
+                device float* out_buffer [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]) {
+                Wide value = Wide(1.0f);
+                value = negate(value);
+                out_buffer[gid] = value[gid & 7u];
             }
             """).strip(),
         encoding="utf-8",
@@ -46626,12 +46753,89 @@ def test_translate_project_rejects_unsupported_struct_alias_vector_width(tmp_pat
 
     assert payload["summary"]["translatedCount"] == 0
     assert payload["summary"]["failedCount"] == 1
-    assert payload["diagnostics"][0]["code"] == "project.translate.unsupported-feature"
+    assert payload["diagnostics"][0]["code"] == (
+        "project.translate.metal-wide-vector-unsupported"
+    )
     assert payload["diagnostics"][0]["missingCapabilities"] == [
-        "spirv.generic_vector_width"
+        "metal.wide-vector-aggregate-lowering"
     ]
+    assert "operation '-'" in payload["diagnostics"][0]["message"]
     assert payload["artifacts"][0]["status"] == "failed"
     assert not (repo / payload["artifacts"][0]["path"]).exists()
+
+
+def test_translate_project_rejects_unresolved_empty_spirv_initializer(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "empty_initializer.cgl").write_text(
+        textwrap.dedent("""
+            shader EmptyInitializer {
+                void exercise() {
+                    unresolved({});
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["vulkan"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "spirv.empty_initializer_type_inference": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.unsupported-feature"
+    assert diagnostic["missingCapabilities"] == [
+        "spirv.empty_initializer_type_inference"
+    ]
+    assert "cannot infer the destination type" in diagnostic["message"]
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+
+
+def test_translate_project_contextualizes_empty_spirv_initializer(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "empty_initializer.cgl").write_text(
+        textwrap.dedent("""
+            shader EmptyInitializer {
+                float consume(float value) {
+                    return value;
+                }
+
+                compute {
+                    void main() {
+                        float value = consume({});
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["vulkan"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["summary"]["missingCapabilityCounts"] == {}
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "OpFunctionCall" in generated
+    assert "OpTypeArray" not in generated
 
 
 def test_metal_project_materialization_concretizes_dispatch_bool_functor_helper(
@@ -49196,6 +49400,36 @@ METAL_ELEMENTWISE_COPY_KERNEL = textwrap.dedent("""
     """).strip()
 
 
+METAL_NESTED_GENERIC_MEMBER_KERNEL = textwrap.dedent("""
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct Tile {
+        template <typename T, int Rows, int Cols, int Leading, int Threads>
+        T load(T value) {
+            return value + T(Rows + Cols + Leading + Threads);
+        }
+    };
+
+    struct BlockMMA {
+        Tile Atile;
+        Tile Btile;
+
+        float mma(float value) {
+            float left = Atile.template load<float, 1, 1, (36), (1)>(value);
+            return Btile.template load<float, 1, 2, (1), (36)>(left);
+        }
+    };
+
+    kernel void generic_member_kernel(
+        device float* results [[buffer(0)]],
+        uint index [[thread_position_in_grid]]) {
+        BlockMMA block;
+        results[index] = block.mma(float(index));
+    }
+    """).strip()
+
+
 def _write_metal_directx_project(repo: Path, kernel_name: str, source: str) -> Path:
     kernel_dir = repo / "kernels"
     kernel_dir.mkdir(parents=True)
@@ -49280,6 +49514,118 @@ def test_metal_elementwise_copy_to_directx_is_not_flagged(tmp_path):
     assert artifact["status"] == "translated"
     assert artifact["target"] == "directx"
     assert (repo / artifact["path"]).exists()
+
+
+def test_metal_nested_generic_member_calls_translate_and_validate_for_all_targets(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    kernel_dir = repo / "kernels"
+    kernel_dir.mkdir(parents=True)
+    (kernel_dir / "generic_member.metal").write_text(
+        METAL_NESTED_GENERIC_MEMBER_KERNEL,
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["kernels"]
+            include = ["kernels/*.metal"]
+            targets = ["directx", "opengl", "vulkan"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        load_project_config(repo), format_output=False
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
+    assert set(artifacts) == {"directx", "opengl", "vulkan"}
+
+    generated = {
+        target: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for target, artifact in artifacts.items()
+    }
+    for artifact in generated.values():
+        assert ".load<" not in artifact
+        assert ".template load" not in artifact
+    for target in ("directx", "opengl"):
+        artifact = generated[target]
+        assert "Tile__load__float_1_1_36_1" in artifact
+        assert "Tile__load__float_1_2_1_36" in artifact
+
+    assert_directx_compute_validates_if_available(generated["directx"], tmp_path)
+    assert_compute_glsl_validates_if_available(generated["opengl"], tmp_path)
+    assert_spirv_asm_validates_if_available(generated["vulkan"], tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("call_expression", "generic_arguments"),
+    [
+        (
+            "self.Atile.load<float, 1, 1, 36, 1>(source)",
+            ["float", "1", "1", "36", "1"],
+        ),
+        ("self.Atile.load<>(source)", []),
+    ],
+)
+def test_unmaterialized_generic_member_call_reports_structured_project_details(
+    tmp_path,
+    call_expression,
+    generic_arguments,
+):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "generic_member.cgl").write_text(
+        textwrap.dedent(f"""
+            shader GenericMemberDiagnostic {{
+                compute {{
+                    void main() {{
+                        {call_expression};
+                    }}
+                }}
+            }}
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            include = ["shaders/*.cgl"]
+            targets = ["directx"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        load_project_config(repo), format_output=False
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    diagnostic = next(
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == "project.translate.generic-member-call-unresolved"
+    )
+    assert diagnostic["missingCapabilities"] == ["generic.member-call-specialization"]
+    assert diagnostic["details"]["genericMemberCall"] == {
+        "method": "load",
+        "receiver": "self.Atile",
+        "suggestedAction": (
+            "materialize the concrete member-template specialization before "
+            "DirectX generation"
+        ),
+        "targetBackend": "DirectX",
+        "genericArguments": generic_arguments,
+    }
 
 
 def test_metal_unresolved_construct_findings_skip_locally_defined_simd_helpers():

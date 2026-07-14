@@ -18,6 +18,8 @@ from crosstl.translator.ast import (
     AttributeNode,
     BinaryOpNode,
     BlockNode,
+    CooperativeMatrixOpNode,
+    CooperativeMatrixType,
     ExecutionModel,
     FunctionCallNode,
     FunctionNode,
@@ -41,6 +43,7 @@ from crosstl.translator.ast import (
     create_legacy_shader_node,
 )
 from crosstl.translator.codegen.directx_codegen import (
+    DirectXCooperativeMatrixUnsupportedError,
     DirectXSemanticArraySizeError,
     DirectXUnresolvedSourceTypeError,
     HLSLCodeGen,
@@ -95,6 +98,73 @@ def test_hlsl_type_node_renders_expression_generic_arguments():
         HLSLCodeGen().convert_type_node_to_string(type_node)
         == "LoopedElemToLoc<DIM, -1, OffsetT, General>"
     )
+
+
+def test_hlsl_cooperative_matrix_type_reports_structured_diagnostic():
+    source_location = {"line": 7, "column": 11}
+    matrix_type = CooperativeMatrixType(
+        PrimitiveType("float"),
+        8,
+        8,
+        scope="subgroup",
+        use="accumulator",
+        source_location=source_location,
+    )
+
+    with pytest.raises(DirectXCooperativeMatrixUnsupportedError) as excinfo:
+        HLSLCodeGen().map_type(matrix_type)
+
+    diagnostic = excinfo.value
+    assert (
+        diagnostic.project_diagnostic_code
+        == "project.translate.directx-cooperative-matrix-unsupported"
+    )
+    assert diagnostic.missing_capabilities == ("directx.cooperative-matrix-lowering",)
+    assert diagnostic.operation == "type"
+    assert diagnostic.source_location == source_location
+    assert "cooperative matrix type lowering is unavailable" in str(diagnostic)
+
+
+def test_hlsl_cooperative_matrix_shader_fails_before_generic_type_emission():
+    source = """
+    shader CooperativeMatrixDirectX {
+        compute {
+            void main() {
+                CooperativeMatrix<float, 8, 8> value;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(DirectXCooperativeMatrixUnsupportedError) as excinfo:
+        HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert excinfo.value.operation == "type"
+    assert excinfo.value.missing_capabilities == (
+        "directx.cooperative-matrix-lowering",
+    )
+
+
+def test_hlsl_cooperative_matrix_operation_reports_structured_diagnostic():
+    source_location = {"line": 13, "column": 17}
+    matrix_op = CooperativeMatrixOpNode(
+        "multiply_accumulate",
+        [IdentifierNode("left"), IdentifierNode("right"), IdentifierNode("acc")],
+        source_location=source_location,
+    )
+
+    with pytest.raises(DirectXCooperativeMatrixUnsupportedError) as excinfo:
+        HLSLCodeGen().generate_expression(matrix_op)
+
+    diagnostic = excinfo.value
+    assert (
+        diagnostic.project_diagnostic_code
+        == "project.translate.directx-cooperative-matrix-unsupported"
+    )
+    assert diagnostic.missing_capabilities == ("directx.cooperative-matrix-lowering",)
+    assert diagnostic.operation == "multiply_accumulate"
+    assert diagnostic.source_location == source_location
+    assert "operation 'multiply_accumulate'" in str(diagnostic)
 
 
 def test_hlsl_codegen_drops_metal_system_includes_but_preserves_hlsl_includes():
@@ -1362,6 +1432,73 @@ def test_hlsl_codegen_maps_structural_reference_parameters_to_values():
 
     assert "uint2 threefry2x32_hash(uint2 key, uint2 count)" in generated
     assert "ReferenceType(" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+
+
+def test_hlsl_codegen_maps_mutable_reference_parameters_to_inout():
+    uint2_type = VectorType(PrimitiveType("uint"), 2)
+    ast = ShaderNode(
+        "MutableReferenceParameter",
+        ExecutionModel.COMPUTE_KERNEL,
+        functions=[
+            FunctionNode(
+                "update_key",
+                NamedType("void"),
+                [ParameterNode("key", ReferenceType(uint2_type, is_mutable=True))],
+                BlockNode([]),
+            )
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert "void update_key(inout uint2 key)" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+
+
+def test_hlsl_codegen_maps_writable_metal_reference_parameters_to_inout():
+    ast = parse_code(tokenize_code("void update_key(thread uvec2& key) {}"))
+
+    generated = generate_code(ast)
+
+    assert "void update_key(inout uint2 key)" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+
+
+@pytest.mark.parametrize(
+    ("source_qualifier", "expected_signature"),
+    [
+        ("const", "void inspect_key(const uint2 key)"),
+        ("readonly", "void inspect_key(uint2 key)"),
+    ],
+)
+def test_hlsl_codegen_keeps_readonly_reference_parameters_input_only(
+    source_qualifier, expected_signature
+):
+    uint2_type = VectorType(PrimitiveType("uint"), 2)
+    ast = ShaderNode(
+        "ReadonlyReferenceParameter",
+        ExecutionModel.COMPUTE_KERNEL,
+        functions=[
+            FunctionNode(
+                "inspect_key",
+                NamedType("void"),
+                [
+                    ParameterNode(
+                        "key",
+                        ReferenceType(uint2_type),
+                        qualifiers=["thread", source_qualifier],
+                    )
+                ],
+                BlockNode([]),
+            )
+        ],
+    )
+
+    generated = generate_code(ast)
+
+    assert expected_signature in generated
+    assert "void inspect_key(inout " not in generated
     HLSLParser(HLSLLexer(generated).tokenize()).parse()
 
 

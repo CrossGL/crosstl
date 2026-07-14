@@ -10,8 +10,10 @@ from crosstl.backend.Metal.MetalCrossGLCodeGen import (
     MetalBuiltinOverloadResolutionError,
     MetalCallableLoweringError,
     MetalSizeofResolutionError,
+    MetalStageEntryArrayResourceError,
     MetalStaticConstantResolutionError,
     MetalToCrossGLConverter,
+    MetalWideVectorLoweringError,
 )
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
@@ -86,7 +88,10 @@ def test_codegen_keeps_dependent_enable_if_return_type_from_tinygrad_metal():
     """
     generated = convert(code)
 
-    assert "type load(thread RT& dst, threadgroup ST& src, int threadIdx)" in generated
+    assert (
+        "type load(inout thread RT dst, threadgroup ST& src, int threadIdx)"
+        in generated
+    )
     assert "return;" in generated
     assert parse_crossgl(generated) is not None
 
@@ -929,6 +934,56 @@ def test_codegen_writable_c_array_parameter_preserves_aliasing():
         "void fill(thread float values[4], thread float source[4])"
         in MetalCodeGen().generate(parse_crossgl(crossgl))
     )
+
+
+def test_codegen_struct_method_receiver_directions_reach_native_targets():
+    source = """
+    struct NestedState { int value; };
+
+    struct State {
+        int scalar;
+        int values[2];
+        NestedState nested;
+
+        void mutate(int amount) {
+            scalar += amount;
+            values[1] = amount;
+            nested.value += amount;
+        }
+
+        int total() const {
+            return scalar + values[1] + nested.value;
+        }
+    };
+
+    int apply(thread State& state) {
+        state.mutate(3);
+        return state.total();
+    }
+    """
+
+    crossgl = convert(MetalPreprocessor().preprocess(source))
+    ast = parse_crossgl(crossgl)
+    generated_targets = (
+        crossgl,
+        TranslatorHLSLCodeGen().generate(ast),
+        GLSLCodeGen().generate(ast),
+    )
+
+    assert "int State__total(in thread State& self)" in normalize(crossgl)
+
+    for generated in generated_targets:
+        generated = normalize(generated)
+        mutable_signature = re.search(r"\bvoid State__mutate\s*\(([^)]*)\)", generated)
+        const_signature = re.search(r"\bint State__total\s*\(([^)]*)\)", generated)
+
+        assert mutable_signature is not None
+        assert "inout" in mutable_signature.group(1).split(",", 1)[0].split()
+        assert const_signature is not None
+        assert "inout" not in const_signature.group(1).split(",", 1)[0].split()
+        assert "self.scalar += amount;" in generated
+        assert "self.values[1] = amount;" in generated
+        assert "self.nested.value += amount;" in generated
 
 
 def test_codegen_fragment_early_tests_attribute_becomes_stage_layout():
@@ -1818,7 +1873,7 @@ def test_codegen_class_helper_data_member_from_public_metal_shader():
     assert "TausStep" not in crossgl
     assert "thread Loki(" not in crossgl
     assert "float rand(" not in crossgl
-    assert "float read_seed(thread Loki& rng)" in crossgl
+    assert "float read_seed(inout thread Loki rng)" in crossgl
     assert parse_crossgl(crossgl) is not None
 
 
@@ -1849,7 +1904,7 @@ def test_codegen_gnu_inline_unsigned_helpers_from_strelka_random_shader():
     assert "uint pcg_hash(uint seed)" in crossgl
     assert "uint state = seed * 747796405u + 2891336453u;" in crossgl
     assert "uint tea(uint val0, uint val1)" in crossgl
-    assert "uint lcg(thread uint& prev)" in crossgl
+    assert "uint lcg(inout thread uint prev)" in crossgl
     assert "__inline__" not in crossgl
     assert "unsigned" not in crossgl
     assert parse_crossgl(crossgl) is not None
@@ -1941,6 +1996,179 @@ def test_codegen_device_buffer_parameters_use_structured_buffer_contract():
     assert "const device float* input" in metal
     assert "float value = input[tid.x];" in metal
     assert "data[tid.x] = value * 2.0;" in metal
+
+
+def test_codegen_stage_entry_arrays_lower_to_non_conflicting_resources(tmp_path):
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void copy_pair(constant const int offsets[2], device float scratch[2]) {
+        scratch[offsets[0]] = scratch[offsets[1]];
+    }
+
+    kernel void array_resources(
+        constant const int strides[3],
+        device float values[],
+        device const float* source [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {
+        uint index = uint(strides[gid % 3]);
+        values[gid] = source[index] + values[gid];
+    }
+    """
+    crossgl = convert(code)
+
+    assert "StructuredBuffer<int> strides @buffer(1)" in crossgl
+    assert "RWStructuredBuffer<float> values @buffer(2)" in crossgl
+    assert "StructuredBuffer<float> source @buffer(0)" in crossgl
+    assert "uint index = uint(buffer_load(strides, gid % 3));" in crossgl
+    assert (
+        "buffer_store(values, gid, buffer_load(source, index) + "
+        "buffer_load(values, gid));"
+    ) in crossgl
+    assert (
+        "void copy_pair(constant int[2] offsets, " "inout device float[2] scratch)"
+    ) in crossgl
+    assert "scratch[offsets[0]] = scratch[offsets[1]];" in crossgl
+    assert "StructuredBuffer<int> offsets" not in crossgl
+    assert "RWStructuredBuffer<float> scratch" not in crossgl
+
+    ast = parse_crossgl(crossgl)
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+    glsl = GLSLCodeGen().generate(ast)
+    spirv = VulkanSPIRVCodeGen().generate(ast)
+
+    assert "StructuredBuffer<int> strides : register(t1);" in hlsl
+    assert "RWStructuredBuffer<float> values : register(u2);" in hlsl
+    assert "StructuredBuffer<float> source : register(t0);" in hlsl
+    assert "void copy_pair(int offsets[2], inout float scratch[2])" in hlsl
+    assert "uint index = uint(strides.Load((gid % 3)));" in hlsl
+    assert "values[gid] = (source.Load(index) + values.Load(gid));" in hlsl
+
+    assert (
+        "layout(std430, binding = 1) readonly buffer stridesBuffer "
+        "{ int strides[]; };"
+    ) in glsl
+    assert (
+        "layout(std430, binding = 2) buffer valuesBuffer { float values[]; };" in glsl
+    )
+    assert (
+        "layout(std430, binding = 0) readonly buffer sourceBuffer "
+        "{ float source[]; };"
+    ) in glsl
+    assert "void copy_pair(int offsets[2], inout float scratch[2])" in glsl
+    assert "uint index = uint(strides[(gid % 3)]);" in glsl
+    assert "values[gid] = (source[index] + values[gid]);" in glsl
+
+    for resource_name, binding in (("source", 0), ("strides", 1), ("values", 2)):
+        resource_id_match = re.search(rf'OpName (%\d+) "{resource_name}"', spirv)
+        assert resource_id_match is not None
+        resource_id = resource_id_match.group(1)
+        assert f"OpDecorate {resource_id} DescriptorSet 0" in spirv
+        assert f"OpDecorate {resource_id} Binding {binding}" in spirv
+    assert spirv.count(" BufferBlock") == 3
+    assert spirv.count(" NonWritable") == 2
+    assert "OpTypeArray" in spirv
+    assert "WARNING" not in spirv
+
+    glslang = shutil.which("glslangValidator")
+    dxc = shutil.which("dxc")
+    hlsl_path = tmp_path / "stage-entry-arrays.hlsl"
+    hlsl_path.write_text(hlsl, encoding="utf-8")
+    if dxc is not None:
+        subprocess.run(
+            [
+                dxc,
+                "-T",
+                "cs_6_0",
+                "-E",
+                "CSMain",
+                str(hlsl_path),
+                "-Fo",
+                str(tmp_path / "stage-entry-arrays.dxil"),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    elif glslang is not None:
+        subprocess.run(
+            [
+                glslang,
+                "-D",
+                "-V",
+                "-S",
+                "comp",
+                "-e",
+                "CSMain",
+                str(hlsl_path),
+                "-o",
+                str(tmp_path / "stage-entry-arrays-hlsl.spv"),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    if glslang is not None:
+        glsl_path = tmp_path / "stage-entry-arrays.comp"
+        glsl_path.write_text(glsl, encoding="utf-8")
+        subprocess.run(
+            [glslang, "-S", "comp", str(glsl_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    spirv_as = shutil.which("spirv-as")
+    spirv_val = shutil.which("spirv-val")
+    if spirv_as is not None and spirv_val is not None:
+        assembly_path = tmp_path / "stage-entry-arrays.spvasm"
+        binary_path = tmp_path / "stage-entry-arrays.spv"
+        assembly_path.write_text(spirv, encoding="utf-8")
+        subprocess.run(
+            [
+                spirv_as,
+                "--target-env",
+                "vulkan1.1",
+                str(assembly_path),
+                "-o",
+                str(binary_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            [spirv_val, "--target-env", "vulkan1.1", str(binary_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+
+def test_codegen_reports_multidimensional_stage_entry_array_resource():
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void invalid_array_resource(constant int values[2][3]) {
+    }
+    """
+
+    with pytest.raises(MetalStageEntryArrayResourceError) as exc_info:
+        convert(code)
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.metal-entry-array-resource-invalid"
+    )
+    assert diagnostic.missing_capabilities == (
+        "metal.stage-entry-array-resource-lowering",
+    )
+    assert diagnostic.parameter_name == "values"
+    assert diagnostic.array_dimensions == ("2", "3")
+    assert diagnostic.reason == "multidimensional-parameter-array"
 
 
 def test_codegen_address_of_device_buffer_element_preserves_lvalue():
@@ -4052,7 +4280,7 @@ def test_codegen_sanitizes_crossgl_keyword_generic_type_argument_from_tinygrad()
     """
     crossgl = convert(code)
 
-    assert "rt_base<T,layout_>& src" in crossgl
+    assert "inout thread rt_base<T,layout_> src" in crossgl
     assert parse_crossgl(crossgl) is not None
 
 
@@ -4264,8 +4492,8 @@ def test_codegen_preserves_ray_and_object_address_space_payloads_from_msl_spec()
     """
     crossgl = convert(code)
 
-    assert "RayPayload& payload @ray_data @payload" in crossgl
-    assert "ObjectPayload& objectPayload @object_data @payload" in crossgl
+    assert "inout RayPayload payload @ray_data @payload" in crossgl
+    assert "inout ObjectPayload objectPayload @object_data @payload" in crossgl
 
     metal = MetalCodeGen().generate(parse_crossgl(crossgl))
     assert "ray_data RayPayload& payload [[payload]]" in metal
@@ -4684,6 +4912,417 @@ def test_codegen_parses_materialized_struct_alias_template_vectors():
         CrossGLLexer(crossgl).get_tokens(), strict_function_bodies=True
     ).parse()
     assert strict_ast is not None
+
+
+def test_codegen_preserves_non_wide_array_return_initializer(tmp_path):
+    source = """
+        metal::array<bool, 2> make_pair(bool x, bool y) {
+            return {x, y};
+        }
+
+        kernel void use_pair(
+            device uint* output [[buffer(0)]],
+            uint gid [[thread_position_in_grid]]) {
+            metal::array<bool, 2> value = make_pair(true, false);
+            output[gid] = uint(value[0]);
+        }
+        """
+
+    crossgl = convert(source)
+
+    assert "bool[2] make_pair(bool x, bool y)" in crossgl
+    assert "return {x, y};" in crossgl
+    ast = parse_crossgl(crossgl)
+    spirv = VulkanSPIRVCodeGen().generate(ast)
+    assert "OpTypeArray" in spirv
+    assert "OpCompositeConstruct" in spirv
+    assert "OpReturnValue" in spirv
+    assert "WARNING" not in spirv
+
+    spirv_as = shutil.which("spirv-as")
+    spirv_val = shutil.which("spirv-val")
+    if spirv_as is not None and spirv_val is not None:
+        assembly_path = tmp_path / "array-return.spvasm"
+        binary_path = tmp_path / "array-return.spv"
+        assembly_path.write_text(spirv, encoding="utf-8")
+        subprocess.run(
+            [
+                spirv_as,
+                "--target-env",
+                "vulkan1.1",
+                str(assembly_path),
+                "-o",
+                str(binary_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            [spirv_val, "--target-env", "vulkan1.1", str(binary_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+
+def test_codegen_lowers_concrete_wide_vectors_to_aggregate_helpers():
+    source = """
+        using Wide = metal::vec<float, 8>;
+
+        Wide make_wide(float base) {
+            return Wide(
+                base,
+                base + 1.0f,
+                base + 2.0f,
+                base + 3.0f,
+                base + 4.0f,
+                base + 5.0f,
+                base + 6.0f,
+                base + 7.0f);
+        }
+
+        void accumulate(thread Wide& value, float delta) {
+            value += Wide(delta);
+            value[3] = value.s7;
+        }
+
+        float read_lane(Wide value, uint lane) {
+            return value[lane] + value.s2;
+        }
+
+        kernel void use_wide_vector(
+            device float* output [[buffer(0)]],
+            uint gid [[thread_position_in_grid]]) {
+            Wide splat = Wide(1.0f);
+            Wide full = make_wide(float(gid));
+            accumulate(full, 2.0f);
+            output[gid] = read_lane(full, gid & 7u) + splat.s0;
+        }
+        """
+
+    crossgl = convert(source)
+
+    aggregate = "CrossGLMetalVector_float_8"
+    assert crossgl.count(f"struct {aggregate}") == 1
+    assert "float lanes[8];" in crossgl
+    assert f"{aggregate} {aggregate}_splat(float value)" in crossgl
+    assert f"{aggregate} {aggregate}_make(" in crossgl
+    for lane in range(8):
+        assert f"result.lanes[{lane}] = value;" in crossgl
+        assert f"result.lanes[{lane}] = value{lane};" in crossgl
+    assert (
+        f"return {aggregate}_make(base, base + 1.0f, base + 2.0f, "
+        "base + 3.0f, base + 4.0f, base + 5.0f, base + 6.0f, "
+        "base + 7.0f);"
+    ) in crossgl
+    assert f"{aggregate} make_wide(float base)" in crossgl
+    assert f"void accumulate(inout thread {aggregate} value, float delta)" in crossgl
+    assert (
+        f"{aggregate}_add_assign_vector(value, {aggregate}_splat(delta));"
+    ) in crossgl
+    assert "value.lanes[3] = value.lanes[7];" in crossgl
+    assert "return value.lanes[lane] + value.lanes[2];" in crossgl
+    assert f"{aggregate} splat = {aggregate}_splat(1.0f);" in crossgl
+    assert "accumulate(full, 2.0f);" in crossgl
+    assert "gid & 7u" in crossgl
+    assert "vec<float, 8>" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_wide_vector_aggregate_reaches_native_targets(tmp_path):
+    source = """
+        using Wide = metal::vec<float, 8>;
+
+        void add_bias(thread Wide& value, float bias) {
+            value += Wide(bias);
+        }
+
+        kernel void store_wide_lane(
+            device float* out_buffer [[buffer(0)]],
+            uint gid [[thread_position_in_grid]]) {
+            Wide value = Wide(
+                0.0f, 1.0f, 2.0f, 3.0f,
+                4.0f, 5.0f, 6.0f, 7.0f);
+            add_bias(value, 1.0f);
+            out_buffer[gid] = value[gid & 7u];
+        }
+        """
+
+    crossgl = convert(source)
+    ast = parse_crossgl(crossgl)
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+    glsl = GLSLCodeGen().generate(ast)
+    spirv = VulkanSPIRVCodeGen().generate(ast)
+
+    aggregate = "CrossGLMetalVector_float_8"
+    for generated in (hlsl, glsl):
+        assert f"struct {aggregate}" in generated
+        assert "float lanes[8]" in generated
+        assert "vec<float, 8>" not in generated
+    assert f"{aggregate}_add_assign_vector" in hlsl
+    assert f"{aggregate}_add_assign_vector" in glsl
+    assert f"void add_bias(inout {aggregate} value, float bias)" in hlsl
+    assert f"void add_bias(inout {aggregate} value, float bias)" in glsl
+    assert "add_bias(value, 1.0);" in hlsl
+    assert "add_bias(value, 1.0);" in glsl
+    assert "OpTypeStruct" in spirv
+    assert "OpTypeArray" in spirv
+    assert "OpAccessChain" in spirv
+    assert "OpFAdd" in spirv
+    assert "OpStore" in spirv
+    assert "WARNING" not in spirv
+
+    dxc = shutil.which("dxc")
+    glslang = shutil.which("glslangValidator")
+    hlsl_path = tmp_path / "wide-vector.hlsl"
+    hlsl_path.write_text(hlsl, encoding="utf-8")
+    if dxc is not None:
+        subprocess.run(
+            [dxc, "-T", "cs_6_0", "-E", "CSMain", str(hlsl_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    elif glslang is not None:
+        subprocess.run(
+            [
+                glslang,
+                "-D",
+                "-V",
+                "-S",
+                "comp",
+                "-e",
+                "CSMain",
+                str(hlsl_path),
+                "-o",
+                str(tmp_path / "wide-vector-hlsl.spv"),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    if glslang is not None:
+        glsl_path = tmp_path / "wide-vector.comp"
+        glsl_path.write_text(glsl, encoding="utf-8")
+        subprocess.run(
+            [glslang, "-S", "comp", str(glsl_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    spirv_as = shutil.which("spirv-as")
+    spirv_val = shutil.which("spirv-val")
+    if spirv_as is not None and spirv_val is not None:
+        assembly_path = tmp_path / "wide-vector.spvasm"
+        binary_path = tmp_path / "wide-vector.spv"
+        assembly_path.write_text(spirv, encoding="utf-8")
+        subprocess.run(
+            [
+                spirv_as,
+                "--target-env",
+                "vulkan1.1",
+                str(assembly_path),
+                "-o",
+                str(binary_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            [spirv_val, "--target-env", "vulkan1.1", str(binary_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+
+def test_codegen_rejects_multi_lane_wide_vector_member_selector():
+    source = """
+        using Wide = metal::vec<float, 8>;
+
+        float2 select_lanes(Wide value) {
+            return value.xy;
+        }
+        """
+
+    with pytest.raises(MetalWideVectorLoweringError) as error:
+        convert(source)
+
+    assert error.value.vector_type == "metal::vec<float,8>"
+    assert error.value.operation == "member-access"
+    assert "member selector 'xy' is not a single lane" in error.value.reason
+
+
+def test_codegen_rejects_wide_vector_constructor_from_narrow_vector():
+    source = """
+        using Wide = metal::vec<float, 8>;
+
+        Wide widen(float4 value) {
+            return Wide(value);
+        }
+        """
+
+    with pytest.raises(MetalWideVectorLoweringError) as error:
+        convert(source)
+
+    assert error.value.vector_type == "metal::vec<float,8>"
+    assert error.value.operation == "constructor"
+    assert "requires a scalar or one matching wide vector" in error.value.reason
+
+
+@pytest.mark.parametrize(
+    ("expression", "operation"),
+    [
+        ("-value", "-"),
+        ("metal::abs(value)", "call metal::abs"),
+    ],
+)
+def test_codegen_rejects_unsupported_wide_vector_operations(expression, operation):
+    source = f"""
+        using Wide = metal::vec<float, 8>;
+
+        Wide apply(Wide value) {{
+            return {expression};
+        }}
+        """
+
+    with pytest.raises(MetalWideVectorLoweringError) as error:
+        convert(source)
+
+    assert error.value.vector_type == "metal::vec<float,8>"
+    assert error.value.operation == operation
+    assert "no semantics-preserving aggregate" in error.value.reason
+
+
+def test_codegen_wide_vector_pointer_indexing_selects_the_pointee_first():
+    source = """
+        using Wide = metal::vec<float, 8>;
+
+        float read_lane(thread Wide* values, uint row, uint lane) {
+            return values[row][lane];
+        }
+        """
+
+    crossgl = convert(source)
+
+    assert "return values[row].lanes[lane];" in crossgl
+    assert "values.lanes[row]" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_wide_vector_compound_assignment_evaluates_lvalue_once():
+    source = """
+        using Wide = metal::vec<float, 8>;
+
+        void update(thread Wide* values, thread uint& index) {
+            values[index++] += Wide(1.0f);
+        }
+        """
+
+    crossgl = convert(source)
+
+    statement = next(
+        line for line in crossgl.splitlines() if "add_assign_vector(values" in line
+    )
+    assert statement.count("index++") == 1
+    assert "add_assign_vector(values[index++]" in statement
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_wide_vector_braced_initializer_zero_fills_remaining_lanes():
+    source = """
+        using Wide = metal::vec<float, 8>;
+
+        Wide make_value() {
+            return Wide{1.0f};
+        }
+        """
+
+    crossgl = convert(source)
+
+    assert (
+        "return CrossGLMetalVector_float_8_make(" "1.0f, 0, 0, 0, 0, 0, 0, 0);"
+    ) in crossgl
+    assert "CrossGLMetalVector_float_8_splat(1.0f)" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_wide_vector_nested_arithmetic_retains_aggregate_type():
+    source = """
+        using Wide = metal::vec<float, 8>;
+
+        Wide add_twice(Wide value, float bias) {
+            return (value + bias) + bias;
+        }
+        """
+
+    crossgl = convert(source)
+
+    helper = "CrossGLMetalVector_float_8_add_vector_scalar"
+    assert f"return {helper}({helper}(value, bias), bias);" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_rejects_abi_visible_wide_vector_storage():
+    source = """
+        using Wide = metal::vec<float, 8>;
+
+        kernel void store_wide(
+            device Wide* output [[buffer(0)]],
+            uint gid [[thread_position_in_grid]]) {
+            output[gid] = Wide(1.0f);
+        }
+        """
+
+    with pytest.raises(MetalWideVectorLoweringError) as error:
+        convert(source)
+
+    assert error.value.operation == "resource-layout"
+    assert "does not preserve Metal ABI alignment" in error.value.reason
+
+
+def test_codegen_avoids_wide_vector_helper_name_collisions():
+    source = """
+        float CrossGLMetalVector_float_8_splat(float value) {
+            return value;
+        }
+
+        using Wide = metal::vec<float, 8>;
+
+        Wide make_value(float value) {
+            return Wide(value);
+        }
+        """
+
+    crossgl = convert(source)
+
+    assert "struct CrossGLMetalVector_float_8_1" in crossgl
+    assert "CrossGLMetalVector_float_8_1_splat(value)" in crossgl
+    assert crossgl.count("CrossGLMetalVector_float_8_splat(float value)") == 1
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_avoids_wide_vector_helper_name_collisions_with_local_variables():
+    source = """
+        using Wide = metal::vec<float, 8>;
+
+        Wide make_value(float value) {
+            float CrossGLMetalVector_float_8_splat = value;
+            return Wide(CrossGLMetalVector_float_8_splat);
+        }
+        """
+
+    crossgl = convert(source)
+
+    assert "struct CrossGLMetalVector_float_8_1" in crossgl
+    assert (
+        "CrossGLMetalVector_float_8_1_splat(" "CrossGLMetalVector_float_8_splat)"
+    ) in crossgl
+    assert parse_crossgl(crossgl) is not None
 
 
 def test_codegen_sizeof_dependent_typename_from_tinygrad_tile_copy():
@@ -5130,10 +5769,10 @@ def test_codegen_preserves_native_address_space_qualifiers():
     """
     crossgl = convert(code)
 
-    assert "void update(threadgroup Payload& scratch" in crossgl
-    assert "device float[] values" in crossgl
+    assert "void update(inout threadgroup Payload scratch" in crossgl
+    assert "inout device float[] values" in crossgl
     assert "constant uint& count" in crossgl
-    assert "thread float& localValue" in crossgl
+    assert "inout thread float localValue" in crossgl
     assert "threadgroup Payload scratch;" in crossgl
     assert "thread float localValue = buffer_load(inData, tid);" in crossgl
     assert "RWStructuredBuffer<float> outData @buffer(0)" in crossgl
@@ -5629,11 +6268,9 @@ def test_codegen_leaves_array_extent_value_template_parameter_undeclared():
     assert "int tg_mem_size = 0;" not in result
 
 
-def test_codegen_keeps_struct_local_using_alias_uninlined():
-    # A body-local `using` alias whose target is a struct/user template (as in
-    # mlx fft's `using read_writer_t = ReadWriter<...>;`) must keep its historical
-    # handling: only scalar-resolving aliases are inlined, so a struct alias is
-    # never rewritten to a scalar type.
+def test_codegen_keeps_unresolved_struct_template_local_alias_uninlined():
+    # A body-local alias whose target still contains a generic argument cannot
+    # be mapped to a concrete CrossGL struct and must not become a scalar.
     code = """
     #include <metal_stdlib>
     using namespace metal;
@@ -5655,6 +6292,27 @@ def test_codegen_keeps_struct_local_using_alias_uninlined():
     # primitive (which would otherwise misdeclare the variable as `uint r`).
     assert "uint r " not in result
     assert "float r " not in result
+
+
+def test_codegen_inlines_local_alias_to_materialized_struct():
+    code = """
+    struct ReadWriter_float {
+      int value;
+      ReadWriter_float(int value_) : value(value_) {}
+    };
+
+    kernel void rw(device int* out [[buffer(0)]]) {
+      using read_writer_t = ReadWriter_float;
+      read_writer_t writer = read_writer_t(3);
+      out[0] = writer.value;
+    }
+    """
+
+    result = convert(code)
+
+    assert "ReadWriter_float writer = ReadWriter_float(3);" in result
+    assert "read_writer_t" not in result
+    assert parse_crossgl(result) is not None
 
 
 def test_codegen_preserves_static_struct_integer_constants():
@@ -6046,3 +6704,62 @@ def test_const_for_loop_nonzero_indices_reach_vulkan_stores(tmp_path):
         capture_output=True,
         text=True,
     )
+
+
+def test_metal_cooperative_matrix_operations_round_trip_through_shared_ir():
+    source = """
+    #include <metal_stdlib>
+    #include <metal_simdgroup_matrix>
+    using namespace metal;
+
+    kernel void matrix_roundtrip(
+        device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+      simdgroup_matrix<float, 8, 8> left;
+      simdgroup_matrix<float, 8, 8> right;
+      simdgroup_matrix<float, 8, 8> accumulator;
+      simdgroup_load(left, input, 8);
+      left.thread_elements()[0] = 1.0f;
+      simdgroup_matrix<float, 8, 8> product = left * right;
+      simdgroup_matrix<float, 8, 8> sum = left + right;
+      simdgroup_matrix<float, 8, 8> difference = left - right;
+      simdgroup_matrix<float, 8, 8> negated = -left;
+      simdgroup_load(left, input, 8, 0, true);
+      simdgroup_multiply_accumulate(accumulator, left, right, product);
+      simdgroup_store(accumulator, output, 8, 0, true);
+    }
+    """
+
+    crossgl = convert(source)
+
+    assert "CooperativeMatrix<float,8,8,subgroup,unspecified,unspecified>" in crossgl
+    assert "cooperative_matrix_load(left, input, 8);" in crossgl
+    assert "cooperative_matrix_element(left, 0) = 1.0f;" in crossgl
+    assert "cooperative_matrix_multiply(left, right)" in crossgl
+    assert "cooperative_matrix_add(left, right)" in crossgl
+    assert "cooperative_matrix_subtract(left, right)" in crossgl
+    assert "cooperative_matrix_negate(left)" in crossgl
+    assert (
+        "cooperative_matrix_multiply_accumulate(accumulator, left, right, product);"
+        in crossgl
+    )
+    assert "cooperative_matrix_store(output, accumulator, 8, 0, true);" in crossgl
+
+    regenerated = MetalCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "#include <metal_simdgroup_matrix>" in regenerated
+    assert "simdgroup_matrix<float, 8, 8> left;" in regenerated
+    assert "left.thread_elements()[0] = 1.0;" in regenerated
+    assert "simdgroup_matrix<float, 8, 8> product = (left * right);" in regenerated
+    assert "simdgroup_matrix<float, 8, 8> sum = (left + right);" in regenerated
+    assert "simdgroup_matrix<float, 8, 8> difference = (left - right);" in regenerated
+    assert "simdgroup_matrix<float, 8, 8> negated = (-left);" in regenerated
+    assert "cooperative_matrix_load(left, input, 8, 0, true);" in crossgl
+    assert "cooperative_matrix_store(output, accumulator, 8, 0, true);" in crossgl
+    assert "simdgroup_load(left, input, 8, 0, true);" in regenerated
+    assert (
+        "simdgroup_multiply_accumulate(accumulator, left, right, product);"
+        in regenerated
+    )
+    assert "simdgroup_store(accumulator, output, 8, 0, true);" in regenerated
+    assert "cooperative_matrix_" not in regenerated

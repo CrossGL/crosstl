@@ -91,12 +91,6 @@ GEMV_EXPECTED_ENTRY_POINT_COUNT = 224
 REDUCED_FRONTIER_MODE = "reduced-frontier"
 FULL_CORPUS_MODE = "full-corpus"
 FRONTIER_VALIDATION_TRACKED_ISSUES: tuple[str, ...] = ()
-VULKAN_GEMV_TRANSLATION_TRACKED_ISSUES = (
-    "https://github.com/CrossGL/crosstl/issues/1561",
-)
-VULKAN_GEMV_TRANSLATION_BLOCKER_CAPABILITY = (
-    "spirv.nested_return_storage_buffer_function"
-)
 FULL_CORPUS_TRANSLATION_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1376",
     "https://github.com/CrossGL/crosstl/issues/1476",
@@ -105,9 +99,7 @@ FULL_CORPUS_TRANSLATION_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1544",
     "https://github.com/CrossGL/crosstl/issues/1546",
     "https://github.com/CrossGL/crosstl/issues/1554",
-    "https://github.com/CrossGL/crosstl/issues/1555",
     "https://github.com/CrossGL/crosstl/issues/1559",
-    *VULKAN_GEMV_TRANSLATION_TRACKED_ISSUES,
     "https://github.com/CrossGL/crosstl/issues/1562",
 )
 RUNTIME_READINESS_TRACKED_ISSUES = (
@@ -185,6 +177,9 @@ FULL_CORPUS_TRACKED_ISSUES = (
     *FULL_CORPUS_SEMANTIC_TRACKED_ISSUES,
 )
 RESOLVED_FRONTIER_ISSUES = (
+    "https://github.com/CrossGL/crosstl/issues/1573",
+    "https://github.com/CrossGL/crosstl/issues/1555",
+    "https://github.com/CrossGL/crosstl/issues/1561",
     "https://github.com/CrossGL/crosstl/issues/1551",
     "https://github.com/CrossGL/crosstl/issues/1498",
     "https://github.com/CrossGL/crosstl/issues/1535",
@@ -1609,59 +1604,13 @@ def _check_gemv_vulkan_toolchain(
         diagnostics = [
             item for item in payload.get("diagnostics", []) if isinstance(item, Mapping)
         ]
-        expected_blockers = [
-            item
+        messages = [
+            str(item.get("message"))
             for item in diagnostics
-            if item.get("code") == "project.translate.unsupported-feature"
-            and item.get("target") == "vulkan"
-            and item.get("sourceBackend") == "metal"
-            and isinstance(item.get("missingCapabilities"), list)
-            and VULKAN_GEMV_TRANSLATION_BLOCKER_CAPABILITY
-            in item.get("missingCapabilities", [])
-            and isinstance(item.get("message"), str)
-            and "contains a nested return" in item["message"]
+            if isinstance(item.get("message"), str)
         ]
-        if len(diagnostics) != 1 or len(expected_blockers) != 1:
-            messages = [
-                str(item.get("message"))
-                for item in diagnostics
-                if isinstance(item.get("message"), str)
-            ]
-            detail = f": {messages[0]}" if messages else ""
-            raise PortingCheckError(f"Vulkan GEMV translation failed{detail}")
-        _require(
-            summary.get("translatedCount") == 0 and summary.get("failedCount") == 1,
-            "Vulkan GEMV nested-return blocker report must contain exactly one "
-            "failed artifact",
-        )
-        failed_artifacts = [
-            item
-            for item in payload.get("artifacts", [])
-            if isinstance(item, Mapping)
-            and item.get("source") == MLX_GEMV_SOURCE
-            and item.get("target") == "vulkan"
-            and item.get("status") == "failed"
-        ]
-        _require(
-            len(failed_artifacts) == 1,
-            "Vulkan GEMV nested-return blocker artifact is missing",
-        )
-        blocker = expected_blockers[0]
-        return {
-            "name": "gemv-vulkan-toolchain",
-            "status": "blocked-by-tracked-issue",
-            "report": _relpath(report_path, mlx_root),
-            "source": MLX_GEMV_SOURCE,
-            "target": "vulkan",
-            "translationDiagnosticCode": blocker.get("code"),
-            "translationMissingCapabilities": blocker.get("missingCapabilities", []),
-            "trackedTranslationIssues": list(VULKAN_GEMV_TRANSLATION_TRACKED_ISSUES),
-            "structuralValidationStatus": "blocked-before-artifact",
-            "semanticReadinessStatus": "blocked-before-artifact",
-            "semanticBlockers": list(VULKAN_GEMV_TRANSLATION_TRACKED_ISSUES),
-            "availableValidators": sorted(required_tools),
-            "runtimeIntegrationIncluded": False,
-        }
+        detail = f": {messages[0]}" if messages else ""
+        raise PortingCheckError(f"Vulkan GEMV translation failed{detail}")
     _require(
         summary.get("translatedCount") == 1 and summary.get("failedCount") == 0,
         "Vulkan GEMV report did not contain one clean translated artifact",

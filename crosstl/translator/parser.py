@@ -17,6 +17,8 @@ from .ast import (
     ConstructorNode,
     ConstructorPatternNode,
     ContinueNode,
+    CooperativeMatrixOpNode,
+    CooperativeMatrixType,
     DoWhileNode,
     EnumNode,
     EnumVariantNode,
@@ -62,6 +64,7 @@ from .ast import (
     StructPatternNode,
     SwitchNode,
     TernaryOpNode,
+    TypeNode,
     UnaryOpNode,
     VariableNode,
     VectorType,
@@ -113,6 +116,18 @@ WAVE_INTRINSICS = {
     "WaveMultiPrefixBitAnd",
     "WaveMultiPrefixBitOr",
     "WaveMultiPrefixBitXor",
+}
+
+COOPERATIVE_MATRIX_INTRINSICS = {
+    "cooperative_matrix_element": "element",
+    "cooperative_matrix_load": "load",
+    "cooperative_matrix_store": "store",
+    "cooperative_matrix_multiply": "multiply",
+    "cooperative_matrix_multiply_accumulate": "multiply_accumulate",
+    "cooperative_matrix_add": "elementwise_add",
+    "cooperative_matrix_subtract": "elementwise_subtract",
+    "cooperative_matrix_elementwise_multiply": "elementwise_multiply",
+    "cooperative_matrix_negate": "negate",
 }
 
 RAYTRACING_INTRINSICS = {
@@ -278,10 +293,28 @@ class Parser:
     def __init__(self, tokens, strict_function_bodies=False):
         self.tokens = tokens
         self.strict_function_bodies = strict_function_bodies
+        self.active_generic_parameter_names = set()
+        self.declared_type_names = {
+            str(tokens[index + 1][1])
+            for index, token in enumerate(tokens[:-1])
+            if token[0] in {"STRUCT", "ENUM", "TRAIT"}
+            and tokens[index + 1][0] == "IDENTIFIER"
+        }
         self.pos = 0
         self.current_token = (
             self.tokens[self.pos] if self.pos < len(self.tokens) else ("EOF", None)
         )
+
+    def enter_generic_parameter_scope(self, generic_params):
+        """Expose generic parameter names while parsing their declaration body."""
+        previous = self.active_generic_parameter_names
+        self.active_generic_parameter_names = previous | {
+            parameter.name for parameter in generic_params
+        }
+        return previous
+
+    def restore_generic_parameter_scope(self, previous):
+        self.active_generic_parameter_names = previous
 
     def skip_comments(self):
         while self.current_token[0] in ["COMMENT_SINGLE", "COMMENT_MULTI"]:
@@ -1288,9 +1321,13 @@ class Parser:
         self.eat("LBRACE")
         members = []
 
-        while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
-            member = self.parse_struct_member()
-            self.append_parsed_nodes(members, member)
+        previous_scope = self.enter_generic_parameter_scope(generic_params)
+        try:
+            while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
+                member = self.parse_struct_member()
+                self.append_parsed_nodes(members, member)
+        finally:
+            self.restore_generic_parameter_scope(previous_scope)
 
         if self.current_token[0] == "EOF":
             return None
@@ -1566,36 +1603,40 @@ class Parser:
         if self.current_token[0] == "LESS_THAN":
             generic_params = self.parse_generic_parameters()
 
-        self.eat("LPAREN")
-        parameters = self.parse_parameter_list()
-        self.eat("RPAREN")
+        previous_scope = self.enter_generic_parameter_scope(generic_params)
+        try:
+            self.eat("LPAREN")
+            parameters = self.parse_parameter_list()
+            self.eat("RPAREN")
 
-        if self.is_arrow_token():
-            self.eat_arrow()
-            attributes.extend(self.parse_return_type_attributes())
-            return_type = self.parse_type()
+            if self.is_arrow_token():
+                self.eat_arrow()
+                attributes.extend(self.parse_return_type_attributes())
+                return_type = self.parse_type()
 
-        post_attributes = self.parse_post_declaration_attributes()
+            post_attributes = self.parse_post_declaration_attributes()
 
-        body = None
-        if self.current_token[0] == "LBRACE":
-            body_start_pos = self.pos
-            body_start_token = self.current_token
-            try:
-                body = self.parse_block()
-            except SyntaxError as exc:
-                if self.strict_function_bodies:
-                    raise CrossGLFunctionBodyParseError(
-                        name,
-                        exc,
-                        self.current_token,
-                    ) from exc
-                self.pos = body_start_pos
-                self.current_token = body_start_token
-                self.skip_balanced_declaration()
-                body = BlockNode([])
-        else:
-            self.eat("SEMICOLON")
+            body = None
+            if self.current_token[0] == "LBRACE":
+                body_start_pos = self.pos
+                body_start_token = self.current_token
+                try:
+                    body = self.parse_block()
+                except SyntaxError as exc:
+                    if self.strict_function_bodies:
+                        raise CrossGLFunctionBodyParseError(
+                            name,
+                            exc,
+                            self.current_token,
+                        ) from exc
+                    self.pos = body_start_pos
+                    self.current_token = body_start_token
+                    self.skip_balanced_declaration()
+                    body = BlockNode([])
+            else:
+                self.eat("SEMICOLON")
+        finally:
+            self.restore_generic_parameter_scope(previous_scope)
 
         return FunctionNode(
             name=name,
@@ -1673,6 +1714,17 @@ class Parser:
                 size = self.parse_expression()
             self.eat("RBRACKET")
             param_type = ArrayType(param_type, size)
+
+        if isinstance(param_type, ReferenceType):
+            qualifier_names = {str(qualifier).lower() for qualifier in qualifiers}
+            writable_address_space = qualifier_names.intersection(
+                {"thread", "threadgroup", "device", "ray_data", "object_data"}
+            )
+            readonly_reference = qualifier_names.intersection(
+                {"const", "constant", "readonly", "in"}
+            )
+            if (is_mutable or writable_address_space) and not readonly_reference:
+                param_type.is_mutable = True
 
         attributes.extend(self.parse_post_declaration_attributes())
 
@@ -2457,7 +2509,10 @@ class Parser:
                     name = f"{name}{separator}{segment}"
                     generic_args = segment_generic_args
 
-            base_type = NamedType(name, generic_args)
+            if name.rsplit("::", 1)[-1] == "CooperativeMatrix":
+                base_type = self.cooperative_matrix_type(generic_args)
+            else:
+                base_type = NamedType(name, generic_args)
 
         elif self.current_token[0] == "LBRACKET":
             self.eat("LBRACKET")
@@ -2507,6 +2562,55 @@ class Parser:
                 base_type = NamedType(f"buffer_{base_type}", [])
 
         return base_type
+
+    def cooperative_matrix_type(self, generic_args):
+        """Build the canonical cooperative matrix type from generic arguments."""
+        if not 3 <= len(generic_args) <= 6:
+            raise SyntaxError(
+                "CooperativeMatrix expects 3 to 6 generic arguments: "
+                "element type, rows, columns, scope, use, and layout"
+            )
+
+        element_type = generic_args[0]
+        if not isinstance(element_type, TypeNode):
+            raise SyntaxError("CooperativeMatrix element argument must be a type")
+
+        rows = self.cooperative_matrix_dimension(generic_args[1])
+        cols = self.cooperative_matrix_dimension(generic_args[2])
+        scope = self.cooperative_matrix_contract_label(
+            generic_args[3] if len(generic_args) > 3 else None,
+            "subgroup",
+        )
+        use = self.cooperative_matrix_contract_label(
+            generic_args[4] if len(generic_args) > 4 else None,
+            "unspecified",
+        )
+        layout = self.cooperative_matrix_contract_label(
+            generic_args[5] if len(generic_args) > 5 else None,
+            "unspecified",
+        )
+        return CooperativeMatrixType(
+            element_type,
+            rows,
+            cols,
+            scope,
+            use,
+            layout,
+        )
+
+    def cooperative_matrix_dimension(self, argument):
+        if isinstance(argument, LiteralNode) and isinstance(argument.value, int):
+            return argument.value
+        return argument
+
+    def cooperative_matrix_contract_label(self, argument, default):
+        if argument is None:
+            return default
+        if isinstance(argument, (IdentifierNode, NamedType)):
+            return argument.name
+        if isinstance(argument, LiteralNode):
+            return str(argument.value)
+        return self.format_type_argument(argument)
 
     def parse_callable_type(self):
         """Parse Mojo-style function type syntax emitted by reverse codegen."""
@@ -4008,6 +4112,20 @@ class Parser:
                 left = self.parse_struct_constructor_expression(left.name)
             elif (
                 self.current_token[0] == "LESS_THAN"
+                and isinstance(left, (MemberAccessNode, PointerAccessNode))
+                and self.generic_suffix_is_call_suffix()
+            ):
+                generic_args = self.parse_generic_arguments()
+                self.eat("LPAREN")
+                arguments = []
+                while self.current_token[0] != "RPAREN":
+                    arguments.append(self.parse_expression())
+                    if self.current_token[0] == "COMMA":
+                        self.eat("COMMA")
+                self.eat("RPAREN")
+                left = FunctionCallNode(left, arguments, generic_args=generic_args)
+            elif (
+                self.current_token[0] == "LESS_THAN"
                 and isinstance(left, IdentifierNode)
                 and (
                     left.name in {"vec2", "vec3", "vec4"}
@@ -4031,6 +4149,11 @@ class Parser:
                 if isinstance(left, IdentifierNode):
                     if left.name in WAVE_INTRINSICS:
                         left = WaveOpNode(left.name, arguments)
+                    elif left.name in COOPERATIVE_MATRIX_INTRINSICS:
+                        left = CooperativeMatrixOpNode(
+                            COOPERATIVE_MATRIX_INTRINSICS[left.name],
+                            arguments,
+                        )
                     elif left.name in RAYTRACING_INTRINSICS:
                         left = RayTracingOpNode(left.name, arguments)
                     elif left.name in MESH_INTRINSICS:
@@ -4178,6 +4301,37 @@ class Parser:
             self.tokens[:] = saved_tokens
             self.pos = saved_pos
             self.current_token = saved_token
+
+    def generic_suffix_is_call_suffix(self):
+        """Return whether ``<...>`` is followed immediately by a call."""
+        if self.current_token[0] != "LESS_THAN":
+            return False
+
+        saved_pos = self.pos
+        saved_token = self.current_token
+        saved_tokens = list(self.tokens)
+        try:
+            generic_args = self.parse_generic_arguments()
+            return self.current_token[0] == "LPAREN" and (
+                self.generic_member_arguments_are_unambiguous(generic_args)
+            )
+        except SyntaxError:
+            return False
+        finally:
+            self.tokens[:] = saved_tokens
+            self.pos = saved_pos
+            self.current_token = saved_token
+
+    def generic_member_arguments_are_unambiguous(self, generic_args):
+        """Distinguish a single symbolic generic from a relational chain."""
+        if len(generic_args) != 1:
+            return True
+        argument = generic_args[0]
+        if not isinstance(argument, NamedType) or argument.generic_args:
+            return True
+        return argument.name in (
+            self.active_generic_parameter_names | self.declared_type_names
+        )
 
     def format_expression_path(self, expression):
         if isinstance(expression, IdentifierNode):
@@ -5157,29 +5311,32 @@ class Parser:
 
         if self.current_token[0] == "EOF":
             return None
-        elif self.current_token[0] == "STRUCT":
-            struct_node = self.parse_struct()
-            if struct_node:
-                struct_node.generic_params = generic_params
-            return struct_node
-        elif self.current_token[0] == "ENUM":
-            enum_node = self.parse_enum()
-            if enum_node:
-                enum_node.generic_params = generic_params
-            return enum_node
-        elif self.current_token[0] == "FUNCTION" or self.is_function_declaration():
-            func_node = self.parse_function()
-            if func_node:
-                func_node.generic_params = generic_params
-            return func_node
-        elif self.current_token[0] == "TRAIT":
-            trait_node = self.parse_trait()
-            if trait_node:
-                trait_node.generic_params = generic_params
-            return trait_node
-        else:
+        previous_scope = self.enter_generic_parameter_scope(generic_params)
+        try:
+            if self.current_token[0] == "STRUCT":
+                struct_node = self.parse_struct()
+                if struct_node:
+                    struct_node.generic_params = generic_params
+                return struct_node
+            if self.current_token[0] == "ENUM":
+                enum_node = self.parse_enum()
+                if enum_node:
+                    enum_node.generic_params = generic_params
+                return enum_node
+            if self.current_token[0] == "FUNCTION" or self.is_function_declaration():
+                func_node = self.parse_function()
+                if func_node:
+                    func_node.generic_params = generic_params
+                return func_node
+            if self.current_token[0] == "TRAIT":
+                trait_node = self.parse_trait()
+                if trait_node:
+                    trait_node.generic_params = generic_params
+                return trait_node
             self.skip_balanced_declaration()
             return None
+        finally:
+            self.restore_generic_parameter_scope(previous_scope)
 
     def parse_trait(self):
         """Parse a trait-like declaration into the current AST shape."""
@@ -5204,13 +5361,17 @@ class Parser:
         self.eat("LBRACE")
 
         methods = []
-        while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
-            if self.is_function_declaration():
-                func = self.parse_function()
-                if func:
-                    methods.append(func)
-            else:
-                self.skip_unknown_token()
+        previous_scope = self.enter_generic_parameter_scope(generic_params)
+        try:
+            while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
+                if self.is_function_declaration():
+                    func = self.parse_function()
+                    if func:
+                        methods.append(func)
+                else:
+                    self.skip_unknown_token()
+        finally:
+            self.restore_generic_parameter_scope(previous_scope)
 
         if self.current_token[0] == "EOF":
             return None
