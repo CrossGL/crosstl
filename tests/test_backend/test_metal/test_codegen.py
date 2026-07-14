@@ -7476,6 +7476,133 @@ def test_codegen_resolves_later_value_default_from_earlier_binding_in_extent():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_folds_owner_dependent_constexpr_static_member_chains():
+    code = """
+    template <typename Scalar, int Bits, int Word = 8>
+    inline constexpr short pack_factor() {
+        return Word / Bits;
+    }
+
+    template <int Bits, int Word = 8>
+    inline constexpr short bytes_per_pack() {
+        constexpr int power_of_two = (Bits & (Bits - 1)) == 0;
+        return power_of_two ? (Word / 8) : (Bits == 5 ? 5 : 3);
+    }
+
+    template <typename T, int Bits>
+    struct Loader {
+        static constexpr short factor = pack_factor<T, Bits>();
+        static constexpr short bytes = bytes_per_pack<Bits>();
+        static constexpr short reads = 32 / factor;
+    };
+
+    kernel void load_factors(device int* out [[buffer(0)]]) {
+        Loader<float, 2> two_bit;
+        Loader<float, 3> three_bit;
+        Loader<float, 4> four_bit;
+        out[0] = two_bit.reads;
+        out[1] = three_bit.bytes;
+        out[2] = four_bit.reads;
+    }
+    """
+
+    crossgl = convert(code)
+    compact = normalize(crossgl)
+
+    assert "struct Loader_float_2 { static int16 factor = 4;" in compact
+    assert "static int16 bytes = 1;" in compact
+    assert "static int16 reads = 8;" in compact
+    assert "struct Loader_float_3 { static int16 factor = 2;" in compact
+    assert "static int16 bytes = 3;" in compact
+    assert "struct Loader_float_4 { static int16 factor = 2;" in compact
+    assert "static int16 reads = 16;" in compact
+    assert "pack_factor_float_2_8" not in crossgl
+    assert "pack_factor_float_4_8" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_owner_constexpr_diagnostic_names_static_member_context():
+    code = """
+    template <int Bits, int Word = 8>
+    constexpr short pack_factor() {
+        return Word / Bits;
+    }
+
+    struct Loader_4 {
+        static constexpr short factor = pack_factor<RuntimeBits>();
+    };
+    """
+
+    with pytest.raises(MetalTemplateArgumentResolutionError) as exc_info:
+        convert_without_preprocessing(code, file_path="owner-constexpr.metal")
+
+    diagnostic = exc_info.value
+    assert diagnostic.owner == "Loader_4"
+    assert diagnostic.member == "factor"
+    assert diagnostic.function_name == "pack_factor"
+    assert diagnostic.parameter_name == "Bits"
+    assert diagnostic.argument_expression == "RuntimeBits"
+    assert diagnostic.requested_specialization == "pack_factor<RuntimeBits>"
+    assert diagnostic.reason == "remains dependent on RuntimeBits"
+    assert diagnostic.source_location["file"] == "owner-constexpr.metal"
+    assert "while resolving Loader_4::factor" in str(diagnostic)
+
+
+def test_codegen_reuses_equivalent_owner_constexpr_helper_requests():
+    code = """
+    template <int Bits, int Word = 8>
+    constexpr short pack_factor() {
+        return Word / Bits;
+    }
+
+    struct LeftLoader {
+        static constexpr short factor = pack_factor<4>();
+    };
+
+    struct RightLoader {
+        static constexpr short factor = pack_factor<4>();
+    };
+    """
+    ast = MetalParser(MetalLexer(code, preprocess=False).tokenize()).parse()
+    converter = MetalToCrossGLConverter()
+
+    crossgl = converter.generate(ast)
+
+    assert len(converter.constexpr_helper_values) == 1
+    assert crossgl.count("static int16 factor = 2;") == 2
+    assert "pack_factor_4_8" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_rejects_cyclic_owner_constexpr_helper_requests():
+    code = """
+    template <int Bits = 4>
+    constexpr short first_factor() {
+        return second_factor<Bits>();
+    }
+
+    template <int Bits = 4>
+    constexpr short second_factor() {
+        return first_factor<Bits>();
+    }
+
+    struct Loader_4 {
+        static constexpr short factor = first_factor<4>();
+    };
+    """
+
+    with pytest.raises(MetalTemplateArgumentResolutionError) as exc_info:
+        convert_without_preprocessing(code, file_path="cyclic-owner.metal")
+
+    diagnostic = exc_info.value
+    assert diagnostic.owner == "Loader_4"
+    assert diagnostic.member == "factor"
+    assert diagnostic.function_name == "first_factor"
+    assert diagnostic.requested_specialization == "first_factor<4>"
+    assert diagnostic.reason == "has a cyclic constexpr helper dependency"
+    assert diagnostic.source_location["file"] == "cyclic-owner.metal"
+
+
 def test_codegen_value_template_substitution_respects_lexical_shadowing():
     code = """
     template <bool Flag = false>

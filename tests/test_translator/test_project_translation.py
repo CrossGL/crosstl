@@ -15976,8 +15976,8 @@ def test_translate_project_parenthesized_metal_scoped_constant_to_all_gpu_target
         target: (repo / artifact["path"]).read_text(encoding="utf-8")
         for target, artifact in artifacts.items()
     }
-    assert "float((4 * 8))" in outputs["directx"]
-    assert "float((4 * 8))" in outputs["opengl"]
+    assert "float(32)" in outputs["directx"]
+    assert "float(32)" in outputs["opengl"]
     assert_compute_glsl_validates_if_available(outputs["opengl"], tmp_path)
     assert_spirv_asm_validates_if_available(outputs["vulkan"], tmp_path)
 

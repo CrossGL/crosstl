@@ -2948,7 +2948,7 @@ class MetalParser:
             qualifier = self.current_token[1]
             self.eat(self.current_token[0])
 
-        return_type, _return_qualifiers = self.parse_type_specifier(
+        return_type, return_qualifiers = self.parse_type_specifier(
             attributes=attributes
         )
 
@@ -3015,6 +3015,7 @@ class MetalParser:
             attributes=attributes,
             qualifier=qualifier,  # Also store as single qualifier for backward compatibility
         )
+        function.declaration_qualifiers = list(return_qualifiers)
         self.pop_declaration_context()
         return function
 

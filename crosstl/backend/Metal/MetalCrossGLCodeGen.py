@@ -126,6 +126,9 @@ class MetalTemplateArgumentResolutionError(ValueError):
         reason,
         argument_kind,
         source_location=None,
+        owner=None,
+        member=None,
+        requested_specialization=None,
     ):
         self.function_name = function_name
         self.parameter_name = parameter_name
@@ -140,6 +143,9 @@ class MetalTemplateArgumentResolutionError(ValueError):
             else None
         )
         self.selected_call = selected_call
+        self.owner = owner
+        self.member = member
+        self.requested_specialization = requested_specialization or selected_call
         self.reason = reason
         self.source_location = source_location
         if argument_kind == "missing":
@@ -151,15 +157,20 @@ class MetalTemplateArgumentResolutionError(ValueError):
                 f"explicit type argument for '{parameter_name}' "
                 f"({argument_expression})"
             )
+        elif argument_kind == "constexpr_body":
+            argument = f"constexpr body ({argument_expression})"
         else:
             argument = (
                 f"{argument_kind} argument for '{parameter_name}' "
                 f"({argument_expression})"
             )
-        super().__init__(
+        message = (
             "Cannot materialize Metal function template "
             f"'{function_name}' for call '{selected_call}': {argument} {reason}"
         )
+        if owner is not None and member is not None:
+            message += f" while resolving {owner}::{member}"
+        super().__init__(message)
 
 
 class MetalCallableLoweringError(ValueError):
@@ -851,12 +862,17 @@ class MetalToCrossGLConverter:
         self.struct_static_constants = {}
         self.struct_static_constant_members = {}
         self.struct_static_constant_resolution_stack = []
+        self.struct_static_constexpr_member_keys = set()
         self.current_struct_static_constant_owner = None
+        self.struct_template_parameters = {}
         self.local_struct_type_aliases = {}
         self.integral_constant_bindings = []
         self.template_value_bindings = []
         self.template_binding_shadow_scopes = []
         self.value_template_functions = {}
+        self.constexpr_value_template_functions = {}
+        self.constexpr_helper_values = {}
+        self.constexpr_helper_resolution_stack = []
         self.default_value_template_bindings = {}
         self.value_template_specializations = {}
         self.pending_value_template_specializations = []
@@ -1079,6 +1095,7 @@ class MetalToCrossGLConverter:
         key = (owner, name)
         if key not in self.struct_static_constant_members:
             return None
+        self.propagate_struct_static_constexpr_dependency(key)
         return self.render_resolved_static_constant(key)
 
     def render_static_struct_member_identifier(self, name, require_constant=False):
@@ -1108,6 +1125,7 @@ class MetalToCrossGLConverter:
         mapped_struct = self.map_struct_name(resolved_struct)
         key = (mapped_struct, member_name)
         if key in self.struct_static_constant_members:
+            self.propagate_struct_static_constexpr_dependency(key)
             return self.render_resolved_static_constant(key)
         if require_constant:
             raise MetalStaticConstantResolutionError(
@@ -1116,6 +1134,15 @@ class MetalToCrossGLConverter:
                 "the selected declaration has no compile-time static member",
             )
         return self.sanitize_identifier(f"{mapped_struct}::{member_name}")
+
+    def propagate_struct_static_constexpr_dependency(self, dependency_key):
+        if (
+            dependency_key in self.struct_static_constexpr_member_keys
+            and self.struct_static_constant_resolution_stack
+        ):
+            self.struct_static_constexpr_member_keys.add(
+                self.struct_static_constant_resolution_stack[-1]
+            )
 
     def render_decltype_static_struct_member(self, expr):
         owner = getattr(expr, "object", None)
@@ -2040,7 +2067,10 @@ class MetalToCrossGLConverter:
                         else:
                             code += f"        static_assert({cond});\n"
                         continue
-                    decl = self.format_struct_member_decl(member)
+                    decl = self.format_struct_member_decl(
+                        member,
+                        owner=self.map_struct_name(struct_node.name),
+                    )
                     code += f"        {decl};\n"
                 code += "    }\n\n"
 
@@ -2221,11 +2251,19 @@ class MetalToCrossGLConverter:
 
     def collect_struct_static_constants(self, structs):
         members = {}
+        template_parameters = {}
         for struct_node in structs or []:
             struct_name = getattr(struct_node, "name", None)
             if not struct_name:
                 continue
             mapped_name = self.map_struct_name(struct_name)
+            template_parameters[mapped_name] = {
+                name: kind
+                for kind, name in (
+                    getattr(struct_node, "template_parameters", None) or []
+                )
+                if name
+            }
             for member in getattr(struct_node, "members", []) or []:
                 if not self.is_compile_time_static_member(member):
                     continue
@@ -2236,6 +2274,8 @@ class MetalToCrossGLConverter:
         self.struct_static_constants = {}
         self.struct_static_constant_members = members
         self.struct_static_constant_resolution_stack = []
+        self.struct_static_constexpr_member_keys = set()
+        self.struct_template_parameters = template_parameters
         for key in members:
             self.resolve_struct_static_constant(key)
 
@@ -2270,26 +2310,60 @@ class MetalToCrossGLConverter:
             )
 
         owner, _member_name = key
-        local_integer_values = self.struct_static_integer_values(owner)
-        integer_value = evaluate_literal_int_expression(
-            default_value,
-            local_integer_values,
-        )
-        if integer_value is not None:
-            rendered = str(integer_value)
-        else:
-            self.struct_static_constant_resolution_stack.append(key)
-            previous_owner = self.current_struct_static_constant_owner
-            self.current_struct_static_constant_owner = owner
-            try:
+        self.struct_static_constant_resolution_stack.append(key)
+        previous_owner = self.current_struct_static_constant_owner
+        self.current_struct_static_constant_owner = owner
+        try:
+            local_integer_values = self.struct_static_integer_values(owner)
+            integer_value = evaluate_literal_int_expression(
+                default_value,
+                local_integer_values,
+            )
+            if integer_value is not None:
+                rendered = self.render_static_integral_value(member, integer_value)
+            else:
                 rendered = self.generate_expression(default_value, False)
-            finally:
-                self.current_struct_static_constant_owner = previous_owner
-                self.struct_static_constant_resolution_stack.pop()
+                folded_value = self.evaluate_value_template_constant_expression(
+                    rendered
+                )
+                if folded_value is not None:
+                    rendered = self.render_static_integral_value(member, folded_value)
+        except MetalTemplateArgumentResolutionError as error:
+            raise self.contextualize_static_template_resolution_error(
+                error,
+                key,
+                member,
+            ) from error
+        finally:
+            self.current_struct_static_constant_owner = previous_owner
+            self.struct_static_constant_resolution_stack.pop()
         if not rendered:
             return None
         self.struct_static_constants[key] = rendered
         return rendered
+
+    def render_static_integral_value(self, member, value):
+        member_type = self.normalized_metal_type(getattr(member, "vtype", None))
+        if member_type == "bool":
+            return "true" if value else "false"
+        return str(value)
+
+    def contextualize_static_template_resolution_error(self, error, key, member):
+        owner, member_name = key
+        return MetalTemplateArgumentResolutionError(
+            error.function_name,
+            error.parameter_name,
+            error.argument_expression,
+            error.selected_call,
+            error.reason,
+            error.argument_kind,
+            getattr(member, "source_location", None) or error.source_location,
+            owner=owner,
+            member=member_name,
+            requested_specialization=(
+                getattr(error, "requested_specialization", None) or error.selected_call
+            ),
+        )
 
     def struct_static_integer_values(self, owner):
         values = {}
@@ -2534,7 +2608,7 @@ class MetalToCrossGLConverter:
             and entry[1]
         ]
 
-    def split_value_template_call_name(self, name):
+    def split_value_template_call_name(self, name, function_index=None):
         text = str(name).strip()
         if "<" not in text or not text.endswith(">"):
             return None
@@ -2544,7 +2618,10 @@ class MetalToCrossGLConverter:
             return None
         arguments = self.split_generic_arguments(text[angle + 1 : -1])
         function_name = base.rsplit("::", 1)[-1]
-        if function_name not in self.value_template_functions:
+        functions = (
+            self.value_template_functions if function_index is None else function_index
+        )
+        if function_name not in functions:
             return None
         return function_name, arguments
 
@@ -2558,11 +2635,18 @@ class MetalToCrossGLConverter:
         return f"{function.name}<{template_parameters}>({parameters})"
 
     def resolve_value_template_function(
-        self, function_name, call_arguments, explicit_template_arguments=None
+        self,
+        function_name,
+        call_arguments,
+        explicit_template_arguments=None,
+        function_index=None,
     ):
+        functions = (
+            self.value_template_functions if function_index is None else function_index
+        )
         value_candidates = [
             function
-            for function in self.value_template_functions.get(function_name, [])
+            for function in functions.get(function_name, [])
             if len(getattr(function, "params", []) or []) == len(call_arguments)
         ]
         if not value_candidates:
@@ -2723,6 +2807,17 @@ class MetalToCrossGLConverter:
                 self.value_template_functions.setdefault(function.name, []).append(
                     function
                 )
+        self.constexpr_value_template_functions = {
+            name: [
+                function
+                for function in candidates
+                if self.function_is_constexpr(function)
+            ]
+            for name, candidates in self.value_template_functions.items()
+            if any(self.function_is_constexpr(function) for function in candidates)
+        }
+        self.constexpr_helper_values = {}
+        self.constexpr_helper_resolution_stack = []
         self.restrict_value_template_functions_to_default_dependency_graph()
         self.default_value_template_bindings = {}
         self.value_template_specializations = {}
@@ -2784,6 +2879,498 @@ class MetalToCrossGLConverter:
             self.suppressed_value_template_function_ids.add(id(function))
             key = self.value_template_specialization_key(function, bindings)
             self.value_template_specializations[key] = function.name
+
+    def function_is_constexpr(self, function):
+        return "constexpr" in {
+            str(qualifier).lower()
+            for qualifier in getattr(function, "declaration_qualifiers", []) or []
+        }
+
+    def render_struct_static_constexpr_helper_call(self, call, is_main=False):
+        owner = self.current_struct_static_constant_owner
+        if owner is None or not self.struct_static_constant_resolution_stack:
+            return None
+
+        call_name = str(getattr(call, "name", ""))
+        parsed = self.split_value_template_call_name(
+            call_name,
+            function_index=self.constexpr_value_template_functions,
+        )
+        if parsed is None:
+            function_name = call_name.rsplit("::", 1)[-1]
+            if function_name not in self.constexpr_value_template_functions:
+                return None
+            explicit_arguments = None
+        else:
+            function_name, explicit_arguments = parsed
+
+        function = self.resolve_value_template_function(
+            function_name,
+            getattr(call, "args", []) or [],
+            explicit_template_arguments=explicit_arguments,
+            function_index=self.constexpr_value_template_functions,
+        )
+        if function is None:
+            return None
+        rendered = self.evaluate_struct_static_constexpr_helper(
+            function,
+            explicit_arguments,
+            getattr(call, "args", []) or [],
+            selected_call=call_name,
+            is_main=is_main,
+        )
+        self.struct_static_constexpr_member_keys.add(
+            self.struct_static_constant_resolution_stack[-1]
+        )
+        return rendered
+
+    def evaluate_struct_static_constexpr_helper(
+        self,
+        function,
+        explicit_arguments,
+        call_arguments,
+        *,
+        selected_call,
+        is_main,
+    ):
+        (
+            template_bindings,
+            value_bindings,
+            type_bindings,
+        ) = self.bind_struct_static_constexpr_template_arguments(
+            function,
+            explicit_arguments,
+            selected_call=selected_call,
+        )
+        runtime_bindings = self.bind_struct_static_constexpr_call_arguments(
+            function,
+            call_arguments,
+            selected_call=selected_call,
+            is_main=is_main,
+        )
+        requested_specialization = self.constexpr_helper_specialization_name(
+            function,
+            template_bindings,
+        )
+        cache_key = (
+            id(function),
+            tuple(
+                template_bindings.get(name)
+                for _kind, name in getattr(function, "template_parameters", None) or []
+                if name
+            ),
+            tuple(
+                runtime_bindings.get(getattr(parameter, "name", None))
+                for parameter in getattr(function, "params", []) or []
+            ),
+        )
+        cached = self.constexpr_helper_values.get(cache_key)
+        if cached is not None:
+            return cached
+        if cache_key in self.constexpr_helper_resolution_stack:
+            raise MetalTemplateArgumentResolutionError(
+                function.name,
+                "<return>",
+                requested_specialization,
+                selected_call,
+                "has a cyclic constexpr helper dependency",
+                "constexpr_body",
+                getattr(function, "template_source_location", None)
+                or getattr(function, "source_location", None),
+                requested_specialization=requested_specialization,
+            )
+
+        body = list(getattr(function, "body", None) or [])
+        local_declarations = body[:-1]
+        if (
+            not body
+            or not isinstance(body[-1], ReturnNode)
+            or any(
+                not self.is_supported_constexpr_local_declaration(statement)
+                for statement in local_declarations
+            )
+        ):
+            raise MetalTemplateArgumentResolutionError(
+                function.name,
+                "<return>",
+                requested_specialization,
+                selected_call,
+                "contains statements outside the supported constexpr local "
+                "declaration and return subset",
+                "constexpr_body",
+                getattr(function, "template_source_location", None)
+                or getattr(function, "source_location", None),
+                requested_specialization=requested_specialization,
+            )
+
+        return_type = self.substitute_template_value_text(
+            getattr(function, "return_type", ""),
+            bindings=type_bindings,
+            honor_shadowing=False,
+        )
+        if not self.is_integral_constexpr_type(return_type):
+            raise MetalTemplateArgumentResolutionError(
+                function.name,
+                "<return>",
+                return_type,
+                selected_call,
+                "does not have an integral or boolean return type",
+                "constexpr_body",
+                getattr(function, "template_source_location", None)
+                or getattr(function, "source_location", None),
+                requested_specialization=requested_specialization,
+            )
+
+        previous_type_aliases = dict(self.type_aliases)
+        self.type_aliases.update(type_bindings)
+        active_value_bindings = dict(value_bindings)
+        active_value_bindings.update(runtime_bindings)
+        self.template_value_bindings.append(active_value_bindings)
+        self.constexpr_helper_resolution_stack.append(cache_key)
+        try:
+            for declaration in local_declarations:
+                local_name = declaration.left.name
+                local_expression = self.generate_expression(
+                    declaration.right,
+                    is_main,
+                )
+                local_value = self.normalize_struct_static_constexpr_expression(
+                    local_expression,
+                    function,
+                    local_name,
+                    selected_call,
+                    requested_specialization,
+                )
+                active_value_bindings[local_name] = local_value
+            rendered = self.generate_expression(body[-1].value, is_main)
+        finally:
+            self.constexpr_helper_resolution_stack.pop()
+            self.template_value_bindings.pop()
+            self.type_aliases = previous_type_aliases
+
+        result = self.normalize_struct_static_constexpr_expression(
+            rendered,
+            function,
+            "<return>",
+            selected_call,
+            requested_specialization,
+        )
+
+        self.constexpr_helper_values[cache_key] = result
+        return result
+
+    def is_supported_constexpr_local_declaration(self, statement):
+        if (
+            not isinstance(statement, AssignmentNode)
+            or getattr(statement, "operator", None) != "="
+            or not isinstance(getattr(statement, "left", None), VariableNode)
+            or not getattr(statement.left, "name", None)
+        ):
+            return False
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(statement.left, "qualifiers", []) or []
+        }
+        return "constexpr" in qualifiers and self.is_integral_constexpr_type(
+            getattr(statement.left, "vtype", None)
+        )
+
+    def normalize_struct_static_constexpr_expression(
+        self,
+        rendered,
+        function,
+        expression_name,
+        selected_call,
+        requested_specialization,
+    ):
+        folded = self.evaluate_value_template_constant_expression(rendered)
+        if folded is not None:
+            return str(folded)
+
+        dependencies = set(re.findall(r"\b[A-Za-z_]\w*\b", rendered))
+        owner_parameters = self.current_struct_template_value_parameters()
+        allowed = set(owner_parameters)
+        allowed.update(self.constexpr_integral_type_names())
+        allowed.update({"true", "false"})
+        unresolved = sorted(dependencies - allowed)
+        if unresolved or not dependencies.intersection(owner_parameters):
+            reason = (
+                f"remains dependent on {', '.join(unresolved)}"
+                if unresolved
+                else "cannot be evaluated as a supported integral constant expression"
+            )
+            raise MetalTemplateArgumentResolutionError(
+                function.name,
+                expression_name,
+                rendered,
+                selected_call,
+                reason,
+                "constexpr_body",
+                getattr(function, "template_source_location", None)
+                or getattr(function, "source_location", None),
+                requested_specialization=requested_specialization,
+            )
+        return f"({rendered})"
+
+    def bind_struct_static_constexpr_template_arguments(
+        self,
+        function,
+        explicit_arguments,
+        *,
+        selected_call,
+    ):
+        parameters = getattr(function, "template_parameters", None) or []
+        defaults = getattr(function, "template_parameter_defaults", {}) or {}
+        explicit_arguments = list(explicit_arguments or [])
+        template_bindings = {}
+        value_bindings = {}
+        type_bindings = {}
+        argument_index = 0
+
+        for kind, name in parameters:
+            if not name:
+                continue
+            explicit = argument_index < len(explicit_arguments)
+            if explicit:
+                expression = explicit_arguments[argument_index]
+                argument_index += 1
+                argument_kind = "explicit" if kind == "value" else "explicit_type"
+            else:
+                expression = defaults.get(name)
+                argument_kind = "default" if kind == "value" else "default_type"
+                if expression is None:
+                    raise MetalTemplateArgumentResolutionError(
+                        function.name,
+                        name,
+                        None,
+                        selected_call,
+                        "was not supplied and has no declaration default",
+                        "missing",
+                        getattr(function, "template_source_location", None)
+                        or getattr(function, "source_location", None),
+                    )
+
+            if kind == "value":
+                resolved = self.resolve_struct_static_constexpr_value_argument(
+                    expression,
+                    template_bindings,
+                    function,
+                    name,
+                    selected_call,
+                    argument_kind,
+                )
+                value_bindings[name] = resolved
+            else:
+                resolved = self.resolve_struct_static_constexpr_type_argument(
+                    expression,
+                    template_bindings,
+                    function,
+                    name,
+                    selected_call,
+                    argument_kind,
+                )
+                type_bindings[name] = resolved
+            template_bindings[name] = resolved
+
+        if argument_index != len(explicit_arguments):
+            return {}, {}, {}
+        return template_bindings, value_bindings, type_bindings
+
+    def resolve_struct_static_constexpr_value_argument(
+        self,
+        expression,
+        earlier_bindings,
+        function,
+        parameter_name,
+        selected_call,
+        argument_kind,
+    ):
+        text = self.struct_static_constexpr_argument_text(
+            expression,
+            earlier_bindings,
+        )
+        normalized = re.sub(r"\s+", " ", text).strip()
+        if normalized in {"true", "false"}:
+            return normalized
+        integer = re.fullmatch(r"([-+]?\d+)(?:[uUlL]+)?", normalized)
+        if integer is not None:
+            return integer.group(1)
+        value = self.evaluate_value_template_constant_expression(normalized)
+        if value is not None:
+            return str(value)
+
+        identifiers = sorted(set(re.findall(r"\b[A-Za-z_]\w*\b", normalized)))
+        unresolved = sorted(
+            set(identifiers) - self.current_struct_template_value_parameters()
+        )
+        if identifiers and not unresolved:
+            return normalized
+        reason = (
+            f"remains dependent on {', '.join(unresolved or identifiers)}"
+            if identifiers
+            else "cannot be evaluated as a supported integral constant expression"
+        )
+        raise MetalTemplateArgumentResolutionError(
+            function.name,
+            parameter_name,
+            str(expression),
+            selected_call,
+            reason,
+            argument_kind,
+            getattr(function, "template_source_location", None)
+            or getattr(function, "source_location", None),
+        )
+
+    def resolve_struct_static_constexpr_type_argument(
+        self,
+        expression,
+        earlier_bindings,
+        function,
+        parameter_name,
+        selected_call,
+        argument_kind,
+    ):
+        text = self.struct_static_constexpr_argument_text(
+            expression,
+            earlier_bindings,
+        )
+        identifiers = set(re.findall(r"\b[A-Za-z_]\w*\b", text))
+        helper_parameters = {
+            name
+            for _kind, name in getattr(function, "template_parameters", None) or []
+            if name
+        }
+        owner_parameters = set(
+            self.struct_template_parameters.get(
+                self.current_struct_static_constant_owner,
+                {},
+            )
+        )
+        unresolved = sorted((identifiers & helper_parameters) - owner_parameters)
+        if unresolved:
+            raise MetalTemplateArgumentResolutionError(
+                function.name,
+                parameter_name,
+                str(expression),
+                selected_call,
+                f"remains dependent on {', '.join(unresolved)}",
+                argument_kind,
+                getattr(function, "template_source_location", None)
+                or getattr(function, "source_location", None),
+            )
+        return text.strip()
+
+    def struct_static_constexpr_argument_text(self, expression, earlier_bindings):
+        bindings = dict(self.struct_static_owner_member_bindings())
+        for scope in self.template_value_bindings:
+            bindings.update(scope)
+        bindings.update(earlier_bindings)
+        return self.substitute_template_value_text(
+            str(expression),
+            bindings=bindings,
+            honor_shadowing=False,
+        )
+
+    def struct_static_owner_member_bindings(self):
+        owner = self.current_struct_static_constant_owner
+        return {
+            member_name: value
+            for (
+                candidate_owner,
+                member_name,
+            ), value in self.struct_static_constants.items()
+            if candidate_owner == owner
+        }
+
+    def current_struct_template_value_parameters(self):
+        return {
+            name
+            for name, kind in self.struct_template_parameters.get(
+                self.current_struct_static_constant_owner,
+                {},
+            ).items()
+            if kind == "value"
+        }
+
+    def bind_struct_static_constexpr_call_arguments(
+        self,
+        function,
+        call_arguments,
+        *,
+        selected_call,
+        is_main,
+    ):
+        bindings = {}
+        allowed = self.current_struct_template_value_parameters()
+        for parameter, argument in zip(
+            getattr(function, "params", []) or [],
+            call_arguments,
+        ):
+            rendered = self.generate_expression(argument, is_main)
+            folded = self.evaluate_value_template_constant_expression(rendered)
+            if folded is not None:
+                rendered = str(folded)
+            else:
+                identifiers = set(re.findall(r"\b[A-Za-z_]\w*\b", rendered))
+                unresolved = sorted(identifiers - allowed)
+                if unresolved or not identifiers:
+                    reason = (
+                        f"remains dependent on {', '.join(unresolved)}"
+                        if unresolved
+                        else "cannot be evaluated as a supported integral "
+                        "constant expression"
+                    )
+                    raise MetalTemplateArgumentResolutionError(
+                        function.name,
+                        getattr(parameter, "name", None) or "<argument>",
+                        rendered,
+                        selected_call,
+                        reason,
+                        "call",
+                        getattr(argument, "source_location", None)
+                        or getattr(function, "source_location", None),
+                    )
+            bindings[getattr(parameter, "name", None)] = rendered
+        return bindings
+
+    def constexpr_helper_specialization_name(self, function, bindings):
+        parameters = [
+            name
+            for _kind, name in getattr(function, "template_parameters", None) or []
+            if name
+        ]
+        if not parameters:
+            return function.name
+        arguments = ",".join(str(bindings[name]) for name in parameters)
+        return f"{function.name}<{arguments}>"
+
+    def is_integral_constexpr_type(self, type_name):
+        resolved = self.normalized_metal_type(self.resolve_type_alias(type_name))
+        return resolved in self.constexpr_integral_type_names()
+
+    @staticmethod
+    def constexpr_integral_type_names():
+        return {
+            "bool",
+            "char",
+            "uchar",
+            "short",
+            "ushort",
+            "int",
+            "uint",
+            "long",
+            "ulong",
+            "size_t",
+            "ptrdiff_t",
+            "int8_t",
+            "uint8_t",
+            "int16_t",
+            "uint16_t",
+            "int32_t",
+            "uint32_t",
+            "int64_t",
+            "uint64_t",
+        }
 
     def bind_value_template_arguments(
         self,
@@ -3096,12 +3683,17 @@ class MetalToCrossGLConverter:
         self.struct_static_constants = {}
         self.struct_static_constant_members = {}
         self.struct_static_constant_resolution_stack = []
+        self.struct_static_constexpr_member_keys = set()
         self.current_struct_static_constant_owner = None
+        self.struct_template_parameters = {}
         self.local_struct_type_aliases = {}
         self.integral_constant_bindings = []
         self.template_value_bindings = []
         self.template_binding_shadow_scopes = []
         self.value_template_functions = {}
+        self.constexpr_value_template_functions = {}
+        self.constexpr_helper_values = {}
+        self.constexpr_helper_resolution_stack = []
         self.default_value_template_bindings = {}
         self.value_template_specializations = {}
         self.pending_value_template_specializations = []
@@ -3391,7 +3983,7 @@ class MetalToCrossGLConverter:
             parts.append(storage_format)
         return " ".join(part for part in parts if part)
 
-    def format_struct_member_decl(self, member):
+    def format_struct_member_decl(self, member, owner=None):
         """Render a struct field while preserving compile-time member constants."""
         declaration = self.format_decl(member, include_semantic=True)
         qualifiers = {
@@ -3404,7 +3996,12 @@ class MetalToCrossGLConverter:
         declaration = f"static {declaration}"
         default_value = getattr(member, "default_value", None)
         if default_value is not None and not getattr(member, "array_sizes", None):
-            declaration += f" = {self.generate_expression(default_value, False)}"
+            key = (owner, getattr(member, "name", None))
+            if owner is not None and key in self.struct_static_constexpr_member_keys:
+                rendered_default = self.render_resolved_static_constant(key)
+            else:
+                rendered_default = self.generate_expression(default_value, False)
+            declaration += f" = {rendered_default}"
         return declaration
 
     def format_parameter_decl(self, var, index, semantic_context=None):
@@ -4524,6 +5121,12 @@ class MetalToCrossGLConverter:
             if callback is not None:
                 raise self.unsupported_callback_error(expr.name, callback)
             self.reject_unsupported_wide_vector_call(expr)
+            constexpr_value = self.render_struct_static_constexpr_helper_call(
+                expr,
+                is_main,
+            )
+            if constexpr_value is not None:
+                return constexpr_value
             materialized_name = self.materialized_value_template_call_name(
                 expr.name, expr.args
             )

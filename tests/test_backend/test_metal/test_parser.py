@@ -90,6 +90,41 @@ def test_parse_numeric_heavy_generated_identifier_function_and_call():
     assert call.name == "nvfp4_quantize_float_gs_16_b_4"
 
 
+def test_parse_owner_dependent_constexpr_static_helper_contract():
+    code = """
+    template <typename Scalar, int Bits, int Word = 8>
+    inline constexpr short pack_factor() {
+        return Word / Bits;
+    }
+
+    template <typename T, int Bits>
+    struct Loader {
+        static constexpr short factor = pack_factor<T, Bits>();
+    };
+    """
+
+    ast = parse_ok(code)
+    helper = ast.functions[0]
+    owner = ast.structs[0]
+    factor = owner.members[0]
+
+    assert helper.name == "pack_factor"
+    assert helper.template_parameters == [
+        ("typename", "Scalar"),
+        ("value", "Bits"),
+        ("value", "Word"),
+    ]
+    assert helper.template_parameter_defaults == {"Word": "8"}
+    assert helper.declaration_qualifiers == ["inline", "constexpr"]
+    assert owner.template_parameters == [
+        ("typename", "T"),
+        ("value", "Bits"),
+    ]
+    assert isinstance(factor.default_value, FunctionCallNode)
+    assert factor.default_value.name == "pack_factor<T,Bits>"
+    assert factor.default_value.args == []
+
+
 def test_numeric_leading_generated_identifier_reports_specific_error():
     code = """
     float 16_b_4(float value) {
