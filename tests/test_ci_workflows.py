@@ -2149,6 +2149,10 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "Verify MLX frontier accounting" in mlx_porting
     assert "expected 11 clean MLX frontier sources" in mlx_porting
     assert "fence contract accounting must be 3 failed, 0 emitted" in mlx_porting
+    assert 'checks["reference-accessor-lvalue-identity"]' in mlx_porting
+    assert "reference accessor proof accounting is incomplete" in mlx_porting
+    assert "reference accessor {target} storage evidence is incomplete" in mlx_porting
+    assert "reference accessor {target} native validation must be" in mlx_porting
     assert "expected 4 OpenGL toolchain frontier sources" in mlx_porting
     assert (
         "OpenGL frontier accounting must be 4 sources, 4 artifacts, "

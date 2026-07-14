@@ -225,6 +225,85 @@ def _runtime_arange_artifact_manifest(module, target, output_name="out"):
     }
 
 
+def _write_reference_accessor_report(
+    module,
+    work_dir,
+    report_path,
+    *,
+    generated_by_target=None,
+):
+    defaults = {
+        "directx": (
+            """
+            struct ReferenceAccessorTile {
+              float val_frags[4];
+            };
+            RWStructuredBuffer<float> out : register(u0);
+            [numthreads(1, 1, 1)]
+            void CSMain() {
+              ReferenceAccessorTile tile;
+              tile.val_frags[((1 * 2) + 1)] = 73.25f;
+              out[0] = tile.val_frags[((1 * 2) + 1)];
+            }
+        """
+        ),
+        "opengl": (
+            """
+            #version 450
+            struct ReferenceAccessorTile {
+              float val_frags[4];
+            };
+            layout(std430, binding = 0) buffer out_block { float out_values[]; };
+            void main() {
+              ReferenceAccessorTile tile;
+              tile.val_frags[((1 * 2) + 1)] = 73.25;
+              out_values[0] = tile.val_frags[((1 * 2) + 1)];
+            }
+        """
+        ),
+    }
+    generated_by_target = {**defaults, **(generated_by_target or {})}
+    project_dir = work_dir / "reference-accessor-project"
+    artifacts = []
+    for target, suffix in (("directx", ".hlsl"), ("opengl", ".glsl")):
+        generated_path = (
+            project_dir
+            / "generated"
+            / target
+            / Path(module.REFERENCE_ACCESSOR_FIXTURE_NAME).with_suffix(suffix)
+        )
+        generated_path.parent.mkdir(parents=True, exist_ok=True)
+        generated_path.write_text(
+            generated_by_target[target].strip() + "\n",
+            encoding="utf-8",
+        )
+        artifacts.append(
+            {
+                "source": module.REFERENCE_ACCESSOR_FIXTURE_NAME,
+                "sourceBackend": "metal",
+                "target": target,
+                "path": generated_path.relative_to(project_dir).as_posix(),
+                "status": "translated",
+            }
+        )
+    report_path.write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "unitCount": 1,
+                    "artifactCount": 2,
+                    "translatedCount": 2,
+                    "failedCount": 0,
+                    "diagnosticCounts": {"error": 0, "note": 0, "warning": 0},
+                },
+                "diagnostics": [],
+                "artifacts": artifacts,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def _write_metal_roundtrip_report(
     module,
     mlx_root,
@@ -339,6 +418,243 @@ def _write_metal_roundtrip_report(
         ),
         encoding="utf-8",
     )
+
+
+def test_reference_accessor_fixture_translates_through_public_project_surface(
+    tmp_path,
+):
+    from crosstl.project import translate_project
+
+    module = _load_harness()
+    project_dir = tmp_path / "reference-accessor-project"
+    project_dir.mkdir()
+    source_path = project_dir / module.REFERENCE_ACCESSOR_FIXTURE_NAME
+    source_path.write_bytes(module.REFERENCE_ACCESSOR_FIXTURE_PATH.read_bytes())
+
+    source = source_path.read_text(encoding="utf-8")
+    assert "constexpr thread float& frag_at" in source
+    assert "return val_frags[i * width + j];" in source
+    assert "tile.frag_at(1, 1) = 73.25f;" in source
+
+    payload = translate_project(
+        project_dir,
+        targets=list(module.REFERENCE_ACCESSOR_TARGETS),
+        output_dir="generated",
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 2
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+    artifacts = {
+        artifact["target"]: artifact
+        for artifact in payload["artifacts"]
+        if artifact["status"] == "translated"
+    }
+    assert set(artifacts) == set(module.REFERENCE_ACCESSOR_TARGETS)
+    for target, artifact in artifacts.items():
+        generated = (project_dir / artifact["path"]).read_text(encoding="utf-8")
+        evidence = module._reference_accessor_write_evidence(
+            generated,
+            target=target,
+        )
+        assert evidence["status"] == "verified-original-storage-write"
+        assert evidence["readBackFromWrittenLvalue"] is True
+        assert evidence["readBackLvalue"] == evidence["storageLvalue"]
+        assert evidence["valueReturningHelperUsedForWrite"] is False
+
+
+def test_reference_accessor_check_records_structured_proof_and_native_validation(
+    tmp_path, monkeypatch
+):
+    module = _load_harness()
+    mlx_root = tmp_path / "mlx"
+    work_dir = mlx_root / ".crosstl-mlx-porting"
+    config_dir = work_dir / "configs"
+    report_dir = work_dir / "reports"
+    log_dir = work_dir / "logs"
+    for directory in (config_dir, report_dir, log_dir):
+        directory.mkdir(parents=True)
+    commands = []
+
+    def fake_run_command(name, command, *, log_dir, check=True, timeout_seconds=None):
+        commands.append((name, list(command)))
+        if name == "translate-reference-accessor":
+            _write_reference_accessor_report(
+                module,
+                work_dir,
+                report_dir / "reference-accessor.json",
+            )
+        elif name == "validate-reference-accessor-directx":
+            Path(command[command.index("-Fo") + 1]).write_bytes(b"DXIL")
+        elif name == "validate-reference-accessor-opengl":
+            Path(command[command.index("-o") + 1]).write_bytes(b"SPIRV")
+        stdout_path = log_dir / f"{name}.stdout"
+        stderr_path = log_dir / f"{name}.stderr"
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text("", encoding="utf-8")
+        return module.CommandResult(name, list(command), 0, stdout_path, stderr_path)
+
+    tools = {
+        "dxc": "/opt/tools/dxc",
+        "glslangValidator": "/opt/tools/glslangValidator",
+        "spirv-val": "/opt/tools/spirv-val",
+    }
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+    monkeypatch.setattr(module.shutil, "which", tools.get)
+
+    result = module._check_reference_accessor_lvalue_identity(
+        mlx_root,
+        work_dir,
+        config_dir,
+        report_dir,
+        log_dir,
+        "python",
+        require_directx_toolchain=True,
+        require_opengl_toolchain=True,
+    )
+
+    config = (config_dir / "reference-accessor.toml").read_text(encoding="utf-8")
+    assert 'source_roots = ["."]' in config
+    assert f'include = ["{module.REFERENCE_ACCESSOR_FIXTURE_NAME}"]' in config
+    assert 'targets = ["directx", "opengl"]' in config
+    assert [name for name, _command in commands] == [
+        "translate-reference-accessor",
+        "validate-reference-accessor-directx",
+        "validate-reference-accessor-opengl",
+        "validate-reference-accessor-opengl-spirv",
+    ]
+    translate_command = commands[0][1]
+    assert translate_command[:4] == [
+        "python",
+        "-m",
+        "crosstl",
+        "translate-project",
+    ]
+    assert Path(translate_command[4]) == work_dir / "reference-accessor-project"
+    assert commands[1][1][:7] == [
+        "/opt/tools/dxc",
+        "-T",
+        "cs_6_0",
+        "-E",
+        "CSMain",
+        str(
+            work_dir
+            / "reference-accessor-project"
+            / "generated"
+            / "directx"
+            / "reference_accessor_lvalue.hlsl"
+        ),
+        "-Fo",
+    ]
+    assert commands[2][1][0] == "/opt/tools/glslangValidator"
+    assert commands[2][1][1:5] == [
+        "--target-env",
+        "opengl",
+        "-S",
+        "comp",
+    ]
+    assert commands[3][1][:3] == [
+        "/opt/tools/spirv-val",
+        "--target-env",
+        "opengl4.5",
+    ]
+
+    assert result["status"] == "passed"
+    assert result["proofStatus"] == "verified-original-storage-write"
+    assert result["translationSurface"] == "crosstl translate-project"
+    assert result["accessorContract"]["storageExpression"] == (
+        "val_frags[i * width + j]"
+    )
+    assert result["runtimeParityClaimed"] is False
+    assert result["upstreamMlxRuntimeExecuted"] is False
+    assert result["sourceSha256"] == module._sha256(
+        module.REFERENCE_ACCESSOR_FIXTURE_PATH
+    )
+    for target, tool in (
+        ("directx", "dxc"),
+        ("opengl", "glslangValidator"),
+    ):
+        proof = result["targetProofs"][target]
+        assert proof["writeEvidence"] == {
+            "status": "verified-original-storage-write",
+            "storageMember": "val_frags",
+            "storageLvalue": "tile.val_frags[((1*2)+1)]",
+            "sentinel": "73.25",
+            "readBackFromSameStorage": True,
+            "readBackFromWrittenLvalue": True,
+            "readBackLvalue": "tile.val_frags[((1*2)+1)]",
+            "valueReturningHelperUsedForWrite": False,
+        }
+        assert proof["nativeValidation"]["status"] == "validated"
+        assert proof["nativeValidation"]["nativeCompiler"] == tool
+        assert (mlx_root / proof["artifact"]).is_file()
+
+
+@pytest.mark.parametrize(
+    ("generated", "message"),
+    [
+        pytest.param(
+            """
+            void CSMain() {
+              ReferenceAccessorTile__frag_at(tile, 1, 1) = 73.25f;
+              out[0] = tile.val_frags[3];
+            }
+            """,
+            "value-return helper",
+            id="value-return-helper",
+        ),
+        pytest.param(
+            """
+            void main() {
+              float value = ReferenceAccessorTile__frag_at(tile, 1, 1);
+              value = 73.25;
+              // tile.val_frags[3] = 73.25;
+              out_values[0] = tile.val_frags[3];
+            }
+            """,
+            "did not write the sentinel directly",
+            id="temporary-and-comment",
+        ),
+        pytest.param(
+            """
+            void main() {
+              ReferenceAccessorTile tile_copy = tile;
+              tile_copy.val_frags[3] = 73.25;
+              out_values[0] = tile_copy.val_frags[3];
+            }
+            """,
+            "copied receiver",
+            id="copied-receiver-storage",
+        ),
+        pytest.param(
+            """
+            void main() {
+              tile.val_frags[3] = 73.25;
+              out_values[0] = tile.val_frags[2];
+            }
+            """,
+            "exact val_frags lvalue",
+            id="different-storage-element",
+        ),
+        pytest.param(
+            """
+            void main() {
+              tile.val_frags[3] = 73.25;
+              tile.val_frags[3] = 0.0;
+            }
+            """,
+            "exact val_frags lvalue",
+            id="subsequent-write-is-not-readback",
+        ),
+    ],
+)
+def test_reference_accessor_evidence_rejects_value_copy_false_positives(
+    generated, message
+):
+    module = _load_harness()
+
+    with pytest.raises(module.PortingCheckError, match=message):
+        module._reference_accessor_write_evidence(generated, target="opengl")
 
 
 def test_metal_roundtrip_validates_generated_artifact_natively(tmp_path, monkeypatch):
@@ -3239,6 +3555,13 @@ def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatc
     )
     monkeypatch.setattr(
         module,
+        "_check_reference_accessor_lvalue_identity",
+        lambda *args, **kwargs: pytest.fail(
+            "reduced reference accessor proof should not run"
+        ),
+    )
+    monkeypatch.setattr(
+        module,
         "_translate_directx_vulkan_frontier",
         lambda *args, **kwargs: pytest.fail("reduced frontier should not run"),
     )
@@ -3277,6 +3600,11 @@ def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatc
     assert result["scope"]["fullCorpusExpectedArtifactCount"] == 120
     assert result["scope"]["fullCorpusExpectedTranslatedArtifactCount"] == 117
     assert result["scope"]["fullCorpusExpectedFenceFailureCount"] == 3
+    assert result["scope"]["referenceAccessorProofIncluded"] is False
+    assert result["scope"]["referenceAccessorTargets"] == []
+    assert result["scope"]["referenceAccessorDirectxToolchainRequired"] is False
+    assert result["scope"]["referenceAccessorOpenglToolchainRequired"] is False
+    assert result["scope"]["runtimeParityClaimed"] is False
 
 
 def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkeypatch):
@@ -3306,6 +3634,25 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
             "name": "atomic-fence-contract",
             "status": "blocked-as-expected",
         },
+    )
+    reference_accessor_requirements = []
+
+    def fake_reference_accessor_check(
+        *args, require_directx_toolchain, require_opengl_toolchain
+    ):
+        reference_accessor_requirements.append(
+            (require_directx_toolchain, require_opengl_toolchain)
+        )
+        return {
+            "name": "reference-accessor-lvalue-identity",
+            "status": "passed",
+            "runtimeParityClaimed": False,
+        }
+
+    monkeypatch.setattr(
+        module,
+        "_check_reference_accessor_lvalue_identity",
+        fake_reference_accessor_check,
     )
     monkeypatch.setattr(
         module,
@@ -3379,6 +3726,7 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
         "metal-kernel-scan",
         "metal-roundtrip",
         "atomic-fence-contract",
+        "reference-accessor-lvalue-identity",
         "directx-vulkan-frontier",
         "arange-opengl",
         "opengl-frontier",
@@ -3386,6 +3734,7 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
         "gemv-vulkan-toolchain",
         "runtime-readiness",
     ]
+    assert reference_accessor_requirements == [(False, True)]
     assert opengl_frontier_requirements == [True]
     assert result["scope"]["openglFrontierToolchainRequired"] is True
     assert result["scope"]["openglGemvToolchainRequired"] is True
@@ -3393,6 +3742,11 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
     assert result["scope"]["runtimeReadinessIncluded"] is True
     assert result["scope"]["runtimeFixtureExecutionIncluded"] is True
     assert result["scope"]["nativeRuntimeExecutionIncluded"] is True
+    assert result["scope"]["referenceAccessorProofIncluded"] is True
+    assert result["scope"]["referenceAccessorTargets"] == ["directx", "opengl"]
+    assert result["scope"]["referenceAccessorDirectxToolchainRequired"] is False
+    assert result["scope"]["referenceAccessorOpenglToolchainRequired"] is True
+    assert result["scope"]["runtimeParityClaimed"] is False
     assert result["scope"]["cleanFrontierSources"] == list(
         module.MLX_CLEAN_REDUCED_FRONTIER_SOURCES
     )
