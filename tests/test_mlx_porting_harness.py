@@ -8,6 +8,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 HARNESS_PATH = ROOT / "demos" / "integrations" / "mlx" / "run_mlx_porting.py"
+MLX_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "mlx-project-porting.yml"
 
 
 def _load_harness():
@@ -238,7 +239,14 @@ def _write_reference_accessor_report(
             struct ReferenceAccessorTile {
               float val_frags[4];
             };
+            struct ReferenceAccessorFragmentTile {
+              float2 val_frags[4];
+            };
+            struct ReferenceAccessorStoreLoop {
+              ReferenceAccessorFragmentTile nestedTile;
+            };
             RWStructuredBuffer<float> out : register(u0);
+            RWStructuredBuffer<float2> nestedOut : register(u1);
             void ReferenceAccessorOps__store(
                 inout float value,
                 RWStructuredBuffer<float> out) {
@@ -252,12 +260,28 @@ def _write_reference_accessor_report(
               ReferenceAccessorOps__store(
                   self.val_frags[((i * 2) + j)], out);
             }
+            void ReferenceAccessorStoreLoop__store(
+                in ReferenceAccessorStoreLoop self,
+                inout float2 stored,
+                int i,
+                int j) {
+              for (int k = 0; k < 2; ++k) {
+                stored[k] =
+                    self.nestedTile.val_frags[((i * 2) + j)][k];
+              }
+            }
             [numthreads(1, 1, 1)]
             void CSMain() {
               ReferenceAccessorTile tile;
               tile.val_frags[((1 * 2) + 1)] = 73.25f;
               out[0] = tile.val_frags[((1 * 2) + 1)];
               ReferenceAccessorTile__store(tile, out, 1, 1);
+              ReferenceAccessorStoreLoop nestedStore;
+              nestedStore.nestedTile.val_frags[((1 * 2) + 1)] =
+                  float2(11.5f, 29.75f);
+              float2 stored;
+              ReferenceAccessorStoreLoop__store(nestedStore, stored, 1, 1);
+              nestedOut[0] = stored;
             }
         """
         ),
@@ -267,7 +291,16 @@ def _write_reference_accessor_report(
             struct ReferenceAccessorTile {
               float val_frags[4];
             };
+            struct ReferenceAccessorFragmentTile {
+              vec2 val_frags[4];
+            };
+            struct ReferenceAccessorStoreLoop {
+              ReferenceAccessorFragmentTile nestedTile;
+            };
             layout(std430, binding = 0) buffer out_block { float out_values[]; };
+            layout(std430, binding = 1) buffer nested_out_block {
+              vec2 nested_out_values[];
+            };
             void ReferenceAccessorOps_store__glsl_out_out_float(
                 inout float value,
                 int out_offset) {
@@ -281,11 +314,28 @@ def _write_reference_accessor_report(
               ReferenceAccessorOps_store__glsl_out_out_float(
                   self.val_frags[((i * 2) + j)], out_offset);
             }
+            void ReferenceAccessorStoreLoop__store(
+                ReferenceAccessorStoreLoop self,
+                inout vec2 stored,
+                int i,
+                int j) {
+              for (int k = 0; k < 2; ++k) {
+                stored[k] =
+                    self.nestedTile.val_frags[((i * 2) + j)][k];
+              }
+            }
             void main() {
               ReferenceAccessorTile tile;
               tile.val_frags[((1 * 2) + 1)] = 73.25;
               out_values[0] = tile.val_frags[((1 * 2) + 1)];
               ReferenceAccessorTile_store__glsl_out_out_float(tile, 1, 1, 0);
+              ReferenceAccessorStoreLoop nestedStore;
+              nestedStore.nestedTile.val_frags[((1 * 2) + 1)] =
+                  vec2(11.5, 29.75);
+              vec2 stored;
+              ReferenceAccessorStoreLoop__store(
+                  nestedStore, stored, 1, 1);
+              nested_out_values[0] = stored;
             }
         """
         ),
@@ -462,8 +512,21 @@ def test_reference_accessor_fixture_translates_through_public_project_surface(
     source = source_path.read_text(encoding="utf-8")
     assert "constexpr thread float& frag_at" in source
     assert "constexpr const thread float& frag_at" in source
+    assert "constexpr thread float2& frag_at" in source
+    assert "constexpr const thread float2& frag_at" in source
     assert "return val_frags[i * width + j];" in source
     assert "ReferenceAccessorOps::store(frag_at(i, j), out);" in source
+    outer_declaration = "struct ReferenceAccessorStoreLoop {"
+    nested_member = "ReferenceAccessorFragmentTile nestedTile;"
+    nested_store = (
+        "void store(thread float2& stored, const short i, const short j) const"
+    )
+    nested_alias = "thread const auto& accum = nestedTile.frag_at(i, j);"
+    nested_read = "stored[k] = accum[k];"
+    assert source.index(outer_declaration) < source.index(nested_member)
+    assert source.index(nested_member) < source.index(nested_store)
+    assert source.index(nested_store) < source.index(nested_alias)
+    assert source.index(nested_alias) < source.index(nested_read)
     alias_declaration = "using tile_t = ReferenceAccessorTile;"
     receiver_declaration = "tile_t tile;"
     accessor_write = "tile.frag_at(1, 1) = 73.25f;"
@@ -505,6 +568,21 @@ def test_reference_accessor_fixture_translates_through_public_project_surface(
         assert const_read["passedDirectlyToHelper"] is True
         assert const_read["accessorCallEliminated"] is True
         assert const_read["kernelPathInvoked"] is True
+        nested_const_alias = module._reference_accessor_nested_const_alias_evidence(
+            generated,
+            target=target,
+        )
+        assert nested_const_alias["status"] == (
+            "verified-original-nested-storage-const-alias-read"
+        )
+        assert nested_const_alias["storageLvalue"].startswith(
+            "self.nestedTile.val_frags["
+        )
+        assert nested_const_alias["storageLvalue"].endswith("][k]")
+        assert nested_const_alias["aliasEliminated"] is True
+        assert nested_const_alias["accessorCallEliminated"] is True
+        assert nested_const_alias["readFromOriginalStorage"] is True
+        assert nested_const_alias["kernelPathInvoked"] is True
 
 
 def test_reference_accessor_check_records_structured_proof_and_native_validation(
@@ -606,10 +684,22 @@ def test_reference_accessor_check_records_structured_proof_and_native_validation
     assert result["status"] == "passed"
     assert result["proofStatus"] == "verified-original-storage-write"
     assert result["constReadProofStatus"] == ("verified-original-storage-const-read")
+    assert result["nestedConstAliasProofStatus"] == (
+        "verified-original-nested-storage-const-alias-read"
+    )
     assert result["translationSurface"] == "crosstl translate-project"
     assert result["accessorContract"]["storageExpression"] == (
         "val_frags[i * width + j]"
     )
+    assert result["accessorContract"]["nestedConstAliasRead"] == {
+        "outerType": "ReferenceAccessorStoreLoop",
+        "tileMember": "nestedTile",
+        "fragmentReturnType": "const thread float2&",
+        "enclosingMethod": "store(...) const",
+        "aliasDeclaration": "thread const auto& accum = nestedTile.frag_at(i, j)",
+        "readExpression": "accum[k]",
+        "storageExpression": "nestedTile.val_frags[i * width + j][k]",
+    }
     assert result["runtimeParityClaimed"] is False
     assert result["upstreamMlxRuntimeExecuted"] is False
     assert result["sourceSha256"] == module._sha256(
@@ -638,6 +728,24 @@ def test_reference_accessor_check_records_structured_proof_and_native_validation
         assert const_read["passedDirectlyToHelper"] is True
         assert const_read["accessorCallEliminated"] is True
         assert const_read["kernelPathInvoked"] is True
+        nested_const_alias = proof["nestedConstAliasEvidence"]
+        assert nested_const_alias["status"] == (
+            "verified-original-nested-storage-const-alias-read"
+        )
+        assert nested_const_alias["storageMember"] == "val_frags"
+        assert nested_const_alias["storagePath"] == "self.nestedTile.val_frags"
+        assert nested_const_alias["storageLvalue"] == (
+            "self.nestedTile.val_frags[((i*2)+j)][k]"
+        )
+        assert nested_const_alias["outerReceiver"] == "self"
+        assert nested_const_alias["tileMember"] == "nestedTile"
+        assert nested_const_alias["fragmentType"] == "float2"
+        assert nested_const_alias["aliasName"] == "accum"
+        assert nested_const_alias["aliasEliminated"] is True
+        assert nested_const_alias["accessorCallEliminated"] is True
+        assert nested_const_alias["indexedAliasRead"] == "accum[k]"
+        assert nested_const_alias["readFromOriginalStorage"] is True
+        assert nested_const_alias["kernelPathInvoked"] is True
         assert proof["nativeValidation"]["status"] == "validated"
         assert proof["nativeValidation"]["nativeCompiler"] == tool
         assert (mlx_root / proof["artifact"]).is_file()
@@ -708,6 +816,88 @@ def test_reference_accessor_evidence_rejects_value_copy_false_positives(
 
     with pytest.raises(module.PortingCheckError, match=message):
         module._reference_accessor_write_evidence(generated, target="opengl")
+
+
+@pytest.mark.parametrize(
+    ("generated", "message"),
+    [
+        pytest.param(
+            """
+            void ReferenceAccessorStoreLoop__store(
+                in ReferenceAccessorStoreLoop self) {
+              float2 accum =
+                  self.nestedTile.val_frags[((i * 2) + j)];
+              out[2 + k] = accum[k];
+            }
+            void CSMain() {
+              ReferenceAccessorStoreLoop__store(nestedStore);
+            }
+            """,
+            "accum reference alias",
+            id="alias-retained",
+        ),
+        pytest.param(
+            """
+            void ReferenceAccessorStoreLoop__store(
+                in ReferenceAccessorStoreLoop self) {
+              out[2 + k] = ReferenceAccessorFragmentTile__frag_at(
+                  self.nestedTile, i, j)[k];
+            }
+            void CSMain() {
+              ReferenceAccessorStoreLoop__store(nestedStore);
+            }
+            """,
+            "frag_at helper or call",
+            id="accessor-retained",
+        ),
+        pytest.param(
+            """
+            void ReferenceAccessorStoreLoop__store(
+                in ReferenceAccessorStoreLoop self) {
+              ReferenceAccessorFragmentTile tileCopy = self.nestedTile;
+              out[2 + k] = tileCopy.val_frags[((i * 2) + j)][k];
+            }
+            void CSMain() {
+              ReferenceAccessorStoreLoop__store(nestedStore);
+            }
+            """,
+            "self.nestedTile.val_frags storage indexed by k",
+            id="copied-nested-tile",
+        ),
+    ],
+)
+def test_nested_const_alias_evidence_rejects_unlowered_or_copied_reads(
+    generated, message
+):
+    module = _load_harness()
+
+    with pytest.raises(module.PortingCheckError, match=message):
+        module._reference_accessor_nested_const_alias_evidence(
+            generated,
+            target="directx",
+        )
+
+
+def test_mlx_workflow_accounts_nested_const_alias_native_validation():
+    workflow = MLX_WORKFLOW_PATH.read_text(encoding="utf-8")
+
+    assert "os: [ubuntu-latest, windows-latest, macOS-latest]" in workflow
+    assert '"nestedConstAliasProofStatus"' in workflow
+    assert 'proof["nestedConstAliasEvidence"]' in workflow
+    assert "verified-original-nested-storage-const-alias-read" in workflow
+    assert "nested const-alias evidence is incomplete" in workflow
+    assert '"Linux": "opengl"' in workflow
+    assert '"Windows": "directx"' in workflow
+    assert 'expected_directx_required = os.environ["RUNNER_OS"] == "Windows"' in (
+        workflow
+    )
+    assert 'expected_opengl_required = os.environ["RUNNER_OS"] == "Linux"' in workflow
+    assert '"directx": "dxc"' in workflow
+    assert '"opengl": "glslangValidator"' in workflow
+    assert 'native_validation["spirvValidator"] != "spirv-val"' in workflow
+    assert 'native_validation["required"] is not expected_required' in workflow
+    assert 'reference_accessor["runtimeParityClaimed"] is not False' in workflow
+    assert 'reference_accessor["upstreamMlxRuntimeExecuted"] is not False' in workflow
 
 
 def test_metal_roundtrip_validates_generated_artifact_natively(tmp_path, monkeypatch):

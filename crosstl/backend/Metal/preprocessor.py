@@ -6985,6 +6985,12 @@ class MetalPreprocessor(HLSLPreprocessor):
             local_constant_owner_spans,
             local_constant_type_aliases,
         )
+        instantiated_body = self._rewrite_const_reference_alias_bindings(
+            instantiated_body,
+            positioned_local_types,
+            rewrite_structs_by_name,
+            const_receivers={"self"} if method.is_const else set(),
+        )
         result: List[str] = []
         i = 0
         n = len(instantiated_body)
@@ -7830,6 +7836,403 @@ class MetalPreprocessor(HLSLPreprocessor):
             return None
         return bool(re.search(r"\bconst\b", leading) or declaration.group("trailing"))
 
+    def _rewrite_const_reference_alias_bindings(
+        self,
+        code: str,
+        variable_types: Dict[str, List[Tuple[int, str]]],
+        structs_by_name: Dict[str, _MetalStructDefinition],
+        *,
+        const_receivers: Set[str],
+    ) -> str:
+        """Inline proven local const-reference aliases without making a copy."""
+        if "auto" not in code or "&" not in code:
+            return code
+        pattern = re.compile(
+            r"\b(?P<qualifiers>(?:(?:thread|const)\s+)+)"
+            r"auto\s*&\s*(?P<alias>[A-Za-z_]\w*)\s*=\s*"
+        )
+        working = code
+        while True:
+            masked = self._mask_comments_and_literals(working)
+            bindings = list(pattern.finditer(masked))
+            if not bindings:
+                return working
+            scopes = self._find_lexical_brace_scopes(working)
+            call_argument_spans = self._potential_call_argument_spans(
+                working,
+                masked,
+                0,
+                len(working),
+            )
+            rewrites: List[Tuple[int, int, str]] = []
+            for binding in bindings:
+                qualifiers = binding.group("qualifiers").split()
+                if qualifiers.count("const") != 1 or qualifiers.count("thread") > 1:
+                    continue
+                boundary = max(
+                    masked.rfind(token, 0, binding.start()) for token in (";", "{", "}")
+                )
+                if masked[boundary + 1 : binding.start()].strip():
+                    continue
+                initializer = self._parse_dotted_reference_alias_initializer(
+                    working,
+                    masked,
+                    binding.end(),
+                )
+                if initializer is None:
+                    continue
+                receiver_parts, method_name, arg_open, arg_close, statement_end = (
+                    initializer
+                )
+                if len(receiver_parts) < 2:
+                    continue
+
+                receiver_type = self._resolve_declared_type_at(
+                    variable_types,
+                    receiver_parts[0],
+                    binding.start(),
+                )
+                receiver_info = self._nested_member_receiver_info(
+                    receiver_type,
+                    structs_by_name,
+                )
+                if receiver_info is None or receiver_info[1] != ".":
+                    continue
+                current_struct = structs_by_name.get(receiver_info[0])
+                if current_struct is None:
+                    continue
+                if receiver_parts[0] not in const_receivers:
+                    receiver_is_const = self._simple_receiver_constness(
+                        working,
+                        current_struct.name,
+                        receiver_parts[0],
+                        binding.start(),
+                    )
+                    if receiver_is_const is not True:
+                        continue
+
+                value_chain_is_valid = True
+                for member_name in receiver_parts[1:]:
+                    member = next(
+                        (
+                            item
+                            for item in current_struct.data_members
+                            if item.name == member_name
+                        ),
+                        None,
+                    )
+                    if (
+                        member is None
+                        or member.array_suffix
+                        or "*" in member.type_text
+                        or "&" in member.type_text
+                    ):
+                        value_chain_is_valid = False
+                        break
+                    member_type = self._normalize_inferred_type(member.type_text)
+                    current_struct = structs_by_name.get(member_type)
+                    if current_struct is None:
+                        value_chain_is_valid = False
+                        break
+                if not value_chain_is_valid:
+                    continue
+
+                reference_methods = self._concrete_reference_methods(
+                    current_struct,
+                    method_name,
+                )
+                if not reference_methods:
+                    continue
+                method = self._select_direct_reference_method(
+                    working,
+                    current_struct,
+                    reference_methods,
+                    arg_open,
+                    receiver_is_const=True,
+                )
+                _call_end, storage = self._direct_reference_accessor_rewrite(
+                    working,
+                    current_struct,
+                    method,
+                    receiver=".".join(receiver_parts),
+                    arg_open=arg_open,
+                )
+
+                scope_start, scope_end = self._innermost_lexical_scope(
+                    scopes,
+                    binding.start(),
+                    len(working),
+                )
+                if not (scope_start <= binding.start() < statement_end <= scope_end):
+                    continue
+                alias_replacements = self._const_reference_alias_use_replacements(
+                    working,
+                    masked,
+                    binding.group("alias"),
+                    statement_end,
+                    scope_end,
+                    storage,
+                )
+                if (
+                    alias_replacements is None
+                    or not self._reference_alias_capture_is_stable(
+                        working,
+                        masked,
+                        call_argument_spans,
+                        scope_start,
+                        statement_end,
+                        scope_end,
+                        storage,
+                        {
+                            match.group(0)
+                            for argument in self._split_top_level_commas(
+                                working[arg_open + 1 : arg_close]
+                            )
+                            for match in re.finditer(r"\b[A-Za-z_]\w*\b", argument)
+                            if not self._is_member_identifier_context(
+                                argument, match.start()
+                            )
+                        },
+                    )
+                ):
+                    continue
+                erased_binding = "".join(
+                    "\n" if char == "\n" else " "
+                    for char in working[binding.start() : statement_end]
+                )
+                rewrites.extend(
+                    [
+                        (binding.start(), statement_end, erased_binding),
+                        *alias_replacements,
+                    ]
+                )
+            if not rewrites:
+                return working
+            working = self._apply_text_replacements(working, rewrites)
+
+    def _parse_dotted_reference_alias_initializer(
+        self,
+        code: str,
+        masked: str,
+        start: int,
+    ) -> Optional[Tuple[List[str], str, int, int, int]]:
+        parts: List[str] = []
+        cursor = start
+        arg_open = -1
+        while True:
+            while cursor < len(masked) and masked[cursor].isspace():
+                cursor += 1
+            part, consumed = self._read_identifier(masked, cursor)
+            if not part:
+                return None
+            parts.append(part)
+            cursor += consumed
+            while cursor < len(masked) and masked[cursor].isspace():
+                cursor += 1
+            if cursor < len(masked) and masked[cursor] == ".":
+                cursor += 1
+                continue
+            if cursor < len(masked) and masked[cursor] == "(":
+                arg_open = cursor
+                break
+            return None
+        if len(parts) < 3:
+            return None
+        arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
+        if arg_close is None:
+            return None
+        statement_end = arg_close + 1
+        while statement_end < len(masked) and masked[statement_end].isspace():
+            statement_end += 1
+        if statement_end >= len(masked) or masked[statement_end] != ";":
+            return None
+        return parts[:-1], parts[-1], arg_open, arg_close, statement_end + 1
+
+    def _const_reference_alias_use_replacements(
+        self,
+        code: str,
+        masked: str,
+        alias: str,
+        lifetime_start: int,
+        lifetime_end: int,
+        storage: str,
+    ) -> Optional[List[Tuple[int, int, str]]]:
+        lifetime = code[lifetime_start:lifetime_end]
+        if any(
+            self._declared_local_name(statement) == alias
+            for statement in self._iter_simple_declarations(lifetime)
+        ):
+            return None
+        replacements: List[Tuple[int, int, str]] = []
+        alias_pattern = re.compile(rf"\b{re.escape(alias)}\b")
+        for match in alias_pattern.finditer(masked, lifetime_start, lifetime_end):
+            if self._is_member_identifier_context(masked, match.start()):
+                continue
+            cursor = match.end()
+            while cursor < lifetime_end and masked[cursor].isspace():
+                cursor += 1
+            if cursor >= lifetime_end or masked[cursor] != "[":
+                return None
+            while cursor < lifetime_end and masked[cursor] == "[":
+                close = self._find_matching_delimiter(code, cursor, "[", "]")
+                if close is None or close >= lifetime_end:
+                    return None
+                cursor = close + 1
+                while cursor < lifetime_end and masked[cursor].isspace():
+                    cursor += 1
+            previous = match.start() - 1
+            while previous >= lifetime_start and masked[previous].isspace():
+                previous -= 1
+            if previous >= lifetime_start and masked[previous] == "&":
+                return None
+            statement_boundary = max(
+                masked.rfind(token, lifetime_start, match.start())
+                for token in (";", "{", "}")
+            )
+            prefix = masked[statement_boundary + 1 : match.start()]
+            if re.search(r"&\s*[A-Za-z_]\w*\s*=\s*$", prefix):
+                return None
+            if re.match(
+                r"(?:\+\+|--|(?:(?:<<|>>|[+\-*/%&|^])?=(?!=)))",
+                masked[cursor:],
+            ):
+                return None
+            replacements.append((match.start(), match.end(), storage))
+        return replacements or None
+
+    def _reference_alias_capture_is_stable(
+        self,
+        code: str,
+        masked: str,
+        call_argument_spans: List[Tuple[int, int]],
+        capture_scope_start: int,
+        lifetime_start: int,
+        lifetime_end: int,
+        storage: str,
+        argument_captures: Set[str],
+    ) -> bool:
+        captured = {
+            match.group(0)
+            for match in re.finditer(r"\b[A-Za-z_]\w*\b", storage)
+            if not self._is_member_identifier_context(storage, match.start())
+        }
+        lifetime = code[lifetime_start:lifetime_end]
+        if any(
+            self._declared_local_name(statement) in captured
+            for statement in self._iter_simple_declarations(lifetime)
+        ):
+            return False
+        for name in captured:
+            name_pattern = re.compile(rf"\b{re.escape(name)}\b")
+            for match in name_pattern.finditer(
+                masked,
+                capture_scope_start,
+                lifetime_end,
+            ):
+                if self._is_member_identifier_context(masked, match.start()):
+                    continue
+                previous = match.start() - 1
+                while previous >= capture_scope_start and masked[previous].isspace():
+                    previous -= 1
+                statement_boundary = max(
+                    masked.rfind(token, capture_scope_start, match.start())
+                    for token in (";", "{", "}")
+                )
+                prefix = masked[statement_boundary + 1 : match.start()]
+                reference_escape = (
+                    previous >= capture_scope_start and masked[previous] == "&"
+                ) or re.search(r"&\s*[A-Za-z_]\w*\s*=\s*$", prefix)
+                if reference_escape and (
+                    match.start() >= lifetime_start or name in argument_captures
+                ):
+                    return False
+                if match.start() < lifetime_start:
+                    continue
+                if previous >= lifetime_start - 1 and masked[
+                    max(lifetime_start, previous - 1) : previous + 1
+                ] in {"++", "--"}:
+                    return False
+                if name in argument_captures and any(
+                    lifetime_start <= start < match.start() < end <= lifetime_end
+                    for start, end in call_argument_spans
+                ):
+                    return False
+                cursor = self._reference_capture_access_end(
+                    code,
+                    masked,
+                    match.end(),
+                    lifetime_end,
+                )
+                if re.match(
+                    r"(?:\+\+|--|(?:(?:<<|>>|[+\-*/%&|^])?=(?!=)))",
+                    masked[cursor:lifetime_end],
+                ):
+                    return False
+        return True
+
+    def _reference_capture_access_end(
+        self,
+        code: str,
+        masked: str,
+        start: int,
+        limit: int,
+    ) -> int:
+        cursor = start
+        while cursor < limit:
+            while cursor < limit and masked[cursor].isspace():
+                cursor += 1
+            if masked.startswith("->", cursor):
+                cursor += 2
+            elif masked[cursor : cursor + 1] == ".":
+                cursor += 1
+            elif masked[cursor : cursor + 1] == "[":
+                close = self._find_matching_delimiter(code, cursor, "[", "]")
+                if close is None or close >= limit:
+                    return cursor
+                cursor = close + 1
+                continue
+            else:
+                break
+            while cursor < limit and masked[cursor].isspace():
+                cursor += 1
+            _member, consumed = self._read_identifier(masked, cursor)
+            if not consumed:
+                break
+            cursor += consumed
+        while cursor < limit and masked[cursor].isspace():
+            cursor += 1
+        return cursor
+
+    def _potential_call_argument_spans(
+        self,
+        code: str,
+        masked: str,
+        start: int,
+        end: int,
+    ) -> List[Tuple[int, int]]:
+        pattern = re.compile(
+            r"\b(?P<callee>[A-Za-z_]\w*" r"(?:\s*(?:\.|->|::)\s*[A-Za-z_]\w*)*)\s*\("
+        )
+        spans: List[Tuple[int, int]] = []
+        control_names = {"if", "for", "while", "switch", "sizeof", "decltype"}
+        for match in pattern.finditer(masked, start, end):
+            callee_names = IDENTIFIER_RE.findall(match.group("callee"))
+            if not callee_names or callee_names[-1] in control_names:
+                continue
+            open_paren = match.end() - 1
+            close_paren = self._find_matching_delimiter(code, open_paren, "(", ")")
+            if close_paren is not None and close_paren < end:
+                spans.append((open_paren, close_paren))
+        return spans
+
+    def _mask_comments_and_literals(self, code: str) -> str:
+        masked = list(code)
+        for start, end in self._find_comment_and_literal_spans(code):
+            for index in range(start, end):
+                if masked[index] != "\n":
+                    masked[index] = " "
+        return "".join(masked)
+
     def _build_direct_reference_accessor_rewrite(
         self,
         code: str,
@@ -7856,6 +8259,30 @@ class MetalPreprocessor(HLSLPreprocessor):
             self._reject_reference_returning_method_call(
                 code, struct, method, arg_open, arg_close
             )
+
+        return self._direct_reference_accessor_rewrite(
+            code,
+            struct,
+            method,
+            receiver=receiver,
+            arg_open=arg_open,
+        )
+
+    def _direct_reference_accessor_rewrite(
+        self,
+        code: str,
+        struct: _MetalStructDefinition,
+        method: _MetalStructMethod,
+        *,
+        receiver: str,
+        arg_open: int,
+    ) -> Tuple[int, str]:
+        arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
+        if arg_close is None:
+            self._reject_reference_returning_method_call(
+                code, struct, method, arg_open, arg_open
+            )
+            raise AssertionError("reference-return rejection must raise")
 
         expression = self._direct_reference_return_expression(struct, method)
         if expression is None:

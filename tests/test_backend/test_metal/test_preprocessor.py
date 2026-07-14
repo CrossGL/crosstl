@@ -2627,6 +2627,229 @@ def test_preprocessor_constant_reference_accessor_receiver_fails_closed():
     assert error.source_location["length"] > 0
 
 
+def test_preprocessor_substitutes_nested_const_reference_alias_uses():
+    code = """
+    struct Tile {
+        float2 val_frags[4];
+        thread float2& frag_at(short i, short j) {
+            return val_frags[i * 2 + j];
+        }
+        const thread float2& frag_at(short i, short j) const {
+            return val_frags[i * 2 + j];
+        }
+    };
+
+    struct StoreLoop {
+        Tile Ctile;
+        void store(short i, short j, device float* output) const {
+            thread const auto& accum = Ctile.frag_at(i, j);
+            for (short k = 0; k < 2; ++k) {
+                output[k] = accum[k];
+            }
+        }
+    };
+
+    void run(thread const StoreLoop& loop, device float* output) {
+        loop.store(0, 1, output);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "const auto& accum" not in output
+    assert "frag_at(i, j)" not in output
+    assert "output[k] = self.Ctile.val_frags[(i) * 2 + (j)][k];" in output
+
+
+def _nested_const_reference_alias_source(
+    *,
+    accessor_arguments="i, j",
+    alias_lifetime="output[0] = accum[0];",
+    alias_setup="",
+    accessor_declarations=None,
+    supporting_declarations="",
+    tile_member="Tile Ctile;",
+    accessor_receiver="Ctile",
+):
+    if accessor_declarations is None:
+        accessor_declarations = """
+        thread float2& frag_at(short i, short j) {
+            return val_frags[i * 2 + j];
+        }
+        const thread float2& frag_at(short i, short j) const {
+            return val_frags[i * 2 + j];
+        }
+        """
+    accessor_call = (
+        f"{accessor_receiver}frag_at"
+        if accessor_receiver.endswith("->")
+        else f"{accessor_receiver}.frag_at"
+    )
+    return f"""
+    struct Tile {{
+        float2 val_frags[4];
+        {accessor_declarations}
+    }};
+    struct TileCarrier {{ thread Tile* tile; }};
+    {supporting_declarations}
+    struct StoreLoop {{
+        {tile_member}
+        void store(short i, short j, device float* output) const {{
+            {alias_setup}
+            thread const auto& accum =
+                {accessor_call}({accessor_arguments});
+            {alias_lifetime}
+        }}
+    }};
+    void run(thread const StoreLoop& loop, device float* output) {{
+        loop.store(0, 1, output);
+    }}
+    """
+
+
+def test_preprocessor_substitutes_nested_const_reference_alias_through_value_chain():
+    code = _nested_const_reference_alias_source(
+        supporting_declarations="struct TileLayer { Tile tile; };",
+        tile_member="TileLayer layer;",
+        accessor_receiver="layer.tile",
+        alias_lifetime="""
+        output[0] = accum[0];
+        output[1] = accum[1];
+        """,
+    )
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "const auto& accum" not in output
+    assert "layer.tile.frag_at(i, j)" not in output
+    assert "output[0] = self.layer.tile.val_frags[(i) * 2 + (j)][0];" in output
+    assert "output[1] = self.layer.tile.val_frags[(i) * 2 + (j)][1];" in output
+
+
+def test_preprocessor_substitutes_sequential_nested_const_reference_aliases():
+    code = _nested_const_reference_alias_source(
+        alias_lifetime="""
+        thread const auto& alternate = Ctile.frag_at(j, i);
+        output[0] = accum[0];
+        output[1] = alternate[1];
+        """,
+    )
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "const auto& accum" not in output
+    assert "const auto& alternate" not in output
+    assert "output[0] = self.Ctile.val_frags[(i) * 2 + (j)][0];" in output
+    assert "output[1] = self.Ctile.val_frags[(j) * 2 + (i)][1];" in output
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        pytest.param(
+            _nested_const_reference_alias_source(
+                tile_member="TileCarrier carrier;",
+                accessor_receiver="carrier.tile->",
+            ),
+            id="pointer-traversal",
+        ),
+        pytest.param(
+            _nested_const_reference_alias_source(
+                accessor_declarations="""
+                const thread float2& frag_at(short i, short j) const {
+                    return val_frags[i * 2 + j];
+                }
+                const thread float2& frag_at(int i, int j) const {
+                    return val_frags[i * 2 + j];
+                }
+                """,
+            ),
+            id="ambiguous-overload",
+        ),
+        pytest.param(
+            _nested_const_reference_alias_source(
+                alias_lifetime="""
+                {
+                    float2 accum = float2(0.0f);
+                    output[0] = accum[0];
+                }
+                """,
+            ),
+            id="shadowed-alias",
+        ),
+        pytest.param(
+            _nested_const_reference_alias_source(
+                alias_lifetime="thread const float2* escaped = &accum;",
+            ),
+            id="reference-escape",
+        ),
+        pytest.param(
+            _nested_const_reference_alias_source(accessor_arguments="i++, j"),
+            id="side-effectful-argument",
+        ),
+        pytest.param(
+            _nested_const_reference_alias_source(
+                alias_lifetime="i += 1; output[0] = accum[0];",
+            ),
+            id="captured-index-mutation",
+        ),
+        pytest.param(
+            _nested_const_reference_alias_source(
+                alias_lifetime=(
+                    "thread short& index_alias = i; "
+                    "index_alias += 1; output[0] = accum[0];"
+                ),
+            ),
+            id="captured-index-reference",
+        ),
+        pytest.param(
+            _nested_const_reference_alias_source(
+                alias_lifetime="""
+                {
+                    short i = 0;
+                    output[0] = accum[0];
+                }
+                """,
+            ),
+            id="captured-index-shadow",
+        ),
+        pytest.param(
+            _nested_const_reference_alias_source(
+                alias_setup="thread short& index_alias = i;",
+                alias_lifetime="index_alias += 1; output[0] = accum[0];",
+            ),
+            id="preexisting-captured-index-reference",
+        ),
+        pytest.param(
+            _nested_const_reference_alias_source(
+                accessor_arguments="index.row, j",
+                alias_setup="Index index{ i };",
+                alias_lifetime="index.row += 1; output[0] = accum[0];",
+                supporting_declarations="struct Index { short row; };",
+            ),
+            id="captured-index-member-mutation",
+        ),
+        pytest.param(
+            _nested_const_reference_alias_source(
+                alias_lifetime="bump(i); output[0] = accum[0];",
+                supporting_declarations="void bump(thread short& value);",
+            ),
+            id="captured-index-reference-argument",
+        ),
+    ],
+)
+def test_preprocessor_nested_const_reference_alias_fails_closed(code):
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.project_diagnostic_code == "project.translate.metal-struct-method"
+    assert error.missing_capabilities == ("struct.reference-return",)
+    assert error.method_name == "frag_at"
+    assert error.reason == "reference-return-identity-unsupported"
+    assert "preserving the returned lvalue identity" in str(error)
+
+
 def test_preprocessor_leaves_unknown_struct_member_calls_unchanged():
     code = """
     void invoke(thread ExternalState& state) {

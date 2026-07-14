@@ -918,10 +918,18 @@ exactly indexed fixed-array element. Simple receiver declarations can use a
 lexically visible ``using`` or ``typedef`` chain that resolves to the concrete
 struct; alias scope and declaration order are honored before the accessor is
 rewritten to original storage. A proven ``thread const`` receiver selects one
-matching const accessor, including implicit calls from a const struct method.
-Constant-address-space receivers, unresolved aliases, pointer or nested
-receivers, ambiguous overloads, reference escapes, side-effectful indices, and
-indirect storage remain fail-closed with
+matching const accessor, including implicit calls from a const struct method. A
+local ``thread const auto&`` binding may also read through an accessor on a
+nested value member when the member path contains no pointer, reference, or
+array traversal. The binding is replaced with the original fixed-array storage
+only when every use is an indexed read and the accessor arguments cannot change
+through a reference, member mutation, or subsequent call during the binding's
+lifetime.
+
+Constant-address-space receivers, unresolved aliases, pointer-member
+receivers, ambiguous overloads, mutable or escaping local reference bindings,
+side-effectful or unstable indices, non-indexed alias uses, and indirect storage
+remain fail-closed with
 ``project.translate.metal-struct-method`` rather than being converted to
 value-returning helpers.
 
