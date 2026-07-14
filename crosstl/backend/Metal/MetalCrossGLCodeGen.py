@@ -3649,9 +3649,7 @@ class MetalToCrossGLConverter:
         type_bindings = {}
         for index, (kind, name) in enumerate(parameters):
             explicit = index < len(explicit_arguments)
-            expression = (
-                explicit_arguments[index] if explicit else defaults.get(name)
-            )
+            expression = explicit_arguments[index] if explicit else defaults.get(name)
             if expression is None:
                 raise MetalTemplateArgumentResolutionError(
                     function.name,
@@ -3757,11 +3755,7 @@ class MetalToCrossGLConverter:
             tuple(
                 (
                     kind,
-                    (
-                        value_bindings[name]
-                        if kind == "value"
-                        else type_bindings[name]
-                    ),
+                    (value_bindings[name] if kind == "value" else type_bindings[name]),
                 )
                 for kind, name in getattr(function, "template_parameters", None) or []
                 if name
@@ -3878,9 +3872,7 @@ class MetalToCrossGLConverter:
         )
         next_count = self.materialized_template_specialization_count + 1
         if next_count > self.max_template_specializations:
-            requested_signature = (
-                f"{function.name}<{', '.join(requested_arguments)}>"
-            )
+            requested_signature = f"{function.name}<{', '.join(requested_arguments)}>"
             raise MetalTemplateSpecializationError(
                 "Metal template specialization limit exceeded while "
                 f"materializing '{requested_signature}'; {next_count} unique "
@@ -3939,8 +3931,7 @@ class MetalToCrossGLConverter:
             error.argument_kind,
             source_location or error.source_location,
             requested_specialization=(
-                getattr(error, "requested_specialization", None)
-                or error.selected_call
+                getattr(error, "requested_specialization", None) or error.selected_call
             ),
             enclosing_function=self.current_function_name,
             enclosing_specialization=self.current_function_specialization,
@@ -6671,9 +6662,7 @@ class MetalToCrossGLConverter:
         ):
             return None
         normalized = self.normalized_metal_type(
-            self.substitute_template_type_text(
-                self.resolve_local_type_aliases(text)
-            )
+            self.substitute_template_type_text(self.resolve_local_type_aliases(text))
         )
         mapped = self.map_type(normalized)
         if (
