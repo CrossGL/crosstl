@@ -22,7 +22,7 @@
         "path": "crosstl/backend/DirectX"
       },
       "signals": {
-        "unsupported_marker_count": 339,
+        "unsupported_marker_count": 342,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/directx_codegen.py",
@@ -123,7 +123,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1240
+        "test_count": 1249
       },
       "translator_codegen": {
         "exists": true,

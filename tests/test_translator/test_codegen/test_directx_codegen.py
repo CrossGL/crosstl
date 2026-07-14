@@ -43,6 +43,7 @@ from crosstl.translator.ast import (
     create_legacy_shader_node,
 )
 from crosstl.translator.codegen.directx_codegen import (
+    DirectXAggregateConditionalError,
     DirectXAtomicFenceLoweringError,
     DirectXCooperativeMatrixUnsupportedError,
     DirectXPrivatePointerParameterError,
@@ -38527,6 +38528,337 @@ def test_hlsl_private_scalar_pointer_accepts_proven_zero_loop_index():
     assert "float observed = mean;" in generated
     assert "x[i]" not in generated
     assert "float*" not in generated
+
+
+def test_hlsl_aggregate_conditional_initializer_preserves_selected_branch(tmp_path):
+    shader = """
+    shader AggregateConditionalInitializer {
+        struct Payload {
+            float value;
+        };
+
+        bool choose(inout uint calls) {
+            calls += 1u;
+            return calls == 1u;
+        }
+
+        Payload make_left(inout uint calls) {
+            calls += 10u;
+            Payload result = { 1.0 };
+            return result;
+        }
+
+        Payload make_right(inout uint calls) {
+            calls += 100u;
+            Payload result = { 2.0 };
+            return result;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                uint calls = 0u;
+                Payload selected = choose(calls)
+                    ? make_left(calls)
+                    : make_right(calls);
+                float observed = selected.value + float(calls);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Payload selected;" in generated
+    assert "if (choose(calls)) {" in generated
+    assert "selected = make_left(calls);" in generated
+    assert "selected = make_right(calls);" in generated
+    assert generated.count("choose(calls)") == 1
+    assert generated.count("make_left(calls)") == 1
+    assert generated.count("make_right(calls)") == 1
+    assert "? make_left" not in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_const_aggregate_conditional_uses_mutable_control_flow_local(tmp_path):
+    shader = """
+    shader ConstAggregateConditionalInitializer {
+        struct Payload {
+            float value;
+        };
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                Payload left = { 1.0 };
+                Payload right = { 2.0 };
+                bool use_left = true;
+                const Payload selected = use_left ? left : right;
+                float observed = selected.value;
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Payload selected;" in generated
+    assert "const Payload selected;" not in generated
+    assert "selected = left;" in generated
+    assert "selected = right;" in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_aggregate_conditional_ignores_stale_scalar_expression_context(tmp_path):
+    shader = """
+    shader AggregateConditionalScalarContext {
+        struct Bits {
+            uint2 first;
+            uint2 second;
+        };
+
+        Bits make_bits(uint2 first, uint2 second) {
+            Bits result = { first, second };
+            return result;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                bool drop = false;
+                Bits bits = make_bits(
+                    uint2(tid.x, 0u),
+                    uint2(tid.y, drop ? 0u : tid.y)
+                );
+                uint observed = bits.second.y;
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "(drop ? 0u : tid.y)" in generated
+    assert "Bits bits = make_bits(" in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_aggregate_conditional_assignment_and_return_use_control_flow(
+    tmp_path,
+):
+    shader = """
+    shader AggregateConditionalAssignmentReturn {
+        struct Payload {
+            float value;
+        };
+
+        Payload select_value(bool use_left, Payload left, Payload right) {
+            return use_left ? left : right;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                Payload left = { 1.0 };
+                Payload right = { 2.0 };
+                Payload selected = left;
+                bool use_left = true;
+                selected = use_left ? left : right;
+                Payload returned = select_value(use_left, left, right);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "if (use_left) {\n        return left;" in generated
+    assert "} else {\n        return right;" in generated
+    assert "if (use_left) {\n        selected = left;" in generated
+    assert "} else {\n        selected = right;" in generated
+    assert "use_left ? left : right" not in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_aggregate_conditional_call_argument_is_materialized(tmp_path):
+    shader = """
+    shader AggregateConditionalCallArgument {
+        struct Payload {
+            float value;
+        };
+
+        float consume(Payload payload) {
+            return payload.value;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                Payload left = { 1.0 };
+                Payload right = { 2.0 };
+                bool use_left = true;
+                float observed = consume(use_left ? left : right);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    temporary = re.search(
+        r"Payload (__crossgl_aggregate_conditional_\d+);",
+        generated,
+    )
+    assert temporary is not None
+    temporary_name = temporary.group(1)
+    assert f"{temporary_name} = left;" in generated
+    assert f"{temporary_name} = right;" in generated
+    assert f"float observed = consume({temporary_name});" in generated
+    assert "consume((use_left ? left : right))" not in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_fixed_array_conditional_copies_only_the_selected_array(tmp_path):
+    shader = """
+    shader FixedArrayConditional {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                float left[2] = { 1.0, 2.0 };
+                float right[2] = { 3.0, 4.0 };
+                bool use_left = true;
+                float selected[2] = use_left ? left : right;
+                float observed = selected[0] + selected[1];
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float selected[2];" in generated
+    assert "if (use_left) {" in generated
+    assert "selected[0] = left[0];" in generated
+    assert "selected[1] = left[1];" in generated
+    assert "selected[0] = right[0];" in generated
+    assert "selected[1] = right[1];" in generated
+    assert "selected = left" not in generated
+    assert "selected = right" not in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_nested_aggregate_conditional_uses_whole_value_assignment(tmp_path):
+    shader = """
+    shader NestedAggregateConditional {
+        struct Inner {
+            float value;
+        };
+
+        struct Outer {
+            Inner inner;
+            float weights[2];
+        };
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                Inner first_inner = { 1.0 };
+                Inner second_inner = { 2.0 };
+                Outer left;
+                left.inner = first_inner;
+                left.weights[0] = 3.0;
+                left.weights[1] = 4.0;
+                Outer right;
+                right.inner = second_inner;
+                right.weights[0] = 5.0;
+                right.weights[1] = 6.0;
+                bool use_left = true;
+                Outer selected = use_left ? left : right;
+                float observed = selected.inner.value + selected.weights[0];
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Outer selected;" in generated
+    assert "selected = left;" in generated
+    assert "selected = right;" in generated
+    assert "use_left ? left : right" not in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_aggregate_conditional_reports_unsafe_call_argument_order():
+    shader = """
+    shader AggregateConditionalCallOrder {
+        struct Payload {
+            float value;
+        };
+
+        float observe(float first, Payload payload) {
+            return first + payload.value;
+        }
+
+        float side_effect() {
+            return 1.0;
+        }
+
+        float read(bool use_left, Payload left, Payload right) {
+            return observe(side_effect(), use_left ? left : right);
+        }
+    }
+    """
+
+    with pytest.raises(DirectXAggregateConditionalError) as excinfo:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = excinfo.value
+    assert (
+        diagnostic.project_diagnostic_code
+        == "project.translate.directx-aggregate-conditional-unsupported"
+    )
+    assert diagnostic.missing_capabilities == (
+        "directx.aggregate-conditional-lowering",
+    )
+    assert diagnostic.aggregate_type == "Payload"
+    assert diagnostic.target == "HLSL"
+    assert diagnostic.context == "call-argument"
+    assert diagnostic.reason == "sibling-evaluation-order"
+
+
+def test_hlsl_aggregate_conditional_reports_unsupported_nested_call_argument():
+    shader = """
+    shader AggregateConditionalNestedCallArgument {
+        struct Payload {
+            float value;
+        };
+
+        float consume(float value) {
+            return value;
+        }
+
+        float read(bool use_left, Payload left, Payload right) {
+            return consume((use_left ? left : right).value);
+        }
+    }
+    """
+
+    with pytest.raises(DirectXAggregateConditionalError) as excinfo:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = excinfo.value
+    assert diagnostic.aggregate_type == "Payload"
+    assert diagnostic.target == "HLSL"
+    assert diagnostic.context == "expression"
+    assert diagnostic.reason == "statement-context-required"
 
 
 if __name__ == "__main__":
