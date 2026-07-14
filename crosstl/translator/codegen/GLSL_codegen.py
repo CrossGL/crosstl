@@ -3341,8 +3341,7 @@ class GLSLCodeGen:
         constants = list(getattr(ast, "constants", []) or [])
         self.glsl_specialization_constant_names = {
             node.name
-            for node in constants
-            + list(getattr(ast, "global_variables", []) or [])
+            for node in constants + list(getattr(ast, "global_variables", []) or [])
             if getattr(node, "name", None)
             and self.glsl_specialization_constant_attributes(node)
         }

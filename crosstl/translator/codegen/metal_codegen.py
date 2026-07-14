@@ -4,10 +4,10 @@ import ast as py_ast
 import re
 from hashlib import sha1
 
-from ...glsl_builtins import GLSL_BUILTIN_INT_LIMITS
 from ...backend.common_ast import AssignmentNode as BackendAssignmentNode
 from ...backend.common_ast import ReturnNode as BackendReturnNode
 from ...backend.common_ast import VariableNode as BackendVariableNode
+from ...glsl_builtins import GLSL_BUILTIN_INT_LIMITS
 from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,

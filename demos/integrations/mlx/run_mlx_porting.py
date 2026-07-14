@@ -2591,8 +2591,7 @@ def _check_opengl_frontier(
                 f"for {name}",
             )
             _require(
-                re.search(rf"\buniform\s+\w+\s+{re.escape(name)}\b", generated)
-                is None,
+                re.search(rf"\buniform\s+\w+\s+{re.escape(name)}\b", generated) is None,
                 f"OpenGL artifact lowered specialization input {name} as a uniform",
             )
         specialization_evidence[source] = dict(expected_constants)

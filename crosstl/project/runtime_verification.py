@@ -3890,9 +3890,7 @@ def _parse_runtime_specialization_constant(
             value.get("overrideStatus"),
             field_name=f"{field_name}.overrideStatus",
         ),
-        status=_optional_string(
-            value.get("status"), field_name=f"{field_name}.status"
-        ),
+        status=_optional_string(value.get("status"), field_name=f"{field_name}.status"),
         value_provenance=dict(value_provenance),
         metadata=_parse_runtime_contract_item_metadata(value, field_name=field_name),
     )

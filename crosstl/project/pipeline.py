@@ -3320,8 +3320,10 @@ def _variant_specialization_constants(
 ) -> dict[str, dict[str, bool | int | float | str]]:
     result: dict[str, dict[str, bool | int | float | str]] = {}
     for name, value in variants.items():
-        if not isinstance(name, str) or not name.strip() or not isinstance(
-            value, Mapping
+        if (
+            not isinstance(name, str)
+            or not name.strip()
+            or not isinstance(value, Mapping)
         ):
             continue
         variant_path = _mapping_key_path("project.variants", name)
@@ -7939,9 +7941,7 @@ def load_project_config(
         raise ValueError("crosstl.toml [project.variants] must be a table")
     specialization_constants = _as_specialization_value_mapping(
         project.get(SPECIALIZATION_CONSTANTS_CONFIG_KEY),
-        field_name=(
-            f"crosstl.toml [project.{SPECIALIZATION_CONSTANTS_CONFIG_KEY}]"
-        ),
+        field_name=(f"crosstl.toml [project.{SPECIALIZATION_CONSTANTS_CONFIG_KEY}]"),
     )
     output_dir = _as_optional_non_empty_str(
         project.get("output_dir"),
@@ -18724,7 +18724,11 @@ def _resolved_project_specialization_constants(
         selectors = [declaration.name]
         if declaration.constant_id is not None:
             selectors.append(str(declaration.constant_id))
-        matches = [(selector, configured[selector]) for selector in selectors if selector in configured]
+        matches = [
+            (selector, configured[selector])
+            for selector in selectors
+            if selector in configured
+        ]
         resolved_matches: list[tuple[str, Any, dict[str, Any]]] = []
         for selector, (raw_value, provenance) in matches:
             valid, value, reason = _specialization_value_for_type(
@@ -18911,9 +18915,7 @@ def _source_location_from_specialization_record(
         offset=max(0, int(location.get("offset", 0))),
         length=max(0, int(location.get("length", 0))),
         end_line=max(1, int(location.get("endLine", location.get("line", 1)))),
-        end_column=max(
-            1, int(location.get("endColumn", location.get("column", 1)))
-        ),
+        end_column=max(1, int(location.get("endColumn", location.get("column", 1)))),
         end_offset=max(0, int(location.get("endOffset", 0))),
     )
 
@@ -18923,7 +18925,9 @@ def _crossgl_specialization_literal(value: Any, source_type: str) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, int):
-        return f"{value}u" if normalized_type.startswith(("u", "unsigned")) else str(value)
+        return (
+            f"{value}u" if normalized_type.startswith(("u", "unsigned")) else str(value)
+        )
     if isinstance(value, float):
         text = repr(value)
         return text if "." in text or "e" in text.lower() else f"{text}.0"
@@ -19008,7 +19012,9 @@ def _materialize_crossgl_specialization_constants(
                 variant=variant,
                 missing_capabilities=["specialization.constant.identity"],
             )
-            raise ProjectSpecializationError(diagnostic.message, diagnostics=(diagnostic,))
+            raise ProjectSpecializationError(
+                diagnostic.message, diagnostics=(diagnostic,)
+            )
         attribute_pattern = (
             r"@(?:function_constant|constant_id)\s*\(\s*"
             rf"{re.escape(str(constant_id))}\s*\)"
@@ -19043,7 +19049,9 @@ def _materialize_crossgl_specialization_constants(
                 variant=variant,
                 missing_capabilities=["specialization.constant.materialization"],
             )
-            raise ProjectSpecializationError(diagnostic.message, diagnostics=(diagnostic,))
+            raise ProjectSpecializationError(
+                diagnostic.message, diagnostics=(diagnostic,)
+            )
     try:
         cgl_spec.parse(materialized)
     except Exception as exc:
@@ -19057,7 +19065,9 @@ def _materialize_crossgl_specialization_constants(
             variant=variant,
             missing_capabilities=["specialization.constant.materialization"],
         )
-        raise ProjectSpecializationError(diagnostic.message, diagnostics=(diagnostic,)) from exc
+        raise ProjectSpecializationError(
+            diagnostic.message, diagnostics=(diagnostic,)
+        ) from exc
     return materialized
 
 
@@ -19150,9 +19160,7 @@ def translate_project(
             source_options=config.source_options,
             variants=config.variants,
             specialization_constants=config.specialization_constants,
-            variant_specialization_constants=(
-                config.variant_specialization_constants
-            ),
+            variant_specialization_constants=(config.variant_specialization_constants),
             selected_variants=config.selected_variants,
             external_corpus_manifest=config.external_corpus_manifest,
         )
@@ -22121,9 +22129,7 @@ def _runtime_manifest_merge_specialization_constants(
 ) -> dict[str, Any]:
     reflected_constants = [
         dict(constant)
-        for constant in _record_sequence(
-            host_interface.get("specializationConstants")
-        )
+        for constant in _record_sequence(host_interface.get("specializationConstants"))
         if isinstance(constant, Mapping)
     ]
     source_constants = [
@@ -22153,8 +22159,7 @@ def _runtime_manifest_merge_specialization_constants(
             source_constants,
             artifact_constants,
         )
-        if (identity := _runtime_specialization_constant_identity(constant))
-        is not None
+        if (identity := _runtime_specialization_constant_identity(constant)) is not None
     }
     for constant in specialization_constants:
         identity = _runtime_specialization_constant_identity(constant)
@@ -22190,9 +22195,7 @@ def _runtime_manifest_merge_specialization_constants(
         details = diagnostic.get("details")
         resource = details.get("resource") if isinstance(details, Mapping) else None
         conflicting = (
-            details.get("conflictingResource")
-            if isinstance(details, Mapping)
-            else None
+            details.get("conflictingResource") if isinstance(details, Mapping) else None
         )
         if resource in specialization_names or conflicting in specialization_names:
             continue
@@ -22509,9 +22512,7 @@ def _runtime_manifest_specialization_constants(
         return []
     return [
         dict(constant)
-        for constant in _record_sequence(
-            host_interface.get("specializationConstants")
-        )
+        for constant in _record_sequence(host_interface.get("specializationConstants"))
         if isinstance(constant, Mapping)
     ]
 
@@ -23269,9 +23270,7 @@ def _runtime_binding_specialization_constants(
     if not records:
         host_interface = artifact.get("hostInterface")
         if isinstance(host_interface, Mapping):
-            records = _record_sequence(
-                host_interface.get("specializationConstants")
-            )
+            records = _record_sequence(host_interface.get("specializationConstants"))
     return [dict(record) for record in records if isinstance(record, Mapping)]
 
 
@@ -23461,9 +23460,7 @@ def _runtime_binding_manifest_entries(
             entry_points = [None]
         resource_bindings = _runtime_binding_resource_bindings(artifact)
         scalar_constants = _runtime_binding_scalar_constants(root_path, artifact)
-        specialization_constants = _runtime_binding_specialization_constants(
-            artifact
-        )
+        specialization_constants = _runtime_binding_specialization_constants(artifact)
         for index, entry_point in enumerate(entry_points):
             entries.append(
                 {
@@ -34241,9 +34238,7 @@ def _project_config_for_scan_validation(
         "project.specializationConstants", specialization_constants
     ):
         return None
-    raw_variant_specializations = project.get(
-        "variantSpecializationConstants", {}
-    )
+    raw_variant_specializations = project.get("variantSpecializationConstants", {})
     if _variant_specialization_mapping_contract_reasons(
         "project.variantSpecializationConstants", raw_variant_specializations
     ):
@@ -35654,9 +35649,7 @@ def _project_config_for_include_validation(
         "project.specializationConstants", specialization_constants
     ):
         specialization_constants = {}
-    raw_variant_specializations = project.get(
-        "variantSpecializationConstants", {}
-    )
+    raw_variant_specializations = project.get("variantSpecializationConstants", {})
     if _variant_specialization_mapping_contract_reasons(
         "project.variantSpecializationConstants", raw_variant_specializations
     ):
@@ -36476,9 +36469,7 @@ def _variant_specialization_mapping_contract_reasons(
         else:
             variant_prefix = _mapping_key_path(prefix, variant)
         reasons.extend(
-            _specialization_value_mapping_contract_reasons(
-                variant_prefix, constants
-            )
+            _specialization_value_mapping_contract_reasons(variant_prefix, constants)
         )
     return reasons
 
@@ -37464,9 +37455,7 @@ def _project_metadata_contract_reasons(
             )
 
     specialization_constants = project.get("specializationConstants")
-    specialization_constants_are_mapping = isinstance(
-        specialization_constants, Mapping
-    )
+    specialization_constants_are_mapping = isinstance(specialization_constants, Mapping)
     if _optional_project_field(
         project, "specializationConstants", required=require_full_metadata
     ):
@@ -37483,9 +37472,8 @@ def _project_metadata_contract_reasons(
             reasons.append(
                 "project.specializationConstantCount must be a non-negative integer"
             )
-        elif (
-            specialization_constants_are_mapping
-            and count != len(specialization_constants)
+        elif specialization_constants_are_mapping and count != len(
+            specialization_constants
         ):
             reasons.append(
                 "project.specializationConstantCount must match "
@@ -37494,9 +37482,7 @@ def _project_metadata_contract_reasons(
             )
 
     variant_specializations = project.get("variantSpecializationConstants")
-    variant_specializations_are_mapping = isinstance(
-        variant_specializations, Mapping
-    )
+    variant_specializations_are_mapping = isinstance(variant_specializations, Mapping)
     if _optional_project_field(
         project,
         "variantSpecializationConstants",
@@ -37526,9 +37512,7 @@ def _project_metadata_contract_reasons(
                 _mapping_field_contract_reasons(
                     "project.variantSpecializationConstantCounts",
                     counts,
-                    _variant_specialization_constant_counts(
-                        variant_specializations
-                    ),
+                    _variant_specialization_constant_counts(variant_specializations),
                     "project.variantSpecializationConstants",
                 )
             )

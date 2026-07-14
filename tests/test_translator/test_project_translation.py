@@ -37548,8 +37548,7 @@ def test_project_function_constant_variant_materializes_before_target_codegen(
                     }
                 }
             }
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
     (tmp_path / "crosstl.toml").write_text(
@@ -37580,17 +37579,14 @@ def test_project_function_constant_variant_materializes_before_target_codegen(
     assert payload["summary"]["failedCount"] == 0
     artifact = payload["artifacts"][0]
     constants = {
-        constant["name"]: constant
-        for constant in artifact["specializationConstants"]
+        constant["name"]: constant for constant in artifact["specializationConstants"]
     }
     assert constants["has_w"]["required"] is True
     assert "defaultValue" not in constants["has_w"]
     assert constants["has_w"]["concreteValue"] is True
     assert constants["has_w"]["valueProvenance"] == {
         "kind": "project-variant",
-        "path": (
-            "project.variants.configured.specialization_constants.has_w"
-        ),
+        "path": "project.variants.configured.specialization_constants.has_w",
         "selector": "has_w",
         "selectorKind": "name",
         "variant": "configured",
@@ -37626,16 +37622,17 @@ def test_project_function_constant_variant_materializes_before_target_codegen(
     runtime_artifact = runtime_manifest["artifacts"][0]
     assert runtime_artifact["resourceBindings"] == []
     assert [
-        constant["name"]
-        for constant in runtime_artifact["specializationConstants"]
+        constant["name"] for constant in runtime_artifact["specializationConstants"]
     ] == ["has_w", "mode", "scale"]
     binding_manifest = build_runtime_binding_manifest(report_path)
     binding = binding_manifest["entries"][0]
     assert binding["resourceBindings"] == []
     assert binding["scalarConstants"] == []
-    assert [
-        constant["name"] for constant in binding["specializationConstants"]
-    ] == ["has_w", "mode", "scale"]
+    assert [constant["name"] for constant in binding["specializationConstants"]] == [
+        "has_w",
+        "mode",
+        "scale",
+    ]
 
 
 def test_metal_project_function_constant_values_reach_directx_codegen(tmp_path):
@@ -37652,8 +37649,7 @@ def test_metal_project_function_constant_values_reach_directx_codegen(tmp_path):
                 uint index [[thread_position_in_grid]]) {
                 output[index] = enabled ? float(mode) : 0.0f;
             }
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
     config = project_pipeline.ProjectConfig(
@@ -37671,8 +37667,7 @@ def test_metal_project_function_constant_values_reach_directx_codegen(tmp_path):
     assert payload["diagnostics"] == []
     artifact = payload["artifacts"][0]
     constants = {
-        constant["name"]: constant
-        for constant in artifact["specializationConstants"]
+        constant["name"]: constant for constant in artifact["specializationConstants"]
     }
     assert constants["enabled"]["source"] == "metal.function_constant"
     assert constants["enabled"]["sourceLocation"]["line"] == 4
@@ -37704,8 +37699,7 @@ def test_metal_project_required_function_constant_defers_to_opengl(tmp_path):
                 uint index [[thread_position_in_grid]]) {
                 output[index] = enabled ? 1.0f : 0.0f;
             }
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
     config = project_pipeline.ProjectConfig(
@@ -37777,8 +37771,7 @@ def test_project_function_constant_deferred_metadata_distinguishes_required(
                     }
                 }
             }
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
     config = project_pipeline.ProjectConfig(
@@ -37790,8 +37783,7 @@ def test_project_function_constant_deferred_metadata_distinguishes_required(
     payload = translate_project(config).to_json()
     artifact = payload["artifacts"][0]
     constants = {
-        constant["name"]: constant
-        for constant in artifact["specializationConstants"]
+        constant["name"]: constant for constant in artifact["specializationConstants"]
     }
     required = constants["requiredFlag"]
     assert required["required"] is True

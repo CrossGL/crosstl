@@ -235,7 +235,12 @@ def _status_for_reflection(
         return "ambiguous"
     if REFLECTION_INCOMPLETE_OUTPUT in codes:
         return "incomplete"
-    if not entry_points and not resources and not constants and not specialization_constants:
+    if (
+        not entry_points
+        and not resources
+        and not constants
+        and not specialization_constants
+    ):
         return "unavailable"
     return "ready"
 
@@ -1115,9 +1120,7 @@ def _reflect_spirv_assembly(source: str, *, artifact_format: str) -> dict[str, A
             if width == 32:
                 scalar_types[tokens[0]] = "int" if signed else "uint"
             elif width is not None:
-                scalar_types[tokens[0]] = (
-                    f"i{width}" if signed else f"u{width}"
-                )
+                scalar_types[tokens[0]] = f"i{width}" if signed else f"u{width}"
         elif opcode == "OpTypeFloat" and len(tokens) >= 4 and tokens[1] == "=":
             width = _int_value(tokens[3])
             scalar_types[tokens[0]] = {
@@ -1142,12 +1145,16 @@ def _reflect_spirv_assembly(source: str, *, artifact_format: str) -> dict[str, A
                 "typeId": tokens[3],
                 "value": _literal_value(tokens[4]),
             }
-        elif opcode in {
-            "OpSpecConstantTrue",
-            "OpSpecConstantFalse",
-            "OpConstantTrue",
-            "OpConstantFalse",
-        } and len(tokens) >= 4:
+        elif (
+            opcode
+            in {
+                "OpSpecConstantTrue",
+                "OpSpecConstantFalse",
+                "OpConstantTrue",
+                "OpConstantFalse",
+            }
+            and len(tokens) >= 4
+        ):
             constants_by_id[tokens[0]] = {
                 "kind": (
                     "specialization-constant"
@@ -1196,9 +1203,7 @@ def _reflect_spirv_assembly(source: str, *, artifact_format: str) -> dict[str, A
         decorate = decorations.get(constant_id, {})
         if constant["kind"] == "scalar-constant" and constant_id not in names:
             continue
-        source_type = _spirv_type_name(
-            str(constant.get("typeId")), names, scalar_types
-        )
+        source_type = _spirv_type_name(str(constant.get("typeId")), names, scalar_types)
         payload = {
             "name": names.get(constant_id, constant_id.lstrip("%")),
             "kind": constant["kind"],

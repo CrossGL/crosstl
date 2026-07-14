@@ -3741,7 +3741,7 @@ def test_reduced_frontier_requires_directx_toolchain_runs_per_artifact(
     assert 'targets = ["directx"]' in toolchain_config
     assert "[project.specialization_constants]" in toolchain_config
     for selector, value in module.MLX_FRONTIER_SPECIALIZATION_CONSTANTS.items():
-        assert f'{json.dumps(selector)} = {json.dumps(value)}' in toolchain_config
+        assert f"{json.dumps(selector)} = {json.dumps(value)}" in toolchain_config
     # The DXC compile gate is scoped to the verified subset, not the whole
     # frontier, so only those sources appear in the toolchain config.
     for source in module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES:
