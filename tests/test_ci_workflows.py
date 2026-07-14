@@ -2149,6 +2149,17 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "Verify MLX frontier accounting" in mlx_porting
     assert "expected 11 clean MLX frontier sources" in mlx_porting
     assert "fence contract accounting must be 3 failed, 0 emitted" in mlx_porting
+    assert "MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES" in mlx_porting
+    assert "MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS" in mlx_porting
+    assert 'checks["directx-vulkan-frontier"]' in mlx_porting
+    assert 'directx["directxToolchainArtifactCount"]' in mlx_porting
+    assert 'directx["directxToolchainValidatedArtifactCount"]' in mlx_porting
+    assert 'directx["directxToolchainValidatedEntryPointCounts"]' in mlx_porting
+    assert 'directx["directxToolchainValidatedEntryPointCount"]' in mlx_porting
+    assert 'directx["toolchainRuns"] != directx_entry_point_count' in mlx_porting
+    assert "DirectX frontier accounting is incomplete" in mlx_porting
+    assert "DirectX frontier toolchain must validate every configured" in mlx_porting
+    assert "source artifact and compute entry" in mlx_porting
     assert 'checks["reference-accessor-lvalue-identity"]' in mlx_porting
     assert "reference accessor proof accounting is incomplete" in mlx_porting
     assert "reference accessor {target} storage evidence is incomplete" in mlx_porting
@@ -2259,6 +2270,9 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
             in harness
         )
     assert "MLX_DIRECTX_VULKAN_FRONTIER_SOURCES" in harness
+    assert "MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES" in harness
+    assert "MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS" in harness
+    assert "MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT" in harness
     assert "MLX_BLOCKED_REDUCED_FRONTIER_SOURCES" in harness
     assert "_check_atomic_fence_contract" in harness
     assert "project.translate.directx-atomic-fence-unsupported" in harness

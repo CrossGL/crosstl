@@ -168,8 +168,19 @@ jobs:
           import os
           from pathlib import Path
 
+          from demos.integrations.mlx.run_mlx_porting import (
+              MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS,
+              MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES,
+          )
+
           fence_source = "mlx/backend/metal/kernels/fence.metal"
           fence_issue = "https://github.com/CrossGL/crosstl/issues/1537"
+          directx_frontier_sources = set(MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES)
+          directx_entry_point_counts = dict(
+              MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS
+          )
+          directx_frontier_count = len(directx_frontier_sources)
+          directx_entry_point_count = sum(directx_entry_point_counts.values())
           opengl_frontier_sources = {
               "mlx/backend/metal/kernels/arg_reduce.metal",
               "mlx/backend/metal/kernels/binary_two.metal",
@@ -290,6 +301,36 @@ jobs:
                   raise SystemExit(
                       f"reference accessor {target} native validation must be "
                       f"{expected_status} on {os.environ['RUNNER_OS']}"
+                  )
+          directx = checks["directx-vulkan-frontier"]
+          if (
+              set(directx["directxToolchainSources"])
+              != directx_frontier_sources
+              or directx["directxToolchainArtifactCount"]
+              != directx_frontier_count
+              or directx["directxToolchainExpectedEntryPointCounts"]
+              != directx_entry_point_counts
+              or directx["directxToolchainExpectedEntryPointCount"]
+              != directx_entry_point_count
+          ):
+              raise SystemExit("DirectX frontier accounting is incomplete")
+          if os.environ["RUNNER_OS"] == "Windows":
+              if (
+                  directx["directxToolchainRequired"] is not True
+                  or directx["directxValidationStatus"] != "validated"
+                  or directx["directxToolchainValidatedArtifactCount"]
+                  != directx_frontier_count
+                  or set(directx["directxToolchainValidatedSources"])
+                  != directx_frontier_sources
+                  or directx["directxToolchainValidatedEntryPointCounts"]
+                  != directx_entry_point_counts
+                  or directx["directxToolchainValidatedEntryPointCount"]
+                  != directx_entry_point_count
+                  or directx["toolchainRuns"] != directx_entry_point_count
+              ):
+                  raise SystemExit(
+                      "DirectX frontier toolchain must validate every configured "
+                      "source artifact and compute entry"
                   )
           opengl = checks["opengl-frontier"]
           if set(opengl["sources"]) != opengl_frontier_sources:
