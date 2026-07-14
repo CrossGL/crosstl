@@ -9,6 +9,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 HARNESS_PATH = ROOT / "demos" / "integrations" / "mlx" / "run_mlx_porting.py"
 MLX_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "mlx-project-porting.yml"
+MLX_README_PATH = ROOT / "demos" / "integrations" / "mlx" / "README.md"
 
 
 def _load_harness():
@@ -1317,24 +1318,31 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert opengl_frontier["runtime_parity_claimed"] is False
 
     directx = expected_gaps["directx_toolchain_status"]
+    assert directx["compiler"] == {"name": "dxc", "version": "v1.9.2602.24"}
     assert directx["dxc_validated_sources"] == list(
         module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
+    )
+    assert directx["expected_entry_point_counts"] == (
+        module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS
+    )
+    assert sum(directx["expected_entry_point_counts"].values()) == (
+        module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT
     )
     assert set(directx["directx_toolchain_gaps"]) == set(
         module.MLX_REDUCED_FRONTIER_SOURCES
     ) - set(module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES)
-    assert (
-        "1519"
-        not in directx["directx_toolchain_gaps"][
-            "mlx/backend/metal/kernels/layer_norm.metal"
-        ]
-    )
-    assert (
-        "1519"
-        not in directx["directx_toolchain_gaps"][
-            module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE
-        ]
-    )
+    directx_gaps = directx["directx_toolchain_gaps"]
+    assert "issues/1694" in directx_gaps[module.MLX_BINARY_TWO_SOURCE]
+    assert "issues/1695" in directx_gaps[module.MLX_BINARY_TWO_SOURCE]
+    assert "issues/1696" in directx_gaps["mlx/backend/metal/kernels/random.metal"]
+    assert "issues/1542" in directx_gaps["mlx/backend/metal/kernels/random.metal"]
+    assert "issues/1695" in directx_gaps["mlx/backend/metal/kernels/ternary.metal"]
+    assert "issues/1491" in directx_gaps["mlx/backend/metal/kernels/ternary.metal"]
+    assert "issues/1524" in directx_gaps["mlx/backend/metal/kernels/ternary.metal"]
+    assert "issues/1537" in directx_gaps[module.MLX_FENCE_SOURCE]
+    assert "issues/1518" not in json.dumps(directx_gaps)
+    assert directx["native_runtime_executed"] is False
+    assert directx["runtime_parity_claimed"] is False
 
     pointer_reinterpretation = expected_gaps["pointer_reinterpretation_status"]
     assert pointer_reinterpretation["status"] == "partial"
@@ -1479,7 +1487,7 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         "static_members": 42,
     }
     assert function_local_alias["native_validation"] == {
-        "directx": "translated-dxc-blocked-by-existing-issues",
+        "directx": "dxc-validated",
         "opengl": "validated",
         "vulkan": "validated",
     }
@@ -1696,11 +1704,11 @@ def test_arg_reduce_advances_into_clean_toolchain_frontiers():
     assert module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES == (
         module.MLX_ARG_REDUCE_SOURCE,
         module.MLX_BINARY_TWO_SOURCE,
-        "mlx/backend/metal/kernels/logsumexp.metal",
-        "mlx/backend/metal/kernels/rms_norm.metal",
+        module.MLX_LOGSUMEXP_SOURCE,
+        module.MLX_RMS_NORM_SOURCE,
         module.MLX_ROPE_SOURCE,
         module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
-        "mlx/backend/metal/kernels/softmax.metal",
+        module.MLX_SOFTMAX_SOURCE,
     )
     assert module.MLX_REDUCED_FRONTIER_SOURCES == tuple(
         sorted(
@@ -1816,7 +1824,7 @@ def test_empty_initializer_issue_is_resolved_for_pinned_quantized_nax():
     )
 
 
-def test_scaled_dot_product_attention_enters_opengl_function_constant_frontier():
+def test_scaled_dot_product_attention_enters_native_toolchain_frontiers():
     module = _load_harness()
     source = module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE
     resolved_issue = "https://github.com/CrossGL/crosstl/issues/1535"
@@ -1832,6 +1840,7 @@ def test_scaled_dot_product_attention_enters_opengl_function_constant_frontier()
     assert resolved_issue in module.RESOLVED_FRONTIER_ISSUES
     assert resolved_issue not in module.FULL_CORPUS_TRACKED_ISSUES
     assert source in module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES
+    assert source in module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
     assert module.OPENGL_SCALED_DOT_PRODUCT_ATTENTION_TRACKED_ISSUES == (
         function_constant_issue,
     )
@@ -3627,7 +3636,7 @@ def test_reduced_frontier_accepts_multiple_vulkan_toolchain_runs_per_artifact(
     assert module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE in toolchain_config
 
 
-def test_reduced_frontier_requires_directx_toolchain_runs_per_artifact(
+def test_reduced_frontier_requires_all_directx_entries_per_artifact(
     tmp_path, monkeypatch
 ):
     module = _load_harness()
@@ -3642,14 +3651,14 @@ def test_reduced_frontier_requires_directx_toolchain_runs_per_artifact(
 
     frontier_count = len(module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES)
     directx_subset_count = len(module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES)
-    directx_paths = [
-        f".crosstl/out/directx/{Path(source).with_suffix('.hlsl')}"
+    directx_paths = {
+        source: f".crosstl/out/directx/{Path(source).with_suffix('.hlsl')}"
         for source in module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
-    ]
-    directx_subset_paths = [
-        f".crosstl/out/directx/{Path(source).with_suffix('.hlsl')}"
+    }
+    directx_subset_paths = {
+        source: f".crosstl/out/directx/{Path(source).with_suffix('.hlsl')}"
         for source in module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
-    ]
+    }
     commands = []
     alias_evidence = {"source": module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE}
     monkeypatch.setattr(
@@ -3661,8 +3670,8 @@ def test_reduced_frontier_requires_directx_toolchain_runs_per_artifact(
     def fake_run_command(name, command, *, log_dir, check=True, timeout_seconds=None):
         commands.append((name, list(command)))
         is_toolchain = name != "translate-directx-vulkan-frontier"
-        # The DXC compile gate runs only on the verified subset; the translation
-        # frontier still emits every frontier artifact.
+        # The DXC compile gate runs only on its eight-source frontier; the
+        # translation frontier still emits every clean frontier artifact.
         report_directx_paths = directx_subset_paths if is_toolchain else directx_paths
         report = {
             "summary": {
@@ -3683,8 +3692,13 @@ def test_reduced_frontier_requires_directx_toolchain_runs_per_artifact(
                 },
             },
             "artifacts": [
-                {"target": "directx", "path": path, "status": "translated"}
-                for path in report_directx_paths
+                {
+                    "source": source,
+                    "target": "directx",
+                    "path": path,
+                    "status": "translated",
+                }
+                for source, path in report_directx_paths.items()
             ],
             "validation": {
                 "summary": {"failedCount": 0},
@@ -3693,11 +3707,23 @@ def test_reduced_frontier_requires_directx_toolchain_runs_per_artifact(
                     if not is_toolchain
                     else [
                         {
+                            "source": source,
                             "target": "directx",
                             "path": path,
+                            "command": [
+                                "dxc",
+                                "-T",
+                                "cs_6_0",
+                                "-E",
+                                "CSMain" if index == 0 else f"CSMain_{index + 1}",
+                                path,
+                            ],
                             "status": "ok",
                         }
-                        for path in directx_subset_paths
+                        for source, path in directx_subset_paths.items()
+                        for index in range(
+                            module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS[source]
+                        )
                     ]
                 ),
             },
@@ -3727,9 +3753,29 @@ def test_reduced_frontier_requires_directx_toolchain_runs_per_artifact(
         require_vulkan_toolchain=False,
     )
 
-    assert result["toolchainRuns"] == directx_subset_count
+    assert result["toolchainRuns"] == (module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT)
     assert result["status"] == "passed"
     assert result["directxToolchainRequired"] is True
+    assert result["directxToolchainSources"] == list(
+        module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
+    )
+    assert result["directxToolchainArtifactCount"] == directx_subset_count
+    assert result["directxToolchainExpectedEntryPointCounts"] == (
+        module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS
+    )
+    assert result["directxToolchainExpectedEntryPointCount"] == (
+        module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT
+    )
+    assert result["directxToolchainValidatedSources"] == list(
+        module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
+    )
+    assert result["directxToolchainValidatedArtifactCount"] == directx_subset_count
+    assert result["directxToolchainValidatedEntryPointCounts"] == (
+        module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS
+    )
+    assert result["directxToolchainValidatedEntryPointCount"] == (
+        module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT
+    )
     assert result["semanticReadinessStatus"] == "not-established"
     assert result["directxValidationStatus"] == "validated"
     assert result["vulkanValidationStatus"] == "not-run"
@@ -3742,13 +3788,13 @@ def test_reduced_frontier_requires_directx_toolchain_runs_per_artifact(
     assert "[project.specialization_constants]" in toolchain_config
     for selector, value in module.MLX_FRONTIER_SPECIALIZATION_CONSTANTS.items():
         assert f"{json.dumps(selector)} = {json.dumps(value)}" in toolchain_config
-    # The DXC compile gate is scoped to the verified subset, not the whole
-    # frontier, so only those sources appear in the toolchain config.
+    # The DXC compile gate is scoped to its eight-source frontier, not the whole
+    # clean translation frontier, so only those sources appear in this config.
     for source in module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES:
         assert source in toolchain_config
 
 
-def test_directx_toolchain_frontier_includes_rope_and_gap_ledger_matches():
+def test_directx_toolchain_frontier_matches_pinned_dxc_inventory():
     module = _load_harness()
     gaps = json.loads(
         (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
@@ -3756,14 +3802,76 @@ def test_directx_toolchain_frontier_includes_rope_and_gap_ledger_matches():
         )
     )
 
-    assert module.MLX_ROPE_SOURCE in module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
-    assert module.MLX_ROPE_SOURCE in module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
+    expected_sources = (
+        module.MLX_ARANGE_SOURCE,
+        module.MLX_ARG_REDUCE_SOURCE,
+        module.MLX_LAYER_NORM_SOURCE,
+        module.MLX_LOGSUMEXP_SOURCE,
+        module.MLX_RMS_NORM_SOURCE,
+        module.MLX_ROPE_SOURCE,
+        module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
+        module.MLX_SOFTMAX_SOURCE,
+    )
+    assert module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES == expected_sources
+    assert set(expected_sources) < set(module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES)
+    assert tuple(module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS) == expected_sources
+    assert {
+        source: module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS[source]
+        for source in (
+            module.MLX_LAYER_NORM_SOURCE,
+            module.MLX_LOGSUMEXP_SOURCE,
+            module.MLX_RMS_NORM_SOURCE,
+            module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
+            module.MLX_SOFTMAX_SOURCE,
+        )
+    } == {
+        module.MLX_LAYER_NORM_SOURCE: 12,
+        module.MLX_LOGSUMEXP_SOURCE: 6,
+        module.MLX_RMS_NORM_SOURCE: 12,
+        module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE: 42,
+        module.MLX_SOFTMAX_SOURCE: 10,
+    }
+    assert module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT == sum(
+        module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS.values()
+    )
     directx_status = gaps["directx_toolchain_status"]
     assert directx_status["specialization_constants"] == (
         module.MLX_FRONTIER_SPECIALIZATION_CONSTANTS
     )
-    assert module.MLX_ROPE_SOURCE in directx_status["dxc_validated_sources"]
-    assert module.MLX_ROPE_SOURCE not in directx_status["directx_toolchain_gaps"]
+    assert directx_status["dxc_validated_sources"] == list(expected_sources)
+    assert directx_status["expected_entry_point_counts"] == (
+        module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS
+    )
+    assert set(directx_status["directx_toolchain_gaps"]) == {
+        module.MLX_BINARY_TWO_SOURCE,
+        "mlx/backend/metal/kernels/random.metal",
+        "mlx/backend/metal/kernels/ternary.metal",
+        module.MLX_FENCE_SOURCE,
+    }
+    assert {
+        f"https://github.com/CrossGL/crosstl/issues/{issue}"
+        for issue in (1694, 1695, 1696)
+    } <= set(gaps["tracked_issues"])
+
+
+def test_directx_frontier_readme_records_compile_only_scope_and_current_gaps():
+    readme = MLX_README_PATH.read_text(encoding="utf-8")
+    normalized_readme = " ".join(readme.split())
+
+    assert "official DXC v1.9.2602.24 on Windows CI" in readme
+    assert (
+        "the eight-source `arange.metal`, `arg_reduce.metal`, `layer_norm.metal`"
+        in normalized_readme
+    )
+    assert "11, 24, 12, 6, 12, 18, 42, and 10 entries respectively" in (
+        normalized_readme
+    )
+    for issue in (1694, 1695, 1696, 1542, 1491, 1524, 1537):
+        assert f"https://github.com/CrossGL/crosstl/issues/{issue}" in readme
+    assert "does not dispatch these kernels or establish numerical parity" in (
+        normalized_readme
+    )
+    assert "DirectX remains outside the DXC gate" not in readme
 
 
 def test_binary_resource_relocation_issue_is_full_corpus_only():

@@ -57,15 +57,28 @@ The current harness verifies:
   clean artifact generation for DirectX, OpenGL, and Vulkan. OpenGL compilation
   and both OpenGL-derived and native SPIR-V validation run in the required Linux
   toolchain gate;
-- DirectX HLSL smoke checks with DXC on Windows CI for the verified subset
-  (`arange.metal`, `arg_reduce.metal`, and `rope.metal`). The pinned rope
-  translation supplies required function constant IDs through the quoted
-  `"1"`, `"2"`, and `"3"` selectors in `[project.specialization_constants]`,
-  materializes the concrete DirectX variant, and compiles every discovered
-  entry, including the unsuffixed `CSMain`. Other clean frontier kernels
-  translate to DirectX but are excluded for structural and semantic gaps
-  recorded in `expected-gaps.json`; `fence.metal` is excluded because its
-  DirectX translation intentionally fails before DXC;
+- DirectX HLSL smoke checks with official DXC v1.9.2602.24 on Windows CI for
+  the eight-source `arange.metal`, `arg_reduce.metal`, `layer_norm.metal`,
+  `logsumexp.metal`, `rms_norm.metal`, `rope.metal`,
+  `scaled_dot_product_attention.metal`, and `softmax.metal` frontier. At the
+  pinned revision the gate compiles every generated compute entry: 11, 24, 12,
+  6, 12, 18, 42, and 10 entries respectively. The pinned rope translation
+  supplies required function constant IDs through the quoted `"1"`, `"2"`, and
+  `"3"` selectors in `[project.specialization_constants]` and materializes the
+  concrete DirectX variant before compilation. `binary_two.metal` remains
+  outside the gate under [#1694](https://github.com/CrossGL/crosstl/issues/1694)
+  and [#1695](https://github.com/CrossGL/crosstl/issues/1695), `random.metal`
+  under [#1696](https://github.com/CrossGL/crosstl/issues/1696) with runtime
+  dispatch metadata still tracked by
+  [#1542](https://github.com/CrossGL/crosstl/issues/1542), and `ternary.metal`
+  first under [#1695](https://github.com/CrossGL/crosstl/issues/1695), with later
+  entries still dependent on
+  [#1491](https://github.com/CrossGL/crosstl/issues/1491) and
+  [#1524](https://github.com/CrossGL/crosstl/issues/1524). `fence.metal` is
+  excluded because its DirectX translation intentionally fails under
+  [#1537](https://github.com/CrossGL/crosstl/issues/1537) before DXC. This gate
+  establishes compiler acceptance only; it does not dispatch these kernels or
+  establish numerical parity;
 - Vulkan assembly and validator checks for the existing non-fence regression
   frontier when SPIR-V tools are available. Vulkan atomic-fence feature work is
   deferred; the separate `fence.metal` contract check prevents generated
@@ -277,8 +290,8 @@ the fixed arrays of resource aliases introduced by the pinned revision's wide
 quantized matrix-vector helpers. CrossGL/crosstl#1671 tracks workgroup backing
 provenance through nested FFT helper parameters. CrossGL/crosstl#1672 tracks
 owner-dependent `constexpr` helper calls in quantized struct static members.
-CrossGL/crosstl#1491 tracks the current scaled-attention
-qualified-static-constant materialization blocker.
+CrossGL/crosstl#1491 tracks remaining qualified-static-constant materialization,
+including the current `ternary.metal` DirectX exclusion.
 Built-in overloads are resolved alongside user-defined wrappers by source
 signature.
 Before native validation, the harness verifies
@@ -296,8 +309,9 @@ constructors, casts, and generic static-member owners. For the pinned attention
 source this resolves 531 concrete uses across all 42 entries, including the
 float accumulation type used by the half and bfloat input families. The full
 source translates to DirectX, OpenGL, and Vulkan; local OpenGL and Vulkan native
-validation passes. DirectX remains outside the DXC gate for the independent
-resource-cursor issue listed in `expected-gaps.json`.
+validation passes, and official DXC v1.9.2602.24 compiles all 42 generated
+DirectX compute entries. This is compiler validation, not Direct3D runtime
+execution or numerical parity.
 The project Vulkan artifact is warning-free because project preparation removes
 unreachable generic declarations. Direct single-file translation still emits
 five such warnings under

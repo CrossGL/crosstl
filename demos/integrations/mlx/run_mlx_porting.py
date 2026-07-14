@@ -37,12 +37,15 @@ MLX_BINARY_TWO_SOURCE = "mlx/backend/metal/kernels/binary_two.metal"
 MLX_FENCE_SOURCE = "mlx/backend/metal/kernels/fence.metal"
 MLX_FENCE_EXPECTED_ATOMIC_FENCE_COUNT = 3
 MLX_GEMV_SOURCE = "mlx/backend/metal/kernels/gemv.metal"
+MLX_LAYER_NORM_SOURCE = "mlx/backend/metal/kernels/layer_norm.metal"
+MLX_LOGSUMEXP_SOURCE = "mlx/backend/metal/kernels/logsumexp.metal"
 MLX_METAL_ROUNDTRIP_SOURCE = MLX_FENCE_SOURCE
 MLX_RMS_NORM_SOURCE = "mlx/backend/metal/kernels/rms_norm.metal"
 MLX_ROPE_SOURCE = "mlx/backend/metal/kernels/rope.metal"
 MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE = (
     "mlx/backend/metal/kernels/scaled_dot_product_attention.metal"
 )
+MLX_SOFTMAX_SOURCE = "mlx/backend/metal/kernels/softmax.metal"
 REFERENCE_ACCESSOR_FIXTURE_NAME = "reference_accessor_lvalue.metal"
 REFERENCE_ACCESSOR_FIXTURE_PATH = (
     Path(__file__).resolve().parent / "fixtures" / REFERENCE_ACCESSOR_FIXTURE_NAME
@@ -53,23 +56,23 @@ REFERENCE_ACCESSOR_DXC_ENTRY_POINT = "CSMain"
 MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES = (
     MLX_ARG_REDUCE_SOURCE,
     MLX_BINARY_TWO_SOURCE,
-    "mlx/backend/metal/kernels/logsumexp.metal",
+    MLX_LOGSUMEXP_SOURCE,
     MLX_RMS_NORM_SOURCE,
     MLX_ROPE_SOURCE,
     MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
-    "mlx/backend/metal/kernels/softmax.metal",
+    MLX_SOFTMAX_SOURCE,
 )
 MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
-    "mlx/backend/metal/kernels/arange.metal",
+    MLX_ARANGE_SOURCE,
     MLX_ARG_REDUCE_SOURCE,
     MLX_BINARY_TWO_SOURCE,
-    "mlx/backend/metal/kernels/layer_norm.metal",
-    "mlx/backend/metal/kernels/logsumexp.metal",
+    MLX_LAYER_NORM_SOURCE,
+    MLX_LOGSUMEXP_SOURCE,
     "mlx/backend/metal/kernels/random.metal",
     MLX_RMS_NORM_SOURCE,
     MLX_ROPE_SOURCE,
     MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
-    "mlx/backend/metal/kernels/softmax.metal",
+    MLX_SOFTMAX_SOURCE,
     "mlx/backend/metal/kernels/ternary.metal",
 )
 MLX_CLEAN_REDUCED_FRONTIER_SOURCES = tuple(
@@ -92,13 +95,31 @@ MLX_REDUCED_FRONTIER_SOURCES = tuple(
     )
 )
 # Subset of the clean frontier gated by DXC on Windows. The DirectX/Vulkan frontier
-# is still translated in full (and all Vulkan artifacts are spirv-val'd), but the
-# remaining kernels have tracked structural or semantic defects and stay outside
-# the DirectX compile gate until those are fixed.
+# is still translated in full (and all Vulkan artifacts are spirv-val'd), while
+# the remaining kernels stay outside the DirectX compile gate under tracked gaps.
 MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES = (
-    "mlx/backend/metal/kernels/arange.metal",
+    MLX_ARANGE_SOURCE,
     MLX_ARG_REDUCE_SOURCE,
+    MLX_LAYER_NORM_SOURCE,
+    MLX_LOGSUMEXP_SOURCE,
+    MLX_RMS_NORM_SOURCE,
     MLX_ROPE_SOURCE,
+    MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
+    MLX_SOFTMAX_SOURCE,
+)
+# Pinned generated compute entries compiled by official DXC v1.9.2602.24.
+MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS = {
+    MLX_ARANGE_SOURCE: 11,
+    MLX_ARG_REDUCE_SOURCE: 24,
+    MLX_LAYER_NORM_SOURCE: 12,
+    MLX_LOGSUMEXP_SOURCE: 6,
+    MLX_RMS_NORM_SOURCE: 12,
+    MLX_ROPE_SOURCE: 18,
+    MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE: 42,
+    MLX_SOFTMAX_SOURCE: 10,
+}
+MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT = sum(
+    MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS.values()
 )
 MLX_FRONTIER_SPECIALIZATION_CONSTANTS = {
     "1": False,
@@ -1935,7 +1956,9 @@ def _scaled_attention_local_alias_evidence(
             generated_by_target["vulkan"],
         )
     )
-    expected_entry_count = 42
+    expected_entry_count = MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS[
+        MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE
+    ]
     _require(
         directx_entry_count == expected_entry_count
         and vulkan_entry_count == expected_entry_count,
@@ -1961,6 +1984,22 @@ def _scaled_attention_local_alias_evidence(
             "https://github.com/CrossGL/crosstl/issues/1568"
         ),
     }
+
+
+def _directx_toolchain_entry_point(run: Mapping[str, Any]) -> str | None:
+    command = run.get("command")
+    if not isinstance(command, list) or any(
+        not isinstance(argument, str) for argument in command
+    ):
+        return None
+    try:
+        profile = command[command.index("-T") + 1]
+        entry_point = command[command.index("-E") + 1]
+    except (ValueError, IndexError):
+        return None
+    if not profile.startswith("cs_") or not entry_point:
+        return None
+    return entry_point
 
 
 def _translate_directx_vulkan_frontier(
@@ -2115,6 +2154,38 @@ def _translate_directx_vulkan_frontier(
         for run in toolchain_runs
         if isinstance(run, dict) and run.get("target") == "vulkan"
     ]
+    directx_entry_points_by_source: dict[str, list[str]] = {
+        source: [] for source in MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
+    }
+    for run in directx_runs:
+        if run.get("status") != "ok":
+            continue
+        source = run.get("source")
+        _require(
+            source in directx_entry_points_by_source,
+            f"DirectX toolchain validation reported an unexpected source: {source}",
+        )
+        entry_point = _directx_toolchain_entry_point(run)
+        _require(
+            entry_point is not None,
+            "DirectX toolchain validation did not record a compute entry command",
+        )
+        validated_entries = directx_entry_points_by_source[source]
+        _require(
+            entry_point not in validated_entries,
+            f"DirectX toolchain validation duplicated {source} entry {entry_point}",
+        )
+        validated_entries.append(entry_point)
+    directx_validated_entry_point_counts = {
+        source: len(entry_points)
+        for source, entry_points in directx_entry_points_by_source.items()
+        if entry_points
+    }
+    directx_validated_sources = [
+        source
+        for source in MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
+        if source in directx_validated_entry_point_counts
+    ]
     required_toolchains = {
         "directx": (
             require_directx_toolchain,
@@ -2134,6 +2205,19 @@ def _translate_directx_vulkan_frontier(
                 and artifact.get("status") == "translated"
                 and isinstance(artifact.get("path"), str)
             }
+            if target == "directx":
+                artifact_sources = {
+                    artifact.get("source")
+                    for artifact in artifact_payload.get("artifacts", [])
+                    if isinstance(artifact, dict)
+                    and artifact.get("target") == target
+                    and artifact.get("status") == "translated"
+                    and isinstance(artifact.get("source"), str)
+                }
+                _require(
+                    artifact_sources == set(MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES),
+                    "DirectX toolchain artifact sources did not match the frontier",
+                )
             validated_paths = {
                 run.get("path")
                 for run in runs
@@ -2160,6 +2244,16 @@ def _translate_directx_vulkan_frontier(
                     "validation issues are tracked"
                 ),
             )
+    if require_directx_toolchain and run_toolchains:
+        _require(
+            directx_validated_sources == list(MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES),
+            "DirectX toolchain did not validate every configured source",
+        )
+        _require(
+            directx_validated_entry_point_counts
+            == MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS,
+            "DirectX toolchain did not validate every generated compute entry point",
+        )
     return {
         "name": "directx-vulkan-frontier",
         "status": "passed",
@@ -2171,6 +2265,22 @@ def _translate_directx_vulkan_frontier(
         "targets": ["directx", "vulkan"],
         "toolchainRuns": len(toolchain_runs),
         "directxToolchainRequired": require_directx_toolchain,
+        "directxToolchainSources": list(MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES),
+        "directxToolchainArtifactCount": len(MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES),
+        "directxToolchainExpectedEntryPointCounts": dict(
+            MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS
+        ),
+        "directxToolchainExpectedEntryPointCount": (
+            MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT
+        ),
+        "directxToolchainValidatedSources": directx_validated_sources,
+        "directxToolchainValidatedArtifactCount": len(directx_validated_sources),
+        "directxToolchainValidatedEntryPointCounts": (
+            directx_validated_entry_point_counts
+        ),
+        "directxToolchainValidatedEntryPointCount": sum(
+            directx_validated_entry_point_counts.values()
+        ),
         "vulkanToolchainRequired": require_vulkan_toolchain,
         "directxValidationStatus": (
             "validated" if run_toolchains and directx_runs else "not-required"
