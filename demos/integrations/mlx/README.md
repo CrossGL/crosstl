@@ -58,11 +58,14 @@ The current harness verifies:
   and both OpenGL-derived and native SPIR-V validation run in the required Linux
   toolchain gate;
 - DirectX HLSL smoke checks with DXC on Windows CI for the verified subset
-  (`arange.metal`, `arg_reduce.metal`, and `rope.metal`). The gate
-  compiles every discovered entry, including the unsuffixed `CSMain`. Other
-  clean frontier kernels translate to DirectX but are excluded for structural
-  and semantic gaps recorded in `expected-gaps.json`; `fence.metal` is excluded
-  because its DirectX translation intentionally fails before DXC;
+  (`arange.metal`, `arg_reduce.metal`, and `rope.metal`). The pinned rope
+  translation supplies required function constant IDs through the quoted
+  `"1"`, `"2"`, and `"3"` selectors in `[project.specialization_constants]`,
+  materializes the concrete DirectX variant, and compiles every discovered
+  entry, including the unsuffixed `CSMain`. Other clean frontier kernels
+  translate to DirectX but are excluded for structural and semantic gaps
+  recorded in `expected-gaps.json`; `fence.metal` is excluded because its
+  DirectX translation intentionally fails before DXC;
 - Vulkan assembly and validator checks for the existing non-fence regression
   frontier when SPIR-V tools are available. Vulkan atomic-fence feature work is
   deferred; the separate `fence.metal` contract check prevents generated
@@ -70,10 +73,13 @@ The current harness verifies:
 - OpenGL artifact generation for `arange.metal`, including deterministic
   separation of the source `float` and `bfloat16_t` helper declarations after
   both map to GLSL `float` and source-typed call rewriting coverage;
-- OpenGL artifact generation for the clean four-source `arg_reduce.metal`,
-  `binary_two.metal`, `logsumexp.metal`, and `softmax.metal` frontier. Project
-  translation must emit four artifacts with zero diagnostics. In the CI-required
-  mode every artifact compiles for OpenGL/SPIR-V 1.3 and passes `spirv-val`;
+- OpenGL artifact generation for the clean seven-source `arg_reduce.metal`,
+  `binary_two.metal`, `logsumexp.metal`, `rms_norm.metal`, `rope.metal`,
+  `scaled_dot_product_attention.metal`, and `softmax.metal` frontier. Project
+  translation must emit seven artifacts with zero diagnostics. In the
+  CI-required mode every artifact compiles for OpenGL/SPIR-V 1.3 and passes
+  `spirv-val`. This is native artifact validation only; the gate does not run
+  the kernels or establish runtime parity;
 - on Linux CI, full project materialization of `gemv.metal` to OpenGL followed
   by native GLSL compilation and SPIR-V 1.3 validation for all 225 source
   specializations represented by the generated artifact;
@@ -283,10 +289,8 @@ target. It first compiles the focused scalar-conversion fixtures successfully,
 then compiles the translated `arange.metal` artifact. Shuffle-and-fill wrappers
 lower through backend-neutral subgroup semantics and preserve their explicit
 fill value for lanes below the delta.
-The reduced DirectX/Vulkan frontier includes
-`scaled_dot_product_attention.metal`; its OpenGL path remains excluded under
-the function-constant contract in
-[#1538](https://github.com/CrossGL/crosstl/issues/1538). Function-local scalar
+The reduced DirectX/Vulkan frontier and the seven-source OpenGL artifact gate
+include `scaled_dot_product_attention.metal`. Function-local scalar
 and vector aliases now retain lexical scope and resolve across declarations,
 constructors, casts, and generic static-member owners. For the pinned attention
 source this resolves 531 concrete uses across all 42 entries, including the
@@ -327,12 +331,14 @@ compiles for OpenGL/SPIR-V 1.3, and the resulting SPIR-V passes `spirv-val`. Thi
 resolves [#1661](https://github.com/CrossGL/crosstl/issues/1661) for the pinned
 frontier. It is artifact and toolchain evidence only; it does not establish
 numerical or runtime parity.
-The OpenGL/SPIR-V gate includes `rms_norm.metal`, `rope.metal`, and
+The seven-source OpenGL/SPIR-V gate includes `rms_norm.metal`, `rope.metal`, and
 `scaled_dot_product_attention.metal`. Their Metal function constants retain
-their numeric identifiers as GLSL specialization constants; the gate compiles
-each generated module for OpenGL/SPIR-V 1.3 and validates the resulting binary.
-Project-supplied concrete values, DirectX compile-time variants, and host
-specialization wiring remain tracked under
+their numeric identifiers as native GLSL specialization constants; the gate
+compiles each generated module for OpenGL/SPIR-V 1.3 and validates the resulting
+binary. It does not apply runtime specialization values, dispatch a kernel, or
+establish runtime parity. For the pinned DirectX rope check, project
+configuration supplies IDs 1 through 3 and CrossTL materializes a concrete HLSL
+variant before DXC. Host-side OpenGL specialization wiring remains tracked under
 [#1538](https://github.com/CrossGL/crosstl/issues/1538).
 `fence.metal` emits no DirectX, OpenGL, or Vulkan target artifact. The harness
 requires the target-specific structured diagnostics and the exact requested
