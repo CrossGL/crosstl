@@ -36,6 +36,7 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLAggregateInitializerError,
     OpenGLAtomicFenceLoweringError,
     OpenGLBooleanCompoundAssignmentError,
+    OpenGLCompileTimeGlobalError,
     OpenGLCompoundAssignmentError,
     OpenGLCooperativeMatrixError,
     OpenGLFixedArrayResourceError,
@@ -9852,6 +9853,104 @@ def test_glsl_global_uniforms_do_not_consume_resource_bindings():
     assert "layout(std140, binding = 0) float exposure;" not in generated_code
     assert "layout(std140, binding = 1) vec4 tint;" not in generated_code
     assert "layout(binding = 0) uniform sampler2D colorMap;" in generated_code
+
+
+def test_glsl_compile_time_global_values_emit_const_and_validate(tmp_path):
+    code = """
+    shader CompileTimeGlobalValues {
+        struct LookupConfig {
+            uint base;
+            uvec2 bias;
+        };
+
+        constant uint sentinel = 5;
+        constant uvec2 laneBias = uvec2(1, 2);
+        constant LookupConfig config = LookupConfig(7, uvec2(3, 4));
+        constant uint[2][4] rotations = {
+            {13, 15, 26, 6},
+            {17, 29, 16, 24}
+        };
+
+        compute {
+            void main(RWStructuredBuffer<uint> outputValues @buffer(0)) {
+                outputValues[0] = sentinel + laneBias.y + config.base
+                    + rotations[1][2];
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "const uint sentinel = 5;" in generated_code
+    assert "const uvec2 laneBias = uvec2(1, 2);" in generated_code
+    assert "const LookupConfig config = LookupConfig(7, uvec2(3, 4));" in generated_code
+    assert (
+        "const uint rotations[2][4] = uint[2][4]("
+        "uint[4](13, 15, 26, 6), uint[4](17, 29, 16, 24));" in generated_code
+    )
+    assert not re.search(
+        r"\buniform\s+(?:uint|uvec2|LookupConfig)\s+"
+        r"(?:sentinel|laneBias|config|rotations)\b",
+        generated_code,
+    )
+    assert "rotations[1][2]" in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "compile_time_global_values",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_constant_address_space_runtime_resources_remain_uniforms():
+    code = """
+    shader ConstantAddressSpaceResources {
+        constant float runtimeScale @location(3);
+        constant sampler2D lookupTexture @binding(2);
+
+        fragment {
+            vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                return texture(lookupTexture, uv) * runtimeScale;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "layout(location = 3) uniform float runtimeScale;" in generated_code
+    assert "layout(binding = 2) uniform sampler2D lookupTexture;" in generated_code
+    assert "const float runtimeScale" not in generated_code
+    assert "const sampler2D lookupTexture" not in generated_code
+
+
+def test_glsl_compile_time_global_rejects_runtime_initializer():
+    code = """
+    shader InvalidCompileTimeGlobal {
+        float buildLookup() {
+            return 2.0;
+        }
+
+        constant float lookupValue = buildLookup();
+    }
+    """
+
+    with pytest.raises(OpenGLCompileTimeGlobalError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.opengl-compile-time-global-invalid"
+    )
+    assert diagnostic.missing_capabilities == ("opengl.compile-time-global-lowering",)
+    assert diagnostic.variable_name == "lookupValue"
+    assert diagnostic.expression_kind == "FunctionCallNode"
+    assert diagnostic.detail == "buildLookup"
+    assert diagnostic.reason == "function-call"
 
 
 def test_glsl_reserved_global_uniform_names_are_aliased():
