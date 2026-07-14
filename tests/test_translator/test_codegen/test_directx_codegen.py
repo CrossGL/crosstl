@@ -47,6 +47,7 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXCooperativeMatrixUnsupportedError,
     DirectXPrivatePointerParameterError,
     DirectXResourcePointerArrayError,
+    DirectXResourcePointerParameterError,
     DirectXSemanticArraySizeError,
     DirectXTrailingZeroBuiltinError,
     DirectXUnresolvedSourceTypeError,
@@ -4272,14 +4273,14 @@ def test_hlsl_metal_constant_array_helpers_preserve_resource_parameters(tmp_path
     assert "RWStructuredBuffer<int64_t> result : register(u1);" in generated_code
     assert (
         "void read_stride(StructuredBuffer<int64_t> strides, "
-        "RWStructuredBuffer<int64_t> result)" in generated_code
+        "RWStructuredBuffer<int64_t> result, int64_t result_offset)" in generated_code
     )
     assert (
         "void forward_stride(StructuredBuffer<int64_t> strides, "
-        "RWStructuredBuffer<int64_t> result)" in generated_code
+        "RWStructuredBuffer<int64_t> result, int64_t result_offset)" in generated_code
     )
-    assert "read_stride(strides, result);" in generated_code
-    assert "forward_stride(strides, result);" in generated_code
+    assert "read_stride(strides, result, int64_t(result_offset));" in generated_code
+    assert "forward_stride(strides, result, int64_t(0));" in generated_code
     assert "int64_t strides[3]" not in generated_code
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
 
@@ -4453,6 +4454,212 @@ def test_hlsl_metal_resource_pointer_dereferences_lower_to_buffer_indices(tmp_pa
         )
 
 
+def test_hlsl_storage_pointer_element_argument_lowers_to_resource_offset_pair():
+    shader = """
+    shader StoragePointerElementArgument {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            float read_at(const device float* values, uint relative) {
+                return values[relative];
+            }
+
+            void main(
+                StructuredBuffer<float> src @binding(0),
+                RWStructuredBuffer<float> dst @binding(1),
+                uvec3 gid @gl_GlobalInvocationID
+            ) {
+                dst[gid.x] = read_at(&src[gid.x], 2u);
+            }
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "float read_at(StructuredBuffer<float> values, int64_t values_offset, "
+        "uint relative)" in generated
+    )
+    assert "return values[uint((values_offset + relative))];" in generated
+    assert "read_at(src, int64_t(gid.x), 2u)" in generated
+    assert "&src[" not in generated
+    assert "float* values" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+
+
+def test_hlsl_storage_pointer_offsets_compose_through_nested_helpers():
+    shader = """
+    shader NestedStoragePointerElementArgument {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            float leaf(const device float* values, uint relative) {
+                return values[relative];
+            }
+
+            float middle(const device float* values, uint inner) {
+                return leaf(&values[inner], 1u);
+            }
+
+            void main(
+                StructuredBuffer<float> src @binding(0),
+                RWStructuredBuffer<float> dst @binding(1),
+                uvec3 gid @gl_GlobalInvocationID
+            ) {
+                dst[gid.x] = middle(&src[gid.x], 2u);
+            }
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "float middle(StructuredBuffer<float> values, int64_t values_offset, "
+        "uint inner)" in generated
+    )
+    assert "leaf(values, int64_t((values_offset + inner)), 1u)" in generated
+    assert "middle(src, int64_t(gid.x), 2u)" in generated
+    assert "return values[uint((values_offset + relative))];" in generated
+    assert "&values[" not in generated
+    assert "&src[" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+
+
+def test_hlsl_storage_pointer_element_argument_preserves_writable_access():
+    shader = """
+    shader WritableStoragePointerElementArgument {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void store_at(device float* values, uint relative, float value) {
+                values[relative] = value;
+            }
+
+            void main(
+                RWStructuredBuffer<float> dst @binding(0),
+                uvec3 gid @gl_GlobalInvocationID
+            ) {
+                store_at(&dst[gid.x], 3u, 7.0);
+            }
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "void store_at(RWStructuredBuffer<float> values, int64_t values_offset, "
+        "uint relative, float value)" in generated
+    )
+    assert "values[uint((values_offset + relative))] = value;" in generated
+    assert "store_at(dst, int64_t(gid.x), 3u, 7.0);" in generated
+    assert "&dst[" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+
+
+def test_hlsl_storage_pointer_element_argument_rejects_readonly_write_root():
+    shader = """
+    shader ReadonlyStoragePointerElementArgument {
+        compute {
+            void store_at(device float* values) {
+                values[0] = 1.0;
+            }
+
+            void main(StructuredBuffer<float> src @binding(0)) {
+                store_at(&src[2]);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(DirectXResourcePointerParameterError) as excinfo:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    diagnostic = excinfo.value
+    assert diagnostic.function_name == "store_at"
+    assert diagnostic.parameter_name == "values"
+    assert diagnostic.address_space == "device"
+    assert diagnostic.expected_access == "read_write"
+    assert diagnostic.actual_access == "read"
+    assert diagnostic.reason == "access-mismatch"
+
+
+def test_hlsl_storage_pointer_parameter_rejects_read_through_writeonly_contract():
+    shader = """
+    shader WriteonlyStoragePointerRead {
+        compute {
+            float read_at(writeonly device float* values) {
+                return values[0];
+            }
+
+            void main(RWStructuredBuffer<float> dst @binding(0)) {
+                float value = read_at(dst);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(DirectXResourcePointerParameterError) as excinfo:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    diagnostic = excinfo.value
+    assert diagnostic.function_name == "read_at"
+    assert diagnostic.parameter_name == "values"
+    assert diagnostic.expected_access == "read"
+    assert diagnostic.actual_access == "write"
+    assert diagnostic.reason == "read-through-writeonly-pointer"
+
+
+def test_hlsl_storage_pointer_element_argument_rejects_element_type_mismatch():
+    shader = """
+    shader StoragePointerElementTypeMismatch {
+        compute {
+            float read_at(const device float* values) {
+                return values[0];
+            }
+
+            void main(StructuredBuffer<uint> src @binding(0)) {
+                float value = read_at(&src[2]);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(DirectXResourcePointerParameterError) as excinfo:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    diagnostic = excinfo.value
+    assert diagnostic.function_name == "read_at"
+    assert diagnostic.parameter_name == "values"
+    assert diagnostic.reason == "element-type-mismatch"
+
+
+def test_hlsl_storage_pointer_parameter_rejects_pointer_to_pointer():
+    shader = """
+    shader StoragePointerToPointer {
+        compute {
+            float read_at(const device float* * values) {
+                return values[0][0];
+            }
+
+            void main(StructuredBuffer<float> src @binding(0)) {
+                float value = src[0];
+            }
+        }
+    }
+    """
+
+    with pytest.raises(DirectXResourcePointerParameterError) as excinfo:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    diagnostic = excinfo.value
+    assert diagnostic.function_name == "read_at"
+    assert diagnostic.parameter_name == "values"
+    assert diagnostic.reason == "unsupported-pointee-type"
+
+
 def test_hlsl_readonly_resource_pointer_root_can_advance(tmp_path):
     shader = """
     #include <metal_stdlib>
@@ -4522,8 +4729,14 @@ def test_hlsl_metal_fixed_device_pointer_array_lowers_to_bounded_offsets(tmp_pat
     )
 
     assert "int64_t rows_offsets[4];" in generated
-    assert "rows_offsets[uint(i)] = int64_t((i * row_stride));" in generated
-    assert "output[i] = input[uint(rows_offsets[uint(i)])];" in generated
+    assert (
+        "rows_offsets[uint(i)] = int64_t((input_offset + (i * row_stride)));"
+        in generated
+    )
+    assert (
+        "output[uint((output_offset + i))] = input[uint(rows_offsets[uint(i)])];"
+        in generated
+    )
     assert "rows_offsets[uint((4 - 1))]" in generated
     assert "float* rows" not in generated
     assert "input +" not in generated
