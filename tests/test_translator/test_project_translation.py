@@ -37627,6 +37627,109 @@ def test_project_function_constant_variant_materializes_before_target_codegen(
     ] == ["has_w", "mode", "scale"]
 
 
+def test_metal_project_function_constant_values_reach_directx_codegen(tmp_path):
+    (tmp_path / "function_constants.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            constant bool enabled [[function_constant(7)]];
+            constant int mode [[function_constant(8)]] = 2;
+
+            kernel void fill(
+                device float* output [[buffer(0)]],
+                uint index [[thread_position_in_grid]]) {
+                output[index] = enabled ? float(mode) : 0.0f;
+            }
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    config = project_pipeline.ProjectConfig(
+        root=tmp_path,
+        include_patterns=("function_constants.metal",),
+        targets=("directx",),
+        specialization_constants={"enabled": True, "8": 5},
+    )
+
+    payload = translate_project(config).to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    constants = {
+        constant["name"]: constant
+        for constant in artifact["specializationConstants"]
+    }
+    assert constants["enabled"]["source"] == "metal.function_constant"
+    assert constants["enabled"]["sourceLocation"]["line"] == 4
+    assert constants["enabled"]["concreteValue"] is True
+    assert constants["enabled"]["valueProvenance"]["selectorKind"] == "name"
+    assert constants["mode"]["defaultValue"] == 2
+    assert constants["mode"]["concreteValue"] == 5
+    assert constants["mode"]["valueProvenance"]["selectorKind"] == "id"
+
+    generated = (tmp_path / artifact["path"]).read_text(encoding="utf-8")
+    assert "static const bool enabled = true;" in generated
+    assert "static const int mode = 5;" in generated
+    assert "function_constant" not in generated
+    assert "bool enabled;" not in generated
+    assert "$Globals" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+
+
+def test_metal_project_required_function_constant_defers_to_opengl(tmp_path):
+    (tmp_path / "function_constant.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            constant bool enabled [[function_constant(7)]];
+
+            kernel void fill(
+                device float* output [[buffer(0)]],
+                uint index [[thread_position_in_grid]]) {
+                output[index] = enabled ? 1.0f : 0.0f;
+            }
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    config = project_pipeline.ProjectConfig(
+        root=tmp_path,
+        include_patterns=("function_constant.metal",),
+        targets=("opengl",),
+    )
+
+    payload = translate_project(config).to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["specializationMaterialization"] == {
+        "status": "deferred",
+        "mode": "deferred",
+        "targetSupportsDeferredSpecialization": True,
+        "constantCount": 1,
+        "requiredCount": 1,
+        "overriddenCount": 0,
+        "concreteCount": 0,
+        "source": "shared-crossgl-specialization",
+    }
+    constant = artifact["specializationConstants"][0]
+    assert constant["name"] == "enabled"
+    assert constant["id"] == 7
+    assert constant["required"] is True
+    assert constant["status"] == "required"
+    assert constant["valueProvenance"] == {"kind": "runtime-override-required"}
+
+    generated = (tmp_path / artifact["path"]).read_text(encoding="utf-8")
+    assert "layout(constant_id = 7) const bool enabled = false;" in generated
+    assert "uniform bool enabled" not in generated
+
+
 def test_project_function_constant_deferred_metadata_distinguishes_required(
     tmp_path,
 ):

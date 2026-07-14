@@ -1292,7 +1292,7 @@ TARGET_SOURCE_OPTIONS_KEY = "target_options"
 TEMPLATE_VARIANTS_SOURCE_OPTION = "template_variants"
 SPECIALIZATION_CONSTANTS_CONFIG_KEY = "specialization_constants"
 DEFERRED_SPECIALIZATION_TARGETS = frozenset(
-    ("cgl", "crossgl", "metal", "vulkan")
+    ("cgl", "crossgl", "metal", "opengl", "vulkan")
 )
 METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION = "max_template_specializations"
 METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION = (
