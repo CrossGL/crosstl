@@ -182,8 +182,31 @@ def assert_directx_compute_validates_if_available(hlsl_code, tmp_path):
     shader_path = tmp_path / "shader.hlsl"
     shader_path.write_text(hlsl_code, encoding="utf-8")
 
+    dxc = shutil.which("dxc")
+    if dxc:
+        output_path = tmp_path / "shader.dxil"
+        compile_result = subprocess.run(
+            [
+                dxc,
+                "-T",
+                "cs_6_0",
+                "-E",
+                "CSMain",
+                str(shader_path),
+                "-Fo",
+                str(output_path),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert compile_result.returncode == 0, (
+            compile_result.stdout + compile_result.stderr
+        )
+        return
+
     glslang = shutil.which("glslangValidator")
-    if glslang:
+    if glslang and "int64_t" not in hlsl_code:
         output_path = tmp_path / "shader.spv"
         compile_result = subprocess.run(
             [
@@ -206,28 +229,6 @@ def assert_directx_compute_validates_if_available(hlsl_code, tmp_path):
             compile_result.stdout + compile_result.stderr
         )
         return
-
-    dxc = shutil.which("dxc")
-    if not dxc:
-        return
-
-    output_path = tmp_path / "shader.dxil"
-    compile_result = subprocess.run(
-        [
-            dxc,
-            "-T",
-            "cs_6_0",
-            "-E",
-            "CSMain",
-            str(shader_path),
-            "-Fo",
-            str(output_path),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert compile_result.returncode == 0, compile_result.stdout + compile_result.stderr
 
 
 def assert_guarded_glsl_validates_if_available(glsl_code, tmp_path):
@@ -50451,6 +50452,37 @@ METAL_NESTED_GENERIC_MEMBER_KERNEL = textwrap.dedent("""
     """).strip()
 
 
+METAL_ADDRESSED_TEMPLATE_MEMBER_KERNEL = textwrap.dedent("""
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct ReducedMMAFrag {
+        template <typename SrcPtrType>
+        static float load(SrcPtrType src, const int stride) {
+            return static_cast<float>(src[stride]);
+        }
+    };
+
+    struct ReducedMMATile {
+        float value;
+
+        template <typename U>
+        void load(const device U* src, const int index) {
+            value = ReducedMMAFrag::load(&(src[index]), 1);
+        }
+    };
+
+    kernel void template_member_buffer_pointer(
+        const device float* src [[buffer(0)]],
+        device float* out [[buffer(1)]],
+        uint gid [[thread_position_in_grid]]) {
+        ReducedMMATile tile;
+        tile.load(src, int(gid));
+        out[gid] = tile.value;
+    }
+    """).strip()
+
+
 def _write_metal_directx_project(repo: Path, kernel_name: str, source: str) -> Path:
     kernel_dir = repo / "kernels"
     kernel_dir.mkdir(parents=True)
@@ -50582,6 +50614,56 @@ def test_metal_nested_generic_member_calls_translate_and_validate_for_all_target
     assert_directx_compute_validates_if_available(generated["directx"], tmp_path)
     assert_compute_glsl_validates_if_available(generated["opengl"], tmp_path)
     assert_spirv_asm_validates_if_available(generated["vulkan"], tmp_path)
+
+
+def test_metal_addressed_template_member_pointer_translates_and_validates(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "template_member_buffer_pointer.metal").write_text(
+        METAL_ADDRESSED_TEMPLATE_MEMBER_KERNEL,
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx", "opengl"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 2
+    assert payload["summary"]["failedCount"] == 0
+    artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
+    assert set(artifacts) == {"directx", "opengl"}
+    generated = {
+        target: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for target, artifact in artifacts.items()
+    }
+
+    directx = generated["directx"]
+    assert "StructuredBuffer<float> src" in directx
+    assert "int64_t src_offset" in directx
+    assert "src[uint((src_offset + stride))]" in directx
+    assert "int64_t((src_offset + index))" in directx
+    assert "ReducedMMATile__load__float(tile, src, int64_t(0), int(gid))" in directx
+    assert "&src[" not in directx
+    assert "float* src" not in directx
+
+    opengl = generated["opengl"]
+    assert "int stride, int src_offset" in opengl
+    assert "float(src[(src_offset + stride)])" in opengl
+    assert "int((src_offset + index))" in opengl
+    assert (
+        "ReducedMMATile_load_float__glsl_src_src_float(tile, int(gid), int(0))"
+        in opengl
+    )
+    assert "&(src[index])" not in opengl
+
+    assert_directx_compute_validates_if_available(directx, tmp_path)
+    assert_compute_glsl_validates_if_available(opengl, tmp_path)
 
 
 @pytest.mark.parametrize(

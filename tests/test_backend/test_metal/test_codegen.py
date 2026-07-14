@@ -2409,11 +2409,12 @@ def test_codegen_preserves_readonly_device_helper_parameters_for_hlsl(tmp_path):
 
     hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
     assert (
-        "void copy_one(StructuredBuffer<float> src, "
-        "RWStructuredBuffer<float> dst, uint index)" in hlsl
+        "void copy_one(StructuredBuffer<float> src, int64_t src_offset, "
+        "RWStructuredBuffer<float> dst, int64_t dst_offset, uint index)" in hlsl
     )
     assert "StructuredBuffer<float> src : register(t0);" in hlsl
-    assert "copy_one(src, dst, index);" in hlsl
+    assert "dst[uint((dst_offset + index))] = src[uint((src_offset + index))];" in hlsl
+    assert "copy_one(src, int64_t(0), dst, int64_t(0), index);" in hlsl
 
     dxc = shutil.which("dxc")
     if dxc is not None:

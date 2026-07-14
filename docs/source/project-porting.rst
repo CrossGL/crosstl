@@ -931,6 +931,24 @@ fails closed with ``project.translate.metal-struct-method``. Addressed-element
 indices must also be known integral expressions without unsupported calls,
 assignments, side effects, nested subscripts, or ambiguous expression forms.
 
+Concrete pointee comparisons resolve visible non-template ``using`` and
+``typedef`` chains at the method declaration and call site before deciding
+whether two pointer types are compatible. Declaration order, nested shadowing,
+and sibling scopes are preserved. Forward references, alias cycles, and chains
+whose equivalence cannot be proved remain failed bindings; they are not treated
+as matching merely because their unresolved spelling is the same.
+
+For DirectX, a supported storage-pointer helper parameter is emitted as a
+``StructuredBuffer`` or ``RWStructuredBuffer`` resource together with a signed
+element offset. Passing ``&buffer[index]``, a previously rebased alias, or an
+alias forwarded through another supported helper composes that offset without
+emitting HLSL pointer syntax or mutating the resource handle. The generated
+helper applies the offset to every indexed load or store. Element-type
+changes, insufficient read or write access, pointer-to-pointer parameters, and
+arguments without a concrete structured-buffer root fail with
+``project.translate.directx-resource-pointer-parameter-unsupported`` rather
+than producing an invalid call.
+
 The contract applies generally to Metal sources handled by project translation.
 The pinned MLX ``BaseMMAFrag::load(&(src[index]))`` call shape is a focused
 acceptance example for retaining the qualified pointer through nested template-
