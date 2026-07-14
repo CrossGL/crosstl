@@ -2440,6 +2440,83 @@ def test_preprocessor_inlines_direct_reference_accessor_as_original_storage():
     assert "return self.values[(index)];" in output
 
 
+def test_preprocessor_inlines_implicit_reference_accessor_in_helper_argument():
+    code = """
+    struct Fragment {
+        float lanes[2];
+    };
+
+    struct FragmentOps {
+        static void store(const thread Fragment& fragment, device float* output) {
+            output[0] = fragment.lanes[0];
+        }
+    };
+
+    struct Tile {
+        Fragment val_frags[4];
+        thread Fragment& frag_at(short i, short j) {
+            return val_frags[i * 2 + j];
+        }
+        const thread Fragment& frag_at(short i, short j) const {
+            return val_frags[i * 2 + j];
+        }
+        void store(short i, short j, device float* output) const {
+            FragmentOps::store(frag_at(i, j), output);
+        }
+    };
+
+    void run(thread Tile& tile, device float* output) {
+        tile.store(0, 1, output);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "FragmentOps__store(self.val_frags[(i) * 2 + (j)], output);" in output
+    assert "frag_at(i, j)" not in output
+    assert "Tile__frag_at" not in output
+
+
+def test_preprocessor_rejects_unsafe_implicit_reference_accessor_argument():
+    code = """
+    struct Fragment {
+        float lanes[2];
+    };
+
+    struct FragmentOps {
+        static void store(thread Fragment& fragment, device float* output) {
+            output[0] = fragment.lanes[0];
+        }
+    };
+
+    struct Tile {
+        Fragment val_frags[4];
+        thread Fragment& frag_at(short i, short j) {
+            return val_frags[i * 2 + j];
+        }
+        void store(short i, short j, device float* output) {
+            FragmentOps::store(frag_at(i++, j), output);
+        }
+    };
+
+    void run(thread Tile& tile, device float* output) {
+        tile.store(0, 1, output);
+    }
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.project_diagnostic_code == "project.translate.metal-struct-method"
+    assert error.missing_capabilities == ("struct.reference-return",)
+    assert error.struct_name == "Tile"
+    assert error.method_name == "frag_at"
+    assert error.requested_signature == "Tile::frag_at(i++, j)"
+    assert error.reason == "reference-return-identity-unsupported"
+    assert "preserving the returned lvalue identity" in str(error)
+
+
 @pytest.mark.parametrize(
     "alias_declarations",
     [
@@ -2483,36 +2560,57 @@ def test_preprocessor_inlines_direct_reference_accessor_through_alias_chain(
     assert "Tile__frag_at" not in output
 
 
-@pytest.mark.parametrize(
-    "receiver_declaration",
-    [
-        pytest.param("thread const tile_type& tile", id="const"),
-        pytest.param("constant tile_type& tile", id="constant-address-space"),
-    ],
-)
-def test_preprocessor_alias_reference_accessor_read_only_receivers_fail_closed(
-    receiver_declaration,
-):
-    code = f"""
-    struct Fragment {{ float lanes[2]; }};
+def test_preprocessor_inlines_const_reference_accessor_through_alias_chain():
+    code = """
+    struct Fragment { float lanes[2]; };
 
-    struct Tile {{
+    struct Tile {
         using frag_type = Fragment;
         frag_type val_frags[4];
-        thread frag_type& frag_at(short i, short j) {{
+        thread frag_type& frag_at(short i, short j) {
             return val_frags[i * 2 + j];
-        }}
-        const thread frag_type& frag_at(short i, short j) const {{
+        }
+        const thread frag_type& frag_at(short i, short j) const {
             return val_frags[i * 2 + j];
-        }}
-    }};
+        }
+    };
 
     using tile_alias = Tile;
     using tile_type = tile_alias;
-    float inspect({receiver_declaration}, short i, short j) {{
+    float inspect(thread const tile_type& tile, short i, short j) {
         float result = tile.frag_at(i, j).lanes[0];
         return result;
-    }}
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "float result = tile.val_frags[(i) * 2 + (j)].lanes[0];" in output
+    assert "tile.frag_at(" not in output
+    assert "Tile__frag_at" not in output
+
+
+def test_preprocessor_constant_reference_accessor_receiver_fails_closed():
+    code = """
+    struct Fragment { float lanes[2]; };
+
+    struct Tile {
+        using frag_type = Fragment;
+        frag_type val_frags[4];
+        thread frag_type& frag_at(short i, short j) {
+            return val_frags[i * 2 + j];
+        }
+        const thread frag_type& frag_at(short i, short j) const {
+            return val_frags[i * 2 + j];
+        }
+    };
+
+    using tile_alias = Tile;
+    using tile_type = tile_alias;
+    float inspect(constant tile_type& tile, short i, short j) {
+        float result = tile.frag_at(i, j).lanes[0];
+        return result;
+    }
     """
 
     with pytest.raises(MetalStructMethodError) as excinfo:
@@ -2713,7 +2811,7 @@ def test_preprocessor_leaves_unknown_struct_member_calls_unchanged():
             "State",
             "element",
             "State::element()",
-            "thread int&",
+            "const thread int&",
             id="const-receiver",
         ),
         pytest.param(

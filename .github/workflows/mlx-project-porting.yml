@@ -197,6 +197,8 @@ jobs:
               scope["referenceAccessorProofIncluded"] is not True
               or scope["referenceAccessorTargets"] != ["directx", "opengl"]
               or reference_accessor["proofStatus"] != "verified-original-storage-write"
+              or reference_accessor["constReadProofStatus"]
+              != "verified-original-storage-const-read"
               or reference_accessor["artifactCount"] != 2
               or reference_accessor["projectDiagnosticCount"] != 0
               or reference_accessor["runtimeParityClaimed"] is not False
@@ -210,6 +212,7 @@ jobs:
           for target in ("directx", "opengl"):
               proof = reference_accessor["targetProofs"][target]
               evidence = proof["writeEvidence"]
+              const_read = proof["constReadEvidence"]
               if (
                   evidence["status"] != "verified-original-storage-write"
                   or evidence["storageMember"] != "val_frags"
@@ -218,6 +221,18 @@ jobs:
               ):
                   raise SystemExit(
                       f"reference accessor {target} storage evidence is incomplete"
+                  )
+              if (
+                  const_read["status"]
+                  != "verified-original-storage-const-read"
+                  or const_read["storageMember"] != "val_frags"
+                  or const_read["implicitReceiver"] != "self"
+                  or const_read["passedDirectlyToHelper"] is not True
+                  or const_read["accessorCallEliminated"] is not True
+                  or const_read["kernelPathInvoked"] is not True
+              ):
+                  raise SystemExit(
+                      f"reference accessor {target} const-read evidence is incomplete"
                   )
               expected_status = (
                   "validated" if target == expected_native_target else "not-required"

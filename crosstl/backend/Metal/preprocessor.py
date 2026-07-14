@@ -7726,15 +7726,25 @@ class MetalPreprocessor(HLSLPreprocessor):
             for argument in self._split_top_level_commas(code[arg_open + 1 : arg_close])
             if argument.strip()
         ]
-        candidates = [
-            method
-            for method in methods
-            if not method.is_static
-            and not method.is_const
-            and re.search(r"\bconst\b", method.return_type) is None
-            and len(method.parameter_names) == len(arguments)
-        ]
-        if receiver_is_const is False and len(candidates) == 1:
+        if receiver_is_const is True:
+            candidates = [
+                method
+                for method in methods
+                if not method.is_static
+                and method.is_const
+                and re.search(r"\bconst\b", method.return_type) is not None
+                and len(method.parameter_names) == len(arguments)
+            ]
+        else:
+            candidates = [
+                method
+                for method in methods
+                if not method.is_static
+                and not method.is_const
+                and re.search(r"\bconst\b", method.return_type) is None
+                and len(method.parameter_names) == len(arguments)
+            ]
+        if receiver_is_const is not None and len(candidates) == 1:
             candidate = candidates[0]
             normalized_parameters = self._normalize_template_argument_text(
                 candidate.parameters
@@ -7745,13 +7755,19 @@ class MetalPreprocessor(HLSLPreprocessor):
                 if method is not candidate
                 and method.name == candidate.name
                 and len(method.parameter_names) == len(arguments)
-                and not (
-                    method.is_const
-                    and self._normalize_template_argument_text(method.parameters)
-                    == normalized_parameters
-                )
             ]
-            if not competing_overloads:
+            matching_counterparts = [
+                method
+                for method in competing_overloads
+                if method.is_const != candidate.is_const
+                and not method.is_static
+                and any(method is concrete for concrete in struct.methods)
+                and self._normalize_template_argument_text(method.parameters)
+                == normalized_parameters
+            ]
+            if len(matching_counterparts) <= 1 and len(matching_counterparts) == len(
+                competing_overloads
+            ):
                 return candidate
 
         self._reject_reference_returning_method_call(
@@ -7810,10 +7826,9 @@ class MetalPreprocessor(HLSLPreprocessor):
         if declared_type != struct_name:
             return None
         leading = declaration.group("leading") or ""
-        return bool(
-            re.search(r"\b(?:const|constant)\b", leading)
-            or declaration.group("trailing")
-        )
+        if re.search(r"\bconstant\b", leading):
+            return None
+        return bool(re.search(r"\bconst\b", leading) or declaration.group("trailing"))
 
     def _build_direct_reference_accessor_rewrite(
         self,

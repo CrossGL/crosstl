@@ -239,11 +239,25 @@ def _write_reference_accessor_report(
               float val_frags[4];
             };
             RWStructuredBuffer<float> out : register(u0);
+            void ReferenceAccessorOps__store(
+                inout float value,
+                RWStructuredBuffer<float> out) {
+              out[1] = value;
+            }
+            void ReferenceAccessorTile__store(
+                in ReferenceAccessorTile self,
+                RWStructuredBuffer<float> out,
+                int i,
+                int j) {
+              ReferenceAccessorOps__store(
+                  self.val_frags[((i * 2) + j)], out);
+            }
             [numthreads(1, 1, 1)]
             void CSMain() {
               ReferenceAccessorTile tile;
               tile.val_frags[((1 * 2) + 1)] = 73.25f;
               out[0] = tile.val_frags[((1 * 2) + 1)];
+              ReferenceAccessorTile__store(tile, out, 1, 1);
             }
         """
         ),
@@ -254,10 +268,24 @@ def _write_reference_accessor_report(
               float val_frags[4];
             };
             layout(std430, binding = 0) buffer out_block { float out_values[]; };
+            void ReferenceAccessorOps_store__glsl_out_out_float(
+                inout float value,
+                int out_offset) {
+              out_values[out_offset + 1] = value;
+            }
+            void ReferenceAccessorTile_store__glsl_out_out_float(
+                ReferenceAccessorTile self,
+                int i,
+                int j,
+                int out_offset) {
+              ReferenceAccessorOps_store__glsl_out_out_float(
+                  self.val_frags[((i * 2) + j)], out_offset);
+            }
             void main() {
               ReferenceAccessorTile tile;
               tile.val_frags[((1 * 2) + 1)] = 73.25;
               out_values[0] = tile.val_frags[((1 * 2) + 1)];
+              ReferenceAccessorTile_store__glsl_out_out_float(tile, 1, 1, 0);
             }
         """
         ),
@@ -433,7 +461,9 @@ def test_reference_accessor_fixture_translates_through_public_project_surface(
 
     source = source_path.read_text(encoding="utf-8")
     assert "constexpr thread float& frag_at" in source
+    assert "constexpr const thread float& frag_at" in source
     assert "return val_frags[i * width + j];" in source
+    assert "ReferenceAccessorOps::store(frag_at(i, j), out);" in source
     alias_declaration = "using tile_t = ReferenceAccessorTile;"
     receiver_declaration = "tile_t tile;"
     accessor_write = "tile.frag_at(1, 1) = 73.25f;"
@@ -466,6 +496,15 @@ def test_reference_accessor_fixture_translates_through_public_project_surface(
         assert evidence["readBackFromWrittenLvalue"] is True
         assert evidence["readBackLvalue"] == evidence["storageLvalue"]
         assert evidence["valueReturningHelperUsedForWrite"] is False
+        const_read = module._reference_accessor_const_read_evidence(
+            generated,
+            target=target,
+        )
+        assert const_read["status"] == "verified-original-storage-const-read"
+        assert const_read["storageLvalue"].startswith("self.val_frags[")
+        assert const_read["passedDirectlyToHelper"] is True
+        assert const_read["accessorCallEliminated"] is True
+        assert const_read["kernelPathInvoked"] is True
 
 
 def test_reference_accessor_check_records_structured_proof_and_native_validation(
@@ -566,6 +605,7 @@ def test_reference_accessor_check_records_structured_proof_and_native_validation
 
     assert result["status"] == "passed"
     assert result["proofStatus"] == "verified-original-storage-write"
+    assert result["constReadProofStatus"] == ("verified-original-storage-const-read")
     assert result["translationSurface"] == "crosstl translate-project"
     assert result["accessorContract"]["storageExpression"] == (
         "val_frags[i * width + j]"
@@ -590,6 +630,14 @@ def test_reference_accessor_check_records_structured_proof_and_native_validation
             "readBackLvalue": "tile.val_frags[((1*2)+1)]",
             "valueReturningHelperUsedForWrite": False,
         }
+        const_read = proof["constReadEvidence"]
+        assert const_read["status"] == "verified-original-storage-const-read"
+        assert const_read["storageMember"] == "val_frags"
+        assert const_read["storageLvalue"].startswith("self.val_frags[")
+        assert const_read["implicitReceiver"] == "self"
+        assert const_read["passedDirectlyToHelper"] is True
+        assert const_read["accessorCallEliminated"] is True
+        assert const_read["kernelPathInvoked"] is True
         assert proof["nativeValidation"]["status"] == "validated"
         assert proof["nativeValidation"]["nativeCompiler"] == tool
         assert (mlx_root / proof["artifact"]).is_file()
