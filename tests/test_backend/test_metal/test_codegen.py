@@ -8134,9 +8134,7 @@ def test_codegen_type_alias_member_array_keeps_component_type():
 
     crossgl = normalize(convert(source))
 
-    assert (
-        "CrossGLMetalVectorIndex_vec2_set(tile.values[0], lane, 1.0f);" in crossgl
-    )
+    assert "CrossGLMetalVectorIndex_vec2_set(tile.values[0], lane, 1.0f);" in crossgl
 
 
 def test_codegen_resource_vector_components_preserve_buffer_indexing(tmp_path):
