@@ -45,6 +45,255 @@ class _VulkanBufferResource:
     memory: Any
 
 
+@dataclass(frozen=True)
+class _PreparedOpenGLBuffer:
+    name: str
+    binding_index: int
+    resource_kind: str | None
+    dtype: str
+    shape: tuple[int, ...]
+    source: str | None
+    output_name: str | None
+    payload: bytes
+
+    @property
+    def size(self) -> int:
+        return len(self.payload)
+
+
+class OpenGLComputeRuntime:
+    """Optional headless OpenGL compute runtime for buffer fixtures.
+
+    ModernGL is imported lazily so the runtime remains optional. Context
+    creation prefers EGL before allowing ModernGL to choose its platform
+    default.
+    """
+
+    name = "opengl-compute-runtime"
+
+    def __init__(
+        self,
+        *,
+        module_loader: Any | None = None,
+        context_factory: Any | None = None,
+        context_backends: Sequence[str | None] = ("egl", None),
+        require_version: int = 430,
+    ):
+        self._module_loader = module_loader or importlib.import_module
+        self._context_factory = context_factory
+        self.context_backends = tuple(context_backends)
+        self.require_version = int(require_version)
+
+    def is_available(
+        self,
+        adapter: Any,
+        request: RuntimeExecutionRequest,
+    ) -> RuntimeExecutorAvailability:
+        _ = adapter, request
+        try:
+            moderngl = self._load_moderngl()
+        except RuntimeExecutorUnavailable as exc:
+            return RuntimeExecutorAvailability(
+                False,
+                reason=str(exc),
+                details={
+                    "reasonKind": "dependency-unavailable",
+                    "target": "opengl",
+                    "missingPythonModules": ["moderngl"],
+                },
+            )
+
+        context = None
+        try:
+            context, backend = self._create_context(moderngl)
+            version_code = int(getattr(context, "version_code", 0) or 0)
+            if version_code and version_code < self.require_version:
+                raise RuntimeExecutorUnavailable(
+                    "OpenGL compute requires context version "
+                    f"{self.require_version}, got {version_code}."
+                )
+        except Exception as exc:  # pragma: no cover - depends on local GL loader
+            return RuntimeExecutorAvailability(
+                False,
+                reason=f"OpenGL compute runtime is unavailable: {exc}",
+                details={
+                    "reasonKind": "opengl-runtime-unavailable",
+                    "target": "opengl",
+                    "error": str(exc),
+                },
+            )
+        finally:
+            _release_opengl_object(context)
+
+        return RuntimeExecutorAvailability(
+            True,
+            details={
+                "reasonKind": "available",
+                "target": "opengl",
+                "runtime": self.name,
+                "contextBackend": backend or "default",
+                "versionCode": version_code,
+            },
+        )
+
+    def load_artifact(self, adapter: Any, state: Any, module_path: Path) -> str:
+        _ = adapter, state
+        try:
+            source = Path(module_path).read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            raise RuntimeAdapterSetupError(
+                f"OpenGL runtime artifact could not be read: {exc}",
+                details={"target": "opengl", "modulePath": str(module_path)},
+            ) from exc
+        if not source.strip():
+            raise RuntimeAdapterSetupError(
+                "OpenGL runtime artifact is empty.",
+                details={"target": "opengl", "modulePath": str(module_path)},
+            )
+        return source
+
+    def dispatch(
+        self,
+        adapter: Any,
+        state: Any,
+        request: NativeRuntimeDispatchRequest,
+    ) -> dict[str, Mapping[str, Any]]:
+        _ = adapter, state
+        if request.entry_point not in (None, "main"):
+            raise RuntimeExecutorUnavailable(
+                "OpenGL compute artifacts expose the selected entry point as main; "
+                f"got {request.entry_point!r}."
+            )
+
+        moderngl = self._load_moderngl()
+        shader_source = self._shader_source(request)
+        prepared_buffers = _prepare_opengl_buffers(request.buffers)
+        workgroup_count = _workgroup_count(request, target="OpenGL")
+        if not prepared_buffers:
+            raise RuntimeExecutorUnavailable(
+                "OpenGL compute runtime requires at least one buffer resource."
+            )
+
+        context = None
+        shader = None
+        resources: list[tuple[_PreparedOpenGLBuffer, Any]] = []
+        try:
+            context, _backend = self._create_context(moderngl)
+            try:
+                shader = context.compute_shader(shader_source)
+            except Exception as exc:
+                raise RuntimeAdapterSetupError(
+                    f"OpenGL compute shader compilation or linking failed: {exc}",
+                    details={"target": "opengl", "runtime": self.name},
+                ) from exc
+
+            for prepared in prepared_buffers:
+                buffer = self._create_buffer(context, prepared)
+                resources.append((prepared, buffer))
+            self._bind_constants(shader, request.constants)
+            shader.run(
+                group_x=workgroup_count[0],
+                group_y=workgroup_count[1],
+                group_z=workgroup_count[2],
+            )
+            context.memory_barrier()
+            finish = getattr(context, "finish", None)
+            if callable(finish):
+                finish()
+            return self._read_outputs(resources)
+        except (RuntimeAdapterSetupError, RuntimeExecutorUnavailable):
+            raise
+        except RuntimeAdapterDispatchError:
+            raise
+        except Exception as exc:
+            raise RuntimeAdapterDispatchError(
+                f"OpenGL compute dispatch failed: {exc}",
+                details={"target": "opengl", "runtime": self.name},
+            ) from exc
+        finally:
+            for _prepared, buffer in reversed(resources):
+                _release_opengl_object(buffer)
+            _release_opengl_object(shader)
+            _release_opengl_object(context)
+
+    def _load_moderngl(self) -> Any:
+        try:
+            return self._module_loader("moderngl")
+        except Exception as exc:
+            raise RuntimeExecutorUnavailable(
+                "ModernGL is unavailable; install the optional 'moderngl' package "
+                "to run OpenGL runtime fixtures."
+            ) from exc
+
+    def _create_context(self, moderngl: Any) -> tuple[Any, str | None]:
+        if self._context_factory is not None:
+            return self._context_factory(moderngl), None
+
+        failures = []
+        for backend in self.context_backends:
+            kwargs = {"require": self.require_version}
+            if backend is not None:
+                kwargs["backend"] = backend
+            try:
+                return moderngl.create_standalone_context(**kwargs), backend
+            except Exception as exc:
+                failures.append(f"{backend or 'default'}: {exc}")
+        raise RuntimeExecutorUnavailable(
+            "No headless OpenGL compute context could be created ("
+            + "; ".join(failures)
+            + ")."
+        )
+
+    def _shader_source(self, request: NativeRuntimeDispatchRequest) -> str:
+        if isinstance(request.loaded_artifact, str):
+            return request.loaded_artifact
+        return self.load_artifact(None, None, request.module_path)
+
+    def _create_buffer(self, context: Any, prepared: _PreparedOpenGLBuffer) -> Any:
+        if prepared.payload:
+            buffer = context.buffer(prepared.payload)
+        else:
+            buffer = context.buffer(reserve=max(prepared.size, 1))
+        if prepared.resource_kind in {"constant-buffer", "uniform"}:
+            buffer.bind_to_uniform_block(prepared.binding_index)
+        else:
+            buffer.bind_to_storage_buffer(prepared.binding_index)
+        return buffer
+
+    def _bind_constants(self, shader: Any, constants: Mapping[str, Any]) -> None:
+        for name, binding in constants.items():
+            if binding.value is None:
+                raise RuntimeExecutorUnavailable(
+                    f"OpenGL runtime constant {name!r} has no bound value."
+                )
+            try:
+                uniform = shader[name]
+            except (KeyError, TypeError) as exc:
+                raise RuntimeExecutorUnavailable(
+                    f"OpenGL runtime constant {name!r} is not an active uniform."
+                ) from exc
+            value = binding.value
+            if isinstance(value, list):
+                value = tuple(value)
+            uniform.value = value
+
+    def _read_outputs(
+        self,
+        resources: Sequence[tuple[_PreparedOpenGLBuffer, Any]],
+    ) -> dict[str, Mapping[str, Any]]:
+        outputs: dict[str, Mapping[str, Any]] = {}
+        for prepared, buffer in resources:
+            if prepared.source != "expectedOutput":
+                continue
+            payload = buffer.read(size=prepared.size)
+            outputs[prepared.output_name or prepared.name] = {
+                "dtype": prepared.dtype,
+                "shape": list(prepared.shape),
+                "values": _unpack_values(payload, prepared.dtype, target="OpenGL"),
+            }
+        return outputs
+
+
 class VulkanComputeRuntime:
     """Reference Vulkan compute runtime for simple storage-buffer fixtures.
 
@@ -591,6 +840,17 @@ def _read_mapped_memory(mapped: Any, size: int) -> bytes:
         view.release()
 
 
+def _release_opengl_object(value: Any) -> None:
+    if value is None:
+        return
+    release = getattr(value, "release", None)
+    if callable(release):
+        try:
+            release()
+        except Exception:
+            pass
+
+
 def _vulkan_descriptor_type(vk: Any, resource_kind: str | None) -> Any:
     if resource_kind in {"constant-buffer", "uniform"}:
         return vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
@@ -632,7 +892,7 @@ def _prepare_vulkan_buffers(
                 "Vulkan compute runtime requires unique set/binding pairs."
             )
         seen_bindings.add(descriptor)
-        dtype = _normalize_dtype(binding.dtype)
+        dtype = _normalize_dtype(binding.dtype, target="Vulkan")
         shape = tuple(int(value) for value in binding.shape)
         element_count = (
             math.prod(shape) if shape else len(_flatten_values(binding.value))
@@ -640,7 +900,12 @@ def _prepare_vulkan_buffers(
         if binding.source == "expectedOutput":
             payload = b"\x00" * (element_count * _dtype_size(dtype))
         else:
-            payload = _pack_values(binding.value, dtype, expected_count=element_count)
+            payload = _pack_values(
+                binding.value,
+                dtype,
+                expected_count=element_count,
+                target="Vulkan",
+            )
         prepared.append(
             _PreparedVulkanBuffer(
                 name=name,
@@ -659,6 +924,79 @@ def _prepare_vulkan_buffers(
     )
 
 
+def _prepare_opengl_buffers(
+    bindings: Mapping[str, NativeRuntimeBufferBinding],
+) -> tuple[_PreparedOpenGLBuffer, ...]:
+    prepared = []
+    seen_bindings: set[tuple[str, int]] = set()
+    for name, binding in bindings.items():
+        resource = binding.binding
+        if resource.kind not in (
+            None,
+            "buffer",
+            "storage-buffer",
+            "constant-buffer",
+            "uniform",
+        ):
+            raise RuntimeExecutorUnavailable(
+                f"OpenGL compute runtime supports buffer resources only: {name}."
+            )
+        if resource.binding is None:
+            raise RuntimeExecutorUnavailable(
+                f"OpenGL compute runtime requires an explicit binding for {name}."
+            )
+        set_index = _int_field(resource.set, default=0)
+        if set_index != 0:
+            raise RuntimeExecutorUnavailable(
+                "OpenGL compute runtime does not support nonzero descriptor sets."
+            )
+        binding_index = _int_field(resource.binding)
+        namespace = (
+            "uniform" if resource.kind in {"constant-buffer", "uniform"} else "storage"
+        )
+        descriptor = (namespace, binding_index)
+        if descriptor in seen_bindings:
+            raise RuntimeExecutorUnavailable(
+                f"OpenGL compute runtime requires unique {namespace} buffer bindings."
+            )
+        seen_bindings.add(descriptor)
+        dtype = _normalize_dtype(binding.dtype, target="OpenGL")
+        shape = tuple(int(value) for value in binding.shape)
+        element_count = (
+            math.prod(shape) if shape else len(_flatten_values(binding.value))
+        )
+        if binding.source == "expectedOutput":
+            payload = b"\x00" * (element_count * _dtype_size(dtype))
+        else:
+            payload = _pack_values(
+                binding.value,
+                dtype,
+                expected_count=element_count,
+                target="OpenGL",
+            )
+        prepared.append(
+            _PreparedOpenGLBuffer(
+                name=name,
+                binding_index=binding_index,
+                resource_kind=resource.kind,
+                dtype=dtype,
+                shape=shape,
+                source=binding.source,
+                output_name=_runtime_value_name(binding),
+                payload=payload,
+            )
+        )
+    return tuple(
+        sorted(
+            prepared,
+            key=lambda item: (
+                item.resource_kind in {"constant-buffer", "uniform"},
+                item.binding_index,
+            ),
+        )
+    )
+
+
 def _runtime_value_name(binding: NativeRuntimeBufferBinding) -> str | None:
     value_name = binding.metadata.get("runtimeValueName")
     if isinstance(value_name, str) and value_name.strip():
@@ -666,11 +1004,15 @@ def _runtime_value_name(binding: NativeRuntimeBufferBinding) -> str | None:
     return None
 
 
-def _workgroup_count(request: NativeRuntimeDispatchRequest) -> tuple[int, int, int]:
+def _workgroup_count(
+    request: NativeRuntimeDispatchRequest,
+    *,
+    target: str = "Vulkan",
+) -> tuple[int, int, int]:
     dispatch = request.dispatch
     if dispatch is None:
         raise RuntimeExecutorUnavailable(
-            "Vulkan compute runtime requires dispatch geometry."
+            f"{target} compute runtime requires dispatch geometry."
         )
     if dispatch.workgroup_count:
         values = tuple(int(value) for value in dispatch.workgroup_count)
@@ -684,15 +1026,21 @@ def _workgroup_count(request: NativeRuntimeDispatchRequest) -> tuple[int, int, i
         )
     else:
         raise RuntimeExecutorUnavailable(
-            "Vulkan compute runtime requires workgroupCount or globalSize/workgroupSize."
+            f"{target} compute runtime requires workgroupCount or "
+            "globalSize/workgroupSize."
         )
-    return _pad3(values, field_name="workgroupCount")
+    return _pad3(values, field_name="workgroupCount", target=target)
 
 
-def _pad3(values: Sequence[int], *, field_name: str) -> tuple[int, int, int]:
+def _pad3(
+    values: Sequence[int],
+    *,
+    field_name: str,
+    target: str = "Vulkan",
+) -> tuple[int, int, int]:
     if len(values) > 3:
         raise RuntimeExecutorUnavailable(
-            f"Vulkan compute runtime {field_name} must have at most three dimensions."
+            f"{target} compute runtime {field_name} must have at most three dimensions."
         )
     padded = tuple(max(1, int(value)) for value in values) + (1,) * (3 - len(values))
     return padded[:3]
@@ -711,7 +1059,7 @@ def _int_field(value: Any, *, default: int | None = None) -> int:
         ) from exc
 
 
-def _normalize_dtype(dtype: str | None) -> str:
+def _normalize_dtype(dtype: str | None, *, target: str = "Vulkan") -> str:
     aliases = {
         "float": "float32",
         "f32": "float32",
@@ -725,7 +1073,8 @@ def _normalize_dtype(dtype: str | None) -> str:
     value = aliases.get(normalized, normalized)
     if value not in {"float32", "uint32", "int32"}:
         raise RuntimeExecutorUnavailable(
-            f"Vulkan compute runtime supports float32, uint32, and int32 buffers, not {dtype!r}."
+            f"{target} compute runtime supports float32, uint32, and int32 buffers, "
+            f"not {dtype!r}."
         )
     return value
 
@@ -751,21 +1100,36 @@ def _flatten_values(value: Any) -> list[Any]:
     return [value]
 
 
-def _pack_values(value: Any, dtype: str, *, expected_count: int) -> bytes:
+def _pack_values(
+    value: Any,
+    dtype: str,
+    *,
+    expected_count: int,
+    target: str = "Vulkan",
+) -> bytes:
     values = _flatten_values(value)
     if len(values) != expected_count:
         raise RuntimeExecutorUnavailable(
-            "Vulkan compute runtime buffer value count does not match shape."
+            f"{target} compute runtime buffer value count does not match shape."
         )
     return struct.pack("<" + _dtype_format(dtype) * expected_count, *values)
 
 
-def _unpack_values(payload: bytes, dtype: str) -> list[Any]:
+def _unpack_values(
+    payload: bytes,
+    dtype: str,
+    *,
+    target: str = "Vulkan",
+) -> list[Any]:
     size = _dtype_size(dtype)
     if len(payload) % size:
         raise RuntimeAdapterDispatchError(
-            "Vulkan runtime output byte length is not aligned to the dtype size.",
-            details={"target": "vulkan", "dtype": dtype, "byteLength": len(payload)},
+            f"{target} runtime output byte length is not aligned to the dtype size.",
+            details={
+                "target": target.lower(),
+                "dtype": dtype,
+                "byteLength": len(payload),
+            },
         )
     count = len(payload) // size
     if count == 0:

@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import struct
 import subprocess
 from pathlib import Path
 
@@ -9,8 +10,10 @@ import pytest
 import crosstl.project as project_api
 from crosstl._crosstl import translate
 from crosstl.project.native_runtime_drivers import (
+    OpenGLComputeRuntime,
     VulkanComputeRuntime,
     _first_vulkan_handle,
+    _prepare_opengl_buffers,
     _prepare_vulkan_buffers,
     _read_mapped_memory,
     _write_mapped_memory,
@@ -18,11 +21,15 @@ from crosstl.project.native_runtime_drivers import (
 from crosstl.project.runtime_verification import (
     UNAVAILABLE,
     NativeRuntimeBufferBinding,
+    NativeRuntimeConstantBinding,
+    NativeRuntimeDispatchRequest,
     RuntimeAdapterSetupError,
     RuntimeArtifactSelector,
+    RuntimeDispatchGeometry,
     RuntimeExecutionRequest,
     RuntimeFixture,
     RuntimeResourceBinding,
+    RuntimeSpecializationConstant,
     VulkanRuntimeParityAdapter,
     verify_runtime_test_manifest,
 )
@@ -42,6 +49,321 @@ def _runtime_request(tmp_path: Path) -> RuntimeExecutionRequest:
         artifact_path=tmp_path / "out" / "vulkan" / "add.spv",
         project_root=tmp_path,
     )
+
+
+def test_opengl_compute_runtime_reports_missing_python_binding(tmp_path):
+    def missing_loader(name):
+        assert name == "moderngl"
+        raise ModuleNotFoundError(name)
+
+    runtime = OpenGLComputeRuntime(module_loader=missing_loader)
+
+    availability = runtime.is_available(None, _runtime_request(tmp_path))
+
+    assert availability.available is False
+    assert availability.details["reasonKind"] == "dependency-unavailable"
+    assert availability.details["missingPythonModules"] == ["moderngl"]
+
+
+def test_opengl_compute_runtime_probes_and_releases_headless_context(tmp_path):
+    class FakeContext:
+        version_code = 460
+
+        def __init__(self):
+            self.released = False
+
+        def release(self):
+            self.released = True
+
+    context = FakeContext()
+    runtime = OpenGLComputeRuntime(
+        module_loader=lambda name: object(),
+        context_factory=lambda module: context,
+    )
+
+    availability = runtime.is_available(None, _runtime_request(tmp_path))
+
+    assert availability.available is True
+    assert availability.details["runtime"] == "opengl-compute-runtime"
+    assert availability.details["versionCode"] == 460
+    assert context.released is True
+
+
+def test_opengl_compute_runtime_loads_utf8_glsl(tmp_path):
+    artifact_path = tmp_path / "add.comp"
+    artifact_path.write_text("#version 430\nvoid main() {}\n", encoding="utf-8")
+    runtime = OpenGLComputeRuntime(module_loader=lambda name: object())
+
+    assert runtime.load_artifact(None, None, artifact_path).startswith("#version 430")
+
+
+def test_prepare_opengl_buffers_packs_storage_and_uniform_buffers():
+    buffers = _prepare_opengl_buffers(
+        {
+            "lhs": NativeRuntimeBufferBinding(
+                name="lhs",
+                binding=RuntimeResourceBinding(
+                    name="lhs",
+                    kind="storage-buffer",
+                    set=0,
+                    binding=0,
+                ),
+                value=[1.0, 2.0],
+                source="input",
+                dtype="float32",
+                shape=(2,),
+            ),
+            "params": NativeRuntimeBufferBinding(
+                name="params",
+                binding=RuntimeResourceBinding(
+                    name="params",
+                    kind="constant-buffer",
+                    set=0,
+                    binding=0,
+                ),
+                value=[3],
+                source="input",
+                dtype="uint32",
+                shape=(1,),
+            ),
+            "out": NativeRuntimeBufferBinding(
+                name="out",
+                binding=RuntimeResourceBinding(
+                    name="out",
+                    kind="storage-buffer",
+                    set=0,
+                    binding=1,
+                ),
+                source="expectedOutput",
+                dtype="float32",
+                shape=(2,),
+                metadata={"runtimeValueName": "result"},
+            ),
+        }
+    )
+
+    assert [(buffer.resource_kind, buffer.binding_index) for buffer in buffers] == [
+        ("storage-buffer", 0),
+        ("storage-buffer", 1),
+        ("constant-buffer", 0),
+    ]
+    assert buffers[0].payload == b"\x00\x00\x80?\x00\x00\x00@"
+    assert buffers[1].payload == b"\x00" * 8
+    assert buffers[1].output_name == "result"
+    assert buffers[2].payload == b"\x03\x00\x00\x00"
+
+
+def test_opengl_compute_runtime_dispatches_and_reads_storage_buffer(tmp_path):
+    class FakeUniform:
+        value = None
+
+    class FakeBuffer:
+        def __init__(self, payload):
+            self.payload = bytearray(payload)
+            self.storage_binding = None
+            self.uniform_binding = None
+            self.released = False
+
+        def bind_to_storage_buffer(self, binding):
+            self.storage_binding = binding
+
+        def bind_to_uniform_block(self, binding):
+            self.uniform_binding = binding
+
+        def read(self, size):
+            return bytes(self.payload[:size])
+
+        def release(self):
+            self.released = True
+
+    class FakeShader:
+        def __init__(self, context):
+            self.context = context
+            self.uniforms = {"scale": FakeUniform()}
+            self.run_args = None
+            self.released = False
+
+        def __getitem__(self, name):
+            return self.uniforms[name]
+
+        def run(self, **kwargs):
+            self.run_args = kwargs
+            lhs, out = self.context.buffers
+            values = struct.unpack("<2f", lhs.payload)
+            scale = self.uniforms["scale"].value
+            out.payload[:] = struct.pack("<2f", *(value * scale for value in values))
+
+        def release(self):
+            self.released = True
+
+    class FakeContext:
+        version_code = 460
+
+        def __init__(self):
+            self.buffers = []
+            self.shader = None
+            self.barrier_called = False
+            self.finish_called = False
+            self.released = False
+
+        def compute_shader(self, source):
+            assert source.startswith("#version 430")
+            self.shader = FakeShader(self)
+            return self.shader
+
+        def buffer(self, data=None, reserve=None):
+            payload = data if data is not None else b"\x00" * reserve
+            buffer = FakeBuffer(payload)
+            self.buffers.append(buffer)
+            return buffer
+
+        def memory_barrier(self):
+            self.barrier_called = True
+
+        def finish(self):
+            self.finish_called = True
+
+        def release(self):
+            self.released = True
+
+    context = FakeContext()
+    runtime = OpenGLComputeRuntime(
+        module_loader=lambda name: object(),
+        context_factory=lambda module: context,
+    )
+    request = NativeRuntimeDispatchRequest(
+        target="opengl",
+        artifact={"target": "opengl"},
+        artifact_path=tmp_path / "add.comp",
+        module_path=tmp_path / "add.comp",
+        loaded_artifact="#version 430\nvoid main() {}\n",
+        buffers={
+            "lhs": NativeRuntimeBufferBinding(
+                name="lhs",
+                binding=RuntimeResourceBinding(
+                    name="lhs", kind="storage-buffer", set=0, binding=0
+                ),
+                value=[1.0, 2.0],
+                source="input",
+                dtype="float32",
+                shape=(2,),
+            ),
+            "out": NativeRuntimeBufferBinding(
+                name="out",
+                binding=RuntimeResourceBinding(
+                    name="out", kind="storage-buffer", set=0, binding=1
+                ),
+                source="expectedOutput",
+                dtype="float32",
+                shape=(2,),
+                metadata={"runtimeValueName": "result"},
+            ),
+        },
+        constants={
+            "scale": NativeRuntimeConstantBinding(
+                name="scale",
+                constant=RuntimeSpecializationConstant(
+                    name="scale", kind="uniform", dtype="float32"
+                ),
+                value=3.0,
+                source="input",
+            )
+        },
+        dispatch=RuntimeDispatchGeometry(entry_point="main", workgroup_count=(2, 1, 1)),
+        entry_point="main",
+    )
+
+    outputs = runtime.dispatch(None, None, request)
+
+    assert outputs == {
+        "result": {"dtype": "float32", "shape": [2], "values": [3.0, 6.0]}
+    }
+    assert context.shader.run_args == {"group_x": 2, "group_y": 1, "group_z": 1}
+    assert context.shader.uniforms["scale"].value == 3.0
+    assert context.barrier_called is True
+    assert context.finish_called is True
+    assert all(buffer.released for buffer in context.buffers)
+    assert context.shader.released is True
+    assert context.released is True
+
+
+def test_opengl_compute_runtime_is_exported_from_project_api():
+    assert project_api.OpenGLComputeRuntime is OpenGLComputeRuntime
+
+
+def test_opengl_compute_runtime_executes_vector_scale_on_device(tmp_path):
+    if os.environ.get("CROSTL_RUN_OPENGL_DEVICE_TEST") != "1":
+        pytest.skip("set CROSTL_RUN_OPENGL_DEVICE_TEST=1 to run OpenGL device test")
+    pytest.importorskip("moderngl")
+
+    source_path = tmp_path / "scale.cgl"
+    source_path.write_text(
+        """
+shader OpenGLRuntimeScale {
+    StructuredBuffer<float> input_values @ binding(0);
+    RWStructuredBuffer<float> output_values @ binding(1);
+
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+        void main(uint3 tid @ gl_GlobalInvocationID) {
+            float value = buffer_load(input_values, tid.x);
+            buffer_store(output_values, tid.x, value * 2.0);
+        }
+    }
+}
+""".lstrip(),
+        encoding="utf-8",
+    )
+    translated = translate(
+        str(source_path),
+        backend="opengl",
+        format_output=False,
+    )
+
+    runtime = OpenGLComputeRuntime(context_backends=("egl",))
+    request = NativeRuntimeDispatchRequest(
+        target="opengl",
+        artifact={"target": "opengl"},
+        artifact_path=tmp_path / "scale.comp",
+        module_path=tmp_path / "scale.comp",
+        loaded_artifact=translated,
+        buffers={
+            "input_values": NativeRuntimeBufferBinding(
+                name="input_values",
+                binding=RuntimeResourceBinding(
+                    name="input_values", kind="storage-buffer", set=0, binding=0
+                ),
+                value=[1.5, -2.0, 4.0],
+                source="input",
+                dtype="float32",
+                shape=(3,),
+            ),
+            "output_values": NativeRuntimeBufferBinding(
+                name="output_values",
+                binding=RuntimeResourceBinding(
+                    name="output_values", kind="storage-buffer", set=0, binding=1
+                ),
+                source="expectedOutput",
+                dtype="float32",
+                shape=(3,),
+                metadata={"runtimeValueName": "scaled"},
+            ),
+        },
+        constants={},
+        dispatch=RuntimeDispatchGeometry(entry_point="main", workgroup_count=(3, 1, 1)),
+        entry_point="main",
+    )
+
+    outputs = runtime.dispatch(None, None, request)
+
+    assert outputs == {
+        "scaled": {
+            "dtype": "float32",
+            "shape": [3],
+            "values": [3.0, -4.0, 8.0],
+        }
+    }
 
 
 def test_vulkan_compute_runtime_reports_missing_python_binding(tmp_path):

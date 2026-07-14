@@ -1609,6 +1609,10 @@ def native_runtime_parity_adapter(
         raise RuntimeVerificationError(
             f"Native runtime parity adapter is not available for {target}."
         )
+    if runtime is None and normalized == "opengl":
+        from .native_runtime_drivers import OpenGLComputeRuntime
+
+        runtime = OpenGLComputeRuntime()
     return adapter_class(runtime=runtime, **kwargs)
 
 
