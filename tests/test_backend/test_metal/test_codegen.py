@@ -25,7 +25,16 @@ from crosstl.backend.Metal.preprocessor import (
     MetalPreprocessor,
     MetalTemplateSpecializationError,
 )
+from crosstl.translator.ast import ArrayAccessNode as CrossGLArrayAccessNode
+from crosstl.translator.ast import AssignmentNode as CrossGLAssignmentNode
+from crosstl.translator.ast import BinaryOpNode as CrossGLBinaryOpNode
+from crosstl.translator.ast import FunctionCallNode as CrossGLFunctionCallNode
+from crosstl.translator.ast import IdentifierNode as CrossGLIdentifierNode
+from crosstl.translator.ast import LiteralNode as CrossGLLiteralNode
+from crosstl.translator.ast import MemberAccessNode as CrossGLMemberAccessNode
 from crosstl.translator.ast import ResourceMemoryQualifierNode
+from crosstl.translator.ast import TernaryOpNode as CrossGLTernaryOpNode
+from crosstl.translator.ast import UnaryOpNode as CrossGLUnaryOpNode
 from crosstl.translator.codegen.directx_codegen import (
     HLSLCodeGen as TranslatorHLSLCodeGen,
 )
@@ -71,6 +80,73 @@ def parse_crossgl(code: str):
     tokens = CrossGLLexer(code).get_tokens()
     parser = CrossGLParser(tokens)
     return parser.parse()
+
+
+def find_crossgl_function(shader, name):
+    functions = list(shader.functions)
+    functions.extend(stage.entry_point for stage in shader.stages.values())
+    return next(function for function in functions if function.name == name)
+
+
+def crossgl_local_initializers(function):
+    return {
+        statement.name: statement.initial_value
+        for statement in function.body.statements
+        if getattr(statement, "initial_value", None) is not None
+    }
+
+
+def crossgl_expression_tree(expression):
+    if isinstance(expression, CrossGLIdentifierNode):
+        return expression.name
+    if isinstance(expression, CrossGLLiteralNode):
+        return expression.value
+    if isinstance(expression, CrossGLAssignmentNode):
+        return (
+            "assignment",
+            expression.operator,
+            crossgl_expression_tree(expression.left),
+            crossgl_expression_tree(expression.right),
+        )
+    if isinstance(expression, CrossGLBinaryOpNode):
+        return (
+            "binary",
+            expression.op,
+            crossgl_expression_tree(expression.left),
+            crossgl_expression_tree(expression.right),
+        )
+    if isinstance(expression, CrossGLTernaryOpNode):
+        return (
+            "conditional",
+            crossgl_expression_tree(expression.condition),
+            crossgl_expression_tree(expression.true_expr),
+            crossgl_expression_tree(expression.false_expr),
+        )
+    if isinstance(expression, CrossGLFunctionCallNode):
+        return (
+            "call",
+            crossgl_expression_tree(expression.function),
+            tuple(crossgl_expression_tree(arg) for arg in expression.arguments),
+        )
+    if isinstance(expression, CrossGLMemberAccessNode):
+        return (
+            "member",
+            crossgl_expression_tree(expression.object),
+            expression.member,
+        )
+    if isinstance(expression, CrossGLArrayAccessNode):
+        return (
+            "subscript",
+            crossgl_expression_tree(expression.array),
+            crossgl_expression_tree(expression.index),
+        )
+    if isinstance(expression, CrossGLUnaryOpNode):
+        return (
+            "postfix" if expression.is_postfix else "prefix",
+            expression.op,
+            crossgl_expression_tree(expression.operand),
+        )
+    raise AssertionError(f"Unexpected CrossGL expression: {expression!r}")
 
 
 def test_codegen_preserves_variadic_pack_expansion_from_mlx_integral_constant():
@@ -2101,6 +2177,181 @@ def test_codegen_ternary_expression():
     result = convert(code)
     assert "1" in result and "2" in result
     assert "?" in result or "if" in result
+
+
+def test_codegen_preserves_conditional_and_assignment_binary_operand_trees():
+    code = """
+    int grouped(bool choose, int a, int b, int c) {
+        int left_conditional = (choose ? a : b) + c;
+        int right_conditional = a + (choose ? b : c);
+        int left_assignment = (a = b) + c;
+        int right_assignment = a + (b = c);
+        int ordinary = a + b * c;
+        return ordinary;
+    }
+    """
+
+    parsed = parse_crossgl(convert(code))
+    initializers = crossgl_local_initializers(find_crossgl_function(parsed, "grouped"))
+    trees = {
+        name: crossgl_expression_tree(expression)
+        for name, expression in initializers.items()
+    }
+
+    assert trees == {
+        "left_conditional": (
+            "binary",
+            "+",
+            ("conditional", "choose", "a", "b"),
+            "c",
+        ),
+        "right_conditional": (
+            "binary",
+            "+",
+            "a",
+            ("conditional", "choose", "b", "c"),
+        ),
+        "left_assignment": (
+            "binary",
+            "+",
+            ("assignment", "=", "a", "b"),
+            "c",
+        ),
+        "right_assignment": (
+            "binary",
+            "+",
+            "a",
+            ("assignment", "=", "b", "c"),
+        ),
+        "ordinary": (
+            "binary",
+            "+",
+            "a",
+            ("binary", "*", "b", "c"),
+        ),
+    }
+
+
+def test_codegen_preserves_nested_conditional_parser_associativity():
+    code = """
+    int nested(bool outer, bool inner, bool fallback, int a, int b, int c) {
+        int nested_condition = (outer ? inner : fallback) ? a : b;
+        int nested_true = outer ? (inner ? a : b) : c;
+        int nested_false = outer ? a : (inner ? b : c);
+        int true_assignment = outer ? (a = b) : c;
+        int false_assignment = outer ? a : (b = c);
+        int assignment_condition = (outer = inner) ? a : b;
+        return nested_condition;
+    }
+    """
+
+    parsed = parse_crossgl(convert(code))
+    initializers = crossgl_local_initializers(find_crossgl_function(parsed, "nested"))
+    trees = {
+        name: crossgl_expression_tree(expression)
+        for name, expression in initializers.items()
+    }
+
+    assert trees == {
+        "nested_condition": (
+            "conditional",
+            ("conditional", "outer", "inner", "fallback"),
+            "a",
+            "b",
+        ),
+        "nested_true": (
+            "conditional",
+            "outer",
+            ("conditional", "inner", "a", "b"),
+            "c",
+        ),
+        "nested_false": (
+            "conditional",
+            "outer",
+            "a",
+            ("conditional", "inner", "b", "c"),
+        ),
+        "true_assignment": (
+            "conditional",
+            "outer",
+            ("assignment", "=", "a", "b"),
+            "c",
+        ),
+        "false_assignment": (
+            "conditional",
+            "outer",
+            "a",
+            ("assignment", "=", "b", "c"),
+        ),
+        "assignment_condition": (
+            "conditional",
+            ("assignment", "=", "outer", "inner"),
+            "a",
+            "b",
+        ),
+    }
+
+
+def test_codegen_preserves_conditional_structured_buffer_pointer_offset_tree():
+    code = """
+    kernel void shifted_mask(
+        constant int* mask_strides [[buffer(0)]],
+        device int* output [[buffer(1)]],
+        bool has_output_mask,
+        uint gid [[thread_position_in_grid]]) {
+        const constant int* lhs_mask_strides =
+            mask_strides + (has_output_mask ? 2 : 0);
+        output[gid] = lhs_mask_strides[0];
+    }
+    """
+
+    parsed = parse_crossgl(convert(code))
+    initializers = crossgl_local_initializers(
+        find_crossgl_function(parsed, "shifted_mask")
+    )
+
+    assert crossgl_expression_tree(initializers["lhs_mask_strides"]) == (
+        "binary",
+        "+",
+        "mask_strides",
+        ("conditional", "has_output_mask", 2, 0),
+    )
+
+
+def test_codegen_preserves_conditional_postfix_base_trees():
+    code = """
+    struct Pair {
+        int value;
+        int values[2];
+    };
+
+    int low_precedence_bases(bool choose, Pair left, Pair right) {
+        int member = (choose ? left : right).value;
+        int element = (choose ? left.values : right.values)[1];
+        return member + element;
+    }
+    """
+
+    parsed = parse_crossgl(convert(code))
+    initializers = crossgl_local_initializers(
+        find_crossgl_function(parsed, "low_precedence_bases")
+    )
+
+    assert crossgl_expression_tree(initializers["member"]) == (
+        "member",
+        ("conditional", "choose", "left", "right"),
+        "value",
+    )
+    assert crossgl_expression_tree(initializers["element"]) == (
+        "subscript",
+        (
+            "conditional",
+            "choose",
+            ("member", "left", "values"),
+            ("member", "right", "values"),
+        ),
+        1,
+    )
 
 
 def test_codegen_arrays_and_indexing():

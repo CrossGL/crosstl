@@ -956,6 +956,14 @@ aliases retain the accumulated signed element offset and read-only contract.
 Explicit pointee types remain authoritative: incompatible declared element
 types are rejected rather than being replaced with the backing type.
 
+Metal reverse translation preserves conditional and assignment expressions as
+lower-precedence operands when serializing binary and postfix expressions. For
+resource-backed pointer aliases, a dynamic offset such as
+``buffer + (enabled ? first : second)`` therefore retains the conditional as
+the offset expression before DirectX or OpenGL resource-plus-offset lowering.
+This guarantees expression-tree preservation for the translated artifact; it
+does not provide host dispatch, resource binding, or numerical runtime parity.
+
 The contract applies generally to Metal sources handled by project translation.
 The pinned MLX ``BaseMMAFrag::load(&(src[index]))`` call shape is a focused
 acceptance example for retaining the qualified pointer through nested template-

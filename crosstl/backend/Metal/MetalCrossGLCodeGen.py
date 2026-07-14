@@ -328,6 +328,9 @@ class MetalToCrossGLConverter:
         "/": 10,
         "%": 10,
     }
+    assignment_precedence = -1
+    conditional_precedence = 0
+    postfix_precedence = max(binary_precedence.values()) + 1
     crossgl_reserved_identifiers = {
         "break",
         "case",
@@ -5641,7 +5644,7 @@ class MetalToCrossGLConverter:
         elif isinstance(expr, LambdaNode):
             return self.generate_lambda_expression(expr, is_main)
         elif isinstance(expr, CallNode):
-            callee = self.generate_expression(expr.callee, is_main)
+            callee = self.generate_postfix_operand(expr.callee, is_main)
             args = ", ".join(
                 self.generate_expression(arg, is_main) for arg in expr.args
             )
@@ -5655,7 +5658,7 @@ class MetalToCrossGLConverter:
                     getattr(expr, "source_location", None),
                     operation=f"method {expr.method}",
                 )
-            obj = self.generate_expression(expr.object, is_main)
+            obj = self.generate_postfix_operand(expr.object, is_main)
             args = ", ".join(
                 self.generate_expression(arg, is_main) for arg in expr.args
             )
@@ -5739,7 +5742,7 @@ class MetalToCrossGLConverter:
             static_member = self.render_decltype_static_struct_member(expr)
             if static_member is not None:
                 return static_member
-            obj = self.generate_expression(expr.object, is_main)
+            obj = self.generate_postfix_operand(expr.object, is_main)
             wide_vector = self.wide_vector_expression_info(expr.object)
             if wide_vector is not None:
                 lane = self.wide_vector_lane_index(
@@ -5769,7 +5772,7 @@ class MetalToCrossGLConverter:
             ):
                 return self.generate_structured_buffer_load(expr, is_main)
             wide_vector = self.wide_vector_expression_info(expr.array)
-            array = self.generate_expression(expr.array, is_main)
+            array = self.generate_postfix_operand(expr.array, is_main)
             index = self.generate_expression(expr.index, is_main)
             if wide_vector is not None:
                 return f"{array}.lanes[{index}]"
@@ -5810,7 +5813,7 @@ class MetalToCrossGLConverter:
                     getattr(expr, "source_location", None),
                     operation=expr.op,
                 )
-            operand = self.generate_expression(expr.operand, is_main)
+            operand = self.generate_postfix_operand(expr.operand, is_main)
             return f"{operand}{expr.op}"
         elif isinstance(expr, TernaryOpNode):
             wide_vector = self.wide_vector_expression_info(
@@ -5823,7 +5826,19 @@ class MetalToCrossGLConverter:
                     getattr(expr, "source_location", None),
                     operation="?:",
                 )
-            return f"{self.generate_expression(expr.condition, is_main)} ? {self.generate_expression(expr.true_expr, is_main)} : {self.generate_expression(expr.false_expr, is_main)}"
+            condition = self.generate_precedence_operand(
+                expr.condition,
+                self.conditional_precedence,
+                is_main,
+                parenthesize_equal=True,
+            )
+            true_expr = self.generate_expression(expr.true_expr, is_main)
+            false_expr = self.generate_precedence_operand(
+                expr.false_expr,
+                self.conditional_precedence,
+                is_main,
+            )
+            return f"{condition} ? {true_expr} : {false_expr}"
         elif isinstance(expr, CastNode):
             wide_vector_cast = self.generate_wide_vector_constructor(
                 expr.target_type,
@@ -6682,23 +6697,54 @@ class MetalToCrossGLConverter:
                 return unscoped
         return None
 
-    def generate_binary_operand(self, operand, parent_op, is_right, is_main=False):
-        text = self.generate_expression(operand, is_main)
-        if not isinstance(operand, BinaryOpNode):
-            return text
+    def expression_precedence(self, expression):
+        if isinstance(expression, AssignmentNode):
+            return self.assignment_precedence
+        if isinstance(expression, TernaryOpNode):
+            return self.conditional_precedence
+        if isinstance(expression, BinaryOpNode):
+            return self.binary_precedence.get(expression.op, 0)
+        return None
 
+    def generate_precedence_operand(
+        self,
+        operand,
+        parent_precedence,
+        is_main=False,
+        parenthesize_equal=False,
+    ):
+        text = self.generate_expression(operand, is_main)
+        operand_precedence = self.expression_precedence(operand)
+        if operand_precedence is not None and (
+            operand_precedence < parent_precedence
+            or (parenthesize_equal and operand_precedence == parent_precedence)
+        ):
+            return f"({text})"
+        return text
+
+    def generate_binary_operand(self, operand, parent_op, is_right, is_main=False):
         parent_precedence = self.binary_precedence.get(parent_op, 0)
-        operand_precedence = self.binary_precedence.get(operand.op, 0)
-        if operand_precedence < parent_precedence or (
+        parenthesize_equal = bool(
             is_right
-            and operand_precedence == parent_precedence
+            and isinstance(operand, BinaryOpNode)
             and (
                 parent_op not in {"+", "*", "&&", "||", "&", "|", "^"}
                 or operand.op != parent_op
             )
-        ):
-            return f"({text})"
-        return text
+        )
+        return self.generate_precedence_operand(
+            operand,
+            parent_precedence,
+            is_main,
+            parenthesize_equal=parenthesize_equal,
+        )
+
+    def generate_postfix_operand(self, operand, is_main=False):
+        return self.generate_precedence_operand(
+            operand,
+            self.postfix_precedence,
+            is_main,
+        )
 
     def generate_cast_operand(self, operand, rendered_operand):
         if isinstance(operand, (AssignmentNode, BinaryOpNode, TernaryOpNode)):
