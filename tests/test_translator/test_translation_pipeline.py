@@ -619,6 +619,125 @@ def test_metal_explicit_template_helper_specializes_to_concrete_opengl(tmp_path)
     assert not re.search(r"\b(?:T|IdxT|Offset)\b", generated)
 
 
+@pytest.mark.parametrize("backend", ["directx", "opengl"])
+def test_metal_reachable_template_resources_materialize_before_target_codegen(
+    tmp_path,
+    backend,
+):
+    source_path = _write_source(
+        tmp_path,
+        "materialized-copy.metal",
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        template <typename T, int Width = 4>
+        T add_bias(T value, uint bias = 1u) {
+            return value + T(Width) + T(bias);
+        }
+
+        template <typename T, int Width = 4>
+        [[kernel]] void copy_values(
+            const device T* values [[buffer(0)]],
+            device T* results [[buffer(1)]],
+            uint gid [[thread_position_in_grid]],
+            uint lid [[thread_position_in_threadgroup]]) {
+            threadgroup T scratch[Width];
+            scratch[lid] = add_bias<T, Width>(values[gid]);
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+            results[gid] = scratch[lid];
+        }
+
+        template [[host_name("copy_float")]] [[kernel]]
+        decltype(copy_values<float>) copy_values<float>;
+        """,
+    )
+
+    generated = crosstl.translate(
+        str(source_path), backend=backend, format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+    assert "add_bias_float_4" in generated
+    assert not re.search(r"\b(?:T|Width)\b", generated)
+    assert "template <" not in generated
+    if backend == "directx":
+        assert "StructuredBuffer<float> values : register(t0);" in generated
+        assert "RWStructuredBuffer<float> results : register(u1);" in generated
+        assert "groupshared float copy_float_scratch[4];" in generated
+        assert re.search(r"float add_bias_float_4\(float value, uint bias\)", generated)
+        assert "add_bias_float_4(values.Load(gid), 1u)" in generated
+    else:
+        assert re.search(
+            r"readonly buffer valuesBuffer\s*\{\s*float values\[\];\s*\};",
+            generated,
+        )
+        assert re.search(
+            r"buffer resultsBuffer\s*\{\s*float results\[\];\s*\};",
+            generated,
+        )
+        assert "shared float copy_float_scratch[4];" in generated
+        assert re.search(r"float add_bias_float_4\(float value, uint bias\)", generated)
+        assert "add_bias_float_4(values[gid], 1u)" in generated
+
+
+def test_metal_unresolved_reachable_template_resources_fail_before_target_codegen(
+    tmp_path,
+):
+    source_path = _write_source(
+        tmp_path,
+        "unresolved-copy.metal",
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        template <typename T, int Width>
+        T add_bias(T value) {
+            return value + T(Width);
+        }
+
+        template <typename T, int Width>
+        [[kernel]] void unresolved_copy(
+            const device T* values [[buffer(0)]],
+            device T* results [[buffer(1)]],
+            uint gid [[thread_position_in_grid]],
+            uint lid [[thread_position_in_threadgroup]]) {
+            threadgroup T scratch[Width];
+            scratch[lid] = add_bias<T, Width>(values[gid]);
+            results[gid] = scratch[lid];
+        }
+        """,
+    )
+
+    for backend in ("directx", "opengl"):
+        with pytest.raises(ValueError) as exc_info:
+            crosstl.translate(str(source_path), backend=backend, format_output=False)
+
+        message = str(exc_info.value)
+        assert exc_info.value.project_diagnostic_code == (
+            "project.translate.template-materialization-unsupported"
+        )
+        assert exc_info.value.missing_capabilities == ("template.specialization",)
+        assert exc_info.value.metadata["status"] == "unsupported"
+        unresolved_entries = [
+            record
+            for record in exc_info.value.metadata["unsupported"]
+            if record["name"] == "unresolved_copy"
+        ]
+        assert len(unresolved_entries) == 1
+        assert unresolved_entries[0]["missingParameters"] == ["T", "Width"]
+        assert unresolved_entries[0]["requiredSignature"] == (
+            "unresolved_copy<T, Width>"
+        )
+        assert "requires concrete template arguments" in message
+        assert "unresolved_copy" in message
+        assert "T" in message
+        assert "Width" in message
+        assert "codegen cannot emit" not in message
+        assert "StructuredBuffer<T>" not in message
+        assert "buffer T[]" not in message
+
+
 def test_metal_uint2_dispatch_id_promotes_to_directx_uint3(tmp_path):
     source_path = _write_source(
         tmp_path,

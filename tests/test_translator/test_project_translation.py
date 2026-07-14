@@ -12459,6 +12459,226 @@ def test_translate_project_opengl_validates_implicit_metal_matmul_resources(
     assert output == validator_inputs[0]
 
 
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_translate_project_matches_direct_metal_materialized_signatures(
+    tmp_path,
+    target,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source_path = repo / "materialized-copy.metal"
+    source_path.write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T, int Width = 4>
+            T add_bias(T value, uint bias = 1u) {
+                return value + T(Width) + T(bias);
+            }
+
+            template <typename T, int Width = 4>
+            [[kernel]] void copy_values(
+                const device T* values [[buffer(0)]],
+                device T* results [[buffer(1)]],
+                uint gid [[thread_position_in_grid]],
+                uint lid [[thread_position_in_threadgroup]]) {
+                threadgroup T scratch[Width];
+                scratch[lid] = add_bias<T, Width>(values[gid]);
+                threadgroup_barrier(mem_flags::mem_threadgroup);
+                results[gid] = scratch[lid];
+            }
+
+            template [[host_name("copy_float")]] [[kernel]]
+            decltype(copy_values<float>) copy_values<float>;
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    direct_output = crosstl_cli.translate(
+        str(source_path), backend=target, format_output=False
+    )
+    payload = translate_project(
+        repo,
+        targets=[target],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["templateMaterialization"]["status"] == "materialized"
+    assert artifact["templateMaterialization"]["unsupported"] == []
+    project_output = (repo / artifact["path"]).read_text(encoding="utf-8")
+
+    def signature_contract(output):
+        normalized = re.sub(r"\s+", " ", output)
+        helper_signatures = sorted(
+            set(
+                re.findall(
+                    r"\bfloat add_bias_float_4\(float value, uint bias\)",
+                    normalized,
+                )
+            )
+        )
+        if target == "directx":
+            resources = sorted(
+                re.findall(
+                    r"\b((?:RW)?StructuredBuffer)<(float)>\s+\w+\s*"
+                    r":\s*register\(([tu]\d+)\);",
+                    normalized,
+                )
+            )
+            shared_storage = re.findall(
+                r"\bgroupshared (float) copy_float_scratch\[(\d+)\];",
+                normalized,
+            )
+            entry_signatures = re.findall(
+                r"\[numthreads\(([^)]+)\)\]\s*void\s+(\w+)\(([^)]*)\)",
+                normalized,
+            )
+        else:
+            resources = sorted(
+                re.findall(
+                    r"layout\(std430, binding = (\d+)\) (readonly )?buffer "
+                    r"\w+ \{ (float) \w+\[\]; \};",
+                    normalized,
+                )
+            )
+            shared_storage = re.findall(
+                r"\bshared (float) copy_float_scratch\[(\d+)\];", normalized
+            )
+            entry_signatures = re.findall(
+                r"layout\(local_size_x = ([^,]+), local_size_y = ([^,]+), "
+                r"local_size_z = ([^)]+)\) in;\s*void\s+(main)\(([^)]*)\)",
+                normalized,
+            )
+        return {
+            "resources": resources,
+            "sharedStorage": shared_storage,
+            "helpers": helper_signatures,
+            "entries": entry_signatures,
+        }
+
+    direct_contract = signature_contract(direct_output)
+    project_contract = signature_contract(project_output)
+    assert direct_contract == project_contract
+    assert direct_contract["helpers"] == [
+        "float add_bias_float_4(float value, uint bias)"
+    ]
+    assert direct_contract["sharedStorage"] == [("float", "4")]
+    assert direct_contract["entries"]
+    if target == "directx":
+        assert direct_contract["resources"] == [
+            ("RWStructuredBuffer", "float", "u1"),
+            ("StructuredBuffer", "float", "t0"),
+        ]
+    else:
+        assert direct_contract["resources"] == [
+            ("0", "readonly ", "float"),
+            ("1", "", "float"),
+        ]
+
+    for output in (direct_output, project_output):
+        assert "add_bias_float_4" in output
+        assert "copy_float_scratch[4]" in output
+        assert not re.search(r"\b(?:T|Width)\b", output)
+        assert "template <" not in output
+
+
+def test_translate_project_unresolved_metal_resources_fail_before_target_codegen(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source_path = repo / "unresolved-copy.metal"
+    source_path.write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T, int Width>
+            T add_bias(T value) {
+                return value + T(Width);
+            }
+
+            template <typename T, int Width>
+            [[kernel]] void unresolved_copy(
+                const device T* values [[buffer(0)]],
+                device T* results [[buffer(1)]],
+                uint gid [[thread_position_in_grid]],
+                uint lid [[thread_position_in_threadgroup]]) {
+                threadgroup T scratch[Width];
+                scratch[lid] = add_bias<T, Width>(values[gid]);
+                results[gid] = scratch[lid];
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    direct_failures = {}
+    for target in ("directx", "opengl"):
+        with pytest.raises(ValueError) as exc_info:
+            crosstl_cli.translate(str(source_path), backend=target, format_output=False)
+        direct_failures[target] = exc_info.value
+
+    payload = translate_project(
+        repo,
+        targets=["directx", "opengl"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 2
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.template-materialization-unsupported": 2
+    }
+    assert len(payload["artifacts"]) == 2
+    assert len(payload["diagnostics"]) == 2
+
+    diagnostics_by_target = {
+        diagnostic["target"]: diagnostic for diagnostic in payload["diagnostics"]
+    }
+    for artifact in payload["artifacts"]:
+        target = artifact["target"]
+        direct_failure = direct_failures[target]
+        diagnostic = diagnostics_by_target[target]
+
+        assert artifact["status"] == "failed"
+        assert not (repo / artifact["path"]).exists()
+        assert artifact["templateMaterialization"]["status"] == "unsupported"
+        assert diagnostic["code"] == direct_failure.project_diagnostic_code
+        assert diagnostic["missingCapabilities"] == list(
+            direct_failure.missing_capabilities
+        )
+        assert diagnostic["code"] == (
+            "project.translate.template-materialization-unsupported"
+        )
+        assert diagnostic["sourceBackend"] == "metal"
+        assert "requires concrete template arguments" in diagnostic["message"]
+        assert "unresolved_copy" in diagnostic["message"]
+        assert "T" in diagnostic["message"]
+        assert "Width" in diagnostic["message"]
+        assert "codegen cannot emit" not in diagnostic["message"]
+        assert "StructuredBuffer<T>" not in artifact["error"]
+        assert "buffer T[]" not in artifact["error"]
+
+        unresolved_entries = [
+            record
+            for record in artifact["templateMaterialization"]["unsupported"]
+            if record["name"] == "unresolved_copy"
+        ]
+        assert len(unresolved_entries) == 1
+        assert unresolved_entries[0]["missingParameters"] == ["T", "Width"]
+        assert unresolved_entries[0]["requiredSignature"] == (
+            "unresolved_copy<T, Width>"
+        )
+
+
 def test_translate_project_materializes_metal_rope_template_defaults_to_targets(
     tmp_path,
 ):
