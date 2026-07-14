@@ -46,6 +46,7 @@ def test_directx_runtime_smoke_reports_skip_for_missing_adapter(tmp_path, monkey
     [
         "backend-unavailable",
         "dependency-unavailable",
+        "device-selection-failed",
         "direct3d-runtime-unavailable",
         "platform-unavailable",
     ],

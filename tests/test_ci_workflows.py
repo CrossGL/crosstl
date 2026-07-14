@@ -277,6 +277,7 @@ def test_full_suite_runs_fail_closed_windows_directx_native_runtime_smoke():
     assert "DirectXShaderCompiler/releases/download/v1.9.2602" in smoke_job
     assert 'python -m pip install -e ".[directx-runtime]"' in smoke_job
     assert "python tools/directx_runtime_smoke.py" in smoke_job
+    assert "continue-on-error" not in smoke_job
     assert "crosstl.translate(" in smoke_runner
     assert '[dxc, "-T", "cs_6_0", "-E", "CSMain"' in smoke_runner
     assert "runtime.dispatch(" in smoke_runner

@@ -1482,7 +1482,7 @@ class DirectXRuntimeParityAdapter(NativeRuntimeParityAdapter):
     target = "directx"
     targets = ("directx",)
     required_tools = ("dxc",)
-    supported_platforms = ("win32", "cygwin")
+    supported_platforms = ("win32",)
 
     def validation_commands(
         self,

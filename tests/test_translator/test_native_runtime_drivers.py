@@ -214,6 +214,7 @@ class _FakeCompushady:
     def __init__(self, *, backend="d3d12"):
         self.backend = type("Backend", (), {"name": backend})()
         self.device = _FakeDirectXDevice()
+        self.devices = [self.device]
         self.buffers = []
         self.computes = []
         self.fail_device = False
@@ -225,6 +226,9 @@ class _FakeCompushady:
 
     def get_backend(self):
         return self.backend
+
+    def get_discovered_devices(self):
+        return self.devices
 
     def get_current_device(self):
         if self.fail_device:
@@ -269,7 +273,7 @@ def test_directx_compute_runtime_reports_unsupported_platform_without_import(tmp
         "reasonKind": "platform-unavailable",
         "target": "directx",
         "platform": "darwin",
-        "requiredPlatforms": ["win32", "cygwin"],
+        "requiredPlatforms": ["win32"],
     }
 
 
@@ -311,7 +315,7 @@ def test_compushady_backend_name_accepts_imported_backend_module():
     assert _compushady_backend_name(backend) == "d3d12"
 
 
-def test_directx_compute_runtime_reports_device_initialization_failure(tmp_path):
+def test_directx_compute_runtime_fails_closed_for_device_selection_error(tmp_path):
     module = _FakeCompushady()
     module.fail_device = True
     runtime = DirectXComputeRuntime(
@@ -322,8 +326,23 @@ def test_directx_compute_runtime_reports_device_initialization_failure(tmp_path)
     availability = runtime.is_available(None, _runtime_request(tmp_path))
 
     assert availability.available is False
-    assert availability.details["reasonKind"] == "device-unavailable"
+    assert availability.details["reasonKind"] == "device-selection-failed"
     assert availability.details["error"] == "device creation failed"
+
+
+def test_directx_compute_runtime_reports_empty_device_list(tmp_path):
+    module = _FakeCompushady()
+    module.devices = []
+    runtime = DirectXComputeRuntime(
+        module_loader=lambda name: module,
+        platform_name="win32",
+    )
+
+    availability = runtime.is_available(None, _runtime_request(tmp_path))
+
+    assert availability.available is False
+    assert availability.details["reasonKind"] == "device-unavailable"
+    assert "error" not in availability.details
 
 
 def test_directx_compute_runtime_reports_selected_device(tmp_path):
@@ -421,6 +440,40 @@ def test_prepare_directx_buffers_rejects_unsupported_resource_kind(tmp_path):
         _prepare_directx_buffers({"lhs": binding})
 
     assert excinfo.value.details["reasonKind"] == "unsupported-resource-kind"
+
+
+@pytest.mark.parametrize(
+    ("type_name", "metadata"),
+    [
+        ("ByteAddressBuffer", {}),
+        ("RWBuffer<float>", {"byteStride": 4}),
+    ],
+)
+def test_prepare_directx_buffers_rejects_views_compushady_cannot_describe(
+    tmp_path,
+    type_name,
+    metadata,
+):
+    request = _directx_dispatch_request(tmp_path)
+    lhs = request.buffers["lhs"]
+    binding = NativeRuntimeBufferBinding(
+        **{
+            **lhs.__dict__,
+            "binding": RuntimeResourceBinding(
+                **{
+                    **lhs.binding.__dict__,
+                    "type_name": type_name,
+                    "metadata": metadata,
+                }
+            ),
+        }
+    )
+
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        _prepare_directx_buffers({"lhs": binding})
+
+    assert excinfo.value.details["reasonKind"] == "unsupported-buffer-view"
+    assert excinfo.value.details["type"] == type_name
 
 
 def test_prepare_directx_buffers_rejects_sparse_registers(tmp_path):

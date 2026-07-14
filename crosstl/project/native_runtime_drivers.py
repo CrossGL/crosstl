@@ -107,7 +107,7 @@ class DirectXComputeRuntime:
     """
 
     name = "directx-compute-runtime"
-    supported_platforms = ("win32", "cygwin")
+    supported_platforms = ("win32",)
 
     def __init__(
         self,
@@ -183,9 +183,9 @@ class DirectXComputeRuntime:
         except Exception as exc:  # pragma: no cover - depends on local adapters
             return RuntimeExecutorAvailability(
                 False,
-                reason=f"No Direct3D 12 compute device is available: {exc}",
+                reason=f"Direct3D 12 device selection failed: {exc}",
                 details={
-                    "reasonKind": "device-unavailable",
+                    "reasonKind": "device-selection-failed",
                     "target": "directx",
                     "runtime": self.name,
                     "error": str(exc),
@@ -412,6 +412,15 @@ class DirectXComputeRuntime:
             ) from exc
 
     def _select_device(self, compushady: Any) -> Any:
+        get_discovered_devices = getattr(compushady, "get_discovered_devices", None)
+        if not callable(get_discovered_devices):
+            raise RuntimeExecutorUnavailable(
+                "compushady does not expose Direct3D device discovery."
+            )
+        devices = get_discovered_devices()
+        if not devices:
+            return None
+
         get_current_device = getattr(compushady, "get_current_device", None)
         if callable(get_current_device):
             return get_current_device()
@@ -1755,6 +1764,18 @@ def _directx_buffer_stride(
 ) -> int:
     resource = binding.binding
     metadata = {**dict(resource.metadata), **dict(binding.metadata)}
+    type_name = str(resource.type_name or "").strip()
+    normalized_type = re.sub(r"\s+", "", type_name).lower()
+    if namespace != "cbv" and (
+        "byteaddressbuffer" in normalized_type
+        or ("buffer<" in normalized_type and "structuredbuffer<" not in normalized_type)
+    ):
+        raise _directx_setup_error(
+            f"DirectX buffer view is not supported for {binding.name!r}.",
+            "unsupported-buffer-view",
+            resource=binding.name,
+            type=resource.type_name,
+        )
     explicit_stride = next(
         (
             metadata[key]
@@ -1770,11 +1791,7 @@ def _directx_buffer_stride(
             resource=binding.name,
         )
     else:
-        type_name = str(resource.type_name or "").strip()
-        normalized_type = re.sub(r"\s+", "", type_name).lower()
         if namespace == "cbv":
-            stride = 0
-        elif "byteaddressbuffer" in normalized_type:
             stride = 0
         elif "structuredbuffer" in normalized_type:
             match = re.search(r"structuredbuffer<([^>]+)>", normalized_type)
@@ -1787,13 +1804,6 @@ def _directx_buffer_stride(
                     resource=binding.name,
                     type=resource.type_name,
                 )
-        elif re.search(r"(?:^|\w)rw?buffer<|(?:^|\w)buffer<", normalized_type):
-            raise _directx_setup_error(
-                f"DirectX typed buffer views are not supported for {binding.name!r}.",
-                "unsupported-buffer-view",
-                resource=binding.name,
-                type=resource.type_name,
-            )
         elif type_name:
             raise _directx_setup_error(
                 f"DirectX runtime cannot infer the buffer view for {binding.name!r}.",
@@ -1803,12 +1813,9 @@ def _directx_buffer_stride(
             )
         else:
             stride = _dtype_size(dtype)
-    byte_address_buffer = (
-        "byteaddressbuffer" in re.sub(r"\s+", "", str(resource.type_name or "")).lower()
-    )
     if (
         stride < 0
-        or (stride == 0 and namespace != "cbv" and not byte_address_buffer)
+        or (stride == 0 and namespace != "cbv")
         or (stride and payload_size % stride)
     ):
         raise _directx_setup_error(

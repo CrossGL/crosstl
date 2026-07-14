@@ -142,11 +142,15 @@ def _dispatch_request(hlsl_path: Path, dxil_path: Path) -> NativeRuntimeDispatch
 
 def main() -> int:
     if not sys.platform.startswith("win"):
-        raise RuntimeError("The Direct3D 12 native runtime smoke test requires Windows.")
+        raise RuntimeError(
+            "The Direct3D 12 native runtime smoke test requires Windows."
+        )
 
     dxc = shutil.which("dxc")
     if dxc is None:
-        raise RuntimeError("DXC is required for the Direct3D 12 native runtime smoke test.")
+        raise RuntimeError(
+            "DXC is required for the Direct3D 12 native runtime smoke test."
+        )
 
     with tempfile.TemporaryDirectory(prefix="crosstl-directx-runtime-") as temp_dir:
         work_dir = Path(temp_dir)
