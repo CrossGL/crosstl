@@ -5742,10 +5742,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     f"{self.unsupported_glsl_buffer_block_local_variable_placeholder('HLSL', vtype, stmt.name)};\n",
                 )
 
-            declaration = format_c_style_array_declaration(
+            base_declaration = format_c_style_array_declaration(
                 self.map_type(vtype), stmt_name
             )
-            declaration = f"{self.local_variable_qualifier(stmt)}{declaration}"
+            declaration = f"{self.local_variable_qualifier(stmt)}{base_declaration}"
             initial_value = getattr(stmt, "initial_value", None)
             if isinstance(initial_value, MatchNode):
                 code = f"{indent_str}{declaration};\n"
@@ -5762,7 +5762,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 aggregate_init = (
                     self.generate_hlsl_aggregate_conditional_initialization(
                         initial_value,
-                        declaration,
+                        f"{self.local_variable_qualifier(stmt, omit_const=True)}"
+                        f"{base_declaration}",
                         stmt_name,
                         vtype,
                         indent,
@@ -6160,7 +6161,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             vtype = self.expression_result_type(getattr(stmt, "initial_value", None))
         return vtype or "float"
 
-    def local_variable_qualifier(self, node):
+    def local_variable_qualifier(self, node, *, omit_const=False):
         qualifiers = {str(value).lower() for value in getattr(node, "qualifiers", [])}
         rendered = []
         if qualifiers & {"groupshared", "shared", "threadgroup", "workgroup"}:
@@ -6169,7 +6170,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             rendered.append("static")
         if self.hlsl_has_precise_modifier(node):
             rendered.append("precise")
-        if "const" in qualifiers:
+        if "const" in qualifiers and not omit_const:
             rendered.append("const")
         return f"{' '.join(rendered)} " if rendered else ""
 

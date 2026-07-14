@@ -38581,6 +38581,36 @@ def test_hlsl_aggregate_conditional_initializer_preserves_selected_branch(tmp_pa
     assert_directx_compute_validates_if_available(generated, tmp_path)
 
 
+def test_hlsl_const_aggregate_conditional_uses_mutable_control_flow_local(tmp_path):
+    shader = """
+    shader ConstAggregateConditionalInitializer {
+        struct Payload {
+            float value;
+        };
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                Payload left = { 1.0 };
+                Payload right = { 2.0 };
+                bool use_left = true;
+                const Payload selected = use_left ? left : right;
+                float observed = selected.value;
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Payload selected;" in generated
+    assert "const Payload selected;" not in generated
+    assert "selected = left;" in generated
+    assert "selected = right;" in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
 def test_hlsl_aggregate_conditional_assignment_and_return_use_control_flow(
     tmp_path,
 ):
