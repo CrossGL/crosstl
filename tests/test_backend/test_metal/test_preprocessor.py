@@ -3903,6 +3903,180 @@ def test_preprocessor_declared_pointer_parameter_still_binds_pointee():
     assert "Loader__load__const_device_half_ptr(" not in output
 
 
+def test_preprocessor_matches_concrete_pointer_template_member_parameters():
+    code = """
+    struct Loader {
+      template <typename Tag>
+      float load_pointer(const device float* src, Tag tag) {
+        return src[0] + tag;
+      }
+
+      template <typename Tag>
+      float load_qualified(const volatile device float* src, Tag tag) {
+        return src[0] + tag;
+      }
+    };
+
+    kernel void k(
+        const device float* src [[buffer(0)]],
+        device float* out [[buffer(1)]]) {
+      Loader loader;
+      out[0] = loader.load_pointer(src, 1);
+      out[1] = loader.load_qualified(src, 1);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert (
+        "float Loader__load_pointer__int(thread Loader& self, "
+        "const device float* src, int tag)" in output
+    )
+    assert (
+        "float Loader__load_qualified__int(thread Loader& self, "
+        "const volatile device float* src, int tag)" in output
+    )
+
+
+@pytest.mark.parametrize(
+    ("declared_type", "actual_parameter"),
+    [
+        pytest.param(
+            "const device float*",
+            "const device int* value [[buffer(0)]],",
+            id="pointer-pointee",
+        ),
+        pytest.param(
+            "const device float*",
+            "const volatile device float* value [[buffer(0)]],",
+            id="dropped-volatile",
+        ),
+    ],
+)
+def test_preprocessor_rejects_concrete_pointer_template_member_parameter_mismatch(
+    declared_type, actual_parameter
+):
+    code = f"""
+    struct Loader {{
+      template <typename Tag>
+      float load({declared_type} value, Tag tag) {{ return float(tag); }}
+    }};
+
+    kernel void k(
+        {actual_parameter}
+        device float* out [[buffer(1)]]) {{
+      Loader loader;
+      out[0] = loader.load(value, 1);
+    }}
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.project_diagnostic_code == "project.translate.metal-struct-method"
+    assert error.missing_capabilities == ("struct.template-method",)
+    assert error.requested_signature == "loader.load(value, 1)"
+    assert "did not bind consistently" in str(error)
+
+
+def test_preprocessor_rejects_concrete_array_pointee_mismatch():
+    code = """
+    struct Loader {
+      template <typename Tag>
+      float load(thread float values[4], Tag tag) { return float(tag); }
+    };
+
+    kernel void k(device float* out [[buffer(0)]]) {
+      thread int values[4];
+      Loader loader;
+      out[0] = loader.load(values, 1);
+    }
+    """
+
+    with pytest.raises(MetalStructMethodError, match="did not bind consistently"):
+        MetalPreprocessor().preprocess(code)
+
+
+def test_preprocessor_validates_dependent_concrete_pointer_pointee_portion():
+    source = """
+    template <typename Left, typename Right>
+    struct Pair { Left first; Right second; };
+
+    struct Loader {
+      template <typename Tag>
+      float load(const device Pair<Tag, float>* value, Tag tag) {
+        return float(tag);
+      }
+    };
+
+    kernel void k(
+        const device Pair<int, RIGHT_TYPE>* value [[buffer(0)]],
+        device float* out [[buffer(1)]]) {
+      Loader loader;
+      out[0] = loader.load(value, 1);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(source.replace("RIGHT_TYPE", "float"))
+    assert "Loader__load__int(loader, value, 1)" in output
+
+    with pytest.raises(MetalStructMethodError, match="did not bind consistently"):
+        MetalPreprocessor().preprocess(source.replace("RIGHT_TYPE", "int"))
+
+
+def test_preprocessor_selects_template_pointer_overload_by_concrete_pointee():
+    code = """
+    struct Loader {
+      template <typename Tag>
+      int load_pointer(const device float* src, Tag tag) {
+        return int(src[0]) + tag;
+      }
+
+      template <typename Tag>
+      int load_pointer(const device int* src, Tag tag) {
+        return src[0] + tag;
+      }
+    };
+
+    kernel void k(
+        const device int* src [[buffer(0)]],
+        device int* out [[buffer(1)]]) {
+      Loader loader;
+      out[0] = loader.load_pointer(src, 1);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert (
+        "int Loader__load_pointer__int(thread Loader& self, "
+        "const device int* src, int tag)" in output
+    )
+    assert "const device float* src, int tag" not in output
+
+
+def test_preprocessor_preserves_scalar_conversion_for_concrete_parameter():
+    code = """
+    struct Loader {
+      template <typename Tag>
+      float load(float value, Tag tag) { return value + tag; }
+    };
+
+    kernel void k(device float* out [[buffer(0)]]) {
+      Loader loader;
+      out[0] = loader.load(1, 2);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Loader__load__int(loader, 1, 2)" in output
+    assert (
+        "float Loader__load__int(thread Loader& self, float value, int tag)" in output
+    )
+
+
 def test_preprocessor_instantiates_explicit_value_template_member_call():
     code = """
     struct Reducer {
@@ -5411,6 +5585,27 @@ def test_preprocessor_template_member_binding_drops_expression_reference():
     )
 
     assert bindings == {"T": "float"}
+
+
+def test_preprocessor_explicit_template_binding_allows_untyped_parameter():
+    preprocessor = MetalPreprocessor()
+    struct = preprocessor._find_concrete_struct_definitions("""
+        struct Consumer {
+          template <typename T>
+          static T consume(float untyped) { return T(untyped); }
+        };
+        """)[0]
+    method = struct.template_methods[0]
+
+    bindings = preprocessor._bind_template_method_parameters(
+        method,
+        [None],
+        explicit_template_arguments=["int"],
+        owner_struct=struct,
+        structs_by_name={struct.name: struct},
+    )
+
+    assert bindings == {"T": "int"}
 
 
 @pytest.mark.parametrize(

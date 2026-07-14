@@ -5715,6 +5715,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 return None
         declared_parameter_types: List[str] = []
         declared_parameter_is_indirect: List[bool] = []
+        declared_parameter_is_array: List[bool] = []
         declared_pointer_types: List[Optional[str]] = []
         for parameter in parameters[: len(concrete_argument_types)]:
             subscriptable = self._pointer_or_array_parameter_type(parameter)
@@ -5731,6 +5732,10 @@ class MetalPreprocessor(HLSLPreprocessor):
             if normalized and normalized != "void":
                 declared_parameter_types.append(normalized)
                 declared_parameter_is_indirect.append(subscriptable is not None)
+                declarator = self._strip_top_level_default_value(
+                    self._strip_metal_attributes(parameter)
+                ).strip()
+                declared_parameter_is_array.append(declarator.endswith("]"))
                 declared_pointer_types.append(
                     subscriptable.pointer_type if subscriptable is not None else None
                 )
@@ -5753,9 +5758,17 @@ class MetalPreprocessor(HLSLPreprocessor):
         }
         if any(not value for value in bindings.values()):
             return None
-        for declared_type, is_indirect, declared_pointer_type, concrete_type in zip(
+        indirect_pointee_types: List[Tuple[str, str]] = []
+        for (
+            declared_type,
+            is_indirect,
+            is_array,
+            declared_pointer_type,
+            concrete_type,
+        ) in zip(
             declared_parameter_types,
             declared_parameter_is_indirect,
+            declared_parameter_is_array,
             declared_pointer_types,
             concrete_argument_types,
         ):
@@ -5777,6 +5790,11 @@ class MetalPreprocessor(HLSLPreprocessor):
                 )
                 if concrete_value_type is None:
                     return None
+                indirect_pointee_types.append((declared_type, concrete_value_type))
+            elif is_array:
+                # Internal method-body inference retains the element type for
+                # local arrays. It is still a concrete pointee for validation.
+                indirect_pointee_types.append((declared_type, concrete_value_type))
             self._infer_template_parameter_bindings_from_type(
                 declared_type,
                 concrete_value_type,
@@ -5802,6 +5820,24 @@ class MetalPreprocessor(HLSLPreprocessor):
                 if not normalized_default:
                     return None
                 bindings[name] = normalized_default
+        # Pointer deduction above validates address-space/cv compatibility and
+        # binds template names. Once explicit/default bindings are also known,
+        # validate the complete pointee pattern so concrete portions cannot be
+        # ignored merely because another parameter supplied every binding.
+        for declared_type, concrete_value_type in indirect_pointee_types:
+            resolved_declared_type = self._replace_identifiers(declared_type, bindings)
+            if owner_struct is not None:
+                resolved_declared_type = self._canonicalize_struct_scoped_type(
+                    resolved_declared_type, owner_struct, structs_by_name
+                )
+            resolved_declared_type = self._canonical_template_binding_pointee_type(
+                resolved_declared_type
+            )
+            concrete_value_type = self._canonical_template_binding_pointee_type(
+                concrete_value_type
+            )
+            if resolved_declared_type != concrete_value_type:
+                return None
         return bindings
 
     def _template_member_free_name(
@@ -9640,6 +9676,16 @@ class MetalPreprocessor(HLSLPreprocessor):
         pointee = self._normalize_inferred_type(normalized[:-1])
         return pointee or None
 
+    def _canonical_template_binding_pointee_type(self, type_text: str) -> str:
+        normalized = self._normalize_inferred_type(type_text)
+        specialization = self._materialized_struct_specializations.get(normalized)
+        if specialization is None:
+            return normalized
+        source_name, source_arguments = specialization
+        return self._normalize_template_argument_text(
+            f"{source_name}<{', '.join(source_arguments)}>"
+        )
+
     @staticmethod
     def _pointer_argument_matches_declared_type(
         declared_pointer_type: str, concrete_pointer_type: str
@@ -9651,10 +9697,11 @@ class MetalPreprocessor(HLSLPreprocessor):
         concrete_spaces = concrete_tokens & address_space_tokens
         if len(declared_spaces) != 1 or declared_spaces != concrete_spaces:
             return False
-        # Qualification may be added when binding to a const pointee, but it may
-        # not be discarded when the argument points at const storage.
-        if "const" in concrete_tokens and "const" not in declared_tokens:
-            return False
+        # Pointee qualification may be added by the declared parameter, but it
+        # may not be discarded from the concrete argument.
+        for qualifier in ("const", "volatile"):
+            if qualifier in concrete_tokens and qualifier not in declared_tokens:
+                return False
         return True
 
     @staticmethod
