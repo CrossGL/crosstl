@@ -4,6 +4,7 @@ import sys
 
 from .MetalAst import *
 from .MetalLexer import *
+from .preprocessor import DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT
 
 MIN_METAL_PARSE_RECURSION_LIMIT = 10000
 
@@ -279,10 +280,24 @@ class MetalParserError(SyntaxError):
 class MetalParser:
     """Parse Metal tokens into the Metal backend shader AST."""
 
-    def __init__(self, tokens, file_path=None):
+    def __init__(
+        self,
+        tokens,
+        file_path=None,
+        max_template_specializations=None,
+        template_specialization_limit_source=None,
+    ):
         self.tokens = tokens
         self.pos = 0
         self.file_path = file_path
+        self.max_template_specializations = (
+            DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT
+            if max_template_specializations is None
+            else max_template_specializations
+        )
+        self.template_specialization_limit_source = (
+            template_specialization_limit_source or "max_template_specializations"
+        )
         self.current_token = (
             self.tokens[self.pos] if self.pos < len(self.tokens) else ("EOF", None)
         )
@@ -646,7 +661,7 @@ class MetalParser:
             else:
                 self.eat(self.current_token[0])
 
-        return ShaderNode(
+        shader = ShaderNode(
             includes=preprocessors,
             functions=functions,
             structs=structs,
@@ -655,6 +670,11 @@ class MetalParser:
             enums=enums,
             typedefs=typedefs,
         )
+        shader.max_template_specializations = self.max_template_specializations
+        shader.template_specialization_limit_source = (
+            self.template_specialization_limit_source
+        )
+        return shader
 
     def add_global_declaration(self, global_variables, declaration):
         if isinstance(declaration, list):

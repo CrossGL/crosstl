@@ -21,7 +21,10 @@ from crosstl.backend.Metal.MetalCrossGLCodeGen import (
 )
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
-from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+from crosstl.backend.Metal.preprocessor import (
+    MetalPreprocessor,
+    MetalTemplateSpecializationError,
+)
 from crosstl.translator.ast import ResourceMemoryQualifierNode
 from crosstl.translator.codegen.directx_codegen import (
     HLSLCodeGen as TranslatorHLSLCodeGen,
@@ -8047,11 +8050,11 @@ def test_codegen_mixed_type_value_template_keeps_inferred_type_parameter():
     assert parse_crossgl(crossgl) is not None
 
 
-def test_codegen_fails_closed_for_explicit_mixed_type_value_arguments():
+def test_codegen_materializes_explicit_mixed_type_value_arguments():
     code = """
     template <typename T, bool Alternate = false>
     T mixed(T value) {
-        return Alternate ? value : -value;
+        return Alternate ? T(1) : -value;
     }
 
     float run_mixed(float value) {
@@ -8059,21 +8062,208 @@ def test_codegen_fails_closed_for_explicit_mixed_type_value_arguments():
     }
     """
 
+    crossgl = convert_without_preprocessing(code)
+
+    assert "float mixed_float_true(float value)" in crossgl
+    assert "return true ? float(1) : (-value);" in crossgl
+    assert "return mixed_float_true(value);" in crossgl
+    assert "generic<T>" not in crossgl
+    assert not re.search(r"\b(?:T|Alternate)\b", crossgl)
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_materializes_transitive_mixed_template_graph(tmp_path):
+    code = """
+    template <typename T, int Width>
+    T leaf(T value) {
+        return value + T(Width);
+    }
+
+    template <typename T, int Width>
+    T middle(T value) {
+        return leaf<T, Width>(value);
+    }
+
+    kernel void run_materialized(
+        device float* out [[buffer(0)]],
+        uint gid [[thread_position_in_grid]]) {
+        out[gid] = middle<float, 4>(out[gid])
+            + middle<float, 4>(out[gid])
+            + middle<float, 8>(out[gid]);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(code)
+
+    assert crossgl.count("float leaf_float_4(float value)") == 1
+    assert crossgl.count("float middle_float_4(float value)") == 1
+    assert crossgl.count("float leaf_float_8(float value)") == 1
+    assert crossgl.count("float middle_float_8(float value)") == 1
+    assert crossgl.index("float leaf_float_4") < crossgl.index("float middle_float_4")
+    assert crossgl.index("float leaf_float_8") < crossgl.index("float middle_float_8")
+    assert crossgl.index("float middle_float_8") < crossgl.index("run_materialized")
+    assert crossgl.count("middle_float_4(buffer_load(out_, gid))") == 2
+    assert not re.search(r"\b(?:T|Width)\b", crossgl)
+
+    ast = parse_crossgl(crossgl)
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+    glsl = GLSLCodeGen().generate(ast)
+    assert "middle_float_4(out_.Load(gid))" in hlsl
+    assert "middle_float_8(out_.Load(gid))" in hlsl
+    assert "middle_float_4(out_[gid])" in glsl
+    assert "middle_float_8(out_[gid])" in glsl
+
+    dxc = shutil.which("dxc")
+    if dxc is not None:
+        hlsl_path = tmp_path / "transitive-materialization.hlsl"
+        hlsl_path.write_text(hlsl, encoding="utf-8")
+        subprocess.run(
+            [dxc, "-T", "cs_6_0", "-E", "CSMain", str(hlsl_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    glslang = shutil.which("glslangValidator")
+    if glslang is not None:
+        glsl_path = tmp_path / "transitive-materialization.comp"
+        glsl_path.write_text(glsl, encoding="utf-8")
+        subprocess.run(
+            [
+                glslang,
+                "--target-env",
+                "opengl",
+                "-S",
+                "comp",
+                str(glsl_path),
+                "-o",
+                str(tmp_path / "transitive-materialization.spv"),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+
+def test_codegen_preserves_overload_selection_in_transitive_materialization():
+    code = """
+    template <int Width>
+    float leaf(float value) {
+        return value + float(Width);
+    }
+
+    template <int Width>
+    int leaf(int value) {
+        return value + Width;
+    }
+
+    template <typename T, int Width>
+    T middle(T value) {
+        return leaf<Width>(value);
+    }
+
+    float run_materialized(float value) {
+        return middle<float, 4>(value);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(code)
+
+    assert "float leaf_4_float(float value)" in crossgl
+    assert "return leaf_4_float(value);" in crossgl
+    assert "int leaf_4_int" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_rejects_partial_transitive_template_request():
+    code = """
+    template <typename T, int Width>
+    T leaf(T value) {
+        return value;
+    }
+
+    template <typename T, int Width>
+    T middle(T value) {
+        return leaf<T>(value);
+    }
+
+    float run_materialized(float value) {
+        return middle<float, 4>(value);
+    }
+    """
+
     with pytest.raises(MetalTemplateArgumentResolutionError) as exc_info:
-        convert_without_preprocessing(code, file_path="mixed-template.metal")
+        convert_without_preprocessing(code, file_path="partial-template.metal")
 
     diagnostic = exc_info.value
-    assert diagnostic.argument_kind == "explicit_type"
-    assert diagnostic.parameter_name == "T"
-    assert diagnostic.argument_expression == "float"
-    assert diagnostic.explicit_argument == "float"
-    assert diagnostic.reason == (
-        "cannot be preserved by the value-template specialization identity"
-    )
-    assert diagnostic.source_location["file"] == "mixed-template.metal"
-    assert diagnostic.source_location["line"] == 2
+    assert diagnostic.enclosing_function == "middle"
+    assert diagnostic.enclosing_specialization == "middle_float_4"
+    assert diagnostic.nested_helper == "leaf<T>"
+    assert diagnostic.function_name == "leaf"
+    assert diagnostic.parameter_name == "Width"
+    assert diagnostic.argument_kind == "missing"
+    assert diagnostic.reason == "was not supplied and has no declaration default"
+    assert diagnostic.source_location["file"] == "partial-template.metal"
+
+
+def test_codegen_rejects_recursive_transitive_template_graph():
+    code = """
+    template <typename T, int Width>
+    T first(T value) {
+        return second<T, Width>(value);
+    }
+
+    template <typename T, int Width>
+    T second(T value) {
+        return first<T, Width>(value);
+    }
+
+    float run_materialized(float value) {
+        return first<float, 4>(value);
+    }
+    """
+
+    with pytest.raises(MetalTemplateSpecializationError) as exc_info:
+        convert_without_preprocessing(code)
+
+    diagnostic = exc_info.value
+    assert diagnostic.caller_specialization == "second_float_4"
+    assert diagnostic.callee_template == "first"
+    assert diagnostic.requested_arguments == ("float", "4")
+    assert diagnostic.requested_signature == "first<float, 4>"
     assert str(diagnostic) == (
-        "Cannot materialize Metal function template 'mixed' for call "
-        "'mixed<float,true>': explicit type argument for 'T' (float) cannot be "
-        "preserved by the value-template specialization identity"
+        "Metal template specialization graph is recursive: "
+        "first_float_4 -> second_float_4 -> first_float_4"
     )
+
+
+def test_codegen_honors_transitive_template_specialization_budget():
+    code = """
+    template <typename T, int Width>
+    T leaf(T value) {
+        return value + T(Width);
+    }
+
+    float run_materialized(float value) {
+        return leaf<float, 4>(value) + leaf<float, 8>(value);
+    }
+    """
+    tokens = MetalLexer(code, preprocess=False).tokenize()
+    ast = MetalParser(
+        tokens,
+        file_path="template-budget.metal",
+        max_template_specializations=1,
+        template_specialization_limit_source="focused test budget",
+    ).parse()
+
+    with pytest.raises(MetalTemplateSpecializationError) as exc_info:
+        MetalToCrossGLConverter().generate(ast)
+
+    diagnostic = exc_info.value
+    assert diagnostic.limit == 1
+    assert diagnostic.limit_source == "focused test budget"
+    assert diagnostic.unique_specialization_count == 2
+    assert diagnostic.caller_specialization == "run_materialized"
+    assert diagnostic.callee_template == "leaf"
+    assert diagnostic.requested_arguments == ("float", "8")
+    assert diagnostic.requested_signature == "leaf<float, 8>"
