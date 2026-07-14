@@ -3,7 +3,10 @@
 This directory contains the project-level MLX porting checks used by CrossTL.
 The checks are pinned to MLX commit
 `4367c73b60541ddd5a266ce4644fd93d20223b6e` and exercise the Metal kernel tree
-as a source repository, not as isolated parser snippets.
+as a source repository, not as isolated parser snippets. This pinned revision is
+an active repository-level verification target: configured coverage and expected
+baselines are not, by themselves, evidence that every kernel translates or
+passes a target validator.
 
 ## Scope
 
@@ -92,13 +95,15 @@ the pinned MLX source count. Scheduled and manually triggered CI also run the
 full-corpus artifact scout with finite Metal template materialization budgets.
 The generated full-corpus project config caps
 `max_template_specializations` at 4096 and
-`max_template_materialization_work` at 131072. The full scout translates all 40
-pinned MLX Metal kernel units to DirectX, OpenGL, and Vulkan and records 120
-target attempts. Its fence-aware baseline is 117 translated artifacts and three
-expected failed `fence.metal` records, one per target, with no fence target files
-emitted. Additional failures remain issue-backed scout results. CI uploads
-generated portability reports, validation summaries embedded in those reports,
-generated logs, available generated artifacts, and a concise JSON summary.
+`max_template_materialization_work` at 131072. The scout discovers all 40 pinned
+MLX Metal kernel units and attempts 120 DirectX, OpenGL, and Vulkan artifacts.
+Its fence-aware success condition is 117 translated artifacts and three expected
+failed `fence.metal` records, one per target, with no fence target files emitted.
+That condition is a gate expectation, not a claim that the pinned full corpus
+currently satisfies it. Additional failures remain issue-backed scout results.
+CI uploads generated portability reports, validation summaries embedded in
+those reports, generated logs, available generated artifacts, and a concise JSON
+summary.
 Because `binary_two.metal` was already in the DirectX/Vulkan frontier, its OpenGL
 promotion does not change either reduced source count.
 
@@ -211,9 +216,27 @@ The harness writes reports, generated artifacts, and command logs under
 ## Current Translator Gaps
 
 CrossGL/crosstl#1376 tracks bounded runtime for the scheduled full-corpus scout.
-CrossGL/crosstl#1676 tracks demand-driven materialization so repository
-translation charges configured work budgets to reachable concrete template
-graphs instead of eager whole-source cross products.
+[#1676](https://github.com/CrossGL/crosstl/issues/1676) remains an active
+verification target for MLX commit
+`4367c73b60541ddd5a266ce4644fd93d20223b6e`. The materialization change charges
+configured work budgets to unique reachable concrete entries, helpers, and
+struct specializations plus actual type-environment resolution, rather than an
+eager whole-source instantiation-by-template Cartesian estimate or repeated
+expanded-text scans. Artifact metadata and budget diagnostics report reachable
+specializations, dependency-discovery work, and pruned eager candidate pairs as
+separate counts. Focused tests establish the accounting behavior. An isolated
+project replay of `quantized.metal` at the pinned revision now advances both
+DirectX and OpenGL past the former 522,068-item eager planning failure without
+raising the 131,072 work limit. Both targets then fail closed with
+`project.translate.metal-struct-method` while lowering the reference-returning
+`MMATile::frag_at(i, j)` accessor tracked by CrossGL/crosstl#1557; neither target
+emits an artifact, so no validator acceptance or runtime parity is claimed. A
+fresh pinned full-corpus report is still required to identify every kernel that
+advances past the former budget failure and to satisfy the repository-level
+acceptance criteria for CrossGL/crosstl#1676. The checked-in evidence also
+records full-kernel Vulkan replays of `fp_quantized.metal` and
+`quantized_nax.metal` as failed after selected materialization contracts; only
+the explicitly documented reduced quantized fixtures carry validator evidence.
 CrossGL/crosstl#1659 tracks quadratic DirectX resource-register relocation for
 large aggregate artifacts; a high-budget `binary.metal` DirectX translation
 reaches that allocator after template materialization.

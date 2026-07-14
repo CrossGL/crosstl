@@ -1289,7 +1289,6 @@ METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_SOURCE_OPTION = (
     "template_materialization_work_limit_source"
 )
 METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_MULTIPLIER = 64
-METAL_LARGE_TEMPLATE_SOURCE_MIN_CHARS = 96 * 1024
 METAL_DIAGNOSTIC_TEMPLATE_HELPER_RE = re.compile(
     r"(^|_)(?:debug|dbg|log|trace|diagnostic|diag|assert)($|_)"
 )
@@ -1536,11 +1535,19 @@ REPORT_ARTIFACT_TEMPLATE_MATERIALIZATION_FIELDS = frozenset(
     (
         "status",
         "specializationCount",
+        "accounting",
         "configuredParameterCount",
         "configuredParameters",
         "configuredParameterSources",
         "specializations",
         "unsupported",
+    )
+)
+REPORT_ARTIFACT_TEMPLATE_MATERIALIZATION_ACCOUNTING_FIELDS = frozenset(
+    (
+        "reachableSpecializationCount",
+        "dependencyDiscoveryWorkCount",
+        "prunedCandidateCount",
     )
 )
 REPORT_ARTIFACT_TEMPLATE_SPECIALIZATION_FIELDS = frozenset(
@@ -9722,6 +9729,18 @@ def _metal_find_implicit_template_function_calls(
             and preprocessor._containing_span(function.span[0], included) is None
         ):
             continue
+        candidate_calls = _plain_template_helper_call_sites(
+            preprocessor,
+            source,
+            templates_by_name,
+            excluded_spans,
+            [function.body_span],
+        )
+        if not any(
+            not explicit_template_arguments
+            for _name, _arguments, _span, explicit_template_arguments in candidate_calls
+        ):
+            continue
         type_environment = _metal_function_type_environment(
             preprocessor,
             source,
@@ -9807,6 +9826,7 @@ class _ImplicitTemplateMaterialization:
     materialized_names: dict[tuple[str, tuple[str, ...], tuple[str, ...]], str] = field(
         default_factory=dict
     )
+    dependency_discovery_work_count: int = 0
 
 
 @dataclass
@@ -9834,6 +9854,13 @@ class _MetalTemplateMaterializationWorkBudget:
     target: str
     pass_name: str = "implicit-template-materialization/type-environment"
     used: int = 0
+    unique_items: set[tuple[Any, ...]] = field(default_factory=set)
+    dependency_discovery_work_count: int = 0
+    pruned_candidate_count: int = 0
+
+    @property
+    def reachable_specialization_count(self) -> int:
+        return len(self.unique_items)
 
     def consume(
         self,
@@ -9845,6 +9872,22 @@ class _MetalTemplateMaterializationWorkBudget:
     ) -> None:
         if amount <= 0:
             return
+        self.dependency_discovery_work_count += amount
+        self._consume(
+            amount,
+            offset=offset,
+            length=length,
+            context=context,
+        )
+
+    def _consume(
+        self,
+        amount: int,
+        *,
+        offset: int,
+        length: int,
+        context: str,
+    ) -> None:
         self.used += amount
         if self.used <= self.limit:
             return
@@ -9859,28 +9902,52 @@ class _MetalTemplateMaterializationWorkBudget:
         requested_signature = f"{self.pass_name}: {self.used} work items for {context}"
         suggested_action = (
             "raise max_template_materialization_work for this source pattern "
-            "or backend, reduce implicit Metal template helper fan-out, or add "
-            "explicit template arguments"
+            "or backend, reduce the reachable concrete template graph or "
+            "type-resolution fan-out, or provide explicit template arguments"
         )
         location_text = (
             f" Source context: {location.file}:{location.line}:{location.column}."
             if location is not None
             else ""
         )
-        raise MetalTemplateSpecializationError(
+        error = MetalTemplateSpecializationError(
             "Metal template materialization work budget exceeded while "
             f"running {self.pass_name} for target '{self.target}'; "
-            f"{self.used} work items requested, limit {self.limit} from "
+            f"{self.used} work items requested for {context}, "
+            f"limit {self.limit} from "
             f"{self.limit_source}.{location_text} "
             f"Suggested action: {suggested_action}.",
             limit=self.limit,
             limit_source=self.limit_source,
-            unique_specialization_count=self.used,
+            unique_specialization_count=self.reachable_specialization_count,
             required_work_items=self.used,
             requested_signature=requested_signature,
             suggested_action=suggested_action,
             source_location=location,
         )
+        error.reachable_specialization_count = self.reachable_specialization_count
+        error.dependency_discovery_work_count = self.dependency_discovery_work_count
+        error.pruned_candidate_count = self.pruned_candidate_count
+        raise error
+
+    def consume_unique(
+        self,
+        key: tuple[Any, ...],
+        *,
+        offset: int = 0,
+        length: int = 0,
+        context: str,
+    ) -> bool:
+        if key in self.unique_items:
+            return False
+        self.unique_items.add(key)
+        self._consume(
+            1,
+            offset=offset,
+            length=length,
+            context=context,
+        )
+        return True
 
 
 def _metal_template_materialization_work_limit(
@@ -10109,6 +10176,11 @@ def _materialize_implicit_template_function_calls(
         text=materialized,
         specializations=specializations,
         materialized_names=implicit_materialized_names,
+        dependency_discovery_work_count=(
+            work_budget.dependency_discovery_work_count
+            if work_budget is not None
+            else 0
+        ),
     )
 
 
@@ -11661,9 +11733,7 @@ def _metal_struct_field_type_environments(
     structs = preprocessor._find_concrete_struct_definitions(source)
     if work_budget is not None and structs:
         work_budget.consume(
-            preprocessor._template_materialization_scan_work_items(source)
-            + len(structs)
-            + sum(len(struct.data_member_types) for struct in structs),
+            len(structs) + sum(len(struct.data_member_types) for struct in structs),
             offset=int(structs[0].span[0]),
             length=max(int(structs[0].span[1]) - int(structs[0].span[0]), 0),
             context="concrete struct field type scan",
@@ -12524,19 +12594,6 @@ def _materialize_plain_template_helper_calls(
         for template in templates:
             templates_by_name.setdefault(template.name, []).append(template)
         template_spans = preprocessor._find_template_declaration_spans(working)
-        if work_budget is not None:
-            work_budget.consume(
-                preprocessor._template_materialization_scan_work_items(working),
-                offset=templates[0].span[0],
-                length=max(templates[0].span[1] - templates[0].span[0], 0),
-                context="plain template helper source scan",
-            )
-            work_budget.consume(
-                len(templates) * max(1, len(template_spans)),
-                offset=templates[0].span[0],
-                length=max(templates[0].span[1] - templates[0].span[0], 0),
-                context="plain template helper reachability scan",
-            )
         reachable_function_spans = preprocessor._reachable_function_spans(
             working,
             template_spans,
@@ -12600,6 +12657,17 @@ def _materialize_plain_template_helper_calls(
             materialized_name = materialized_names.get(key)
             if materialized_name is not None:
                 return materialized_name
+
+            if work_budget is not None:
+                work_budget.consume_unique(
+                    ("function", *key),
+                    offset=int(template.span[0]),
+                    length=max(int(template.span[1]) - int(template.span[0]), 0),
+                    context=(
+                        "reachable concrete helper "
+                        f"'{preprocessor._template_specialization_signature(function_name, arguments)}'"
+                    ),
+                )
 
             unique_count = len(materialized_names) + 1
             if len(materialized_names) >= preprocessor.max_template_specializations:
@@ -14445,8 +14513,9 @@ def _template_materialization_metadata(
     configured_parameters: Mapping[str, str],
     configured_parameter_sources: Mapping[str, str],
     unsupported: Sequence[Mapping[str, Any]],
+    accounting: Mapping[str, int] | None = None,
 ) -> dict[str, Any]:
-    return {
+    metadata = {
         "status": "unsupported" if unsupported else "materialized",
         "specializationCount": len(specializations),
         "configuredParameterCount": len(configured_parameters),
@@ -14457,6 +14526,9 @@ def _template_materialization_metadata(
         "specializations": [dict(specialization) for specialization in specializations],
         "unsupported": [dict(record) for record in unsupported],
     }
+    if accounting is not None:
+        metadata["accounting"] = dict(accounting)
+    return metadata
 
 
 def _template_specialization_source(
@@ -15708,6 +15780,13 @@ def _project_template_materialization_for_artifact(
     if stripped_diagnostic_helpers:
         templates = preprocessor._find_template_functions(preprocessed)
 
+    # Candidate accounting mirrors the retired eager planner: every parsed source
+    # instantiation was paired with every remaining template-function declaration.
+    # Exactly one pair is retained for each unique, concrete host entry; duplicate,
+    # unmatched, unsupported, and nonmatching declaration pairs are pruned.
+    source_instantiation_candidate_count = len(source_instantiations) * len(templates)
+    selected_source_instantiation_candidate_count = 0
+
     explicit_work_budget = (
         _MetalTemplateMaterializationWorkBudget(
             limit=materialization_work_limit,
@@ -15718,67 +15797,17 @@ def _project_template_materialization_for_artifact(
             pass_name="explicit-template-materialization",
         )
         if materialization_work_limit > 0
-        and len(preprocessed) >= METAL_LARGE_TEMPLATE_SOURCE_MIN_CHARS
         else None
     )
+    if explicit_work_budget is not None:
+        explicit_work_budget.pruned_candidate_count = (
+            source_instantiation_candidate_count
+        )
 
     specializations: list[dict[str, Any]] = []
     source_instantiation_unsupported: list[dict[str, Any]] = []
     source_instantiation_partial_templates: set[str] = set()
     template_lookup = {template.name: template for template in templates}
-    if target == "opengl" and source_instantiations:
-        materialization_work_items = len(source_instantiations) * max(
-            1,
-            len(templates),
-        )
-        if materialization_work_items > materialization_work_limit:
-            first_instantiation = source_instantiations[0]
-            first_template = template_lookup.get(first_instantiation.function_name)
-            if first_template is not None:
-                location = _source_location_at_offset(
-                    unit,
-                    preprocessed,
-                    int(first_template.span[0]),
-                    max(int(first_template.span[1]) - int(first_template.span[0]), 0),
-                )
-                location_kind = "source declaration"
-            else:
-                location = _source_location_at_offset(
-                    unit,
-                    preprocessed,
-                    int(first_instantiation.span[0]),
-                    max(
-                        int(first_instantiation.span[1])
-                        - int(first_instantiation.span[0]),
-                        0,
-                    ),
-                )
-                location_kind = "source instantiation"
-            requested_signature = (
-                f"{len(source_instantiations)} source instantiations x "
-                f"{len(templates)} templates"
-            )
-            suggested_action = (
-                "raise max_template_materialization_work for this source pattern "
-                "or OpenGL target, or reduce source template instantiations"
-            )
-            raise MetalTemplateSpecializationError(
-                "OpenGL Metal template materialization work limit exceeded before "
-                f"GLSL codegen for '{unit.relative_path}'; "
-                f"{materialization_work_items} source-instantiation/template work "
-                f"items requested ({requested_signature}), limit "
-                f"{materialization_work_limit} from "
-                f"{materialization_work_limit_source}. "
-                f"First {location_kind}: "
-                f"{location.file}:{location.line}:{location.column}. "
-                f"Suggested action: {suggested_action}.",
-                limit=materialization_work_limit,
-                limit_source=materialization_work_limit_source,
-                required_work_items=materialization_work_items,
-                requested_signature=requested_signature,
-                suggested_action=suggested_action,
-                source_location=location,
-            )
     source_instantiation_contexts: list[_SourceInstantiationTemplateContext] = []
     source_instantiation_materialized_names: dict[tuple[str, tuple[str, ...]], str] = {}
     seen_source_instantiations: set[tuple[str, tuple[str, ...], str]] = set()
@@ -15847,6 +15876,22 @@ def _project_template_materialization_for_artifact(
         if key in seen_source_instantiations:
             continue
         seen_source_instantiations.add(key)
+        selected_source_instantiation_candidate_count += 1
+        if explicit_work_budget is not None:
+            explicit_work_budget.pruned_candidate_count = max(
+                0,
+                source_instantiation_candidate_count
+                - selected_source_instantiation_candidate_count,
+            )
+            explicit_work_budget.consume_unique(
+                ("entry", *key),
+                offset=int(instantiation.span[0]),
+                length=max(
+                    int(instantiation.span[1]) - int(instantiation.span[0]),
+                    0,
+                ),
+                context=f"reachable source entry '{instantiation.host_name}'",
+            )
         materialized_name = preprocessor._materialized_function_identifier(
             instantiation.host_name,
             template.name,
@@ -15902,19 +15947,6 @@ def _project_template_materialization_for_artifact(
     templates = preprocessor._find_template_functions(preprocessed)
     templates_by_name = {template.name: template for template in templates}
     template_spans = preprocessor._find_template_declaration_spans(preprocessed)
-    if templates and explicit_work_budget is not None:
-        explicit_work_budget.consume(
-            preprocessor._template_materialization_scan_work_items(preprocessed),
-            offset=templates[0].span[0],
-            length=max(templates[0].span[1] - templates[0].span[0], 0),
-            context="project explicit template source scan",
-        )
-        explicit_work_budget.consume(
-            len(templates) * max(1, len(template_spans)),
-            offset=templates[0].span[0],
-            length=max(templates[0].span[1] - templates[0].span[0], 0),
-            context="project explicit template reachability scan",
-        )
     reachable_function_spans = preprocessor._reachable_function_spans(
         preprocessed, template_spans
     )
@@ -15928,13 +15960,6 @@ def _project_template_materialization_for_artifact(
         explicit_specialization_keys,
         reachable_function_spans,
     )
-    if calls and explicit_work_budget is not None:
-        explicit_work_budget.consume(
-            len(calls) * max(1, len(templates_by_name)),
-            offset=calls[0][2][0],
-            context="project explicit template call matching",
-        )
-
     explicit_template_names: set[str] = set()
     seen_call_specializations: set[tuple[str, tuple[str, ...]]] = set()
     call_site_materialized_names: dict[tuple[str, tuple[str, ...]], str] = {}
@@ -15972,25 +15997,79 @@ def _project_template_materialization_for_artifact(
             )
         )
 
+    explicit_materialized_names: dict[tuple[str, tuple[str, ...]], str] = {}
     try:
         materialized = preprocessor._materialize_explicit_template_function_calls(
             preprocessed,
             work_budget=explicit_work_budget,
+            materialized_names=explicit_materialized_names,
         )
-    except MetalTemplateSpecializationError:
+    except MetalTemplateSpecializationError as exc:
+        if explicit_work_budget is not None:
+            exc.reachable_specialization_count = (
+                explicit_work_budget.reachable_specialization_count
+            )
+            exc.dependency_discovery_work_count = (
+                explicit_work_budget.dependency_discovery_work_count
+            )
+            exc.pruned_candidate_count = explicit_work_budget.pruned_candidate_count
         raise
     except Exception:  # noqa: BLE001
         return None
 
-    implicit_materialization = _materialize_implicit_template_function_calls(
-        preprocessor=preprocessor,
-        materialized=materialized,
-        source_contexts=source_instantiation_contexts,
-        unit=unit,
-        target=target,
-        work_limit=materialization_work_limit,
-        work_limit_source=materialization_work_limit_source,
-    )
+    recorded_specializations = {
+        (record.get("name"), record.get("materializedName"))
+        for record in specializations
+    }
+    for key, materialized_name in explicit_materialized_names.items():
+        function_name, normalized_arguments = key
+        template = templates_by_name.get(function_name)
+        if template is None:
+            continue
+        explicit_template_names.add(function_name)
+        call_site_materialized_names[key] = materialized_name
+        record_key = (function_name, materialized_name)
+        if record_key in recorded_specializations:
+            continue
+        parameters = _template_parameter_values_from_arguments(
+            preprocessor,
+            template,
+            list(normalized_arguments),
+        )
+        specializations.append(
+            _materialized_template_specialization_record(
+                name=function_name,
+                materialized_name=materialized_name,
+                parameters=parameters,
+                parameter_sources={parameter: "call-site" for parameter in parameters},
+                source="call-site",
+            )
+        )
+        recorded_specializations.add(record_key)
+
+    try:
+        implicit_materialization = _materialize_implicit_template_function_calls(
+            preprocessor=preprocessor,
+            materialized=materialized,
+            source_contexts=source_instantiation_contexts,
+            unit=unit,
+            target=target,
+            work_limit=materialization_work_limit,
+            work_limit_source=materialization_work_limit_source,
+        )
+    except MetalTemplateSpecializationError as exc:
+        if explicit_work_budget is not None and hasattr(
+            exc, "reachable_specialization_count"
+        ):
+            exc.reachable_specialization_count += (
+                explicit_work_budget.reachable_specialization_count
+            )
+            exc.dependency_discovery_work_count += (
+                explicit_work_budget.dependency_discovery_work_count
+            )
+            exc.pruned_candidate_count += explicit_work_budget.pruned_candidate_count
+            exc.unique_specialization_count = exc.reachable_specialization_count
+        raise
     materialized = implicit_materialization.text
     specializations.extend(implicit_materialization.specializations)
 
@@ -16364,11 +16443,48 @@ def _project_template_materialization_for_artifact(
         name: used_configured_parameter_sources[name]
         for name in sorted(used_configured_parameter_sources)
     }
+    accounting = None
+    if source_instantiations:
+        reachable_function_specializations = {
+            (record.get("name"), record.get("materializedName"))
+            for record in specializations
+            if _is_non_empty_string(record.get("name"))
+            and _is_non_empty_string(record.get("materializedName"))
+        }
+        reachable_struct_specialization_count = (
+            sum(
+                1
+                for key in explicit_work_budget.unique_items
+                if key and key[0] == "struct"
+            )
+            if explicit_work_budget is not None
+            else len(preprocessor._materialized_struct_specializations)
+        )
+        accounting = {
+            "reachableSpecializationCount": (
+                len(reachable_function_specializations)
+                + reachable_struct_specialization_count
+            ),
+            "dependencyDiscoveryWorkCount": (
+                (
+                    explicit_work_budget.dependency_discovery_work_count
+                    if explicit_work_budget is not None
+                    else 0
+                )
+                + implicit_materialization.dependency_discovery_work_count
+            ),
+            "prunedCandidateCount": max(
+                0,
+                source_instantiation_candidate_count
+                - selected_source_instantiation_candidate_count,
+            ),
+        }
     metadata = _template_materialization_metadata(
         specializations=specializations,
         configured_parameters=configured_payload,
         configured_parameter_sources=configured_source_payload,
         unsupported=unsupported,
+        accounting=accounting,
     )
     if not specializations and not unsupported and not stripped_diagnostic_helpers:
         return None
@@ -16492,6 +16608,13 @@ def _template_materialization_failure_details(exc: Exception) -> dict[str, Any]:
     unique_specialization_count = getattr(exc, "unique_specialization_count", None)
     requested_signature = getattr(exc, "requested_signature", None)
     suggested_action = getattr(exc, "suggested_action", None)
+    reachable_specialization_count = getattr(
+        exc, "reachable_specialization_count", None
+    )
+    dependency_discovery_work_count = getattr(
+        exc, "dependency_discovery_work_count", None
+    )
+    pruned_candidate_count = getattr(exc, "pruned_candidate_count", None)
     owner_struct_name = getattr(exc, "owner_struct_name", None)
     owner_aliases = getattr(exc, "owner_aliases", None)
     nested_struct_name = getattr(exc, "nested_struct_name", None)
@@ -16516,6 +16639,20 @@ def _template_materialization_failure_details(exc: Exception) -> dict[str, Any]:
         template_materialization["requestedSignature"] = requested_signature
     if _is_non_empty_string(suggested_action):
         template_materialization["suggestedAction"] = suggested_action
+    accounting_counts = (
+        reachable_specialization_count,
+        dependency_discovery_work_count,
+        pruned_candidate_count,
+    )
+    if all(
+        isinstance(count, int) and not isinstance(count, bool) and count >= 0
+        for count in accounting_counts
+    ):
+        template_materialization["accounting"] = {
+            "reachableSpecializationCount": reachable_specialization_count,
+            "dependencyDiscoveryWorkCount": dependency_discovery_work_count,
+            "prunedCandidateCount": pruned_candidate_count,
+        }
     if (
         _is_non_empty_string(owner_struct_name)
         and _is_non_empty_string(nested_struct_name)
@@ -38345,6 +38482,28 @@ def _artifact_template_materialization_contract_reasons(
         specializations
     ):
         reasons.append(f"{prefix}.specializationCount must match specializations")
+
+    if "accounting" in materialization:
+        accounting_prefix = f"{prefix}.accounting"
+        accounting = materialization.get("accounting")
+        if not isinstance(accounting, Mapping):
+            reasons.append(f"{accounting_prefix} must be an object")
+        else:
+            reasons.extend(
+                _unsupported_mapping_field_reasons(
+                    accounting_prefix,
+                    accounting,
+                    REPORT_ARTIFACT_TEMPLATE_MATERIALIZATION_ACCOUNTING_FIELDS,
+                )
+            )
+            for field_name in sorted(
+                REPORT_ARTIFACT_TEMPLATE_MATERIALIZATION_ACCOUNTING_FIELDS
+            ):
+                if not _is_non_negative_int(accounting.get(field_name)):
+                    reasons.append(
+                        f"{accounting_prefix}.{field_name} must be a "
+                        "non-negative integer"
+                    )
 
     unsupported = materialization.get("unsupported")
     if not isinstance(unsupported, list):

@@ -16361,6 +16361,11 @@ def test_translate_project_opengl_rejects_post_materialization_template_type_lea
     assert artifact["templateMaterialization"] == {
         "status": "unsupported",
         "specializationCount": 1,
+        "accounting": {
+            "reachableSpecializationCount": 2,
+            "dependencyDiscoveryWorkCount": 0,
+            "prunedCandidateCount": 0,
+        },
         "configuredParameterCount": 0,
         "configuredParameters": {},
         "configuredParameterSources": {},
@@ -45320,6 +45325,199 @@ def test_translate_project_metal_call_site_template_limit_blocks_opengl_material
     )
 
 
+def test_translate_project_metal_materialization_budget_tracks_reachable_graph(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    unrelated_instantiations = "\n".join(
+        f'instantiate_kernel("independent_{index}", independent, float, {index})'
+        for index in range(24)
+    )
+    (repo / "reachable_graph.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T, int Slot>
+            [[kernel]] void independent(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                out[gid] = T(Slot);
+            }
+
+            template <typename T>
+            T shared_leaf(T value) {
+                return value + T(1);
+            }
+
+            template <typename T>
+            T shared_stage(T value) {
+                return shared_leaf<T>(value);
+            }
+
+            template <typename T>
+            [[kernel]] void entry_left(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                out[gid] = shared_stage<T>(T(gid));
+            }
+
+            template <typename T>
+            [[kernel]] void entry_right(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                out[gid] = shared_stage<T>(T(gid + 1));
+            }
+
+            template <typename T, int Bias>
+            T unreachable_helper(T value) {
+                return value + T(Bias);
+            }
+
+            template <typename T>
+            [[kernel]] void unreachable_entry(
+                device T* out [[buffer(0)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                out[gid] = unreachable_helper<T, 99>(T(gid));
+            }
+            """).strip()
+        + "\n\n"
+        + unrelated_instantiations
+        + "\n"
+        + 'instantiate_kernel("entry_left_float", entry_left, float)\n'
+        + 'instantiate_kernel("entry_right_float", entry_right, float)\n',
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            targets = ["opengl"]
+            output_dir = "out"
+
+            [project.source_options.metal]
+            max_template_specializations = 32
+            max_template_materialization_work = 48
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    materialization = artifact["templateMaterialization"]
+    assert materialization["status"] == "materialized"
+    assert materialization["specializationCount"] == 28
+    assert materialization["accounting"] == {
+        "reachableSpecializationCount": 28,
+        "dependencyDiscoveryWorkCount": 0,
+        # The retired eager planner considered 26 instantiations x 7 declarations;
+        # one declaration pair is retained for each concrete host entry.
+        "prunedCandidateCount": (26 * 7) - 26,
+    }
+    specializations = materialization["specializations"]
+    expected_entries = {f"independent_{index}" for index in range(24)} | {
+        "entry_left_float",
+        "entry_right_float",
+    }
+    assert {
+        record["hostName"]
+        for record in specializations
+        if record["source"] == "source-instantiation"
+    } == expected_entries
+    expected_materializations = {
+        ("independent", entry_name)
+        for entry_name in expected_entries
+        if entry_name.startswith("independent_")
+    } | {
+        ("entry_left", "entry_left_float"),
+        ("entry_right", "entry_right_float"),
+        ("shared_leaf", "shared_leaf_float"),
+        ("shared_stage", "shared_stage_float"),
+    }
+    assert {
+        (record["name"], record["materializedName"]) for record in specializations
+    } == expected_materializations
+
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert len(re.findall(r"float shared_leaf_float\(float value\)\s*\{", output)) == 1
+    assert len(re.findall(r"float shared_stage_float\(float value\)\s*\{", output)) == 1
+    assert "unreachable_helper" not in output
+    assert "unreachable_entry" not in output
+
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert "project.validate.invalid-report" not in validation["diagnosticsByCode"]
+
+
+def test_validate_project_report_template_materialization_accounting_is_optional_and_closed(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "accounting.metal").write_text(
+        textwrap.dedent("""
+            template <typename T>
+            T unrelated(T value) {
+                return value;
+            }
+
+            template <typename T>
+            [[kernel]] void launch(device T* out [[buffer(0)]]) {
+                out[0] = T(1);
+            }
+
+            instantiate_kernel("launch_float", launch, float)
+            """).strip(),
+        encoding="utf-8",
+    )
+    payload = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+    accounting = payload["artifacts"][0]["templateMaterialization"]["accounting"]
+    assert accounting == {
+        "reachableSpecializationCount": 1,
+        "dependencyDiscoveryWorkCount": 0,
+        "prunedCandidateCount": 1,
+    }
+    legacy_payload = copy.deepcopy(payload)
+    legacy_payload["artifacts"][0]["templateMaterialization"].pop("accounting")
+    legacy_report_path = repo / "out" / "legacy-accounting-report.json"
+    legacy_report_path.write_text(json.dumps(legacy_payload), encoding="utf-8")
+    legacy_validation = validate_project_report(legacy_report_path)
+    assert legacy_validation["success"] is True
+
+    accounting.pop("dependencyDiscoveryWorkCount")
+    accounting["sourceScanCount"] = 7
+    report_path = repo / "out" / "malformed-accounting-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "artifacts[0].templateMaterialization.accounting.sourceScanCount "
+        "is not allowed"
+    ) in diagnostic["message"]
+    assert (
+        "artifacts[0].templateMaterialization.accounting."
+        "dependencyDiscoveryWorkCount must be a non-negative integer"
+    ) in diagnostic["message"]
+
+
 def test_translate_project_metal_source_instantiation_work_limit_blocks_opengl_materialization(
     tmp_path,
 ):
@@ -45332,7 +45530,7 @@ def test_translate_project_metal_source_instantiation_work_limit_blocks_opengl_m
             output_dir = "out"
 
             [project.source_options.metal]
-            max_template_materialization_work = 4
+            max_template_materialization_work = 2
             """).strip(),
         encoding="utf-8",
     )
@@ -45368,14 +45566,11 @@ def test_translate_project_metal_source_instantiation_work_limit_blocks_opengl_m
     assert artifact["status"] == "failed"
     assert "templateMaterialization" not in artifact
     assert not (repo / artifact["path"]).exists()
-    assert "work limit exceeded before GLSL codegen" in artifact["error"]
-    assert "6 source-instantiation/template work items requested" in artifact["error"]
+    assert "3 work items requested" in artifact["error"]
+    assert "reachable source entry 'launch_f32_c'" in artifact["error"]
     assert (
-        "limit 4 from project.source_options.metal.max_template_materialization_work"
+        "limit 2 from project.source_options.metal.max_template_materialization_work"
         in artifact["error"]
-    )
-    assert "First source declaration: bounded_source_instantiations.metal:9:1" in (
-        artifact["error"]
     )
 
     assert payload["summary"]["translatedCount"] == 0
@@ -45389,17 +45584,27 @@ def test_translate_project_metal_source_instantiation_work_limit_blocks_opengl_m
     assert diagnostic["sourceBackend"] == "metal"
     assert diagnostic["missingCapabilities"] == ["template.specialization"]
     assert diagnostic["location"]["file"] == "bounded_source_instantiations.metal"
-    assert diagnostic["location"]["line"] == 9
+    assert diagnostic["location"]["line"] == 19
     assert diagnostic["location"]["column"] == 1
-    assert "work limit exceeded before GLSL codegen" in diagnostic["message"]
+    assert "reachable source entry 'launch_f32_c'" in diagnostic["message"]
     assert diagnostic["details"]["templateMaterialization"] == {
-        "limit": 4,
+        "accounting": {
+            "reachableSpecializationCount": 3,
+            "dependencyDiscoveryWorkCount": 0,
+            "prunedCandidateCount": 3,
+        },
+        "limit": 2,
         "limitSource": "project.source_options.metal.max_template_materialization_work",
-        "requiredWorkItems": 6,
-        "requestedSignature": "3 source instantiations x 2 templates",
+        "requiredWorkItems": 3,
+        "requestedSpecializationCount": 3,
+        "requestedSignature": (
+            "explicit-template-materialization: 3 work items for reachable "
+            "source entry 'launch_f32_c'"
+        ),
         "suggestedAction": (
             "raise max_template_materialization_work for this source pattern or "
-            "OpenGL target, or reduce source template instantiations"
+            "backend, reduce the reachable concrete template graph or "
+            "type-resolution fan-out, or provide explicit template arguments"
         ),
     }
 
@@ -45513,7 +45718,7 @@ def test_translate_project_applies_metal_target_source_pattern_materialization_w
             output_dir = "out"
 
             [project.source_options.metal]
-            max_template_materialization_work = 4
+            max_template_materialization_work = 2
 
             [project.source_options.metal.target_options.opengl.source_patterns."shaders/p.metal"]
             max_template_materialization_work = 8
@@ -45531,7 +45736,7 @@ def test_translate_project_applies_metal_target_source_pattern_materialization_w
     assert "project.validate.invalid-report" not in validation["diagnosticsByCode"]
     assert payload["project"]["sourceOptions"] == {
         "metal": {
-            "max_template_materialization_work": 4,
+            "max_template_materialization_work": 2,
             "target_options": {
                 "opengl": {
                     "source_patterns": {
@@ -45553,7 +45758,7 @@ def test_translate_project_applies_metal_target_source_pattern_materialization_w
     assert diagnostic["sourceBackend"] == "metal"
     assert diagnostic["missingCapabilities"] == ["template.specialization"]
     assert (
-        "limit 4 from project.source_options.metal.max_template_materialization_work"
+        "limit 2 from project.source_options.metal.max_template_materialization_work"
         in diagnostic["message"]
     )
 
@@ -45586,11 +45791,9 @@ def test_translate_project_metal_explicit_materialization_work_budget_diagnostic
 
             kernel void launch(device float* out [[buffer(0)]]) {
                 out[0] = cast_value<float>(1.0);
+                out[1] = cast_value<half>(2.0);
             }
             """).strip()
-    source += (
-        "\n/*" + ("x" * project_pipeline.METAL_LARGE_TEMPLATE_SOURCE_MIN_CHARS) + "*/\n"
-    )
     (repo / "explicit_budget.metal").write_text(source, encoding="utf-8")
 
     payload = translate_project(load_project_config(repo)).to_json()
@@ -45606,7 +45809,7 @@ def test_translate_project_metal_explicit_materialization_work_budget_diagnostic
     }
     diagnostic = payload["diagnostics"][0]
     assert diagnostic["location"]["file"] == "explicit_budget.metal"
-    assert diagnostic["location"]["line"] == 4
+    assert diagnostic["location"]["line"] == 11
     detail = diagnostic["details"]["templateMaterialization"]
     assert detail["limit"] == 1
     assert (
@@ -45938,6 +46141,11 @@ def test_translate_project_metal_implicit_type_environment_budget_diagnostic(
     assert "implicit-template-materialization/type-environment" in diagnostic["message"]
     assert "templates=1" in diagnostic["message"]
     detail = diagnostic["details"]["templateMaterialization"]
+    assert detail["accounting"] == {
+        "reachableSpecializationCount": 0,
+        "dependencyDiscoveryWorkCount": 4,
+        "prunedCandidateCount": 0,
+    }
     assert detail["limit"] == 3
     assert (
         detail["limitSource"]
@@ -46399,6 +46607,11 @@ def test_translate_project_signature_instantiation_materializes_convolution_help
     expected_materialization = {
         "status": "materialized",
         "specializationCount": 2,
+        "accounting": {
+            "reachableSpecializationCount": 2,
+            "dependencyDiscoveryWorkCount": 0,
+            "prunedCandidateCount": 1,
+        },
         "configuredParameterCount": 0,
         "configuredParameters": {},
         "configuredParameterSources": {},
@@ -46684,6 +46897,11 @@ def test_translate_project_metal_reduction_source_instantiation_records_nontype_
     expected_materialization = {
         "status": "materialized",
         "specializationCount": 1,
+        "accounting": {
+            "reachableSpecializationCount": 1,
+            "dependencyDiscoveryWorkCount": 0,
+            "prunedCandidateCount": 0,
+        },
         "configuredParameterCount": 0,
         "configuredParameters": {},
         "configuredParameterSources": {},
@@ -46772,6 +46990,11 @@ def test_translate_project_metal_reduction_materializes_shared_helper_templates(
     expected_materialization = {
         "status": "materialized",
         "specializationCount": 3,
+        "accounting": {
+            "reachableSpecializationCount": 3,
+            "dependencyDiscoveryWorkCount": 4,
+            "prunedCandidateCount": 2,
+        },
         "configuredParameterCount": 0,
         "configuredParameters": {},
         "configuredParameterSources": {},
@@ -46863,6 +47086,11 @@ def test_translate_project_metal_const_for_loop_partial_template_materializes_to
     expected_materialization = {
         "status": "materialized",
         "specializationCount": 2,
+        "accounting": {
+            "reachableSpecializationCount": 2,
+            "dependencyDiscoveryWorkCount": 3,
+            "prunedCandidateCount": 1,
+        },
         "configuredParameterCount": 0,
         "configuredParameters": {},
         "configuredParameterSources": {},
@@ -48104,6 +48332,11 @@ def test_translate_project_metal_norm_materializes_variadic_shared_helper(
     assert artifact["templateMaterialization"] == {
         "status": "materialized",
         "specializationCount": 2,
+        "accounting": {
+            "reachableSpecializationCount": 2,
+            "dependencyDiscoveryWorkCount": 4,
+            "prunedCandidateCount": 1,
+        },
         "configuredParameterCount": 0,
         "configuredParameters": {},
         "configuredParameterSources": {},
