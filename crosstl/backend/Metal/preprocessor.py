@@ -1117,8 +1117,8 @@ class MetalPreprocessor(HLSLPreprocessor):
                 return_type = self._canonicalize_struct_scoped_type(
                     method.return_type, struct, field_structs_by_name
                 )
-                self._known_member_function_return_types[method.free_name] = (
-                    self._normalize_inferred_type(return_type)
+                self._record_known_member_function_return_type(
+                    method.free_name, return_type
                 )
 
         instantiated_template_functions: Dict[str, str] = {}
@@ -3203,9 +3203,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         return_type = self._canonicalize_struct_scoped_type(
             method.return_type, struct, structs_by_name
         )
-        self._known_member_function_return_types[method.free_name] = (
-            self._normalize_inferred_type(return_type)
-        )
+        self._record_known_member_function_return_type(method.free_name, return_type)
         specialized_body = self._specialize_concrete_method_body(
             struct, method, method.body, structs_by_name
         )
@@ -5768,7 +5766,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 self._normalize_template_binding_type(concrete_type).rstrip("&").strip()
             )
             if is_indirect and concrete_value_type.endswith("*"):
-                if declared_pointer_type is not None and not (
+                if declared_pointer_type is None or not (
                     self._pointer_argument_matches_declared_type(
                         declared_pointer_type, concrete_value_type
                     )
@@ -9478,8 +9476,8 @@ class MetalPreprocessor(HLSLPreprocessor):
             )
             if inferred is None:
                 continue
-            normalized = self._normalize_inferred_type(inferred)
-            if not normalized:
+            normalized = self._normalize_inferred_expression_type(inferred)
+            if normalized is None:
                 continue
             entries = local_variable_types.setdefault(match.group("name"), [])
             entries.append((position, normalized))
@@ -9597,11 +9595,11 @@ class MetalPreprocessor(HLSLPreprocessor):
             or "&" in normalized
         ):
             return None
-        address_spaces = {
+        address_spaces = [
             token
             for token in IDENTIFIER_RE.findall(normalized[:-1])
             if token in {"device", "constant", "thread", "threadgroup"}
-        }
+        ]
         if len(address_spaces) != 1:
             return None
         pointee_type = self._normalize_inferred_type(normalized[:-1])
@@ -9609,15 +9607,35 @@ class MetalPreprocessor(HLSLPreprocessor):
             return None
         return normalized
 
+    def _normalize_inferred_expression_type(self, type_text: str) -> Optional[str]:
+        # Value expressions discard top-level cv/address-space qualifiers during
+        # template binding. Pointer expressions cannot: Metal requires a proven
+        # address space, and dropping it can produce a validating but unusable
+        # specialization. Preserve one fully qualified pointer; reject every
+        # other pointer-bearing spelling rather than normalizing it to `T*`.
+        normalized = self._normalize_template_argument_text(type_text or "")
+        if not normalized:
+            return None
+        if "*" in normalized:
+            return self._normalize_known_address_space_pointer_type(normalized)
+        value_type = self._normalize_inferred_type(normalized)
+        return value_type or None
+
+    def _record_known_member_function_return_type(
+        self, function_name: str, return_type: str
+    ) -> None:
+        normalized = self._normalize_inferred_expression_type(return_type)
+        if normalized is None:
+            self._known_member_function_return_types.pop(function_name, None)
+            return
+        self._known_member_function_return_types[function_name] = normalized
+
     def _normalize_template_binding_type(self, type_text: str) -> str:
-        normalized = self._normalize_template_argument_text(type_text)
-        if normalized.endswith("*"):
-            return normalized
-        return self._normalize_inferred_type(normalized)
+        return self._normalize_inferred_expression_type(type_text) or ""
 
     def _pointer_pointee_value_type(self, pointer_type: str) -> Optional[str]:
-        normalized = self._normalize_template_argument_text(pointer_type)
-        if not normalized.endswith("*") or normalized.count("*") != 1:
+        normalized = self._normalize_known_address_space_pointer_type(pointer_type)
+        if normalized is None:
             return None
         pointee = self._normalize_inferred_type(normalized[:-1])
         return pointee or None
@@ -9648,26 +9666,30 @@ class MetalPreprocessor(HLSLPreprocessor):
             return entry.element_type
         return entry if isinstance(entry, str) and entry else None
 
-    @staticmethod
     def _buffer_pointer_type(
-        buffer_element_types: _MetalBufferTypeView, name: str
+        self, buffer_element_types: _MetalBufferTypeView, name: str
     ) -> Optional[str]:
         entry = buffer_element_types.get(name)
         if isinstance(entry, _MetalSubscriptableType):
-            return entry.pointer_type
+            return self._normalize_known_address_space_pointer_type(
+                entry.pointer_type or ""
+            )
         return None
 
-    @staticmethod
     def _buffer_pointer_expression_type(
-        buffer_element_types: _MetalBufferTypeView, name: str
+        self, buffer_element_types: _MetalBufferTypeView, name: str
     ) -> Optional[str]:
         # Structured entries distinguish a proven pointer from an element type
         # whose address space is unknown. Plain strings remain supported for the
         # legacy unit-level element maps used by callers of this private helper.
         entry = buffer_element_types.get(name)
         if isinstance(entry, _MetalSubscriptableType):
-            return entry.pointer_type
-        return entry if isinstance(entry, str) and entry else None
+            return self._normalize_known_address_space_pointer_type(
+                entry.pointer_type or ""
+            )
+        if not isinstance(entry, str) or not entry or "*" in entry:
+            return None
+        return entry
 
     def _is_metal_scalar_or_vector_type(self, type_text: str) -> bool:
         return self._scalar_and_width(type_text) is not None
@@ -9711,14 +9733,24 @@ class MetalPreprocessor(HLSLPreprocessor):
                 structs_by_name,
             )
 
-        # Cast: `static_cast<T>(expr)` -> T.
+        # Cast: `static_cast<T>(expr)` -> T. A pointer target is inferable only
+        # when it names exactly one explicit Metal address space.
         static_cast = re.match(r"static_cast\s*<(?P<type>.+)>\s*\(", expr, re.DOTALL)
         if static_cast is not None:
-            angle_end = self._find_matching_angle(expr, expr.find("<"))
+            angle_start = expr.find("<")
+            angle_end = self._find_matching_angle(expr, angle_start)
             if angle_end is not None:
-                return self._normalize_inferred_type(
-                    expr[expr.find("<") + 1 : angle_end]
-                )
+                paren_start = angle_end + 1
+                while paren_start < len(expr) and expr[paren_start].isspace():
+                    paren_start += 1
+                if paren_start < len(expr) and expr[paren_start] == "(":
+                    paren_end = self._find_matching_delimiter(
+                        expr, paren_start, "(", ")"
+                    )
+                    if paren_end == len(expr) - 1:
+                        return self._normalize_inferred_expression_type(
+                            expr[angle_start + 1 : angle_end]
+                        )
 
         # Literal types.
         literal_type = self._infer_literal_type(expr)
@@ -9797,7 +9829,7 @@ class MetalPreprocessor(HLSLPreprocessor):
 
         # Bare local variable -> its declared type.
         if IDENTIFIER_RE.fullmatch(expr) and expr in local_variable_types:
-            return local_variable_types[expr]
+            return self._normalize_inferred_expression_type(local_variable_types[expr])
 
         # Member access `obj.member` / `obj->member` -> the declared field type.
         # Pointer fields are not value-typeable as a bare access, so a trailing
@@ -9903,7 +9935,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         paren_end = self._find_matching_delimiter(expr, paren_start, "(", ")")
         if paren_end != len(expr) - 1:
             return None
-        return return_type
+        return self._normalize_inferred_expression_type(return_type)
 
     def _infer_pointer_arithmetic_type(
         self,
@@ -9915,9 +9947,15 @@ class MetalPreprocessor(HLSLPreprocessor):
     ) -> Optional[str]:
         expression = self._strip_enclosing_parens(expr)
         if IDENTIFIER_RE.fullmatch(expression):
-            return self._buffer_pointer_expression_type(
-                buffer_element_types, expression
-            )
+            if expression in buffer_element_types:
+                return self._buffer_pointer_expression_type(
+                    buffer_element_types, expression
+                )
+            if expression in local_variable_types:
+                return self._normalize_known_address_space_pointer_type(
+                    local_variable_types[expression]
+                )
+            return None
         split = self._split_top_level_binary_arithmetic(expression)
         if split is None:
             return None
@@ -10109,8 +10147,10 @@ class MetalPreprocessor(HLSLPreprocessor):
             for method in concrete_ops:
                 declared = self._operator_call_parameter_types(method)
                 if declared == normalized_args:
-                    result = self._normalize_inferred_type(method.return_type)
-                    if result:
+                    result = self._normalize_inferred_expression_type(
+                        method.return_type
+                    )
+                    if result is not None:
                         return result
 
         # 2. A template operator() whose parameters bind from the inferred
@@ -10127,11 +10167,14 @@ class MetalPreprocessor(HLSLPreprocessor):
                 )
                 if bindings is None:
                     continue
-                substituted = self._normalize_inferred_type(
+                substituted = self._normalize_inferred_expression_type(
                     self._replace_identifiers(method.return_type, bindings)
                 )
-                if substituted and not self._type_references_template_parameter(
-                    substituted, method.template_parameters
+                if (
+                    substituted is not None
+                    and not self._type_references_template_parameter(
+                        substituted, method.template_parameters
+                    )
                 ):
                     return substituted
 
@@ -10142,8 +10185,8 @@ class MetalPreprocessor(HLSLPreprocessor):
         #    return type is one of its own template parameters.
         fixed_returns: Set[str] = set()
         for method in [*concrete_ops, *template_ops]:
-            result = self._normalize_inferred_type(method.return_type)
-            if not result or self._type_references_template_parameter(
+            result = self._normalize_inferred_expression_type(method.return_type)
+            if result is None or self._type_references_template_parameter(
                 result, method.template_parameters
             ):
                 return None
@@ -10295,6 +10338,11 @@ class MetalPreprocessor(HLSLPreprocessor):
         #         the target width is unknown), in which case we bail;
         #   * anything else (two different concrete non-literal types, or two
         #     differing literals) -> ambiguous, so bail rather than guess.
+        # Pointer arithmetic has a dedicated, address-space-aware path. Reaching
+        # this scalar fallback with any pointer means that path rejected the
+        # expression, so normalizing qualifiers here would reopen it as `T*`.
+        if "*" in left_type or "*" in right_type:
+            return None
         left = self._normalize_inferred_type(left_type)
         right = self._normalize_inferred_type(right_type)
         if not left or not right:

@@ -3837,6 +3837,40 @@ def test_preprocessor_preserves_generic_pointer_argument_expressions():
     assert "Loader__load__half(" not in output
 
 
+def test_preprocessor_preserves_addressed_pointer_through_auto_locals():
+    code = """
+    struct Loader {
+      template <typename Pointer>
+      float load(Pointer src) { return float(src[0]); }
+    };
+
+    kernel void k(
+        const device half* src [[buffer(0)]],
+        device float* out [[buffer(1)]],
+        uint offset [[thread_position_in_grid]]) {
+      Loader loader;
+      auto cast_ptr = static_cast<const device half*>(src);
+      auto offset_ptr = cast_ptr + offset;
+      auto copied_ptr = offset_ptr;
+      out[0] = loader.load(cast_ptr);
+      out[1] = loader.load(offset_ptr);
+      out[2] = loader.load(copied_ptr);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    helper = (
+        "float Loader__load__const_device_half_ptr("
+        "thread Loader& self, const device half* src)"
+    )
+    assert output.count(helper) == 1
+    assert "Loader__load__const_device_half_ptr(loader, cast_ptr)" in output
+    assert "Loader__load__const_device_half_ptr(loader, offset_ptr)" in output
+    assert "Loader__load__const_device_half_ptr(loader, copied_ptr)" in output
+    assert "Loader__load__half(" not in output
+
+
 def test_preprocessor_declared_pointer_parameter_still_binds_pointee():
     code = """
     struct Loader {
@@ -6129,6 +6163,90 @@ def test_preprocessor_generic_pointer_without_address_space_clean_fails(argument
     assert "could not be inferred conservatively" in str(error)
 
 
+@pytest.mark.parametrize(
+    "cast_expression",
+    [
+        "static_cast<float*>(src)",
+        "static_cast<const float*>(src)",
+        "static_cast<device half**>(src)",
+        "static_cast<device thread half*>(src)",
+        "static_cast<device device half*>(src)",
+    ],
+)
+def test_preprocessor_generic_pointer_cast_without_single_address_space_clean_fails(
+    cast_expression,
+):
+    code = f"""
+    struct Loader {{
+      template <typename Pointer>
+      float load(Pointer src) {{ return float(src[0]); }}
+    }};
+
+    void invoke(const device half* src) {{
+      Loader loader;
+      float value = loader.load({cast_expression});
+    }}
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.project_diagnostic_code == "project.translate.metal-struct-method"
+    assert error.missing_capabilities == ("struct.template-method",)
+    assert error.requested_signature == f"loader.load({cast_expression})"
+    assert "could not be inferred conservatively" in str(error)
+
+
+def test_preprocessor_unqualified_auto_pointer_clean_fails():
+    code = """
+    struct Loader {
+      template <typename Pointer>
+      float load(Pointer src) { return float(src[0]); }
+    };
+
+    void invoke(const device half* src) {
+      Loader loader;
+      auto pointer = static_cast<half*>(src);
+      float value = loader.load(pointer);
+    }
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.project_diagnostic_code == "project.translate.metal-struct-method"
+    assert error.missing_capabilities == ("struct.template-method",)
+    assert error.requested_signature == "loader.load(pointer)"
+    assert "could not be inferred conservatively" in str(error)
+
+
+def test_preprocessor_declared_unqualified_pointer_parameter_clean_fails():
+    code = """
+    struct Loader {
+      template <typename U>
+      float load(U* src) { return float(src[0]); }
+    };
+
+    kernel void k(
+        const device half* src [[buffer(0)]],
+        device float* out [[buffer(1)]]) {
+      Loader loader;
+      out[0] = loader.load(src);
+    }
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.project_diagnostic_code == "project.translate.metal-struct-method"
+    assert error.missing_capabilities == ("struct.template-method",)
+    assert error.requested_signature == "loader.load(src)"
+    assert "did not bind consistently" in str(error)
+
+
 def test_preprocessor_template_method_conflicting_binding_clean_fails():
     # The single template parameter T appears in two parameters whose call-site
     # arguments infer to DIFFERENT concrete types (float and int). Rather than
@@ -6416,6 +6534,62 @@ def test_infer_argument_type_preserves_qualified_pointer_expressions():
         == "const device half*"
     )
     assert pp._infer_argument_type("offset - src", buffers, locals_) is None
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [
+        ("static_cast<const device half*>(src)", "const device half*"),
+        (
+            "static_cast<threadgroup volatile float*>(src)",
+            "threadgroup volatile float*",
+        ),
+        ("static_cast<float*>(src)", None),
+        ("static_cast<const float*>(src)", None),
+        ("static_cast<device float**>(src)", None),
+        ("static_cast<device thread float*>(src)", None),
+        ("static_cast<device device float*>(src)", None),
+    ],
+)
+def test_infer_argument_type_validates_pointer_static_cast_target(expression, expected):
+    assert MetalPreprocessor()._infer_argument_type(expression, {}, {}) == expected
+
+
+@pytest.mark.parametrize(
+    ("local_type", "expected"),
+    [
+        ("const threadgroup half*", "const threadgroup half*"),
+        ("half*", None),
+        ("threadgroup half**", None),
+        ("device thread half*", None),
+    ],
+)
+def test_infer_argument_type_validates_propagated_local_pointer_type(
+    local_type, expected
+):
+    pp = MetalPreprocessor()
+    assert pp._infer_argument_type("pointer", {}, {"pointer": local_type}) == expected
+    offset_expected = expected if expected is not None else None
+    assert (
+        pp._infer_argument_type(
+            "pointer + offset", {}, {"pointer": local_type, "offset": "uint"}
+        )
+        == offset_expected
+    )
+
+
+def test_infer_argument_type_validates_cached_pointer_return_type():
+    pp = MetalPreprocessor()
+    pp._record_known_member_function_return_type(
+        "Source__addressed", "const device half*"
+    )
+    pp._known_member_function_return_types["Source__unqualified"] = "half*"
+
+    assert (
+        pp._infer_argument_type("Source__addressed(src)", {}, {})
+        == "const device half*"
+    )
+    assert pp._infer_argument_type("Source__unqualified(src)", {}, {}) is None
 
 
 @pytest.mark.parametrize(
