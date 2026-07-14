@@ -25839,17 +25839,29 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if not self.hlsl_is_ternary_expression(expr):
             return None
 
-        candidates = [
-            expected_type,
+        inferred_candidates = [
             self.expression_result_type(expr),
             self.expression_result_type(getattr(expr, "true_expr", None)),
             self.expression_result_type(getattr(expr, "false_expr", None)),
         ]
-        for candidate in candidates:
+        for candidate in inferred_candidates:
             aggregate_type = self.hlsl_aggregate_value_type(candidate)
             if aggregate_type is not None:
                 return aggregate_type
-        return None
+
+        inferred_types = [
+            self.type_name_string(candidate)
+            for candidate in inferred_candidates
+            if self.type_name_string(candidate)
+        ]
+        if any(
+            self.is_scalar_value_type(candidate)
+            or self.is_vector_value_type(candidate)
+            or self.hlsl_matrix_shape(self.map_type(candidate)) is not None
+            for candidate in inferred_types
+        ):
+            return None
+        return self.hlsl_aggregate_value_type(expected_type)
 
     def hlsl_first_aggregate_conditional(self, expr, expected_type=None):
         aggregate_type = self.hlsl_aggregate_conditional_type(expr, expected_type)

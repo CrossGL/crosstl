@@ -38611,6 +38611,41 @@ def test_hlsl_const_aggregate_conditional_uses_mutable_control_flow_local(tmp_pa
     assert_directx_compute_validates_if_available(generated, tmp_path)
 
 
+def test_hlsl_aggregate_conditional_ignores_stale_scalar_expression_context(tmp_path):
+    shader = """
+    shader AggregateConditionalScalarContext {
+        struct Bits {
+            uint2 first;
+            uint2 second;
+        };
+
+        Bits make_bits(uint2 first, uint2 second) {
+            Bits result = { first, second };
+            return result;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                bool drop = false;
+                Bits bits = make_bits(
+                    uint2(tid.x, 0u),
+                    uint2(tid.y, drop ? 0u : tid.y)
+                );
+                uint observed = bits.second.y;
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "(drop ? 0u : tid.y)" in generated
+    assert "Bits bits = make_bits(" in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
 def test_hlsl_aggregate_conditional_assignment_and_return_use_control_flow(
     tmp_path,
 ):
