@@ -9866,7 +9866,9 @@ def test_glsl_compile_time_global_values_emit_const_and_validate(tmp_path):
         constant uint sentinel = 5;
         constant uvec2 laneBias = uvec2(1, 2);
         constant LookupConfig config = LookupConfig(7, uvec2(3, 4));
-        constant uint[2][4] rotations = {
+        constant int tableRows = 2;
+        constant float boundedScale = min(3.0, 4.0);
+        constant uint[tableRows][4] rotations = {
             {13, 15, 26, 6},
             {17, 29, 16, 24}
         };
@@ -9874,7 +9876,7 @@ def test_glsl_compile_time_global_values_emit_const_and_validate(tmp_path):
         compute {
             void main(RWStructuredBuffer<uint> outputValues @buffer(0)) {
                 outputValues[0] = sentinel + laneBias.y + config.base
-                    + rotations[1][2];
+                    + rotations[1][2] + uint(boundedScale);
             }
         }
     }
@@ -9885,8 +9887,10 @@ def test_glsl_compile_time_global_values_emit_const_and_validate(tmp_path):
     assert "const uint sentinel = 5;" in generated_code
     assert "const uvec2 laneBias = uvec2(1, 2);" in generated_code
     assert "const LookupConfig config = LookupConfig(7, uvec2(3, 4));" in generated_code
+    assert "const int tableRows = 2;" in generated_code
+    assert "const float boundedScale = min(3.0, 4.0);" in generated_code
     assert (
-        "const uint rotations[2][4] = uint[2][4]("
+        "const uint rotations[tableRows][4] = uint[2][4]("
         "uint[4](13, 15, 26, 6), uint[4](17, 29, 16, 24));" in generated_code
     )
     assert not re.search(
@@ -9909,10 +9913,13 @@ def test_glsl_constant_address_space_runtime_resources_remain_uniforms():
     shader ConstantAddressSpaceResources {
         constant float runtimeScale @location(3);
         constant sampler2D lookupTexture @binding(2);
+        uniform constant float configuredScale = 2.0;
+        uniform const float explicitConstScale = 3.0;
 
         fragment {
             vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
-                return texture(lookupTexture, uv) * runtimeScale;
+                return texture(lookupTexture, uv) * runtimeScale * configuredScale
+                    * explicitConstScale;
             }
         }
     }
@@ -9924,8 +9931,12 @@ def test_glsl_constant_address_space_runtime_resources_remain_uniforms():
 
     assert "layout(location = 3) uniform float runtimeScale;" in generated_code
     assert "layout(binding = 2) uniform sampler2D lookupTexture;" in generated_code
+    assert "uniform float configuredScale = 2.0;" in generated_code
+    assert "uniform float explicitConstScale = 3.0;" in generated_code
     assert "const float runtimeScale" not in generated_code
     assert "const sampler2D lookupTexture" not in generated_code
+    assert "const float configuredScale" not in generated_code
+    assert "const float explicitConstScale" not in generated_code
 
 
 def test_glsl_compile_time_global_rejects_runtime_initializer():
@@ -9951,6 +9962,38 @@ def test_glsl_compile_time_global_rejects_runtime_initializer():
     assert diagnostic.expression_kind == "FunctionCallNode"
     assert diagnostic.detail == "buildLookup"
     assert diagnostic.reason == "function-call"
+
+    specialization_index_code = """
+    shader InvalidSpecializationIndexGlobal {
+        constant int selectedIndex @constant_id(4) = 1;
+        constant int values[2] = {3, 5};
+        constant int selectedValue = values[selectedIndex];
+    }
+    """
+
+    with pytest.raises(OpenGLCompileTimeGlobalError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(specialization_index_code))
+
+    diagnostic = exc_info.value
+    assert diagnostic.variable_name == "selectedValue"
+    assert diagnostic.expression_kind == "ArrayAccessNode"
+    assert diagnostic.reason == "specialization-array-index"
+
+    specialization_call_code = """
+    shader InvalidSpecializationCallGlobal {
+        constant int runtimeMode @constant_id(5) = 1;
+        constant int clampedMode = min(runtimeMode, 4);
+    }
+    """
+
+    with pytest.raises(OpenGLCompileTimeGlobalError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(specialization_call_code))
+
+    diagnostic = exc_info.value
+    assert diagnostic.variable_name == "clampedMode"
+    assert diagnostic.expression_kind == "FunctionCallNode"
+    assert diagnostic.detail == "min"
+    assert diagnostic.reason == "specialization-function-call"
 
 
 def test_glsl_reserved_global_uniform_names_are_aliased():

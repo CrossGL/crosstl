@@ -152,7 +152,7 @@
         "path": "crosstl/backend/GLSL"
       },
       "signals": {
-        "unsupported_marker_count": 244,
+        "unsupported_marker_count": 245,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
