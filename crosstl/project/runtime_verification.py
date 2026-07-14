@@ -282,9 +282,14 @@ class RuntimeSpecializationConstant:
     constant_id: Any = None
     kind: str = "specialization-constant"
     dtype: str | None = None
+    source_type: str | None = None
     value: Any = None
     default: Any = None
     required: bool = False
+    overridden: bool | None = None
+    override_status: str | None = None
+    status: str | None = None
+    value_provenance: Mapping[str, Any] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:
@@ -295,10 +300,20 @@ class RuntimeSpecializationConstant:
             payload["id"] = self.constant_id
         if self.dtype is not None:
             payload["dtype"] = self.dtype
+        if self.source_type is not None:
+            payload["sourceType"] = self.source_type
         if self.value is not None:
             payload["value"] = self.value
         if self.default is not None:
             payload["default"] = self.default
+        if self.overridden is not None:
+            payload["overridden"] = self.overridden
+        if self.override_status is not None:
+            payload["overrideStatus"] = self.override_status
+        if self.status is not None:
+            payload["status"] = self.status
+        if self.value_provenance:
+            payload["valueProvenance"] = dict(self.value_provenance)
         if self.metadata:
             payload["metadata"] = dict(self.metadata)
         return payload
@@ -3840,6 +3855,11 @@ def _parse_runtime_specialization_constant(
         raise RuntimeVerificationError(
             f"{field_name} must identify a constant by name or id."
         )
+    value_provenance = value.get("valueProvenance", {})
+    if not isinstance(value_provenance, Mapping):
+        raise RuntimeVerificationError(
+            f"{field_name}.valueProvenance must be an object."
+        )
     return RuntimeSpecializationConstant(
         name=name,
         constant_id=constant_id,
@@ -3847,12 +3867,33 @@ def _parse_runtime_specialization_constant(
             _optional_string(value.get("kind"), field_name=f"{field_name}.kind")
             or default_kind
         ),
-        dtype=_optional_string(value.get("dtype"), field_name=f"{field_name}.dtype"),
-        value=value.get("value"),
-        default=value.get("default"),
+        dtype=_optional_string(
+            value.get("dtype", value.get("sourceType")),
+            field_name=f"{field_name}.dtype",
+        ),
+        source_type=_optional_string(
+            value.get("sourceType"), field_name=f"{field_name}.sourceType"
+        ),
+        value=value.get("concreteValue", value.get("value")),
+        default=value.get("defaultValue", value.get("default")),
         required=_optional_bool(
             value.get("required", False), field_name=f"{field_name}.required"
         ),
+        overridden=(
+            _optional_bool(
+                value.get("overridden"), field_name=f"{field_name}.overridden"
+            )
+            if "overridden" in value
+            else None
+        ),
+        override_status=_optional_string(
+            value.get("overrideStatus"),
+            field_name=f"{field_name}.overrideStatus",
+        ),
+        status=_optional_string(
+            value.get("status"), field_name=f"{field_name}.status"
+        ),
+        value_provenance=dict(value_provenance),
         metadata=_parse_runtime_contract_item_metadata(value, field_name=field_name),
     )
 
@@ -4977,15 +5018,23 @@ def _runtime_adapter_contract_from_artifact(
         for index, binding in enumerate(resource_records)
         if isinstance(binding, Mapping)
     )
+    specialization_records = list(
+        _runtime_record_sequence(artifact.get("specializationConstants"))
+    )
+    if not specialization_records and isinstance(host_interface, Mapping):
+        specialization_records = list(
+            _runtime_record_sequence(host_interface.get("specializationConstants"))
+        )
+    if not specialization_records and isinstance(host_interface, Mapping):
+        specialization_records = [
+            constant
+            for constant in _runtime_record_sequence(host_interface.get("constants"))
+            if isinstance(constant, Mapping)
+            and str(constant.get("kind", "")).lower()
+            in {"function-constant", "specialization-constant"}
+        ]
     artifact_payload = {
-        "specializationConstants": [
-            *list(_runtime_record_sequence(artifact.get("specializationConstants"))),
-            *(
-                list(_runtime_record_sequence(host_interface.get("constants")))
-                if isinstance(host_interface, Mapping)
-                else []
-            ),
-        ],
+        "specializationConstants": specialization_records,
         "functionConstants": artifact.get("functionConstants", []),
     }
     manifest_contract = RuntimeAdapterContract(
@@ -5120,7 +5169,11 @@ def _merge_runtime_adapter_contract(
         specialization_constants=_merge_runtime_contract_items(
             base.specialization_constants,
             override.specialization_constants,
-            key=lambda item: item.name if item.name is not None else item.constant_id,
+            key=lambda item: (
+                ("id", item.constant_id)
+                if item.constant_id is not None
+                else ("name", item.name)
+            ),
         ),
         dispatch=_merge_runtime_dispatch(base.dispatch, override.dispatch),
         validation_hooks=_merge_runtime_contract_items(

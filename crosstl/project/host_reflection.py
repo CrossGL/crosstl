@@ -61,8 +61,32 @@ def host_interface_record(
     entry_points: Sequence[Mapping[str, Any]] = (),
     resources: Sequence[Mapping[str, Any]] = (),
     constants: Sequence[Mapping[str, Any]] = (),
+    specialization_constants: Sequence[Mapping[str, Any]] = (),
     diagnostics: Sequence[str | Mapping[str, Any] | ReflectionDiagnostic] = (),
 ) -> dict[str, Any]:
+    scalar_constants = []
+    reflected_specializations = [dict(item) for item in specialization_constants]
+    for constant in constants:
+        payload = dict(constant)
+        if str(payload.get("kind", "")).lower() in {
+            "function-constant",
+            "specialization-constant",
+        }:
+            reflected_specializations.append(payload)
+        else:
+            scalar_constants.append(payload)
+    deduplicated_specializations = []
+    seen_specializations = set()
+    for constant in reflected_specializations:
+        key = (
+            constant.get("id"),
+            constant.get("name"),
+            constant.get("kind"),
+        )
+        if key in seen_specializations:
+            continue
+        seen_specializations.add(key)
+        deduplicated_specializations.append(constant)
     diagnostic_records = [
         _diagnostic_record(diagnostic).to_json() for diagnostic in diagnostics
     ]
@@ -73,10 +97,12 @@ def host_interface_record(
         "artifactFormat": artifact_format,
         "entryPointCount": len(entry_points),
         "resourceCount": len(resources),
-        "constantCount": len(constants),
+        "constantCount": len(scalar_constants),
+        "specializationConstantCount": len(deduplicated_specializations),
         "entryPoints": [dict(entry_point) for entry_point in entry_points],
         "resources": [dict(resource) for resource in resources],
-        "constants": [dict(constant) for constant in constants],
+        "constants": scalar_constants,
+        "specializationConstants": deduplicated_specializations,
         "diagnostics": [record["code"] for record in diagnostic_records],
         "diagnosticRecords": diagnostic_records,
     }
@@ -195,6 +221,7 @@ def _status_for_reflection(
     entry_points: Sequence[Mapping[str, Any]],
     resources: Sequence[Mapping[str, Any]],
     constants: Sequence[Mapping[str, Any]],
+    specialization_constants: Sequence[Mapping[str, Any]],
     diagnostics: Sequence[ReflectionDiagnostic],
 ) -> str:
     codes = {diagnostic.code for diagnostic in diagnostics}
@@ -208,7 +235,7 @@ def _status_for_reflection(
         return "ambiguous"
     if REFLECTION_INCOMPLETE_OUTPUT in codes:
         return "incomplete"
-    if not entry_points and not resources and not constants:
+    if not entry_points and not resources and not constants and not specialization_constants:
         return "unavailable"
     return "ready"
 
@@ -220,21 +247,32 @@ def _finalize_reflection(
     entry_points: Sequence[Mapping[str, Any]],
     resources: Sequence[Mapping[str, Any]],
     constants: Sequence[Mapping[str, Any]],
-    diagnostics: Sequence[ReflectionDiagnostic],
+    specialization_constants: Sequence[Mapping[str, Any]] = (),
+    diagnostics: Sequence[ReflectionDiagnostic] = (),
 ) -> dict[str, Any]:
     current_diagnostics = list(diagnostics)
-    if not entry_points and not resources and not constants:
+    if (
+        not entry_points
+        and not resources
+        and not constants
+        and not specialization_constants
+    ):
         current_diagnostics.append(
             ReflectionDiagnostic(
                 REFLECTION_EMPTY,
-                "No entry points, resources, or constants were reflected.",
+                "No entry points, resources, constants, or specialization "
+                "constants were reflected.",
                 severity="warning",
             )
         )
     current_diagnostics.extend(_binding_diagnostics(resources))
     return host_interface_record(
         status=_status_for_reflection(
-            entry_points, resources, constants, current_diagnostics
+            entry_points,
+            resources,
+            constants,
+            specialization_constants,
+            current_diagnostics,
         ),
         source="compiled-artifact",
         parser=parser,
@@ -242,6 +280,7 @@ def _finalize_reflection(
         entry_points=entry_points,
         resources=resources,
         constants=constants,
+        specialization_constants=specialization_constants,
         diagnostics=current_diagnostics,
     )
 
@@ -815,18 +854,26 @@ def _reflect_glsl_source(
         )
 
     constants = []
+    specialization_constants = []
     spec_spans = []
     for match in GLSL_SPEC_CONSTANT_RE.finditer(source):
         spec_spans.append(match.span())
         layout = _parse_layout(match.group("layout"))
-        constants.append(
+        source_type = match.group("type")
+        default_value = _literal_value(match.group("value"))
+        specialization_constants.append(
             {
                 "name": match.group("name"),
                 "kind": "specialization-constant",
                 "id": _layout_int(layout, ("constant_id",)),
-                "dtype": match.group("type"),
-                "value": _literal_value(match.group("value")),
+                "dtype": source_type,
+                "sourceType": source_type,
+                "default": default_value,
+                "defaultValue": default_value,
                 "required": False,
+                "overridden": False,
+                "overrideStatus": "not-overridden",
+                "status": "defaulted",
                 "source": "glsl.layout.constant_id",
             }
         )
@@ -850,6 +897,7 @@ def _reflect_glsl_source(
         entry_points=entry_points,
         resources=resources,
         constants=constants,
+        specialization_constants=specialization_constants,
         diagnostics=[],
     )
 
@@ -1016,6 +1064,7 @@ def _reflect_spirv_assembly(source: str, *, artifact_format: str) -> dict[str, A
     names: dict[str, str] = {}
     decorations: dict[str, dict[str, Any]] = {}
     pointer_types: dict[str, tuple[str, str | None]] = {}
+    scalar_types: dict[str, str] = {}
     variables: dict[str, dict[str, Any]] = {}
     constants_by_id: dict[str, dict[str, Any]] = {}
     entry_points = []
@@ -1058,6 +1107,24 @@ def _reflect_spirv_assembly(source: str, *, artifact_format: str) -> dict[str, A
                 ]
         elif opcode == "OpTypePointer" and len(tokens) >= 5 and tokens[1] == "=":
             pointer_types[tokens[0]] = (tokens[3], tokens[4])
+        elif opcode == "OpTypeBool" and len(tokens) >= 3 and tokens[1] == "=":
+            scalar_types[tokens[0]] = "bool"
+        elif opcode == "OpTypeInt" and len(tokens) >= 5 and tokens[1] == "=":
+            width = _int_value(tokens[3])
+            signed = _int_value(tokens[4])
+            if width == 32:
+                scalar_types[tokens[0]] = "int" if signed else "uint"
+            elif width is not None:
+                scalar_types[tokens[0]] = (
+                    f"i{width}" if signed else f"u{width}"
+                )
+        elif opcode == "OpTypeFloat" and len(tokens) >= 4 and tokens[1] == "=":
+            width = _int_value(tokens[3])
+            scalar_types[tokens[0]] = {
+                16: "half",
+                32: "float",
+                64: "double",
+            }.get(width, f"f{width}" if width is not None else "float")
         elif opcode == "OpVariable" and len(tokens) >= 4 and tokens[1] == "=":
             variable_type = tokens[3]
             storage_class = tokens[4] if len(tokens) >= 5 else None
@@ -1074,6 +1141,21 @@ def _reflect_spirv_assembly(source: str, *, artifact_format: str) -> dict[str, A
                 ),
                 "typeId": tokens[3],
                 "value": _literal_value(tokens[4]),
+            }
+        elif opcode in {
+            "OpSpecConstantTrue",
+            "OpSpecConstantFalse",
+            "OpConstantTrue",
+            "OpConstantFalse",
+        } and len(tokens) >= 4:
+            constants_by_id[tokens[0]] = {
+                "kind": (
+                    "specialization-constant"
+                    if opcode.startswith("OpSpec")
+                    else "scalar-constant"
+                ),
+                "typeId": tokens[3],
+                "value": opcode.endswith("True"),
             }
 
     for entry_point in entry_points:
@@ -1109,15 +1191,18 @@ def _reflect_spirv_assembly(source: str, *, artifact_format: str) -> dict[str, A
     resources = _annotate_spirv_resource_entry_points(resources, entry_points)
 
     constants = []
+    specialization_constants = []
     for constant_id, constant in constants_by_id.items():
         decorate = decorations.get(constant_id, {})
         if constant["kind"] == "scalar-constant" and constant_id not in names:
             continue
+        source_type = _spirv_type_name(
+            str(constant.get("typeId")), names, scalar_types
+        )
         payload = {
             "name": names.get(constant_id, constant_id.lstrip("%")),
             "kind": constant["kind"],
-            "dtype": _spirv_type_name(str(constant.get("typeId")), names),
-            "value": constant.get("value"),
+            "dtype": source_type,
             "required": False,
             "source": (
                 "spirv.spec-constant"
@@ -1128,7 +1213,21 @@ def _reflect_spirv_assembly(source: str, *, artifact_format: str) -> dict[str, A
         }
         if "SpecId" in decorate:
             payload["id"] = decorate["SpecId"]
-        constants.append(payload)
+        if constant["kind"] == "specialization-constant":
+            payload.update(
+                {
+                    "sourceType": source_type,
+                    "default": constant.get("value"),
+                    "defaultValue": constant.get("value"),
+                    "overridden": False,
+                    "overrideStatus": "not-overridden",
+                    "status": "defaulted",
+                }
+            )
+            specialization_constants.append(payload)
+        else:
+            payload["value"] = constant.get("value")
+            constants.append(payload)
 
     return _finalize_reflection(
         parser="spirv-reflection",
@@ -1136,6 +1235,7 @@ def _reflect_spirv_assembly(source: str, *, artifact_format: str) -> dict[str, A
         entry_points=entry_points,
         resources=resources,
         constants=constants,
+        specialization_constants=specialization_constants,
         diagnostics=[],
     )
 
@@ -1261,7 +1361,13 @@ def _spirv_resource_access(
     return None
 
 
-def _spirv_type_name(type_id: str, names: Mapping[str, str]) -> str | None:
+def _spirv_type_name(
+    type_id: str,
+    names: Mapping[str, str],
+    scalar_types: Mapping[str, str] | None = None,
+) -> str | None:
+    if scalar_types is not None and type_id in scalar_types:
+        return scalar_types[type_id]
     lowered = type_id.lower()
     if "uint" in lowered:
         return "uint"

@@ -36613,6 +36613,7 @@ def test_build_runtime_artifact_manifest_from_project_report(tmp_path):
         "compilerRequestCount": 1,
         "entryPointCount": 1,
         "resourceBindingCount": 0,
+        "specializationConstantCount": 0,
         "parameterBlockCount": 0,
         "dispatchMetadataCount": 0,
         "artifactsBySource": {"simple.cgl": 1},
@@ -36626,6 +36627,7 @@ def test_build_runtime_artifact_manifest_from_project_report(tmp_path):
             "hostInterface": {"ready": 1},
             "parameterBlocks": {"not-applicable": 1},
             "resourceBindings": {"not-applicable": 1},
+            "specializationConstants": {"not-applicable": 1},
         },
         "runtimeDiagnosticCount": 0,
     }
@@ -36639,6 +36641,7 @@ def test_build_runtime_artifact_manifest_from_project_report(tmp_path):
     assert payload["targets"][0]["sourceCount"] == 1
     assert payload["targets"][0]["entryPointCount"] == 1
     assert payload["targets"][0]["resourceBindingCount"] == 0
+    assert payload["targets"][0]["specializationConstantCount"] == 0
     assert payload["targets"][0]["parameterBlockCount"] == 0
     assert payload["targets"][0]["dispatchMetadataCount"] == 0
     assert len(payload["targets"][0]["artifacts"]) == 1
@@ -36702,9 +36705,11 @@ def test_build_runtime_artifact_manifest_from_project_report(tmp_path):
         "entryPointCount": 1,
         "resourceCount": 0,
         "constantCount": 0,
+        "specializationConstantCount": 0,
         "entryPoints": [{"name": "main", "stage": "vertex", "executionConfig": {}}],
         "resources": [],
         "constants": [],
+        "specializationConstants": [],
         "diagnostics": [],
         "diagnosticRecords": [],
     }
@@ -36729,6 +36734,7 @@ def test_build_runtime_artifact_manifest_from_project_report(tmp_path):
         "hostInterface": "ready",
         "entryPoints": "available",
         "resourceBindings": "not-applicable",
+        "specializationConstants": "not-applicable",
         "parameterBlocks": "not-applicable",
         "dispatch": "not-applicable",
     }
@@ -36810,6 +36816,7 @@ def test_runtime_artifact_manifest_records_runtime_integration_metadata(tmp_path
     assert target["variantCount"] == 1
     assert target["entryPointCount"] == 1
     assert target["resourceBindingCount"] == 2
+    assert target["specializationConstantCount"] == 0
     assert target["parameterBlockCount"] == 1
     assert target["dispatchMetadataCount"] == 1
 
@@ -36888,6 +36895,7 @@ def test_runtime_artifact_manifest_records_runtime_integration_metadata(tmp_path
         "hostInterface": "ready",
         "entryPoints": "available",
         "resourceBindings": "partial",
+        "specializationConstants": "not-applicable",
         "parameterBlocks": "partial",
         "dispatch": "available",
     }
@@ -37227,9 +37235,11 @@ def test_build_runtime_package_from_runtime_artifact_manifest(tmp_path):
         "entryPointCount": 1,
         "resourceCount": 0,
         "constantCount": 0,
+        "specializationConstantCount": 0,
         "entryPoints": [{"name": "main", "stage": "vertex", "executionConfig": {}}],
         "resources": [],
         "constants": [],
+        "specializationConstants": [],
         "diagnostics": [],
         "diagnosticRecords": [],
     }
@@ -37505,6 +37515,233 @@ def test_inspect_runtime_package_reflects_hlsl_artifact_metadata(tmp_path):
     assert host_interface["diagnostics"] == []
 
 
+def test_project_function_constant_variant_materializes_before_target_codegen(
+    tmp_path,
+):
+    shader_path = tmp_path / "shader.cgl"
+    shader_path.write_text(
+        textwrap.dedent("""
+            shader FunctionConstantVariant {
+                bool has_w @function_constant(20);
+                int mode @function_constant(21) = 3;
+                float scale @function_constant(22) = 0.5;
+
+                fragment {
+                    vec4 main() @ gl_FragColor {
+                        return vec4(
+                            scale + float(mode),
+                            has_w ? 1.0 : 0.0,
+                            0.0,
+                            1.0
+                        );
+                    }
+                }
+            }
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            include = ["shader.cgl"]
+            targets = ["directx"]
+            selected_variants = ["configured"]
+
+            [project.specialization_constants]
+            "22" = 1.25
+
+            [project.variants.configured.specialization_constants]
+            has_w = true
+            "21" = 7
+            """),
+        encoding="utf-8",
+    )
+
+    config = load_project_config(tmp_path)
+    assert config.specialization_constants == {"22": 1.25}
+    assert config.variant_specialization_constants == {
+        "configured": {"has_w": True, "21": 7}
+    }
+
+    report = translate_project(config)
+    payload = report.to_json()
+    assert payload["summary"]["failedCount"] == 0
+    artifact = payload["artifacts"][0]
+    constants = {
+        constant["name"]: constant
+        for constant in artifact["specializationConstants"]
+    }
+    assert constants["has_w"]["required"] is True
+    assert "defaultValue" not in constants["has_w"]
+    assert constants["has_w"]["concreteValue"] is True
+    assert constants["has_w"]["valueProvenance"] == {
+        "kind": "project-variant",
+        "path": (
+            "project.variants.configured.specialization_constants.has_w"
+        ),
+        "selector": "has_w",
+        "selectorKind": "name",
+        "variant": "configured",
+    }
+    assert constants["mode"]["defaultValue"] == 3
+    assert constants["mode"]["concreteValue"] == 7
+    assert constants["mode"]["valueProvenance"]["selectorKind"] == "id"
+    assert constants["scale"]["defaultValue"] == 0.5
+    assert constants["scale"]["concreteValue"] == 1.25
+    assert constants["scale"]["valueProvenance"]["kind"] == "project-config"
+    assert artifact["specializationMaterialization"] == {
+        "status": "concrete",
+        "mode": "concrete-crossgl-variant",
+        "targetSupportsDeferredSpecialization": False,
+        "constantCount": 3,
+        "requiredCount": 1,
+        "overriddenCount": 3,
+        "concreteCount": 3,
+        "source": "shared-crossgl-specialization",
+    }
+
+    generated = (tmp_path / artifact["path"]).read_text(encoding="utf-8")
+    assert "static const bool has_w = true;" in generated
+    assert "static const int mode = 7;" in generated
+    assert "static const float scale = 1.25;" in generated
+    assert "uniform bool has_w" not in generated
+
+    report_path = tmp_path / "report.json"
+    report.write_json(report_path)
+    assert validate_project_report(report_path)["success"] is True
+
+    runtime_manifest = build_runtime_artifact_manifest(report_path)
+    runtime_artifact = runtime_manifest["artifacts"][0]
+    assert runtime_artifact["resourceBindings"] == []
+    assert [
+        constant["name"]
+        for constant in runtime_artifact["specializationConstants"]
+    ] == ["has_w", "mode", "scale"]
+    binding_manifest = build_runtime_binding_manifest(report_path)
+    binding = binding_manifest["entries"][0]
+    assert binding["resourceBindings"] == []
+    assert binding["scalarConstants"] == []
+    assert [
+        constant["name"] for constant in binding["specializationConstants"]
+    ] == ["has_w", "mode", "scale"]
+
+
+def test_project_function_constant_deferred_metadata_distinguishes_required(
+    tmp_path,
+):
+    (tmp_path / "shader.cgl").write_text(
+        textwrap.dedent("""
+            shader DeferredFunctionConstants {
+                bool requiredFlag @function_constant(20);
+                int defaultedMode @function_constant(21) = 3;
+
+                fragment {
+                    vec4 main() @ gl_FragColor {
+                        return vec4(
+                            requiredFlag ? 1.0 : 0.0,
+                            float(defaultedMode),
+                            0.0,
+                            1.0
+                        );
+                    }
+                }
+            }
+            """).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    config = project_pipeline.ProjectConfig(
+        root=tmp_path,
+        include_patterns=("shader.cgl",),
+        targets=("cgl",),
+    )
+
+    payload = translate_project(config).to_json()
+    artifact = payload["artifacts"][0]
+    constants = {
+        constant["name"]: constant
+        for constant in artifact["specializationConstants"]
+    }
+    required = constants["requiredFlag"]
+    assert required["required"] is True
+    assert required["status"] == "required"
+    assert "defaultValue" not in required
+    assert "concreteValue" not in required
+    defaulted = constants["defaultedMode"]
+    assert defaulted["required"] is False
+    assert defaulted["status"] == "defaulted"
+    assert defaulted["defaultValue"] == 3
+    assert "concreteValue" not in defaulted
+    assert artifact["specializationMaterialization"]["mode"] == "deferred"
+
+
+@pytest.mark.parametrize(
+    ("source", "specialization_constants", "target", "code", "line"),
+    [
+        (
+            """shader DuplicateIds {
+                bool first @function_constant(20);
+                int second @function_constant(20) = 1;
+                fragment { vec4 main() @ gl_FragColor { return vec4(1.0); } }
+            }""",
+            {},
+            "cgl",
+            "project.translate.specialization-constant-id-duplicate",
+            3,
+        ),
+        (
+            """shader IncompatibleValue {
+                int mode @function_constant(21) = 3;
+                fragment { vec4 main() @ gl_FragColor { return vec4(1.0); } }
+            }""",
+            {"mode": "not-an-int"},
+            "directx",
+            "project.translate.specialization-value-type-incompatible",
+            2,
+        ),
+        (
+            """shader MissingRequired {
+                bool enabled @function_constant(20);
+                fragment { vec4 main() @ gl_FragColor { return vec4(1.0); } }
+            }""",
+            {},
+            "directx",
+            "project.translate.specialization-value-required",
+            2,
+        ),
+    ],
+)
+def test_project_function_constant_diagnostics_are_source_located(
+    tmp_path,
+    source,
+    specialization_constants,
+    target,
+    code,
+    line,
+):
+    (tmp_path / "shader.cgl").write_text(
+        textwrap.dedent(source).strip() + "\n", encoding="utf-8"
+    )
+    config = project_pipeline.ProjectConfig(
+        root=tmp_path,
+        include_patterns=("shader.cgl",),
+        targets=(target,),
+        specialization_constants=specialization_constants,
+    )
+
+    payload = translate_project(config).to_json()
+    assert payload["artifacts"][0]["status"] == "failed"
+    diagnostic = next(
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == code
+    )
+    assert diagnostic["location"]["file"] == "shader.cgl"
+    assert diagnostic["location"]["line"] == line
+    assert diagnostic["location"]["column"] > 1
+
+
 def test_inspect_runtime_package_reflects_glsl_artifact_metadata(tmp_path):
     _, manifest_path = _write_reduced_runtime_package(
         tmp_path,
@@ -37548,14 +37785,21 @@ def test_inspect_runtime_package_reflects_glsl_artifact_metadata(tmp_path):
             "access": "read_write",
         }
     ]
-    assert host_interface["constants"] == [
+    assert host_interface["constants"] == []
+    assert host_interface["specializationConstantCount"] == 1
+    assert host_interface["specializationConstants"] == [
         {
             "name": "tileSize",
             "kind": "specialization-constant",
             "id": 7,
             "dtype": "uint",
-            "value": 16,
+            "sourceType": "uint",
+            "default": 16,
+            "defaultValue": 16,
             "required": False,
+            "overridden": False,
+            "overrideStatus": "not-overridden",
+            "status": "defaulted",
             "source": "glsl.layout.constant_id",
         }
     ]
@@ -37610,13 +37854,20 @@ def test_inspect_runtime_package_reflects_spirv_assembly_metadata(tmp_path):
             "typeId": "%ptr",
         },
     }
-    assert host_interface["constants"] == [
+    assert host_interface["constants"] == []
+    assert host_interface["specializationConstantCount"] == 1
+    assert host_interface["specializationConstants"] == [
         {
             "name": "tileSize",
             "kind": "specialization-constant",
             "dtype": "uint",
-            "value": 16,
+            "sourceType": "uint",
+            "default": 16,
+            "defaultValue": 16,
             "required": False,
+            "overridden": False,
+            "overrideStatus": "not-overridden",
+            "status": "defaulted",
             "source": "spirv.spec-constant",
             "metadata": {"id": "%tileSize", "typeId": "%uint"},
             "id": 7,

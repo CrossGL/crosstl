@@ -326,6 +326,7 @@ RUNTIME_ARTIFACT_MANIFEST_TARGET_FIELDS = frozenset(
         "variantCount",
         "entryPointCount",
         "resourceBindingCount",
+        "specializationConstantCount",
         "parameterBlockCount",
         "dispatchMetadataCount",
         "artifacts",
@@ -351,6 +352,7 @@ RUNTIME_ARTIFACT_MANIFEST_ARTIFACT_FIELDS = frozenset(
         "hostInterface",
         "entryPoints",
         "resourceBindings",
+        "specializationConstants",
         "parameterBlocks",
         "dispatch",
         "validation",
@@ -403,6 +405,7 @@ RUNTIME_BINDING_MANIFEST_TARGET_FIELDS = frozenset(
         "entryCount",
         "resourceBindingCount",
         "scalarConstantCount",
+        "specializationConstantCount",
         "dispatchDimensionCount",
         "artifacts",
         "entries",
@@ -425,6 +428,7 @@ RUNTIME_BINDING_MANIFEST_ENTRY_FIELDS = frozenset(
         "resourceBindings",
         "bufferMutability",
         "scalarConstants",
+        "specializationConstants",
         "dispatchDimensions",
         "validation",
         "diagnostics",
@@ -563,9 +567,11 @@ RUNTIME_HOST_INTERFACE_FIELDS = frozenset(
         "entryPointCount",
         "resourceCount",
         "constantCount",
+        "specializationConstantCount",
         "entryPoints",
         "resources",
         "constants",
+        "specializationConstants",
         "diagnostics",
         "diagnosticRecords",
     )
@@ -1267,6 +1273,10 @@ REPORT_PROJECT_FIELDS = frozenset(
         "variants",
         "variantCount",
         "variantDefineCounts",
+        "specializationConstants",
+        "specializationConstantCount",
+        "variantSpecializationConstants",
+        "variantSpecializationConstantCounts",
         "selectedVariants",
         "externalCorpusManifest",
     )
@@ -1280,6 +1290,10 @@ REPORT_INCLUDE_DIR_STATUS_FIELDS = frozenset(
 SOURCE_OPTION_PATTERNS_KEY = "source_patterns"
 TARGET_SOURCE_OPTIONS_KEY = "target_options"
 TEMPLATE_VARIANTS_SOURCE_OPTION = "template_variants"
+SPECIALIZATION_CONSTANTS_CONFIG_KEY = "specialization_constants"
+DEFERRED_SPECIALIZATION_TARGETS = frozenset(
+    ("cgl", "crossgl", "metal", "vulkan")
+)
 METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION = "max_template_specializations"
 METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION = (
     "template_specialization_limit_source"
@@ -1487,6 +1501,8 @@ REPORT_ARTIFACT_FIELDS = frozenset(
         "generatedSizeBytes",
         "sourceMap",
         "sourceRemap",
+        "specializationConstants",
+        "specializationMaterialization",
         "templateMaterialization",
         "requiredCapabilities",
     )
@@ -3246,6 +3262,37 @@ def _normalize_source_options_for_backend(
     return normalized
 
 
+def _specialization_selector_key(value: Any, *, field_name: str) -> str:
+    if isinstance(value, int) and not isinstance(value, bool):
+        if value < 0:
+            raise ValueError(f"{field_name} numeric ids must be non-negative")
+        return str(value)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} keys must be source names or numeric ids")
+    key = value.strip()
+    if key.isdigit():
+        return str(int(key))
+    return key
+
+
+def _as_specialization_value_mapping(
+    value: Any, *, field_name: str
+) -> dict[str, bool | int | float | str]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_name} must be a table")
+    result: dict[str, bool | int | float | str] = {}
+    for raw_key, item in value.items():
+        key = _specialization_selector_key(raw_key, field_name=field_name)
+        if not isinstance(item, (bool, int, float, str)):
+            raise ValueError(
+                f"{field_name}.{key} must be a boolean, integer, float, or string"
+            )
+        result[key] = item
+    return result
+
+
 def _variant_defines(variants: Mapping[str, Any]) -> dict[str, dict[str, str]]:
     result: dict[str, dict[str, str]] = {}
     for name, value in variants.items():
@@ -3257,8 +3304,34 @@ def _variant_defines(variants: Mapping[str, Any]) -> dict[str, dict[str, str]]:
         if not isinstance(value, Mapping):
             raise ValueError(f"crosstl.toml [{variant_path}] must be a table")
         result[name] = _as_str_mapping(
-            value, field_name=f"crosstl.toml [{variant_path}]"
+            {
+                key: item
+                for key, item in value.items()
+                if key != SPECIALIZATION_CONSTANTS_CONFIG_KEY
+            },
+            field_name=f"crosstl.toml [{variant_path}]",
         )
+    return result
+
+
+def _variant_specialization_constants(
+    variants: Mapping[str, Any],
+) -> dict[str, dict[str, bool | int | float | str]]:
+    result: dict[str, dict[str, bool | int | float | str]] = {}
+    for name, value in variants.items():
+        if not isinstance(name, str) or not name.strip() or not isinstance(
+            value, Mapping
+        ):
+            continue
+        variant_path = _mapping_key_path("project.variants", name)
+        specializations = _as_specialization_value_mapping(
+            value.get(SPECIALIZATION_CONSTANTS_CONFIG_KEY),
+            field_name=(
+                f"crosstl.toml [{variant_path}.{SPECIALIZATION_CONSTANTS_CONFIG_KEY}]"
+            ),
+        )
+        if specializations:
+            result[name] = specializations
     return result
 
 
@@ -3269,6 +3342,16 @@ def _variant_define_counts(variants: Mapping[str, Any]) -> dict[str, int]:
             continue
         counts[name] = len(defines)
     return dict(sorted(counts.items()))
+
+
+def _variant_specialization_constant_counts(
+    variants: Mapping[str, Any],
+) -> dict[str, int]:
+    return {
+        name: len(values)
+        for name, values in sorted(variants.items())
+        if _is_non_empty_string(name) and isinstance(values, Mapping)
+    }
 
 
 def _normalized_targets(targets: Sequence[str] | str) -> list[str]:
@@ -6873,7 +6956,11 @@ class ProjectConfig:
     include_dirs: Sequence[str] | str = ()
     defines: Mapping[str, str] = field(default_factory=dict)
     source_options: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
-    variants: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    variants: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    specialization_constants: Mapping[str, Any] = field(default_factory=dict)
+    variant_specialization_constants: Mapping[str, Mapping[str, Any]] = field(
+        default_factory=dict
+    )
     selected_variants: Sequence[str] | str = ()
     external_corpus_manifest: str | os.PathLike[str] | None = None
 
@@ -6954,6 +7041,7 @@ class ProjectConfig:
         if not isinstance(self.variants, Mapping):
             raise ValueError("ProjectConfig.variants must be a mapping")
         variants: dict[str, dict[str, str]] = {}
+        nested_variant_specializations: dict[str, dict[str, Any]] = {}
         for name, defines in self.variants.items():
             if not isinstance(name, str) or not name.strip():
                 raise ValueError(
@@ -6961,11 +7049,69 @@ class ProjectConfig:
                 )
             if not isinstance(defines, Mapping):
                 raise ValueError(f"ProjectConfig.variants.{name} must be a mapping")
+            nested_variant_specializations[name] = _as_specialization_value_mapping(
+                defines.get(SPECIALIZATION_CONSTANTS_CONFIG_KEY),
+                field_name=(
+                    f"ProjectConfig.variants.{name}."
+                    f"{SPECIALIZATION_CONSTANTS_CONFIG_KEY}"
+                ),
+            )
             variants[name] = _as_str_mapping(
-                defines,
+                {
+                    key: value
+                    for key, value in defines.items()
+                    if key != SPECIALIZATION_CONSTANTS_CONFIG_KEY
+                },
                 field_name=f"ProjectConfig.variants.{name}",
             )
         object.__setattr__(self, "variants", variants)
+        object.__setattr__(
+            self,
+            "specialization_constants",
+            _as_specialization_value_mapping(
+                self.specialization_constants,
+                field_name="ProjectConfig.specialization_constants",
+            ),
+        )
+        if not isinstance(self.variant_specialization_constants, Mapping):
+            raise ValueError(
+                "ProjectConfig.variant_specialization_constants must be a mapping"
+            )
+        explicit_variant_specializations: dict[str, dict[str, Any]] = {}
+        for name, values in self.variant_specialization_constants.items():
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError(
+                    "ProjectConfig.variant_specialization_constants keys must be "
+                    "non-empty strings"
+                )
+            explicit_variant_specializations[name] = _as_specialization_value_mapping(
+                values,
+                field_name=f"ProjectConfig.variant_specialization_constants.{name}",
+            )
+            variants.setdefault(name, {})
+        merged_variant_specializations: dict[str, dict[str, Any]] = {}
+        for name in sorted(set(variants) | set(explicit_variant_specializations)):
+            nested = nested_variant_specializations.get(name, {})
+            explicit = explicit_variant_specializations.get(name, {})
+            conflicts = [
+                key
+                for key in nested.keys() & explicit.keys()
+                if nested[key] != explicit[key]
+            ]
+            if conflicts:
+                raise ValueError(
+                    "ProjectConfig variant specialization constants conflict for "
+                    f"{name}: {', '.join(sorted(conflicts))}"
+                )
+            values = {**nested, **explicit}
+            if values:
+                merged_variant_specializations[name] = values
+        object.__setattr__(self, "variants", variants)
+        object.__setattr__(
+            self,
+            "variant_specialization_constants",
+            merged_variant_specializations,
+        )
         if self.external_corpus_manifest is not None:
             external_corpus_manifest = _path_string_arg(
                 self.external_corpus_manifest,
@@ -7635,6 +7781,23 @@ class ProjectPortabilityReport:
                 },
                 "variantCount": len(self.config.variants),
                 "variantDefineCounts": _variant_define_counts(self.config.variants),
+                "specializationConstants": dict(
+                    sorted(self.config.specialization_constants.items())
+                ),
+                "specializationConstantCount": len(
+                    self.config.specialization_constants
+                ),
+                "variantSpecializationConstants": {
+                    name: dict(sorted(values.items()))
+                    for name, values in sorted(
+                        self.config.variant_specialization_constants.items()
+                    )
+                },
+                "variantSpecializationConstantCounts": (
+                    _variant_specialization_constant_counts(
+                        self.config.variant_specialization_constants
+                    )
+                ),
                 "selectedVariants": list(self.config.selected_variants),
                 "externalCorpusManifest": self.config.external_corpus_manifest,
             },
@@ -7773,6 +7936,12 @@ def load_project_config(
     variants = project.get("variants", {})
     if not isinstance(variants, Mapping):
         raise ValueError("crosstl.toml [project.variants] must be a table")
+    specialization_constants = _as_specialization_value_mapping(
+        project.get(SPECIALIZATION_CONSTANTS_CONFIG_KEY),
+        field_name=(
+            f"crosstl.toml [project.{SPECIALIZATION_CONSTANTS_CONFIG_KEY}]"
+        ),
+    )
     output_dir = _as_optional_non_empty_str(
         project.get("output_dir"),
         field_name="crosstl.toml project.output_dir",
@@ -7814,6 +7983,8 @@ def load_project_config(
         defines=defines,
         source_options=source_options,
         variants=_variant_defines(variants),
+        specialization_constants=specialization_constants,
+        variant_specialization_constants=_variant_specialization_constants(variants),
         selected_variants=_as_str_list(
             project.get("selected_variants"),
             field_name="project.selected_variants",
@@ -8185,6 +8356,43 @@ def _variant_define_sources(
     return sources
 
 
+def _variant_specialization_values(
+    config: ProjectConfig,
+    variant: str | None,
+) -> dict[str, tuple[Any, dict[str, Any]]]:
+    values = {
+        selector: (
+            value,
+            {
+                "kind": "project-config",
+                "path": f"project.{SPECIALIZATION_CONSTANTS_CONFIG_KEY}.{selector}",
+                "selector": selector,
+                "selectorKind": "id" if selector.isdigit() else "name",
+            },
+        )
+        for selector, value in config.specialization_constants.items()
+    }
+    if variant is None:
+        return values
+    for selector, value in config.variant_specialization_constants.get(
+        variant, {}
+    ).items():
+        values[selector] = (
+            value,
+            {
+                "kind": "project-variant",
+                "path": (
+                    f"project.variants.{variant}."
+                    f"{SPECIALIZATION_CONSTANTS_CONFIG_KEY}.{selector}"
+                ),
+                "selector": selector,
+                "selectorKind": "id" if selector.isdigit() else "name",
+                "variant": variant,
+            },
+        )
+    return values
+
+
 def _selected_variant_names(variants: Sequence[str] | str | None) -> list[str] | None:
     if variants is None:
         return None
@@ -8229,6 +8437,11 @@ def _config_with_selected_variants(
     return replace(
         config,
         variants={name: config.variants[name] for name in selected},
+        variant_specialization_constants={
+            name: config.variant_specialization_constants[name]
+            for name in selected
+            if name in config.variant_specialization_constants
+        },
         selected_variants=tuple(selected),
     )
 
@@ -18159,6 +18372,737 @@ def _translation_failure_location(
     )
 
 
+@dataclass(frozen=True)
+class _ProjectSpecializationDeclaration:
+    name: str
+    constant_id: int | None
+    source_type: str
+    attribute: str
+    has_default: bool
+    default_value: Any
+    location: SourceLocation
+
+
+class ProjectSpecializationError(ValueError):
+    """A project specialization contract blocked target generation."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        diagnostics: Sequence[ProjectDiagnostic],
+    ) -> None:
+        super().__init__(message)
+        self.diagnostics = tuple(diagnostics)
+
+
+def _specialization_int_value(value: Any) -> int | None:
+    value = _runtime_host_interface_json_value(value)
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value.strip(), 0)
+        except ValueError:
+            return None
+    return None
+
+
+def _specialization_scalar_literal(value: Any) -> Any:
+    value = _runtime_host_interface_json_value(value)
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    lowered = text.lower()
+    if lowered in {"true", "false"}:
+        return lowered == "true"
+    numeric = text
+    if numeric.lower().endswith(("u", "f", "h")):
+        numeric = numeric[:-1]
+    try:
+        return int(numeric, 0)
+    except ValueError:
+        pass
+    try:
+        return float(numeric)
+    except ValueError:
+        return text
+
+
+def _specialization_attribute_values(node: Any) -> list[tuple[str, int | None]]:
+    values: list[tuple[str, int | None]] = []
+    for attribute in getattr(node, "attributes", []) or []:
+        name = str(getattr(attribute, "name", "")).strip().lower().replace("-", "_")
+        if name not in {"function_constant", "constant_id"}:
+            continue
+        arguments = (
+            getattr(attribute, "arguments", None)
+            or getattr(attribute, "args", None)
+            or []
+        )
+        values.append(
+            (name, _specialization_int_value(arguments[0]) if arguments else None)
+        )
+    for layout_name in ("layout", "interface_layout"):
+        layout = getattr(node, layout_name, None)
+        if not isinstance(layout, Mapping):
+            continue
+        for key, value in layout.items():
+            if str(key).strip().lower() == "constant_id":
+                values.append(("constant_id", _specialization_int_value(value)))
+    return values
+
+
+def _specialization_ast_declaration_items(ast: Any) -> Iterator[tuple[Any, Any, bool]]:
+    seen: set[int] = set()
+    for group_name in ("global_variables", "global_vars", "constants", "constant"):
+        for item in getattr(ast, group_name, []) or []:
+            if id(item) in seen:
+                continue
+            seen.add(id(item))
+            node = getattr(item, "left", None)
+            if node is not None and _is_non_empty_string(getattr(node, "name", None)):
+                yield node, getattr(item, "right", None), True
+                continue
+            if not _is_non_empty_string(getattr(item, "name", None)):
+                continue
+            if hasattr(item, "initial_value"):
+                default_value = getattr(item, "initial_value")
+                yield item, default_value, default_value is not None
+            elif hasattr(item, "value"):
+                default_value = getattr(item, "value")
+                yield item, default_value, default_value is not None
+            else:
+                yield item, None, False
+
+
+def _specialization_statement_location(
+    unit: ProjectTranslationUnit,
+    source: str,
+    *,
+    name: str,
+    constant_id: int | None,
+    used_offsets: set[int],
+) -> SourceLocation:
+    identifier = re.compile(rf"\b{re.escape(name)}\b")
+    attribute_patterns = [
+        re.compile(
+            r"(?:function_constant|constant_id)\s*\(\s*"
+            + (re.escape(str(constant_id)) if constant_id is not None else r"[^)]*")
+            + r"\s*\)",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r"constant_id\s*=\s*"
+            + (re.escape(str(constant_id)) if constant_id is not None else r"[^,)]*")
+            + r"\b",
+            re.IGNORECASE,
+        ),
+    ]
+    for statement in re.finditer(r"[^;{}]{0,4096};", source, re.DOTALL):
+        if not identifier.search(statement.group(0)):
+            continue
+        for pattern in attribute_patterns:
+            match = pattern.search(statement.group(0))
+            if match is None:
+                continue
+            offset = statement.start() + match.start()
+            if offset in used_offsets:
+                continue
+            used_offsets.add(offset)
+            return _source_location_at_offset(unit, source, offset, len(match.group(0)))
+    return SourceLocation(file=unit.relative_path)
+
+
+def _project_specialization_declarations(
+    unit: ProjectTranslationUnit,
+    ast: Any,
+    source: str,
+) -> tuple[list[_ProjectSpecializationDeclaration], list[ProjectDiagnostic]]:
+    declarations: list[_ProjectSpecializationDeclaration] = []
+    diagnostics: list[ProjectDiagnostic] = []
+    used_offsets: set[int] = set()
+    for node, default_value, has_default in _specialization_ast_declaration_items(ast):
+        attributes = _specialization_attribute_values(node)
+        if not attributes:
+            continue
+        name = str(getattr(node, "name"))
+        ids = {constant_id for _attribute, constant_id in attributes}
+        constant_id = next(iter(ids)) if len(ids) == 1 else None
+        location = _specialization_statement_location(
+            unit,
+            source,
+            name=name,
+            constant_id=constant_id,
+            used_offsets=used_offsets,
+        )
+        if None in ids or len(ids) != 1 or constant_id is None or constant_id < 0:
+            diagnostics.append(
+                ProjectDiagnostic(
+                    severity="error",
+                    code="project.translate.specialization-constant-id-invalid",
+                    message=(
+                        f"Specialization constant '{name}' requires one non-negative "
+                        "integer id."
+                    ),
+                    location=location,
+                    source_backend=unit.source_backend,
+                    missing_capabilities=["specialization.constant.identity"],
+                )
+            )
+        source_type = (
+            _runtime_host_interface_type_name(getattr(node, "var_type", None))
+            or _runtime_host_interface_type_name(getattr(node, "vtype", None))
+            or _runtime_host_interface_type_name(getattr(node, "const_type", None))
+            or "unknown"
+        )
+        declarations.append(
+            _ProjectSpecializationDeclaration(
+                name=name,
+                constant_id=constant_id,
+                source_type=source_type,
+                attribute=attributes[0][0],
+                has_default=has_default,
+                default_value=(
+                    _specialization_scalar_literal(default_value)
+                    if has_default
+                    else None
+                ),
+                location=location,
+            )
+        )
+
+    by_id: dict[int, _ProjectSpecializationDeclaration] = {}
+    for declaration in declarations:
+        if declaration.constant_id is None:
+            continue
+        previous = by_id.get(declaration.constant_id)
+        if previous is None:
+            by_id[declaration.constant_id] = declaration
+            continue
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code="project.translate.specialization-constant-id-duplicate",
+                message=(
+                    f"Specialization constant id {declaration.constant_id} is used by "
+                    f"both '{previous.name}' and '{declaration.name}'."
+                ),
+                location=declaration.location,
+                source_backend=unit.source_backend,
+                missing_capabilities=["specialization.constant.identity"],
+                details={
+                    "id": declaration.constant_id,
+                    "name": declaration.name,
+                    "previousName": previous.name,
+                    "previousLocation": previous.location.to_json(),
+                },
+            )
+        )
+    return declarations, diagnostics
+
+
+def _normalized_specialization_type(source_type: str) -> str:
+    value = " ".join(source_type.strip().lower().replace("metal::", "").split())
+    for qualifier in ("const ", "constant ", "constexpr "):
+        if value.startswith(qualifier):
+            value = value[len(qualifier) :]
+    return value
+
+
+def _specialization_value_for_type(
+    value: Any, source_type: str
+) -> tuple[bool, Any, str | None]:
+    value = _specialization_scalar_literal(value)
+    normalized_type = _normalized_specialization_type(source_type)
+    if normalized_type in {"bool", "boolean"}:
+        if isinstance(value, bool):
+            return True, value, None
+        return False, value, "expected a boolean"
+
+    signed_types = {
+        "char",
+        "short",
+        "int",
+        "long",
+        "long long",
+        "int8_t",
+        "int16_t",
+        "int32_t",
+        "int64_t",
+        "i8",
+        "i16",
+        "i32",
+        "i64",
+    }
+    unsigned_types = {
+        "uchar",
+        "ushort",
+        "uint",
+        "ulong",
+        "ulong long",
+        "unsigned char",
+        "unsigned short",
+        "unsigned int",
+        "unsigned long",
+        "unsigned long long",
+        "uint8_t",
+        "uint16_t",
+        "uint32_t",
+        "uint64_t",
+        "u8",
+        "u16",
+        "u32",
+        "u64",
+        "size_t",
+    }
+    if normalized_type in signed_types | unsigned_types:
+        if not isinstance(value, int) or isinstance(value, bool):
+            return False, value, "expected an integer"
+        if normalized_type in unsigned_types and value < 0:
+            return False, value, "expected a non-negative integer"
+        return True, value, None
+
+    if normalized_type in {"half", "float", "double", "f16", "f32", "f64"}:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return False, value, "expected a finite numeric value"
+        converted = float(value)
+        if not math.isfinite(converted):
+            return False, value, "expected a finite numeric value"
+        return True, converted, None
+    return False, value, f"unsupported source type '{source_type}'"
+
+
+def _specialization_diagnostic(
+    declaration: _ProjectSpecializationDeclaration,
+    unit: ProjectTranslationUnit,
+    target: str,
+    variant: str | None,
+    *,
+    code: str,
+    message: str,
+    details: Mapping[str, Any] = (),
+) -> ProjectDiagnostic:
+    return ProjectDiagnostic(
+        severity="error",
+        code=code,
+        message=message,
+        location=declaration.location,
+        target=target,
+        source_backend=unit.source_backend,
+        variant=variant,
+        missing_capabilities=["specialization.constant.materialization"],
+        details=details if isinstance(details, Mapping) else {},
+    )
+
+
+def _resolved_project_specialization_constants(
+    config: ProjectConfig,
+    unit: ProjectTranslationUnit,
+    declarations: Sequence[_ProjectSpecializationDeclaration],
+    *,
+    target: str,
+    variant: str | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any], list[ProjectDiagnostic]]:
+    configured = _variant_specialization_values(config, variant)
+    deferred = target in DEFERRED_SPECIALIZATION_TARGETS
+    diagnostics: list[ProjectDiagnostic] = []
+    records: list[dict[str, Any]] = []
+    for declaration in declarations:
+        selectors = [declaration.name]
+        if declaration.constant_id is not None:
+            selectors.append(str(declaration.constant_id))
+        matches = [(selector, configured[selector]) for selector in selectors if selector in configured]
+        resolved_matches: list[tuple[str, Any, dict[str, Any]]] = []
+        for selector, (raw_value, provenance) in matches:
+            valid, value, reason = _specialization_value_for_type(
+                raw_value, declaration.source_type
+            )
+            if not valid:
+                diagnostics.append(
+                    _specialization_diagnostic(
+                        declaration,
+                        unit,
+                        target,
+                        variant,
+                        code="project.translate.specialization-value-type-incompatible",
+                        message=(
+                            f"Configured value for specialization constant "
+                            f"'{declaration.name}' is incompatible with source type "
+                            f"{declaration.source_type}: {reason}."
+                        ),
+                        details={
+                            "name": declaration.name,
+                            "id": declaration.constant_id,
+                            "sourceType": declaration.source_type,
+                            "selector": selector,
+                            "configuredValue": raw_value,
+                            "provenance": provenance,
+                        },
+                    )
+                )
+                continue
+            resolved_matches.append((selector, value, provenance))
+
+        if len({value for _selector, value, _provenance in resolved_matches}) > 1:
+            diagnostics.append(
+                _specialization_diagnostic(
+                    declaration,
+                    unit,
+                    target,
+                    variant,
+                    code="project.translate.specialization-value-conflict",
+                    message=(
+                        f"Specialization constant '{declaration.name}' has conflicting "
+                        "configured values by name and numeric id."
+                    ),
+                    details={
+                        "name": declaration.name,
+                        "id": declaration.constant_id,
+                        "matches": [
+                            {
+                                "selector": selector,
+                                "value": value,
+                                "provenance": provenance,
+                            }
+                            for selector, value, provenance in resolved_matches
+                        ],
+                    },
+                )
+            )
+            resolved_matches = []
+
+        selected_match = next(
+            (match for match in resolved_matches if match[0] == declaration.name),
+            resolved_matches[0] if resolved_matches else None,
+        )
+        record: dict[str, Any] = {
+            "name": declaration.name,
+            "id": declaration.constant_id,
+            "kind": (
+                "function-constant"
+                if declaration.attribute == "function_constant"
+                else "specialization-constant"
+            ),
+            "sourceType": declaration.source_type,
+            "dtype": declaration.source_type,
+            "required": not declaration.has_default,
+            "overridden": selected_match is not None,
+            "overrideStatus": (
+                "overridden" if selected_match is not None else "not-overridden"
+            ),
+            "deferred": deferred,
+            "source": f"{unit.source_backend}.{declaration.attribute}",
+            "sourceLocation": declaration.location.to_json(),
+        }
+        if declaration.has_default:
+            record["defaultValue"] = declaration.default_value
+            record["default"] = declaration.default_value
+        if selected_match is not None:
+            _selector, concrete_value, provenance = selected_match
+            record["concreteValue"] = concrete_value
+            record["value"] = concrete_value
+            record["status"] = "override"
+            record["valueProvenance"] = dict(provenance)
+        elif not deferred and declaration.has_default:
+            valid, concrete_value, reason = _specialization_value_for_type(
+                declaration.default_value, declaration.source_type
+            )
+            if valid:
+                record["concreteValue"] = concrete_value
+                record["value"] = concrete_value
+                record["status"] = "materialized-default"
+                record["valueProvenance"] = {
+                    "kind": "source-default",
+                    "path": f"{unit.relative_path}:{declaration.location.line}",
+                }
+            else:
+                diagnostics.append(
+                    _specialization_diagnostic(
+                        declaration,
+                        unit,
+                        target,
+                        variant,
+                        code="project.translate.specialization-default-not-concrete",
+                        message=(
+                            f"Default for specialization constant "
+                            f"'{declaration.name}' cannot be materialized for {target}: "
+                            f"{reason}."
+                        ),
+                        details={
+                            "name": declaration.name,
+                            "id": declaration.constant_id,
+                            "sourceType": declaration.source_type,
+                            "defaultValue": declaration.default_value,
+                        },
+                    )
+                )
+                record["status"] = "invalid-default"
+        elif not deferred:
+            diagnostics.append(
+                _specialization_diagnostic(
+                    declaration,
+                    unit,
+                    target,
+                    variant,
+                    code="project.translate.specialization-value-required",
+                    message=(
+                        f"Target {target} cannot defer required specialization "
+                        f"constant '{declaration.name}' (id {declaration.constant_id}); "
+                        "configure a concrete value by source name or numeric id."
+                    ),
+                    details={
+                        "name": declaration.name,
+                        "id": declaration.constant_id,
+                        "sourceType": declaration.source_type,
+                    },
+                )
+            )
+            record["status"] = "missing-required"
+        elif declaration.has_default:
+            record["status"] = "defaulted"
+            record["valueProvenance"] = {
+                "kind": "source-default",
+                "path": f"{unit.relative_path}:{declaration.location.line}",
+            }
+        else:
+            record["status"] = "required"
+            record["valueProvenance"] = {"kind": "runtime-override-required"}
+        records.append(record)
+
+    status = "deferred" if deferred else "concrete"
+    if any(diagnostic.severity == "error" for diagnostic in diagnostics):
+        status = "failed"
+    metadata = {
+        "status": status,
+        "mode": "deferred" if deferred else "concrete-crossgl-variant",
+        "targetSupportsDeferredSpecialization": deferred,
+        "constantCount": len(records),
+        "requiredCount": sum(bool(record.get("required")) for record in records),
+        "overriddenCount": sum(bool(record.get("overridden")) for record in records),
+        "concreteCount": sum("concreteValue" in record for record in records),
+        "source": "shared-crossgl-specialization",
+    }
+    return records, metadata, diagnostics
+
+
+def _source_location_from_specialization_record(
+    record: Mapping[str, Any], unit: ProjectTranslationUnit
+) -> SourceLocation:
+    location = record.get("sourceLocation")
+    if not isinstance(location, Mapping):
+        return SourceLocation(file=unit.relative_path)
+    return SourceLocation(
+        file=str(location.get("file") or unit.relative_path),
+        line=max(1, int(location.get("line", 1))),
+        column=max(1, int(location.get("column", 1))),
+        offset=max(0, int(location.get("offset", 0))),
+        length=max(0, int(location.get("length", 0))),
+        end_line=max(1, int(location.get("endLine", location.get("line", 1)))),
+        end_column=max(
+            1, int(location.get("endColumn", location.get("column", 1)))
+        ),
+        end_offset=max(0, int(location.get("endOffset", 0))),
+    )
+
+
+def _crossgl_specialization_literal(value: Any, source_type: str) -> str:
+    normalized_type = _normalized_specialization_type(source_type)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return f"{value}u" if normalized_type.startswith(("u", "unsigned")) else str(value)
+    if isinstance(value, float):
+        text = repr(value)
+        return text if "." in text or "e" in text.lower() else f"{text}.0"
+    return str(value)
+
+
+def _materialize_crossgl_specialization_constants(
+    source: str,
+    records: Sequence[Mapping[str, Any]],
+    *,
+    unit: ProjectTranslationUnit,
+    target: str,
+    variant: str | None,
+) -> str:
+    cgl_spec = SOURCE_REGISTRY.get("cgl")
+    if cgl_spec is None:
+        raise ProjectSpecializationError(
+            "CrossGL parser is unavailable for specialization materialization.",
+            diagnostics=(
+                ProjectDiagnostic(
+                    severity="error",
+                    code="project.translate.specialization-intermediate-unavailable",
+                    message=(
+                        "CrossGL parser is unavailable for specialization "
+                        "materialization."
+                    ),
+                    location=SourceLocation(file=unit.relative_path),
+                    target=target,
+                    source_backend=unit.source_backend,
+                    variant=variant,
+                    missing_capabilities=["specialization.constant.materialization"],
+                ),
+            ),
+        )
+    try:
+        ast = cgl_spec.parse(source)
+    except Exception as exc:
+        raise ProjectSpecializationError(
+            f"CrossGL specialization intermediate could not be parsed: {exc}",
+            diagnostics=(
+                ProjectDiagnostic(
+                    severity="error",
+                    code="project.translate.specialization-intermediate-invalid",
+                    message=(
+                        "CrossGL specialization intermediate could not be parsed: "
+                        f"{exc}"
+                    ),
+                    location=SourceLocation(file=unit.relative_path),
+                    target=target,
+                    source_backend=unit.source_backend,
+                    variant=variant,
+                    missing_capabilities=["specialization.constant.materialization"],
+                ),
+            ),
+        ) from exc
+    shared_declarations, _diagnostics = _project_specialization_declarations(
+        unit, ast, source
+    )
+    shared_by_id = {
+        declaration.constant_id: declaration
+        for declaration in shared_declarations
+        if declaration.constant_id is not None
+    }
+    materialized = source
+    for record in records:
+        if "concreteValue" not in record:
+            continue
+        name = str(record.get("name") or "")
+        constant_id = record.get("id")
+        declaration = shared_by_id.get(constant_id)
+        if declaration is None or declaration.name != name:
+            diagnostic = ProjectDiagnostic(
+                severity="error",
+                code="project.translate.specialization-intermediate-mismatch",
+                message=(
+                    f"Shared CrossGL intermediate did not preserve specialization "
+                    f"constant '{name}' with id {constant_id}."
+                ),
+                location=_source_location_from_specialization_record(record, unit),
+                target=target,
+                source_backend=unit.source_backend,
+                variant=variant,
+                missing_capabilities=["specialization.constant.identity"],
+            )
+            raise ProjectSpecializationError(diagnostic.message, diagnostics=(diagnostic,))
+        attribute_pattern = (
+            r"@(?:function_constant|constant_id)\s*\(\s*"
+            rf"{re.escape(str(constant_id))}\s*\)"
+        )
+        statement_pattern = re.compile(
+            rf"^(?P<indent>[ \t]*)(?P<body>"
+            rf"(?=[^;{{}}]*\b{re.escape(name)}\b)"
+            rf"(?=[^;{{}}]*{attribute_pattern})[^;{{}}]*);",
+            re.MULTILINE | re.DOTALL | re.IGNORECASE,
+        )
+        replacement = (
+            rf"\g<indent>const {declaration.source_type} {name} = "
+            + _crossgl_specialization_literal(
+                record.get("concreteValue"), declaration.source_type
+            )
+            + ";"
+        )
+        materialized, replacement_count = statement_pattern.subn(
+            replacement, materialized, count=1
+        )
+        if replacement_count != 1:
+            diagnostic = ProjectDiagnostic(
+                severity="error",
+                code="project.translate.specialization-intermediate-mismatch",
+                message=(
+                    f"Shared CrossGL declaration for specialization constant "
+                    f"'{name}' could not be materialized."
+                ),
+                location=_source_location_from_specialization_record(record, unit),
+                target=target,
+                source_backend=unit.source_backend,
+                variant=variant,
+                missing_capabilities=["specialization.constant.materialization"],
+            )
+            raise ProjectSpecializationError(diagnostic.message, diagnostics=(diagnostic,))
+    try:
+        cgl_spec.parse(materialized)
+    except Exception as exc:
+        diagnostic = ProjectDiagnostic(
+            severity="error",
+            code="project.translate.specialization-materialization-invalid",
+            message=f"Materialized CrossGL specialization variant is invalid: {exc}",
+            location=SourceLocation(file=unit.relative_path),
+            target=target,
+            source_backend=unit.source_backend,
+            variant=variant,
+            missing_capabilities=["specialization.constant.materialization"],
+        )
+        raise ProjectSpecializationError(diagnostic.message, diagnostics=(diagnostic,)) from exc
+    return materialized
+
+
+def _project_specialization_metadata_for_input(
+    config: ProjectConfig,
+    unit: ProjectTranslationUnit,
+    input_path: Path,
+    *,
+    target: str,
+    variant: str | None,
+    include_paths: Sequence[str],
+    defines: Mapping[str, str],
+    source_options: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None, list[ProjectDiagnostic]]:
+    source = input_path.read_text(encoding="utf-8", errors="replace")
+    if not re.search(r"\b(?:function_constant|constant_id)\b", source):
+        return [], None, []
+    source_spec = SOURCE_REGISTRY.get(unit.source_backend)
+    if source_spec is None:
+        return [], None, []
+    ast = source_spec.parse(
+        source,
+        file_path=str(input_path),
+        include_paths=include_paths,
+        defines=defines,
+        source_options=source_options,
+    )
+    try:
+        diagnostic_source = unit.path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        diagnostic_source = source
+    declarations, declaration_diagnostics = _project_specialization_declarations(
+        unit, ast, diagnostic_source
+    )
+    declaration_diagnostics = [
+        replace(diagnostic, target=target, variant=variant)
+        for diagnostic in declaration_diagnostics
+    ]
+    if not declarations:
+        return [], None, declaration_diagnostics
+    records, metadata, resolution_diagnostics = (
+        _resolved_project_specialization_constants(
+            config,
+            unit,
+            declarations,
+            target=target,
+            variant=variant,
+        )
+    )
+    diagnostics = [*declaration_diagnostics, *resolution_diagnostics]
+    if any(diagnostic.severity == "error" for diagnostic in diagnostics):
+        metadata["status"] = "failed"
+    return records, metadata, diagnostics
+
+
 def translate_project(
     config_or_root: ProjectConfig | str | os.PathLike[str],
     *,
@@ -18195,6 +19139,10 @@ def translate_project(
             defines=config.defines,
             source_options=config.source_options,
             variants=config.variants,
+            specialization_constants=config.specialization_constants,
+            variant_specialization_constants=(
+                config.variant_specialization_constants
+            ),
             selected_variants=config.selected_variants,
             external_corpus_manifest=config.external_corpus_manifest,
         )
@@ -18373,6 +19321,7 @@ def translate_project(
                 try:
                     output_path.parent.mkdir(parents=True, exist_ok=True)
                     translation_input_path = unit.path
+                    translation_source_backend = unit.source_backend
                     translation_defines: Mapping[str, str] = defines
                     translation_source_options: Mapping[str, Any] = source_options
                     if template_materialization is not None:
@@ -18391,11 +19340,88 @@ def translate_project(
                         translation_source_options = (
                             template_materialization.source_options
                         )
+                    (
+                        specialization_constants,
+                        specialization_materialization,
+                        specialization_diagnostics,
+                    ) = _project_specialization_metadata_for_input(
+                        config,
+                        unit,
+                        translation_input_path,
+                        target=target,
+                        variant=variant,
+                        include_paths=include_paths,
+                        defines=translation_defines,
+                        source_options=translation_source_options,
+                    )
+                    if specialization_constants:
+                        artifact["specializationConstants"] = specialization_constants
+                    if specialization_materialization is not None:
+                        artifact["specializationMaterialization"] = (
+                            specialization_materialization
+                        )
+                    if any(
+                        diagnostic.severity == "error"
+                        for diagnostic in specialization_diagnostics
+                    ):
+                        raise ProjectSpecializationError(
+                            specialization_diagnostics[0].message,
+                            diagnostics=specialization_diagnostics,
+                        )
+                    diagnostics.extend(specialization_diagnostics)
+                    if (
+                        specialization_constants
+                        and specialization_materialization is not None
+                        and specialization_materialization.get("mode")
+                        == "concrete-crossgl-variant"
+                    ):
+                        crossgl_kwargs: dict[str, Any] = {
+                            "backend": "cgl",
+                            "format_output": False,
+                            "source_backend": unit.source_backend,
+                            "include_paths": include_paths,
+                            "defines": translation_defines,
+                        }
+                        if translation_source_options:
+                            crossgl_kwargs["source_options"] = (
+                                translation_source_options
+                            )
+                        crossgl_source = translate(
+                            str(translation_input_path), **crossgl_kwargs
+                        )
+                        materialized_crossgl = (
+                            _materialize_crossgl_specialization_constants(
+                                crossgl_source,
+                                specialization_constants,
+                                unit=unit,
+                                target=target,
+                                variant=variant,
+                            )
+                        )
+                        if template_temp_dir is None:
+                            template_temp_dir = tempfile.TemporaryDirectory(
+                                prefix="crosstl-specialization-"
+                            )
+                        specialized_path = (
+                            Path(template_temp_dir.name)
+                            / f"{Path(unit.relative_path).stem}.specialized.cgl"
+                        )
+                        specialized_path.write_text(
+                            materialized_crossgl, encoding="utf-8"
+                        )
+                        translation_input_path = specialized_path
+                        translation_source_backend = "cgl"
+                        translation_defines = (
+                            defines if unit.source_backend in {"cgl", "crossgl"} else {}
+                        )
+                        translation_source_options = {
+                            "strict_function_bodies": unit.source_backend != "mojo"
+                        }
                     translate_kwargs: dict[str, Any] = {
                         "backend": target,
                         "save_shader": str(output_path),
                         "format_output": format_output,
-                        "source_backend": unit.source_backend,
+                        "source_backend": translation_source_backend,
                         "include_paths": include_paths,
                         "defines": translation_defines,
                     }
@@ -18443,6 +19469,17 @@ def translate_project(
                             _generated_placeholder_diagnostics(artifact_records, config)
                         )
                     diagnostics.extend(unresolved_construct_diagnostics)
+                except ProjectSpecializationError as exc:
+                    failure_message = str(exc)
+                    artifact["status"] = "failed"
+                    artifact["error"] = failure_message
+                    artifact.pop("generatedHash", None)
+                    artifact.pop("generatedSizeBytes", None)
+                    artifact.pop("sourceMap", None)
+                    artifact.pop("sourceRemap", None)
+                    _remove_artifact_output_files(output_path)
+                    artifact_records = [artifact]
+                    diagnostics.extend(exc.diagnostics)
                 except Exception as exc:  # noqa: BLE001
                     # Project translation reports per-artifact failures so one bad
                     # unit does not hide the rest of the repository's migration state.
@@ -20973,7 +22010,11 @@ def _runtime_manifest_source_host_interface(
     host_interface = _runtime_host_interface_from_ast(
         ast, parser=parser_name or "", source="source-artifact"
     )
-    if host_interface["entryPointCount"] == 0 and host_interface["resourceCount"] == 0:
+    if (
+        host_interface["entryPointCount"] == 0
+        and host_interface["resourceCount"] == 0
+        and host_interface.get("specializationConstantCount", 0) == 0
+    ):
         return None
     target = artifact.get("target")
     if _is_non_empty_string(target) and _normalized_targets([str(target)])[0] == "wgsl":
@@ -21017,9 +22058,143 @@ def _runtime_manifest_host_interface(
     root_path: Path | None, artifact: Mapping[str, Any]
 ) -> dict[str, Any] | None:
     reflected = _runtime_manifest_reflected_host_interface(root_path, artifact)
-    if isinstance(reflected, Mapping):
-        return dict(reflected)
-    return _runtime_manifest_source_host_interface(root_path, artifact)
+    source_interface = _runtime_manifest_source_host_interface(root_path, artifact)
+    base = reflected if isinstance(reflected, Mapping) else source_interface
+    if not isinstance(base, Mapping):
+        return None
+    return _runtime_manifest_merge_specialization_constants(
+        base,
+        source_interface=source_interface,
+        artifact=artifact,
+    )
+
+
+def _runtime_specialization_constant_identity(
+    constant: Mapping[str, Any],
+) -> tuple[str, Any] | None:
+    constant_id = constant.get("id", constant.get("constantId"))
+    if constant_id is not None and not isinstance(constant_id, bool):
+        return "id", constant_id
+    name = constant.get("name")
+    if _is_non_empty_string(name):
+        return "name", name
+    return None
+
+
+def _runtime_merge_specialization_constant_records(
+    *record_groups: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    positions: dict[tuple[str, Any], int] = {}
+    for group in record_groups:
+        for constant in group:
+            if not isinstance(constant, Mapping):
+                continue
+            payload = dict(constant)
+            identity = _runtime_specialization_constant_identity(payload)
+            if identity is None:
+                continue
+            position = positions.get(identity)
+            if position is None:
+                positions[identity] = len(records)
+                records.append(payload)
+                continue
+            records[position] = {**records[position], **payload}
+    return records
+
+
+def _runtime_manifest_merge_specialization_constants(
+    host_interface: Mapping[str, Any],
+    *,
+    source_interface: Mapping[str, Any] | None,
+    artifact: Mapping[str, Any],
+) -> dict[str, Any]:
+    reflected_constants = [
+        dict(constant)
+        for constant in _record_sequence(
+            host_interface.get("specializationConstants")
+        )
+        if isinstance(constant, Mapping)
+    ]
+    source_constants = [
+        dict(constant)
+        for constant in _record_sequence(
+            source_interface.get("specializationConstants")
+            if isinstance(source_interface, Mapping)
+            else []
+        )
+        if isinstance(constant, Mapping)
+    ]
+    artifact_constants = [
+        dict(constant)
+        for constant in _record_sequence(artifact.get("specializationConstants"))
+        if isinstance(constant, Mapping)
+    ]
+    specialization_constants = _runtime_merge_specialization_constant_records(
+        reflected_constants,
+        source_constants,
+        artifact_constants,
+    )
+    if not specialization_constants:
+        return dict(host_interface)
+
+    specialization_names = {
+        str(constant.get("name"))
+        for constant in specialization_constants
+        if _is_non_empty_string(constant.get("name"))
+    }
+    resources = [
+        dict(resource)
+        for resource in _record_sequence(host_interface.get("resources"))
+        if isinstance(resource, Mapping)
+        and resource.get("name") not in specialization_names
+    ]
+    constants = [
+        dict(constant)
+        for constant in _record_sequence(host_interface.get("constants"))
+        if isinstance(constant, Mapping)
+        and constant.get("name") not in specialization_names
+    ]
+    diagnostic_records = []
+    for diagnostic in _record_sequence(host_interface.get("diagnosticRecords")):
+        if not isinstance(diagnostic, Mapping):
+            continue
+        details = diagnostic.get("details")
+        resource = details.get("resource") if isinstance(details, Mapping) else None
+        conflicting = (
+            details.get("conflictingResource")
+            if isinstance(details, Mapping)
+            else None
+        )
+        if resource in specialization_names or conflicting in specialization_names:
+            continue
+        diagnostic_records.append(dict(diagnostic))
+    status = str(host_interface.get("status") or "ready")
+    if status in {"ambiguous", "incomplete", "unavailable"} and not diagnostic_records:
+        status = "ready"
+    return host_interface_record(
+        status=status,
+        source=str(host_interface.get("source") or "compiled-artifact"),
+        parser=(
+            str(host_interface.get("parser"))
+            if _is_non_empty_string(host_interface.get("parser"))
+            else None
+        ),
+        artifact_format=(
+            str(host_interface.get("artifactFormat"))
+            if _is_non_empty_string(host_interface.get("artifactFormat"))
+            else None
+        ),
+        entry_points=[
+            dict(entry_point)
+            for entry_point in _record_sequence(host_interface.get("entryPoints"))
+            if isinstance(entry_point, Mapping)
+        ],
+        resources=resources,
+        constants=constants,
+        specialization_constants=specialization_constants,
+        diagnostics=diagnostic_records,
+    )
 
 
 def _runtime_manifest_group_key(value: Any) -> str:
@@ -21199,6 +22374,10 @@ def _runtime_manifest_summary(
             len(_record_sequence(artifact.get("resourceBindings")))
             for artifact in artifacts
         ),
+        "specializationConstantCount": sum(
+            len(_record_sequence(artifact.get("specializationConstants")))
+            for artifact in artifacts
+        ),
         "parameterBlockCount": sum(
             len(_record_sequence(artifact.get("parameterBlocks")))
             for artifact in artifacts
@@ -21292,6 +22471,20 @@ def _runtime_manifest_resources(
         dict(resource)
         for resource in _record_sequence(host_interface.get("resources"))
         if isinstance(resource, Mapping)
+    ]
+
+
+def _runtime_manifest_specialization_constants(
+    host_interface: Mapping[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if not isinstance(host_interface, Mapping):
+        return []
+    return [
+        dict(constant)
+        for constant in _record_sequence(
+            host_interface.get("specializationConstants")
+        )
+        if isinstance(constant, Mapping)
     ]
 
 
@@ -21549,6 +22742,7 @@ def _runtime_manifest_status(
     host_interface: Mapping[str, Any] | None,
     entry_points: Sequence[Mapping[str, Any]],
     resource_bindings: Sequence[Mapping[str, Any]],
+    specialization_constants: Sequence[Mapping[str, Any]],
     parameter_blocks: Sequence[Mapping[str, Any]],
     dispatch: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -21557,6 +22751,7 @@ def _runtime_manifest_status(
             "hostInterface": "unavailable",
             "entryPoints": "unavailable",
             "resourceBindings": "unavailable",
+            "specializationConstants": "unavailable",
             "parameterBlocks": "unavailable",
             "dispatch": dispatch.get("status", "unavailable"),
         }
@@ -21578,6 +22773,9 @@ def _runtime_manifest_status(
         "hostInterface": host_interface.get("status", "unavailable"),
         "entryPoints": "available" if entry_points else "unavailable",
         "resourceBindings": resource_binding_status,
+        "specializationConstants": (
+            "available" if specialization_constants else "not-applicable"
+        ),
         "parameterBlocks": parameter_block_status,
         "dispatch": dispatch.get("status", "unavailable"),
     }
@@ -21594,6 +22792,9 @@ def _runtime_manifest_artifact(
     host_interface = _runtime_manifest_host_interface(root_path, artifact)
     entry_points = _runtime_manifest_entry_points(host_interface)
     resource_bindings = _runtime_manifest_resource_bindings(host_interface)
+    specialization_constants = _runtime_manifest_specialization_constants(
+        host_interface
+    )
     parameter_blocks = _runtime_manifest_parameter_blocks(resource_bindings)
     dispatch = _runtime_manifest_dispatch(entry_points)
     diagnostics = _runtime_manifest_artifact_diagnostics(
@@ -21643,6 +22844,7 @@ def _runtime_manifest_artifact(
         "hostInterface": host_interface,
         "entryPoints": entry_points,
         "resourceBindings": resource_bindings,
+        "specializationConstants": specialization_constants,
         "parameterBlocks": parameter_blocks,
         "dispatch": dispatch,
         "validation": validation,
@@ -21652,6 +22854,7 @@ def _runtime_manifest_artifact(
             host_interface=host_interface,
             entry_points=entry_points,
             resource_bindings=resource_bindings,
+            specialization_constants=specialization_constants,
             parameter_blocks=parameter_blocks,
             dispatch=dispatch,
         ),
@@ -21700,6 +22903,10 @@ def _runtime_manifest_target(
         ),
         "resourceBindingCount": sum(
             len(_record_sequence(artifact.get("resourceBindings")))
+            for artifact in target_manifest_artifacts
+        ),
+        "specializationConstantCount": sum(
+            len(_record_sequence(artifact.get("specializationConstants")))
             for artifact in target_manifest_artifacts
         ),
         "parameterBlockCount": sum(
@@ -21947,6 +23154,8 @@ def _runtime_binding_define_constants(
 
 
 def _runtime_binding_source_constant_payload(constant: Any) -> dict[str, Any] | None:
+    if _specialization_attribute_values(constant):
+        return None
     name = getattr(constant, "name", None)
     if not _is_non_empty_string(name):
         return None
@@ -22023,6 +23232,19 @@ def _runtime_binding_scalar_constants(
             if isinstance(constant, Mapping):
                 constants.append(dict(constant))
     return constants
+
+
+def _runtime_binding_specialization_constants(
+    artifact: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    records = _record_sequence(artifact.get("specializationConstants"))
+    if not records:
+        host_interface = artifact.get("hostInterface")
+        if isinstance(host_interface, Mapping):
+            records = _record_sequence(
+                host_interface.get("specializationConstants")
+            )
+    return [dict(record) for record in records if isinstance(record, Mapping)]
 
 
 def _runtime_binding_resource_mutability(binding: Mapping[str, Any]) -> str:
@@ -22211,6 +23433,9 @@ def _runtime_binding_manifest_entries(
             entry_points = [None]
         resource_bindings = _runtime_binding_resource_bindings(artifact)
         scalar_constants = _runtime_binding_scalar_constants(root_path, artifact)
+        specialization_constants = _runtime_binding_specialization_constants(
+            artifact
+        )
         for index, entry_point in enumerate(entry_points):
             entries.append(
                 {
@@ -22242,6 +23467,9 @@ def _runtime_binding_manifest_entries(
                     ),
                     "scalarConstants": [
                         dict(constant) for constant in scalar_constants
+                    ],
+                    "specializationConstants": [
+                        dict(constant) for constant in specialization_constants
                     ],
                     "dispatchDimensions": _runtime_binding_dispatch_dimensions(
                         artifact, entry_point
@@ -22281,6 +23509,10 @@ def _runtime_binding_manifest_summary(
         "scalarConstantCount": sum(
             len(_record_sequence(entry.get("scalarConstants"))) for entry in entries
         ),
+        "specializationConstantCount": sum(
+            len(_record_sequence(entry.get("specializationConstants")))
+            for entry in entries
+        ),
         "dispatchDimensionCount": sum(
             1
             for entry in entries
@@ -22311,6 +23543,10 @@ def _runtime_binding_manifest_target(
         ),
         "scalarConstantCount": sum(
             len(_record_sequence(entry.get("scalarConstants")))
+            for entry in target_entries
+        ),
+        "specializationConstantCount": sum(
+            len(_record_sequence(entry.get("specializationConstants")))
             for entry in target_entries
         ),
         "dispatchDimensionCount": sum(
@@ -23645,6 +24881,8 @@ def _runtime_host_interface_resource_kind(node: Any) -> str | None:
 
 
 def _runtime_host_interface_resource_from_node(node: Any) -> dict[str, Any] | None:
+    if _specialization_attribute_values(node):
+        return None
     if _is_non_empty_string(getattr(node, "interface_block", None)):
         return None
     kind = _runtime_host_interface_resource_kind(node)
@@ -23802,17 +25040,62 @@ def _runtime_host_interface_resources(ast: Any) -> list[dict[str, Any]]:
     return resources
 
 
+def _runtime_host_interface_specialization_constants(
+    ast: Any, *, parser: str
+) -> list[dict[str, Any]]:
+    constants = []
+    for node, default_value, has_default in _specialization_ast_declaration_items(ast):
+        attributes = _specialization_attribute_values(node)
+        if not attributes:
+            continue
+        ids = {constant_id for _attribute, constant_id in attributes}
+        constant_id = next(iter(ids)) if len(ids) == 1 else None
+        attribute = attributes[0][0]
+        source_type = (
+            _runtime_host_interface_type_name(getattr(node, "var_type", None))
+            or _runtime_host_interface_type_name(getattr(node, "vtype", None))
+            or _runtime_host_interface_type_name(getattr(node, "const_type", None))
+            or "unknown"
+        )
+        payload = {
+            "name": getattr(node, "name", None),
+            "id": constant_id,
+            "kind": (
+                "function-constant"
+                if attribute == "function_constant"
+                else "specialization-constant"
+            ),
+            "dtype": source_type,
+            "sourceType": source_type,
+            "required": not has_default,
+            "overridden": False,
+            "overrideStatus": "not-overridden",
+            "status": "defaulted" if has_default else "required",
+            "source": f"{parser}.{attribute}",
+        }
+        if has_default:
+            value = _specialization_scalar_literal(default_value)
+            payload["default"] = value
+            payload["defaultValue"] = value
+        constants.append(payload)
+    return constants
+
+
 def _runtime_host_interface_from_ast(
     ast: Any, parser: str, *, source: str = "package-artifact"
 ) -> dict[str, Any]:
     entry_points = _runtime_host_interface_entry_points(ast)
     resources = _runtime_host_interface_resources(ast)
+    specialization_constants = _runtime_host_interface_specialization_constants(
+        ast, parser=parser
+    )
     return host_interface_record(
         status="ready",
         source=source,
         parser=parser,
         entry_points=entry_points,
         resources=resources,
+        specialization_constants=specialization_constants,
     )
 
 
@@ -23982,6 +25265,13 @@ def _runtime_package_artifact_host_interface(
             for constant in _record_sequence(host_interface.get("constants"))
             if isinstance(constant, Mapping)
         ],
+        specialization_constants=[
+            dict(constant)
+            for constant in _record_sequence(
+                host_interface.get("specializationConstants")
+            )
+            if isinstance(constant, Mapping)
+        ],
         diagnostics=[
             diagnostic
             for diagnostic in _record_sequence(host_interface.get("diagnostics"))
@@ -24059,6 +25349,7 @@ def _runtime_package_inspection_host_interface(
         if (
             host_interface["entryPointCount"] == 0
             and host_interface["resourceCount"] == 0
+            and host_interface.get("specializationConstantCount", 0) == 0
         ):
             return _runtime_host_interface_empty(
                 "unavailable",
@@ -24155,7 +25446,11 @@ def _runtime_package_inspection_host_interface(
             ),
         )
     host_interface = _runtime_host_interface_from_ast(ast, parser=parser_name or "")
-    if host_interface["entryPointCount"] == 0 and host_interface["resourceCount"] == 0:
+    if (
+        host_interface["entryPointCount"] == 0
+        and host_interface["resourceCount"] == 0
+        and host_interface.get("specializationConstantCount", 0) == 0
+    ):
         return _runtime_host_interface_empty(
             "unavailable",
             parser=parser_name,
@@ -32913,6 +34208,24 @@ def _project_config_for_scan_validation(
             return None
         variants[name] = dict(variant_defines)
 
+    specialization_constants = project.get("specializationConstants", {})
+    if _specialization_value_mapping_contract_reasons(
+        "project.specializationConstants", specialization_constants
+    ):
+        return None
+    raw_variant_specializations = project.get(
+        "variantSpecializationConstants", {}
+    )
+    if _variant_specialization_mapping_contract_reasons(
+        "project.variantSpecializationConstants", raw_variant_specializations
+    ):
+        return None
+    variant_specializations = {
+        str(name): dict(values)
+        for name, values in raw_variant_specializations.items()
+        if isinstance(values, Mapping)
+    }
+
     output_dir = project.get("outputDir")
     if not isinstance(output_dir, str):
         return None
@@ -32948,6 +34261,8 @@ def _project_config_for_scan_validation(
             if isinstance(options, Mapping)
         },
         variants=variants,
+        specialization_constants=dict(specialization_constants),
+        variant_specialization_constants=variant_specializations,
         selected_variants=tuple(selected_variants),
         external_corpus_manifest=external_corpus_manifest,
     )
@@ -34306,6 +35621,18 @@ def _project_config_for_include_validation(
             for name, variant_defines in raw_variants.items()
             if _is_non_empty_string(name) and _valid_string_mapping(variant_defines)
         }
+    specialization_constants = project.get("specializationConstants", {})
+    if _specialization_value_mapping_contract_reasons(
+        "project.specializationConstants", specialization_constants
+    ):
+        specialization_constants = {}
+    raw_variant_specializations = project.get(
+        "variantSpecializationConstants", {}
+    )
+    if _variant_specialization_mapping_contract_reasons(
+        "project.variantSpecializationConstants", raw_variant_specializations
+    ):
+        raw_variant_specializations = {}
     output_dir = project.get("outputDir", DEFAULT_OUTPUT_DIR)
     if not isinstance(output_dir, str):
         output_dir = DEFAULT_OUTPUT_DIR
@@ -34314,6 +35641,12 @@ def _project_config_for_include_validation(
         include_dirs=tuple(_normalize_project_relative_paths(include_dirs)),
         defines=dict(defines),
         variants=variants,
+        specialization_constants=dict(specialization_constants),
+        variant_specialization_constants={
+            str(name): dict(values)
+            for name, values in raw_variant_specializations.items()
+            if isinstance(values, Mapping)
+        },
         selected_variants=tuple(
             name
             for name in project.get("selectedVariants", [])
@@ -35080,6 +36413,45 @@ def _variant_mapping_contract_reasons(prefix: str, value: Any) -> list[str]:
         else:
             variant_prefix = _mapping_key_path(prefix, variant_name)
         reasons.extend(_string_mapping_contract_reasons(variant_prefix, defines))
+    return reasons
+
+
+def _specialization_value_mapping_contract_reasons(
+    prefix: str, value: Any
+) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+    reasons = []
+    for selector, item in value.items():
+        if not _is_non_empty_string(selector):
+            reasons.append(f"{prefix} keys must be source names or numeric ids")
+            continue
+        if selector.isdigit() and selector != str(int(selector)):
+            reasons.append(f"{prefix} numeric ids must use canonical decimal form")
+        if not isinstance(item, (bool, int, float, str)):
+            reasons.append(
+                f"{_mapping_key_path(prefix, selector)} must be a JSON scalar"
+            )
+    return reasons
+
+
+def _variant_specialization_mapping_contract_reasons(
+    prefix: str, value: Any
+) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+    reasons = []
+    for variant, constants in value.items():
+        if not _is_non_empty_string(variant):
+            reasons.append(f"{prefix} keys must be non-empty variant names")
+            variant_prefix = prefix
+        else:
+            variant_prefix = _mapping_key_path(prefix, variant)
+        reasons.extend(
+            _specialization_value_mapping_contract_reasons(
+                variant_prefix, constants
+            )
+        )
     return reasons
 
 
@@ -36061,6 +37433,80 @@ def _project_metadata_contract_reasons(
             reasons.append(
                 "project.variantDefineCounts must map variant names to "
                 "non-negative integers"
+            )
+
+    specialization_constants = project.get("specializationConstants")
+    specialization_constants_are_mapping = isinstance(
+        specialization_constants, Mapping
+    )
+    if _optional_project_field(
+        project, "specializationConstants", required=require_full_metadata
+    ):
+        reasons.extend(
+            _specialization_value_mapping_contract_reasons(
+                "project.specializationConstants", specialization_constants
+            )
+        )
+    if _optional_project_field(
+        project, "specializationConstantCount", required=require_full_metadata
+    ):
+        count = project.get("specializationConstantCount")
+        if not _is_non_negative_int(count):
+            reasons.append(
+                "project.specializationConstantCount must be a non-negative integer"
+            )
+        elif (
+            specialization_constants_are_mapping
+            and count != len(specialization_constants)
+        ):
+            reasons.append(
+                "project.specializationConstantCount must match "
+                "project.specializationConstants "
+                f"({_value_mismatch_context(count, len(specialization_constants))})"
+            )
+
+    variant_specializations = project.get("variantSpecializationConstants")
+    variant_specializations_are_mapping = isinstance(
+        variant_specializations, Mapping
+    )
+    if _optional_project_field(
+        project,
+        "variantSpecializationConstants",
+        required=require_full_metadata,
+    ):
+        reasons.extend(
+            _variant_specialization_mapping_contract_reasons(
+                "project.variantSpecializationConstants",
+                variant_specializations,
+            )
+        )
+        if variant_specializations_are_mapping and variants_is_mapping:
+            unknown_variants = sorted(set(variant_specializations) - set(variants))
+            if unknown_variants:
+                reasons.append(
+                    "project.variantSpecializationConstants keys must be listed "
+                    "in project.variants"
+                )
+    if _optional_project_field(
+        project,
+        "variantSpecializationConstantCounts",
+        required=require_full_metadata,
+    ):
+        counts = project.get("variantSpecializationConstantCounts")
+        if variant_specializations_are_mapping:
+            reasons.extend(
+                _mapping_field_contract_reasons(
+                    "project.variantSpecializationConstantCounts",
+                    counts,
+                    _variant_specialization_constant_counts(
+                        variant_specializations
+                    ),
+                    "project.variantSpecializationConstants",
+                )
+            )
+        elif not isinstance(counts, Mapping):
+            reasons.append(
+                "project.variantSpecializationConstantCounts must be an object"
             )
 
     if _optional_project_field(
