@@ -171,6 +171,7 @@ jobs:
           from demos.integrations.mlx.run_mlx_porting import (
               MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS,
               MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES,
+              MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES,
           )
 
           fence_source = "mlx/backend/metal/kernels/fence.metal"
@@ -181,15 +182,16 @@ jobs:
           )
           directx_frontier_count = len(directx_frontier_sources)
           directx_entry_point_count = sum(directx_entry_point_counts.values())
-          opengl_frontier_sources = {
-              "mlx/backend/metal/kernels/arg_reduce.metal",
+          opengl_frontier_sources = set(MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES)
+          opengl_frontier_count = len(opengl_frontier_sources)
+          required_opengl_promotions = {
               "mlx/backend/metal/kernels/binary_two.metal",
-              "mlx/backend/metal/kernels/logsumexp.metal",
-              "mlx/backend/metal/kernels/rms_norm.metal",
-              "mlx/backend/metal/kernels/rope.metal",
-              "mlx/backend/metal/kernels/scaled_dot_product_attention.metal",
-              "mlx/backend/metal/kernels/softmax.metal",
+              "mlx/backend/metal/kernels/ternary.metal",
           }
+          if not required_opengl_promotions <= opengl_frontier_sources:
+              raise SystemExit("required OpenGL frontier promotions are missing")
+          if opengl_frontier_count != 8:
+              raise SystemExit("expected 8 OpenGL toolchain frontier sources")
           payload = json.loads(
               Path("mlx-upstream/.crosstl-mlx-porting/summary.json").read_text(
                   encoding="utf-8"
@@ -334,25 +336,29 @@ jobs:
                   )
           opengl = checks["opengl-frontier"]
           if set(opengl["sources"]) != opengl_frontier_sources:
-              raise SystemExit("expected 7 OpenGL toolchain frontier sources")
+              raise SystemExit("OpenGL toolchain frontier sources are incomplete")
           if (
-              opengl["sourceCount"] != 7
-              or opengl["artifactCount"] != 7
+              opengl["sourceCount"] != opengl_frontier_count
+              or opengl["artifactCount"] != opengl_frontier_count
               or opengl["projectDiagnosticCount"] != 0
           ):
-              raise SystemExit("OpenGL frontier accounting must be 7 sources, 7 artifacts, and 0 project diagnostics")
+              raise SystemExit(
+                  "OpenGL frontier accounting must cover every configured source "
+                  "with one artifact and zero project diagnostics"
+              )
           if os.environ["RUNNER_OS"] == "Linux":
               validated_sources = set(opengl["toolchainValidatedSources"])
               validation_outputs = set(opengl["nativeValidationOutputs"])
               if (
                   opengl["toolchainRequired"] is not True
                   or opengl["nativeValidationStatus"] != "validated"
-                  or opengl["toolchainValidatedArtifactCount"] != 7
+                  or opengl["toolchainValidatedArtifactCount"]
+                  != opengl_frontier_count
                   or validated_sources != opengl_frontier_sources
                   or validation_outputs != opengl_frontier_sources
               ):
                   raise SystemExit(
-                      "OpenGL frontier toolchain must validate all 7 source paths"
+                      "OpenGL frontier toolchain must validate every source path"
                   )
           PY
 

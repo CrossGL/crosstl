@@ -119,14 +119,15 @@
       "mlx/backend/metal/kernels/rms_norm.metal",
       "mlx/backend/metal/kernels/rope.metal",
       "mlx/backend/metal/kernels/scaled_dot_product_attention.metal",
-      "mlx/backend/metal/kernels/softmax.metal"
+      "mlx/backend/metal/kernels/softmax.metal",
+      "mlx/backend/metal/kernels/ternary.metal"
     ],
-    "source_count": 7,
+    "source_count": 8,
     "target": "opengl",
-    "artifact_count": 7,
+    "artifact_count": 8,
     "project_diagnostic_count": 0,
-    "glslang_compiled_artifact_count": 7,
-    "spirv_validated_artifact_count": 7,
+    "glslang_compiled_artifact_count": 8,
+    "spirv_validated_artifact_count": 8,
     "glslang_target_environments": [
       "opengl",
       "spirv1.3"
@@ -394,7 +395,7 @@
   },
   "directx_toolchain_status": {
     "status": "passing",
-    "note": "Windows CI compiles every generated compute entry in the eight-source DirectX HLSL frontier below. This is native compiler validation only and does not establish Direct3D runtime execution or numerical parity. binary_two.metal, random.metal, and ternary.metal remain outside the clean-frontier DXC gate for the listed defects; fence.metal is a separate blocked source and emits no DirectX artifact under its atomic-fence contract diagnostic.",
+    "note": "Windows CI compiles all 347 generated compute entries in the nine-source DirectX HLSL frontier below. This is native compiler validation only and does not establish Direct3D runtime execution or numerical parity. binary_two.metal and random.metal remain outside the clean-frontier DXC gate for the listed defects; fence.metal is a separate blocked source and emits no DirectX artifact under its atomic-fence contract diagnostic.",
     "compiler": {
       "name": "dxc",
       "version": "v1.9.2602.24"
@@ -419,7 +420,8 @@
       "mlx/backend/metal/kernels/rms_norm.metal": 12,
       "mlx/backend/metal/kernels/rope.metal": 18,
       "mlx/backend/metal/kernels/scaled_dot_product_attention.metal": 42,
-      "mlx/backend/metal/kernels/softmax.metal": 10
+      "mlx/backend/metal/kernels/softmax.metal": 10,
+      "mlx/backend/metal/kernels/ternary.metal": 212
     },
     "dxc_validated_sources": [
       "mlx/backend/metal/kernels/arange.metal",
@@ -429,12 +431,12 @@
       "mlx/backend/metal/kernels/rms_norm.metal",
       "mlx/backend/metal/kernels/rope.metal",
       "mlx/backend/metal/kernels/scaled_dot_product_attention.metal",
-      "mlx/backend/metal/kernels/softmax.metal"
+      "mlx/backend/metal/kernels/softmax.metal",
+      "mlx/backend/metal/kernels/ternary.metal"
     ],
     "directx_toolchain_gaps": {
-      "mlx/backend/metal/kernels/binary_two.metal": "generated HLSL still has target-ABI signature collisions when distinct Metal scalar overloads collapse (https://github.com/CrossGL/crosstl/issues/1694) and structure-valued conditional expressions that require aggregate lowering instead of HLSL struct operators (https://github.com/CrossGL/crosstl/issues/1695)",
+      "mlx/backend/metal/kernels/binary_two.metal": "generated HLSL still has target-ABI signature collisions when distinct Metal scalar overloads collapse (https://github.com/CrossGL/crosstl/issues/1694) and minimum-precision signed integer division and remainder operations that require widening before DXC compilation (https://github.com/CrossGL/crosstl/issues/1701)",
       "mlx/backend/metal/kernels/random.metal": "union-backed aliases still require storage-preserving HLSL lowering (https://github.com/CrossGL/crosstl/issues/1696); reflected dispatch-grid cbuffer binding and dispatch-plan metadata also remain required before native execution (https://github.com/CrossGL/crosstl/issues/1542)",
-      "mlx/backend/metal/kernels/ternary.metal": "DXC first rejects a structure-valued conditional expression that requires aggregate lowering instead of HLSL struct operators (https://github.com/CrossGL/crosstl/issues/1695); later entries still depend on qualified static-constant and concrete type-trait value materialization (https://github.com/CrossGL/crosstl/issues/1491, https://github.com/CrossGL/crosstl/issues/1524)",
       "mlx/backend/metal/kernels/fence.metal": "the requested mem_device, memory_order_seq_cst, thread_scope_system atomic-fence contract is not representable in HLSL and fails with project.translate.directx-atomic-fence-unsupported (https://github.com/CrossGL/crosstl/issues/1537)"
     },
     "native_runtime_executed": false,
@@ -604,8 +606,8 @@
     "https://github.com/CrossGL/crosstl/issues/1671",
     "https://github.com/CrossGL/crosstl/issues/1672",
     "https://github.com/CrossGL/crosstl/issues/1694",
-    "https://github.com/CrossGL/crosstl/issues/1695",
     "https://github.com/CrossGL/crosstl/issues/1696",
+    "https://github.com/CrossGL/crosstl/issues/1701",
     "https://github.com/CrossGL/crosstl/issues/1312",
     "https://github.com/CrossGL/crosstl/issues/1376",
     "https://github.com/CrossGL/crosstl/issues/1676",
@@ -644,6 +646,7 @@
     "https://github.com/CrossGL/crosstl/issues/1660"
   ],
   "resolved_issues": [
+    "https://github.com/CrossGL/crosstl/issues/1695",
     "https://github.com/CrossGL/crosstl/issues/1667",
     "https://github.com/CrossGL/crosstl/issues/1668",
     "https://github.com/CrossGL/crosstl/issues/1661",

@@ -1304,8 +1304,9 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES
     )
     assert opengl_frontier["project_diagnostic_count"] == 0
-    assert opengl_frontier["glslang_compiled_artifact_count"] == 7
-    assert opengl_frontier["spirv_validated_artifact_count"] == 7
+    assert len(module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES) == 8
+    assert opengl_frontier["glslang_compiled_artifact_count"] == 8
+    assert opengl_frontier["spirv_validated_artifact_count"] == 8
     assert opengl_frontier["glslang_target_environments"] == [
         "opengl",
         "spirv1.3",
@@ -1333,13 +1334,12 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     ) - set(module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES)
     directx_gaps = directx["directx_toolchain_gaps"]
     assert "issues/1694" in directx_gaps[module.MLX_BINARY_TWO_SOURCE]
-    assert "issues/1695" in directx_gaps[module.MLX_BINARY_TWO_SOURCE]
+    assert "issues/1701" in directx_gaps[module.MLX_BINARY_TWO_SOURCE]
     assert "issues/1696" in directx_gaps["mlx/backend/metal/kernels/random.metal"]
     assert "issues/1542" in directx_gaps["mlx/backend/metal/kernels/random.metal"]
-    assert "issues/1695" in directx_gaps["mlx/backend/metal/kernels/ternary.metal"]
-    assert "issues/1491" in directx_gaps["mlx/backend/metal/kernels/ternary.metal"]
-    assert "issues/1524" in directx_gaps["mlx/backend/metal/kernels/ternary.metal"]
+    assert module.MLX_TERNARY_SOURCE not in directx_gaps
     assert "issues/1537" in directx_gaps[module.MLX_FENCE_SOURCE]
+    assert "issues/1695" not in json.dumps(directx_gaps)
     assert "issues/1518" not in json.dumps(directx_gaps)
     assert directx["native_runtime_executed"] is False
     assert directx["runtime_parity_claimed"] is False
@@ -1709,6 +1709,7 @@ def test_arg_reduce_advances_into_clean_toolchain_frontiers():
         module.MLX_ROPE_SOURCE,
         module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
         module.MLX_SOFTMAX_SOURCE,
+        module.MLX_TERNARY_SOURCE,
     )
     assert module.MLX_REDUCED_FRONTIER_SOURCES == tuple(
         sorted(
@@ -1754,6 +1755,41 @@ def test_binary_two_advances_into_opengl_toolchain_frontier_without_source_growt
         "resolved_issue": issue,
         "resolved_by_commit": "db593d19bfa04b7a58ef9f4b6b224842d802173f",
     }
+
+
+def test_opengl_toolchain_frontier_matches_pinned_validator_inventory():
+    module = _load_harness()
+    expected_gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    expected_sources = (
+        module.MLX_ARG_REDUCE_SOURCE,
+        module.MLX_BINARY_TWO_SOURCE,
+        module.MLX_LOGSUMEXP_SOURCE,
+        module.MLX_RMS_NORM_SOURCE,
+        module.MLX_ROPE_SOURCE,
+        module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
+        module.MLX_SOFTMAX_SOURCE,
+        module.MLX_TERNARY_SOURCE,
+    )
+
+    assert module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES == expected_sources
+    assert len(expected_sources) == 8
+    status = expected_gaps["opengl_frontier_status"]
+    assert status["sources"] == list(expected_sources)
+    assert status["source_count"] == 8
+    assert status["artifact_count"] == 8
+    assert status["glslang_compiled_artifact_count"] == 8
+    assert status["spirv_validated_artifact_count"] == 8
+    assert status["runtime_integration_included"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    workflow = MLX_WORKFLOW_PATH.read_text(encoding="utf-8")
+    assert "MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES" in workflow
+    assert "if opengl_frontier_count != 8:" in workflow
+    assert "expected 8 OpenGL toolchain frontier sources" in workflow
 
 
 def test_fence_is_blocked_outside_clean_and_directx_toolchain_frontiers():
@@ -2330,6 +2366,8 @@ def test_opengl_frontier_required_toolchain_compiles_and_validates_artifacts(
         "validate-scaled-dot-product-attention-opengl-spirv",
         "validate-softmax-opengl",
         "validate-softmax-opengl-spirv",
+        "validate-ternary-opengl",
+        "validate-ternary-opengl-spirv",
     ]
     assert commands[1][1][:5] == [
         "/tools/glslangValidator",
@@ -2363,6 +2401,7 @@ def test_opengl_frontier_required_toolchain_compiles_and_validates_artifacts(
     for source in module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES:
         assert source in config
     assert module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE in config
+    assert module.MLX_TERNARY_SOURCE in config
     assert "mlx/backend/metal/kernels/rms_norm.metal" in config
     assert 'targets = ["opengl"]' in config
 
@@ -3670,7 +3709,7 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
     def fake_run_command(name, command, *, log_dir, check=True, timeout_seconds=None):
         commands.append((name, list(command)))
         is_toolchain = name != "translate-directx-vulkan-frontier"
-        # The DXC compile gate runs only on its eight-source frontier; the
+        # The DXC compile gate runs only on its configured source frontier; the
         # translation frontier still emits every clean frontier artifact.
         report_directx_paths = directx_subset_paths if is_toolchain else directx_paths
         report = {
@@ -3788,7 +3827,7 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
     assert "[project.specialization_constants]" in toolchain_config
     for selector, value in module.MLX_FRONTIER_SPECIALIZATION_CONSTANTS.items():
         assert f"{json.dumps(selector)} = {json.dumps(value)}" in toolchain_config
-    # The DXC compile gate is scoped to its eight-source frontier, not the whole
+    # The DXC compile gate is scoped to its configured frontier, not the whole
     # clean translation frontier, so only those sources appear in this config.
     for source in module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES:
         assert source in toolchain_config
@@ -3811,6 +3850,7 @@ def test_directx_toolchain_frontier_matches_pinned_dxc_inventory():
         module.MLX_ROPE_SOURCE,
         module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
         module.MLX_SOFTMAX_SOURCE,
+        module.MLX_TERNARY_SOURCE,
     )
     assert module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES == expected_sources
     assert set(expected_sources) < set(module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES)
@@ -3823,6 +3863,7 @@ def test_directx_toolchain_frontier_matches_pinned_dxc_inventory():
             module.MLX_RMS_NORM_SOURCE,
             module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
             module.MLX_SOFTMAX_SOURCE,
+            module.MLX_TERNARY_SOURCE,
         )
     } == {
         module.MLX_LAYER_NORM_SOURCE: 12,
@@ -3830,10 +3871,13 @@ def test_directx_toolchain_frontier_matches_pinned_dxc_inventory():
         module.MLX_RMS_NORM_SOURCE: 12,
         module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE: 42,
         module.MLX_SOFTMAX_SOURCE: 10,
+        module.MLX_TERNARY_SOURCE: 212,
     }
+    assert len(expected_sources) == 9
     assert module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT == sum(
         module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS.values()
     )
+    assert module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT == 347
     directx_status = gaps["directx_toolchain_status"]
     assert directx_status["specialization_constants"] == (
         module.MLX_FRONTIER_SPECIALIZATION_CONSTANTS
@@ -3845,13 +3889,16 @@ def test_directx_toolchain_frontier_matches_pinned_dxc_inventory():
     assert set(directx_status["directx_toolchain_gaps"]) == {
         module.MLX_BINARY_TWO_SOURCE,
         "mlx/backend/metal/kernels/random.metal",
-        "mlx/backend/metal/kernels/ternary.metal",
         module.MLX_FENCE_SOURCE,
     }
     assert {
         f"https://github.com/CrossGL/crosstl/issues/{issue}"
-        for issue in (1694, 1695, 1696)
+        for issue in (1694, 1696, 1701)
     } <= set(gaps["tracked_issues"])
+    aggregate_issue = "https://github.com/CrossGL/crosstl/issues/1695"
+    assert aggregate_issue in module.RESOLVED_FRONTIER_ISSUES
+    assert aggregate_issue in gaps["resolved_issues"]
+    assert aggregate_issue not in gaps["tracked_issues"]
 
 
 def test_directx_frontier_readme_records_compile_only_scope_and_current_gaps():
@@ -3860,13 +3907,14 @@ def test_directx_frontier_readme_records_compile_only_scope_and_current_gaps():
 
     assert "official DXC v1.9.2602.24 on Windows CI" in readme
     assert (
-        "the eight-source `arange.metal`, `arg_reduce.metal`, `layer_norm.metal`"
+        "the nine-source `arange.metal`, `arg_reduce.metal`, `layer_norm.metal`"
         in normalized_readme
     )
-    assert "11, 24, 12, 6, 12, 18, 42, and 10 entries respectively" in (
+    assert "11, 24, 12, 6, 12, 18, 42, 10, and 212 entries respectively" in (
         normalized_readme
     )
-    for issue in (1694, 1695, 1696, 1542, 1491, 1524, 1537):
+    assert "347 generated compute entries" in normalized_readme
+    for issue in (1694, 1695, 1696, 1701, 1542, 1537):
         assert f"https://github.com/CrossGL/crosstl/issues/{issue}" in readme
     assert "does not dispatch these kernels or establish numerical parity" in (
         normalized_readme
