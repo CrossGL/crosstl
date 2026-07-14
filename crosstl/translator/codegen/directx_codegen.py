@@ -689,6 +689,16 @@ class HLSLCodeGen:
     )
     METAL_TYPE_ALIAS_GLOBALS = frozenset({"bfloat16_t", "float16_t"})
     HLSL_CANONICAL_NARROW_FLOAT_CONSTRUCTORS = frozenset({"bfloat", "bfloat16"})
+    HLSL_CANONICAL_64_BIT_VECTOR_CONSTRUCTORS = frozenset(
+        {
+            "i64vec2",
+            "i64vec3",
+            "i64vec4",
+            "u64vec2",
+            "u64vec3",
+            "u64vec4",
+        }
+    )
     HLSL_INTERPOLATION_MODE_MODIFIERS = {
         "flat": "nointerpolation",
         "nointerpolation": "nointerpolation",
@@ -1367,6 +1377,12 @@ class HLSLCodeGen:
             "vec2<u32>": "uint2",
             "vec3<u32>": "uint3",
             "vec4<u32>": "uint4",
+            "i64vec2": "int64_t2",
+            "i64vec3": "int64_t3",
+            "i64vec4": "int64_t4",
+            "u64vec2": "uint64_t2",
+            "u64vec3": "uint64_t3",
+            "u64vec4": "uint64_t4",
             "vec2<bool>": "bool2",
             "vec3<bool>": "bool3",
             "vec4<bool>": "bool4",
@@ -10364,6 +10380,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if name in self.METAL_TYPE_ALIAS_GLOBALS:
             return self.map_type(name)
         if name in self.HLSL_CANONICAL_NARROW_FLOAT_CONSTRUCTORS:
+            return self.map_type(name)
+        if name in self.HLSL_CANONICAL_64_BIT_VECTOR_CONSTRUCTORS:
             return self.map_type(name)
         generic_vector = self.hlsl_generic_vector_type_name(name)
         if generic_vector is not None:
