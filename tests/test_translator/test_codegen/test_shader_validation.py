@@ -12613,6 +12613,51 @@ def test_generated_hlsl_storage_pointer_element_helpers_validate_with_dxc(tmp_pa
     )
 
 
+def test_translated_metal_typed_resource_auto_pointer_alias_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    metal_source = tmp_path / "typed_resource_auto_pointer_alias.metal"
+    source = tmp_path / "typed_resource_auto_pointer_alias.hlsl"
+    output = tmp_path / "typed_resource_auto_pointer_alias.dxil"
+    metal_source.write_text(
+        """
+#include <metal_stdlib>
+using namespace metal;
+
+kernel void read_alias(
+    const device int* values [[buffer(0)]],
+    device int* results [[buffer(1)]]) {
+    const auto* shifted = values + 2u;
+    results[0] = shifted[1];
+}
+""",
+        encoding="utf-8",
+    )
+    code = crosstl.translate(
+        str(metal_source),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "StructuredBuffer<int> values : register(t0);" in code
+    assert "RWStructuredBuffer<int> results : register(u1);" in code
+    assert "int64_t shifted_offset = int64_t(2u);" in code
+    assert "values[uint((shifted_offset + 1))]" in code
+    assert "auto" not in code
+    assert "int*" not in code
+    assert "int *" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
 def test_generated_hlsl_wave_intrinsics_compute_validates_with_dxc(tmp_path):
     dxc = shutil.which("dxc")
     if dxc is None:

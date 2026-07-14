@@ -7792,6 +7792,37 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             },
         }
 
+    def hlsl_const_auto_resource_pointer_pointee_type(self, node, vtype, binding):
+        if not isinstance(vtype, PointerType):
+            return None
+        pointee_type = self.type_name_string(getattr(vtype, "pointee_type", None))
+        if str(pointee_type or "").strip().lower() != "auto":
+            return None
+
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        if not qualifiers.intersection({"const", "constant"}):
+            return None
+        if self.hlsl_resource_type_name(binding.get("resource_type")) not in {
+            "StructuredBuffer",
+            "RWStructuredBuffer",
+        }:
+            return None
+        if binding.get("pointer_reinterpretation") is not None:
+            return None
+
+        backing_element_type = binding.get("element_type")
+        if backing_element_type is None:
+            return None
+        mapped_element_type = str(self.map_type(backing_element_type) or "").strip()
+        if mapped_element_type.lower() in {"", "auto", "let", "void"} or any(
+            marker in mapped_element_type for marker in ("*", "&", "[")
+        ):
+            return None
+        return backing_element_type
+
     def generate_hlsl_resource_pointer_alias_declaration(self, node, indent):
         pointer_array_declaration = (
             self.generate_hlsl_resource_pointer_array_declaration(node, indent)
@@ -7837,6 +7868,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             else self.hlsl_buffer_pointer_pointee_type(vtype)
         )
         backing_element_type = binding.get("element_type")
+        inferred_element_type = self.hlsl_const_auto_resource_pointer_pointee_type(
+            node, vtype, binding
+        )
+        if inferred_element_type is not None:
+            declared_element_type = inferred_element_type
+            self.local_variable_types[node.name] = f"{inferred_element_type}*"
         if (
             declared_element_type is not None
             and backing_element_type is not None

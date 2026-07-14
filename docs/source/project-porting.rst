@@ -949,6 +949,13 @@ arguments without a concrete structured-buffer root fail with
 ``project.translate.directx-resource-pointer-parameter-unsupported`` rather
 than producing an invalid call.
 
+A local read-only ``auto*`` alias whose initializer resolves to a concrete
+``StructuredBuffer`` or ``RWStructuredBuffer`` root deduces its element type
+from that backing resource before DirectX alias lowering. Direct and nested
+aliases retain the accumulated signed element offset and read-only contract.
+Explicit pointee types remain authoritative: incompatible declared element
+types are rejected rather than being replaced with the backing type.
+
 The contract applies generally to Metal sources handled by project translation.
 The pinned MLX ``BaseMMAFrag::load(&(src[index]))`` call shape is a focused
 acceptance example for retaining the qualified pointer through nested template-

@@ -4454,6 +4454,93 @@ def test_hlsl_metal_resource_pointer_dereferences_lower_to_buffer_indices(tmp_pa
         )
 
 
+def test_hlsl_metal_const_auto_pointer_aliases_use_backing_element_type(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void auto_aliases(
+        const constant int64_t* sourceValues [[buffer(0)]],
+        device int64_t* resultValues [[buffer(1)]]) {
+      const auto* direct = sourceValues;
+      const constant auto* shifted = sourceValues + 3;
+      const auto* nested = shifted + 2;
+      resultValues[0] = direct[0];
+      resultValues[1] = shifted[1];
+      resultValues[2] = nested[3];
+    }
+    """
+    shader_path = tmp_path / "const_auto_pointer_aliases.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "int64_t direct_offset = int64_t(0);" in generated
+    assert "int64_t shifted_offset = int64_t(3);" in generated
+    assert "int64_t nested_offset = int64_t((shifted_offset + 2));" in generated
+    assert "sourceValues[uint(direct_offset)]" in generated
+    assert "sourceValues[uint((shifted_offset + 1))]" in generated
+    assert "sourceValues[uint((nested_offset + 3))]" in generated
+    assert "auto*" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_const_auto_pointer_alias_preserves_readonly_access(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void write_through_const_auto(device float* values [[buffer(0)]]) {
+      const auto* reader = values;
+      const auto* nested = reader + 1;
+      *nested = 1.0f;
+    }
+    """
+    shader_path = tmp_path / "const_auto_pointer_readonly.metal"
+    shader_path.write_text(shader)
+
+    with pytest.raises(ValueError, match="does not provide writable storage"):
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+
+def test_hlsl_metal_explicit_pointer_alias_type_mismatch_still_rejects(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void explicit_mismatch(
+        const device int64_t* sourceValues [[buffer(0)]],
+        device float* resultValues [[buffer(1)]]) {
+      const device float* mismatch = sourceValues;
+      resultValues[0] = mismatch[0];
+    }
+    """
+    shader_path = tmp_path / "explicit_pointer_alias_mismatch.metal"
+    shader_path.write_text(shader)
+
+    with pytest.raises(
+        ValueError,
+        match="changes element type from int64_t to float",
+    ):
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+
 def test_hlsl_storage_pointer_element_argument_lowers_to_resource_offset_pair():
     shader = """
     shader StoragePointerElementArgument {
