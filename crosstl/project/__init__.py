@@ -10,7 +10,7 @@ from .host_reflection import (
     ReflectionDiagnostic,
     reflect_target_host_interface,
 )
-from .native_runtime_drivers import VulkanComputeRuntime
+from .native_runtime_drivers import OpenGLComputeRuntime, VulkanComputeRuntime
 from .pipeline import (
     RUNTIME_DEVICE_RUNNER_MANIFEST_KIND,
     ProjectConfig,
@@ -131,6 +131,7 @@ __all__ = [
     "NativeRuntimeParityAdapter",
     "NativeRuntimeValidationCommand",
     "OpenGLRuntimeParityAdapter",
+    "OpenGLComputeRuntime",
     "RuntimeAdapter",
     "RuntimeAdapterDispatchError",
     "RuntimeAdapterSetupError",

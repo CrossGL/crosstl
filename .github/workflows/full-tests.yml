@@ -230,7 +230,7 @@ jobs:
           - os: ubuntu-latest
             adapter: opengl
             required_tools: glslangValidator
-            install_command: sudo apt-get update && sudo apt-get install -y glslang-tools
+            install_command: sudo apt-get update && sudo apt-get install -y glslang-tools libegl1 libegl-mesa0 libgl1 libgl1-mesa-dri mesa-utils
           - os: ubuntu-latest
             adapter: vulkan
             required_tools: spirv-val,spirv-as
@@ -317,6 +317,11 @@ jobs:
         run: |
           python -m pip install vulkan==1.3.275.1
 
+      - name: Install OpenGL runtime dependency
+        if: matrix.adapter == 'opengl' && steps.probe_runtime_parity.outputs.available == 'true'
+        run: |
+          python -m pip install "moderngl>=5.10,<6"
+
       - name: Run runtime parity tests
         if: steps.probe_runtime_parity.outputs.available == 'true'
         shell: bash
@@ -333,6 +338,18 @@ jobs:
             tests/test_translator/test_native_runtime_drivers.py \
             -k "runtime_parity" \
             --junitxml support/generated/runtime-parity-${{ matrix.adapter }}-${{ matrix.os }}.xml
+
+      - name: Run OpenGL compute runtime test
+        if: matrix.adapter == 'opengl' && steps.probe_runtime_parity.outputs.available == 'true'
+        shell: bash
+        env:
+          CROSTL_RUN_OPENGL_DEVICE_TEST: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          python -m pytest -q \
+            tests/test_translator/test_native_runtime_drivers.py \
+            -k "opengl_compute_runtime_executes_vector_scale_on_device"
 
       - name: Record unavailable runtime parity adapter
         if: steps.probe_runtime_parity.outputs.available != 'true'

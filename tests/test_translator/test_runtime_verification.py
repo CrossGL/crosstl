@@ -1856,6 +1856,7 @@ def test_runtime_parity_native_factories_create_target_adapters():
     assert set(adapters) == {"directx", "opengl", "vulkan"}
     assert isinstance(adapters["directx"], DirectXRuntimeParityAdapter)
     assert isinstance(adapters["opengl"], OpenGLRuntimeParityAdapter)
+    assert adapters["opengl"].runtime.name == "opengl-compute-runtime"
     assert isinstance(adapters["vulkan"], VulkanRuntimeParityAdapter)
     assert isinstance(
         native_runtime_parity_adapter("DirectX"), DirectXRuntimeParityAdapter
