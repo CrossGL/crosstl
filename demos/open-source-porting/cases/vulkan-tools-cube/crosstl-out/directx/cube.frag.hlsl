@@ -16,12 +16,12 @@ float linearToSrgb(float linear_) {
     return float(0);
 }
 
-float3 linearToSrgb(float3 linear_) {
-    return float3(linearToSrgb(linear_.r), linearToSrgb(linear_.g), linearToSrgb(linear_.b));
-}
-
 float4 linearToSrgb(float4 linear_) {
     return float4(linearToSrgb(linear_.rgb), linear_.a);
+}
+
+float3 linearToSrgb(float3 linear_) {
+    return float3(linearToSrgb(linear_.r), linearToSrgb(linear_.g), linearToSrgb(linear_.b));
 }
 
 // Fragment Shader
