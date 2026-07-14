@@ -32425,6 +32425,83 @@ def test_translate_project_lowers_mlx_auto_pointer_alias_to_directx(tmp_path):
     assert_directx_compute_validates_if_available(generated, tmp_path)
 
 
+def test_translate_project_preserves_metal_conditional_pointer_alias_grouping(
+    tmp_path,
+):
+    # Reduced from MLX steel_gemm_masked.h at
+    # 4367c73b60541ddd5a266ce4644fd93d20223b6e.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source_path = repo / "conditional_pointer_alias.metal"
+    source_path.write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            kernel void conditional_pointer_alias(
+                const device int* mask_strides [[buffer(0)]],
+                device int* output [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                bool dynamic_flag = gid != 0;
+                const device int* first_alias =
+                    mask_strides + (dynamic_flag ? 2 : 0);
+                const device int* nested_alias = first_alias + 1;
+                output[gid] = nested_alias[gid];
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx", "opengl"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["artifactCount"] == 2
+    assert payload["summary"]["translatedCount"] == 2
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+
+    artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
+    assert set(artifacts) == {"directx", "opengl"}
+    assert all(artifact["status"] == "translated" for artifact in artifacts.values())
+    generated = {
+        target: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for target, artifact in artifacts.items()
+    }
+
+    assert "StructuredBuffer<int> mask_strides : register(t0);" in generated["directx"]
+    assert (
+        "layout(std430, binding = 0) readonly buffer mask_stridesBuffer { int mask_strides[]; };"
+        in generated["opengl"]
+    )
+    for output in generated.values():
+        assert re.search(r"\bmask_strides\s*\[[^\]\n]*nested_alias_offset", output)
+        assert re.search(
+            r"\bfirst_alias_offset\s*=\s*[^;\n]*"
+            r"\(\s*dynamic_flag\s*\?\s*2\s*:\s*0\s*\)",
+            output,
+        )
+        assert (
+            re.search(
+                r"\b(?:const\s+)?(?:device\s+)?int\s*\*\s*"
+                r"(?:mask_strides|first_alias|nested_alias)\b",
+                output,
+            )
+            is None
+        )
+        assert (
+            re.search(
+                r"\(\s*mask_strides\s*\+\s*dynamic_flag\s*\)\s*\?\s*2\s*:\s*0",
+                output,
+            )
+            is None
+        )
+
+
 def test_translate_project_resolves_mlx_sort_reference_thread_ids_for_vulkan(
     tmp_path,
 ):

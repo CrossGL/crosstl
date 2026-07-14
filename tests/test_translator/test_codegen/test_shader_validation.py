@@ -6720,6 +6720,20 @@ shader TransitiveShadowedConstIndexValidation {
 """
 
 
+METAL_CONDITIONAL_TYPED_RESOURCE_POINTER_ALIAS_SOURCE = """\
+#include <metal_stdlib>
+using namespace metal;
+
+kernel void read_alias(
+    const device int* values [[buffer(0)]],
+    device int* results [[buffer(1)]]) {
+    bool flag = values[0] != 0;
+    const device int* shifted = values + (flag ? 2u : 1u);
+    results[0] = shifted[1];
+}
+"""
+
+
 def run_validator(command):
     result = subprocess.run(command, capture_output=True, text=True)
     diagnostics = f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
@@ -11875,6 +11889,36 @@ def test_generated_glsl_compute_stage_validates_with_glslang(tmp_path):
     run_validator([glslang, "-S", "comp", str(source)])
 
 
+def test_translated_metal_conditional_typed_resource_pointer_alias_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    metal_source = tmp_path / "conditional_typed_resource_pointer_alias.metal"
+    source = tmp_path / "conditional_typed_resource_pointer_alias.comp"
+    metal_source.write_text(
+        METAL_CONDITIONAL_TYPED_RESOURCE_POINTER_ALIAS_SOURCE,
+        encoding="utf-8",
+    )
+    code = crosstl.translate(
+        str(metal_source),
+        backend="opengl",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "(flag ? 2u : 1u)" in code
+    assert "shifted_offset" in code
+    assert "int*" not in code
+    assert "int *" not in code
+    assert "(values + flag) ?" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "comp", str(source)])
+
+
 def test_generated_glsl_wave_intrinsics_compute_validates_with_glslang(tmp_path):
     glslang = shutil.which("glslangValidator")
     if glslang is None:
@@ -12651,6 +12695,39 @@ kernel void read_alias(
     assert "auto" not in code
     assert "int*" not in code
     assert "int *" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_translated_metal_conditional_typed_resource_pointer_alias_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    metal_source = tmp_path / "conditional_typed_resource_pointer_alias.metal"
+    source = tmp_path / "conditional_typed_resource_pointer_alias.hlsl"
+    output = tmp_path / "conditional_typed_resource_pointer_alias.dxil"
+    metal_source.write_text(
+        METAL_CONDITIONAL_TYPED_RESOURCE_POINTER_ALIAS_SOURCE,
+        encoding="utf-8",
+    )
+    code = crosstl.translate(
+        str(metal_source),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "(flag ? 2u : 1u)" in code
+    assert "shifted_offset" in code
+    assert "int*" not in code
+    assert "int *" not in code
+    assert "(values + flag) ?" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(
