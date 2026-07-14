@@ -18,6 +18,11 @@ setup(
     ],
     python_requires=">=3.8",
     install_requires=["gast", "tomli; python_version<'3.11'"],
+    extras_require={
+        "directx-runtime": [
+            "compushady>=0.17.5,<0.18; platform_system=='Windows'",
+        ],
+    },
     entry_points={
         "console_scripts": [
             "crosstl=crosstl._crosstl:main",

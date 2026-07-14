@@ -4,6 +4,7 @@ import shutil
 import struct
 import subprocess
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -13,6 +14,7 @@ from crosstl.project.native_runtime_drivers import (
     DirectXComputeRuntime,
     OpenGLComputeRuntime,
     VulkanComputeRuntime,
+    _compushady_backend_name,
     _first_vulkan_handle,
     _prepare_directx_buffers,
     _prepare_directx_constants,
@@ -301,6 +303,12 @@ def test_directx_compute_runtime_reports_wrong_compushady_backend(tmp_path):
     assert availability.details["reasonKind"] == "backend-unavailable"
     assert availability.details["requiredBackend"] == "d3d12"
     assert availability.details["activeBackend"] == "vulkan"
+
+
+def test_compushady_backend_name_accepts_imported_backend_module():
+    backend = ModuleType("compushady.backends.d3d12")
+
+    assert _compushady_backend_name(backend) == "d3d12"
 
 
 def test_directx_compute_runtime_reports_device_initialization_failure(tmp_path):

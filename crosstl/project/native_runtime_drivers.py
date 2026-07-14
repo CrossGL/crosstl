@@ -1363,7 +1363,9 @@ def _read_mapped_memory(mapped: Any, size: int) -> bytes:
 
 
 def _compushady_backend_name(backend: Any) -> str:
-    value = getattr(backend, "name", backend if isinstance(backend, str) else "")
+    value = getattr(backend, "name", None) or getattr(backend, "__name__", None)
+    if value is None and isinstance(backend, str):
+        value = backend
     return str(value or "").strip().lower().rsplit(".", 1)[-1]
 
 
