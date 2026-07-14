@@ -404,6 +404,32 @@ class DirectXAggregateInitializerError(ValueError):
         self.source_location = source_location
 
 
+class DirectXAggregateConditionalError(ValueError):
+    """Raised when an aggregate conditional has no faithful HLSL lowering."""
+
+    project_diagnostic_code = (
+        "project.translate.directx-aggregate-conditional-unsupported"
+    )
+    missing_capabilities = ("directx.aggregate-conditional-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        aggregate_type=None,
+        target="HLSL",
+        context=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.aggregate_type = aggregate_type
+        self.target = target
+        self.context = context
+        self.reason = reason
+        self.source_location = source_location
+
+
 class DirectXPrivatePointerParameterError(ValueError):
     """Raised when a private pointer cannot become a fixed HLSL array."""
 
@@ -5733,6 +5759,33 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
                 return self.hlsl_record_generated_statement_int_constants(stmt, code)
             if initial_value is not None:
+                aggregate_init = (
+                    self.generate_hlsl_aggregate_conditional_initialization(
+                        initial_value,
+                        declaration,
+                        stmt_name,
+                        vtype,
+                        indent,
+                    )
+                )
+                if aggregate_init is not None:
+                    return self.hlsl_record_generated_statement_int_constants(
+                        stmt, aggregate_init
+                    )
+                aggregate_value = (
+                    self.render_hlsl_aggregate_conditional_value_expression(
+                        initial_value,
+                        vtype,
+                        indent,
+                        context="initializer",
+                    )
+                )
+                if aggregate_value is not None:
+                    aggregate_code, init_expr = aggregate_value
+                    aggregate_code += f"{indent_str}{declaration} = {init_expr};\n"
+                    return self.hlsl_record_generated_statement_int_constants(
+                        stmt, aggregate_code
+                    )
                 ternary_init = (
                     self.generate_hlsl_typed_buffer_atomic_ternary_initialization(
                         initial_value,
@@ -5805,6 +5858,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return f"{indent_str}{element_type}[{size}] {stmt_name};\n"
 
         elif isinstance(stmt, AssignmentNode):
+            aggregate_assignment = (
+                self.generate_hlsl_aggregate_conditional_assignment_statement(
+                    stmt, indent
+                )
+            )
+            if aggregate_assignment is not None:
+                return self.hlsl_record_generated_statement_int_constants(
+                    stmt, aggregate_assignment
+                )
             ternary_assignment = (
                 self.generate_hlsl_typed_buffer_atomic_ternary_assignment_statement(
                     stmt, indent
@@ -5871,6 +5933,23 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                             code += ", "
                     return f"{indent_str}return {code};\n"
                 else:
+                    aggregate_return = self.generate_hlsl_aggregate_conditional_return(
+                        stmt.value, indent
+                    )
+                    if aggregate_return is not None:
+                        return aggregate_return
+                    aggregate_value = (
+                        self.render_hlsl_aggregate_conditional_value_expression(
+                            stmt.value,
+                            self.current_function_return_type,
+                            indent,
+                            context="return",
+                        )
+                    )
+                    if aggregate_value is not None:
+                        aggregate_code, return_expr = aggregate_value
+                        aggregate_code += f"{indent_str}return {return_expr};\n"
+                        return aggregate_code
                     ternary_return = (
                         self.generate_hlsl_typed_buffer_atomic_ternary_return(
                             stmt.value, indent
@@ -5929,6 +6008,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 if tail_return is not None:
                     return tail_return
                 if isinstance(getattr(stmt, "expression", None), AssignmentNode):
+                    aggregate_assignment = (
+                        self.generate_hlsl_aggregate_conditional_assignment_statement(
+                            stmt.expression, indent
+                        )
+                    )
+                    if aggregate_assignment is not None:
+                        return self.hlsl_record_generated_statement_int_constants(
+                            stmt, aggregate_assignment
+                        )
                     ternary_assignment = self.generate_hlsl_typed_buffer_atomic_ternary_assignment_statement(
                         stmt.expression, indent
                     )
@@ -5949,6 +6037,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                             self.generate_assignment(stmt.expression), indent
                         ),
                     )
+                aggregate_value = (
+                    self.render_hlsl_aggregate_conditional_value_expression(
+                        stmt.expression,
+                        self.expression_result_type(stmt.expression),
+                        indent,
+                        context="expression-statement",
+                    )
+                )
+                if aggregate_value is not None:
+                    aggregate_code, expression = aggregate_value
+                    return f"{aggregate_code}{indent_str}{expression};\n"
                 atomic_statement = self.generate_hlsl_typed_buffer_atomic_statement(
                     stmt.expression
                 )
@@ -5982,6 +6081,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return f"{indent_str}{self.generate_expression(stmt)};\n"
 
         else:
+            aggregate_value = self.render_hlsl_aggregate_conditional_value_expression(
+                stmt,
+                self.expression_result_type(stmt),
+                indent,
+                context="expression-statement",
+            )
+            if aggregate_value is not None:
+                aggregate_code, expression = aggregate_value
+                return f"{aggregate_code}{indent_str}{expression};\n"
             atomic_statement = self.generate_hlsl_typed_buffer_atomic_statement(stmt)
             if atomic_statement is not None:
                 return self.generate_statement_code(atomic_statement, indent)
@@ -6012,6 +6120,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return_type = self.type_name_string(self.current_function_return_type)
         if not return_type or return_type == "void":
             return None
+
+        aggregate_return = self.generate_hlsl_aggregate_conditional_return(
+            stmt.expression, indent
+        )
+        if aggregate_return is not None:
+            return aggregate_return
+
+        aggregate_value = self.render_hlsl_aggregate_conditional_value_expression(
+            stmt.expression,
+            return_type,
+            indent,
+            context="return",
+        )
+        if aggregate_value is not None:
+            aggregate_code, value = aggregate_value
+            return f"{aggregate_code}{'    ' * indent}return {value};\n"
 
         indent_str = "    " * indent
         value = self.generate_expression_with_expected(stmt.expression, return_type)
@@ -9759,6 +9883,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return f"{obj}.{member}"
         elif hasattr(expr, "__class__") and "TernaryOp" in str(expr.__class__):
             expected_type = self.current_expression_expected_type
+            aggregate_type = self.hlsl_aggregate_conditional_type(expr, expected_type)
+            if aggregate_type is not None:
+                self.hlsl_aggregate_conditional_error(
+                    expr,
+                    aggregate_type=aggregate_type,
+                    context="expression",
+                    reason="statement-context-required",
+                    detail=(
+                        "HLSL aggregate selection requires a temporary or direct "
+                        "statement control flow"
+                    ),
+                )
             condition = self.generate_expression_with_expected(
                 getattr(expr, "condition", ""), "bool"
             )
@@ -25681,6 +25817,482 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         code += f"{indent_str}{parts['intrinsic']}({', '.join(call_args)});\n"
         code += f"{indent_str}return {original};\n"
         return code
+
+    def hlsl_is_ternary_expression(self, expr):
+        return isinstance(expr, TernaryOpNode) or (
+            hasattr(expr, "__class__") and "TernaryOp" in str(expr.__class__)
+        )
+
+    def hlsl_aggregate_value_type(self, type_name):
+        type_name = self.type_name_string(type_name)
+        if not type_name:
+            return None
+        mapped_type = self.map_type(type_name)
+        if self.hlsl_struct_constructor_fields(mapped_type) is not None:
+            return mapped_type
+        if self.hlsl_outer_array_type(mapped_type) is not None:
+            return mapped_type
+        return None
+
+    def hlsl_aggregate_conditional_type(self, expr, expected_type=None):
+        if not self.hlsl_is_ternary_expression(expr):
+            return None
+
+        candidates = [
+            expected_type,
+            self.expression_result_type(expr),
+            self.expression_result_type(getattr(expr, "true_expr", None)),
+            self.expression_result_type(getattr(expr, "false_expr", None)),
+        ]
+        for candidate in candidates:
+            aggregate_type = self.hlsl_aggregate_value_type(candidate)
+            if aggregate_type is not None:
+                return aggregate_type
+        return None
+
+    def hlsl_first_aggregate_conditional(self, expr, expected_type=None):
+        aggregate_type = self.hlsl_aggregate_conditional_type(expr, expected_type)
+        if aggregate_type is not None:
+            return expr, aggregate_type
+        for node in self.walk_ast(expr):
+            if node is expr:
+                continue
+            aggregate_type = self.hlsl_aggregate_conditional_type(node)
+            if aggregate_type is not None:
+                return node, aggregate_type
+        return None, None
+
+    def hlsl_aggregate_conditional_error(
+        self,
+        expr,
+        *,
+        aggregate_type,
+        context,
+        reason,
+        detail,
+    ):
+        type_name = self.map_type(aggregate_type) if aggregate_type else None
+        display_type = type_name or "<unresolved>"
+        raise DirectXAggregateConditionalError(
+            "DirectX cannot lower aggregate conditional value "
+            f"'{display_type}' in {context}: {detail}",
+            aggregate_type=type_name,
+            target="HLSL",
+            context=context,
+            reason=reason,
+            source_location=getattr(expr, "source_location", None),
+        )
+
+    def hlsl_expression_has_observable_side_effects(self, expr):
+        for node in self.walk_ast(expr):
+            if isinstance(node, AssignmentNode):
+                return True
+            if isinstance(node, UnaryOpNode) and getattr(node, "op", None) in {
+                "++",
+                "--",
+            }:
+                return True
+            if isinstance(node, FunctionCallNode) or (
+                hasattr(node, "__class__") and "FunctionCall" in str(node.__class__)
+            ):
+                return True
+        return False
+
+    def render_hlsl_statement_value_expression(
+        self, expr, expected_type, indent, *, context
+    ):
+        aggregate_value = self.render_hlsl_aggregate_conditional_value_expression(
+            expr,
+            expected_type,
+            indent,
+            context=context,
+        )
+        if aggregate_value is not None:
+            return aggregate_value
+
+        if self.hlsl_expression_contains_typed_buffer_atomic(expr):
+            return self.render_hlsl_typed_buffer_atomic_value_expression(
+                expr, expected_type, indent
+            )
+
+        lifted_atomic = self.hlsl_typed_buffer_atomic_lifted_expression(expr)
+        if lifted_atomic is not None:
+            statements, rendered = lifted_atomic
+            return self.generate_statement_code("\n".join(statements), indent), rendered
+
+        return "", self.generate_expression_with_expected(expr, expected_type)
+
+    def hlsl_aggregate_conditional_declaration(self, type_name, variable_name):
+        return format_c_style_array_declaration(self.map_type(type_name), variable_name)
+
+    def render_hlsl_aggregate_array_copy(
+        self,
+        target,
+        source,
+        expected_type,
+        root_expr,
+        indent,
+        *,
+        context,
+    ):
+        try:
+            _mapped_type, extent, element_type = (
+                self.hlsl_fixed_array_aggregate_contract(root_expr, expected_type)
+            )
+        except DirectXAggregateInitializerError as error:
+            self.hlsl_aggregate_conditional_error(
+                root_expr,
+                aggregate_type=expected_type,
+                context=context,
+                reason="array-shape-unresolved",
+                detail=str(error),
+            )
+
+        code = ""
+        for index in range(extent):
+            child_target = f"{target}[{index}]"
+            child_source = f"{source}[{index}]"
+            if self.hlsl_outer_array_type(element_type) is not None:
+                code += self.render_hlsl_aggregate_array_copy(
+                    child_target,
+                    child_source,
+                    element_type,
+                    root_expr,
+                    indent,
+                    context=context,
+                )
+            else:
+                code += f"{'    ' * indent}{child_target} = {child_source};\n"
+        return code
+
+    def render_hlsl_aggregate_conditional_branch_assignment(
+        self,
+        expr,
+        target,
+        expected_type,
+        indent,
+        *,
+        context,
+    ):
+        if self.hlsl_aggregate_conditional_type(expr, expected_type) is not None:
+            return self.generate_hlsl_aggregate_conditional_assignment(
+                expr,
+                target,
+                "=",
+                expected_type,
+                indent,
+                context=context,
+            )
+
+        if self.hlsl_outer_array_type(expected_type) is not None:
+            if isinstance(expr, ArrayLiteralNode):
+                statements = self.hlsl_aggregate_assignment_statements(
+                    target,
+                    expr,
+                    expected_type,
+                    expr,
+                )
+                return self.generate_statement_code("\n".join(statements), indent)
+            if not self.hlsl_repeatable_array_assignment_target(expr):
+                self.hlsl_aggregate_conditional_error(
+                    expr,
+                    aggregate_type=expected_type,
+                    context=context,
+                    reason="array-branch-evaluation",
+                    detail=(
+                        "the selected array branch cannot be evaluated once and "
+                        "copied element by element"
+                    ),
+                )
+            source = self.generate_expression(expr)
+            return self.render_hlsl_aggregate_array_copy(
+                target,
+                source,
+                expected_type,
+                expr,
+                indent,
+                context=context,
+            )
+
+        struct_initialization = self.render_hlsl_struct_value_initialization(
+            target, expected_type, expr, indent
+        )
+        if struct_initialization is not None:
+            return struct_initialization
+
+        code, rendered = self.render_hlsl_statement_value_expression(
+            expr,
+            expected_type,
+            indent,
+            context=context,
+        )
+        return f"{code}{'    ' * indent}{target} = {rendered};\n"
+
+    def generate_hlsl_aggregate_conditional_assignment(
+        self,
+        expr,
+        target,
+        operator,
+        expected_type,
+        indent,
+        *,
+        context,
+    ):
+        aggregate_type = self.hlsl_aggregate_conditional_type(expr, expected_type)
+        if aggregate_type is None:
+            return None
+        if operator != "=":
+            self.hlsl_aggregate_conditional_error(
+                expr,
+                aggregate_type=aggregate_type,
+                context=context,
+                reason="unsupported-assignment-operator",
+                detail=f"operator '{operator}' has no aggregate assignment contract",
+            )
+
+        condition = getattr(expr, "condition", None)
+        condition_code, rendered_condition = (
+            self.render_hlsl_statement_value_expression(
+                condition,
+                "bool",
+                indent,
+                context="condition",
+            )
+        )
+        indent_str = "    " * indent
+        code = condition_code
+        code += f"{indent_str}if ({rendered_condition}) {{\n"
+        code += self.render_hlsl_aggregate_conditional_branch_assignment(
+            getattr(expr, "true_expr", None),
+            target,
+            aggregate_type,
+            indent + 1,
+            context=context,
+        )
+        code += f"{indent_str}}} else {{\n"
+        code += self.render_hlsl_aggregate_conditional_branch_assignment(
+            getattr(expr, "false_expr", None),
+            target,
+            aggregate_type,
+            indent + 1,
+            context=context,
+        )
+        code += f"{indent_str}}}\n"
+        return code
+
+    def generate_hlsl_aggregate_conditional_initialization(
+        self,
+        expr,
+        declaration,
+        target,
+        expected_type,
+        indent,
+    ):
+        aggregate_type = self.hlsl_aggregate_conditional_type(expr, expected_type)
+        if aggregate_type is None:
+            return None
+        indent_str = "    " * indent
+        code = f"{indent_str}{declaration};\n"
+        code += self.generate_hlsl_aggregate_conditional_assignment(
+            expr,
+            target,
+            "=",
+            aggregate_type,
+            indent,
+            context="initializer",
+        )
+        return code
+
+    def generate_hlsl_aggregate_conditional_assignment_statement(self, stmt, indent):
+        if hasattr(stmt, "target") and hasattr(stmt, "value"):
+            target = stmt.target
+            value = stmt.value
+            operator = getattr(stmt, "operator", "=")
+        else:
+            target = stmt.left
+            value = stmt.right
+            operator = getattr(stmt, "operator", "=")
+
+        target_type = self.expression_result_type(target)
+        if self.hlsl_aggregate_conditional_type(value, target_type) is None:
+            return None
+        return self.generate_hlsl_aggregate_conditional_assignment(
+            value,
+            self.generate_expression(target),
+            operator,
+            target_type,
+            indent,
+            context="assignment",
+        )
+
+    def generate_hlsl_aggregate_conditional_return(self, expr, indent=0):
+        aggregate_type = self.hlsl_aggregate_conditional_type(
+            expr, self.current_function_return_type
+        )
+        if aggregate_type is None:
+            return None
+
+        condition_code, rendered_condition = (
+            self.render_hlsl_statement_value_expression(
+                getattr(expr, "condition", None),
+                "bool",
+                indent,
+                context="condition",
+            )
+        )
+        indent_str = "    " * indent
+        code = condition_code
+        code += f"{indent_str}if ({rendered_condition}) {{\n"
+        code += self.generate_hlsl_aggregate_conditional_return_branch(
+            getattr(expr, "true_expr", None), aggregate_type, indent + 1
+        )
+        code += f"{indent_str}}} else {{\n"
+        code += self.generate_hlsl_aggregate_conditional_return_branch(
+            getattr(expr, "false_expr", None), aggregate_type, indent + 1
+        )
+        code += f"{indent_str}}}\n"
+        return code
+
+    def generate_hlsl_aggregate_conditional_return_branch(
+        self, expr, expected_type, indent
+    ):
+        nested = self.generate_hlsl_aggregate_conditional_return(expr, indent)
+        if nested is not None:
+            return nested
+
+        struct_return = self.render_hlsl_struct_return(expr, indent)
+        if struct_return is not None:
+            return struct_return
+
+        code, rendered = self.render_hlsl_statement_value_expression(
+            expr,
+            expected_type,
+            indent,
+            context="return",
+        )
+        return f"{code}{'    ' * indent}return {rendered};\n"
+
+    def materialize_hlsl_aggregate_conditional(
+        self, expr, expected_type, indent, *, context
+    ):
+        aggregate_type = self.hlsl_aggregate_conditional_type(expr, expected_type)
+        if aggregate_type is None:
+            return None
+        temp_name = self.next_hlsl_temp_variable("aggregate_conditional")
+        self.local_variable_types[temp_name] = aggregate_type
+        declaration = self.hlsl_aggregate_conditional_declaration(
+            aggregate_type, temp_name
+        )
+        indent_str = "    " * indent
+        code = f"{indent_str}{declaration};\n"
+        code += self.generate_hlsl_aggregate_conditional_assignment(
+            expr,
+            temp_name,
+            "=",
+            aggregate_type,
+            indent,
+            context=context,
+        )
+        return code, temp_name
+
+    def render_hlsl_aggregate_conditional_value_expression(
+        self, expr, expected_type, indent, *, context
+    ):
+        materialized = self.materialize_hlsl_aggregate_conditional(
+            expr, expected_type, indent, context=context
+        )
+        if materialized is not None:
+            return materialized
+
+        if not (
+            isinstance(expr, FunctionCallNode)
+            or (hasattr(expr, "__class__") and "FunctionCall" in str(expr.__class__))
+        ):
+            return None
+
+        func_name = self.function_call_name(expr)
+        args = list(getattr(expr, "arguments", getattr(expr, "args", [])) or [])
+        parameter_types = self.function_parameter_types.get(func_name) or []
+        aggregate_arguments = {}
+        for index, arg in enumerate(args):
+            argument_type = (
+                parameter_types[index] if index < len(parameter_types) else None
+            )
+            conditional, aggregate_type = self.hlsl_first_aggregate_conditional(
+                arg, argument_type
+            )
+            if conditional is not None:
+                aggregate_arguments[index] = (conditional, aggregate_type)
+
+        if not aggregate_arguments:
+            return None
+
+        first_index = min(aggregate_arguments)
+        first_conditional, first_aggregate_type = aggregate_arguments[first_index]
+        for index, arg in enumerate(args):
+            if index in aggregate_arguments:
+                continue
+            if self.hlsl_expression_has_observable_side_effects(arg):
+                self.hlsl_aggregate_conditional_error(
+                    first_conditional,
+                    aggregate_type=first_aggregate_type,
+                    context="call-argument",
+                    reason="sibling-evaluation-order",
+                    detail=(
+                        "materializing the aggregate argument would reorder another "
+                        "side-effecting argument"
+                    ),
+                )
+
+        rendered_args = []
+        argument_code = ""
+        changed_indices = set()
+
+        for index, arg in enumerate(args):
+            argument_type = (
+                parameter_types[index] if index < len(parameter_types) else None
+            )
+            rendered_argument = self.render_hlsl_aggregate_conditional_value_expression(
+                arg,
+                argument_type,
+                indent,
+                context="call-argument",
+            )
+            if rendered_argument is None:
+                rendered_args.append(
+                    self.generate_expression_with_expected(arg, argument_type)
+                )
+                continue
+
+            code, rendered = rendered_argument
+            argument_code += code
+            rendered_args.append(rendered)
+            changed_indices.add(index)
+
+        if not changed_indices:
+            return None
+
+        if not isinstance(func_name, str) or func_name not in getattr(
+            self, "function_return_types", {}
+        ):
+            self.hlsl_aggregate_conditional_error(
+                first_conditional,
+                aggregate_type=first_aggregate_type,
+                context="call-argument",
+                reason="unsupported-call-target",
+                detail="the callee does not have a materializable user-function contract",
+            )
+
+        specialized_func_name = generic_function_call_name(self, func_name, args)
+        callee = specialized_func_name or self.hlsl_function_call_name(func_name)
+        rendered_call_args = self.generate_call_arguments_from_rendered(
+            func_name,
+            args,
+            rendered_args,
+            private_pointer_func_name=func_name,
+            workgroup_pointer_func_name=func_name,
+        )
+        return argument_code, f"{callee}({', '.join(rendered_call_args)})"
 
     def hlsl_expression_contains_typed_buffer_atomic(self, expr):
         for node in self.walk_ast(expr):
