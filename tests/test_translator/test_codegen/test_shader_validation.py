@@ -2393,6 +2393,39 @@ shader ComputeStageValidation {
 """
 
 
+HLSL_STORAGE_POINTER_ELEMENT_COMPUTE_SHADER = """
+shader StoragePointerElementValidation {
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+        float read_at(const device float* values, uint relative) {
+            return values[relative];
+        }
+
+        float read_nested(const device float* values, uint inner) {
+            return read_at(&values[inner], 1u);
+        }
+
+        void store_at(device float* values, uint relative, float value) {
+            values[relative] = value;
+        }
+
+        void main(
+            StructuredBuffer<float> src @binding(0),
+            RWStructuredBuffer<float> dst @binding(1),
+            uvec3 gid @gl_GlobalInvocationID
+        ) {
+            store_at(
+                &dst[gid.x],
+                2u,
+                read_nested(&src[gid.x], 3u)
+            );
+        }
+    }
+}
+"""
+
+
 COMPUTE_DO_WHILE_SHADER = """
 shader ComputeDoWhileValidation {
     compute {
@@ -12552,6 +12585,27 @@ def test_generated_hlsl_compute_stage_validates_with_dxc(tmp_path):
     code = HLSLCodeGen().generate_stage(
         crosstl.translator.parse(COMPUTE_STAGE_SHADER), "compute"
     )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_storage_pointer_element_helpers_validate_with_dxc(tmp_path):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "storage_pointer_element_helpers.hlsl"
+    output = tmp_path / "storage_pointer_element_helpers.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(HLSL_STORAGE_POINTER_ELEMENT_COMPUTE_SHADER),
+        "compute",
+    )
+    assert "&src[" not in code
+    assert "&dst[" not in code
+    assert "float* values" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

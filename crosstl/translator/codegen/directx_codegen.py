@@ -447,6 +447,36 @@ class DirectXWorkgroupPointerError(ValueError):
         self.source_location = source_location
 
 
+class DirectXResourcePointerParameterError(ValueError):
+    """Raised when a storage-pointer parameter has no faithful HLSL pair."""
+
+    project_diagnostic_code = (
+        "project.translate.directx-resource-pointer-parameter-unsupported"
+    )
+    missing_capabilities = ("directx.resource-pointer-parameter-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        function_name=None,
+        parameter_name=None,
+        address_space=None,
+        expected_access=None,
+        actual_access=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.function_name = function_name
+        self.parameter_name = parameter_name
+        self.address_space = address_space
+        self.expected_access = expected_access
+        self.actual_access = actual_access
+        self.reason = reason
+        self.source_location = source_location
+
+
 class DirectXResourcePointerArrayError(ValueError):
     """Raised when a storage-pointer array has no faithful HLSL lowering."""
 
@@ -1015,6 +1045,8 @@ class HLSLCodeGen:
         self.function_hlsl_workgroup_pointer_parameter_indices = {}
         self.function_hlsl_workgroup_pointer_backing_variants = {}
         self.function_hlsl_workgroup_pointer_base_names = {}
+        self.function_hlsl_resource_pointer_parameters = {}
+        self.function_hlsl_resource_pointer_parameter_indices = {}
         self.hlsl_omitted_function_names = set()
         self.current_hlsl_workgroup_pointer_variant = {}
         self.current_hlsl_workgroup_pointer_base_names = {}
@@ -1603,6 +1635,8 @@ class HLSLCodeGen:
         self.function_hlsl_workgroup_pointer_parameter_indices = {}
         self.function_hlsl_workgroup_pointer_backing_variants = {}
         self.function_hlsl_workgroup_pointer_base_names = {}
+        self.function_hlsl_resource_pointer_parameters = {}
+        self.function_hlsl_resource_pointer_parameter_indices = {}
         self.hlsl_omitted_function_names = set()
         self.current_hlsl_workgroup_pointer_variant = {}
         self.current_hlsl_workgroup_pointer_base_names = {}
@@ -1959,6 +1993,9 @@ class HLSLCodeGen:
                 generic_function_specializations.values()
             ).items():
                 self.function_overloads.setdefault(name, []).extend(overloads)
+        resource_pointer_functions = list(functions)
+        resource_pointer_functions.extend(generic_function_specializations.values())
+        self.collect_hlsl_resource_pointer_parameters(resource_pointer_functions)
         self.function_stage_parameter_dependencies = (
             self.collect_hlsl_function_stage_parameter_dependencies(ast, target_stage)
         )
@@ -4710,6 +4747,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self.local_variable_types[p.name] = self.type_name_string(raw_param_type)
 
             param_decl_type = self.type_name_string(raw_param_type)
+            resource_pointer_contract = self.hlsl_resource_pointer_parameter_contract(
+                p, function_name
+            )
             param_type = self.hlsl_workgroup_pointer_parameter_array_type(
                 p, getattr(func, "name", None)
             )
@@ -4717,6 +4757,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 param_type = self.hlsl_private_pointer_parameter_array_type(
                     p, getattr(func, "name", None)
                 )
+            if param_type is None and resource_pointer_contract is not None:
+                param_type = resource_pointer_contract["resource_type"]
             if param_type is None:
                 param_type = self.map_resource_parameter_type_with_hint(
                     param_decl_type, p, getattr(func, "name", None)
@@ -4827,6 +4869,28 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             params.append(
                 f"{declaration} {semantic_attr}" if semantic_attr else declaration
             )
+            if resource_pointer_contract is not None:
+                used_names = set(self.current_identifier_reserved_names)
+                used_names.update(emitted_param_names)
+                offset_name = self.hlsl_unique_local_identifier(
+                    f"{p.name}_offset", used_names
+                )
+                params.append(f"int64_t {offset_name}")
+                emitted_param_names.add(offset_name)
+                self.current_identifier_reserved_names.add(offset_name)
+                self.local_variable_types[offset_name] = "int64_t"
+                self.current_hlsl_resource_pointer_aliases[p.name] = {
+                    "kind": "resource-pointer",
+                    "root": self.hlsl_declaration_identifier_name(p.name),
+                    "root_kind": "parameter",
+                    "offset": offset_name,
+                    "element_type": resource_pointer_contract["element_type"],
+                    "source_element_type": resource_pointer_contract["element_type"],
+                    "resource_type": resource_pointer_contract["resource_type"],
+                    "address_space": resource_pointer_contract["address_space"],
+                    "access": resource_pointer_contract["access"],
+                    "is_pointer_alias": True,
+                }
             if is_private_pointer_parameter(
                 p
             ) and p.name not in self.function_private_pointer_scalar_parameters.get(
@@ -6869,6 +6933,256 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         return binding
 
+    def hlsl_resource_pointer_parameter_type_node(self, parameter):
+        parameter_type = getattr(
+            parameter, "param_type", getattr(parameter, "vtype", None)
+        )
+        return parameter_type if isinstance(parameter_type, PointerType) else None
+
+    def hlsl_resource_pointer_parameter_address_space(self, parameter):
+        pointer_type = self.hlsl_resource_pointer_parameter_type_node(parameter)
+        if pointer_type is None:
+            return None
+        address_space = str(pointer_type.address_space or "").strip().lower()
+        if not address_space:
+            qualifiers = {
+                str(qualifier).lower()
+                for qualifier in getattr(parameter, "qualifiers", []) or []
+            }
+            address_space = next(
+                (
+                    candidate
+                    for candidate in ("device", "global", "storage")
+                    if candidate in qualifiers
+                ),
+                "",
+            )
+        return address_space or None
+
+    def hlsl_resource_pointer_parameter(self, parameter):
+        return self.hlsl_resource_pointer_parameter_address_space(parameter) in {
+            "device",
+            "global",
+            "storage",
+        }
+
+    def hlsl_resource_pointer_parameter_access(self, parameter):
+        pointer_type = self.hlsl_resource_pointer_parameter_type_node(parameter)
+        access_mode = str(
+            getattr(pointer_type, "access_mode", None) or ""
+        ).lower()
+        access_aliases = {
+            "read": "read",
+            "readonly": "read",
+            "write": "write",
+            "writeonly": "write",
+            "read_write": "read_write",
+            "readwrite": "read_write",
+        }
+        if access_mode in access_aliases:
+            return access_aliases[access_mode]
+
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(parameter, "qualifiers", []) or []
+        }
+        if qualifiers.intersection({"read_write", "readwrite", "inout"}):
+            return "read_write"
+        if qualifiers.intersection({"write", "writeonly", "out"}):
+            return "write"
+        if qualifiers.intersection(
+            {"const", "constant", "read", "readonly", "in"}
+        ):
+            return "read"
+        if pointer_type is not None and not getattr(pointer_type, "is_mutable", True):
+            return "read"
+        return "read_write"
+
+    def hlsl_resource_pointer_parameter_contract(
+        self, parameter, function_name=None
+    ):
+        if not self.hlsl_resource_pointer_parameter(parameter):
+            return None
+        pointer_type = self.hlsl_resource_pointer_parameter_type_node(parameter)
+        pointee_type = getattr(pointer_type, "pointee_type", None)
+        parameter_name = getattr(parameter, "name", None)
+        address_space = self.hlsl_resource_pointer_parameter_address_space(parameter)
+        if isinstance(pointee_type, (PointerType, ArrayType)) or pointee_type is None:
+            raise DirectXResourcePointerParameterError(
+                "DirectX storage pointer parameter "
+                f"'{function_name}.{parameter_name}' has an unsupported pointee "
+                "type",
+                function_name=function_name,
+                parameter_name=parameter_name,
+                address_space=address_space,
+                reason="unsupported-pointee-type",
+                source_location=getattr(parameter, "source_location", None),
+            )
+
+        element_type = self.type_name_string(pointee_type)
+        mapped_element_type = self.map_type(element_type)
+        if not mapped_element_type or any(
+            marker in str(mapped_element_type) for marker in ("*", "&", "[")
+        ):
+            raise DirectXResourcePointerParameterError(
+                "DirectX storage pointer parameter "
+                f"'{function_name}.{parameter_name}' has an unsupported pointee "
+                "type",
+                function_name=function_name,
+                parameter_name=parameter_name,
+                address_space=address_space,
+                reason="unsupported-pointee-type",
+                source_location=getattr(parameter, "source_location", None),
+            )
+
+        access = self.hlsl_resource_pointer_parameter_access(parameter)
+        resource_name = "StructuredBuffer" if access == "read" else "RWStructuredBuffer"
+        return {
+            "address_space": address_space,
+            "access": access,
+            "element_type": element_type,
+            "resource_type": f"{resource_name}<{mapped_element_type}>",
+        }
+
+    def collect_hlsl_resource_pointer_parameters(self, functions):
+        parameters_by_function = {}
+        indices_by_function = {}
+        for function in functions or []:
+            function_name = getattr(function, "name", None)
+            if not function_name:
+                continue
+            parameters = getattr(
+                function, "parameters", getattr(function, "params", [])
+            )
+            pointer_parameters = []
+            pointer_indices = {}
+            for index, parameter in enumerate(parameters):
+                if not self.hlsl_resource_pointer_parameter(parameter):
+                    continue
+                pointer_parameters.append(parameter)
+                pointer_indices[index] = parameter.name
+            if pointer_parameters:
+                parameters_by_function[function_name] = pointer_parameters
+                indices_by_function[function_name] = pointer_indices
+        self.function_hlsl_resource_pointer_parameters = parameters_by_function
+        self.function_hlsl_resource_pointer_parameter_indices = indices_by_function
+
+    def hlsl_resource_pointer_parameter_indices_for_function(self, function_name):
+        indices = self.function_hlsl_resource_pointer_parameter_indices.get(
+            function_name
+        )
+        if indices is not None:
+            return indices
+        materialized_name = self.hlsl_materialized_function_name(function_name)
+        return self.function_hlsl_resource_pointer_parameter_indices.get(
+            materialized_name, {}
+        )
+
+    def hlsl_resource_pointer_parameter_for_call(
+        self, function_name, argument_index
+    ):
+        parameter_name = self.hlsl_resource_pointer_parameter_indices_for_function(
+            function_name
+        ).get(argument_index)
+        if parameter_name is None:
+            return None, function_name
+        materialized_name = self.hlsl_materialized_function_name(function_name)
+        parameters = self.function_hlsl_resource_pointer_parameters.get(
+            function_name
+        ) or self.function_hlsl_resource_pointer_parameters.get(materialized_name, [])
+        parameter = next(
+            (
+                candidate
+                for candidate in parameters
+                if candidate.name == parameter_name
+            ),
+            None,
+        )
+        return parameter, materialized_name
+
+    def hlsl_resource_pointer_access_satisfies(self, actual_access, required_access):
+        if required_access == "read":
+            return actual_access in {"read", "read_write"}
+        if required_access == "write":
+            return actual_access in {"write", "read_write"}
+        return actual_access == "read_write"
+
+    def hlsl_resource_pointer_call_argument_binding(
+        self, function_name, argument_index, argument
+    ):
+        parameter, materialized_name = self.hlsl_resource_pointer_parameter_for_call(
+            function_name, argument_index
+        )
+        if parameter is None:
+            return None
+        parameter_name = parameter.name
+        contract = self.hlsl_resource_pointer_parameter_contract(
+            parameter, materialized_name
+        )
+        binding = self.hlsl_resource_pointer_binding(argument)
+        if binding is None or binding.get("kind") == "workgroup-pointer":
+            raise DirectXResourcePointerParameterError(
+                "DirectX storage pointer argument for "
+                f"'{materialized_name}.{parameter_name}' has no concrete "
+                "StructuredBuffer or RWStructuredBuffer backing resource",
+                function_name=materialized_name,
+                parameter_name=parameter_name,
+                address_space=contract["address_space"],
+                expected_access=contract["access"],
+                reason="call-backing-unresolved",
+                source_location=getattr(argument, "source_location", None),
+            )
+
+        resource_name = self.hlsl_resource_type_name(binding.get("resource_type"))
+        if resource_name not in {"StructuredBuffer", "RWStructuredBuffer"}:
+            raise DirectXResourcePointerParameterError(
+                "DirectX storage pointer argument for "
+                f"'{materialized_name}.{parameter_name}' requires a "
+                "StructuredBuffer or RWStructuredBuffer root",
+                function_name=materialized_name,
+                parameter_name=parameter_name,
+                address_space=contract["address_space"],
+                expected_access=contract["access"],
+                actual_access=binding.get("access"),
+                reason="resource-kind-mismatch",
+                source_location=getattr(argument, "source_location", None),
+            )
+
+        expected_type = self.map_type(contract["element_type"])
+        actual_type = self.map_type(binding.get("element_type"))
+        if not actual_type or actual_type != expected_type:
+            raise DirectXResourcePointerParameterError(
+                "DirectX storage pointer argument for "
+                f"'{materialized_name}.{parameter_name}' changes element type "
+                f"from {actual_type or 'unknown'} to {expected_type}",
+                function_name=materialized_name,
+                parameter_name=parameter_name,
+                address_space=contract["address_space"],
+                expected_access=contract["access"],
+                actual_access=binding.get("access"),
+                reason="element-type-mismatch",
+                source_location=getattr(argument, "source_location", None),
+            )
+
+        actual_access = binding.get("access")
+        if not self.hlsl_resource_pointer_access_satisfies(
+            actual_access, contract["access"]
+        ):
+            raise DirectXResourcePointerParameterError(
+                "DirectX storage pointer argument for "
+                f"'{materialized_name}.{parameter_name}' requires "
+                f"{contract['access']} access but its backing resource provides "
+                f"{actual_access or 'unknown'} access",
+                function_name=materialized_name,
+                parameter_name=parameter_name,
+                address_space=contract["address_space"],
+                expected_access=contract["access"],
+                actual_access=actual_access,
+                reason="access-mismatch",
+                source_location=getattr(argument, "source_location", None),
+            )
+        return binding
+
     def hlsl_workgroup_pointer_call_argument_binding(
         self, function_name, argument_index, argument
     ):
@@ -7706,7 +8020,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         binding = self.hlsl_resource_pointer_binding(pointer_expression)
         if binding is None:
             return None
-        if require_write and binding.get("access") != "read_write":
+        binding_access = binding.get("access")
+        if require_write and not self.hlsl_resource_pointer_access_satisfies(
+            binding_access, "write"
+        ):
             pointer_array_binding = binding.get("pointer_array_binding")
             if pointer_array_binding is not None:
                 raise self.hlsl_resource_pointer_array_error(
@@ -7719,6 +8036,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             name = getattr(pointer_expression, "name", None) or str(pointer_expression)
             raise ValueError(
                 f"DirectX resource pointer '{name}' does not provide writable storage"
+            )
+        if not require_write and binding_access == "write":
+            name = getattr(pointer_expression, "name", None) or str(pointer_expression)
+            raise DirectXResourcePointerParameterError(
+                f"DirectX resource pointer '{name}' does not provide readable storage",
+                function_name=self.current_function_name,
+                parameter_name=getattr(pointer_expression, "name", None),
+                address_space=binding.get("address_space", "storage"),
+                expected_access="read",
+                actual_access=binding_access,
+                reason="read-through-writeonly-pointer",
+                source_location=getattr(pointer_expression, "source_location", None),
             )
         reinterpretation = binding.get("pointer_reinterpretation")
         if require_write and reinterpretation is not None:
@@ -22310,6 +22639,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 workgroup_pointer_func_name, {}
             )
         )
+        resource_pointer_indices = (
+            self.hlsl_resource_pointer_parameter_indices_for_function(
+                workgroup_pointer_func_name
+            )
+        )
         rendered_args = []
         for index, arg in enumerate(args):
             expected_type = (
@@ -22328,7 +22662,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         "argument; a materialized array temporary is required"
                     ),
                 )
-            if index in workgroup_pointer_indices:
+            if index in workgroup_pointer_indices or index in resource_pointer_indices:
                 rendered_args.append("")
             else:
                 rendered_args.append(
@@ -22368,17 +22702,28 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     ]
                 )
             else:
-                private_binding = self.hlsl_private_pointer_call_argument_binding(
-                    private_pointer_func_name, index, arg
+                resource_binding = self.hlsl_resource_pointer_call_argument_binding(
+                    workgroup_pointer_func_name, index, arg
                 )
-                if private_binding is None:
-                    generated_args.append(rendered_args[index])
-                elif private_binding.get("scalar"):
-                    generated_args.append(private_binding["backing"])
-                else:
+                if resource_binding is not None:
                     generated_args.extend(
-                        [private_binding["backing"], private_binding["offset"]]
+                        [
+                            resource_binding["root"],
+                            f"int64_t({resource_binding.get('offset', '0')})",
+                        ]
                     )
+                else:
+                    private_binding = self.hlsl_private_pointer_call_argument_binding(
+                        private_pointer_func_name, index, arg
+                    )
+                    if private_binding is None:
+                        generated_args.append(rendered_args[index])
+                    elif private_binding.get("scalar"):
+                        generated_args.append(private_binding["backing"])
+                    else:
+                        generated_args.extend(
+                            [private_binding["backing"], private_binding["offset"]]
+                        )
             if index >= len(param_names):
                 continue
             texture_param = param_names[index]
