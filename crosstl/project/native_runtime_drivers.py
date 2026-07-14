@@ -5,7 +5,9 @@ from __future__ import annotations
 import ctypes
 import importlib
 import math
+import re
 import struct
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -19,6 +21,40 @@ from .runtime_verification import (
     RuntimeExecutorAvailability,
     RuntimeExecutorUnavailable,
 )
+
+
+@dataclass(frozen=True)
+class _PreparedDirectXBuffer:
+    name: str
+    namespace: str
+    binding_index: int
+    dtype: str
+    shape: tuple[int, ...]
+    source: str | None
+    output_name: str | None
+    payload: bytes
+    allocation_size: int
+    stride: int = 0
+
+    @property
+    def size(self) -> int:
+        return len(self.payload)
+
+
+@dataclass
+class _DirectXBufferResource:
+    prepared: _PreparedDirectXBuffer
+    upload_buffer: Any
+    device_buffer: Any
+
+
+@dataclass(frozen=True)
+class _DirectXConstantValue:
+    name: str
+    binding_index: int
+    byte_offset: int
+    dtype: str
+    payload: bytes
 
 
 @dataclass(frozen=True)
@@ -59,6 +95,407 @@ class _PreparedOpenGLBuffer:
     @property
     def size(self) -> int:
         return len(self.payload)
+
+
+class DirectXComputeRuntime:
+    """Optional Direct3D 12 compute runtime for buffer fixtures.
+
+    ``compushady`` is imported lazily and receives the DXIL emitted by the
+    native DirectX parity adapter. Its descriptor-list API represents
+    contiguous CBV, SRV, and UAV registers in space zero; unsupported layouts
+    are rejected before resource creation.
+    """
+
+    name = "directx-compute-runtime"
+    supported_platforms = ("win32", "cygwin")
+
+    def __init__(
+        self,
+        *,
+        module_loader: Any | None = None,
+        platform_name: str | None = None,
+    ):
+        self._module_loader = module_loader or importlib.import_module
+        self.platform_name = platform_name or sys.platform
+
+    def is_available(
+        self,
+        adapter: Any,
+        request: RuntimeExecutionRequest,
+    ) -> RuntimeExecutorAvailability:
+        _ = adapter, request
+        if not self._platform_supported():
+            return RuntimeExecutorAvailability(
+                False,
+                reason=(
+                    "Direct3D 12 compute runtime is available on Windows only; "
+                    f"current platform is {self.platform_name}."
+                ),
+                details={
+                    "reasonKind": "platform-unavailable",
+                    "target": "directx",
+                    "platform": self.platform_name,
+                    "requiredPlatforms": list(self.supported_platforms),
+                },
+            )
+        try:
+            compushady = self._load_compushady()
+        except RuntimeExecutorUnavailable as exc:
+            return RuntimeExecutorAvailability(
+                False,
+                reason=str(exc),
+                details={
+                    "reasonKind": "dependency-unavailable",
+                    "target": "directx",
+                    "missingPythonModules": ["compushady"],
+                },
+            )
+
+        try:
+            backend = compushady.get_backend()
+        except Exception as exc:  # pragma: no cover - depends on local D3D loader
+            return RuntimeExecutorAvailability(
+                False,
+                reason=f"Direct3D 12 backend initialization failed: {exc}",
+                details={
+                    "reasonKind": "direct3d-runtime-unavailable",
+                    "target": "directx",
+                    "error": str(exc),
+                },
+            )
+        backend_name = _compushady_backend_name(backend)
+        if backend_name != "d3d12":
+            return RuntimeExecutorAvailability(
+                False,
+                reason=(
+                    "compushady is not using its Direct3D 12 backend; "
+                    f"active backend is {backend_name or 'unknown'}."
+                ),
+                details={
+                    "reasonKind": "backend-unavailable",
+                    "target": "directx",
+                    "requiredBackend": "d3d12",
+                    "activeBackend": backend_name,
+                },
+            )
+        try:
+            device = self._select_device(compushady)
+        except Exception as exc:  # pragma: no cover - depends on local adapters
+            return RuntimeExecutorAvailability(
+                False,
+                reason=f"No Direct3D 12 compute device is available: {exc}",
+                details={
+                    "reasonKind": "device-unavailable",
+                    "target": "directx",
+                    "runtime": self.name,
+                    "error": str(exc),
+                },
+            )
+        if device is None:
+            return RuntimeExecutorAvailability(
+                False,
+                reason="No Direct3D 12 compute device is available.",
+                details={
+                    "reasonKind": "device-unavailable",
+                    "target": "directx",
+                    "runtime": self.name,
+                },
+            )
+
+        details: dict[str, Any] = {
+            "reasonKind": "available",
+            "target": "directx",
+            "runtime": self.name,
+            "backend": backend_name,
+        }
+        device_name = getattr(device, "name", None)
+        if isinstance(device_name, str) and device_name:
+            details["device"] = device_name
+        for field_name, detail_name in (
+            ("is_hardware", "isHardware"),
+            ("is_discrete", "isDiscrete"),
+        ):
+            value = getattr(device, field_name, None)
+            if isinstance(value, bool):
+                details[detail_name] = value
+        return RuntimeExecutorAvailability(True, details=details)
+
+    def load_artifact(self, adapter: Any, state: Any, module_path: Path) -> bytes:
+        _ = adapter, state
+        try:
+            shader = Path(module_path).read_bytes()
+        except OSError as exc:
+            raise RuntimeAdapterSetupError(
+                f"DirectX runtime artifact could not be read: {exc}",
+                details={
+                    "target": "directx",
+                    "reasonKind": "artifact-read-failed",
+                    "modulePath": str(module_path),
+                },
+            ) from exc
+        if not shader:
+            raise RuntimeAdapterSetupError(
+                "DirectX runtime artifact is empty.",
+                details={
+                    "target": "directx",
+                    "reasonKind": "artifact-empty",
+                    "modulePath": str(module_path),
+                },
+            )
+        return shader
+
+    def dispatch(
+        self,
+        adapter: Any,
+        state: Any,
+        request: NativeRuntimeDispatchRequest,
+    ) -> dict[str, Mapping[str, Any]]:
+        _ = adapter, state
+        if not self._platform_supported():
+            raise RuntimeExecutorUnavailable(
+                "Direct3D 12 compute runtime is available on Windows only."
+            )
+        if (
+            request.dispatch is not None
+            and request.dispatch.entry_point is not None
+            and request.entry_point is not None
+            and request.dispatch.entry_point != request.entry_point
+        ):
+            raise RuntimeAdapterSetupError(
+                "DirectX runtime entry-point metadata is inconsistent.",
+                details={
+                    "target": "directx",
+                    "reasonKind": "entry-point-mismatch",
+                    "entryPoint": request.entry_point,
+                    "dispatchEntryPoint": request.dispatch.entry_point,
+                },
+            )
+
+        compushady = self._load_compushady()
+        shader = self._shader_code(request)
+        prepared = (
+            *_prepare_directx_buffers(request.buffers),
+            *_prepare_directx_constants(request.constants),
+        )
+        prepared = _validate_directx_register_layout(prepared)
+        workgroup_count = _workgroup_count(request, target="DirectX")
+
+        owned_objects: list[Any] = []
+        resources: list[_DirectXBufferResource] = []
+        compute = None
+        try:
+            try:
+                backend = compushady.get_backend()
+                backend_name = _compushady_backend_name(backend)
+                if backend_name != "d3d12":
+                    raise RuntimeExecutorUnavailable(
+                        "compushady must use its Direct3D 12 backend for DXIL dispatch."
+                    )
+                device = self._select_device(compushady)
+                if device is None:
+                    raise RuntimeExecutorUnavailable(
+                        "No Direct3D 12 compute device is available."
+                    )
+            except RuntimeExecutorUnavailable:
+                raise
+            except Exception as exc:
+                raise RuntimeAdapterSetupError(
+                    f"Direct3D 12 device selection failed: {exc}",
+                    details={
+                        "target": "directx",
+                        "runtime": self.name,
+                        "reasonKind": "device-selection-failed",
+                    },
+                ) from exc
+
+            for item in prepared:
+                try:
+                    resource = self._create_buffer_resource(
+                        compushady,
+                        device,
+                        item,
+                        owned_objects,
+                    )
+                except (RuntimeAdapterSetupError, RuntimeExecutorUnavailable):
+                    raise
+                except Exception as exc:
+                    raise RuntimeAdapterSetupError(
+                        f"DirectX resource creation failed for {item.name!r}: {exc}",
+                        details={
+                            "target": "directx",
+                            "runtime": self.name,
+                            "reasonKind": "resource-creation-failed",
+                            "resource": item.name,
+                            "namespace": item.namespace,
+                            "binding": item.binding_index,
+                        },
+                    ) from exc
+                resources.append(resource)
+
+            bound_resources = {
+                namespace: [
+                    resource.device_buffer
+                    for resource in resources
+                    if resource.prepared.namespace == namespace
+                ]
+                for namespace in ("cbv", "srv", "uav")
+            }
+            try:
+                compute = compushady.Compute(
+                    shader,
+                    cbv=bound_resources["cbv"],
+                    srv=bound_resources["srv"],
+                    uav=bound_resources["uav"],
+                    device=device,
+                )
+                owned_objects.append(compute)
+            except Exception as exc:
+                raise RuntimeAdapterSetupError(
+                    f"DirectX compute pipeline creation failed: {exc}",
+                    details={
+                        "target": "directx",
+                        "runtime": self.name,
+                        "reasonKind": "compute-pipeline-creation-failed",
+                        "cbvCount": len(bound_resources["cbv"]),
+                        "srvCount": len(bound_resources["srv"]),
+                        "uavCount": len(bound_resources["uav"]),
+                    },
+                ) from exc
+            try:
+                compute.dispatch(*workgroup_count)
+            except Exception as exc:
+                raise RuntimeAdapterDispatchError(
+                    f"DirectX compute dispatch failed: {exc}",
+                    details={
+                        "target": "directx",
+                        "runtime": self.name,
+                        "reasonKind": "dispatch-failed",
+                        "workgroupCount": list(workgroup_count),
+                    },
+                ) from exc
+            return self._read_outputs(
+                compushady,
+                device,
+                resources,
+                owned_objects,
+            )
+        except (
+            RuntimeAdapterDispatchError,
+            RuntimeAdapterSetupError,
+            RuntimeExecutorUnavailable,
+        ):
+            raise
+        except Exception as exc:
+            raise RuntimeAdapterDispatchError(
+                f"DirectX compute dispatch failed: {exc}",
+                details={"target": "directx", "runtime": self.name},
+            ) from exc
+        finally:
+            for value in reversed(owned_objects):
+                _release_directx_object(value)
+            resources.clear()
+            compute = None
+
+    def _platform_supported(self) -> bool:
+        return any(
+            self.platform_name.startswith(platform)
+            for platform in self.supported_platforms
+        )
+
+    def _load_compushady(self) -> Any:
+        try:
+            return self._module_loader("compushady")
+        except Exception as exc:
+            raise RuntimeExecutorUnavailable(
+                "compushady is unavailable; install the optional 'compushady' "
+                "package to run DirectX runtime fixtures."
+            ) from exc
+
+    def _select_device(self, compushady: Any) -> Any:
+        get_current_device = getattr(compushady, "get_current_device", None)
+        if callable(get_current_device):
+            return get_current_device()
+        get_best_device = getattr(compushady, "get_best_device", None)
+        if callable(get_best_device):
+            return get_best_device()
+        raise RuntimeExecutorUnavailable(
+            "compushady does not expose a Direct3D device selector."
+        )
+
+    def _shader_code(self, request: NativeRuntimeDispatchRequest) -> bytes:
+        if isinstance(request.loaded_artifact, (bytes, bytearray, memoryview)):
+            shader = bytes(request.loaded_artifact)
+            if shader:
+                return shader
+        return self.load_artifact(None, None, request.module_path)
+
+    def _create_buffer_resource(
+        self,
+        compushady: Any,
+        device: Any,
+        prepared: _PreparedDirectXBuffer,
+        owned_objects: list[Any],
+    ) -> _DirectXBufferResource:
+        upload_buffer = compushady.Buffer(
+            prepared.allocation_size,
+            compushady.HEAP_UPLOAD,
+            device=device,
+        )
+        owned_objects.append(upload_buffer)
+        payload = prepared.payload.ljust(prepared.allocation_size, b"\x00")
+        upload_buffer.upload(payload)
+        device_buffer = compushady.Buffer(
+            prepared.allocation_size,
+            compushady.HEAP_DEFAULT,
+            stride=prepared.stride,
+            device=device,
+        )
+        owned_objects.append(device_buffer)
+        upload_buffer.copy_to(device_buffer)
+        return _DirectXBufferResource(
+            prepared=prepared,
+            upload_buffer=upload_buffer,
+            device_buffer=device_buffer,
+        )
+
+    def _read_outputs(
+        self,
+        compushady: Any,
+        device: Any,
+        resources: Sequence[_DirectXBufferResource],
+        owned_objects: list[Any],
+    ) -> dict[str, Mapping[str, Any]]:
+        outputs: dict[str, Mapping[str, Any]] = {}
+        for resource in resources:
+            prepared = resource.prepared
+            if prepared.source != "expectedOutput":
+                continue
+            try:
+                readback = compushady.Buffer(
+                    prepared.allocation_size,
+                    compushady.HEAP_READBACK,
+                    device=device,
+                )
+                owned_objects.append(readback)
+                resource.device_buffer.copy_to(readback)
+                payload = bytes(readback.readback(prepared.size))
+            except Exception as exc:
+                raise RuntimeAdapterDispatchError(
+                    f"DirectX output readback failed for {prepared.name!r}: {exc}",
+                    details={
+                        "target": "directx",
+                        "runtime": self.name,
+                        "reasonKind": "readback-failed",
+                        "resource": prepared.name,
+                        "binding": prepared.binding_index,
+                    },
+                ) from exc
+            outputs[prepared.output_name or prepared.name] = {
+                "dtype": prepared.dtype,
+                "shape": list(prepared.shape),
+                "values": _unpack_values(payload, prepared.dtype, target="DirectX"),
+            }
+        return outputs
 
 
 class OpenGLComputeRuntime:
@@ -923,6 +1360,590 @@ def _read_mapped_memory(mapped: Any, size: int) -> bytes:
         return byte_view[:size].tobytes()
     finally:
         view.release()
+
+
+def _compushady_backend_name(backend: Any) -> str:
+    value = getattr(backend, "name", backend if isinstance(backend, str) else "")
+    return str(value or "").strip().lower().rsplit(".", 1)[-1]
+
+
+def _release_directx_object(value: Any) -> None:
+    if value is None:
+        return
+    for method_name in ("release", "close"):
+        method = getattr(value, method_name, None)
+        if callable(method):
+            try:
+                method()
+            except Exception:
+                pass
+            return
+
+
+def _prepare_directx_buffers(
+    bindings: Mapping[str, NativeRuntimeBufferBinding],
+) -> tuple[_PreparedDirectXBuffer, ...]:
+    prepared = []
+    for name, binding in bindings.items():
+        resource = binding.binding
+        namespace = _directx_resource_namespace(name, binding)
+        binding_value = resource.binding
+        if binding_value is None:
+            binding_value = resource.index
+        if binding_value is None:
+            raise _directx_setup_error(
+                f"DirectX compute runtime requires an explicit register for {name}.",
+                "register-missing",
+                resource=name,
+                namespace=namespace,
+            )
+        binding_index = _directx_int_field(
+            binding_value,
+            field_name="binding",
+            resource=name,
+            register_prefix=namespace[0],
+        )
+        set_index = _directx_int_field(
+            resource.set,
+            field_name="set",
+            resource=name,
+            default=0,
+        )
+        if set_index != 0:
+            raise _directx_setup_error(
+                "DirectX compute runtime supports register space zero only.",
+                "unsupported-register-space",
+                resource=name,
+                namespace=namespace,
+                binding=binding_index,
+                registerSpace=set_index,
+            )
+        if namespace == "cbv" and binding.source == "expectedOutput":
+            raise _directx_setup_error(
+                "DirectX constant buffers cannot be runtime output resources.",
+                "unsupported-output-resource",
+                resource=name,
+                namespace=namespace,
+                binding=binding_index,
+            )
+
+        dtype = _normalize_directx_dtype(binding.dtype, resource=name)
+        try:
+            shape = tuple(int(value) for value in binding.shape)
+        except (TypeError, ValueError) as exc:
+            raise _directx_setup_error(
+                f"DirectX runtime buffer {name!r} has an invalid shape.",
+                "invalid-buffer-shape",
+                resource=name,
+            ) from exc
+        if any(value < 0 for value in shape):
+            raise _directx_setup_error(
+                f"DirectX runtime buffer {name!r} has a negative shape dimension.",
+                "invalid-buffer-shape",
+                resource=name,
+                shape=list(shape),
+            )
+        element_count = (
+            math.prod(shape) if shape else len(_flatten_values(binding.value))
+        )
+        if element_count <= 0:
+            raise _directx_setup_error(
+                f"DirectX runtime buffer {name!r} has no addressable elements.",
+                "buffer-size-missing",
+                resource=name,
+                shape=list(shape),
+            )
+        if binding.source == "expectedOutput":
+            payload = b"\x00" * (element_count * _dtype_size(dtype))
+        else:
+            try:
+                payload = _pack_values(
+                    binding.value,
+                    dtype,
+                    expected_count=element_count,
+                    target="DirectX",
+                )
+            except (RuntimeExecutorUnavailable, struct.error) as exc:
+                raise _directx_setup_error(
+                    f"DirectX runtime buffer {name!r} could not be packed: {exc}",
+                    "buffer-packing-failed",
+                    resource=name,
+                    dtype=dtype,
+                    shape=list(shape),
+                ) from exc
+
+        stride = _directx_buffer_stride(binding, namespace, dtype, len(payload))
+        allocation_size = (
+            _align_to(len(payload), 256) if namespace == "cbv" else len(payload)
+        )
+        prepared.append(
+            _PreparedDirectXBuffer(
+                name=name,
+                namespace=namespace,
+                binding_index=binding_index,
+                dtype=dtype,
+                shape=shape,
+                source=binding.source,
+                output_name=_runtime_value_name(binding),
+                payload=payload,
+                allocation_size=allocation_size,
+                stride=stride,
+            )
+        )
+    return tuple(
+        sorted(
+            prepared,
+            key=lambda item: (
+                {"cbv": 0, "srv": 1, "uav": 2}[item.namespace],
+                item.binding_index,
+            ),
+        )
+    )
+
+
+def _prepare_directx_constants(
+    bindings: Mapping[str, Any],
+) -> tuple[_PreparedDirectXBuffer, ...]:
+    grouped: dict[int, list[_DirectXConstantValue]] = {}
+    for name, binding in bindings.items():
+        metadata = _directx_constant_metadata(binding)
+        mechanism = str(metadata.get("mechanism") or "").strip().lower()
+        constant_kind = str(binding.constant.kind or "").strip().lower()
+        if mechanism in {"compiled", "compiled-literal", "static"} or (
+            not mechanism
+            and constant_kind
+            in {"scalar-constant", "compile-time-constant", "static-constant"}
+        ):
+            _validate_directx_compiled_constant(name, binding)
+            continue
+        if not mechanism and constant_kind in {"constant-buffer", "cbv", "uniform"}:
+            mechanism = "constant-buffer"
+        if mechanism not in {"constant-buffer", "cbv"}:
+            raise _directx_setup_error(
+                f"DirectX runtime constant {name!r} has no supported binding mechanism.",
+                "unsupported-constant-binding",
+                constant=name,
+                constantKind=binding.constant.kind,
+            )
+
+        binding_value = metadata.get("binding", metadata.get("register"))
+        if binding_value is None:
+            raise _directx_setup_error(
+                f"DirectX runtime constant {name!r} requires a CBV register.",
+                "constant-register-missing",
+                constant=name,
+            )
+        binding_index = _directx_int_field(
+            binding_value,
+            field_name="binding",
+            resource=name,
+            register_prefix="b",
+        )
+        set_index = _directx_int_field(
+            metadata.get("set", metadata.get("space")),
+            field_name="set",
+            resource=name,
+            default=0,
+        )
+        if set_index != 0:
+            raise _directx_setup_error(
+                "DirectX runtime constants support register space zero only.",
+                "unsupported-register-space",
+                constant=name,
+                namespace="cbv",
+                binding=binding_index,
+                registerSpace=set_index,
+            )
+        byte_offset = _directx_int_field(
+            metadata.get("byteOffset", metadata.get("offset")),
+            field_name="byteOffset",
+            resource=name,
+            default=0,
+        )
+        if byte_offset % 4:
+            raise _directx_setup_error(
+                f"DirectX runtime constant {name!r} must be four-byte aligned.",
+                "constant-offset-invalid",
+                constant=name,
+                byteOffset=byte_offset,
+            )
+        dtype = _normalize_directx_dtype(binding.constant.dtype, resource=name)
+        values = _flatten_values(binding.value)
+        if not values:
+            raise _directx_setup_error(
+                f"DirectX runtime constant {name!r} has no bound value.",
+                "constant-value-missing",
+                constant=name,
+            )
+        try:
+            payload = _pack_values(
+                binding.value,
+                dtype,
+                expected_count=len(values),
+                target="DirectX",
+            )
+        except (RuntimeExecutorUnavailable, struct.error) as exc:
+            raise _directx_setup_error(
+                f"DirectX runtime constant {name!r} could not be packed: {exc}",
+                "constant-packing-failed",
+                constant=name,
+                dtype=dtype,
+            ) from exc
+        grouped.setdefault(binding_index, []).append(
+            _DirectXConstantValue(
+                name=name,
+                binding_index=binding_index,
+                byte_offset=byte_offset,
+                dtype=dtype,
+                payload=payload,
+            )
+        )
+
+    prepared = []
+    for binding_index, constants in sorted(grouped.items()):
+        ranges: list[tuple[int, int, str]] = []
+        payload_size = max(
+            value.byte_offset + len(value.payload) for value in constants
+        )
+        payload = bytearray(payload_size)
+        for value in sorted(constants, key=lambda item: (item.byte_offset, item.name)):
+            start = value.byte_offset
+            end = start + len(value.payload)
+            overlap = next(
+                (
+                    existing_name
+                    for existing_start, existing_end, existing_name in ranges
+                    if start < existing_end and end > existing_start
+                ),
+                None,
+            )
+            if overlap is not None:
+                raise _directx_setup_error(
+                    "DirectX runtime constants have overlapping CBV byte ranges.",
+                    "constant-layout-overlap",
+                    namespace="cbv",
+                    binding=binding_index,
+                    constant=value.name,
+                    overlaps=overlap,
+                )
+            payload[start:end] = value.payload
+            ranges.append((start, end, value.name))
+        names = ", ".join(value.name for value in constants)
+        prepared.append(
+            _PreparedDirectXBuffer(
+                name=f"constants[{names}]",
+                namespace="cbv",
+                binding_index=binding_index,
+                dtype="uint32",
+                shape=(),
+                source="constant",
+                output_name=None,
+                payload=bytes(payload),
+                allocation_size=_align_to(payload_size, 256),
+            )
+        )
+    return tuple(prepared)
+
+
+def _validate_directx_register_layout(
+    prepared: Sequence[_PreparedDirectXBuffer],
+) -> tuple[_PreparedDirectXBuffer, ...]:
+    result = []
+    for namespace in ("cbv", "srv", "uav"):
+        resources = sorted(
+            (item for item in prepared if item.namespace == namespace),
+            key=lambda item: item.binding_index,
+        )
+        indices = [item.binding_index for item in resources]
+        if len(indices) != len(set(indices)):
+            duplicates = sorted(
+                {index for index in indices if indices.count(index) > 1}
+            )
+            raise _directx_setup_error(
+                f"DirectX runtime has duplicate {namespace.upper()} registers.",
+                "duplicate-register-binding",
+                namespace=namespace,
+                bindings=indices,
+                duplicateBindings=duplicates,
+            )
+        expected = list(range(len(indices)))
+        if indices != expected:
+            raise _directx_setup_error(
+                "compushady requires contiguous DirectX registers starting at zero.",
+                "sparse-register-layout",
+                namespace=namespace,
+                bindings=indices,
+                expectedBindings=expected,
+            )
+        result.extend(resources)
+    return tuple(result)
+
+
+def _directx_resource_namespace(
+    name: str,
+    binding: NativeRuntimeBufferBinding,
+) -> str:
+    resource = binding.binding
+    kind = str(resource.kind or "buffer").strip().lower().replace("_", "-")
+    if kind in {"constant-buffer", "constantbuffer", "uniform", "cbv"}:
+        return "cbv"
+    if kind in {"srv", "shader-resource", "read-only-buffer"}:
+        namespace = "srv"
+    elif kind in {"uav", "unordered-access", "read-write-buffer"}:
+        namespace = "uav"
+    elif kind in {"buffer", "storage-buffer"}:
+        namespace = ""
+    else:
+        raise _directx_setup_error(
+            f"DirectX compute runtime supports buffer resources only: {name}.",
+            "unsupported-resource-kind",
+            resource=name,
+            resourceKind=resource.kind,
+        )
+
+    type_name = str(resource.type_name or "").strip()
+    normalized_type = re.sub(r"\s+", "", type_name).lower()
+    type_namespace = None
+    if normalized_type:
+        if any(
+            marker in normalized_type
+            for marker in (
+                "rwstructuredbuffer",
+                "rwbyteaddressbuffer",
+                "rwbuffer<",
+                "appendstructuredbuffer",
+                "consumestructuredbuffer",
+                "rasterizerordered",
+            )
+        ):
+            type_namespace = "uav"
+        elif any(
+            marker in normalized_type
+            for marker in ("structuredbuffer", "byteaddressbuffer", "buffer<")
+        ):
+            type_namespace = "srv"
+
+    access = str(resource.access or "").strip().lower().replace("-", "_")
+    access_namespace = None
+    if access in {"write", "read_write", "readwrite"}:
+        access_namespace = "uav"
+    elif access in {"read", "read_only", "readonly"}:
+        access_namespace = "srv"
+
+    inferred = namespace or type_namespace or access_namespace
+    if binding.source == "expectedOutput":
+        if inferred == "srv":
+            raise _directx_setup_error(
+                f"DirectX output resource {name!r} is reflected as read-only.",
+                "resource-access-mismatch",
+                resource=name,
+                resourceKind=resource.kind,
+                access=resource.access,
+                type=resource.type_name,
+            )
+        return "uav"
+    return inferred or "srv"
+
+
+def _directx_buffer_stride(
+    binding: NativeRuntimeBufferBinding,
+    namespace: str,
+    dtype: str,
+    payload_size: int,
+) -> int:
+    resource = binding.binding
+    metadata = {**dict(resource.metadata), **dict(binding.metadata)}
+    explicit_stride = next(
+        (
+            metadata[key]
+            for key in ("byteStride", "elementStride", "stride")
+            if key in metadata
+        ),
+        None,
+    )
+    if explicit_stride is not None:
+        stride = _directx_int_field(
+            explicit_stride,
+            field_name="byteStride",
+            resource=binding.name,
+        )
+    else:
+        type_name = str(resource.type_name or "").strip()
+        normalized_type = re.sub(r"\s+", "", type_name).lower()
+        if namespace == "cbv":
+            stride = 0
+        elif "byteaddressbuffer" in normalized_type:
+            stride = 0
+        elif "structuredbuffer" in normalized_type:
+            match = re.search(r"structuredbuffer<([^>]+)>", normalized_type)
+            element_type = match.group(1) if match else ""
+            stride = _directx_hlsl_element_stride(element_type)
+            if stride is None:
+                raise _directx_setup_error(
+                    f"DirectX runtime cannot infer the stride for {binding.name!r}.",
+                    "buffer-stride-missing",
+                    resource=binding.name,
+                    type=resource.type_name,
+                )
+        elif re.search(r"(?:^|\w)rw?buffer<|(?:^|\w)buffer<", normalized_type):
+            raise _directx_setup_error(
+                f"DirectX typed buffer views are not supported for {binding.name!r}.",
+                "unsupported-buffer-view",
+                resource=binding.name,
+                type=resource.type_name,
+            )
+        elif type_name:
+            raise _directx_setup_error(
+                f"DirectX runtime cannot infer the buffer view for {binding.name!r}.",
+                "unsupported-buffer-view",
+                resource=binding.name,
+                type=resource.type_name,
+            )
+        else:
+            stride = _dtype_size(dtype)
+    byte_address_buffer = (
+        "byteaddressbuffer" in re.sub(r"\s+", "", str(resource.type_name or "")).lower()
+    )
+    if (
+        stride < 0
+        or (stride == 0 and namespace != "cbv" and not byte_address_buffer)
+        or (stride and payload_size % stride)
+    ):
+        raise _directx_setup_error(
+            f"DirectX runtime buffer {binding.name!r} has an invalid byte stride.",
+            "buffer-stride-invalid",
+            resource=binding.name,
+            byteStride=stride,
+            byteLength=payload_size,
+        )
+    return stride
+
+
+def _directx_hlsl_element_stride(type_name: str) -> int | None:
+    scalar_sizes = {
+        "float": 4,
+        "float32_t": 4,
+        "int": 4,
+        "int32_t": 4,
+        "uint": 4,
+        "uint32_t": 4,
+    }
+    if type_name in scalar_sizes:
+        return scalar_sizes[type_name]
+    match = re.fullmatch(r"(float|int|uint)([1-4])", type_name)
+    if match:
+        return 4 * int(match.group(2))
+    return None
+
+
+def _directx_constant_metadata(binding: Any) -> dict[str, Any]:
+    metadata = {
+        **dict(binding.constant.metadata),
+        **dict(binding.metadata),
+    }
+    nested = metadata.get("directx")
+    if isinstance(nested, Mapping):
+        metadata.update(nested)
+    directx_binding = metadata.get("directxBinding")
+    if isinstance(directx_binding, Mapping):
+        metadata.update(directx_binding)
+    elif isinstance(directx_binding, str) and "mechanism" not in metadata:
+        metadata["mechanism"] = directx_binding
+    if "kind" in metadata and "mechanism" not in metadata:
+        metadata["mechanism"] = metadata["kind"]
+    if "registerSpace" in metadata and "space" not in metadata:
+        metadata["space"] = metadata["registerSpace"]
+    return metadata
+
+
+def _validate_directx_compiled_constant(name: str, binding: Any) -> None:
+    reflected_value = binding.constant.value
+    if reflected_value is None:
+        reflected_value = binding.constant.default
+    if reflected_value is None or binding.value != reflected_value:
+        raise _directx_setup_error(
+            f"DirectX compiled constant {name!r} cannot be overridden at dispatch.",
+            "compiled-constant-mismatch",
+            constant=name,
+            reflectedValue=reflected_value,
+            boundValue=binding.value,
+        )
+
+
+def _normalize_directx_dtype(dtype: str | None, *, resource: str) -> str:
+    try:
+        return _normalize_dtype(dtype, target="DirectX")
+    except RuntimeExecutorUnavailable as exc:
+        raise _directx_setup_error(
+            str(exc),
+            "unsupported-dtype",
+            resource=resource,
+            dtype=dtype,
+        ) from exc
+
+
+def _directx_int_field(
+    value: Any,
+    *,
+    field_name: str,
+    resource: str,
+    default: int | None = None,
+    register_prefix: str | None = None,
+) -> int:
+    if value is None:
+        if default is not None:
+            return default
+        raise _directx_setup_error(
+            f"DirectX runtime {field_name} is required for {resource!r}.",
+            "integer-field-missing",
+            resource=resource,
+            field=field_name,
+        )
+    normalized = value
+    if isinstance(value, str) and register_prefix:
+        stripped = value.strip().lower()
+        if stripped.startswith(register_prefix):
+            normalized = stripped[len(register_prefix) :]
+    try:
+        result = int(normalized)
+    except (TypeError, ValueError) as exc:
+        raise _directx_setup_error(
+            f"DirectX runtime {field_name} must be an integer for {resource!r}.",
+            "integer-field-invalid",
+            resource=resource,
+            field=field_name,
+            value=value,
+        ) from exc
+    if result < 0:
+        raise _directx_setup_error(
+            f"DirectX runtime {field_name} cannot be negative for {resource!r}.",
+            "integer-field-invalid",
+            resource=resource,
+            field=field_name,
+            value=result,
+        )
+    return result
+
+
+def _directx_setup_error(
+    message: str,
+    reason_kind: str,
+    **details: Any,
+) -> RuntimeAdapterSetupError:
+    return RuntimeAdapterSetupError(
+        message,
+        details={
+            "target": "directx",
+            "runtime": DirectXComputeRuntime.name,
+            "reasonKind": reason_kind,
+            **details,
+        },
+    )
+
+
+def _align_to(value: int, alignment: int) -> int:
+    value = max(value, 1)
+    return max(alignment, ((value + alignment - 1) // alignment) * alignment)
 
 
 def _release_opengl_object(value: Any) -> None:

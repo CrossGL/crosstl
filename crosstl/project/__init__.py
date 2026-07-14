@@ -10,7 +10,11 @@ from .host_reflection import (
     ReflectionDiagnostic,
     reflect_target_host_interface,
 )
-from .native_runtime_drivers import OpenGLComputeRuntime, VulkanComputeRuntime
+from .native_runtime_drivers import (
+    DirectXComputeRuntime,
+    OpenGLComputeRuntime,
+    VulkanComputeRuntime,
+)
 from .pipeline import (
     RUNTIME_DEVICE_RUNNER_MANIFEST_KIND,
     ProjectConfig,
@@ -124,6 +128,7 @@ __all__ = [
     "REFLECTION_TOOL_UNAVAILABLE",
     "REFLECTION_UNSUPPORTED_FORMAT",
     "ReflectionDiagnostic",
+    "DirectXComputeRuntime",
     "DirectXRuntimeParityAdapter",
     "NativeRuntimeBufferBinding",
     "NativeRuntimeConstantBinding",

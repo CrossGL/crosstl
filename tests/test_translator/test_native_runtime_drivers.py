@@ -10,16 +10,21 @@ import pytest
 import crosstl.project as project_api
 from crosstl._crosstl import translate
 from crosstl.project.native_runtime_drivers import (
+    DirectXComputeRuntime,
     OpenGLComputeRuntime,
     VulkanComputeRuntime,
     _first_vulkan_handle,
+    _prepare_directx_buffers,
+    _prepare_directx_constants,
     _prepare_opengl_buffers,
     _prepare_vulkan_buffers,
     _read_mapped_memory,
+    _validate_directx_register_layout,
     _write_mapped_memory,
 )
 from crosstl.project.runtime_verification import (
     UNAVAILABLE,
+    DirectXRuntimeParityAdapter,
     NativeRuntimeBufferBinding,
     NativeRuntimeConstantBinding,
     NativeRuntimeDispatchRequest,
@@ -28,6 +33,7 @@ from crosstl.project.runtime_verification import (
     RuntimeArtifactSelector,
     RuntimeDispatchGeometry,
     RuntimeExecutionRequest,
+    RuntimeExecutorUnavailable,
     RuntimeFixture,
     RuntimeResourceBinding,
     RuntimeSpecializationConstant,
@@ -74,6 +80,656 @@ def _opengl_dispatch_request(tmp_path: Path) -> NativeRuntimeDispatchRequest:
         dispatch=RuntimeDispatchGeometry(entry_point="main", workgroup_count=(1, 1, 1)),
         entry_point="main",
     )
+
+
+def _directx_dispatch_request(tmp_path: Path) -> NativeRuntimeDispatchRequest:
+    return NativeRuntimeDispatchRequest(
+        target="directx",
+        artifact={"target": "directx"},
+        artifact_path=tmp_path / "runtime.hlsl",
+        module_path=tmp_path / "runtime.dxil",
+        loaded_artifact=b"DXBC\x00\x01",
+        buffers={
+            "params": NativeRuntimeBufferBinding(
+                name="params",
+                binding=RuntimeResourceBinding(
+                    name="params",
+                    kind="constant-buffer",
+                    type_name="Params",
+                    set=0,
+                    binding=0,
+                    access="read",
+                ),
+                value=[3],
+                source="input",
+                dtype="uint32",
+                shape=(1,),
+            ),
+            "lhs": NativeRuntimeBufferBinding(
+                name="lhs",
+                binding=RuntimeResourceBinding(
+                    name="lhs",
+                    kind="buffer",
+                    type_name="StructuredBuffer<float>",
+                    set=0,
+                    binding=0,
+                    access="read",
+                ),
+                value=[1.0, 2.0],
+                source="input",
+                dtype="float32",
+                shape=(2,),
+            ),
+            "out": NativeRuntimeBufferBinding(
+                name="out",
+                binding=RuntimeResourceBinding(
+                    name="out",
+                    kind="buffer",
+                    type_name="RWStructuredBuffer<float>",
+                    set=0,
+                    binding=0,
+                    access="read_write",
+                ),
+                source="expectedOutput",
+                dtype="float32",
+                shape=(2,),
+                metadata={"runtimeValueName": "result"},
+            ),
+        },
+        constants={},
+        dispatch=RuntimeDispatchGeometry(entry_point="main", workgroup_count=(2, 3, 1)),
+        entry_point="main",
+    )
+
+
+class _FakeDirectXDevice:
+    name = "Fake Direct3D Adapter"
+    is_hardware = True
+    is_discrete = False
+
+
+class _FakeDirectXBuffer:
+    def __init__(self, runtime, size, heap_type, stride, device):
+        self.runtime = runtime
+        self.size = size
+        self.heap_type = heap_type
+        self.stride = stride
+        self.device = device
+        self.payload = bytearray(size)
+        self.released = False
+
+    def upload(self, payload):
+        self.payload[: len(payload)] = payload
+
+    def copy_to(self, destination):
+        if (
+            destination.heap_type == self.runtime.HEAP_READBACK
+            and self.runtime.fail_readback_copy
+        ):
+            raise RuntimeError("readback copy failed")
+        destination.payload[: len(self.payload)] = self.payload
+
+    def readback(self, size=0, offset=0):
+        if self.runtime.fail_readback:
+            raise RuntimeError("readback failed")
+        size = size or len(self.payload) - offset
+        return bytes(self.payload[offset : offset + size])
+
+    def release(self):
+        self.released = True
+
+
+class _FakeDirectXCompute:
+    def __init__(self, runtime, shader, cbv, srv, uav, device):
+        self.runtime = runtime
+        self.shader = shader
+        self.cbv = cbv
+        self.srv = srv
+        self.uav = uav
+        self.device = device
+        self.dispatch_args = None
+        self.released = False
+
+    def dispatch(self, x, y, z):
+        self.dispatch_args = (x, y, z)
+        if self.runtime.fail_dispatch:
+            raise RuntimeError("dispatch rejected")
+        scale = struct.unpack("<I", self.cbv[0].payload[:4])[0]
+        values = struct.unpack("<2f", self.srv[0].payload[:8])
+        self.uav[0].payload[:8] = struct.pack(
+            "<2f", *(value * scale for value in values)
+        )
+
+    def release(self):
+        self.released = True
+
+
+class _FakeCompushady:
+    HEAP_DEFAULT = 0
+    HEAP_UPLOAD = 1
+    HEAP_READBACK = 2
+
+    def __init__(self, *, backend="d3d12"):
+        self.backend = type("Backend", (), {"name": backend})()
+        self.device = _FakeDirectXDevice()
+        self.buffers = []
+        self.computes = []
+        self.fail_device = False
+        self.fail_compute = False
+        self.fail_dispatch = False
+        self.fail_default_buffer = False
+        self.fail_readback_copy = False
+        self.fail_readback = False
+
+    def get_backend(self):
+        return self.backend
+
+    def get_current_device(self):
+        if self.fail_device:
+            raise RuntimeError("device creation failed")
+        return self.device
+
+    def Buffer(self, size, heap_type=0, stride=0, device=None):
+        if heap_type == self.HEAP_DEFAULT and self.fail_default_buffer:
+            raise RuntimeError("default buffer creation failed")
+        buffer = _FakeDirectXBuffer(self, size, heap_type, stride, device)
+        self.buffers.append(buffer)
+        return buffer
+
+    def Compute(self, shader, cbv=None, srv=None, uav=None, device=None):
+        if self.fail_compute:
+            raise RuntimeError("pipeline creation failed")
+        compute = _FakeDirectXCompute(
+            self,
+            shader,
+            list(cbv or []),
+            list(srv or []),
+            list(uav or []),
+            device,
+        )
+        self.computes.append(compute)
+        return compute
+
+
+def test_directx_compute_runtime_reports_unsupported_platform_without_import(tmp_path):
+    def unexpected_loader(name):
+        raise AssertionError(f"unexpected import: {name}")
+
+    runtime = DirectXComputeRuntime(
+        module_loader=unexpected_loader,
+        platform_name="darwin",
+    )
+
+    availability = runtime.is_available(None, _runtime_request(tmp_path))
+
+    assert availability.available is False
+    assert availability.details == {
+        "reasonKind": "platform-unavailable",
+        "target": "directx",
+        "platform": "darwin",
+        "requiredPlatforms": ["win32", "cygwin"],
+    }
+
+
+def test_directx_compute_runtime_reports_missing_python_binding(tmp_path):
+    def missing_loader(name):
+        assert name == "compushady"
+        raise ModuleNotFoundError(name)
+
+    runtime = DirectXComputeRuntime(
+        module_loader=missing_loader,
+        platform_name="win32",
+    )
+
+    availability = runtime.is_available(None, _runtime_request(tmp_path))
+
+    assert availability.available is False
+    assert availability.details["reasonKind"] == "dependency-unavailable"
+    assert availability.details["missingPythonModules"] == ["compushady"]
+
+
+def test_directx_compute_runtime_reports_wrong_compushady_backend(tmp_path):
+    module = _FakeCompushady(backend="vulkan")
+    runtime = DirectXComputeRuntime(
+        module_loader=lambda name: module,
+        platform_name="win32",
+    )
+
+    availability = runtime.is_available(None, _runtime_request(tmp_path))
+
+    assert availability.available is False
+    assert availability.details["reasonKind"] == "backend-unavailable"
+    assert availability.details["requiredBackend"] == "d3d12"
+    assert availability.details["activeBackend"] == "vulkan"
+
+
+def test_directx_compute_runtime_reports_device_initialization_failure(tmp_path):
+    module = _FakeCompushady()
+    module.fail_device = True
+    runtime = DirectXComputeRuntime(
+        module_loader=lambda name: module,
+        platform_name="win32",
+    )
+
+    availability = runtime.is_available(None, _runtime_request(tmp_path))
+
+    assert availability.available is False
+    assert availability.details["reasonKind"] == "device-unavailable"
+    assert availability.details["error"] == "device creation failed"
+
+
+def test_directx_compute_runtime_reports_selected_device(tmp_path):
+    module = _FakeCompushady()
+    runtime = DirectXComputeRuntime(
+        module_loader=lambda name: module,
+        platform_name="win32",
+    )
+
+    availability = runtime.is_available(None, _runtime_request(tmp_path))
+
+    assert availability.available is True
+    assert availability.details == {
+        "reasonKind": "available",
+        "target": "directx",
+        "runtime": "directx-compute-runtime",
+        "backend": "d3d12",
+        "device": "Fake Direct3D Adapter",
+        "isHardware": True,
+        "isDiscrete": False,
+    }
+
+
+def test_directx_compute_runtime_loads_nonempty_dxil(tmp_path):
+    artifact_path = tmp_path / "add.dxil"
+    artifact_path.write_bytes(b"DXBC\x00\x01")
+    runtime = DirectXComputeRuntime(
+        module_loader=lambda name: object(),
+        platform_name="win32",
+    )
+
+    assert runtime.load_artifact(None, None, artifact_path) == b"DXBC\x00\x01"
+
+
+def test_directx_compute_runtime_rejects_empty_dxil(tmp_path):
+    artifact_path = tmp_path / "empty.dxil"
+    artifact_path.write_bytes(b"")
+    runtime = DirectXComputeRuntime(platform_name="win32")
+
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        runtime.load_artifact(None, None, artifact_path)
+
+    assert excinfo.value.details["reasonKind"] == "artifact-empty"
+
+
+def test_prepare_directx_buffers_maps_and_packs_descriptor_namespaces(tmp_path):
+    prepared = _validate_directx_register_layout(
+        _prepare_directx_buffers(_directx_dispatch_request(tmp_path).buffers)
+    )
+
+    assert [(item.name, item.namespace, item.binding_index) for item in prepared] == [
+        ("params", "cbv", 0),
+        ("lhs", "srv", 0),
+        ("out", "uav", 0),
+    ]
+    assert prepared[0].payload == struct.pack("<I", 3)
+    assert prepared[0].allocation_size == 256
+    assert prepared[0].stride == 0
+    assert prepared[1].payload == struct.pack("<2f", 1.0, 2.0)
+    assert prepared[1].stride == 4
+    assert prepared[2].payload == b"\x00" * 8
+    assert prepared[2].output_name == "result"
+
+
+def test_prepare_directx_buffers_rejects_nonzero_register_space(tmp_path):
+    request = _directx_dispatch_request(tmp_path)
+    lhs = request.buffers["lhs"]
+    binding = NativeRuntimeBufferBinding(
+        **{
+            **lhs.__dict__,
+            "binding": RuntimeResourceBinding(**{**lhs.binding.__dict__, "set": 2}),
+        }
+    )
+
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        _prepare_directx_buffers({"lhs": binding})
+
+    assert excinfo.value.details["reasonKind"] == "unsupported-register-space"
+    assert excinfo.value.details["registerSpace"] == 2
+
+
+def test_prepare_directx_buffers_rejects_unsupported_resource_kind(tmp_path):
+    request = _directx_dispatch_request(tmp_path)
+    lhs = request.buffers["lhs"]
+    binding = NativeRuntimeBufferBinding(
+        **{
+            **lhs.__dict__,
+            "binding": RuntimeResourceBinding(
+                **{**lhs.binding.__dict__, "kind": "texture"}
+            ),
+        }
+    )
+
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        _prepare_directx_buffers({"lhs": binding})
+
+    assert excinfo.value.details["reasonKind"] == "unsupported-resource-kind"
+
+
+def test_prepare_directx_buffers_rejects_sparse_registers(tmp_path):
+    request = _directx_dispatch_request(tmp_path)
+    lhs = request.buffers["lhs"]
+    binding = NativeRuntimeBufferBinding(
+        **{
+            **lhs.__dict__,
+            "binding": RuntimeResourceBinding(**{**lhs.binding.__dict__, "binding": 1}),
+        }
+    )
+
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        _validate_directx_register_layout(_prepare_directx_buffers({"lhs": binding}))
+
+    assert excinfo.value.details["reasonKind"] == "sparse-register-layout"
+    assert excinfo.value.details["namespace"] == "srv"
+    assert excinfo.value.details["bindings"] == [1]
+    assert excinfo.value.details["expectedBindings"] == [0]
+
+
+def test_prepare_directx_buffers_rejects_duplicate_registers(tmp_path):
+    request = _directx_dispatch_request(tmp_path)
+
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        _validate_directx_register_layout(
+            _prepare_directx_buffers(
+                {
+                    "lhs": request.buffers["lhs"],
+                    "rhs": NativeRuntimeBufferBinding(
+                        **{
+                            **request.buffers["lhs"].__dict__,
+                            "name": "rhs",
+                        }
+                    ),
+                }
+            )
+        )
+
+    assert excinfo.value.details["reasonKind"] == "duplicate-register-binding"
+    assert excinfo.value.details["duplicateBindings"] == [0]
+
+
+def test_prepare_directx_constants_packs_explicit_constant_buffer():
+    constants = _prepare_directx_constants(
+        {
+            "scale": NativeRuntimeConstantBinding(
+                name="scale",
+                constant=RuntimeSpecializationConstant(
+                    name="scale",
+                    kind="constant-buffer",
+                    dtype="float32",
+                    metadata={
+                        "directx": {
+                            "binding": "b0",
+                            "byteOffset": 0,
+                        }
+                    },
+                ),
+                value=2.5,
+            ),
+            "count": NativeRuntimeConstantBinding(
+                name="count",
+                constant=RuntimeSpecializationConstant(
+                    name="count",
+                    kind="constant-buffer",
+                    dtype="uint32",
+                    metadata={
+                        "directx": {
+                            "binding": "b0",
+                            "byteOffset": 4,
+                        }
+                    },
+                ),
+                value=3,
+            ),
+        }
+    )
+
+    assert len(constants) == 1
+    assert constants[0].namespace == "cbv"
+    assert constants[0].binding_index == 0
+    assert constants[0].payload == struct.pack("<fI", 2.5, 3)
+    assert constants[0].allocation_size == 256
+
+
+def test_prepare_directx_constants_accepts_matching_compiled_literal():
+    constants = _prepare_directx_constants(
+        {
+            "tile_size": NativeRuntimeConstantBinding(
+                name="tile_size",
+                constant=RuntimeSpecializationConstant(
+                    name="tile_size",
+                    kind="scalar-constant",
+                    dtype="uint32",
+                    value=4,
+                ),
+                value=4,
+            )
+        }
+    )
+
+    assert constants == ()
+
+
+def test_prepare_directx_constants_rejects_ambiguous_specialization_constant():
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        _prepare_directx_constants(
+            {
+                "tile_size": NativeRuntimeConstantBinding(
+                    name="tile_size",
+                    constant=RuntimeSpecializationConstant(
+                        name="tile_size",
+                        dtype="uint32",
+                        value=4,
+                    ),
+                    value=4,
+                )
+            }
+        )
+
+    assert excinfo.value.details["reasonKind"] == "unsupported-constant-binding"
+
+
+def test_directx_compute_runtime_dispatches_and_reads_typed_output(tmp_path):
+    module = _FakeCompushady()
+    runtime = DirectXComputeRuntime(
+        module_loader=lambda name: module,
+        platform_name="win32",
+    )
+
+    outputs = runtime.dispatch(None, None, _directx_dispatch_request(tmp_path))
+
+    assert outputs == {
+        "result": {
+            "dtype": "float32",
+            "shape": [2],
+            "values": [3.0, 6.0],
+        }
+    }
+    compute = module.computes[0]
+    assert compute.shader == b"DXBC\x00\x01"
+    assert compute.dispatch_args == (2, 3, 1)
+    assert len(compute.cbv) == len(compute.srv) == len(compute.uav) == 1
+    assert compute.cbv[0].size == 256
+    assert compute.srv[0].stride == compute.uav[0].stride == 4
+    assert all(buffer.device is module.device for buffer in module.buffers)
+    assert all(buffer.released for buffer in module.buffers)
+    assert compute.released is True
+
+
+def test_directx_runtime_adapter_compiles_dxil_and_dispatches_fixture(tmp_path):
+    artifact_path = tmp_path / "out" / "directx" / "scale.hlsl"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text(
+        "[numthreads(1,1,1)] void main() {}\n",
+        encoding="utf-8",
+    )
+    module = _FakeCompushady()
+
+    def compile_dxil(command, *, input_text=None):
+        assert input_text is None
+        output_path = Path(command[command.index("-Fo") + 1])
+        output_path.write_bytes(b"DXBC\x00\x01")
+        return {"returncode": 0}
+
+    adapter = DirectXRuntimeParityAdapter(
+        runtime=DirectXComputeRuntime(
+            module_loader=lambda name: module,
+            platform_name="win32",
+        ),
+        required_tools=(),
+        supported_platforms=(),
+        tool_resolver=lambda tool: f"/fake/{tool}",
+        command_runner=compile_dxil,
+    )
+    report = verify_runtime_test_manifest(
+        {
+            "kind": "crosstl-project-portability-report",
+            "project": {"root": str(tmp_path), "targets": ["directx"]},
+            "artifacts": [
+                {
+                    "source": "kernels/scale.cgl",
+                    "path": "out/directx/scale.hlsl",
+                    "target": "directx",
+                    "status": "translated",
+                    "entryPoints": [{"name": "main", "stage": "compute"}],
+                    "resourceBindings": [
+                        {
+                            "name": "params",
+                            "kind": "constant-buffer",
+                            "type": "Params",
+                            "set": 0,
+                            "binding": 0,
+                            "access": "read",
+                        },
+                        {
+                            "name": "lhs",
+                            "kind": "buffer",
+                            "type": "StructuredBuffer<float>",
+                            "set": 0,
+                            "binding": 0,
+                            "access": "read",
+                        },
+                        {
+                            "name": "out",
+                            "kind": "buffer",
+                            "type": "RWStructuredBuffer<float>",
+                            "set": 0,
+                            "binding": 0,
+                            "access": "read_write",
+                        },
+                    ],
+                    "dispatch": {
+                        "entryPoint": "main",
+                        "workgroupCount": [2, 3, 1],
+                    },
+                }
+            ],
+        },
+        {
+            "kind": "crosstl-project-runtime-test-manifest",
+            "adapters": [
+                {
+                    "id": "native-directx",
+                    "executor": "directx",
+                    "adapterKind": "directx-native-runtime",
+                    "platformRequirements": {"requiredTools": []},
+                }
+            ],
+            "tests": [
+                {
+                    "id": "directx-scale",
+                    "selector": {
+                        "source": "kernels/scale.cgl",
+                        "target": "directx",
+                    },
+                    "adapter": "native-directx",
+                    "inputs": [
+                        {
+                            "name": "params",
+                            "dtype": "uint32",
+                            "shape": [1],
+                            "values": [3],
+                        },
+                        {
+                            "name": "lhs",
+                            "dtype": "float32",
+                            "shape": [2],
+                            "values": [1.0, 2.0],
+                        },
+                    ],
+                    "expectedOutputs": [
+                        {
+                            "name": "out",
+                            "dtype": "float32",
+                            "shape": [2],
+                            "values": [3.0, 6.0],
+                        }
+                    ],
+                }
+            ],
+        },
+        executors={"directx": adapter},
+    )
+
+    result = report["results"][0]
+    assert report["success"] is True
+    assert result["status"] == "passed"
+    assert module.computes[0].shader == b"DXBC\x00\x01"
+    assert module.computes[0].dispatch_args == (2, 3, 1)
+
+
+@pytest.mark.parametrize(
+    ("failure", "reason_kind"),
+    [
+        ("fail_default_buffer", "resource-creation-failed"),
+        ("fail_compute", "compute-pipeline-creation-failed"),
+        ("fail_dispatch", "dispatch-failed"),
+        ("fail_readback_copy", "readback-failed"),
+    ],
+)
+def test_directx_compute_runtime_reports_phase_failure_and_releases_resources(
+    tmp_path,
+    failure,
+    reason_kind,
+):
+    module = _FakeCompushady()
+    setattr(module, failure, True)
+    runtime = DirectXComputeRuntime(
+        module_loader=lambda name: module,
+        platform_name="win32",
+    )
+    error_type = (
+        RuntimeAdapterSetupError
+        if reason_kind
+        in {"resource-creation-failed", "compute-pipeline-creation-failed"}
+        else RuntimeAdapterDispatchError
+    )
+
+    with pytest.raises(error_type) as excinfo:
+        runtime.dispatch(None, None, _directx_dispatch_request(tmp_path))
+
+    assert excinfo.value.details["reasonKind"] == reason_kind
+    assert all(buffer.released for buffer in module.buffers)
+    assert all(compute.released for compute in module.computes)
+
+
+def test_directx_compute_runtime_rejects_dispatch_off_windows(tmp_path):
+    runtime = DirectXComputeRuntime(platform_name="linux")
+
+    with pytest.raises(RuntimeExecutorUnavailable, match="Windows only"):
+        runtime.dispatch(None, None, _directx_dispatch_request(tmp_path))
+
+
+def test_directx_compute_runtime_is_exported_from_project_api():
+    assert project_api.DirectXComputeRuntime is DirectXComputeRuntime
 
 
 def test_opengl_compute_runtime_reports_missing_python_binding(tmp_path):
