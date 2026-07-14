@@ -16281,8 +16281,9 @@ complex64_t crossgl_complex64_mod_assign(
         if isinstance(expression, ConstructorNode):
             return all(
                 self.glsl_side_effect_free_expression(argument)
-                for argument in list(getattr(expression, "arguments", []) or [])
-                + list((getattr(expression, "named_arguments", {}) or {}).values())
+                for argument in list(getattr(expression, "arguments", []) or []) + list(
+                    (getattr(expression, "named_arguments", {}) or {}).values()
+                )
             )
         return False
 

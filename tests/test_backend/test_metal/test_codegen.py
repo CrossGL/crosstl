@@ -1032,9 +1032,7 @@ def test_codegen_rebinds_lowered_struct_sibling_overload_with_resources():
     assert "return post_in(elem);" in lowered
 
     crossgl = convert(lowered)
-    load_body = crossgl.rsplit(
-        "ReadWriter_float2_float2__load", 1
-    )[1].split("}", 1)[0]
+    load_body = crossgl.rsplit("ReadWriter_float2_float2__load", 1)[1].split("}", 1)[0]
 
     assert (
         "ReadWriter_float2_float2__post_in(self, crosstl_ptr_input, "

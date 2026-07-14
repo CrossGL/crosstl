@@ -4833,9 +4833,8 @@ class MetalToCrossGLConverter:
         if not params:
             return None
         receiver = params[0]
-        if (
-            getattr(receiver, "name", None) != "self"
-            or not self.reference_parameter(receiver)
+        if getattr(receiver, "name", None) != "self" or not self.reference_parameter(
+            receiver
         ):
             return None
 
@@ -4856,11 +4855,7 @@ class MetalToCrossGLConverter:
             )
         )
         helper_prefix = next(
-            (
-                prefix
-                for prefix in prefixes
-                if helper_name.startswith(f"{prefix}__")
-            ),
+            (prefix for prefix in prefixes if helper_name.startswith(f"{prefix}__")),
             None,
         )
         if helper_prefix is None:
@@ -4937,9 +4932,7 @@ class MetalToCrossGLConverter:
             return None
 
         helper_name = f"{context['helper_prefix']}__{method_name}"
-        all_candidates = list(
-            self.user_function_overloads_by_name.get(helper_name, [])
-        )
+        all_candidates = list(self.user_function_overloads_by_name.get(helper_name, []))
         if not all_candidates:
             return None
 
@@ -4970,8 +4963,7 @@ class MetalToCrossGLConverter:
             if (
                 candidate_context is None
                 or candidate_context["owner"] != context["owner"]
-                or len(params)
-                != 1 + len(current_transport) + len(expression.args)
+                or len(params) != 1 + len(current_transport) + len(expression.args)
             ):
                 continue
             candidate_transport = params[1 : 1 + len(current_transport)]
@@ -4997,9 +4989,7 @@ class MetalToCrossGLConverter:
             viable.append((candidate, mapped_types, source_types, candidate_readonly))
 
         candidate_signatures = tuple(
-            self.lowered_method_candidate_signature(
-                candidate, len(current_transport)
-            )
+            self.lowered_method_candidate_signature(candidate, len(current_transport))
             for candidate in all_candidates
         )
         if not viable:
@@ -5021,9 +5011,7 @@ class MetalToCrossGLConverter:
             matches = viable
         else:
             matches = [
-                candidate
-                for candidate in viable
-                if candidate[1] == argument_types
+                candidate for candidate in viable if candidate[1] == argument_types
             ]
             if not matches:
                 raise MetalStructMethodCallResolutionError(
@@ -5072,7 +5060,11 @@ class MetalToCrossGLConverter:
                 context["owner"],
                 method_name,
                 diagnostic_argument_types,
-                (self.lowered_method_candidate_signature(selected, len(current_transport)),),
+                (
+                    self.lowered_method_candidate_signature(
+                        selected, len(current_transport)
+                    ),
+                ),
                 "reference-returning sibling helpers require lvalue-preserving lowering",
                 getattr(expression, "source_location", None),
             )

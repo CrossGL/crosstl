@@ -8724,9 +8724,7 @@ def test_translate_project_reports_directx_trailing_zero_builtin_contract(tmp_pa
         "directx.trailing-zero-builtin-lowering": 1
     }
     diagnostic = payload["diagnostics"][0]
-    assert diagnostic["code"] == (
-        "project.translate.directx-trailing-zero-unsupported"
-    )
+    assert diagnostic["code"] == ("project.translate.directx-trailing-zero-unsupported")
     assert diagnostic["target"] == "directx"
     assert diagnostic["sourceBackend"] == "cgl"
     assert diagnostic["location"]["file"] == "trailing_zero.cgl"
@@ -45675,9 +45673,7 @@ def test_translate_project_reports_unresolved_metal_struct_sibling_call(
     assert diagnostic["location"]["file"] == "reader.metal"
     assert diagnostic["location"]["line"] == 5
     assert diagnostic["location"]["column"] == 14
-    assert diagnostic["missingCapabilities"] == [
-        "metal.struct-method-call-lowering"
-    ]
+    assert diagnostic["missingCapabilities"] == ["metal.struct-method-call-lowering"]
     assert diagnostic["details"] == {
         "sourcePath": "reader.metal",
         "structMethodCall": {
