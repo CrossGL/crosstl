@@ -198,6 +198,9 @@ The harness writes reports, generated artifacts, and command logs under
 ## Current Translator Gaps
 
 CrossGL/crosstl#1376 tracks bounded runtime for the scheduled full-corpus scout.
+CrossGL/crosstl#1676 tracks demand-driven materialization so repository
+translation charges configured work budgets to reachable concrete template
+graphs instead of eager whole-source cross products.
 CrossGL/crosstl#1659 tracks quadratic DirectX resource-register relocation for
 large aggregate artifacts; a high-budget `binary.metal` DirectX translation
 reaches that allocator after template materialization.
