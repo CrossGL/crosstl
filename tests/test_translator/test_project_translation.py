@@ -37652,7 +37652,8 @@ def test_metal_project_function_constant_values_reach_directx_codegen(tmp_path):
         specialization_constants={"enabled": True, "8": 5},
     )
 
-    payload = translate_project(config).to_json()
+    report = translate_project(config)
+    payload = report.to_json()
 
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
@@ -37702,7 +37703,8 @@ def test_metal_project_required_function_constant_defers_to_opengl(tmp_path):
         targets=("opengl",),
     )
 
-    payload = translate_project(config).to_json()
+    report = translate_project(config)
+    payload = report.to_json()
 
     assert payload["summary"]["translatedCount"] == 1
     assert payload["summary"]["failedCount"] == 0
@@ -37728,6 +37730,20 @@ def test_metal_project_required_function_constant_defers_to_opengl(tmp_path):
     generated = (tmp_path / artifact["path"]).read_text(encoding="utf-8")
     assert "layout(constant_id = 7) const bool enabled = false;" in generated
     assert "uniform bool enabled" not in generated
+
+    report_path = tmp_path / "report.json"
+    report.write_json(report_path)
+    runtime_manifest = build_runtime_artifact_manifest(report_path)
+    runtime_artifact = runtime_manifest["artifacts"][0]
+    runtime_constant = runtime_artifact["specializationConstants"][0]
+    assert runtime_constant["name"] == "enabled"
+    assert runtime_constant["required"] is True
+    assert "default" not in runtime_constant
+    assert "defaultValue" not in runtime_constant
+    assert all(
+        resource.get("name") != "enabled"
+        for resource in runtime_artifact["resourceBindings"]
+    )
 
 
 def test_project_function_constant_deferred_metadata_distinguishes_required(

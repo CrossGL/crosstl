@@ -22137,6 +22137,24 @@ def _runtime_manifest_merge_specialization_constants(
     )
     if not specialization_constants:
         return dict(host_interface)
+    source_contracts = {
+        identity: constant
+        for constant in _runtime_merge_specialization_constant_records(
+            source_constants,
+            artifact_constants,
+        )
+        if (identity := _runtime_specialization_constant_identity(constant))
+        is not None
+    }
+    for constant in specialization_constants:
+        identity = _runtime_specialization_constant_identity(constant)
+        contract = source_contracts.get(identity) if identity is not None else None
+        if not isinstance(contract, Mapping) or contract.get("required") is not True:
+            continue
+        if "default" in contract or "defaultValue" in contract:
+            continue
+        constant.pop("default", None)
+        constant.pop("defaultValue", None)
 
     specialization_names = {
         str(constant.get("name"))
