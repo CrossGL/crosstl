@@ -17047,6 +17047,37 @@ def _directx_private_pointer_failure_details(
     return dict(sorted(details.items()))
 
 
+def _directx_resource_pointer_array_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.directx-resource-pointer-array-unsupported"
+    ):
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    pointer_array = {}
+    fields = {
+        "function": getattr(exc, "function_name", None),
+        "array": getattr(exc, "array_name", None),
+        "addressSpace": getattr(exc, "address_space", None),
+        "backingRoot": getattr(exc, "backing_root", None),
+        "conflictingRoot": getattr(exc, "conflicting_root", None),
+        "reason": getattr(exc, "reason", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            pointer_array[name] = value
+    if pointer_array:
+        details["resourcePointerArray"] = dict(sorted(pointer_array.items()))
+    return dict(sorted(details.items()))
+
+
 def _directx_trailing_zero_failure_details(
     exc: Exception,
     unit: ProjectTranslationUnit,
@@ -17410,6 +17441,7 @@ def _translation_failure_details(
         **_opengl_fixed_array_resource_failure_details(exc, unit, artifact_path),
         **_opengl_resource_memory_qualifier_failure_details(exc, unit, artifact_path),
         **_directx_private_pointer_failure_details(exc, unit, artifact_path),
+        **_directx_resource_pointer_array_failure_details(exc, unit, artifact_path),
         **_directx_trailing_zero_failure_details(exc, unit, artifact_path),
         **_opengl_private_pointer_failure_details(exc, unit, artifact_path),
         **_directx_workgroup_pointer_failure_details(exc, unit, artifact_path),

@@ -46,6 +46,7 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXAtomicFenceLoweringError,
     DirectXCooperativeMatrixUnsupportedError,
     DirectXPrivatePointerParameterError,
+    DirectXResourcePointerArrayError,
     DirectXSemanticArraySizeError,
     DirectXTrailingZeroBuiltinError,
     DirectXUnresolvedSourceTypeError,
@@ -4481,6 +4482,206 @@ def test_hlsl_readonly_resource_pointer_root_can_advance(tmp_path):
     assert "float value = sourceValues[uint(sourceValues_offset)];" in generated_code
     assert "sourceValues +=" not in generated_code
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
+def test_hlsl_metal_fixed_device_pointer_array_lowers_to_bounded_offsets(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    template <typename T, int Count>
+    void read_rows(
+        const device T* input,
+        device T* output,
+        constant int& row_stride) {
+      const device T* rows[Count];
+      for (int i = 0; i < Count; ++i) {
+        rows[i] = input + i * row_stride;
+      }
+      for (int i = 0; i < Count; ++i) {
+        output[i] = rows[i][0];
+      }
+      output[Count] = rows[Count - 1][1];
+    }
+
+    kernel void pointer_array(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]],
+        constant int& row_stride [[buffer(2)]]) {
+      read_rows<float, 4>(input, output, row_stride);
+    }
+    """
+    shader_path = tmp_path / "pointer_array.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "int64_t rows_offsets[4];" in generated
+    assert "rows_offsets[uint(i)] = int64_t((i * row_stride));" in generated
+    assert "output[i] = input[uint(rows_offsets[uint(i)])];" in generated
+    assert "rows_offsets[uint((4 - 1))]" in generated
+    assert "float* rows" not in generated
+    assert "input +" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+
+
+def test_hlsl_metal_mutable_device_pointer_array_preserves_stores(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void write_rows(device float* output, constant int& row_stride) {
+      device float* rows[2];
+      for (int i = 0; i < 2; ++i) {
+        rows[i] = output + i * row_stride;
+      }
+      for (int i = 0; i < 2; ++i) {
+        rows[i][0] = float(i);
+      }
+    }
+
+    kernel void pointer_array_store(
+        device float* output [[buffer(0)]],
+        constant int& row_stride [[buffer(1)]]) {
+      write_rows(output, row_stride);
+    }
+    """
+    shader_path = tmp_path / "pointer_array_store.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "int64_t rows_offsets[2];" in generated
+    assert "output[uint(rows_offsets[uint(i)])] = float(i);" in generated
+    assert "float* rows" not in generated
+    assert "output +" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+
+
+def test_hlsl_metal_device_pointer_array_rejects_unbounded_selection(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void read_row(
+        const device float* input,
+        device float* output,
+        int selected) {
+      const device float* rows[2];
+      for (int i = 0; i < 2; ++i) {
+        rows[i] = input + i * 4;
+      }
+      output[0] = rows[selected][0];
+    }
+
+    kernel void pointer_array_unbounded(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]],
+        constant int& selected [[buffer(2)]]) {
+      read_row(input, output, selected);
+    }
+    """
+    shader_path = tmp_path / "pointer_array_unbounded.metal"
+    shader_path.write_text(shader)
+
+    with pytest.raises(DirectXResourcePointerArrayError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    diagnostic = excinfo.value
+    assert diagnostic.array_name == "rows"
+    assert diagnostic.address_space == "device"
+    assert diagnostic.reason == "index-unproven"
+
+
+def test_hlsl_metal_device_pointer_array_rejects_dynamic_backing_root(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void read_rows(
+        const device float* left,
+        const device float* right,
+        device float* output) {
+      const device float* rows[2];
+      for (int i = 0; i < 2; ++i) {
+        rows[i] = (i == 0) ? left : right;
+      }
+      for (int i = 0; i < 2; ++i) {
+        output[i] = rows[i][0];
+      }
+    }
+
+    kernel void pointer_array_roots(
+        const device float* left [[buffer(0)]],
+        const device float* right [[buffer(1)]],
+        device float* output [[buffer(2)]]) {
+      read_rows(left, right, output);
+    }
+    """
+    shader_path = tmp_path / "pointer_array_roots.metal"
+    shader_path.write_text(shader)
+
+    with pytest.raises(DirectXResourcePointerArrayError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    diagnostic = excinfo.value
+    assert diagnostic.array_name == "rows"
+    assert diagnostic.address_space == "device"
+    assert diagnostic.reason == "backing-contract-unproven"
+
+
+def test_hlsl_metal_device_pointer_array_rejects_element_escape(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void read_row(const device float* input, device float* output) {
+      const device float* rows[2];
+      for (int i = 0; i < 2; ++i) {
+        rows[i] = input + i * 4;
+      }
+      const device float* selected = rows[0];
+      output[0] = selected[0];
+    }
+
+    kernel void pointer_array_escape(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+      read_row(input, output);
+    }
+    """
+    shader_path = tmp_path / "pointer_array_escape.metal"
+    shader_path.write_text(shader)
+
+    with pytest.raises(DirectXResourcePointerArrayError) as excinfo:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    assert excinfo.value.reason == "pointer-element-escape"
 
 
 def test_hlsl_resource_pointer_alias_rejects_readonly_write():

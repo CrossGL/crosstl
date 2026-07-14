@@ -8558,6 +8558,126 @@ def test_translate_project_reports_directx_private_pointer_contract(tmp_path):
     assert not (repo / artifact["path"]).exists()
 
 
+def test_translate_project_reports_directx_resource_pointer_array_contract(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "pointer_array.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            void select_row(
+                const device float* input,
+                device float* output,
+                int selected) {
+              const device float* rows[2];
+              for (int i = 0; i < 2; ++i) {
+                rows[i] = input + i * 4;
+              }
+              output[0] = rows[selected][0];
+            }
+
+            kernel void pointer_array(
+                const device float* input [[buffer(0)]],
+                device float* output [[buffer(1)]],
+                constant int& selected [[buffer(2)]]) {
+              select_row(input, output, selected);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="translated",
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.directx-resource-pointer-array-unsupported": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "directx.resource-pointer-array-lowering": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == (
+        "project.translate.directx-resource-pointer-array-unsupported"
+    )
+    assert diagnostic["target"] == "directx"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["location"]["file"] == "pointer_array.metal"
+    assert diagnostic["missingCapabilities"] == [
+        "directx.resource-pointer-array-lowering"
+    ]
+    assert diagnostic["details"] == {
+        "resourcePointerArray": {
+            "addressSpace": "device",
+            "array": "rows",
+            "backingRoot": "input",
+            "function": "select_row",
+            "reason": "index-unproven",
+        },
+        "sourcePath": "pointer_array.metal",
+        "targetArtifact": "translated/directx/pointer_array.hlsl",
+    }
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+
+
+def test_translate_project_lowers_bounded_directx_resource_pointer_array(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "pointer_array.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            void read_rows(
+                const device float* input,
+                device float* output,
+                int row_stride) {
+              const device float* rows[2];
+              for (int i = 0; i < 2; ++i) {
+                rows[i] = input + i * row_stride;
+              }
+              for (int i = 0; i < 2; ++i) {
+                output[i] = rows[i][0];
+              }
+            }
+
+            kernel void pointer_array(
+                const device float* input [[buffer(0)]],
+                device float* output [[buffer(1)]],
+                constant int& row_stride [[buffer(2)]]) {
+              read_rows(input, output, row_stride);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="translated",
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "int64_t rows_offsets[2];" in generated
+    assert "rows_offsets[uint(i)] = int64_t((i * row_stride));" in generated
+    assert "output[i] = input[uint(rows_offsets[uint(i)])];" in generated
+    assert "float* rows" not in generated
+
+
 def test_translate_project_reports_opengl_private_pointer_contract(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

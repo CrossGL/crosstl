@@ -8,6 +8,7 @@ from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
     ArrayNode,
+    ArrayType,
     AssignmentNode,
     AttributeNode,
     BinaryOpNode,
@@ -442,6 +443,36 @@ class DirectXWorkgroupPointerError(ValueError):
         super().__init__(message)
         self.function_name = function_name
         self.parameter_name = parameter_name
+        self.reason = reason
+        self.source_location = source_location
+
+
+class DirectXResourcePointerArrayError(ValueError):
+    """Raised when a storage-pointer array has no faithful HLSL lowering."""
+
+    project_diagnostic_code = (
+        "project.translate.directx-resource-pointer-array-unsupported"
+    )
+    missing_capabilities = ("directx.resource-pointer-array-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        function_name=None,
+        array_name=None,
+        address_space=None,
+        backing_root=None,
+        conflicting_root=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.function_name = function_name
+        self.array_name = array_name
+        self.address_space = address_space
+        self.backing_root = backing_root
+        self.conflicting_root = conflicting_root
         self.reason = reason
         self.source_location = source_location
 
@@ -1008,6 +1039,8 @@ class HLSLCodeGen:
         self.hlsl_promoted_entry_scalar_constant_members = {}
         self.current_hlsl_resource_pointer_offsets = {}
         self.current_hlsl_resource_pointer_aliases = {}
+        self.current_hlsl_bounded_loop_indices = {}
+        self.current_hlsl_parameter_resource_types = {}
         self.struct_member_types = {}
         self.structs_by_name = {}
         self.hlsl_fixed_array_return_structs = {}
@@ -1599,6 +1632,8 @@ class HLSLCodeGen:
         self.hlsl_promoted_entry_scalar_constant_members = {}
         self.current_hlsl_resource_pointer_offsets = {}
         self.current_hlsl_resource_pointer_aliases = {}
+        self.current_hlsl_bounded_loop_indices = {}
+        self.current_hlsl_parameter_resource_types = {}
         self.current_global_resource_declaration_nodes = None
         self.standard_math_constant_shadow_names = set()
         self.hlsl_fixed_array_return_structs = {}
@@ -4614,6 +4649,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             name: dict(binding)
             for name, binding in self.hlsl_global_groupshared_pointer_aliases.items()
         }
+        self.current_hlsl_bounded_loop_indices = {}
+        self.current_hlsl_parameter_resource_types = {}
         # Name of the SV_GroupIndex parameter an explicit @gl_SubgroupID compute
         # parameter needs injected, populated lazily while emitting parameters and
         # consumed by the post-loop compute-builtin parameter pass.
@@ -4685,6 +4722,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     param_decl_type, p, getattr(func, "name", None)
                 )
             param_type = self.directx_resource_declaration_type(param_type)
+            self.current_hlsl_parameter_resource_types[p.name] = param_type
             if self.is_texture_type(raw_param_type) or self.is_image_type(
                 raw_param_type
             ):
@@ -6897,6 +6935,320 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return None
         return resource_type.split("<", 1)[1][:-1].strip() or None
 
+    def hlsl_storage_pointer_array_declaration_type(self, node):
+        vtype = getattr(node, "var_type", getattr(node, "vtype", None))
+        pointer_type = getattr(vtype, "element_type", None)
+        if not isinstance(vtype, ArrayType) or not isinstance(
+            pointer_type, PointerType
+        ):
+            return None
+        address_space = str(pointer_type.address_space or "").strip().lower()
+        if address_space != "device":
+            return None
+        return vtype, pointer_type, address_space
+
+    def hlsl_resource_pointer_array_error(
+        self,
+        message,
+        *,
+        binding=None,
+        node=None,
+        reason=None,
+    ):
+        binding = binding or {}
+        declaration = binding.get("declaration_node")
+        source_node = node or declaration
+        return DirectXResourcePointerArrayError(
+            message,
+            function_name=self.current_function_name,
+            array_name=binding.get("array_name") or getattr(declaration, "name", None),
+            address_space=binding.get("address_space"),
+            backing_root=binding.get("root"),
+            conflicting_root=binding.get("conflicting_root"),
+            reason=reason,
+            source_location=getattr(source_node, "source_location", None),
+        )
+
+    def generate_hlsl_resource_pointer_array_declaration(self, node, indent):
+        declaration_type = self.hlsl_storage_pointer_array_declaration_type(node)
+        if declaration_type is None:
+            return None
+        binding = self.current_hlsl_resource_pointer_aliases.get(node.name)
+        if binding is None or binding.get("declaration_id") != id(node):
+            raise self.hlsl_resource_pointer_array_error(
+                f"DirectX storage pointer array '{node.name}' has no proven "
+                "canonical initialization loop",
+                binding={
+                    "array_name": node.name,
+                    "address_space": declaration_type[2],
+                    "declaration_node": node,
+                },
+                node=node,
+                reason="initialization-unproven",
+            )
+        return (
+            f"{'    ' * indent}int64_t {binding['offset_array']}"
+            f"[{binding['extent']}];\n"
+        )
+
+    def hlsl_resource_pointer_array_for_access(self, expression):
+        if not isinstance(expression, ArrayAccessNode):
+            return None
+        array = getattr(expression, "array", getattr(expression, "array_expr", None))
+        if not isinstance(array, (IdentifierNode, VariableNode)):
+            return None
+        binding = self.current_hlsl_resource_pointer_aliases.get(array.name)
+        if binding is None or binding.get("kind") != "resource-pointer-array":
+            return None
+        return binding
+
+    def hlsl_resource_pointer_array_index(self, binding, index_expression):
+        literal_index = self.literal_int_value(
+            index_expression, self.hlsl_current_visible_int_constants()
+        )
+        rendered_index = self.generate_expression(index_expression)
+        if isinstance(literal_index, int) and not isinstance(literal_index, bool):
+            index_range = (literal_index, literal_index + 1)
+        elif isinstance(index_expression, (IdentifierNode, VariableNode)):
+            index_range = self.current_hlsl_bounded_loop_indices.get(
+                index_expression.name
+            )
+            if index_range != (0, binding["extent"]):
+                index_range = None
+        else:
+            index_range = None
+        if index_range is None or not (
+            0 <= index_range[0] <= index_range[1] <= binding["extent"]
+        ):
+            reason = "index-unproven" if index_range is None else "index-out-of-bounds"
+            raise self.hlsl_resource_pointer_array_error(
+                f"DirectX cannot prove bounded indexing of storage pointer array "
+                f"'{binding['array_name']}' by '{rendered_index}'",
+                binding=binding,
+                node=index_expression,
+                reason=reason,
+            )
+        return rendered_index, index_range
+
+    def hlsl_canonical_for_index_range(self, node):
+        init = getattr(node, "init", None)
+        condition = getattr(node, "condition", None)
+        update = getattr(node, "update", None)
+        if isinstance(update, list) and len(update) == 1:
+            update = update[0]
+        if not isinstance(init, VariableNode) or not isinstance(
+            condition, BinaryOpNode
+        ):
+            return None
+        name = init.name
+        constants = self.hlsl_current_visible_int_constants()
+        start = self.literal_int_value(getattr(init, "initial_value", None), constants)
+        stop = self.literal_int_value(getattr(condition, "right", None), constants)
+        condition_name = getattr(getattr(condition, "left", None), "name", None)
+        operator = getattr(condition, "operator", getattr(condition, "op", None))
+        if not (
+            start == 0
+            and isinstance(stop, int)
+            and not isinstance(stop, bool)
+            and stop >= 0
+            and condition_name == name
+            and operator == "<"
+            and isinstance(update, UnaryOpNode)
+            and getattr(update, "operator", getattr(update, "op", None)) == "++"
+            and getattr(getattr(update, "operand", None), "name", None) == name
+        ):
+            return None
+        return name, stop
+
+    def prepare_hlsl_resource_pointer_array(self, node, next_statement):
+        declaration_type = self.hlsl_storage_pointer_array_declaration_type(node)
+        if declaration_type is None:
+            return
+        array_type, pointer_type, address_space = declaration_type
+        binding = {
+            "array_name": node.name,
+            "address_space": address_space,
+            "declaration_node": node,
+        }
+
+        def reject(reason, source=node):
+            raise self.hlsl_resource_pointer_array_error(
+                f"DirectX cannot prove the bounded same-root contract for storage "
+                f"pointer array '{node.name}'",
+                binding=binding,
+                node=source,
+                reason=reason,
+            )
+
+        extent = self.literal_int_value(
+            array_type.size, self.hlsl_current_visible_int_constants()
+        )
+        if not isinstance(extent, int) or isinstance(extent, bool) or extent <= 0:
+            reject("unknown-extent")
+        if getattr(node, "initial_value", None) is not None:
+            reject("initializer-unsupported")
+        loop_range = (
+            self.hlsl_canonical_for_index_range(next_statement)
+            if isinstance(next_statement, ForNode)
+            else None
+        )
+        if loop_range is None or loop_range[1] != extent:
+            reject("initialization-unproven")
+        body = getattr(next_statement, "body", None)
+        statements = getattr(body, "statements", body if isinstance(body, list) else [])
+        expression = (
+            getattr(statements[0], "expression", statements[0])
+            if len(statements) == 1
+            else None
+        )
+        if not isinstance(expression, AssignmentNode):
+            reject("initialization-unproven", next_statement)
+        target = getattr(expression, "target", getattr(expression, "left", None))
+        target_array = getattr(target, "array", getattr(target, "array_expr", None))
+        target_index = getattr(target, "index", getattr(target, "index_expr", None))
+        if (
+            not isinstance(target, ArrayAccessNode)
+            or getattr(target_array, "name", None) != node.name
+            or getattr(target_index, "name", None) != loop_range[0]
+            or getattr(expression, "operator", "=") != "="
+        ):
+            reject("initialization-unproven", expression)
+
+        value = getattr(expression, "value", getattr(expression, "right", None))
+        if self.hlsl_private_pointer_expression_has_side_effects(value):
+            reject("side-effecting-offset", value)
+        root_expression = value
+        if isinstance(value, BinaryOpNode) and value.op in {"+", "-"}:
+            root_expression = value.left
+            if (
+                value.op == "+"
+                and self.hlsl_resource_pointer_binding(root_expression) is None
+            ):
+                root_expression = value.right
+        if not isinstance(root_expression, (IdentifierNode, VariableNode)):
+            replacement = None
+        else:
+            direct_root = self.hlsl_resource_pointer_binding(root_expression)
+            replacement = self.hlsl_resource_pointer_binding(value)
+            if (
+                direct_root is None
+                or replacement is None
+                or direct_root.get("root") != replacement.get("root")
+            ):
+                replacement = None
+        element_type = self.hlsl_buffer_pointer_pointee_type(pointer_type)
+        qualifiers = {str(value).lower() for value in node.qualifiers or []}
+        required_access = (
+            "read"
+            if "const" in qualifiers
+            or str(pointer_type.access_mode or "").lower() in {"read", "readonly"}
+            else "read_write"
+        )
+        if (
+            replacement is None
+            or self.hlsl_resource_type_name(replacement.get("resource_type"))
+            not in {"StructuredBuffer", "RWStructuredBuffer"}
+            or replacement.get("pointer_reinterpretation") is not None
+            or self.map_type(replacement.get("element_type"))
+            != self.map_type(element_type)
+            or required_access == "read_write"
+            and replacement.get("access") != "read_write"
+        ):
+            reject("backing-contract-unproven", value)
+
+        used_names = set(self.current_identifier_reserved_names)
+        used_names.update(self.local_variable_types)
+        offset_name = self.hlsl_unique_local_identifier(
+            f"{node.name}_offsets", used_names
+        )
+        self.current_identifier_reserved_names.add(offset_name)
+        binding.update(
+            {
+                "kind": "resource-pointer-array",
+                "extent": extent,
+                "element_type": element_type,
+                "required_access": required_access,
+                "offset_array": offset_name,
+                "root": replacement["root"],
+                "resource_type": replacement["resource_type"],
+                "source_element_type": replacement.get("source_element_type"),
+                "assignment_target_id": id(target),
+                "assignment_offset": replacement.get("offset", "0"),
+                "declaration_id": id(node),
+            }
+        )
+        self.current_hlsl_resource_pointer_aliases[node.name] = binding
+        self.local_variable_types[offset_name] = f"int64_t[{extent}]"
+
+    def generate_hlsl_resource_pointer_array_assignment(self, target, value, op):
+        binding = self.hlsl_resource_pointer_array_for_access(target)
+        if binding is None:
+            return None
+        if op != "=" or id(target) != binding.get("assignment_target_id"):
+            raise self.hlsl_resource_pointer_array_error(
+                "DirectX storage pointer array element reassignment is outside the "
+                f"proven initialization loop for '{binding['array_name']}'",
+                binding=binding,
+                node=target,
+                reason="element-reassignment-unsupported",
+            )
+        index_expression = getattr(target, "index", getattr(target, "index_expr", None))
+        rendered_index, _index_range = self.hlsl_resource_pointer_array_index(
+            binding, index_expression
+        )
+        return (
+            f"{binding['offset_array']}[uint({rendered_index})] = "
+            f"int64_t({binding['assignment_offset']})"
+        )
+
+    def hlsl_resource_pointer_array_selection_binding(self, expression):
+        binding = self.hlsl_resource_pointer_array_for_access(expression)
+        if binding is None:
+            return None
+        index_expression = getattr(
+            expression, "index", getattr(expression, "index_expr", None)
+        )
+        rendered_index, _index_range = self.hlsl_resource_pointer_array_index(
+            binding, index_expression
+        )
+        return {
+            **binding,
+            "kind": "resource-pointer-array-element",
+            "offset": f"{binding['offset_array']}[uint({rendered_index})]",
+            "access": binding["required_access"],
+            "is_pointer_alias": True,
+            "pointer_array_binding": binding,
+        }
+
+    def hlsl_resource_pointer_array_bare_expression_error(self, expression):
+        name = (
+            expression
+            if isinstance(expression, str)
+            else getattr(expression, "name", None)
+        )
+        binding = self.current_hlsl_resource_pointer_aliases.get(name)
+        if binding is None or binding.get("kind") != "resource-pointer-array":
+            return
+        raise self.hlsl_resource_pointer_array_error(
+            "DirectX cannot emit storage pointer array "
+            f"'{binding['array_name']}' as a first-class value",
+            binding=binding,
+            node=expression,
+            reason="pointer-array-escape",
+        )
+
+    def hlsl_resource_pointer_array_selection_escape_error(self, binding, node):
+        array_binding = binding and binding.get("pointer_array_binding")
+        if array_binding is None:
+            return
+        raise self.hlsl_resource_pointer_array_error(
+            "DirectX cannot materialize a selected storage pointer array element "
+            "as another pointer alias",
+            binding=array_binding,
+            node=node,
+            reason="pointer-element-escape",
+        )
+
     def hlsl_resource_pointer_alias_expression(self, expression):
         if isinstance(expression, str):
             binding = self.current_hlsl_resource_pointer_aliases.get(expression)
@@ -6904,6 +7256,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if isinstance(expression, (IdentifierNode, VariableNode)):
             binding = self.current_hlsl_resource_pointer_aliases.get(expression.name)
             return bool(binding and binding.get("is_pointer_alias"))
+        if isinstance(expression, ArrayAccessNode):
+            return self.hlsl_resource_pointer_array_for_access(expression) is not None
         if isinstance(expression, BinaryOpNode) and expression.op in {"+", "-"}:
             return self.hlsl_resource_pointer_alias_expression(
                 expression.left
@@ -6937,6 +7291,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return None
 
         if isinstance(expression, ArrayAccessNode):
+            pointer_array_binding = self.hlsl_resource_pointer_array_selection_binding(
+                expression
+            )
+            if pointer_array_binding is not None:
+                return pointer_array_binding
             binding = self.hlsl_resource_pointer_binding(expression.array)
             if binding is None:
                 return None
@@ -6959,9 +7318,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 else getattr(expression, "name", None)
             )
             if raw_name in self.current_hlsl_resource_pointer_aliases:
-                return dict(self.current_hlsl_resource_pointer_aliases[raw_name])
+                binding = self.current_hlsl_resource_pointer_aliases[raw_name]
+                if binding.get("kind") == "resource-pointer-array":
+                    return None
+                return dict(binding)
 
-            resource_type = self.hlsl_buffer_helper_resource_type(expression)
+            resource_type = self.current_hlsl_parameter_resource_types.get(
+                raw_name
+            ) or self.hlsl_buffer_helper_resource_type(expression)
             resource_name = self.hlsl_resource_type_name(resource_type)
             if resource_name not in {
                 "Buffer",
@@ -7127,6 +7491,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         }
 
     def generate_hlsl_resource_pointer_alias_declaration(self, node, indent):
+        pointer_array_declaration = (
+            self.generate_hlsl_resource_pointer_array_declaration(node, indent)
+        )
+        if pointer_array_declaration is not None:
+            return pointer_array_declaration
         vtype = getattr(node, "var_type", getattr(node, "vtype", None))
         workgroup_declaration = self.hlsl_workgroup_pointer_declaration(
             node, self.current_hlsl_resource_pointer_aliases
@@ -7136,6 +7505,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         binding = self.hlsl_resource_pointer_binding(
             getattr(node, "initial_value", None)
         )
+        self.hlsl_resource_pointer_array_selection_escape_error(binding, node)
         if binding is None:
             if workgroup_declaration:
                 raise self.hlsl_workgroup_pointer_error(
@@ -7237,6 +7607,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
 
     def generate_hlsl_resource_pointer_alias_assignment(self, target, value, op):
+        pointer_array_assignment = self.generate_hlsl_resource_pointer_array_assignment(
+            target, value, op
+        )
+        if pointer_array_assignment is not None:
+            return pointer_array_assignment
         if not isinstance(target, (str, IdentifierNode, VariableNode)):
             return None
         target_name = (
@@ -7267,6 +7642,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
 
         replacement = self.hlsl_resource_pointer_binding(value)
+        self.hlsl_resource_pointer_array_selection_escape_error(replacement, value)
         if replacement is None:
             if current.get("kind") == "workgroup-pointer":
                 raise self.hlsl_workgroup_pointer_error(
@@ -7331,6 +7707,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if binding is None:
             return None
         if require_write and binding.get("access") != "read_write":
+            pointer_array_binding = binding.get("pointer_array_binding")
+            if pointer_array_binding is not None:
+                raise self.hlsl_resource_pointer_array_error(
+                    "DirectX storage pointer array "
+                    f"'{pointer_array_binding['array_name']}' is read-only",
+                    binding=pointer_array_binding,
+                    node=pointer_expression,
+                    reason="write-through-readonly-alias",
+                )
             name = getattr(pointer_expression, "name", None) or str(pointer_expression)
             raise ValueError(
                 f"DirectX resource pointer '{name}' does not provide writable storage"
@@ -7667,6 +8052,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         previous_resource_pointer_aliases = dict(
             self.current_hlsl_resource_pointer_aliases
         )
+        previous_bounded_loop_indices = dict(self.current_hlsl_bounded_loop_indices)
         previous_unsupported_locals = set(
             self.current_unsupported_glsl_buffer_block_local_variables
         )
@@ -7677,6 +8063,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
 
         try:
+            loop_range = self.hlsl_canonical_for_index_range(node)
+            if loop_range is not None:
+                loop_name, loop_stop = loop_range
+                self.current_hlsl_bounded_loop_indices[loop_name] = (0, loop_stop)
             init = ""
             condition = ""
             update = ""
@@ -7719,6 +8109,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self.current_hlsl_resource_pointer_aliases = (
                 previous_resource_pointer_aliases
             )
+            self.current_hlsl_bounded_loop_indices = previous_bounded_loop_indices
             self.current_unsupported_glsl_buffer_block_local_variables = (
                 previous_unsupported_locals
             )
@@ -7987,8 +8378,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         else:
             statements = []
 
-        for stmt in statements:
+        for index, stmt in enumerate(statements):
             if isinstance(stmt, VariableNode):
+                next_statement = (
+                    statements[index + 1] if index + 1 < len(statements) else None
+                )
+                self.prepare_hlsl_resource_pointer_array(stmt, next_statement)
                 self.activate_hlsl_hoisted_groupshared_declaration(stmt)
             code += self.generate_statement(stmt, indent)
         return code
@@ -8089,6 +8484,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 none_value = self.generate_hlsl_builtin_option_none_value()
                 if none_value is not None:
                     return none_value
+            self.hlsl_resource_pointer_array_bare_expression_error(expr)
             self.hlsl_workgroup_pointer_bare_expression_error(expr)
             return expr
         elif isinstance(expr, bool):
@@ -8156,6 +8552,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             standard_constant = self.hlsl_standard_math_constant_expression(name)
             if standard_constant is not None:
                 return standard_constant
+            self.hlsl_resource_pointer_array_bare_expression_error(expr)
             self.hlsl_workgroup_pointer_bare_expression_error(expr)
             return self.hlsl_identifier_name(name)
         elif isinstance(expr, VariableNode):
@@ -8172,6 +8569,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             standard_constant = self.hlsl_standard_math_constant_expression(expr.name)
             if standard_constant is not None:
                 return standard_constant
+            self.hlsl_resource_pointer_array_bare_expression_error(expr)
             self.hlsl_workgroup_pointer_bare_expression_error(expr)
             return self.hlsl_identifier_name(expr.name)
         elif hasattr(expr, "__class__") and "BinaryOp" in str(expr.__class__):
@@ -8258,6 +8656,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         elif hasattr(expr, "__class__") and "ArrayAccess" in str(expr.__class__):
             array_expr = getattr(expr, "array_expr", getattr(expr, "array", ""))
             index_expr = getattr(expr, "index_expr", getattr(expr, "index", ""))
+            pointer_array_binding = self.hlsl_resource_pointer_array_for_access(expr)
+            if pointer_array_binding is not None:
+                self.hlsl_resource_pointer_array_index(
+                    pointer_array_binding, index_expr
+                )
+                raise self.hlsl_resource_pointer_array_error(
+                    "DirectX cannot emit a selected storage pointer array element "
+                    f"from '{pointer_array_binding['array_name']}' as a first-class "
+                    "pointer",
+                    binding=pointer_array_binding,
+                    node=expr,
+                    reason="pointer-element-escape",
+                )
             private_pointer_access = self.generate_hlsl_private_pointer_view_access(
                 array_expr, index_expr, access_expression=expr
             )
