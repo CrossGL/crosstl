@@ -1961,7 +1961,7 @@ def test_mixed_glsl_specialization_constants_lower_for_target_codegen():
     assert "Metal does not support double specialization constant" in metal
     assert "constant double spDouble" not in metal
     assert "thread VertexOutput& output" in metal
-    assert "constant int gl_MaxImageUnits = 8;" in metal
+    assert metal.count("constant int gl_MaxImageUnits = 8;") == 1
     assert "Metal vertex entry points require a position output" in metal
     assert "float4 __crossgl_position [[position]];" in metal
 

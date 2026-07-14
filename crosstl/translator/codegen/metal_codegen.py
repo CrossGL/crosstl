@@ -17122,9 +17122,17 @@ class MetalCodeGen:
         return functions
 
     def generate_metal_builtin_limit_fallbacks(self, ast, functions):
-        if not self.functions_use_identifier(functions, "gl_MaxImageUnits"):
+        name = "gl_MaxImageUnits"
+        declared_names = {
+            getattr(node, "name", None)
+            for node in [
+                *(getattr(ast, "constants", []) or []),
+                *(getattr(ast, "global_variables", []) or []),
+            ]
+        }
+        if name in declared_names or not self.functions_use_identifier(functions, name):
             return ""
-        default = GLSL_BUILTIN_INT_LIMITS["gl_MaxImageUnits"]
+        default = GLSL_BUILTIN_INT_LIMITS[name]
         return (
             "/* CrossGL fallback: GLSL builtin limit specialization "
             "gl_MaxImageUnits is not available in Metal; using the OpenGL "
