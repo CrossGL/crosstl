@@ -4,6 +4,7 @@ import re
 from copy import deepcopy
 from types import SimpleNamespace
 
+from ...glsl_builtins import GLSL_BUILTIN_INT_LIMITS
 from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
@@ -677,6 +678,7 @@ class OpenGLSpecializationConstantError(ValueError):
         specialization_id=None,
         constant_type=None,
         conflicting_name=None,
+        conflicting_id=None,
         reason=None,
         source_location=None,
     ):
@@ -685,6 +687,7 @@ class OpenGLSpecializationConstantError(ValueError):
         self.specialization_id = specialization_id
         self.constant_type = constant_type
         self.conflicting_name = conflicting_name
+        self.conflicting_id = conflicting_id
         self.reason = reason
         self.source_location = source_location
 
@@ -3335,17 +3338,23 @@ class GLSLCodeGen:
         self.function_structured_buffer_access_requirements = (
             self.collect_function_structured_buffer_access_requirements(functions)
         )
-        self.literal_int_constants = collect_literal_int_constants(
-            getattr(ast, "constants", [])
-        )
+        constants = list(getattr(ast, "constants", []) or [])
         self.glsl_specialization_constant_names = {
             node.name
-            for node in list(getattr(ast, "constants", []) or []) + list(
-                getattr(ast, "global_variables", []) or []
-            )
+            for node in constants
+            + list(getattr(ast, "global_variables", []) or [])
             if getattr(node, "name", None)
             and self.glsl_specialization_constant_attributes(node)
         }
+        # Constants derived from a specialization default remain runtime-dependent.
+        self.literal_int_constants = collect_literal_int_constants(
+            [
+                node
+                for node in constants
+                if getattr(node, "name", None)
+                not in self.glsl_specialization_constant_names
+            ]
+        )
         self.literal_int_vector_constants = (
             self.collect_literal_int_vector_constants_from_variables(
                 getattr(ast, "global_variables", []),
@@ -6080,6 +6089,15 @@ class GLSLCodeGen:
         declaration = format_c_style_array_declaration(mapped_type, name)
         constant_id = self.glsl_specialization_constant_id(node)
         value = self.glsl_specialization_constant_value(node)
+        builtin_declaration = self.glsl_builtin_specialization_constant_declaration(
+            node,
+            name=name,
+            const_type=const_type,
+            constant_id=constant_id,
+            value=value,
+        )
+        if builtin_declaration is not None:
+            return builtin_declaration
         metadata = ""
         layout = ""
         if constant_id is not None:
@@ -6099,6 +6117,40 @@ class GLSLCodeGen:
             value_code = self.generate_constant_expression(value, const_type)
 
         return f"{metadata}{layout}const {declaration} = {value_code};\n"
+
+    def glsl_builtin_specialization_constant_declaration(
+        self,
+        node,
+        *,
+        name,
+        const_type,
+        constant_id,
+        value,
+    ):
+        default = GLSL_BUILTIN_INT_LIMITS.get(name)
+        if default is None or constant_id is None:
+            return None
+        self.validate_glsl_specialization_constant_type(node, const_type)
+        if self.map_type(const_type) != "int":
+            raise OpenGLSpecializationConstantError(
+                f"OpenGL built-in specialization constant '{name}' must use int",
+                constant_name=name,
+                specialization_id=constant_id,
+                constant_type=self.type_name_string(const_type),
+                reason="builtin-type-mismatch",
+                source_location=self.glsl_specialization_constant_source_location(node),
+            )
+        if value is not None and evaluate_literal_int_expression(value) != default:
+            raise OpenGLSpecializationConstantError(
+                f"OpenGL built-in specialization constant '{name}' must retain "
+                f"its implicit default {default}",
+                constant_name=name,
+                specialization_id=constant_id,
+                constant_type=self.type_name_string(const_type),
+                reason="builtin-default-mismatch",
+                source_location=self.glsl_specialization_constant_source_location(node),
+            )
+        return f"layout(constant_id = {constant_id}) {name};\n"
 
     def glsl_constant_layout_prefix(self, node):
         constant_id = self.glsl_specialization_constant_id(node)
@@ -6266,13 +6318,30 @@ class GLSLCodeGen:
             if self.glsl_specialization_constant_attributes(node)
         ]
         used_ids = {}
+        used_names = {}
         for node in declarations:
             constant_id = self.glsl_specialization_constant_id(node)
             const_type = self.glsl_specialization_constant_type(node)
             self.validate_glsl_specialization_constant_type(node, const_type)
+            name = self.glsl_specialization_constant_name(node) or "<unnamed>"
+            previous = used_names.get(name)
+            if previous is not None and previous is not node:
+                previous_id = self.glsl_specialization_constant_id(previous)
+                raise OpenGLSpecializationConstantError(
+                    f"Duplicate OpenGL specialization constant name '{name}' "
+                    f"for ids {previous_id} and {constant_id}",
+                    constant_name=name,
+                    specialization_id=constant_id,
+                    constant_type=self.type_name_string(const_type),
+                    conflicting_name=name,
+                    conflicting_id=previous_id,
+                    reason="duplicate-name",
+                    source_location=self.glsl_specialization_constant_source_location(
+                        node
+                    ),
+                )
             previous = used_ids.get(constant_id)
             if previous is not None and previous is not node:
-                name = self.glsl_specialization_constant_name(node) or "<unnamed>"
                 previous_name = (
                     self.glsl_specialization_constant_name(previous) or "<unnamed>"
                 )
@@ -6289,6 +6358,7 @@ class GLSLCodeGen:
                     ),
                 )
             used_ids[constant_id] = node
+            used_names[name] = node
 
         global_ids = {id(node) for node in globals_}
         self.glsl_global_specialization_constants = [

@@ -462,6 +462,54 @@ def test_glsl_specialization_constant_branch_is_not_statically_pruned():
     assert "if (ENABLE_FEATURE) {" in generated
 
 
+def test_glsl_specialization_constant_dependency_is_not_statically_pruned(tmp_path):
+    shader = """
+    shader DependentSpecializationConstantBranch {
+        const int MODE @constant_id(3) = 1;
+        const int DERIVED_MODE = MODE + 1;
+
+        compute {
+            void main() {
+                int result = 0;
+                if (DERIVED_MODE == 2) {
+                    result = 10;
+                } else {
+                    result = 20;
+                }
+            }
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "layout(constant_id = 3) const int MODE = 1;" in generated
+    assert "const int DERIVED_MODE = (MODE + 1);" in generated
+    assert "if ((DERIVED_MODE == 2)) {" in generated
+    assert "result = 10;" in generated
+    assert "result = 20;" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "dependent_specialization_constant",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_builtin_limit_specialization_uses_native_redeclaration():
+    shader = """
+    shader BuiltinSpecializationConstant {
+        const int gl_MaxImageUnits @constant_id(24) = 8;
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "layout(constant_id = 24) gl_MaxImageUnits;" in generated
+    assert "const int gl_MaxImageUnits" not in generated
+
+
 def test_glsl_global_function_constants_emit_scalar_specializations_and_validate(
     tmp_path,
 ):
@@ -534,6 +582,32 @@ def test_glsl_specialization_constant_rejects_duplicate_ids_with_location():
     assert diagnostic.specialization_id == 7
     assert diagnostic.conflicting_name == "enabled"
     assert diagnostic.reason == "duplicate-id"
+    assert diagnostic.source_location == source_location
+
+
+def test_glsl_specialization_constant_rejects_duplicate_names_with_location():
+    shader = """
+    shader DuplicateSpecializationNames {
+        const bool mode @constant_id(7) = true;
+        constant int mode @function_constant(8) = 2;
+    }
+    """
+    ast = parse_code(tokenize_code(shader))
+    source_location = {"line": 4, "column": 9}
+    ast.global_variables[0].source_location = source_location
+
+    with pytest.raises(
+        OpenGLSpecializationConstantError,
+        match="Duplicate OpenGL specialization constant name 'mode'",
+    ) as exc_info:
+        GLSLCodeGen().generate(ast)
+
+    diagnostic = exc_info.value
+    assert diagnostic.constant_name == "mode"
+    assert diagnostic.specialization_id == 8
+    assert diagnostic.conflicting_name == "mode"
+    assert diagnostic.conflicting_id == 7
+    assert diagnostic.reason == "duplicate-name"
     assert diagnostic.source_location == source_location
 
 
