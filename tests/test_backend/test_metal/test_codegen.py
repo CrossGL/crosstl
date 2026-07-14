@@ -8119,6 +8119,26 @@ def test_codegen_auto_struct_return_retains_nested_array_vector_type():
     assert "CrossGLMetalVectorIndex_u8vec4_get(bits.bytes, 0)" not in crossgl
 
 
+def test_codegen_type_alias_member_array_keeps_component_type():
+    source = """
+    struct Tile {
+        float2 values[2];
+    };
+
+    void read_alias(uint lane) {
+        using tile_t = Tile;
+        tile_t tile;
+        tile.values[0][lane] = 1.0f;
+    }
+    """
+
+    crossgl = normalize(convert(source))
+
+    assert (
+        "CrossGLMetalVectorIndex_vec2_set(tile.values[0], lane, 1.0f);" in crossgl
+    )
+
+
 def test_codegen_resource_vector_components_preserve_buffer_indexing(tmp_path):
     source = """
     kernel void resource_components(

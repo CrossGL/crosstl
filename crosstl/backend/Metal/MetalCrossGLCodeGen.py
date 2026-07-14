@@ -9865,7 +9865,9 @@ class MetalToCrossGLConverter:
             )
             if vector_member_type is not None:
                 return vector_member_type
-            object_type = self.normalized_metal_type(object_type)
+            object_type = self.normalized_metal_type(
+                self.resolve_type_alias(object_type)
+            )
             member_types = self.struct_member_types.get(object_type)
             if not member_types:
                 return None
