@@ -46,6 +46,7 @@ MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE = (
     "mlx/backend/metal/kernels/scaled_dot_product_attention.metal"
 )
 MLX_SOFTMAX_SOURCE = "mlx/backend/metal/kernels/softmax.metal"
+MLX_TERNARY_SOURCE = "mlx/backend/metal/kernels/ternary.metal"
 REFERENCE_ACCESSOR_FIXTURE_NAME = "reference_accessor_lvalue.metal"
 REFERENCE_ACCESSOR_FIXTURE_PATH = (
     Path(__file__).resolve().parent / "fixtures" / REFERENCE_ACCESSOR_FIXTURE_NAME
@@ -61,6 +62,7 @@ MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES = (
     MLX_ROPE_SOURCE,
     MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
     MLX_SOFTMAX_SOURCE,
+    MLX_TERNARY_SOURCE,
 )
 MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
     MLX_ARANGE_SOURCE,
@@ -73,7 +75,7 @@ MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
     MLX_ROPE_SOURCE,
     MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
     MLX_SOFTMAX_SOURCE,
-    "mlx/backend/metal/kernels/ternary.metal",
+    MLX_TERNARY_SOURCE,
 )
 MLX_CLEAN_REDUCED_FRONTIER_SOURCES = tuple(
     dict.fromkeys(
@@ -106,6 +108,7 @@ MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES = (
     MLX_ROPE_SOURCE,
     MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
     MLX_SOFTMAX_SOURCE,
+    MLX_TERNARY_SOURCE,
 )
 # Pinned generated compute entries compiled by official DXC v1.9.2602.24.
 MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS = {
@@ -117,6 +120,7 @@ MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS = {
     MLX_ROPE_SOURCE: 18,
     MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE: 42,
     MLX_SOFTMAX_SOURCE: 10,
+    MLX_TERNARY_SOURCE: 212,
 }
 MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT = sum(
     MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS.values()
@@ -280,6 +284,7 @@ FULL_CORPUS_TRACKED_ISSUES = (
     *METAL_ROUNDTRIP_SEMANTIC_TRACKED_ISSUES,
 )
 RESOLVED_FRONTIER_ISSUES = (
+    "https://github.com/CrossGL/crosstl/issues/1695",
     "https://github.com/CrossGL/crosstl/issues/1667",
     "https://github.com/CrossGL/crosstl/issues/1668",
     "https://github.com/CrossGL/crosstl/issues/1661",
