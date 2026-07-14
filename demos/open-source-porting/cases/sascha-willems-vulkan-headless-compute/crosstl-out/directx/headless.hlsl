@@ -1,5 +1,5 @@
 
-static const uint BUFFER_ELEMENTS = 32;
+static const uint BUFFER_ELEMENTS = 32u;
 
 RWByteAddressBuffer pos : register(u0);
 uint fibonacci(uint n);

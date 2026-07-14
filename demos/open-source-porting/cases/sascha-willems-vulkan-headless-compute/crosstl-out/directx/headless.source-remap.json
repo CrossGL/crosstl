@@ -6,9 +6,9 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 3,
-        "endOffset": 41,
+        "endOffset": 42,
         "file": "crosstl-out/directx/headless.hlsl",
-        "length": 40,
+        "length": 41,
         "line": 2,
         "offset": 1
       },
@@ -28,11 +28,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 6,
-        "endOffset": 106,
+        "endOffset": 107,
         "file": "crosstl-out/directx/headless.hlsl",
         "length": 24,
         "line": 5,
-        "offset": 82
+        "offset": 83
       },
       "original": {
         "column": 1,
@@ -50,11 +50,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 8,
-        "endOffset": 132,
+        "endOffset": 133,
         "file": "crosstl-out/directx/headless.hlsl",
         "length": 25,
         "line": 7,
-        "offset": 107
+        "offset": 108
       },
       "original": {
         "column": 1,
@@ -72,11 +72,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 9,
-        "endOffset": 150,
+        "endOffset": 151,
         "file": "crosstl-out/directx/headless.hlsl",
         "length": 18,
         "line": 8,
-        "offset": 132
+        "offset": 133
       },
       "original": {
         "column": 1,
@@ -94,11 +94,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 12,
-        "endOffset": 193,
+        "endOffset": 194,
         "file": "crosstl-out/directx/headless.hlsl",
         "length": 19,
         "line": 11,
-        "offset": 174
+        "offset": 175
       },
       "original": {
         "column": 1,
@@ -116,11 +116,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 13,
-        "endOffset": 212,
+        "endOffset": 213,
         "file": "crosstl-out/directx/headless.hlsl",
         "length": 19,
         "line": 12,
-        "offset": 193
+        "offset": 194
       },
       "original": {
         "column": 1,
@@ -138,11 +138,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 14,
-        "endOffset": 249,
+        "endOffset": 250,
         "file": "crosstl-out/directx/headless.hlsl",
         "length": 37,
         "line": 13,
-        "offset": 212
+        "offset": 213
       },
       "original": {
         "column": 1,
@@ -160,11 +160,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 15,
-        "endOffset": 275,
+        "endOffset": 276,
         "file": "crosstl-out/directx/headless.hlsl",
         "length": 26,
         "line": 14,
-        "offset": 249
+        "offset": 250
       },
       "original": {
         "column": 1,
@@ -182,11 +182,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 16,
-        "endOffset": 297,
+        "endOffset": 298,
         "file": "crosstl-out/directx/headless.hlsl",
         "length": 22,
         "line": 15,
-        "offset": 275
+        "offset": 276
       },
       "original": {
         "column": 1,
@@ -204,11 +204,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 17,
-        "endOffset": 318,
+        "endOffset": 319,
         "file": "crosstl-out/directx/headless.hlsl",
         "length": 21,
         "line": 16,
-        "offset": 297
+        "offset": 298
       },
       "original": {
         "column": 1,
@@ -226,11 +226,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 25,
-        "endOffset": 481,
+        "endOffset": 482,
         "file": "crosstl-out/directx/headless.hlsl",
         "length": 37,
         "line": 24,
-        "offset": 444
+        "offset": 445
       },
       "original": {
         "column": 1,
@@ -248,11 +248,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 26,
-        "endOffset": 517,
+        "endOffset": 518,
         "file": "crosstl-out/directx/headless.hlsl",
         "length": 36,
         "line": 25,
-        "offset": 481
+        "offset": 482
       },
       "original": {
         "column": 1,
@@ -270,11 +270,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 29,
-        "endOffset": 601,
+        "endOffset": 602,
         "file": "crosstl-out/directx/headless.hlsl",
         "length": 62,
         "line": 28,
-        "offset": 539
+        "offset": 540
       },
       "original": {
         "column": 1,
