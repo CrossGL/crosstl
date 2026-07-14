@@ -38769,5 +38769,32 @@ def test_hlsl_aggregate_conditional_reports_unsafe_call_argument_order():
     assert diagnostic.reason == "sibling-evaluation-order"
 
 
+def test_hlsl_aggregate_conditional_reports_unsupported_nested_call_argument():
+    shader = """
+    shader AggregateConditionalNestedCallArgument {
+        struct Payload {
+            float value;
+        };
+
+        float consume(float value) {
+            return value;
+        }
+
+        float read(bool use_left, Payload left, Payload right) {
+            return consume((use_left ? left : right).value);
+        }
+    }
+    """
+
+    with pytest.raises(DirectXAggregateConditionalError) as excinfo:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = excinfo.value
+    assert diagnostic.aggregate_type == "Payload"
+    assert diagnostic.target == "HLSL"
+    assert diagnostic.context == "expression"
+    assert diagnostic.reason == "statement-context-required"
+
+
 if __name__ == "__main__":
     pytest.main()
