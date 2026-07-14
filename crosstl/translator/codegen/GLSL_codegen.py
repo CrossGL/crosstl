@@ -16281,9 +16281,8 @@ complex64_t crossgl_complex64_mod_assign(
         if isinstance(expression, ConstructorNode):
             return all(
                 self.glsl_side_effect_free_expression(argument)
-                for argument in list(getattr(expression, "arguments", []) or []) + list(
-                    (getattr(expression, "named_arguments", {}) or {}).values()
-                )
+                for argument in list(getattr(expression, "arguments", []) or [])
+                + list((getattr(expression, "named_arguments", {}) or {}).values())
             )
         return False
 
@@ -23387,8 +23386,11 @@ complex64_t crossgl_complex64_mod_assign(
                         self.glsl_private_pointer_backing_error(
                             call, parameter_name, binding
                         )
-                    self.glsl_private_pointer_binding_offset(
-                        call, parameter_name, binding
+                    self.glsl_private_pointer_binding_offset_interval(
+                        call,
+                        parameter_name,
+                        binding,
+                        require_exact=binding.get("root_kind") == "scalar",
                     )
                     expected_type = pointer_element_types[call["callee"]][
                         parameter_name
@@ -23465,10 +23467,9 @@ complex64_t crossgl_complex64_mod_assign(
                 )
                 for parameter_name in full_span_parameters:
                     binding = call["bindings"].get(parameter_name, {})
-                    if (
-                        binding.get("root_kind") == "local"
-                        and binding.get("offset") == 0
-                    ):
+                    if binding.get("root_kind") == "local" and binding.get(
+                        "offset_interval"
+                    ) == (0, 0):
                         required_spans[call["callee"]][parameter_name] = max(
                             required_spans[call["callee"]][parameter_name],
                             binding["extent"],
@@ -23489,10 +23490,12 @@ complex64_t crossgl_complex64_mod_assign(
                         span = callee_spans.get(parameter_name, 0)
                         if span <= 0 or binding.get("root_kind") != "parameter":
                             continue
-                        offset = self.glsl_private_pointer_binding_offset(
-                            call, parameter_name, binding
+                        _lower, upper = (
+                            self.glsl_private_pointer_binding_offset_interval(
+                                call, parameter_name, binding
+                            )
                         )
-                        needed = offset + span
+                        needed = upper + span
                         root_name = binding["root"]
                         if needed > caller_spans.get(root_name, 0):
                             caller_spans[root_name] = needed
@@ -23688,11 +23691,17 @@ complex64_t crossgl_complex64_mod_assign(
         constants,
     ):
         calls = []
+        initial_intervals = {}
+        for name, value in constants.items():
+            literal = self.literal_int_value(value, constants)
+            if literal is not None:
+                initial_intervals[name] = (literal, literal)
         initial_bindings = {
             name: {
                 "root_kind": "parameter",
                 "root": name,
                 "offset": 0,
+                "offset_interval": (0, 0),
                 "side_effecting": False,
                 "element_type": element_type,
             }
@@ -23709,6 +23718,7 @@ complex64_t crossgl_complex64_mod_assign(
                     "root": name,
                     "extent": 1,
                     "offset": 0,
+                    "offset_interval": (0, 0),
                     "side_effecting": False,
                     "element_type": info["element_type"],
                 }
@@ -23724,6 +23734,7 @@ complex64_t crossgl_complex64_mod_assign(
                     "root": name,
                     "extent": info["extent"],
                     "offset": 0,
+                    "offset_interval": (0, 0),
                     "side_effecting": False,
                     "element_type": info["element_type"],
                 }
@@ -23734,6 +23745,7 @@ complex64_t crossgl_complex64_mod_assign(
                     "root": name,
                     "extent": 1,
                     "offset": 0,
+                    "offset_interval": (0, 0),
                     "side_effecting": False,
                     "element_type": scalar_info["element_type"],
                 }
@@ -23741,11 +23753,36 @@ complex64_t crossgl_complex64_mod_assign(
                 "root_kind": None,
                 "root": name,
                 "offset": None,
+                "offset_interval": None,
                 "side_effecting": False,
                 "element_type": None,
             }
 
-        def record_call(node, active_bindings):
+        def merge_intervals(left, right):
+            return {
+                name: (
+                    min(left[name][0], right[name][0]),
+                    max(left[name][1], right[name][1]),
+                )
+                for name in left.keys() & right.keys()
+            }
+
+        def modified_names(value):
+            names = set()
+            for child in self.walk_ast(value):
+                if isinstance(child, AssignmentNode):
+                    target = getattr(child, "target", getattr(child, "left", None))
+                    if isinstance(target, (str, IdentifierNode, VariableNode)):
+                        name = self.expression_name(target)
+                        if name:
+                            names.add(name)
+                elif isinstance(child, UnaryOpNode) and child.op in {"++", "--"}:
+                    name = self.expression_name(child.operand)
+                    if name:
+                        names.add(name)
+            return names
+
+        def record_call(node, active_bindings, active_intervals):
             callee_key = self.glsl_private_pointer_call_target_key(
                 node,
                 source_candidates,
@@ -23765,6 +23802,7 @@ complex64_t crossgl_complex64_mod_assign(
                     caller_local_arrays,
                     constants,
                     active_bindings,
+                    active_intervals,
                 )
                 if (
                     escaped_binding is not None
@@ -23793,12 +23831,14 @@ complex64_t crossgl_complex64_mod_assign(
                     caller_local_arrays,
                     constants,
                     active_bindings,
+                    active_intervals,
                 )
                 if binding is None:
                     binding = {
                         "root_kind": None,
                         "root": self.expression_name(argument),
                         "offset": None,
+                        "offset_interval": None,
                         "side_effecting": (
                             self.glsl_private_pointer_expression_has_side_effects(
                                 argument
@@ -23817,70 +23857,203 @@ complex64_t crossgl_complex64_mod_assign(
                 }
             )
 
-        def visit(value, active_bindings):
+        def visit(value, active_bindings, active_intervals):
             if value is None or isinstance(value, (str, int, float, bool)):
                 return
             if isinstance(value, (list, tuple)):
                 for item in value:
-                    visit(item, active_bindings)
+                    visit(item, active_bindings, active_intervals)
                 return
             if isinstance(value, BlockNode):
                 block_bindings = dict(active_bindings)
-                for statement in getattr(value, "statements", []) or []:
-                    visit(statement, block_bindings)
+                block_intervals = dict(active_intervals)
+                statements = list(getattr(value, "statements", []) or [])
+                declared_names = {
+                    getattr(statement, "name", None)
+                    for statement in statements
+                    if isinstance(statement, (VariableNode, ArrayNode))
+                    and getattr(statement, "name", None)
+                }
+                outer_names = set(active_bindings)
+                for statement in statements:
+                    visit(statement, block_bindings, block_intervals)
+                for name in outer_names - declared_names:
+                    if name in block_intervals:
+                        active_intervals[name] = block_intervals[name]
+                    else:
+                        active_intervals.pop(name, None)
                 return
             if isinstance(value, (VariableNode, ArrayNode)):
-                visit(getattr(value, "initial_value", None), active_bindings)
+                initial_value = getattr(value, "initial_value", None)
+                visit(initial_value, active_bindings, active_intervals)
                 name, binding = shadow_binding(value)
                 if name:
+                    interval = self.glsl_private_pointer_affine_interval(
+                        initial_value, active_intervals, constants
+                    )
+                    if interval is None:
+                        active_intervals.pop(name, None)
+                    else:
+                        active_intervals[name] = interval
                     active_bindings[name] = binding
                 return
+            if isinstance(value, AssignmentNode):
+                target = getattr(value, "target", getattr(value, "left", None))
+                assigned = getattr(value, "value", getattr(value, "right", None))
+                visit(target, active_bindings, active_intervals)
+                visit(assigned, active_bindings, active_intervals)
+                target_name = self.expression_name(target)
+                if target_name and isinstance(
+                    target, (str, IdentifierNode, VariableNode)
+                ):
+                    assigned_interval = self.glsl_private_pointer_affine_interval(
+                        assigned, active_intervals, constants
+                    )
+                    operator = getattr(value, "operator", "=")
+                    current = active_intervals.get(target_name)
+                    if operator == "=":
+                        replacement = assigned_interval
+                    elif operator == "+=" and current and assigned_interval:
+                        replacement = (
+                            current[0] + assigned_interval[0],
+                            current[1] + assigned_interval[1],
+                        )
+                    elif operator == "-=" and current and assigned_interval:
+                        replacement = (
+                            current[0] - assigned_interval[1],
+                            current[1] - assigned_interval[0],
+                        )
+                    else:
+                        replacement = None
+                    if replacement is None:
+                        active_intervals.pop(target_name, None)
+                    else:
+                        active_intervals[target_name] = replacement
+                return
             if isinstance(value, FunctionCallNode):
-                record_call(value, active_bindings)
+                record_call(value, active_bindings, active_intervals)
                 for argument in (
                     getattr(value, "arguments", getattr(value, "args", [])) or []
                 ):
-                    visit(argument, active_bindings)
+                    visit(argument, active_bindings, active_intervals)
                 return
             if isinstance(value, IfNode):
-                visit(getattr(value, "condition", None), active_bindings)
-                visit(getattr(value, "then_branch", None), dict(active_bindings))
-                visit(getattr(value, "else_branch", None), dict(active_bindings))
+                visit(
+                    getattr(value, "condition", None),
+                    active_bindings,
+                    active_intervals,
+                )
+                then_intervals = dict(active_intervals)
+                else_intervals = dict(active_intervals)
+                visit(
+                    getattr(value, "then_branch", None),
+                    dict(active_bindings),
+                    then_intervals,
+                )
+                visit(
+                    getattr(value, "else_branch", None),
+                    dict(active_bindings),
+                    else_intervals,
+                )
+                active_intervals.clear()
+                active_intervals.update(merge_intervals(then_intervals, else_intervals))
                 return
             if isinstance(value, ForNode):
                 loop_bindings = dict(active_bindings)
-                visit(getattr(value, "init", None), loop_bindings)
-                visit(getattr(value, "condition", None), loop_bindings)
-                visit(getattr(value, "body", None), loop_bindings)
-                visit(getattr(value, "update", None), loop_bindings)
+                loop_intervals = dict(active_intervals)
+                visit(getattr(value, "init", None), loop_bindings, loop_intervals)
+                loop_name, loop_interval = self.glsl_private_pointer_loop_interval(
+                    value, loop_intervals, constants
+                )
+                if loop_name and loop_name in modified_names(
+                    getattr(value, "body", None)
+                ):
+                    loop_interval = None
+                if loop_name:
+                    if loop_interval is None:
+                        loop_intervals.pop(loop_name, None)
+                    else:
+                        loop_intervals[loop_name] = loop_interval
+                visit(
+                    getattr(value, "condition", None),
+                    loop_bindings,
+                    loop_intervals,
+                )
+                visit(getattr(value, "body", None), loop_bindings, loop_intervals)
+                visit(getattr(value, "update", None), loop_bindings, loop_intervals)
+                changed_names = modified_names(getattr(value, "body", None))
+                changed_names.update(modified_names(getattr(value, "update", None)))
+                for name in changed_names:
+                    active_intervals.pop(name, None)
                 return
             if isinstance(value, ForInNode):
                 loop_bindings = dict(active_bindings)
-                visit(getattr(value, "iterable", None), loop_bindings)
+                loop_intervals = dict(active_intervals)
+                iterable = getattr(value, "iterable", None)
+                visit(iterable, loop_bindings, loop_intervals)
+                start = self.glsl_private_pointer_affine_interval(
+                    getattr(iterable, "start", None), loop_intervals, constants
+                )
+                end = self.glsl_private_pointer_affine_interval(
+                    getattr(iterable, "end", None), loop_intervals, constants
+                )
                 pattern = getattr(value, "pattern", None)
+                if pattern and start and end:
+                    maximum = end[1] - (
+                        0 if getattr(iterable, "inclusive", False) else 1
+                    )
+                    if start[0] <= maximum:
+                        loop_intervals[pattern] = (start[0], maximum)
+                    else:
+                        loop_intervals.pop(pattern, None)
+                elif pattern:
+                    loop_intervals.pop(pattern, None)
                 if pattern:
                     loop_bindings[pattern] = {
                         "root_kind": None,
                         "root": pattern,
                         "offset": None,
+                        "offset_interval": None,
                         "side_effecting": False,
                         "element_type": None,
                     }
-                visit(getattr(value, "body", None), loop_bindings)
+                visit(getattr(value, "body", None), loop_bindings, loop_intervals)
+                for name in modified_names(getattr(value, "body", None)):
+                    active_intervals.pop(name, None)
                 return
             if isinstance(value, (WhileNode, DoWhileNode, LoopNode)):
                 loop_bindings = dict(active_bindings)
-                visit(getattr(value, "condition", None), loop_bindings)
-                visit(getattr(value, "body", None), loop_bindings)
+                loop_intervals = {
+                    name: interval
+                    for name, interval in active_intervals.items()
+                    if self.literal_int_value(name, constants) is not None
+                }
+                visit(
+                    getattr(value, "condition", None),
+                    loop_bindings,
+                    loop_intervals,
+                )
+                visit(getattr(value, "body", None), loop_bindings, loop_intervals)
+                changed_names = modified_names(getattr(value, "condition", None))
+                changed_names.update(modified_names(getattr(value, "body", None)))
+                for name in changed_names:
+                    active_intervals.pop(name, None)
+                return
+            if isinstance(value, UnaryOpNode):
+                visit(value.operand, active_bindings, active_intervals)
+                if value.op in {"++", "--"}:
+                    name = self.expression_name(value.operand)
+                    if name:
+                        active_intervals.pop(name, None)
                 return
             if not hasattr(value, "__dict__"):
                 return
             for key, child in vars(value).items():
                 if key in {"parent", "annotations", "args", "name"}:
                     continue
-                visit(child, active_bindings)
+                visit(child, active_bindings, active_intervals)
 
-        visit(getattr(function, "body", []), initial_bindings)
+        visit(getattr(function, "body", []), initial_bindings, initial_intervals)
         return calls
 
     def glsl_private_pointer_expression_has_side_effects(self, expression):
@@ -23920,6 +24093,7 @@ complex64_t crossgl_complex64_mod_assign(
         local_arrays,
         constants,
         lexical_bindings=None,
+        intervals=None,
     ):
         if isinstance(expression, (str, IdentifierNode, VariableNode)):
             name = (
@@ -23934,6 +24108,7 @@ complex64_t crossgl_complex64_mod_assign(
                     "root_kind": "parameter",
                     "root": name,
                     "offset": 0,
+                    "offset_interval": (0, 0),
                     "side_effecting": False,
                     "element_type": parameter_element_types[name],
                 }
@@ -23943,6 +24118,7 @@ complex64_t crossgl_complex64_mod_assign(
                     "root": name,
                     "extent": local_arrays[name]["extent"],
                     "offset": 0,
+                    "offset_interval": (0, 0),
                     "side_effecting": False,
                     "element_type": local_arrays[name]["element_type"],
                 }
@@ -23957,6 +24133,7 @@ complex64_t crossgl_complex64_mod_assign(
                     local_arrays,
                     constants,
                     lexical_bindings,
+                    intervals,
                 )
                 if binding is not None and binding.get("root_kind") == "scalar_value":
                     binding["root_kind"] = "scalar"
@@ -23969,6 +24146,7 @@ complex64_t crossgl_complex64_mod_assign(
                 local_arrays,
                 constants,
                 lexical_bindings,
+                intervals,
             )
             delta_expression = operand.index
             operator = "+"
@@ -23979,6 +24157,7 @@ complex64_t crossgl_complex64_mod_assign(
                 local_arrays,
                 constants,
                 lexical_bindings,
+                intervals,
             )
             delta_expression = expression.right
             operator = expression.op
@@ -23989,6 +24168,7 @@ complex64_t crossgl_complex64_mod_assign(
                     local_arrays,
                     constants,
                     lexical_bindings,
+                    intervals,
                 )
                 delta_expression = expression.left
             if binding is None:
@@ -23997,16 +24177,122 @@ complex64_t crossgl_complex64_mod_assign(
             return None
 
         delta = self.literal_int_value(delta_expression, constants)
-        if delta is not None and operator == "-":
-            delta = -delta
+        delta_interval = (
+            (delta, delta)
+            if delta is not None
+            else self.glsl_private_pointer_affine_interval(
+                delta_expression, intervals or {}, constants
+            )
+        )
+        if operator == "-":
+            if delta is not None:
+                delta = -delta
+            if delta_interval is not None:
+                delta_interval = (-delta_interval[1], -delta_interval[0])
         current = binding.get("offset")
         binding["offset"] = (
             None if current is None or delta is None else current + delta
+        )
+        current_interval = binding.get("offset_interval")
+        if current_interval is None and isinstance(current, int):
+            current_interval = (current, current)
+        binding["offset_interval"] = (
+            None
+            if current_interval is None or delta_interval is None
+            else (
+                current_interval[0] + delta_interval[0],
+                current_interval[1] + delta_interval[1],
+            )
         )
         binding["side_effecting"] = binding.get(
             "side_effecting", False
         ) or self.glsl_private_pointer_expression_has_side_effects(delta_expression)
         return binding
+
+    def glsl_private_pointer_affine_interval(self, expression, intervals, constants):
+        value = self.literal_int_value(expression, constants)
+        if value is not None:
+            return value, value
+        if expression is None:
+            return None
+        name = self.expression_name(expression)
+        if name in intervals:
+            return intervals[name]
+        if isinstance(expression, UnaryOpNode):
+            if expression.op in {"++", "--"}:
+                return None
+            operand = self.glsl_private_pointer_affine_interval(
+                expression.operand, intervals, constants
+            )
+            if operand is None:
+                return None
+            if expression.op == "+":
+                return operand
+            if expression.op == "-":
+                return -operand[1], -operand[0]
+            return None
+        if isinstance(expression, BinaryOpNode):
+            if expression.op in {"+", "-"}:
+                left = self.glsl_private_pointer_affine_interval(
+                    expression.left, intervals, constants
+                )
+                right = self.glsl_private_pointer_affine_interval(
+                    expression.right, intervals, constants
+                )
+                if left is None or right is None:
+                    return None
+                if expression.op == "+":
+                    return left[0] + right[0], left[1] + right[1]
+                return left[0] - right[1], left[1] - right[0]
+            if expression.op != "*":
+                return None
+            left_coefficient = self.literal_int_value(expression.left, constants)
+            right_coefficient = self.literal_int_value(expression.right, constants)
+            if left_coefficient is not None:
+                coefficient = left_coefficient
+                affine_expression = expression.right
+            elif right_coefficient is not None:
+                coefficient = right_coefficient
+                affine_expression = expression.left
+            else:
+                return None
+            affine = self.glsl_private_pointer_affine_interval(
+                affine_expression, intervals, constants
+            )
+            if affine is None:
+                return None
+            products = (coefficient * affine[0], coefficient * affine[1])
+            return min(products), max(products)
+        if isinstance(expression, FunctionCallNode):
+            function_name = self.function_call_name(expression)
+            arguments = list(
+                getattr(
+                    expression,
+                    "arguments",
+                    getattr(expression, "args", []),
+                )
+                or []
+            )
+            if (
+                function_name
+                in {
+                    "int",
+                    "uint",
+                    "short",
+                    "ushort",
+                    "int16",
+                    "uint16",
+                    "int32_t",
+                    "uint32_t",
+                    "size_t",
+                    "ptrdiff_t",
+                }
+                and len(arguments) == 1
+            ):
+                return self.glsl_private_pointer_affine_interval(
+                    arguments[0], intervals, constants
+                )
+        return None
 
     def glsl_private_pointer_interval(self, expression, intervals, constants):
         value = self.literal_int_value(expression, constants)
@@ -24512,6 +24798,19 @@ complex64_t crossgl_complex64_mod_assign(
             )
             if specialized_name in self.function_private_pointer_parameters:
                 return specialized_name
+            candidates = source_candidates.get(candidate_name, ())
+            private_candidates = [
+                candidate
+                for candidate in candidates
+                if candidate in self.function_private_pointer_parameters
+            ]
+            if (
+                candidate_name in self.function_private_pointer_parameters
+                and candidate_name not in private_candidates
+            ):
+                private_candidates.append(candidate_name)
+            if not private_candidates:
+                continue
             resolved = self.resolve_glsl_function_overload(
                 candidate_name,
                 arguments,
@@ -24521,16 +24820,8 @@ complex64_t crossgl_complex64_mod_assign(
                 resolved_key = self.glsl_function_declaration_name(resolved)
                 if resolved_key in self.function_private_pointer_parameters:
                     return resolved_key
-            candidates = source_candidates.get(candidate_name, ())
-            private_candidates = [
-                candidate
-                for candidate in candidates
-                if candidate in self.function_private_pointer_parameters
-            ]
             if len(private_candidates) == 1:
                 return private_candidates[0]
-            if candidate_name in self.function_private_pointer_parameters:
-                return candidate_name
         return None
 
     def glsl_private_pointer_materialized_function_name(self, name):
@@ -24554,15 +24845,28 @@ complex64_t crossgl_complex64_mod_assign(
             function_name, function_name
         )
 
-    def glsl_private_pointer_binding_offset(self, call, parameter_name, binding):
+    def glsl_private_pointer_binding_offset_interval(
+        self, call, parameter_name, binding, *, require_exact=False
+    ):
+        exact_offset = binding.get("offset")
+        interval = binding.get("offset_interval")
+        if interval is None and isinstance(exact_offset, int):
+            interval = (exact_offset, exact_offset)
         if binding.get("side_effecting"):
             reason = "side-effecting-view-offset"
-        elif not isinstance(binding.get("offset"), int):
+        elif require_exact and not isinstance(exact_offset, int):
             reason = "unprovable-view-offset"
-        elif binding["offset"] < 0:
+        elif not (
+            isinstance(interval, tuple)
+            and len(interval) == 2
+            and all(isinstance(bound, int) for bound in interval)
+            and interval[0] <= interval[1]
+        ):
+            reason = "unprovable-view-offset"
+        elif interval[0] < 0:
             reason = "negative-view-offset"
         else:
-            return binding["offset"]
+            return interval
         display_name = self.glsl_private_pointer_display_name(call["callee"])
         backing_name = binding.get("root") or "unknown"
         raise OpenGLPrivatePointerParameterError(
@@ -24605,11 +24909,13 @@ complex64_t crossgl_complex64_mod_assign(
         binding,
         extent,
     ):
-        offset = self.glsl_private_pointer_binding_offset(call, parameter_name, binding)
         required_span = self.function_private_pointer_required_spans[call["callee"]][
             parameter_name
         ]
         if extent == 0:
+            offset, _upper_offset = self.glsl_private_pointer_binding_offset_interval(
+                call, parameter_name, binding, require_exact=True
+            )
             display_name = self.glsl_private_pointer_display_name(call["callee"])
             backing_name = binding.get("root") or "unknown"
             if offset != 0:
@@ -24660,23 +24966,31 @@ complex64_t crossgl_complex64_mod_assign(
                     source_location=getattr(call.get("node"), "source_location", None),
                 )
             return
+        lower_offset, upper_offset = self.glsl_private_pointer_binding_offset_interval(
+            call, parameter_name, binding
+        )
         if parameter_name in self.function_private_pointer_full_span_parameters.get(
             call["callee"], set()
         ):
-            if offset != 0:
+            if (lower_offset, upper_offset) != (0, 0):
                 display_name = self.glsl_private_pointer_display_name(call["callee"])
                 backing_name = binding.get("root") or "unknown"
+                offset_label = (
+                    f"offset {lower_offset}"
+                    if lower_offset == upper_offset
+                    else f"offset range {lower_offset} through {upper_offset}"
+                )
                 raise OpenGLPrivatePointerParameterError(
                     "OpenGL private pointer view "
                     f"'{display_name}.{parameter_name}' requires the complete "
-                    f"backing array '{backing_name}' and cannot use offset {offset}",
+                    f"backing array '{backing_name}' and cannot use {offset_label}",
                     function_name=display_name,
                     parameter_name=parameter_name,
                     reason="full-span-view-offset",
                     source_location=getattr(call.get("node"), "source_location", None),
                 )
             required_span = extent
-        upper = offset + required_span - 1
+        upper = upper_offset + required_span - 1
         if upper < extent:
             return
         display_name = self.glsl_private_pointer_display_name(call["callee"])
@@ -24684,7 +24998,7 @@ complex64_t crossgl_complex64_mod_assign(
         raise OpenGLPrivatePointerParameterError(
             "OpenGL private pointer view "
             f"'{display_name}.{parameter_name}' requires elements "
-            f"{offset} through {upper}, but backing array '{backing_name}' "
+            f"{lower_offset} through {upper}, but backing array '{backing_name}' "
             f"has extent {extent}",
             function_name=display_name,
             parameter_name=parameter_name,

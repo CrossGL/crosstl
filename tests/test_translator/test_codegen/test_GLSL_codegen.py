@@ -4361,6 +4361,235 @@ def test_glsl_private_pointer_view_accepts_provably_bounded_loop_slice(tmp_path)
     )
 
 
+def test_glsl_private_pointer_view_accepts_bounded_affine_loop_offset(tmp_path):
+    code = """
+    shader BoundedAffinePrivatePointerView {
+        void write_pair(thread int* values) {
+            values[0] = 11;
+            values[1] = 13;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                int indices[8];
+                for (int t = 0; t < 4; ++t) {
+                    write_pair(indices + t * 2);
+                }
+                int observed = indices[0] + indices[7];
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "void write_pair(inout int values[8], int values_base)" in generated
+    assert "write_pair(indices, int((t * 2)));" in generated
+    assert "indices + t" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "private_pointer_bounded_affine_loop_offset"
+    )
+
+
+def test_glsl_private_pointer_view_nested_affine_forwarding_composes_once(tmp_path):
+    code = """
+    shader NestedAffinePrivatePointerView {
+        void write_pair(thread uint* values) {
+            values[0] = 17;
+            values[1] = 19;
+        }
+
+        void forward(thread uint* values) {
+            for (int t = 0; t < 2; ++t) {
+                write_pair(values + 1 + t * 2);
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                uint backing[10];
+                forward(backing + 3);
+                uint observed = backing[4] + backing[7];
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "void forward(inout uint values[10], int values_base)" in generated
+    assert "void write_pair(inout uint values[10], int values_base)" in generated
+    assert "forward(backing, int(3));" in generated
+    forwarded = re.search(r"write_pair\(values, (?P<offset>[^;]+)\);", generated)
+    assert forwarded is not None, generated
+    offset = forwarded.group("offset")
+    assert offset.count("values_base") == 1
+    assert len(re.findall(r"\bt\b", offset)) == 1
+    assert "int(1)" in offset
+    assert "int((t * 2))" in offset
+    assert "values + 1" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "private_pointer_nested_affine_forwarding"
+    )
+
+
+@pytest.mark.parametrize(
+    ("declaration", "condition", "offset", "reason"),
+    [
+        ("int limit", "t < limit", "t * 2", "unprovable-view-offset"),
+        ("", "t < 2", "t * 2 - 1", "negative-view-offset"),
+        ("", "t < 4", "t * 2", "view-out-of-bounds"),
+        ("", "t < 4", "t * t", "unprovable-view-offset"),
+        ("", "t < 4", "t++ * 2", "side-effecting-view-offset"),
+    ],
+    ids=["unknown-bound", "negative", "out-of-range", "nonlinear", "side-effect"],
+)
+def test_glsl_private_pointer_view_rejects_unbounded_affine_offset_forms(
+    declaration, condition, offset, reason
+):
+    extent = 7 if reason == "view-out-of-bounds" else 8
+    code = f"""
+    shader RejectedAffinePrivatePointerView {{
+        void write_pair(thread int* values) {{
+            values[0] = 1;
+            values[1] = 2;
+        }}
+
+        void dispatch({declaration}) {{
+            int indices[{extent}];
+            for (int t = 0; {condition}; ++t) {{
+                write_pair(indices + {offset});
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLPrivatePointerParameterError) as excinfo:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert excinfo.value.reason == reason
+
+
+def test_glsl_private_pointer_view_rejects_nested_affine_span_overflow():
+    code = """
+    shader NestedAffinePrivatePointerOverflow {
+        void write_pair(thread int* values) {
+            values[0] = 1;
+            values[1] = 2;
+        }
+
+        void forward(thread int* values) {
+            for (int t = 0; t < 4; ++t) {
+                write_pair(values + t * 2);
+            }
+        }
+
+        void dispatch() {
+            int backing[8];
+            forward(backing + 1);
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLPrivatePointerParameterError) as excinfo:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert excinfo.value.reason == "view-out-of-bounds"
+
+
+def test_glsl_private_scalar_pointer_rejects_bounded_symbolic_zero_offset():
+    code = """
+    shader BoundedSymbolicScalarPointerOffset {
+        void increment(thread int* value) {
+            value[0] += 1;
+        }
+
+        void dispatch() {
+            int value = 4;
+            for (int t = 0; t < 1; ++t) {
+                increment(&value + t);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLPrivatePointerParameterError) as excinfo:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert excinfo.value.reason == "unprovable-view-offset"
+
+
+def test_glsl_private_pointer_prepass_skips_scalar_overload_resolution(tmp_path):
+    code = """
+    shader ScalarOverloadsWithPrivatePointerAnalysis {
+        float log1p(float value) {
+            return value + 1.0;
+        }
+
+        double log1p(double value) {
+            return value + 1.0;
+        }
+
+        void write_one(thread int* values) {
+            values[0] = 1;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                int backing[1];
+                write_one(backing);
+                {
+                    float local = 0.5;
+                    float selected = log1p(local);
+                }
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "float log1p(float value)" in generated
+    assert "double log1p(double value)" in generated
+    assert "float selected = log1p(local);" in generated
+    assert "write_one(backing, 0);" in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "private_pointer_prepass_scalar_overload"
+    )
+
+
+def test_glsl_private_pointer_prepass_rejects_ambiguous_pointer_overload():
+    code = """
+    shader AmbiguousPrivatePointerOverload {
+        void write_one(thread int* values) {
+            values[0] = 1;
+        }
+
+        void write_one(thread uint* values) {
+            values[0] = 1u;
+        }
+
+        void dispatch(bool choose) {
+            int signed_values[1];
+            uint unsigned_values[1];
+            write_one(choose ? signed_values : unsigned_values);
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLMappedOverloadError) as excinfo:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert excinfo.value.function_name == "write_one"
+    assert excinfo.value.reason == "call-binding-ambiguous"
+
+
 def test_glsl_private_pointer_view_rejects_aliased_inout_backing():
     code = """
     shader AliasedPrivatePointerBacking {
