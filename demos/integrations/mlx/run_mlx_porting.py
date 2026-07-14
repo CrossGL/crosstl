@@ -1284,6 +1284,90 @@ def _reference_accessor_write_evidence(
     }
 
 
+def _reference_accessor_const_read_evidence(
+    generated: str,
+    *,
+    target: str,
+) -> dict[str, Any]:
+    source = _strip_shader_comments(generated)
+    target_name = {"directx": "DirectX", "opengl": "OpenGL"}.get(target, target)
+    accessor_helper = re.search(
+        r"\b(?:frag_at[A-Za-z_0-9]*|[A-Za-z_]\w*frag_at[A-Za-z_0-9]*)" r"\s*\(",
+        source,
+    )
+    _require(
+        accessor_helper is None,
+        f"{target_name} reference accessor artifact still contains a frag_at "
+        "helper or call",
+    )
+
+    helper_patterns = {
+        "directx": (
+            r"ReferenceAccessorTile__store",
+            r"ReferenceAccessorOps__store",
+        ),
+        "opengl": (
+            r"ReferenceAccessorTile_store[A-Za-z_0-9]*",
+            r"ReferenceAccessorOps_store[A-Za-z_0-9]*",
+        ),
+    }
+    _require(
+        target in helper_patterns,
+        f"unsupported reference accessor evidence target: {target}",
+    )
+    tile_helper_pattern, read_helper_pattern = helper_patterns[target]
+    tile_store = re.search(
+        rf"\bvoid\s+(?P<helper>{tile_helper_pattern})\s*"
+        rf"\((?P<parameters>[^)]*)\)\s*\{{(?P<body>[^{{}}]*)\}}",
+        source,
+        flags=re.DOTALL,
+    )
+    _require(
+        tile_store is not None,
+        f"{target_name} reference accessor artifact is missing the lowered "
+        "const store helper",
+    )
+    _require(
+        re.search(
+            r"\bReferenceAccessorTile\s+self\b",
+            tile_store.group("parameters"),
+        )
+        is not None,
+        f"{target_name} lowered const store helper is missing its tile receiver",
+    )
+    direct_read = re.search(
+        rf"\b(?P<helper>{read_helper_pattern})\s*\(\s*"
+        rf"(?P<storage>self\s*\.\s*val_frags\s*\[[^\]\n;]+\])\s*,",
+        tile_store.group("body"),
+    )
+    _require(
+        direct_read is not None,
+        f"{target_name} implicit const accessor was not lowered to original "
+        "self.val_frags storage passed directly to the read-only helper",
+    )
+    kernel_call = re.search(
+        rf"\b{re.escape(tile_store.group('helper'))}\s*\(\s*tile\s*,",
+        source,
+    )
+    _require(
+        kernel_call is not None,
+        f"{target_name} reference accessor kernel does not invoke the lowered "
+        "const store path",
+    )
+
+    return {
+        "status": "verified-original-storage-const-read",
+        "storageMember": "val_frags",
+        "storageLvalue": re.sub(r"\s+", "", direct_read.group("storage")),
+        "implicitReceiver": "self",
+        "passedDirectlyToHelper": True,
+        "accessorCallEliminated": True,
+        "kernelPathInvoked": True,
+        "loweredTileHelper": tile_store.group("helper"),
+        "loweredReadHelper": direct_read.group("helper"),
+    }
+
+
 def _validate_reference_accessor_directx(
     mlx_root: Path,
     work_dir: Path,
@@ -1542,8 +1626,13 @@ def _check_reference_accessor_lvalue_identity(
             generated_path.is_file(),
             f"reference accessor {target} artifact is missing: {artifact_path}",
         )
+        generated = generated_path.read_text(encoding="utf-8")
         write_evidence = _reference_accessor_write_evidence(
-            generated_path.read_text(encoding="utf-8"),
+            generated,
+            target=target,
+        )
+        const_read_evidence = _reference_accessor_const_read_evidence(
+            generated,
             target=target,
         )
         if target == "directx":
@@ -1566,6 +1655,7 @@ def _check_reference_accessor_lvalue_identity(
             "artifact": _relpath(generated_path, mlx_root),
             "artifactSha256": _sha256(generated_path),
             "writeEvidence": write_evidence,
+            "constReadEvidence": const_read_evidence,
             "nativeValidation": native_validation,
         }
 
@@ -1573,6 +1663,7 @@ def _check_reference_accessor_lvalue_identity(
         "name": "reference-accessor-lvalue-identity",
         "status": "passed",
         "proofStatus": "verified-original-storage-write",
+        "constReadProofStatus": "verified-original-storage-const-read",
         "scope": "reduced-mlx-shaped-fixture",
         "translationSurface": "crosstl translate-project",
         "report": _relpath(report_path, mlx_root),
@@ -1586,6 +1677,12 @@ def _check_reference_accessor_lvalue_identity(
             "returnType": "thread float&",
             "storageExpression": "val_frags[i * width + j]",
             "writeExpression": "tile.frag_at(1, 1) = 73.25f",
+            "constRead": {
+                "returnType": "const thread float&",
+                "enclosingMethod": "store(...) const",
+                "implicitCall": "frag_at(i, j)",
+                "helperParameterType": "const thread float&",
+            },
         },
         "targets": list(REFERENCE_ACCESSOR_TARGETS),
         "artifactCount": len(REFERENCE_ACCESSOR_TARGETS),

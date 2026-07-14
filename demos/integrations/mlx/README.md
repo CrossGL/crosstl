@@ -24,10 +24,14 @@ The current harness verifies:
   complete semantic-equivalence claim;
 - a checked-in reduced Metal fixture that mirrors MLX's reference-returning
   `frag_at` accessor over `val_frags[i * width + j]`. The fixture is translated
-  to DirectX and OpenGL through the public `translate-project` CLI, and the
-  harness requires each generated target to assign the sentinel directly to
-  the original `val_frags[...]` lvalue and read back from that exact array
-  element.
+  to DirectX and OpenGL through the public `translate-project` CLI. Its mutable
+  receiver is declared through a function-local `using` alias, matching the
+  concrete alias declarations produced while materializing repository
+  templates. A paired const accessor is also exercised from a const store-like
+  method that passes the implicit accessor call to a read-only helper. The
+  harness requires each generated target to assign the sentinel directly to the
+  original `val_frags[...]` lvalue, read back from that exact array element, and
+  lower the const accessor argument to the same backing storage.
   A value-return helper or temporary does not satisfy the proof. DXC runs when
   `--require-directx-toolchain` is active; `glslangValidator` and `spirv-val`
   validate OpenGL 4.5 semantics when `--require-opengl-frontier-toolchain` is

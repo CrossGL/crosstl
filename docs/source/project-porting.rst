@@ -912,6 +912,19 @@ whole-source ``source instantiations x template declarations`` Cartesian
 estimate, and repeated scans of progressively expanded source text are not work
 items merely because the text was scanned again.
 
+Metal struct-method lowering preserves direct mutable and read-only reference
+accessors when the returned lvalue is receiver-owned scalar storage or an
+exactly indexed fixed-array element. Simple receiver declarations can use a
+lexically visible ``using`` or ``typedef`` chain that resolves to the concrete
+struct; alias scope and declaration order are honored before the accessor is
+rewritten to original storage. A proven ``thread const`` receiver selects one
+matching const accessor, including implicit calls from a const struct method.
+Constant-address-space receivers, unresolved aliases, pointer or nested
+receivers, ambiguous overloads, reference escapes, side-effectful indices, and
+indirect storage remain fail-closed with
+``project.translate.metal-struct-method`` rather than being converted to
+value-returning helpers.
+
 The default materialization work budget is derived from the active template
 specialization limit, so larger finite source-instantiated kernels can complete
 without raising the unique helper specialization cap. Use

@@ -6493,6 +6493,107 @@ def test_codegen_direct_reference_accessor_preserves_storage_lvalue(tmp_path):
         assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_codegen_const_implicit_reference_accessor_reaches_target_backends(tmp_path):
+    # Reduced from MLX steel/gemm/mma.h at the pinned integration revision.
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct Fragment {
+        float lanes[2];
+    };
+
+    struct FragmentOps {
+        static void store(
+            const thread Fragment& fragment,
+            device float* out) {
+            out[0] = fragment.lanes[0];
+        }
+    };
+
+    struct MMATile {
+        static constexpr short width = 2;
+        Fragment val_frags[4];
+
+        constexpr thread Fragment& frag_at(short i, short j) {
+            return val_frags[i * width + j];
+        }
+
+        constexpr const thread Fragment& frag_at(short i, short j) const {
+            return val_frags[i * width + j];
+        }
+
+        void store(device float* out, short i, short j) const {
+            FragmentOps::store(frag_at(i, j), out);
+        }
+    };
+
+    kernel void store_fragment(device float* out [[buffer(0)]]) {
+        MMATile tile;
+        tile.val_frags[3].lanes[0] = 73.25f;
+        tile.store(out, 1, 1);
+    }
+    """
+
+    crossgl = convert(code)
+    assert "frag_at" not in crossgl
+    assert re.search(
+        r"FragmentOps__store\(self\.val_frags\[[^]]*i[^]]*j[^]]*\], out_?\);",
+        crossgl,
+    )
+
+    ast = parse_crossgl(crossgl)
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+    glsl = GLSLCodeGen().generate(ast)
+    for generated in (hlsl, glsl):
+        assert "frag_at" not in generated
+        assert re.search(
+            r"FragmentOps\w*\(self\.val_frags\[[^]]*i[^]]*j[^]]*\]",
+            generated,
+        )
+
+    glslang = shutil.which("glslangValidator")
+    if glslang is not None:
+        glsl_path = tmp_path / "const-implicit-reference-accessor.glsl"
+        glsl_path.write_text(glsl, encoding="utf-8")
+        result = subprocess.run(
+            [
+                glslang,
+                "-S",
+                "comp",
+                "-G",
+                str(glsl_path),
+                "-o",
+                str(tmp_path / "const-implicit-reference-accessor.spv"),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    dxc = shutil.which("dxc")
+    if dxc is not None:
+        hlsl_path = tmp_path / "const-implicit-reference-accessor.hlsl"
+        hlsl_path.write_text(hlsl, encoding="utf-8")
+        result = subprocess.run(
+            [
+                dxc,
+                "-T",
+                "cs_6_0",
+                "-E",
+                "CSMain",
+                str(hlsl_path),
+                "-Fo",
+                str(tmp_path / "const-implicit-reference-accessor.dxil"),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_codegen_preserves_threadgroup_imageblock_local_pointer_roundtrip():
     code = """
     #include <metal_stdlib>
