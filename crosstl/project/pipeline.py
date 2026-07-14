@@ -16726,6 +16726,35 @@ def _metal_callable_failure_details(
     return dict(sorted(details.items()))
 
 
+def _metal_callable_alias_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.metal-callable-alias-unsupported"
+    ):
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    callable_alias = {}
+    fields = {
+        "aliasName": getattr(exc, "alias_name", None),
+        "signature": getattr(exc, "signature", None),
+        "usage": getattr(exc, "usage", None),
+        "reason": getattr(exc, "reason", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            callable_alias[name] = value
+    if callable_alias:
+        details["callableAlias"] = dict(sorted(callable_alias.items()))
+    return dict(sorted(details.items()))
+
+
 def _opengl_mapped_overload_failure_details(
     exc: Exception,
     unit: ProjectTranslationUnit,
@@ -17396,6 +17425,7 @@ def _translation_failure_details(
         **_metal_sizeof_failure_details(exc, unit, artifact_path),
         **_metal_template_argument_failure_details(exc, unit, artifact_path),
         **_metal_callable_failure_details(exc, unit, artifact_path),
+        **_metal_callable_alias_failure_details(exc, unit, artifact_path),
         **_template_materialization_failure_details(exc),
     }
 

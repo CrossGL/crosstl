@@ -9,6 +9,31 @@ from .MetalParser import *
 from .type_layout import metal_type_layout
 
 
+class MetalCallableAliasLoweringError(ValueError):
+    """Raised when a callable alias survives as a runtime value."""
+
+    project_diagnostic_code = "project.translate.metal-callable-alias-unsupported"
+    missing_capabilities = ("metal.runtime-callable-alias-lowering",)
+
+    def __init__(
+        self,
+        alias_name,
+        signature,
+        usage,
+        reason,
+        source_location=None,
+    ):
+        self.alias_name = alias_name
+        self.signature = signature
+        self.usage = usage
+        self.reason = reason
+        self.source_location = source_location
+        super().__init__(
+            f"Cannot lower Metal callable alias '{alias_name}' ({signature}) "
+            f"used by {usage}: {reason}"
+        )
+
+
 class MetalStaticConstantResolutionError(ValueError):
     """Raised when a referenced Metal static constant cannot be materialized."""
 
@@ -807,6 +832,8 @@ class MetalToCrossGLConverter:
         }
         self.type_aliases = {}
         self.type_alias_qualifiers = {}
+        self.callable_type_aliases = {}
+        self.callable_alias_declarations = {}
         self.global_variable_types = {}
         self.current_variable_types = {}
         self.storage_texture_declaration_ids = set()
@@ -1851,15 +1878,19 @@ class MetalToCrossGLConverter:
         self.wide_vector_compound_helpers = set()
         self.wide_vector_reserved_names = set()
         typedefs = getattr(ast, "typedefs", []) or []
+        self.collect_callable_type_aliases(typedefs)
+        self.validate_runtime_callable_alias_usage(ast)
         self.type_aliases = {
             alias.name: alias.alias_type
             for alias in typedefs
             if isinstance(alias, TypeAliasNode)
+            and alias.name not in self.callable_type_aliases
         }
         self.type_alias_qualifiers = {
             alias.name: list(getattr(alias, "qualifiers", []) or [])
             for alias in typedefs
             if isinstance(alias, TypeAliasNode)
+            and alias.name not in self.callable_type_aliases
         }
         # Body-local ``using`` and ``typedef`` aliases discovered while emitting
         # function bodies; these are inlined at their use sites rather than
@@ -2333,6 +2364,165 @@ class MetalToCrossGLConverter:
             yield from node
             return
         yield from getattr(node, "__dict__", {}).values()
+
+    def collect_callable_type_aliases(self, aliases):
+        alias_nodes = {
+            alias.name: alias
+            for alias in aliases or []
+            if isinstance(alias, TypeAliasNode) and getattr(alias, "name", None)
+        }
+        callable_aliases = {
+            name: alias
+            for name, alias in alias_nodes.items()
+            if isinstance(alias, CallableTypeAliasNode)
+            or getattr(alias, "is_function_type", False)
+        }
+
+        changed = True
+        while changed:
+            changed = False
+            for name, alias in alias_nodes.items():
+                if name in callable_aliases:
+                    continue
+                referenced_name = self.plain_type_alias_reference(alias.alias_type)
+                if referenced_name not in callable_aliases:
+                    continue
+                callable_aliases[name] = callable_aliases[referenced_name]
+                changed = True
+
+        self.callable_type_aliases = callable_aliases
+        self.callable_alias_declarations = {
+            name: alias_nodes[name] for name in callable_aliases
+        }
+
+    def plain_type_alias_reference(self, type_name):
+        text = str(type_name or "").strip()
+        while text.endswith(("*", "&")):
+            text = text[:-1].rstrip()
+        qualifier_pattern = (
+            r"^(?:(?:const|volatile|thread|threadgroup|device|constant|"
+            r"restrict|__restrict|__restrict__)\s+)+"
+        )
+        text = re.sub(qualifier_pattern, "", text).strip()
+        if self.crossgl_identifier_pattern.fullmatch(text):
+            return text
+        return None
+
+    def validate_runtime_callable_alias_usage(self, ast):
+        if not self.callable_type_aliases:
+            return
+
+        for node in self.iter_runtime_ast_nodes(ast):
+            for attribute in ("vtype", "return_type", "target_type", "vector_type"):
+                type_name = getattr(node, attribute, None)
+                alias_name = self.callable_alias_reference(type_name)
+                if alias_name is None:
+                    continue
+                alias = self.callable_type_aliases[alias_name]
+                declaration = self.callable_alias_declarations[alias_name]
+                raise MetalCallableAliasLoweringError(
+                    alias_name,
+                    self.format_callable_alias_signature(alias, alias_name),
+                    self.callable_alias_usage(node, attribute),
+                    "runtime callable values are not representable in CrossGL; "
+                    "materialize the callback as a non-type template argument "
+                    "or use a supported Metal function-table resource",
+                    source_location=(
+                        getattr(node, "source_location", None)
+                        or getattr(declaration, "source_location", None)
+                        or getattr(alias, "source_location", None)
+                    ),
+                )
+
+    def iter_runtime_ast_nodes(self, ast):
+        pending = [
+            value
+            for name, value in getattr(ast, "__dict__", {}).items()
+            if name not in {"typedefs", "includes"}
+        ]
+        seen = set()
+        while pending:
+            node = pending.pop()
+            if node is None or isinstance(node, (str, int, float, bool)):
+                continue
+            if isinstance(node, dict):
+                pending.extend(node.values())
+                continue
+            if isinstance(node, (list, tuple, set)):
+                pending.extend(node)
+                continue
+            node_id = id(node)
+            if node_id in seen:
+                continue
+            seen.add(node_id)
+            if isinstance(node, TypeAliasNode):
+                continue
+            yield node
+            pending.extend(self.iter_ast_children(node))
+
+    def callable_alias_reference(self, type_name):
+        text = str(type_name or "").strip()
+        if not text:
+            return None
+
+        carrier = text
+        while carrier.endswith(("*", "&")):
+            carrier = carrier[:-1].rstrip()
+        base_name, generic_args = self.generic_type_parts(carrier)
+        if base_name in {
+            "visible_function_table",
+            "intersection_function_table",
+        } and any(
+            self.plain_type_alias_reference(argument) in self.callable_type_aliases
+            for argument in generic_args
+        ):
+            return None
+
+        for alias_name in sorted(self.callable_type_aliases, key=len, reverse=True):
+            if re.search(
+                rf"(?<![A-Za-z0-9_]){re.escape(alias_name)}(?![A-Za-z0-9_])",
+                text,
+            ):
+                return alias_name
+        return None
+
+    def callable_alias_usage(self, node, attribute):
+        name = getattr(node, "name", None)
+        node_name = type(node).__name__
+        if name:
+            return f"{node_name} '{name}' {attribute}"
+        return f"{node_name} {attribute}"
+
+    def format_callable_alias_signature(self, alias, alias_name):
+        return_type = str(
+            getattr(alias, "return_type", None) or alias.alias_type
+        ).strip()
+        qualifiers = [
+            str(value).strip()
+            for value in getattr(alias, "qualifiers", []) or []
+            if str(value).strip()
+        ]
+        if qualifiers:
+            return_type = " ".join(qualifiers + [return_type])
+
+        parameters = getattr(alias, "parameters", None)
+        if parameters is None:
+            parameter_text = "..."
+        else:
+            rendered_parameters = []
+            for parameter in parameters:
+                parts = [
+                    str(value).strip()
+                    for value in getattr(parameter, "qualifiers", []) or []
+                    if str(value).strip()
+                ]
+                parts.append(str(getattr(parameter, "vtype", "")).strip())
+                rendered_parameters.append(" ".join(part for part in parts if part))
+            parameter_text = ", ".join(rendered_parameters)
+
+        indirection = str(getattr(alias, "indirection", "") or "")
+        declarator = f"({indirection}{alias_name})" if indirection else alias_name
+        return f"{return_type} {declarator}({parameter_text})"
 
     def value_template_parameter_names(self, function):
         return [
@@ -5655,8 +5845,10 @@ class MetalToCrossGLConverter:
         return argument
 
     def format_type_alias_declaration(self, alias):
-        if getattr(alias, "is_function_type", False) or self.is_resource_type_alias(
-            alias
+        if (
+            alias.name in self.callable_type_aliases
+            or getattr(alias, "is_function_type", False)
+            or self.is_resource_type_alias(alias)
         ):
             return None
         if (

@@ -47624,6 +47624,68 @@ def test_translate_project_reports_unsupported_captured_callback_shape(tmp_path)
     assert diagnostic["details"]["sourcePath"] == "dispatch_bool.metal"
 
 
+def test_translate_project_reports_escaping_metal_callable_alias(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "runtime_callable.metal").write_text(
+        textwrap.dedent("""
+            typedef void (*RadixFunc)(thread float2*, thread float2*);
+            typedef RadixFunc SelectedRadixFunc;
+
+            void invoke(
+                SelectedRadixFunc function,
+                thread float2* values,
+                thread float2* scratch
+            ) {
+                function(values, scratch);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-callable-alias-unsupported": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "metal.runtime-callable-alias-lowering": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == ("project.translate.metal-callable-alias-unsupported")
+    assert diagnostic["target"] == "directx"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["location"]["file"] == "runtime_callable.metal"
+    assert diagnostic["location"]["line"] == 2
+    assert diagnostic["missingCapabilities"] == [
+        "metal.runtime-callable-alias-lowering"
+    ]
+    assert diagnostic["details"] == {
+        "callableAlias": {
+            "aliasName": "SelectedRadixFunc",
+            "reason": (
+                "runtime callable values are not representable in CrossGL; "
+                "materialize the callback as a non-type template argument or "
+                "use a supported Metal function-table resource"
+            ),
+            "signature": "void (*SelectedRadixFunc)(thread float2*, thread float2*)",
+            "usage": "VariableNode 'function' vtype",
+        },
+        "sourcePath": "runtime_callable.metal",
+        "targetArtifact": "out/directx/runtime_callable.hlsl",
+    }
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+
+
 def test_translate_project_preserves_unverified_dispatch_bool_helper(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

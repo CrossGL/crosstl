@@ -9,6 +9,7 @@ import crosstl
 from crosstl.backend.Metal.MetalCrossGLCodeGen import (
     MetalAtomicFenceLoweringError,
     MetalBuiltinOverloadResolutionError,
+    MetalCallableAliasLoweringError,
     MetalCallableLoweringError,
     MetalSizeofResolutionError,
     MetalStageEntryArrayResourceError,
@@ -2930,7 +2931,7 @@ def test_codegen_lowers_static_cast_from_apple_compute_sample():
 def test_codegen_scoped_atomic_thread_fence_from_mlx_kernel_roundtrips():
     # Reduced from:
     # Repo: https://github.com/ml-explore/mlx
-    # Commit: 968d264f2903d578e699c4452a4dbf48633921aa
+    # Commit: 4367c73b60541ddd5a266ce4644fd93d20223b6e
     # Path: mlx/backend/metal/kernels/fence.metal
     code = """
     #pragma METAL internals : enable
@@ -5851,6 +5852,188 @@ def test_codegen_visible_function_table_using_signature_alias_from_apple_wwdc():
     assert parse_crossgl(result) is not None
 
 
+def test_codegen_materializes_callable_alias_without_runtime_typedef():
+    code = """
+    typedef void (*RadixFunc)(thread float2*, thread float2*);
+
+    void radix2(thread float2* values, thread float2* scratch) {
+        values[0] = scratch[0];
+    }
+
+    void radix4(thread float2* values, thread float2* scratch) {
+        values[0] = scratch[0] + scratch[1];
+    }
+
+    template <int Radix, RadixFunc Function>
+    void apply_radix(thread float2* values, thread float2* scratch) {
+        Function(values, scratch);
+    }
+
+    kernel void fft(device float2* out [[buffer(0)]]) {
+        float2 values[2];
+        float2 scratch[2];
+        apply_radix<2, radix2>(values, scratch);
+        apply_radix<4, radix4>(values, scratch);
+        out[0] = values[0];
+    }
+    """
+    result = convert(code)
+
+    assert "typedef void RadixFunc;" not in result
+    assert "void RadixFunc;" not in result
+    assert "apply_radix_2_radix2(values, scratch);" in result
+    assert "apply_radix_4_radix4(values, scratch);" in result
+    assert "radix2(values, scratch);" in result
+    assert "radix4(values, scratch);" in result
+    assert parse_crossgl(result) is not None
+
+
+def test_codegen_callable_alias_materializations_reach_directx_and_opengl(
+    tmp_path,
+):
+    code = """
+    typedef float (*UnaryFunc)(float);
+
+    float plus_one(float value) {
+        return value + 1.0;
+    }
+
+    float times_two(float value) {
+        return value * 2.0;
+    }
+
+    template <UnaryFunc Function>
+    float apply(float value) {
+        return Function(value);
+    }
+
+    kernel void callable_kernel(device float* out [[buffer(0)]]) {
+        out[0] = apply<plus_one>(1.0) + apply<times_two>(2.0);
+    }
+    """
+    ast = parse_crossgl(convert(code))
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+    glsl = GLSLCodeGen().generate(ast)
+
+    for artifact in (hlsl, glsl):
+        assert "apply_plus_one(1.0)" in artifact
+        assert "apply_times_two(2.0)" in artifact
+        assert "return plus_one(value);" in artifact
+        assert "return times_two(value);" in artifact
+        assert "UnaryFunc" not in artifact
+        assert "Function(" not in artifact
+
+    glslang = shutil.which("glslangValidator")
+    if glslang:
+        hlsl_path = tmp_path / "callable_alias.hlsl"
+        hlsl_path.write_text(hlsl, encoding="utf-8")
+        hlsl_result = subprocess.run(
+            [
+                glslang,
+                "-D",
+                "-S",
+                "comp",
+                "-e",
+                "CSMain",
+                "-V",
+                str(hlsl_path),
+                "-o",
+                str(tmp_path / "callable_alias_hlsl.spv"),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert hlsl_result.returncode == 0, hlsl_result.stdout + hlsl_result.stderr
+
+        glsl_path = tmp_path / "callable_alias.comp"
+        glsl_path.write_text(glsl, encoding="utf-8")
+        glsl_result = subprocess.run(
+            [
+                glslang,
+                "-S",
+                "comp",
+                "-V",
+                str(glsl_path),
+                "-o",
+                str(tmp_path / "callable_alias_glsl.spv"),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert glsl_result.returncode == 0, glsl_result.stdout + glsl_result.stderr
+
+    dxc = shutil.which("dxc")
+    if dxc:
+        hlsl_path = tmp_path / "callable_alias.hlsl"
+        hlsl_path.write_text(hlsl, encoding="utf-8")
+        dxc_result = subprocess.run(
+            [
+                dxc,
+                "-T",
+                "cs_6_0",
+                "-E",
+                "CSMain",
+                str(hlsl_path),
+                "-Fo",
+                str(tmp_path / "callable_alias.dxil"),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert dxc_result.returncode == 0, dxc_result.stdout + dxc_result.stderr
+
+
+def test_codegen_rejects_runtime_callable_alias_value():
+    code = """
+    typedef void (*RadixFunc)(thread float2*, thread float2*);
+    typedef RadixFunc SelectedRadixFunc;
+
+    void invoke(SelectedRadixFunc function,
+                thread float2* values,
+                thread float2* scratch) {
+        function(values, scratch);
+    }
+    """
+
+    with pytest.raises(MetalCallableAliasLoweringError) as excinfo:
+        convert(code)
+
+    error = excinfo.value
+    assert error.alias_name == "SelectedRadixFunc"
+    assert error.signature == (
+        "void (*SelectedRadixFunc)(thread float2*, thread float2*)"
+    )
+    assert error.usage == "VariableNode 'function' vtype"
+    assert error.project_diagnostic_code == (
+        "project.translate.metal-callable-alias-unsupported"
+    )
+    assert error.missing_capabilities == ("metal.runtime-callable-alias-lowering",)
+    assert error.source_location["line"] == 3
+
+
+def test_codegen_callable_alias_does_not_match_shadowing_value_names():
+    code = """
+    typedef void (*RadixFunc)(thread float2*, thread float2*);
+
+    void consume_scalar(int RadixFunc) {
+        int value = RadixFunc;
+    }
+
+    void ordinary_void_function(thread float2* value) {
+        value[0] = float2(0.0);
+    }
+    """
+    result = convert(code)
+
+    assert "void consume_scalar(int RadixFunc)" in result
+    assert "void ordinary_void_function(thread vec2* value)" in result
+    assert "typedef void RadixFunc;" not in result
+    assert parse_crossgl(result) is not None
+
+
 def test_codegen_icb_extended_methods():
     code = """
     #include <metal_stdlib>
@@ -7212,7 +7395,7 @@ def test_codegen_materializes_defaulted_bool_and_explicit_specialization():
 
 def test_codegen_materializes_pinned_mlx_perform_fft_bool_specializations():
     # Reduced from mlx/backend/metal/kernels/fft.h at
-    # 968d264f2903d578e699c4452a4dbf48633921aa.
+    # 4367c73b60541ddd5a266ce4644fd93d20223b6e.
     code = """
     template <bool rader = false>
     int perform_fft(int value) {

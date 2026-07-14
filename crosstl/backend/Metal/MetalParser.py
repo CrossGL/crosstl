@@ -1537,19 +1537,20 @@ class MetalParser:
             return self.parse_using_union_alias(alias_name)
         alias_type, qualifiers = self.parse_type_specifier()
         if self.current_token[0] == "LPAREN":
-            self.parse_parenthesized_parameter_tokens()
+            indirection = self.parse_callable_alias_abstract_indirection()
+            parameters = self.parse_callable_alias_parameters()
             self.eat("SEMICOLON")
             self.register_known_type(alias_name)
-            alias = TypeAliasNode(
+            return CallableTypeAliasNode(
                 alias_type,
                 alias_name,
+                parameters,
+                indirection=indirection,
                 qualifiers=qualifiers,
                 source_location=self.source_span_from_tokens(
                     start_token, self.tokens[self.pos - 1]
                 ),
             )
-            alias.is_function_type = True
-            return alias
         self.eat("SEMICOLON")
         self.register_known_type(alias_name)
         return TypeAliasNode(
@@ -1655,35 +1656,51 @@ class MetalParser:
         else:
             alias_type, qualifiers = self.parse_type_specifier()
         if self.current_token[0] == "LPAREN":
-            alias_name = self.parse_function_typedef_declarator(alias_type)
+            alias_name, indirection = self.parse_function_typedef_declarator()
+            if self.current_token[0] != "LPAREN":
+                self.eat("SEMICOLON")
+                self.register_known_type(alias_name)
+                return TypeAliasNode(
+                    self.apply_declarator_type_suffix(alias_type, indirection),
+                    alias_name,
+                    qualifiers=qualifiers,
+                    declarator_type_suffix=indirection,
+                    declarator_type_suffix_grouped=bool(indirection),
+                    source_location=self.source_span_from_tokens(
+                        start_token, self.tokens[self.pos - 1]
+                    ),
+                )
+            parameters = self.parse_callable_alias_parameters()
             self.eat("SEMICOLON")
             self.register_known_type(alias_name)
-            return TypeAliasNode(
+            return CallableTypeAliasNode(
                 alias_type,
                 alias_name,
+                parameters,
+                indirection=indirection,
                 qualifiers=qualifiers,
+                declarator_type_suffix_grouped=bool(indirection),
                 source_location=self.source_span_from_tokens(
                     start_token, self.tokens[self.pos - 1]
                 ),
             )
         alias_name, array_sizes, type_suffix, grouped_suffix = self.parse_declarator()
         if self.current_token[0] == "LPAREN":
-            self.parse_parenthesized_parameter_tokens()
+            parameters = self.parse_callable_alias_parameters()
             self.eat("SEMICOLON")
             self.register_known_type(alias_name)
-            alias = TypeAliasNode(
+            return CallableTypeAliasNode(
                 alias_type,
                 alias_name,
+                parameters,
+                indirection=type_suffix,
                 qualifiers=qualifiers,
                 array_sizes=array_sizes,
-                declarator_type_suffix=type_suffix,
                 declarator_type_suffix_grouped=grouped_suffix,
                 source_location=self.source_span_from_tokens(
                     start_token, self.tokens[self.pos - 1]
                 ),
             )
-            alias.is_function_type = True
-            return alias
         self.eat("SEMICOLON")
         self.register_known_type(alias_name)
         return TypeAliasNode(
@@ -1772,16 +1789,37 @@ class MetalParser:
         self.register_known_type(alias_name)
         return TypeAliasNode(f"union {tag_name}", alias_name)
 
-    def parse_function_typedef_declarator(self, return_type):
+    def parse_function_typedef_declarator(self):
         self.eat("LPAREN")
+        indirection = ""
         while self.current_token[0] in {"MULTIPLY", "BITWISE_AND"}:
+            indirection += self.declarator_pointer_token_suffix(self.current_token[0])
             self.eat(self.current_token[0])
         alias_name = self.current_token[1]
         self.eat("IDENTIFIER")
         self.eat("RPAREN")
-        if self.current_token[0] == "LPAREN":
-            self.parse_parenthesized_parameter_tokens()
-        return alias_name
+        return alias_name, indirection
+
+    def parse_callable_alias_abstract_indirection(self):
+        if self.current_token[0] != "LPAREN" or self.peek(1)[0] not in {
+            "MULTIPLY",
+            "BITWISE_AND",
+        }:
+            return ""
+
+        self.eat("LPAREN")
+        indirection = ""
+        while self.current_token[0] in {"MULTIPLY", "BITWISE_AND"}:
+            indirection += self.declarator_pointer_token_suffix(self.current_token[0])
+            self.eat(self.current_token[0])
+        self.eat("RPAREN")
+        return indirection
+
+    def parse_callable_alias_parameters(self):
+        self.eat("LPAREN")
+        parameters = self.parse_parameters()
+        self.eat("RPAREN")
+        return parameters
 
     def parse_parenthesized_parameter_tokens(self):
         self.eat("LPAREN")

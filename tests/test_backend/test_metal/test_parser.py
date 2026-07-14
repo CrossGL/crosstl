@@ -24,6 +24,7 @@ from crosstl.backend.common_ast import (
 )
 from crosstl.backend.Metal.MetalAst import (
     BlockNode,
+    CallableTypeAliasNode,
     EnumNode,
     LambdaNode,
     TypeAliasNode,
@@ -2856,8 +2857,53 @@ def test_parse_function_pointer_typedef_from_llama_cpp():
     """
     ast = parse_ok(code)
 
-    assert ast.typedefs[0].name == "im2col_t"
-    assert ast.typedefs[0].alias_type == "void"
+    alias = ast.typedefs[0]
+    assert isinstance(alias, CallableTypeAliasNode)
+    assert alias.name == "im2col_t"
+    assert alias.alias_type == "void"
+    assert alias.indirection == ""
+    assert [parameter.vtype for parameter in alias.parameters] == [
+        "ggml_metal_kargs_im2col&",
+        "float*",
+        "char*",
+        "uint3",
+    ]
+    assert [parameter.qualifiers for parameter in alias.parameters] == [
+        ["constant"],
+        ["device", "const"],
+        ["device"],
+        [],
+    ]
+
+
+def test_parse_mlx_callable_pointer_typedef_preserves_signature_contract():
+    code = """
+    typedef void (*RadixFunc)(thread float2*, thread float2*);
+    using AlternateRadixFunc = void (*)(thread float2* lhs,
+                                        thread float2* rhs);
+    """
+    ast = parse_ok(code)
+
+    pointer_typedef, using_alias = ast.typedefs
+    assert isinstance(pointer_typedef, CallableTypeAliasNode)
+    assert pointer_typedef.name == "RadixFunc"
+    assert pointer_typedef.return_type == "void"
+    assert pointer_typedef.indirection == "*"
+    assert pointer_typedef.is_function_pointer is True
+    assert [parameter.vtype for parameter in pointer_typedef.parameters] == [
+        "float2*",
+        "float2*",
+    ]
+    assert [parameter.qualifiers for parameter in pointer_typedef.parameters] == [
+        ["thread"],
+        ["thread"],
+    ]
+    assert pointer_typedef.source_location["line"] == 2
+
+    assert isinstance(using_alias, CallableTypeAliasNode)
+    assert using_alias.name == "AlternateRadixFunc"
+    assert using_alias.indirection == "*"
+    assert [parameter.name for parameter in using_alias.parameters] == ["lhs", "rhs"]
 
 
 def test_parse_enum_return_prototype_from_llama_cpp_context_header():
@@ -3465,7 +3511,7 @@ def test_parse_template_id_value_expression_with_member_args_from_mlx_gemm_gathe
 def test_parse_raw_string_view_shader_template_from_mlx_jit_indexing_header():
     # Reduced from:
     # Repo: https://github.com/ml-explore/mlx
-    # Commit: 968d264f2903d578e699c4452a4dbf48633921aa
+    # Commit: 4367c73b60541ddd5a266ce4644fd93d20223b6e
     # Path: mlx/backend/metal/jit/indexing.h
     code = """
     constexpr std::string_view masked_assign_kernel = R"(

@@ -618,6 +618,43 @@ def test_preprocessor_materializes_explicit_template_helper_calls():
     assert "return src[index] + float(7);" in output
 
 
+def test_preprocessor_materializes_callable_non_type_template_arguments():
+    code = """
+    typedef void (*RadixFunc)(thread float2*, thread float2*);
+
+    void radix2(thread float2* values, thread float2* scratch) {
+        values[0] = scratch[0];
+    }
+
+    void radix4(thread float2* values, thread float2* scratch) {
+        values[0] = scratch[0] + scratch[1];
+    }
+
+    template <int Radix, RadixFunc Function>
+    void apply_radix(thread float2* values, thread float2* scratch) {
+        Function(values, scratch);
+    }
+
+    kernel void fft(device float2* out [[buffer(0)]]) {
+        float2 values[2];
+        float2 scratch[2];
+        apply_radix<2, radix2>(values, scratch);
+        apply_radix<4, radix4>(values, scratch);
+        out[0] = values[0];
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "typedef void (*RadixFunc)(thread float2*, thread float2*);" in output
+    assert "apply_radix_2_radix2(values, scratch);" in output
+    assert "apply_radix_4_radix4(values, scratch);" in output
+    assert "void apply_radix_2_radix2(" in output
+    assert "radix2(values, scratch);" in output
+    assert "void apply_radix_4_radix4(" in output
+    assert "radix4(values, scratch);" in output
+
+
 def test_preprocessor_materializes_helper_calls_from_local_alias_arguments():
     code = """
     template <typename T, typename U, int Count>
