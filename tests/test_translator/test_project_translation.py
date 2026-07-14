@@ -45677,7 +45677,10 @@ def test_translate_project_metal_reference_return_reports_struct_method_details(
     source = textwrap.dedent("""
         struct Counter {
             int value;
-            thread int& value_ref() { return value; }
+            thread int& value_ref() {
+                ++value;
+                return value;
+            }
         };
 
         kernel void increment(device int* out [[buffer(0)]]) {

@@ -3167,6 +3167,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 structs_by_name=structs_by_name,
             )
             for method in struct.methods
+            if not self._method_returns_lvalue_reference(method)
         ]
         return data_only, free_functions
 
@@ -4818,6 +4819,34 @@ class MetalPreprocessor(HLSLPreprocessor):
                 # A data-member access (`var.field`) — leave untouched.
                 return None
             arg_open, explicit_template_arguments = call_suffix
+            owner_struct = structs_by_name.get(struct_type)
+            reference_methods = (
+                self._concrete_reference_methods(owner_struct, member)
+                if owner_struct is not None
+                else []
+            )
+            if reference_methods and explicit_template_arguments is None:
+                receiver_is_const = self._simple_receiver_constness(
+                    code,
+                    struct_type,
+                    ident,
+                    ident_start,
+                )
+                method = self._select_direct_reference_method(
+                    code,
+                    owner_struct,
+                    reference_methods,
+                    arg_open,
+                    receiver_is_const=receiver_is_const,
+                )
+                return self._build_direct_reference_accessor_rewrite(
+                    code,
+                    owner_struct,
+                    method,
+                    receiver=ident,
+                    arg_open=arg_open,
+                    call_start=ident_start,
+                )
             method = methods_by_struct.get(struct_type, {}).get(member)
             if method is not None and explicit_template_arguments is None:
                 return self._build_instance_call_rewrite(
@@ -4970,6 +4999,38 @@ class MetalPreprocessor(HLSLPreprocessor):
                 receiver = code[ident_start:receiver_end].strip()
                 if access == "->":
                     receiver = f"{receiver}[0]"
+                owner_struct = structs_by_name.get(current_struct_name)
+                reference_methods = (
+                    self._concrete_reference_methods(owner_struct, member)
+                    if owner_struct is not None
+                    else []
+                )
+                if (
+                    reference_methods
+                    and explicit_template_arguments is None
+                    and receiver == ident
+                    and access == "."
+                ):
+                    method = self._select_direct_reference_method(
+                        code,
+                        owner_struct,
+                        reference_methods,
+                        arg_open,
+                        receiver_is_const=self._simple_receiver_constness(
+                            code,
+                            current_struct_name,
+                            ident,
+                            ident_start,
+                        ),
+                    )
+                    return self._build_direct_reference_accessor_rewrite(
+                        code,
+                        owner_struct,
+                        method,
+                        receiver=receiver,
+                        arg_open=arg_open,
+                        call_start=ident_start,
+                    )
                 method = methods_by_struct.get(current_struct_name, {}).get(member)
                 if method is not None and explicit_template_arguments is None:
                     return self._build_instance_call_rewrite(
@@ -7291,6 +7352,28 @@ class MetalPreprocessor(HLSLPreprocessor):
             and not template_overloads
             and explicit_template_arguments is None
         ):
+            reference_methods = [
+                candidate
+                for candidate in concrete_siblings
+                if self._method_returns_lvalue_reference(candidate)
+            ]
+            if reference_methods:
+                concrete = self._select_direct_reference_method(
+                    body,
+                    struct,
+                    reference_methods,
+                    arg_open,
+                    receiver_is_const=method.is_const,
+                )
+                return self._build_direct_reference_accessor_rewrite(
+                    body,
+                    struct,
+                    concrete,
+                    receiver="self",
+                    arg_open=arg_open,
+                    call_start=ident_end - len(ident),
+                    enclosing_return_type=method.return_type,
+                )
             if len(concrete_siblings) != 1:
                 return None
             concrete = concrete_siblings[0]
@@ -7598,6 +7681,264 @@ class MetalPreprocessor(HLSLPreprocessor):
                 resolved_default = f"{type_name}{{}}"
             arguments.append(resolved_default)
         return ", ".join(arguments)
+
+    def _method_returns_lvalue_reference(self, method: _MetalStructMethod) -> bool:
+        return bool(
+            re.search(
+                r"(?<!&)\&\s*$",
+                self._normalize_template_argument_text(method.return_type),
+            )
+        )
+
+    def _concrete_reference_methods(
+        self,
+        struct: _MetalStructDefinition,
+        method_name: str,
+    ) -> List[_MetalStructMethod]:
+        return [
+            method
+            for method in struct.methods
+            if method.name == method_name
+            and self._method_returns_lvalue_reference(method)
+        ]
+
+    def _select_direct_reference_method(
+        self,
+        code: str,
+        struct: _MetalStructDefinition,
+        methods: List[_MetalStructMethod],
+        arg_open: int,
+        *,
+        receiver_is_const: Optional[bool],
+    ) -> _MetalStructMethod:
+        arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
+        representative = methods[0]
+        if arg_close is None:
+            self._reject_reference_returning_method_call(
+                code, struct, representative, arg_open, arg_open
+            )
+            raise AssertionError("reference-return rejection must raise")
+
+        arguments = [
+            argument
+            for argument in self._split_top_level_commas(code[arg_open + 1 : arg_close])
+            if argument.strip()
+        ]
+        candidates = [
+            method
+            for method in methods
+            if not method.is_static
+            and not method.is_const
+            and re.search(r"\bconst\b", method.return_type) is None
+            and len(method.parameter_names) == len(arguments)
+        ]
+        if receiver_is_const is False and len(candidates) == 1:
+            candidate = candidates[0]
+            normalized_parameters = self._normalize_template_argument_text(
+                candidate.parameters
+            )
+            competing_overloads = [
+                method
+                for method in [*struct.methods, *struct.template_methods]
+                if method is not candidate
+                and method.name == candidate.name
+                and len(method.parameter_names) == len(arguments)
+                and not (
+                    method.is_const
+                    and self._normalize_template_argument_text(method.parameters)
+                    == normalized_parameters
+                )
+            ]
+            if not competing_overloads:
+                return candidate
+
+        self._reject_reference_returning_method_call(
+            code,
+            struct,
+            candidates[0] if candidates else representative,
+            arg_open,
+            arg_close,
+        )
+        raise AssertionError("reference-return rejection must raise")
+
+    def _simple_receiver_constness(
+        self,
+        code: str,
+        struct_name: str,
+        receiver: str,
+        call_start: int,
+    ) -> Optional[bool]:
+        if re.fullmatch(r"[A-Za-z_]\w*", receiver) is None:
+            return None
+        ignored = self._find_comment_and_literal_spans(code)
+        pattern = re.compile(
+            rf"(?P<leading>(?:(?:const|constant|device|thread|threadgroup|volatile)\s+)*)"
+            rf"\b{re.escape(struct_name)}\b"
+            rf"(?P<trailing>\s+const\b)?\s*(?:[&*]\s*)*"
+            rf"\b{re.escape(receiver)}\b"
+        )
+        matches = [
+            match
+            for match in pattern.finditer(code, 0, call_start)
+            if self._containing_span(match.start(), ignored) is None
+        ]
+        if not matches:
+            return None
+        declaration = matches[-1]
+        leading = declaration.group("leading") or ""
+        return bool(
+            re.search(r"\b(?:const|constant)\b", leading)
+            or declaration.group("trailing")
+        )
+
+    def _build_direct_reference_accessor_rewrite(
+        self,
+        code: str,
+        struct: _MetalStructDefinition,
+        method: _MetalStructMethod,
+        *,
+        receiver: str,
+        arg_open: int,
+        call_start: int,
+        enclosing_return_type: Optional[str] = None,
+    ) -> Tuple[int, str]:
+        arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
+        if arg_close is None:
+            self._reject_reference_returning_method_call(
+                code, struct, method, arg_open, arg_open
+            )
+            raise AssertionError("reference-return rejection must raise")
+
+        if self._reference_call_binds_or_escapes(
+            code,
+            call_start,
+            enclosing_return_type=enclosing_return_type,
+        ):
+            self._reject_reference_returning_method_call(
+                code, struct, method, arg_open, arg_close
+            )
+
+        expression = self._direct_reference_return_expression(struct, method)
+        if expression is None:
+            self._reject_reference_returning_method_call(
+                code, struct, method, arg_open, arg_close
+            )
+
+        match = re.fullmatch(
+            r"self\s*\.\s*(?P<member>[A-Za-z_]\w*)"
+            r"(?P<indices>(?:\s*\[[^\[\]]+\])*)",
+            expression,
+        )
+        if match is None:
+            self._reject_reference_returning_method_call(
+                code, struct, method, arg_open, arg_close
+            )
+
+        member = next(
+            (
+                item
+                for item in struct.data_members
+                if item.name == match.group("member")
+            ),
+            None,
+        )
+        member_qualifiers = (
+            set(IDENTIFIER_RE.findall(member.type_text))
+            if member is not None
+            else set()
+        )
+        indices = re.findall(r"\[\s*([^\[\]]+)\s*\]", match.group("indices"))
+        if (
+            member is None
+            or "*" in member.type_text
+            or "&" in member.type_text
+            or "static" in member_qualifiers
+            or (member.array_suffix and not indices)
+            or (not member.array_suffix and indices)
+            or len(indices) != member.array_suffix.count("[")
+            or any(
+                not self._direct_reference_expression_is_safe(index)
+                for index in indices
+            )
+        ):
+            self._reject_reference_returning_method_call(
+                code, struct, method, arg_open, arg_close
+            )
+
+        raw_arguments = [
+            argument.strip()
+            for argument in self._split_top_level_commas(code[arg_open + 1 : arg_close])
+            if argument.strip()
+        ]
+        if len(raw_arguments) != len(method.parameter_names):
+            self._reject_reference_returning_method_call(
+                code, struct, method, arg_open, arg_close
+            )
+
+        replacements = {"self": receiver}
+        for name, argument in zip(method.parameter_names, raw_arguments):
+            if self._bare_identifier_use_count(
+                expression, name
+            ) != 1 or not self._direct_reference_expression_is_safe(argument):
+                self._reject_reference_returning_method_call(
+                    code, struct, method, arg_open, arg_close
+                )
+            replacements[name] = f"({argument})"
+
+        return arg_close + 1, self._replace_identifiers(expression, replacements)
+
+    def _direct_reference_return_expression(
+        self,
+        struct: _MetalStructDefinition,
+        method: _MetalStructMethod,
+    ) -> Optional[str]:
+        body = self._rewrite_method_body(struct, method)
+        match = re.fullmatch(
+            r"\s*return\s+(?P<expression>.+?)\s*;\s*",
+            body,
+            re.DOTALL,
+        )
+        if match is None:
+            return None
+        return self._strip_enclosing_parens(match.group("expression").strip())
+
+    @staticmethod
+    def _direct_reference_expression_is_safe(expression: str) -> bool:
+        text = expression.strip()
+        if not text or re.search(r"\+\+|--|&&|\|\||[=?:,;{}\[\]]", text):
+            return False
+        if re.search(r"\b[A-Za-z_]\w*\s*\(", text):
+            return False
+        return re.fullmatch(r"[A-Za-z0-9_'\s.()+\-*/%&|^<>]+", text) is not None
+
+    def _bare_identifier_use_count(self, text: str, name: str) -> int:
+        return sum(
+            1
+            for match in re.finditer(rf"\b{re.escape(name)}\b", text)
+            if not self._is_member_identifier_context(text, match.start())
+        )
+
+    def _reference_call_binds_or_escapes(
+        self,
+        code: str,
+        call_start: int,
+        *,
+        enclosing_return_type: Optional[str],
+    ) -> bool:
+        boundary = max(code.rfind(token, 0, call_start) for token in (";", "{", "}"))
+        prefix = code[boundary + 1 : call_start]
+        if re.search(r"&\s*[A-Za-z_]\w*\s*=\s*$", prefix):
+            return True
+        if re.search(r"\breturn\s*$", prefix) is None:
+            return False
+        if enclosing_return_type is None:
+            return True
+        return bool(
+            re.search(
+                r"(?<!&)\&\s*$",
+                self._normalize_template_argument_text(enclosing_return_type),
+            )
+        )
 
     def _build_instance_call_rewrite(
         self,

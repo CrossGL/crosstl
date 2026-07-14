@@ -6419,6 +6419,80 @@ def test_codegen_reference_return_helper_reparses_from_pytorch_linalg():
     parse_crossgl(crossgl)
 
 
+def test_codegen_direct_reference_accessor_preserves_storage_lvalue(tmp_path):
+    code = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct Tile {
+        static constexpr short width = 2;
+        float values[4];
+        constexpr thread float& at(short row, short col) {
+            return values[row * width + col];
+        }
+    };
+
+    kernel void write_kernel(device float* out [[buffer(0)]]) {
+        Tile tile;
+        tile.at(1, 1) = 73.25f;
+        out[0] = tile.values[3];
+    }
+    """
+
+    crossgl = convert(code)
+    assert "Tile__at" not in crossgl
+    assert "tile.values[1 * 2 + 1] = 73.25f;" in crossgl
+
+    ast = parse_crossgl(crossgl)
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+    glsl = GLSLCodeGen().generate(ast)
+    for generated in (hlsl, glsl):
+        assert "tile.values[((1 * 2) + 1)] = 73.25;" in generated
+        assert "tile.values[3]" in generated
+        assert "Tile__at" not in generated
+
+    glslang = shutil.which("glslangValidator")
+    if glslang is not None:
+        glsl_path = tmp_path / "direct-reference-accessor.glsl"
+        glsl_path.write_text(glsl, encoding="utf-8")
+        result = subprocess.run(
+            [
+                glslang,
+                "-S",
+                "comp",
+                "-G",
+                str(glsl_path),
+                "-o",
+                str(tmp_path / "direct-reference-accessor.spv"),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    dxc = shutil.which("dxc")
+    if dxc is not None:
+        hlsl_path = tmp_path / "direct-reference-accessor.hlsl"
+        hlsl_path.write_text(hlsl, encoding="utf-8")
+        result = subprocess.run(
+            [
+                dxc,
+                "-T",
+                "cs_6_0",
+                "-E",
+                "CSMain",
+                str(hlsl_path),
+                "-Fo",
+                str(tmp_path / "direct-reference-accessor.dxil"),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_codegen_preserves_threadgroup_imageblock_local_pointer_roundtrip():
     code = """
     #include <metal_stdlib>
