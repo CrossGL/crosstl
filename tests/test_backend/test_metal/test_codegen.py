@@ -12,6 +12,7 @@ from crosstl.backend.Metal.MetalCrossGLCodeGen import (
     MetalCallableAliasLoweringError,
     MetalCallableLoweringError,
     MetalSizeofResolutionError,
+    MetalSourceOverloadResolutionError,
     MetalStageEntryArrayResourceError,
     MetalStaticConstantResolutionError,
     MetalStructMethodCallResolutionError,
@@ -25,6 +26,7 @@ from crosstl.backend.Metal.preprocessor import (
     MetalPreprocessor,
     MetalTemplateSpecializationError,
 )
+from crosstl.project import translate_project
 from crosstl.translator.ast import ArrayAccessNode as CrossGLArrayAccessNode
 from crosstl.translator.ast import AssignmentNode as CrossGLAssignmentNode
 from crosstl.translator.ast import BinaryOpNode as CrossGLBinaryOpNode
@@ -80,6 +82,41 @@ def parse_crossgl(code: str):
     tokens = CrossGLLexer(code).get_tokens()
     parser = CrossGLParser(tokens)
     return parser.parse()
+
+
+def assert_opengl_compute_validates_if_available(glsl, tmp_path, stem):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        return
+    source_path = tmp_path / f"{stem}.comp"
+    binary_path = tmp_path / f"{stem}.spv"
+    source_path.write_text(glsl, encoding="utf-8")
+    result = subprocess.run(
+        [
+            glslang,
+            "--target-env",
+            "opengl",
+            "-S",
+            "comp",
+            str(source_path),
+            "-o",
+            str(binary_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    spirv_val = shutil.which("spirv-val")
+    if spirv_val is not None:
+        result = subprocess.run(
+            [spirv_val, "--target-env", "opengl4.5", str(binary_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
 
 
 def find_crossgl_function(shader, name):
@@ -7322,6 +7359,311 @@ def test_codegen_reports_ambiguous_metal_builtin_user_overloads():
         "simd_shuffle_down(char, uint)",
         "simd_shuffle_down(int8_t, uint)",
     }
+
+
+def mlx_materialized_auto_local_overload_source(kidx_initializer="2 * index.x"):
+    return """
+    int64_t elem_to_loc_int64_t(
+        int64_t elem,
+        constant const int* shape,
+        constant const int64_t* strides,
+        int ndim) {
+      return elem + int64_t(shape[0]) + strides[0] + ndim;
+    }
+
+    int64_t elem_to_loc_int64_t(
+        uint3 elem,
+        constant const int* shape,
+        constant const int64_t* strides,
+        int ndim) {
+      return int64_t(elem.x) + int64_t(shape[0]) + strides[0] + ndim;
+    }
+
+    kernel void use_indices(
+        device int64_t* out_values [[buffer(0)]],
+        constant const int* shape [[buffer(1)]],
+        constant const int64_t* strides [[buffer(2)]],
+        constant const int& ndim [[buffer(3)]],
+        uint2 index [[thread_position_in_grid]]) {
+      auto cast_index = uint(index.x);
+      auto next_index = cast_index + 1;
+      auto vector_index = index + uint2(1u);
+      auto kidx = KIDX_INITIALIZER;
+      auto first = elem_to_loc_int64_t(kidx, shape, strides, ndim);
+      auto second = elem_to_loc_int64_t(kidx + 1, shape, strides, ndim);
+      auto vector_value = elem_to_loc_int64_t(
+          uint3(vector_index.x, 0u, 0u), shape, strides, ndim);
+      out_values[0] = first + int64_t(next_index);
+      out_values[1] = second;
+      out_values[2] = vector_value;
+    }
+    """.replace("KIDX_INITIALIZER", kidx_initializer)
+
+
+def test_codegen_infers_mlx_auto_locals_before_resource_overload_binding(tmp_path):
+    crossgl = convert(mlx_materialized_auto_local_overload_source())
+    normalized = normalize(crossgl)
+
+    assert "uint cast_index = uint(index.x);" in normalized
+    assert "uint next_index = cast_index + 1;" in normalized
+    assert "uvec2 vector_index = index + uvec2(1u);" in normalized
+    assert "uint kidx = 2 * index.x;" in normalized
+    assert (
+        "int64 first = elem_to_loc_int64_t(kidx, shape, strides, ndim);" in normalized
+    )
+    assert (
+        "int64 second = elem_to_loc_int64_t(kidx + 1, shape, strides, ndim);"
+        in normalized
+    )
+    assert "int64 elem_to_loc_int64_t(int64 elem" in normalized
+    assert "int64 elem_to_loc_int64_t__metal_overload_2(uvec3 elem" in normalized
+    assert (
+        "elem_to_loc_int64_t__metal_overload_2("
+        "uvec3(vector_index.x, 0u, 0u), shape, strides, ndim)" in normalized
+    )
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    scalar_calls = re.findall(r"int64_t (?:first|second) = ([A-Za-z_]\w*)\(", glsl)
+    assert len(scalar_calls) == 2
+    assert len(set(scalar_calls)) == 1
+    assert "metal_overload" not in scalar_calls[0]
+    assert re.search(r"int64_t vector_value = [A-Za-z_]\w*metal_overload_2\w*\(", glsl)
+    assert_opengl_compute_validates_if_available(
+        glsl, tmp_path, "metal-auto-local-overload"
+    )
+
+
+def test_codegen_reports_unresolved_auto_local_resource_overload():
+    source = mlx_materialized_auto_local_overload_source("external_index_value(index)")
+
+    with pytest.raises(MetalSourceOverloadResolutionError) as exc_info:
+        convert(source)
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.metal-source-overload-unresolved"
+    )
+    assert diagnostic.missing_capabilities == ("metal.source-overload-resolution",)
+    assert diagnostic.function_name == "elem_to_loc_int64_t"
+    assert diagnostic.argument_types == ("<unknown>", "int*", "int64_t*", "int")
+    assert diagnostic.reason == "one or more argument types could not be inferred"
+    assert set(diagnostic.candidates) == {
+        "elem_to_loc_int64_t(int64_t, constant const int*, "
+        "constant const int64_t*, int)",
+        "elem_to_loc_int64_t(uint3, constant const int*, "
+        "constant const int64_t*, int)",
+    }
+
+
+def test_codegen_preserves_resource_qualifiers_during_source_overload_binding(
+    tmp_path,
+):
+    source = """
+    int64_t pick(int64_t value, constant const int* data) {
+      return value + data[0];
+    }
+
+    int64_t pick(int64_t value, device int* data) {
+      return value + data[0];
+    }
+
+    int64_t pick(uint3 value, constant const int* data) {
+      return int64_t(value.x) + data[0];
+    }
+
+    kernel void run_picks(
+        device int64_t* out_values [[buffer(0)]],
+        constant const int* data [[buffer(1)]],
+        device int* mutable_data [[buffer(2)]],
+        uint3 index [[thread_position_in_grid]]) {
+      auto kidx = 2 * index.x;
+      auto scalar = pick(kidx, data);
+      auto device_scalar = pick(kidx, mutable_data);
+      auto vector = pick(index, data);
+      out_values[0] = scalar + device_scalar + vector;
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    normalized = normalize(crossgl)
+
+    assert "int64 pick(int64 value, constant int* data)" in normalized
+    assert "int64 pick__metal_overload_2(int64 value, device int* data)" in normalized
+    assert "int64 pick__metal_overload_3(uvec3 value, constant int* data)" in normalized
+    assert "int64 scalar = pick(kidx, data);" in normalized
+    assert (
+        "int64 device_scalar = pick__metal_overload_2(kidx, mutable_data);"
+        in normalized
+    )
+    assert "int64 vector = pick__metal_overload_3(index, data);" in normalized
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert_opengl_compute_validates_if_available(
+        glsl, tmp_path, "metal-qualified-source-overload"
+    )
+
+
+def test_codegen_fails_closed_for_equally_ranked_source_numeric_overloads():
+    source = """
+    int64_t pick(int64_t value, constant const int* data) {
+      return value + data[0];
+    }
+
+    int64_t pick(float value, constant const int* data) {
+      return int64_t(value) + data[0];
+    }
+
+    int64_t pick(uint3 value, constant const int* data) {
+      return int64_t(value.x) + data[0];
+    }
+
+    kernel void run_pick(
+        device int64_t* out_values [[buffer(0)]],
+        constant const int* data [[buffer(1)]],
+        uint index [[thread_position_in_grid]]) {
+      auto value = pick(index, data);
+      out_values[0] = value;
+    }
+    """
+
+    with pytest.raises(MetalSourceOverloadResolutionError) as exc_info:
+        convert_without_preprocessing(source)
+
+    diagnostic = exc_info.value
+    assert diagnostic.argument_types == ("uint", "int*")
+    assert diagnostic.reason == (
+        "multiple source-compatible overloads remain after type matching"
+    )
+    assert set(diagnostic.candidates) == {
+        "pick(int64_t, constant const int*)",
+        "pick(float, constant const int*)",
+    }
+
+
+def test_codegen_reserves_transported_names_and_resets_converter_state():
+    collision_source = """
+    template <int Offset>
+    int pick__metal_overload(int value) {
+      return value + Offset;
+    }
+
+    int64_t pick(int64_t value, constant int* data) {
+      return value + data[0];
+    }
+
+    int64_t pick(uint3 value, constant int* data) {
+      return int64_t(value.x) + data[0];
+    }
+
+    kernel void run_collision(
+        device int64_t* out_values [[buffer(0)]],
+        constant int* data [[buffer(1)]],
+        uint3 index [[thread_position_in_grid]]) {
+      out_values[0] = pick(index, data)
+          + pick__metal_overload<2>(int(index.x));
+    }
+    """
+    clean_source = """
+    int64_t pick(int64_t value, constant int* data) {
+      return value + data[0];
+    }
+
+    int64_t pick(uint3 value, constant int* data) {
+      return int64_t(value.x) + data[0];
+    }
+
+    kernel void run_clean(
+        device int64_t* out_values [[buffer(0)]],
+        constant int* data [[buffer(1)]],
+        uint3 index [[thread_position_in_grid]]) {
+      out_values[0] = pick(index, data);
+    }
+    """
+    converter = MetalToCrossGLConverter()
+
+    collision_ast = MetalParser(
+        MetalLexer(collision_source, preprocess=False).tokenize()
+    ).parse()
+    collision_crossgl = converter.generate(collision_ast)
+    collision_normalized = normalize(collision_crossgl)
+    assert "int pick__metal_overload_2_2(int value)" in collision_normalized
+    assert (
+        "pick__metal_overload_2(index, data)"
+        " + pick__metal_overload_2_2(int(index.x))" in collision_normalized
+    )
+    assert parse_crossgl(collision_crossgl) is not None
+
+    clean_ast = MetalParser(
+        MetalLexer(clean_source, preprocess=False).tokenize()
+    ).parse()
+    clean_crossgl = converter.generate(clean_ast)
+    clean_normalized = normalize(clean_crossgl)
+    assert "int64 pick__metal_overload_2(uvec3 value" in clean_normalized
+    assert "pick__metal_overload_2(index, data)" in clean_normalized
+    assert "pick__metal_overload_2_2" not in clean_normalized
+    assert parse_crossgl(clean_crossgl) is not None
+
+
+def test_mlx_random_auto_local_overload_matches_direct_and_project_opengl(
+    tmp_path,
+):
+    # Reduced from MLX 4367c73b60541ddd5a266ce4644fd93d20223b6e,
+    # mlx/backend/metal/kernels/random.metal and utils.h.
+    source = """
+    template <typename IdxT = int64_t>
+    IdxT elem_to_loc(
+        IdxT elem,
+        constant const int* shape,
+        constant const int64_t* strides,
+        int ndim) {
+      return elem + IdxT(shape[0]) + strides[0] + ndim;
+    }
+
+    template <typename IdxT = int64_t>
+    IdxT elem_to_loc(
+        uint3 elem,
+        constant const int* shape,
+        constant const int64_t* strides,
+        int ndim) {
+      return IdxT(elem.x) + IdxT(shape[0]) + strides[0] + ndim;
+    }
+
+    kernel void rbits(
+        device int64_t* out_values [[buffer(0)]],
+        constant const int* key_shape [[buffer(1)]],
+        constant const int64_t* key_strides [[buffer(2)]],
+        constant const int& ndim [[buffer(3)]],
+        uint2 index [[thread_position_in_grid]]) {
+      auto kidx = 2 * index.x;
+      auto first = elem_to_loc(kidx, key_shape, key_strides, ndim);
+      auto second = elem_to_loc(kidx + 1, key_shape, key_strides, ndim);
+      out_values[0] = first;
+      out_values[1] = second;
+    }
+    """
+    repo = tmp_path / "mlx-reduced"
+    repo.mkdir()
+    source_path = repo / "random.metal"
+    source_path.write_text(source, encoding="utf-8")
+
+    direct = crosstl.translate(str(source_path), backend="opengl", format_output=False)
+    report = translate_project(repo, targets=["opengl"], output_dir="out")
+    payload = report.to_json()
+    assert payload["summary"]["translatedCount"] == 1, payload
+    assert payload["summary"]["failedCount"] == 0, payload
+    artifact = payload["artifacts"][0]
+    project = (repo / artifact["path"]).read_text(encoding="utf-8")
+
+    helper_pattern = r"int64_t (?:first|second) = ([A-Za-z_]\w*)\("
+    direct_helpers = re.findall(helper_pattern, direct)
+    project_helpers = re.findall(helper_pattern, project)
+    assert len(direct_helpers) == len(project_helpers) == 2
+    assert len(set(direct_helpers)) == len(set(project_helpers)) == 1
+    assert direct_helpers[0] == project_helpers[0]
+    assert "metal_overload" not in direct_helpers[0]
+    assert_opengl_compute_validates_if_available(
+        direct, tmp_path, "mlx-random-auto-local-overload"
+    )
 
 
 def test_metal_simd_reductions_reach_backend_wave_instructions():
