@@ -9278,6 +9278,12 @@ class MetalPreprocessor(HLSLPreprocessor):
         # `return totals[i]` (type token `return`) or `else block[i]` — never
         # records a bogus element type (the never-guess contract).
         recognized_aggregates = self._aggregate_type_names(code, struct_spans)
+        function_body_spans = [
+            function.body_span
+            for function in self._find_non_template_function_definitions(
+                code, struct_spans
+            )
+        ]
         array_pattern = re.compile(
             r"(?:(?<=[;{}(,])|^)\s*"
             r"(?P<type>(?:const\s+|constexpr\s+|volatile\s+|thread\s+|"
@@ -9295,11 +9301,18 @@ class MetalPreprocessor(HLSLPreprocessor):
                 and normalized not in recognized_aggregates
             ):
                 continue
+            pointer_type = f"{match.group('type')}*"
+            if (
+                self._normalize_known_address_space_pointer_type(pointer_type) is None
+                and self._containing_span(match.start(), function_body_spans)
+                is not None
+            ):
+                pointer_type = f"thread {match.group('type')}*"
             record(
                 match.group("name"),
                 normalized,
                 match.start(),
-                f"{match.group('type')}*",
+                pointer_type,
             )
 
         for entries in element_types.values():
@@ -9644,6 +9657,18 @@ class MetalPreprocessor(HLSLPreprocessor):
             return entry.pointer_type
         return None
 
+    @staticmethod
+    def _buffer_pointer_expression_type(
+        buffer_element_types: _MetalBufferTypeView, name: str
+    ) -> Optional[str]:
+        # Structured entries distinguish a proven pointer from an element type
+        # whose address space is unknown. Plain strings remain supported for the
+        # legacy unit-level element maps used by callers of this private helper.
+        entry = buffer_element_types.get(name)
+        if isinstance(entry, _MetalSubscriptableType):
+            return entry.pointer_type
+        return entry if isinstance(entry, str) and entry else None
+
     def _is_metal_scalar_or_vector_type(self, type_text: str) -> bool:
         return self._scalar_and_width(type_text) is not None
 
@@ -9763,11 +9788,12 @@ class MetalPreprocessor(HLSLPreprocessor):
             ):
                 return self._normalize_inferred_type(type_name)
 
-        # Bare pointer/array parameter -> its element type. Template deduction for
-        # a declared `device U*` / `threadgroup U*` parameter binds U from this
-        # element type, just as a subscript of the same source would.
+        # A bare tracked pointer/array preserves its complete qualified pointer
+        # type. Binding later peels the pointee only when the DECLARED parameter
+        # itself is a pointer (`device U*`); a by-value `Pointer` binds the full
+        # type. Structured entries without a proven address space fail closed.
         if IDENTIFIER_RE.fullmatch(expr) and expr in buffer_element_types:
-            return self._buffer_element_type(buffer_element_types, expr)
+            return self._buffer_pointer_expression_type(buffer_element_types, expr)
 
         # Bare local variable -> its declared type.
         if IDENTIFIER_RE.fullmatch(expr) and expr in local_variable_types:
@@ -9792,8 +9818,8 @@ class MetalPreprocessor(HLSLPreprocessor):
             return vector_member_type
 
         # Pointer offset `base + integer`, `integer + base`, or `base - integer`
-        # preserves the pointer's element type for template deduction.
-        pointer_arithmetic = self._infer_pointer_arithmetic_element_type(
+        # preserves the pointer's complete qualified type for template deduction.
+        pointer_arithmetic = self._infer_pointer_arithmetic_type(
             expr,
             buffer_element_types,
             local_variable_types,
@@ -9879,7 +9905,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             return None
         return return_type
 
-    def _infer_pointer_arithmetic_element_type(
+    def _infer_pointer_arithmetic_type(
         self,
         expr: str,
         buffer_element_types: _MetalBufferTypeView,
@@ -9889,7 +9915,9 @@ class MetalPreprocessor(HLSLPreprocessor):
     ) -> Optional[str]:
         expression = self._strip_enclosing_parens(expr)
         if IDENTIFIER_RE.fullmatch(expression):
-            return self._buffer_element_type(buffer_element_types, expression)
+            return self._buffer_pointer_expression_type(
+                buffer_element_types, expression
+            )
         split = self._split_top_level_binary_arithmetic(expression)
         if split is None:
             return None
@@ -9898,14 +9926,14 @@ class MetalPreprocessor(HLSLPreprocessor):
             return None
         left_expr = left_expr.strip()
         right_expr = right_expr.strip()
-        left_pointer = self._infer_pointer_arithmetic_element_type(
+        left_pointer = self._infer_pointer_arithmetic_type(
             left_expr,
             buffer_element_types,
             local_variable_types,
             struct_field_types,
             structs_by_name,
         )
-        right_pointer = self._infer_pointer_arithmetic_element_type(
+        right_pointer = self._infer_pointer_arithmetic_type(
             right_expr,
             buffer_element_types,
             local_variable_types,

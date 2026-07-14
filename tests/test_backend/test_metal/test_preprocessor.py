@@ -3769,6 +3769,106 @@ def test_preprocessor_infers_addressed_buffer_element_pointer_for_nested_call():
     assert "Fragment::load(" not in output
 
 
+def test_preprocessor_preserves_const_threadgroup_pointer_in_nested_call():
+    code = """
+    struct Fragment {
+      template <typename SrcPtrType>
+      static float load(SrcPtrType src) { return float(src[0]); }
+    };
+
+    struct Tile {
+      template <typename U>
+      float load(const threadgroup U* src, int index) {
+        return Fragment::load(&(src[index]));
+      }
+    };
+
+    kernel void k(
+        device float* output [[buffer(0)]],
+        uint index [[thread_position_in_grid]]) {
+      threadgroup half shared_values[64];
+      Tile tile;
+      output[index] = tile.load(shared_values, int(index));
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert (
+        "float Fragment__load__const_threadgroup_half_ptr("
+        "const threadgroup half* src)" in output
+    )
+    assert "Fragment__load__const_threadgroup_half_ptr(&(src[index]))" in output
+    assert "Tile__load__half(tile, shared_values, int(index))" in output
+
+
+def test_preprocessor_preserves_generic_pointer_argument_expressions():
+    code = """
+    struct Loader {
+      template <typename Pointer>
+      float load(Pointer src) { return float(src[0]); }
+    };
+
+    kernel void k(
+        const device half* src [[buffer(0)]],
+        device float* out [[buffer(1)]],
+        uint offset [[thread_position_in_grid]]) {
+      Loader loader;
+      out[0] = loader.load(src);
+      out[1] = loader.load(src + offset);
+      out[2] = loader.load(offset + src);
+      out[3] = loader.load(src - offset);
+      out[4] = loader.load(&(src[offset]));
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    helper = (
+        "float Loader__load__const_device_half_ptr("
+        "thread Loader& self, const device half* src)"
+    )
+    assert output.count(helper) == 1
+    assert "Loader__load__const_device_half_ptr(loader, src)" in output
+    assert "Loader__load__const_device_half_ptr(loader, src + offset)" in output
+    assert "Loader__load__const_device_half_ptr(loader, offset + src)" in output
+    assert "Loader__load__const_device_half_ptr(loader, src - offset)" in output
+    assert "Loader__load__const_device_half_ptr(loader, &(src[offset]))" in output
+    assert "Loader__load__half(" not in output
+
+
+def test_preprocessor_declared_pointer_parameter_still_binds_pointee():
+    code = """
+    struct Loader {
+      template <typename U>
+      float load(const device U* src) { return float(src[0]); }
+    };
+
+    kernel void k(
+        const device half* src [[buffer(0)]],
+        device float* out [[buffer(1)]],
+        uint offset [[thread_position_in_grid]]) {
+      Loader loader;
+      out[0] = loader.load(src);
+      out[1] = loader.load(src + offset);
+      out[2] = loader.load(offset + src);
+      out[3] = loader.load(src - offset);
+      out[4] = loader.load(&(src[offset]));
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    helper = "float Loader__load__half(thread Loader& self, const device half* src)"
+    assert output.count(helper) == 1
+    assert "Loader__load__half(loader, src)" in output
+    assert "Loader__load__half(loader, src + offset)" in output
+    assert "Loader__load__half(loader, offset + src)" in output
+    assert "Loader__load__half(loader, src - offset)" in output
+    assert "Loader__load__half(loader, &(src[offset]))" in output
+    assert "Loader__load__const_device_half_ptr(" not in output
+
+
 def test_preprocessor_instantiates_explicit_value_template_member_call():
     code = """
     struct Reducer {
@@ -6003,6 +6103,32 @@ def test_preprocessor_addressed_element_side_effect_clean_fails_structured():
     assert "could not be inferred conservatively" in str(error)
 
 
+@pytest.mark.parametrize("argument", ["src", "src + offset"])
+def test_preprocessor_generic_pointer_without_address_space_clean_fails(argument):
+    code = f"""
+    struct Loader {{
+      template <typename Pointer>
+      float load(Pointer src) {{ return src[0]; }}
+    }};
+
+    void invoke(float* src, int offset) {{
+      Loader loader;
+      float value = loader.load({argument});
+    }}
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.project_diagnostic_code == "project.translate.metal-struct-method"
+    assert error.missing_capabilities == ("struct.template-method",)
+    assert error.struct_name == "Loader"
+    assert error.method_name == "load"
+    assert error.requested_signature == f"loader.load({argument})"
+    assert "could not be inferred conservatively" in str(error)
+
+
 def test_preprocessor_template_method_conflicting_binding_clean_fails():
     # The single template parameter T appears in two parameters whose call-site
     # arguments infer to DIFFERENT concrete types (float and int). Rather than
@@ -6267,6 +6393,29 @@ def test_infer_argument_type_preserves_addressed_element_pointer_type():
         pp._infer_argument_type("&scratch[i + 1]", buffers, {"i": "ushort"})
         == "threadgroup float*"
     )
+
+
+def test_infer_argument_type_preserves_qualified_pointer_expressions():
+    pp = MetalPreprocessor()
+    code = "kernel void k(const device half* src [[buffer(0)]]) {}"
+    positioned = pp._collect_buffer_element_types(code, [])
+    buffers = pp._flatten_types_at(positioned, len(code))
+    locals_ = {"offset": "uint"}
+
+    assert pp._infer_argument_type("src", buffers, locals_) == "const device half*"
+    assert (
+        pp._infer_argument_type("src + offset", buffers, locals_)
+        == "const device half*"
+    )
+    assert (
+        pp._infer_argument_type("offset + src", buffers, locals_)
+        == "const device half*"
+    )
+    assert (
+        pp._infer_argument_type("src - offset", buffers, locals_)
+        == "const device half*"
+    )
+    assert pp._infer_argument_type("offset - src", buffers, locals_) is None
 
 
 @pytest.mark.parametrize(
@@ -6659,8 +6808,14 @@ def test_collect_buffer_element_types_rejects_non_declaration_subscripts():
     element_types = pp._collect_buffer_element_types(code, [])
     # totals is a real `float totals[4]` array; the only recorded type is float.
     assert [t.element_type for _, t in element_types.get("totals", [])] == ["float"]
+    assert [t.pointer_type for _, t in element_types.get("totals", [])] == [
+        "thread float*"
+    ]
     # A struct array records its element struct type.
     assert [t.element_type for _, t in element_types.get("items", [])] == ["Pair"]
+    assert [t.pointer_type for _, t in element_types.get("items", [])] == [
+        "thread Pair*"
+    ]
     # `return`/`if` tokens never become element types.
     assert "block" not in element_types
     assert all(
@@ -6668,6 +6823,24 @@ def test_collect_buffer_element_types_rejects_non_declaration_subscripts():
         for entries in element_types.values()
         for _, t in entries
     )
+
+
+def test_collect_buffer_element_types_preserves_leading_const_pointer_qualifiers():
+    pp = MetalPreprocessor()
+    code = """
+    void read(
+        const device half* device_src,
+        const threadgroup float* group_src) {}
+    """
+
+    element_types = pp._collect_buffer_element_types(code, [])
+
+    assert [entry.pointer_type for _, entry in element_types.get("device_src", [])] == [
+        "const device half*"
+    ]
+    assert [entry.pointer_type for _, entry in element_types.get("group_src", [])] == [
+        "const threadgroup float*"
+    ]
 
 
 # --------------------------------------------------------------------------- #
