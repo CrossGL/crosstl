@@ -512,6 +512,7 @@ def test_project_package_exposes_public_api_surface():
         "NativeRuntimeDispatchRequest",
         "NativeRuntimeParityAdapter",
         "NativeRuntimeValidationCommand",
+        "OpenGLComputeRuntime",
         "OpenGLRuntimeParityAdapter",
         "RuntimeAdapter",
         "RuntimeAdapterDispatchError",
