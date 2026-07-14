@@ -346,6 +346,28 @@ class DirectXUnresolvedSourceTypeError(ValueError):
         super().__init__(message)
 
 
+class DirectXTrailingZeroBuiltinError(ValueError):
+    """Raised when a Clang trailing-zero builtin has no faithful HLSL lowering."""
+
+    project_diagnostic_code = "project.translate.directx-trailing-zero-unsupported"
+    missing_capabilities = ("directx.trailing-zero-builtin-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        builtin_name=None,
+        operand_type=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.builtin_name = builtin_name
+        self.operand_type = operand_type
+        self.reason = reason
+        self.source_location = source_location
+
+
 class DirectXSemanticArraySizeError(ValueError):
     """Diagnostic exception for stage semantic arrays with unknown extents."""
 
@@ -470,6 +492,41 @@ class DirectXAtomicFenceLoweringError(ValueError):
 class HLSLCodeGen:
     """Emit HLSL source from the shared CrossGL translator AST."""
 
+    HLSL_CLANG_TRAILING_ZERO_BUILTINS = frozenset(
+        {"__builtin_ctz", "__builtin_ctzl", "__builtin_ctzll"}
+    )
+    HLSL_CLANG_TRAILING_ZERO_WIDTHS = {
+        "__builtin_ctz": 32,
+        "__builtin_ctzl": 64,
+        "__builtin_ctzll": 64,
+    }
+    HLSL_NARROW_INTEGER_TYPE_NAMES = frozenset(
+        {
+            "char",
+            "signed char",
+            "unsigned char",
+            "uchar",
+            "i8",
+            "u8",
+            "int8",
+            "uint8",
+            "int8_t",
+            "uint8_t",
+            "short",
+            "signed short",
+            "unsigned short",
+            "ushort",
+            "i16",
+            "u16",
+            "int16",
+            "uint16",
+            "int16_t",
+            "uint16_t",
+            "min12int",
+            "min16int",
+            "min16uint",
+        }
+    )
     HLSL_PATCH_CONTROL_POINT_LIMIT = 32
     METAL_ONLY_SYSTEM_INCLUDES = frozenset(
         {
@@ -959,6 +1016,8 @@ class HLSLCodeGen:
         self.required_hlsl_fixed_array_read_helpers = set()
         self.required_hlsl_complex64_helpers = set()
         self.required_hlsl_explicit_bitcast_helpers = set()
+        self.required_hlsl_trailing_zero_helpers = set()
+        self.hlsl_trailing_zero_helper_names = {}
         self.required_hlsl_wave_shuffle_and_fill_up_types = set()
         self.hlsl_lowered_struct_resource_members = {}
         self.generic_struct_definitions = {}
@@ -1548,6 +1607,8 @@ class HLSLCodeGen:
         self.required_hlsl_fixed_array_read_helpers = set()
         self.required_hlsl_complex64_helpers = set()
         self.required_hlsl_explicit_bitcast_helpers = set()
+        self.required_hlsl_trailing_zero_helpers = set()
+        self.hlsl_trailing_zero_helper_names = {}
         self.required_hlsl_wave_shuffle_and_fill_up_types = set()
         self.current_hlsl_available_functions = {}
         self.current_hlsl_hull_output_control_points = None
@@ -1695,6 +1756,7 @@ class HLSLCodeGen:
         self.hlsl_function_name_aliases = self.collect_hlsl_function_name_aliases(
             functions
         )
+        self.prepare_hlsl_trailing_zero_helper_names(functions)
         self.vertex_entry_output_struct_names = (
             self.collect_hlsl_vertex_entry_output_struct_names(ast, target_stage)
         )
@@ -2737,12 +2799,74 @@ class HLSLCodeGen:
         code += self.generate_hlsl_inverse_helpers()
         code += self.generate_hlsl_fragment_shading_rate_helper()
         code += self.generate_hlsl_wave_shuffle_and_fill_up_helpers()
+        code += self.generate_hlsl_trailing_zero_helpers()
         code += self.generate_hlsl_complex64_helpers()
         code += self.generate_hlsl_explicit_bitcast_helpers()
         code += self.generate_hlsl_fixed_array_return_helpers()
         code += functions_code
 
         return code
+
+    def prepare_hlsl_trailing_zero_helper_names(self, functions):
+        used_names = set(self.global_variable_types)
+        used_names.update(self.structs_by_name)
+        used_names.update(getattr(self, "enum_type_names", set()))
+        used_names.update(getattr(self, "enum_struct_type_names", set()))
+        used_names.update(
+            getattr(func, "name", None)
+            for func in functions or []
+            if getattr(func, "name", None)
+        )
+        used_names.update(self.hlsl_function_name_aliases.values())
+        for func in functions or []:
+            used_names.update(self.collect_hlsl_function_identifier_names(func))
+
+        self.hlsl_trailing_zero_helper_names = {}
+        for operand_type in ("uint", "uint64_t"):
+            base_name = f"__crossgl_ctz_{operand_type}"
+            helper_name = base_name
+            while helper_name in used_names:
+                helper_name += "_"
+            self.hlsl_trailing_zero_helper_names[operand_type] = helper_name
+            used_names.add(helper_name)
+
+    def hlsl_trailing_zero_helper_name(self, operand_type):
+        helper_name = self.hlsl_trailing_zero_helper_names.get(operand_type)
+        if helper_name is not None:
+            return helper_name
+
+        used_names = set(getattr(self, "function_return_types", {}))
+        used_names.update(getattr(self, "global_variable_types", {}))
+        used_names.update(getattr(self, "local_variable_types", {}))
+        used_names.update(self.hlsl_trailing_zero_helper_names.values())
+        helper_name = f"__crossgl_ctz_{operand_type}"
+        while helper_name in used_names:
+            helper_name += "_"
+        self.hlsl_trailing_zero_helper_names[operand_type] = helper_name
+        return helper_name
+
+    def generate_hlsl_trailing_zero_helpers(self):
+        helpers = []
+        for operand_type in sorted(self.required_hlsl_trailing_zero_helpers):
+            helper_name = self.hlsl_trailing_zero_helper_name(operand_type)
+            if operand_type == "uint":
+                helpers.append(f"""int {helper_name}(uint value) {{
+    // Clang leaves ctz(0) undefined; use the canonical least-bit -1 sentinel.
+    return value == 0u ? -1 : int(firstbitlow(value));
+}}
+""")
+            elif operand_type == "uint64_t":
+                helpers.append(f"""int {helper_name}(uint64_t value) {{
+    uint lowBits = uint(value);
+    if (lowBits != 0u) {{
+        return int(firstbitlow(lowBits));
+    }}
+    uint highBits = uint(value >> 32);
+    // Clang leaves ctz(0) undefined; use the canonical least-bit -1 sentinel.
+    return highBits == 0u ? -1 : (32 + int(firstbitlow(highBits)));
+}}
+""")
+        return "\n".join(helpers) + ("\n" if helpers else "")
 
     def hlsl_wave_shuffle_and_fill_up_helper_name(self, value_type):
         type_suffix = re.sub(r"[^A-Za-z0-9_]", "_", self.map_type(value_type))
@@ -6162,6 +6286,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 and func_name not in getattr(self, "function_return_types", {})
             ):
                 return self.expression_result_type(args[0])
+            trailing_zero_result_type = self.hlsl_trailing_zero_result_type(
+                func_name, args
+            )
+            if trailing_zero_result_type is not None:
+                return trailing_zero_result_type
             explicit_bitcast_type = self.hlsl_metal_as_type_target_type(func_name)
             if explicit_bitcast_type is not None:
                 return explicit_bitcast_type
@@ -8497,7 +8626,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "min16uint4",
             ]:
                 return self.hlsl_constructor_expression(func_name, args)
-            builtin_call = self.hlsl_builtin_function_call(func_name, args)
+            builtin_call = self.hlsl_builtin_function_call(
+                func_name,
+                args,
+                source_location=getattr(expr, "source_location", None),
+            )
             if builtin_call is not None:
                 return builtin_call
             builtin_callee = self.hlsl_builtin_function_name(func_name, args)
@@ -8676,9 +8809,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return "atan2"
         return self.function_map.get(func_name)
 
-    def hlsl_builtin_function_call(self, func_name, args):
+    def hlsl_builtin_function_call(self, func_name, args, *, source_location=None):
         if not func_name or func_name in getattr(self, "function_return_types", {}):
             return None
+        trailing_zero_call = self.generate_hlsl_trailing_zero_call(
+            func_name,
+            args,
+            source_location=source_location,
+        )
+        if trailing_zero_call is not None:
+            return trailing_zero_call
         if not args and func_name in {"quiet_NaN", "signaling_NaN"}:
             return "asfloat(0x7fc00000)"
         if not args and func_name == "infinity":
@@ -8715,6 +8855,176 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         left = self.generate_expression(args[0])
         right = self.generate_expression(args[1])
         return f"(({left}) - (({right}) * floor(({left}) / ({right}))))"
+
+    def hlsl_trailing_zero_builtin_is_shadowed(self, func_name):
+        return (
+            func_name in getattr(self, "function_return_types", {})
+            or func_name in self.local_variable_types
+            or func_name in self.global_variable_types
+        )
+
+    def hlsl_trailing_zero_result_type(self, func_name, args):
+        if (
+            func_name not in self.HLSL_CLANG_TRAILING_ZERO_BUILTINS
+            or self.hlsl_trailing_zero_builtin_is_shadowed(func_name)
+        ):
+            return None
+        return "int"
+
+    def hlsl_trailing_zero_operand_type_info(self, operand_type):
+        source_type = self.type_name_string(operand_type)
+        if not source_type:
+            return None
+        source_type = source_type.strip()
+        if source_type in self.HLSL_NARROW_INTEGER_TYPE_NAMES:
+            return None
+
+        mapped_type = self.map_type(source_type)
+        if mapped_type == "int":
+            return {
+                "source": source_type,
+                "mapped": mapped_type,
+                "unsigned": "uint",
+                "width": 32,
+            }
+        if mapped_type == "uint":
+            return {
+                "source": source_type,
+                "mapped": mapped_type,
+                "unsigned": "uint",
+                "width": 32,
+            }
+        if mapped_type == "int64_t":
+            return {
+                "source": source_type,
+                "mapped": mapped_type,
+                "unsigned": "uint64_t",
+                "width": 64,
+            }
+        if mapped_type == "uint64_t":
+            return {
+                "source": source_type,
+                "mapped": mapped_type,
+                "unsigned": "uint64_t",
+                "width": 64,
+            }
+        return None
+
+    def directx_trailing_zero_builtin_error(
+        self,
+        func_name,
+        *,
+        reason,
+        operand_type=None,
+        argument_count=None,
+        source_location=None,
+    ):
+        if reason == "invalid-arity":
+            message = (
+                f"DirectX trailing-zero builtin '{func_name}' requires exactly "
+                f"1 scalar integer operand, got {argument_count}"
+            )
+        elif reason == "unresolved-operand-type":
+            message = (
+                f"DirectX translation could not resolve source type metadata for "
+                f"the operand of trailing-zero builtin '{func_name}' in function "
+                f"'{self.current_function_name or '<global>'}'"
+            )
+        elif reason == "unsupported-operand-shape":
+            message = (
+                f"DirectX trailing-zero builtin '{func_name}' requires a scalar "
+                f"integer operand; got '{operand_type}'"
+            )
+        elif reason == "unsupported-integer-width":
+            message = (
+                f"DirectX trailing-zero builtin '{func_name}' supports only 32-bit "
+                f"or 64-bit integer operands; got '{operand_type}'"
+            )
+        elif reason == "operand-narrowing-required":
+            message = (
+                f"DirectX trailing-zero builtin '{func_name}' has a 32-bit operand "
+                f"contract and cannot consume '{operand_type}' without narrowing"
+            )
+        else:
+            message = (
+                f"DirectX trailing-zero builtin '{func_name}' requires a 32-bit "
+                f"or 64-bit integer operand; got '{operand_type}'"
+            )
+        return DirectXTrailingZeroBuiltinError(
+            message,
+            builtin_name=func_name,
+            operand_type=operand_type,
+            reason=reason,
+            source_location=source_location,
+        )
+
+    def generate_hlsl_trailing_zero_call(
+        self, func_name, args, *, source_location=None
+    ):
+        if (
+            func_name not in self.HLSL_CLANG_TRAILING_ZERO_BUILTINS
+            or self.hlsl_trailing_zero_builtin_is_shadowed(func_name)
+        ):
+            return None
+        if len(args) != 1:
+            raise self.directx_trailing_zero_builtin_error(
+                func_name,
+                reason="invalid-arity",
+                argument_count=len(args),
+                source_location=source_location,
+            )
+
+        argument = args[0]
+        operand_type = self.expression_result_type(argument)
+        if operand_type is None:
+            raise self.directx_trailing_zero_builtin_error(
+                func_name,
+                reason="unresolved-operand-type",
+                source_location=source_location,
+            )
+
+        source_type = self.type_name_string(operand_type)
+        mapped_type = self.map_type(source_type)
+        type_info = self.hlsl_trailing_zero_operand_type_info(source_type)
+        if type_info is None:
+            if self.is_vector_value_type(mapped_type) or self.hlsl_matrix_shape(
+                mapped_type
+            ):
+                reason = "unsupported-operand-shape"
+            elif (
+                source_type in self.HLSL_NARROW_INTEGER_TYPE_NAMES
+                or self.hlsl_scalar_or_vector_component_type(mapped_type)
+                in {"min12int", "min16int", "min16uint"}
+            ):
+                reason = "unsupported-integer-width"
+            else:
+                reason = "unsupported-operand-type"
+            raise self.directx_trailing_zero_builtin_error(
+                func_name,
+                reason=reason,
+                operand_type=source_type,
+                source_location=source_location,
+            )
+
+        required_width = self.HLSL_CLANG_TRAILING_ZERO_WIDTHS[func_name]
+        if type_info["width"] > required_width:
+            raise self.directx_trailing_zero_builtin_error(
+                func_name,
+                reason="operand-narrowing-required",
+                operand_type=source_type,
+                source_location=source_location,
+            )
+
+        unsigned_type = "uint64_t" if required_width == 64 else "uint"
+        helper_name = self.hlsl_trailing_zero_helper_name(unsigned_type)
+        self.required_hlsl_trailing_zero_helpers.add(unsigned_type)
+        argument_code = self.generate_expression_with_expected(argument, None)
+        if type_info["width"] == required_width and type_info["mapped"] in {
+            "int",
+            "int64_t",
+        }:
+            argument_code = f"{unsigned_type}({argument_code})"
+        return f"{helper_name}({argument_code})"
 
     def hlsl_identifier_name(self, name):
         if name in self.current_identifier_aliases:

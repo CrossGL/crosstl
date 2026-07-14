@@ -47,6 +47,7 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXCooperativeMatrixUnsupportedError,
     DirectXPrivatePointerParameterError,
     DirectXSemanticArraySizeError,
+    DirectXTrailingZeroBuiltinError,
     DirectXUnresolvedSourceTypeError,
     DirectXWorkgroupPointerError,
     HLSLCodeGen,
@@ -10486,6 +10487,241 @@ def test_hlsl_first_bit_builtins_lower_to_native_intrinsics():
     assert "findMSB(" not in generated_code
     assert "uint firstbitlow = tid.x;" not in generated_code
     assert "uint firstbithigh = tid.y;" not in generated_code
+
+
+def test_hlsl_clang_trailing_zero_builtins_preserve_width_and_signedness():
+    shader = """
+    shader HlslClangTrailingZeroBuiltins {
+        int probe(
+            int signed32,
+            uint unsigned32,
+            int64_t signed64,
+            uint64_t unsigned64) {
+            let signed32Count = __builtin_ctz(signed32);
+            let unsigned32Count = __builtin_ctz(unsigned32);
+            let signed64Count = __builtin_ctzl(signed64);
+            let unsigned64Count = __builtin_ctzll(unsigned64);
+            let wideLiteralCount = __builtin_ctzll(4294967296);
+            return signed32Count + unsigned32Count
+                + signed64Count + unsigned64Count + wideLiteralCount;
+        }
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "int __crossgl_ctz_uint(uint value)" in generated_code
+    assert "return value == 0u ? -1 : int(firstbitlow(value));" in generated_code
+    assert "int __crossgl_ctz_uint64_t(uint64_t value)" in generated_code
+    assert "uint lowBits = uint(value);" in generated_code
+    assert "uint highBits = uint(value >> 32);" in generated_code
+    assert (
+        "return highBits == 0u ? -1 : (32 + int(firstbitlow(highBits)));"
+        in generated_code
+    )
+    assert "int signed32Count = __crossgl_ctz_uint(uint(signed32));" in generated_code
+    assert "int unsigned32Count = __crossgl_ctz_uint(unsigned32);" in generated_code
+    assert (
+        "int signed64Count = __crossgl_ctz_uint64_t(uint64_t(signed64));"
+        in generated_code
+    )
+    assert "int unsigned64Count = __crossgl_ctz_uint64_t(unsigned64);" in generated_code
+    assert (
+        "int wideLiteralCount = __crossgl_ctz_uint64_t(4294967296ull);"
+        in generated_code
+    )
+    assert "__builtin_ctz" not in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
+def test_hlsl_clang_trailing_zero_builtins_respect_function_and_lexical_shadows():
+    shader = """
+    shader HlslClangTrailingZeroShadows {
+        int __builtin_ctz(uint value) {
+            return int(value) + 7;
+        }
+
+        int ctz(uint value) {
+            return int(value) + 11;
+        }
+
+        int __builtin_ctz_extra(uint value) {
+            return int(value) + 13;
+        }
+
+        int callFunctions(uint value) {
+            return __builtin_ctz(value) + ctz(value)
+                + __builtin_ctz_extra(value);
+        }
+
+        int callLexicalShadow(uint __builtin_ctzl, uint value) {
+            return __builtin_ctzl(value);
+        }
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "int __builtin_ctz(uint value)" in generated_code
+    assert "int ctz(uint value)" in generated_code
+    assert "int __builtin_ctz_extra(uint value)" in generated_code
+    assert "return __builtin_ctzl(value);" in generated_code
+    assert "__crossgl_ctz_" not in generated_code
+    assert "firstbitlow(" not in generated_code
+
+
+def test_hlsl_clang_trailing_zero_helper_avoids_user_name_collision():
+    shader = """
+    shader HlslClangTrailingZeroHelperCollision {
+        int __crossgl_ctz_uint(uint value) {
+            return int(value) + 1;
+        }
+
+        int probe(uint value) {
+            return __builtin_ctz(value);
+        }
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "int __crossgl_ctz_uint(uint value)" in generated_code
+    assert "int __crossgl_ctz_uint_(uint value)" in generated_code
+    assert "return __crossgl_ctz_uint_(value);" in generated_code
+    assert "return (int(value) + 1);" in generated_code
+
+
+@pytest.mark.parametrize(
+    ("operand_type", "diagnostic_type", "reason"),
+    [
+        pytest.param("float", "float", "unsupported-operand-type", id="float"),
+        pytest.param("uvec2", "uint2", "unsupported-operand-shape", id="vector"),
+        pytest.param("ushort", "ushort", "unsupported-integer-width", id="narrow"),
+    ],
+)
+def test_hlsl_clang_trailing_zero_builtin_rejects_unsupported_operands(
+    operand_type, diagnostic_type, reason
+):
+    shader = f"""
+    shader HlslInvalidClangTrailingZeroOperand {{
+        int probe({operand_type} value) {{
+            return __builtin_ctz(value);
+        }}
+
+        compute {{
+            void main() {{}}
+        }}
+    }}
+    """
+
+    with pytest.raises(DirectXTrailingZeroBuiltinError) as exc_info:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.directx-trailing-zero-unsupported"
+    )
+    assert diagnostic.missing_capabilities == (
+        "directx.trailing-zero-builtin-lowering",
+    )
+    assert diagnostic.builtin_name == "__builtin_ctz"
+    assert diagnostic.operand_type == diagnostic_type
+    assert diagnostic.reason == reason
+
+
+@pytest.mark.parametrize("arguments", ["", "left, right"], ids=["zero", "two"])
+def test_hlsl_clang_trailing_zero_builtin_rejects_invalid_arity(arguments):
+    shader = f"""
+    shader HlslInvalidClangTrailingZeroArity {{
+        int probe(uint left, uint right) {{
+            return __builtin_ctz({arguments});
+        }}
+
+        compute {{
+            void main() {{}}
+        }}
+    }}
+    """
+
+    with pytest.raises(DirectXTrailingZeroBuiltinError) as exc_info:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert exc_info.value.reason == "invalid-arity"
+    assert "requires exactly 1 scalar integer operand" in str(exc_info.value)
+
+
+def test_hlsl_clang_trailing_zero_unresolved_type_reports_source_location():
+    shader = """
+    shader HlslUnresolvedClangTrailingZeroOperand {
+        int probe() {
+            return __builtin_ctz(missingValue);
+        }
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+    ast = crosstl.translator.parse(shader)
+    call = next(node for node in ast.walk() if isinstance(node, FunctionCallNode))
+    source_location = {"line": 4, "column": 20}
+    call.source_location = source_location
+
+    with pytest.raises(DirectXTrailingZeroBuiltinError) as exc_info:
+        HLSLCodeGen().generate(ast)
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == "unresolved-operand-type"
+    assert diagnostic.operand_type is None
+    assert diagnostic.source_location == source_location
+    assert "could not resolve source type metadata" in str(diagnostic)
+
+
+def test_hlsl_clang_trailing_zero_metal_proxy_validates_natively(tmp_path):
+    source = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void write_trailing_zero_counts(
+        device const ulong* input [[buffer(0)]],
+        device int* output [[buffer(1)]],
+        uint index [[thread_position_in_grid]]) {
+        uint dynamic32 = index | 8u;
+        ulong dynamic64 = input[index];
+        output[(index * 4u) + 0u] = __builtin_ctz(dynamic32);
+        output[(index * 4u) + 1u] = __builtin_ctzl(dynamic64);
+        output[(index * 4u) + 2u] = __builtin_ctzll(dynamic64);
+        output[(index * 4u) + 3u] = __builtin_ctz(8u);
+    }
+    """
+    shader_path = tmp_path / "clang_trailing_zero.metal"
+    shader_path.write_text(source, encoding="utf-8")
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "__builtin_ctz" not in generated_code
+    assert "__crossgl_ctz_uint(dynamic32)" in generated_code
+    assert "__crossgl_ctz_uint64_t(dynamic64)" in generated_code
+    assert "__crossgl_ctz_uint(8u)" in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated_code, tmp_path)
 
 
 def test_hlsl_user_defined_bitfield_reverse_name_is_not_lowered():
