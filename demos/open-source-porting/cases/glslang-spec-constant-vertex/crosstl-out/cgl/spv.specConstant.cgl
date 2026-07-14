@@ -22,7 +22,7 @@ shader main {
     const double spDupDouble @constant_id(119) = 3.1415926535897932384626433832795;
     const uint dupScale @constant_id(122) = 2;
 
-     gl_MaxImageUnits @constant_id(24);
+    const int gl_MaxImageUnits @constant_id(24) = 8;
 
     vertex {
     void foo(vec4 p[arraySize]) {

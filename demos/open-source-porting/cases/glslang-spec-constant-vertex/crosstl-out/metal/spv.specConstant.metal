@@ -24,9 +24,9 @@ __attribute__((unused)) constant float spDupFloat = 3.14;
 __attribute__((unused)) constant float spDupDouble = 3.141592653589793;
 /* CrossGL fallback: Metal source output cannot preserve GLSL specialization constant id 122 for 'dupScale'; using the default literal. */
 __attribute__((unused)) constant uint dupScale = 2;
-
-/* CrossGL fallback: GLSL builtin limit specialization gl_MaxImageUnits is not available in Metal; using the OpenGL minimum value. */
+/* CrossGL fallback: Metal source output cannot preserve GLSL specialization constant id 24 for 'gl_MaxImageUnits'; using the default literal. */
 __attribute__((unused)) constant int gl_MaxImageUnits = 8;
+
 struct VertexInput {
     float4 ucol_0 [[attribute(0)]];
     float4 ucol_1 [[attribute(1)]];

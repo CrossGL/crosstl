@@ -1,24 +1,15 @@
 #version 400
-/* CrossGL fallback: OpenGL source validation cannot preserve specialization constant id 16 for 'arraySize'; using the default literal. */
-const int arraySize = 5;
-/* CrossGL fallback: OpenGL source validation cannot preserve specialization constant id 17 for 'spBool'; using the default literal. */
-const bool spBool = true;
-/* CrossGL fallback: OpenGL source validation cannot preserve specialization constant id 18 for 'spFloat'; using the default literal. */
-const float spFloat = 3.14;
-/* CrossGL fallback: OpenGL source validation cannot preserve specialization constant id 19 for 'spDouble'; using the default literal. */
-const double spDouble = double(3.141592653589793);
-/* CrossGL fallback: OpenGL source validation cannot preserve specialization constant id 22 for 'scale'; using the default literal. */
-const uint scale = 2;
-/* CrossGL fallback: OpenGL source validation cannot preserve specialization constant id 116 for 'dupArraySize'; using the default literal. */
-const int dupArraySize = 12;
-/* CrossGL fallback: OpenGL source validation cannot preserve specialization constant id 117 for 'spDupBool'; using the default literal. */
-const bool spDupBool = true;
-/* CrossGL fallback: OpenGL source validation cannot preserve specialization constant id 118 for 'spDupFloat'; using the default literal. */
-const float spDupFloat = 3.14;
-/* CrossGL fallback: OpenGL source validation cannot preserve specialization constant id 119 for 'spDupDouble'; using the default literal. */
-const double spDupDouble = double(3.141592653589793);
-/* CrossGL fallback: OpenGL source validation cannot preserve specialization constant id 122 for 'dupScale'; using the default literal. */
-const uint dupScale = 2;
+layout(constant_id = 16) const int arraySize = 5;
+layout(constant_id = 17) const bool spBool = true;
+layout(constant_id = 18) const float spFloat = 3.14;
+layout(constant_id = 19) const double spDouble = double(3.141592653589793);
+layout(constant_id = 22) const uint scale = 2;
+layout(constant_id = 116) const int dupArraySize = 12;
+layout(constant_id = 117) const bool spDupBool = true;
+layout(constant_id = 118) const float spDupFloat = 3.14;
+layout(constant_id = 119) const double spDupDouble = double(3.141592653589793);
+layout(constant_id = 122) const uint dupScale = 2;
+layout(constant_id = 24) gl_MaxImageUnits;
 
 in vec4 ucol[arraySize];
 in vec4 dupUcol[dupArraySize];
