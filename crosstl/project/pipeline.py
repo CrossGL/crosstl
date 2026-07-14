@@ -40853,7 +40853,17 @@ def _toolchain_smoke_commands(
         )
         if stages:
             return [
-                ([tools[0], "--stdin", "-S", stage], "artifact") for stage in stages
+                (
+                    _glslang_validation_command(
+                        target,
+                        tools[0],
+                        stage,
+                        artifact_path,
+                        artifact=artifact,
+                    ),
+                    "artifact",
+                )
+                for stage in stages
             ]
     if target == "vulkan" and artifact_path.suffix.lower() == ".spvasm":
         return _vulkan_spirv_assembly_smoke_commands(
@@ -40884,7 +40894,13 @@ def _toolchain_smoke_command(
         )
     if target in {"opengl", "webgl"}:
         return (
-            [tools[0], "--stdin", "-S", _glslang_stage(artifact_path, artifact)],
+            _glslang_validation_command(
+                target,
+                tools[0],
+                _glslang_stage(artifact_path, artifact),
+                artifact_path,
+                artifact=artifact,
+            ),
             "artifact",
         )
     if target == "vulkan":
@@ -40897,6 +40913,45 @@ def _toolchain_smoke_command(
     if availability_command is None:
         return None
     return list(availability_command), "tool-availability"
+
+
+def _glslang_validation_command(
+    target: str,
+    tool: str,
+    stage: str,
+    artifact_path: Path,
+    *,
+    artifact: Mapping[str, Any] | None = None,
+) -> list[str]:
+    command = [tool, "--stdin", "-S", stage]
+    if target != "opengl" or not _opengl_artifact_uses_specialization_constants(
+        artifact_path, artifact
+    ):
+        return command
+    return [
+        *command,
+        "--target-env",
+        "opengl",
+        "--target-env",
+        "spirv1.3",
+        "--auto-map-locations",
+        "-o",
+        os.devnull,
+    ]
+
+
+def _opengl_artifact_uses_specialization_constants(
+    artifact_path: Path, artifact: Mapping[str, Any] | None = None
+) -> bool:
+    if artifact is not None:
+        specialization_constants = artifact.get("specializationConstants")
+        if isinstance(specialization_constants, list) and specialization_constants:
+            return True
+    try:
+        source = artifact_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return GLSLANG_SPECIALIZATION_CONSTANT_RE.search(source) is not None
 
 
 def _vulkan_spirv_assembly_smoke_commands(
@@ -41388,6 +41443,9 @@ GLSLANG_GENERATED_STAGE_COMMENT_RE = re.compile(
 GLSLANG_STAGE_GUARD_RE = re.compile(
     r"^\s*#\s*(?:if|ifdef)\s+" r"(GL_[A-Z0-9_]+(?:_SHADER|_SHADER_EXT))\b",
     re.IGNORECASE | re.MULTILINE,
+)
+GLSLANG_SPECIALIZATION_CONSTANT_RE = re.compile(
+    r"\blayout\s*\(\s*constant_id\s*=", re.IGNORECASE
 )
 GLSLANG_STAGE_GUARD_LINE_RE = re.compile(
     r"^\s*#\s*(?:if|ifdef)\s+(GL_[A-Z0-9_]+(?:_SHADER|_SHADER_EXT))\b",

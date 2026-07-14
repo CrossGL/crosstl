@@ -21710,6 +21710,91 @@ def test_opengl_toolchain_smoke_command_selects_glslang_stage(tmp_path):
     ) == (["glslangValidator", "--stdin", "-S", "frag"], "artifact")
 
 
+def test_opengl_toolchain_smoke_uses_spirv_mode_for_specialization_constants(
+    tmp_path,
+):
+    shader = tmp_path / "specialized.glsl"
+    shader.write_text(
+        textwrap.dedent("""
+            #version 450
+            layout(constant_id = 7) const int mode = 1;
+            in vec4 position;
+            void main() { gl_Position = position * float(mode); }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    assert project_pipeline._toolchain_smoke_commands(
+        "opengl",
+        ["glslangValidator"],
+        shader,
+        artifact={"stage": "vertex"},
+    ) == [
+        (
+            [
+                "glslangValidator",
+                "--stdin",
+                "-S",
+                "vert",
+                "--target-env",
+                "opengl",
+                "--target-env",
+                "spirv1.3",
+                "--auto-map-locations",
+                "-o",
+                project_pipeline.os.devnull,
+            ],
+            "artifact",
+        )
+    ]
+
+
+def test_opengl_specialization_toolchain_smoke_validates_if_available(tmp_path):
+    if shutil.which("glslangValidator") is None:
+        pytest.skip("glslangValidator is not installed")
+
+    repo = tmp_path / "repo"
+    artifact_path = repo / "out" / "opengl" / "specialized.glsl"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text(
+        textwrap.dedent("""
+            #version 450
+            layout(constant_id = 7) const int mode = 1;
+            in vec4 position;
+            void main() { gl_Position = position * float(mode); }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    artifact = {
+        "source": "specialized.vert",
+        "sourceBackend": "opengl",
+        "target": "opengl",
+        "stage": "vertex",
+        "path": "out/opengl/specialized.glsl",
+        "status": "translated",
+        "specializationConstants": [{"name": "mode", "id": 7}],
+    }
+
+    runs = project_pipeline._run_toolchain_smoke([artifact], repo)
+
+    assert len(runs) == 1
+    assert runs[0]["status"] == "ok"
+    assert runs[0]["returncode"] == 0
+    assert runs[0]["command"] == [
+        "glslangValidator",
+        "--stdin",
+        "-S",
+        "vert",
+        "--target-env",
+        "opengl",
+        "--target-env",
+        "spirv1.3",
+        "--auto-map-locations",
+        "-o",
+        project_pipeline.os.devnull,
+    ]
+
+
 def test_opengl_toolchain_smoke_command_uses_generated_stage_comment(tmp_path):
     vertex_shader = tmp_path / "generated.glsl"
     vertex_shader.write_text(
