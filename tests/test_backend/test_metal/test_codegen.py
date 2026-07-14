@@ -7603,6 +7603,239 @@ def test_codegen_rejects_cyclic_owner_constexpr_helper_requests():
     assert diagnostic.source_location["file"] == "cyclic-owner.metal"
 
 
+def test_codegen_folds_constexpr_helpers_in_materialized_function_bodies():
+    code = """
+    template <int Bits, int Word = 32>
+    constexpr int get_pack_factor() {
+        constexpr int factor = Word / Bits;
+        return factor;
+    }
+
+    template <int Bits = 4, int Word = 32>
+    int load_pack() {
+        constexpr int explicit_factor = get_pack_factor<Bits, Word>();
+        constexpr int default_factor = get_pack_factor<Bits>();
+        return explicit_factor + default_factor +
+            get_pack_factor<Bits, Word>();
+    }
+
+    int run_packs() {
+        return load_pack<4>() + load_pack<8>();
+    }
+    """
+    ast = MetalParser(MetalLexer(code, preprocess=False).tokenize()).parse()
+    converter = MetalToCrossGLConverter()
+
+    crossgl = converter.generate(ast)
+    compact = normalize(crossgl)
+
+    assert "int load_pack_4_32()" in crossgl
+    assert "int explicit_factor = 8;" in crossgl
+    assert "int default_factor = 8;" in crossgl
+    assert "return explicit_factor + default_factor + 8;" in crossgl
+    assert "int load_pack_8_32()" in crossgl
+    assert "int explicit_factor = 4;" in crossgl
+    assert "int default_factor = 4;" in crossgl
+    assert "return load_pack_4_32() + load_pack_8_32();" in crossgl
+    assert len(converter.constexpr_helper_values) == 2
+    assert "get_pack_factor_4_32" not in compact
+    assert "get_pack_factor_8_32" not in compact
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_selects_constexpr_helper_overload_in_materialized_body():
+    code = """
+    template <int Scale>
+    constexpr int scaled_value(int value) {
+        return value * Scale;
+    }
+
+    template <int Scale>
+    constexpr int scaled_value(float value) {
+        return int(value) + Scale;
+    }
+
+    template <int Scale = 3>
+    int load_scaled() {
+        constexpr int value = scaled_value<Scale>(4);
+        return value;
+    }
+
+    int run_scaled() {
+        return load_scaled<3>();
+    }
+    """
+
+    crossgl = convert_without_preprocessing(code)
+
+    assert "int value = 12;" in crossgl
+    assert "scaled_value_3" not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_preserves_runtime_constexpr_calls_in_materialized_returns():
+    code = """
+    template <int Scale = 2>
+    constexpr int scaled_runtime_value(int value) {
+        int scaled = value * Scale;
+        return scaled;
+    }
+
+    template <int Scale = 2>
+    int forward_scaled_value(int value) {
+        return scaled_runtime_value<Scale>(value);
+    }
+
+    int run_scaled_value(int value) {
+        return forward_scaled_value<2>(value);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(code)
+
+    assert "return scaled_runtime_value_2(value);" in crossgl
+    assert "int scaled_runtime_value_2(int value)" in crossgl
+    assert "int scaled = value * 2;" in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_materialized_constexpr_diagnostic_respects_shadowing():
+    code = """
+    template <int Bits, int Word = 32>
+    constexpr int get_pack_factor() {
+        return Word / Bits;
+    }
+
+    template <int Bits = 4>
+    int load_factor(int runtime_bits) {
+        {
+            int Bits = runtime_bits;
+            constexpr int factor = get_pack_factor<Bits>();
+            return factor;
+        }
+    }
+
+    int run_factor() {
+        return load_factor<4>(4);
+    }
+    """
+
+    with pytest.raises(MetalTemplateArgumentResolutionError) as exc_info:
+        convert_without_preprocessing(
+            code,
+            file_path="materialized-shadow.metal",
+        )
+
+    diagnostic = exc_info.value
+    assert diagnostic.enclosing_function == "load_factor"
+    assert diagnostic.enclosing_specialization == "load_factor_4"
+    assert diagnostic.nested_helper == "get_pack_factor<Bits>"
+    assert diagnostic.function_name == "get_pack_factor"
+    assert diagnostic.parameter_name == "Bits"
+    assert diagnostic.requested_specialization == "get_pack_factor<Bits>"
+    assert diagnostic.reason == "remains dependent on Bits"
+    assert diagnostic.source_location["file"] == "materialized-shadow.metal"
+    assert "in specialization 'load_factor_4'" in str(diagnostic)
+
+
+@pytest.mark.parametrize(
+    ("helper_declarations", "expected_kind", "expected_reason"),
+    [
+        (
+            """
+            template <int Bits>
+            constexpr int resolve_factor() {
+                int factor = 32 / Bits;
+                return factor;
+            }
+            """,
+            "constexpr_body",
+            "contains statements outside the supported constexpr local "
+            "declaration and return subset",
+        ),
+        (
+            """
+            template <int Bits>
+            constexpr int resolve_factor() {
+                return next_factor<Bits>();
+            }
+
+            template <int Bits>
+            constexpr int next_factor() {
+                return resolve_factor<Bits>();
+            }
+            """,
+            "constexpr_body",
+            "has a cyclic constexpr helper dependency",
+        ),
+    ],
+)
+def test_codegen_materialized_constexpr_failures_are_structured(
+    helper_declarations,
+    expected_kind,
+    expected_reason,
+):
+    code = helper_declarations + """
+        template <int Bits = 4>
+        int load_factor() {
+            constexpr int factor = resolve_factor<Bits>();
+            return factor;
+        }
+
+        int run_factor() {
+            return load_factor<4>();
+        }
+        """
+
+    with pytest.raises(MetalTemplateArgumentResolutionError) as exc_info:
+        convert_without_preprocessing(
+            code,
+            file_path="materialized-constexpr.metal",
+        )
+
+    diagnostic = exc_info.value
+    assert diagnostic.enclosing_function == "load_factor"
+    assert diagnostic.enclosing_specialization == "load_factor_4"
+    assert diagnostic.argument_kind == expected_kind
+    assert diagnostic.reason == expected_reason
+    assert diagnostic.source_location["file"] == "materialized-constexpr.metal"
+
+
+def test_codegen_rejects_ambiguous_materialized_constexpr_helper_overload():
+    code = """
+    template <int Bits>
+    constexpr int resolve_factor() {
+        return 32 / Bits;
+    }
+
+    template <int Bits>
+    constexpr short resolve_factor() {
+        return 16 / Bits;
+    }
+
+    template <int Bits = 4>
+    int load_factor() {
+        constexpr int factor = resolve_factor<Bits>();
+        return factor;
+    }
+
+    int run_factor() {
+        return load_factor<4>();
+    }
+    """
+
+    with pytest.raises(MetalTemplateArgumentResolutionError) as exc_info:
+        convert_without_preprocessing(code)
+
+    diagnostic = exc_info.value
+    assert diagnostic.enclosing_function == "load_factor"
+    assert diagnostic.enclosing_specialization == "load_factor_4"
+    assert diagnostic.argument_kind == "overload"
+    assert diagnostic.reason == (
+        "does not identify one unique value-template declaration"
+    )
+
+
 def test_codegen_value_template_substitution_respects_lexical_shadowing():
     code = """
     template <bool Flag = false>

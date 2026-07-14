@@ -129,6 +129,9 @@ class MetalTemplateArgumentResolutionError(ValueError):
         owner=None,
         member=None,
         requested_specialization=None,
+        enclosing_function=None,
+        enclosing_specialization=None,
+        nested_helper=None,
     ):
         self.function_name = function_name
         self.parameter_name = parameter_name
@@ -146,6 +149,9 @@ class MetalTemplateArgumentResolutionError(ValueError):
         self.owner = owner
         self.member = member
         self.requested_specialization = requested_specialization or selected_call
+        self.enclosing_function = enclosing_function
+        self.enclosing_specialization = enclosing_specialization
+        self.nested_helper = nested_helper
         self.reason = reason
         self.source_location = source_location
         if argument_kind == "missing":
@@ -170,6 +176,12 @@ class MetalTemplateArgumentResolutionError(ValueError):
         )
         if owner is not None and member is not None:
             message += f" while resolving {owner}::{member}"
+        if enclosing_specialization is not None:
+            helper = nested_helper or selected_call
+            message += (
+                f" while resolving constexpr call '{helper}' in specialization "
+                f"'{enclosing_specialization}'"
+            )
         super().__init__(message)
 
 
@@ -881,6 +893,9 @@ class MetalToCrossGLConverter:
         self.current_function_name = None
         self.current_function_return_type = None
         self.current_function = None
+        self.current_function_specialization = None
+        self.current_function_materialization_bindings = {}
+        self.materialized_constexpr_expression_contexts = []
         self.wide_vector_types = {}
         self.wide_vector_binary_helpers = set()
         self.wide_vector_compound_helpers = set()
@@ -2774,11 +2789,16 @@ class MetalToCrossGLConverter:
                             )
                         }
                         if identifiers.intersection(owner_value_names):
-                            selected = self.resolve_value_template_function(
-                                function_name,
-                                node.args,
-                                explicit_template_arguments=explicit_arguments,
-                            )
+                            try:
+                                selected = self.resolve_value_template_function(
+                                    function_name,
+                                    node.args,
+                                    explicit_template_arguments=explicit_arguments,
+                                )
+                            except MetalTemplateArgumentResolutionError as error:
+                                if error.argument_kind != "overload":
+                                    raise
+                                selected = None
                             if (
                                 selected is not None
                                 and id(selected) not in eligible_ids
@@ -2886,9 +2906,38 @@ class MetalToCrossGLConverter:
             for qualifier in getattr(function, "declaration_qualifiers", []) or []
         }
 
-    def render_struct_static_constexpr_helper_call(self, call, is_main=False):
+    def push_materialized_constexpr_expression_context(
+        self,
+        expression,
+        *,
+        required,
+    ):
+        if not self.current_function_materialization_bindings:
+            return False
+        self.materialized_constexpr_expression_contexts.append(
+            {
+                "function": self.current_function_name,
+                "specialization": self.current_function_specialization,
+                "required": required,
+                "source_location": (
+                    getattr(expression, "source_location", None)
+                    or getattr(self.current_function, "source_location", None)
+                ),
+            }
+        )
+        return True
+
+    def render_constexpr_helper_call(self, call, is_main=False):
         owner = self.current_struct_static_constant_owner
-        if owner is None or not self.struct_static_constant_resolution_stack:
+        resolving_static_member = bool(
+            owner is not None and self.struct_static_constant_resolution_stack
+        )
+        materialization_context = (
+            self.materialized_constexpr_expression_contexts[-1]
+            if self.materialized_constexpr_expression_contexts
+            else None
+        )
+        if not resolving_static_member and materialization_context is None:
             return None
 
         call_name = str(getattr(call, "name", ""))
@@ -2904,25 +2953,67 @@ class MetalToCrossGLConverter:
         else:
             function_name, explicit_arguments = parsed
 
-        function = self.resolve_value_template_function(
-            function_name,
-            getattr(call, "args", []) or [],
-            explicit_template_arguments=explicit_arguments,
-            function_index=self.constexpr_value_template_functions,
-        )
-        if function is None:
-            return None
-        rendered = self.evaluate_struct_static_constexpr_helper(
-            function,
-            explicit_arguments,
-            getattr(call, "args", []) or [],
-            selected_call=call_name,
-            is_main=is_main,
-        )
-        self.struct_static_constexpr_member_keys.add(
-            self.struct_static_constant_resolution_stack[-1]
-        )
+        try:
+            function = self.resolve_value_template_function(
+                function_name,
+                getattr(call, "args", []) or [],
+                explicit_template_arguments=explicit_arguments,
+                function_index=self.constexpr_value_template_functions,
+            )
+            if function is None:
+                return None
+            rendered = self.evaluate_struct_static_constexpr_helper(
+                function,
+                explicit_arguments,
+                getattr(call, "args", []) or [],
+                selected_call=call_name,
+                is_main=is_main,
+            )
+        except MetalTemplateArgumentResolutionError as error:
+            if (
+                materialization_context is not None
+                and not materialization_context["required"]
+                and error.argument_kind in {"call", "constexpr_body"}
+            ):
+                return None
+            if materialization_context is None or getattr(
+                error, "enclosing_specialization", None
+            ):
+                raise
+            raise self.contextualize_materialized_constexpr_resolution_error(
+                error,
+                call,
+                materialization_context,
+            ) from error
+        if resolving_static_member:
+            self.struct_static_constexpr_member_keys.add(
+                self.struct_static_constant_resolution_stack[-1]
+            )
         return rendered
+
+    def contextualize_materialized_constexpr_resolution_error(
+        self,
+        error,
+        call,
+        context,
+    ):
+        return MetalTemplateArgumentResolutionError(
+            error.function_name,
+            error.parameter_name,
+            error.argument_expression,
+            error.selected_call,
+            error.reason,
+            error.argument_kind,
+            getattr(call, "source_location", None)
+            or error.source_location
+            or context["source_location"],
+            requested_specialization=(
+                getattr(error, "requested_specialization", None) or error.selected_call
+            ),
+            enclosing_function=context["function"],
+            enclosing_specialization=context["specialization"],
+            nested_helper=str(getattr(call, "name", error.function_name)),
+        )
 
     def evaluate_struct_static_constexpr_helper(
         self,
@@ -3022,10 +3113,12 @@ class MetalToCrossGLConverter:
             )
 
         previous_type_aliases = dict(self.type_aliases)
+        previous_shadow_scopes = self.template_binding_shadow_scopes
         self.type_aliases.update(type_bindings)
         active_value_bindings = dict(value_bindings)
         active_value_bindings.update(runtime_bindings)
         self.template_value_bindings.append(active_value_bindings)
+        self.template_binding_shadow_scopes = []
         self.constexpr_helper_resolution_stack.append(cache_key)
         try:
             for declaration in local_declarations:
@@ -3045,6 +3138,7 @@ class MetalToCrossGLConverter:
             rendered = self.generate_expression(body[-1].value, is_main)
         finally:
             self.constexpr_helper_resolution_stack.pop()
+            self.template_binding_shadow_scopes = previous_shadow_scopes
             self.template_value_bindings.pop()
             self.type_aliases = previous_type_aliases
 
@@ -3261,9 +3355,17 @@ class MetalToCrossGLConverter:
         return text.strip()
 
     def struct_static_constexpr_argument_text(self, expression, earlier_bindings):
-        bindings = dict(self.struct_static_owner_member_bindings())
-        for scope in self.template_value_bindings:
-            bindings.update(scope)
+        if self.materialized_constexpr_expression_contexts:
+            bindings = {
+                name: value
+                for scope in self.template_value_bindings
+                for name, value in scope.items()
+                if not self.template_value_binding_is_shadowed(name)
+            }
+        else:
+            bindings = dict(self.struct_static_owner_member_bindings())
+            for scope in self.template_value_bindings:
+                bindings.update(scope)
         bindings.update(earlier_bindings)
         return self.substitute_template_value_text(
             str(expression),
@@ -3699,7 +3801,11 @@ class MetalToCrossGLConverter:
         self.pending_value_template_specializations = []
         self.suppressed_value_template_function_ids = set()
         self.current_function_name = None
+        self.current_function_return_type = None
         self.current_function = None
+        self.current_function_specialization = None
+        self.current_function_materialization_bindings = {}
+        self.materialized_constexpr_expression_contexts = []
 
     def format_array_suffix(self, var, include_declarator_arrays=True):
         array_type = self.metal_array_type_parts(getattr(var, "vtype", None))
@@ -4149,6 +4255,10 @@ class MetalToCrossGLConverter:
         previous_function_name = self.current_function_name
         previous_function_return_type = self.current_function_return_type
         previous_function = self.current_function
+        previous_function_specialization = self.current_function_specialization
+        previous_function_materialization_bindings = (
+            self.current_function_materialization_bindings
+        )
         self.current_function_name = func.name
         self.current_function_return_type = func.return_type
         self.current_function = func
@@ -4182,6 +4292,8 @@ class MetalToCrossGLConverter:
             function_name = self.sanitize_identifier(
                 output_name or self.function_output_name(func)
             )
+            self.current_function_specialization = function_name
+            self.current_function_materialization_bindings = active_template_bindings
             return_type = self.map_function_return_type(func.return_type)
             generic_prefix = (
                 ""
@@ -4227,6 +4339,10 @@ class MetalToCrossGLConverter:
             self.current_function_name = previous_function_name
             self.current_function_return_type = previous_function_return_type
             self.current_function = previous_function
+            self.current_function_specialization = previous_function_specialization
+            self.current_function_materialization_bindings = (
+                previous_function_materialization_bindings
+            )
         return code
 
     def format_value_template_parameter_declarations(
@@ -4467,20 +4583,30 @@ class MetalToCrossGLConverter:
                     if stmt.value is None:
                         code += "return;\n"
                     else:
-                        if (
-                            self.wide_vector_type_info(
-                                self.current_function_return_type,
-                                getattr(stmt, "source_location", None),
-                            )
-                            is not None
-                        ):
-                            value = self.generate_initializer_value(
+                        pushed_context = (
+                            self.push_materialized_constexpr_expression_context(
                                 stmt.value,
-                                is_main,
-                                self.current_function_return_type,
+                                required=False,
                             )
-                        else:
-                            value = self.generate_expression(stmt.value, is_main)
+                        )
+                        try:
+                            if (
+                                self.wide_vector_type_info(
+                                    self.current_function_return_type,
+                                    getattr(stmt, "source_location", None),
+                                )
+                                is not None
+                            ):
+                                value = self.generate_initializer_value(
+                                    stmt.value,
+                                    is_main,
+                                    self.current_function_return_type,
+                                )
+                            else:
+                                value = self.generate_expression(stmt.value, is_main)
+                        finally:
+                            if pushed_context:
+                                self.materialized_constexpr_expression_contexts.pop()
                         code += f"return {value};\n"
             elif isinstance(stmt, BinaryOpNode):
                 code += f"{self.generate_expression(stmt.left, is_main)} {stmt.op} {self.generate_expression(stmt.right, is_main)};\n"
@@ -4875,20 +5001,31 @@ class MetalToCrossGLConverter:
                 return structured_store
         lhs_info = self.wide_vector_expression_info(node.left)
         lhs = self.generate_expression(node.left, is_main)
-        rhs = self.generate_initializer_value(
-            node.right,
-            is_main,
-            (
-                getattr(node.left, "vtype", None)
-                if isinstance(node.left, VariableNode)
-                else None
-            ),
-            (
-                self.variable_has_array_initializer_shape(node.left)
-                if isinstance(node.left, VariableNode)
-                else False
-            ),
+        pushed_context = bool(
+            self.is_supported_constexpr_local_declaration(node)
+            and self.push_materialized_constexpr_expression_context(
+                node.right,
+                required=True,
+            )
         )
+        try:
+            rhs = self.generate_initializer_value(
+                node.right,
+                is_main,
+                (
+                    getattr(node.left, "vtype", None)
+                    if isinstance(node.left, VariableNode)
+                    else None
+                ),
+                (
+                    self.variable_has_array_initializer_shape(node.left)
+                    if isinstance(node.left, VariableNode)
+                    else False
+                ),
+            )
+        finally:
+            if pushed_context:
+                self.materialized_constexpr_expression_contexts.pop()
         op = node.operator
         if lhs_info is not None and op != "=":
             binary_operator = op[:-1] if op.endswith("=") else None
@@ -5121,7 +5258,7 @@ class MetalToCrossGLConverter:
             if callback is not None:
                 raise self.unsupported_callback_error(expr.name, callback)
             self.reject_unsupported_wide_vector_call(expr)
-            constexpr_value = self.render_struct_static_constexpr_helper_call(
+            constexpr_value = self.render_constexpr_helper_call(
                 expr,
                 is_main,
             )
