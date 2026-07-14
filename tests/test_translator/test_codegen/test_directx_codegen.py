@@ -1260,6 +1260,21 @@ def test_hlsl_codegen_lowers_complex64_binary_operators_to_helpers():
                 ),
             ),
             FunctionNode(
+                "short_divide_complex",
+                complex_type,
+                [
+                    ParameterNode("x", PrimitiveType("short")),
+                    ParameterNode("y", complex_type),
+                ],
+                BlockNode(
+                    [
+                        ReturnNode(
+                            BinaryOpNode(IdentifierNode("x"), "/", IdentifierNode("y"))
+                        )
+                    ]
+                ),
+            ),
+            FunctionNode(
                 "greater_complex",
                 PrimitiveType("bool"),
                 [
@@ -1309,10 +1324,11 @@ def test_hlsl_codegen_lowers_complex64_binary_operators_to_helpers():
     assert "return __crossgl_complex64_add(x, y);" in generated
     assert "return __crossgl_complex64_div(x, y);" in generated
     assert "return __crossgl_complex64_mod(x, y);" in generated
-    assert (
-        "return __crossgl_complex64_div(__crossgl_complex64_make(x, 0.0), y);"
-        in generated
+    real_divide = (
+        "return __crossgl_complex64_div(" "__crossgl_complex64_make(x, 0.0), y);"
     )
+    assert generated.count(real_divide) == 2
+    assert "complex64_t short_divide_complex(min16int x, complex64_t y)" in generated
     assert "return __crossgl_complex64_greater(x, y);" in generated
     assert "return __crossgl_complex64_negate(x);" in generated
     assert "return __crossgl_complex64_make(asfloat(0x7fc00000), 0.0);" in generated

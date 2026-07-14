@@ -7094,6 +7094,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             operator = str(getattr(expr, "operator", getattr(expr, "op", "")))
             if operator in {"==", "!=", "<", "<=", ">", ">=", "&&", "||"}:
                 return self.hlsl_boolean_expression_result_type(left_type, right_type)
+            if self.is_hlsl_complex64_type(left_type) or self.is_hlsl_complex64_type(
+                right_type
+            ):
+                return "complex64_t"
             mapped_operator = self.map_operator(operator)
             if mapped_operator in {"/", "%"}:
                 integer_contract = (
@@ -7109,10 +7113,6 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     width = integer_contract["result_width"]
                     suffix = "" if width == 1 else str(width)
                     return f"{integer_contract['base_type']}{suffix}"
-            if self.is_hlsl_complex64_type(left_type) or self.is_hlsl_complex64_type(
-                right_type
-            ):
-                return "complex64_t"
             if self.is_vector_value_type(left_type):
                 return left_type
             if self.is_vector_value_type(right_type):
