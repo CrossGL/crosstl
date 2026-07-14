@@ -259,6 +259,34 @@ def test_full_suite_runs_runtime_parity_only_for_available_adapters():
     assert '-k "runtime_parity"' in full_suite
 
 
+def test_full_suite_runs_fail_closed_windows_directx_native_runtime_smoke():
+    workflows = _workflow_texts()
+    full_suite = workflows.get("full-tests.yml", "")
+    smoke_runner = (ROOT / "tools" / "directx_runtime_smoke.py").read_text(
+        encoding="utf-8"
+    )
+    smoke_job = full_suite[
+        full_suite.index("  directx-native-runtime-smoke:") : full_suite.index(
+            "  compiler-smoke-linux:"
+        )
+    ]
+
+    assert "Direct3D 12 Native Runtime Smoke (Windows)" in smoke_job
+    assert "runs-on: windows-latest" in smoke_job
+    assert 'python-version: "3.12"' in smoke_job
+    assert "DirectXShaderCompiler/releases/download/v1.9.2602" in smoke_job
+    assert 'python -m pip install -e ".[directx-runtime]"' in smoke_job
+    assert "python tools/directx_runtime_smoke.py" in smoke_job
+    assert "continue-on-error" not in smoke_job
+    assert "crosstl.translate(" in smoke_runner
+    assert '[dxc, "-T", "cs_6_0", "-E", "CSMain"' in smoke_runner
+    assert "runtime.dispatch(" in smoke_runner
+    assert 'reason_kind != "device-unavailable"' in smoke_runner
+    assert "DIRECTX_RUNTIME_SMOKE_SKIPPED" in smoke_runner
+    assert "DXC compilation failed" in smoke_runner
+    assert "native runtime readback mismatch" in smoke_runner
+
+
 def test_open_source_porting_demo_workflow_feeds_support_failure_summaries():
     workflows = _workflow_texts()
     demo = workflows.get("demo.yml", "")
