@@ -899,20 +899,32 @@ Include directories, defines, and named
 variants are recorded in project reports. Source frontend options can also be
 set under ``[project.source_options.<source-backend>]`` and are forwarded only
 to source lexers that expose matching keyword options. Metal source imports
-support ``max_template_specializations`` for project-specific explicit helper
-materialization budgets and ``max_template_materialization_work`` for project
-template materialization work budgets. The default materialization work budget
-is derived from the active template specialization limit, so larger finite
-source-instantiated kernels can complete without raising the unique helper
-specialization cap. Use
+support ``max_template_specializations`` as the project-specific unique concrete
+helper specialization cap and ``max_template_materialization_work`` as the
+project template materialization work budget. Materialization work is charged
+to the reachable concrete graph and the type information actually resolved. It
+counts each unique reachable source entry, concrete helper specialization, and
+concrete struct specialization once, together with uncached function and type-
+environment resolution and concrete struct-field type resolution performed for
+that graph. Shared transitive helpers and repeated occurrences of the same
+concrete signature are therefore deduplicated. The budget does not precharge a
+whole-source ``source instantiations x template declarations`` Cartesian
+estimate, and repeated scans of progressively expanded source text are not work
+items merely because the text was scanned again.
+
+The default materialization work budget is derived from the active template
+specialization limit, so larger finite source-instantiated kernels can complete
+without raising the unique helper specialization cap. Use
 ``[project.source_options.metal.source_patterns."<repo-relative-glob>"]`` to
 raise or lower Metal budgets for matching sources. Use
 ``[project.source_options.metal.target_options.<target>]`` and its nested
 ``source_patterns`` table to override budgets only for one target, such as
-OpenGL. When a Metal helper or materialization-work budget is exceeded,
-project diagnostics report the concrete signature count or work item count,
-the active limit, the configuration field that set the limit, and a suggested
-remediation. Project reports include
+OpenGL. Both limits remain fail-closed. If the next unique entry, helper, struct
+specialization, or required type-environment resolution would cross a configured
+limit, translation fails without emitting the target artifact. The structured
+diagnostic identifies the concrete item or resolution that crossed the limit
+and reports the requested count, active limit, configuration field that set it,
+source location, and suggested remediation. Project reports include
 order-preserving include-directory status records and status counts so missing,
 non-directory, outside-project, and frontend-visible active include directories
 can be triaged without re-running discovery. Missing include directories,

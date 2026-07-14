@@ -1500,8 +1500,11 @@ def test_preprocessor_bounds_owner_alias_materialization_work():
 
     assert output.count("struct Tile_BaseFrag_float_") == 32
     assert "struct Tile_frag_t" not in output
-    assert work_budget.contexts.count("explicit template struct source scan") == 3
-    assert work_budget.used <= 2200
+    assert work_budget.used == 96
+    assert all(
+        context.startswith("reachable concrete struct '")
+        for context in work_budget.contexts
+    )
 
 
 def test_preprocessor_reports_dependent_owner_alias_at_nested_instantiation():

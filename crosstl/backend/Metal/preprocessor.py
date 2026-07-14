@@ -54,7 +54,6 @@ MLX_HOST_NAME_DECL_RE = re.compile(
     re.DOTALL,
 )
 DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT = 512
-TEMPLATE_MATERIALIZATION_SCAN_CHARS_PER_WORK_ITEM = 8
 
 
 class MetalStructMethodError(ValueError):
@@ -592,9 +591,15 @@ class MetalPreprocessor(HLSLPreprocessor):
         return self._apply_text_replacements(code, replacements)
 
     def _materialize_explicit_template_function_calls(
-        self, code: str, *, work_budget: Optional[object] = None
+        self,
+        code: str,
+        *,
+        work_budget: Optional[object] = None,
+        materialized_names: Optional[Dict[Tuple[str, Tuple[str, ...]], str]] = None,
     ) -> str:
-        materialized_names: Dict[Tuple[str, Tuple[str, ...]], str] = {}
+        materialized_names = (
+            materialized_names if materialized_names is not None else {}
+        )
         working = code
 
         while True:
@@ -604,19 +609,6 @@ class MetalPreprocessor(HLSLPreprocessor):
 
             templates_by_name = {template.name: template for template in templates}
             template_spans = self._find_template_declaration_spans(working)
-            if work_budget is not None:
-                work_budget.consume(
-                    self._template_materialization_scan_work_items(working),
-                    offset=templates[0].span[0],
-                    length=max(templates[0].span[1] - templates[0].span[0], 0),
-                    context="explicit template source scan",
-                )
-                work_budget.consume(
-                    len(templates) * max(1, len(template_spans)),
-                    offset=templates[0].span[0],
-                    length=max(templates[0].span[1] - templates[0].span[0], 0),
-                    context="explicit template reachability scan",
-                )
             reachable_function_spans = self._reachable_function_spans(
                 working, template_spans
             )
@@ -630,13 +622,6 @@ class MetalPreprocessor(HLSLPreprocessor):
                 explicit_specialization_keys,
                 reachable_function_spans,
             )
-            if work_budget is not None:
-                first_call_offset = calls[0][2][0] if calls else templates[0].span[0]
-                work_budget.consume(
-                    len(calls) * max(1, len(templates_by_name)),
-                    offset=first_call_offset,
-                    context="explicit template call matching",
-                )
             if not calls:
                 return working
 
@@ -685,6 +670,27 @@ class MetalPreprocessor(HLSLPreprocessor):
                         requested_signature=requested_signature,
                         suggested_action=suggested_action,
                     )
+                if work_budget is not None:
+                    consume_unique = getattr(work_budget, "consume_unique", None)
+                    work_key = ("function", key[0], *key[1])
+                    context = (
+                        "reachable concrete helper "
+                        f"'{self._template_specialization_signature(function_name, template_arguments)}'"
+                    )
+                    if callable(consume_unique):
+                        consume_unique(
+                            work_key,
+                            offset=spans[0][0],
+                            length=max(spans[0][1] - spans[0][0], 0),
+                            context=context,
+                        )
+                    else:
+                        work_budget.consume(
+                            1,
+                            offset=spans[0][0],
+                            length=max(spans[0][1] - spans[0][0], 0),
+                            context=context,
+                        )
                 specialized_name = self._template_specialization_identifier(
                     function_name, list(key[1])
                 )
@@ -709,14 +715,6 @@ class MetalPreprocessor(HLSLPreprocessor):
                 working = working.rstrip() + "\n\n" + "\n\n".join(new_materializations)
                 if not working.endswith("\n"):
                     working += "\n"
-
-    @staticmethod
-    def _template_materialization_scan_work_items(code: str) -> int:
-        return max(
-            1,
-            (len(code) + TEMPLATE_MATERIALIZATION_SCAN_CHARS_PER_WORK_ITEM - 1)
-            // TEMPLATE_MATERIALIZATION_SCAN_CHARS_PER_WORK_ITEM,
-        )
 
     def _materialize_explicit_template_struct_instantiations(
         self, code: str, *, work_budget: Optional[object] = None
@@ -751,13 +749,6 @@ class MetalPreprocessor(HLSLPreprocessor):
             templates = self._find_template_structs(working)
             if not templates:
                 return working
-            if work_budget is not None:
-                work_budget.consume(
-                    self._template_materialization_scan_work_items(working),
-                    offset=templates[0].span[0],
-                    length=max(templates[0].span[1] - templates[0].span[0], 0),
-                    context="explicit template struct source scan",
-                )
             primary_templates = [
                 template
                 for template in templates
@@ -787,12 +778,6 @@ class MetalPreprocessor(HLSLPreprocessor):
                     (template, specialization_arguments)
                 )
             excluded_spans = self._find_template_declaration_spans(working)
-            if work_budget is not None:
-                work_budget.consume(
-                    len(templates_by_name) * max(1, len(excluded_spans)),
-                    offset=templates[0].span[0],
-                    context="explicit template struct declaration matching",
-                )
             (
                 instantiations,
                 selected_partial_specializations,
@@ -803,15 +788,6 @@ class MetalPreprocessor(HLSLPreprocessor):
                 explicit_specialization_keys,
                 partial_specializations,
             )
-            if work_budget is not None:
-                first_offset = (
-                    instantiations[0][2][0] if instantiations else templates[0].span[0]
-                )
-                work_budget.consume(
-                    len(instantiations) * max(1, len(templates_by_name)),
-                    offset=first_offset,
-                    context="explicit template struct instantiation matching",
-                )
             if not instantiations:
                 return working
 
@@ -881,6 +857,28 @@ class MetalPreprocessor(HLSLPreprocessor):
                     # `Name<...>` so the existing template-materialization
                     # diagnostic fires exactly as it does today.
                     return code
+                if work_budget is not None:
+                    consume_unique = getattr(work_budget, "consume_unique", None)
+                    work_key = ("struct", key[0], *key[1])
+                    context = (
+                        "reachable concrete struct "
+                        f"'{self._template_specialization_signature(struct_name, template_arguments)}'"
+                    )
+                    first_span = materialization_spans[0]
+                    if callable(consume_unique):
+                        consume_unique(
+                            work_key,
+                            offset=first_span[0],
+                            length=max(first_span[1] - first_span[0], 0),
+                            context=context,
+                        )
+                    else:
+                        work_budget.consume(
+                            1,
+                            offset=first_span[0],
+                            length=max(first_span[1] - first_span[0], 0),
+                            context=context,
+                        )
                 specialized_name = self._template_specialization_identifier(
                     struct_name, list(key[1])
                 )

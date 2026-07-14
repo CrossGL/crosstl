@@ -1289,7 +1289,6 @@ METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_SOURCE_OPTION = (
     "template_materialization_work_limit_source"
 )
 METAL_TEMPLATE_MATERIALIZATION_WORK_LIMIT_MULTIPLIER = 64
-METAL_LARGE_TEMPLATE_SOURCE_MIN_CHARS = 96 * 1024
 METAL_DIAGNOSTIC_TEMPLATE_HELPER_RE = re.compile(
     r"(^|_)(?:debug|dbg|log|trace|diagnostic|diag|assert)($|_)"
 )
@@ -9722,6 +9721,18 @@ def _metal_find_implicit_template_function_calls(
             and preprocessor._containing_span(function.span[0], included) is None
         ):
             continue
+        candidate_calls = _plain_template_helper_call_sites(
+            preprocessor,
+            source,
+            templates_by_name,
+            excluded_spans,
+            [function.body_span],
+        )
+        if not any(
+            not explicit_template_arguments
+            for _name, _arguments, _span, explicit_template_arguments in candidate_calls
+        ):
+            continue
         type_environment = _metal_function_type_environment(
             preprocessor,
             source,
@@ -9834,6 +9845,7 @@ class _MetalTemplateMaterializationWorkBudget:
     target: str
     pass_name: str = "implicit-template-materialization/type-environment"
     used: int = 0
+    unique_items: set[tuple[Any, ...]] = field(default_factory=set)
 
     def consume(
         self,
@@ -9859,8 +9871,8 @@ class _MetalTemplateMaterializationWorkBudget:
         requested_signature = f"{self.pass_name}: {self.used} work items for {context}"
         suggested_action = (
             "raise max_template_materialization_work for this source pattern "
-            "or backend, reduce implicit Metal template helper fan-out, or add "
-            "explicit template arguments"
+            "or backend, reduce the reachable concrete template graph or "
+            "type-resolution fan-out, or provide explicit template arguments"
         )
         location_text = (
             f" Source context: {location.file}:{location.line}:{location.column}."
@@ -9870,7 +9882,8 @@ class _MetalTemplateMaterializationWorkBudget:
         raise MetalTemplateSpecializationError(
             "Metal template materialization work budget exceeded while "
             f"running {self.pass_name} for target '{self.target}'; "
-            f"{self.used} work items requested, limit {self.limit} from "
+            f"{self.used} work items requested for {context}, "
+            f"limit {self.limit} from "
             f"{self.limit_source}.{location_text} "
             f"Suggested action: {suggested_action}.",
             limit=self.limit,
@@ -9881,6 +9894,25 @@ class _MetalTemplateMaterializationWorkBudget:
             suggested_action=suggested_action,
             source_location=location,
         )
+
+    def consume_unique(
+        self,
+        key: tuple[Any, ...],
+        *,
+        offset: int = 0,
+        length: int = 0,
+        context: str,
+    ) -> bool:
+        if key in self.unique_items:
+            return False
+        self.unique_items.add(key)
+        self.consume(
+            1,
+            offset=offset,
+            length=length,
+            context=context,
+        )
+        return True
 
 
 def _metal_template_materialization_work_limit(
@@ -11661,9 +11693,7 @@ def _metal_struct_field_type_environments(
     structs = preprocessor._find_concrete_struct_definitions(source)
     if work_budget is not None and structs:
         work_budget.consume(
-            preprocessor._template_materialization_scan_work_items(source)
-            + len(structs)
-            + sum(len(struct.data_member_types) for struct in structs),
+            len(structs) + sum(len(struct.data_member_types) for struct in structs),
             offset=int(structs[0].span[0]),
             length=max(int(structs[0].span[1]) - int(structs[0].span[0]), 0),
             context="concrete struct field type scan",
@@ -12524,19 +12554,6 @@ def _materialize_plain_template_helper_calls(
         for template in templates:
             templates_by_name.setdefault(template.name, []).append(template)
         template_spans = preprocessor._find_template_declaration_spans(working)
-        if work_budget is not None:
-            work_budget.consume(
-                preprocessor._template_materialization_scan_work_items(working),
-                offset=templates[0].span[0],
-                length=max(templates[0].span[1] - templates[0].span[0], 0),
-                context="plain template helper source scan",
-            )
-            work_budget.consume(
-                len(templates) * max(1, len(template_spans)),
-                offset=templates[0].span[0],
-                length=max(templates[0].span[1] - templates[0].span[0], 0),
-                context="plain template helper reachability scan",
-            )
         reachable_function_spans = preprocessor._reachable_function_spans(
             working,
             template_spans,
@@ -12600,6 +12617,17 @@ def _materialize_plain_template_helper_calls(
             materialized_name = materialized_names.get(key)
             if materialized_name is not None:
                 return materialized_name
+
+            if work_budget is not None:
+                work_budget.consume_unique(
+                    ("function", *key),
+                    offset=int(template.span[0]),
+                    length=max(int(template.span[1]) - int(template.span[0]), 0),
+                    context=(
+                        "reachable concrete helper "
+                        f"'{preprocessor._template_specialization_signature(function_name, arguments)}'"
+                    ),
+                )
 
             unique_count = len(materialized_names) + 1
             if len(materialized_names) >= preprocessor.max_template_specializations:
@@ -15718,7 +15746,6 @@ def _project_template_materialization_for_artifact(
             pass_name="explicit-template-materialization",
         )
         if materialization_work_limit > 0
-        and len(preprocessed) >= METAL_LARGE_TEMPLATE_SOURCE_MIN_CHARS
         else None
     )
 
@@ -15726,59 +15753,6 @@ def _project_template_materialization_for_artifact(
     source_instantiation_unsupported: list[dict[str, Any]] = []
     source_instantiation_partial_templates: set[str] = set()
     template_lookup = {template.name: template for template in templates}
-    if target == "opengl" and source_instantiations:
-        materialization_work_items = len(source_instantiations) * max(
-            1,
-            len(templates),
-        )
-        if materialization_work_items > materialization_work_limit:
-            first_instantiation = source_instantiations[0]
-            first_template = template_lookup.get(first_instantiation.function_name)
-            if first_template is not None:
-                location = _source_location_at_offset(
-                    unit,
-                    preprocessed,
-                    int(first_template.span[0]),
-                    max(int(first_template.span[1]) - int(first_template.span[0]), 0),
-                )
-                location_kind = "source declaration"
-            else:
-                location = _source_location_at_offset(
-                    unit,
-                    preprocessed,
-                    int(first_instantiation.span[0]),
-                    max(
-                        int(first_instantiation.span[1])
-                        - int(first_instantiation.span[0]),
-                        0,
-                    ),
-                )
-                location_kind = "source instantiation"
-            requested_signature = (
-                f"{len(source_instantiations)} source instantiations x "
-                f"{len(templates)} templates"
-            )
-            suggested_action = (
-                "raise max_template_materialization_work for this source pattern "
-                "or OpenGL target, or reduce source template instantiations"
-            )
-            raise MetalTemplateSpecializationError(
-                "OpenGL Metal template materialization work limit exceeded before "
-                f"GLSL codegen for '{unit.relative_path}'; "
-                f"{materialization_work_items} source-instantiation/template work "
-                f"items requested ({requested_signature}), limit "
-                f"{materialization_work_limit} from "
-                f"{materialization_work_limit_source}. "
-                f"First {location_kind}: "
-                f"{location.file}:{location.line}:{location.column}. "
-                f"Suggested action: {suggested_action}.",
-                limit=materialization_work_limit,
-                limit_source=materialization_work_limit_source,
-                required_work_items=materialization_work_items,
-                requested_signature=requested_signature,
-                suggested_action=suggested_action,
-                source_location=location,
-            )
     source_instantiation_contexts: list[_SourceInstantiationTemplateContext] = []
     source_instantiation_materialized_names: dict[tuple[str, tuple[str, ...]], str] = {}
     seen_source_instantiations: set[tuple[str, tuple[str, ...], str]] = set()
@@ -15847,6 +15821,16 @@ def _project_template_materialization_for_artifact(
         if key in seen_source_instantiations:
             continue
         seen_source_instantiations.add(key)
+        if explicit_work_budget is not None:
+            explicit_work_budget.consume_unique(
+                ("entry", *key),
+                offset=int(instantiation.span[0]),
+                length=max(
+                    int(instantiation.span[1]) - int(instantiation.span[0]),
+                    0,
+                ),
+                context=f"reachable source entry '{instantiation.host_name}'",
+            )
         materialized_name = preprocessor._materialized_function_identifier(
             instantiation.host_name,
             template.name,
@@ -15902,19 +15886,6 @@ def _project_template_materialization_for_artifact(
     templates = preprocessor._find_template_functions(preprocessed)
     templates_by_name = {template.name: template for template in templates}
     template_spans = preprocessor._find_template_declaration_spans(preprocessed)
-    if templates and explicit_work_budget is not None:
-        explicit_work_budget.consume(
-            preprocessor._template_materialization_scan_work_items(preprocessed),
-            offset=templates[0].span[0],
-            length=max(templates[0].span[1] - templates[0].span[0], 0),
-            context="project explicit template source scan",
-        )
-        explicit_work_budget.consume(
-            len(templates) * max(1, len(template_spans)),
-            offset=templates[0].span[0],
-            length=max(templates[0].span[1] - templates[0].span[0], 0),
-            context="project explicit template reachability scan",
-        )
     reachable_function_spans = preprocessor._reachable_function_spans(
         preprocessed, template_spans
     )
@@ -15928,13 +15899,6 @@ def _project_template_materialization_for_artifact(
         explicit_specialization_keys,
         reachable_function_spans,
     )
-    if calls and explicit_work_budget is not None:
-        explicit_work_budget.consume(
-            len(calls) * max(1, len(templates_by_name)),
-            offset=calls[0][2][0],
-            context="project explicit template call matching",
-        )
-
     explicit_template_names: set[str] = set()
     seen_call_specializations: set[tuple[str, tuple[str, ...]]] = set()
     call_site_materialized_names: dict[tuple[str, tuple[str, ...]], str] = {}
@@ -15972,15 +15936,47 @@ def _project_template_materialization_for_artifact(
             )
         )
 
+    explicit_materialized_names: dict[tuple[str, tuple[str, ...]], str] = {}
     try:
         materialized = preprocessor._materialize_explicit_template_function_calls(
             preprocessed,
             work_budget=explicit_work_budget,
+            materialized_names=explicit_materialized_names,
         )
     except MetalTemplateSpecializationError:
         raise
     except Exception:  # noqa: BLE001
         return None
+
+    recorded_specializations = {
+        (record.get("name"), record.get("materializedName"))
+        for record in specializations
+    }
+    for key, materialized_name in explicit_materialized_names.items():
+        function_name, normalized_arguments = key
+        template = templates_by_name.get(function_name)
+        if template is None:
+            continue
+        explicit_template_names.add(function_name)
+        call_site_materialized_names[key] = materialized_name
+        record_key = (function_name, materialized_name)
+        if record_key in recorded_specializations:
+            continue
+        parameters = _template_parameter_values_from_arguments(
+            preprocessor,
+            template,
+            list(normalized_arguments),
+        )
+        specializations.append(
+            _materialized_template_specialization_record(
+                name=function_name,
+                materialized_name=materialized_name,
+                parameters=parameters,
+                parameter_sources={parameter: "call-site" for parameter in parameters},
+                source="call-site",
+            )
+        )
+        recorded_specializations.add(record_key)
 
     implicit_materialization = _materialize_implicit_template_function_calls(
         preprocessor=preprocessor,
