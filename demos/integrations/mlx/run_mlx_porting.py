@@ -42,6 +42,13 @@ MLX_ROPE_SOURCE = "mlx/backend/metal/kernels/rope.metal"
 MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE = (
     "mlx/backend/metal/kernels/scaled_dot_product_attention.metal"
 )
+REFERENCE_ACCESSOR_FIXTURE_NAME = "reference_accessor_lvalue.metal"
+REFERENCE_ACCESSOR_FIXTURE_PATH = (
+    Path(__file__).resolve().parent / "fixtures" / REFERENCE_ACCESSOR_FIXTURE_NAME
+)
+REFERENCE_ACCESSOR_TARGETS = ("directx", "opengl")
+REFERENCE_ACCESSOR_SENTINEL = "73.25"
+REFERENCE_ACCESSOR_DXC_ENTRY_POINT = "CSMain"
 MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES = (
     MLX_ARG_REDUCE_SOURCE,
     MLX_BINARY_TWO_SOURCE,
@@ -606,6 +613,22 @@ def _write_project_config(
             for key, value in options.items():
                 lines.append(f"{key} = {value}")
             lines.append("")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _write_reference_accessor_project_config(path: Path, output_dir: str) -> None:
+    target_list = ", ".join(json.dumps(target) for target in REFERENCE_ACCESSOR_TARGETS)
+    lines = [
+        "[project]",
+        'source_roots = ["."]',
+        f'include = ["{REFERENCE_ACCESSOR_FIXTURE_NAME}"]',
+        f"targets = [{target_list}]",
+        f'output_dir = "{output_dir}"',
+        "",
+        "[project.sources]",
+        '"*.metal" = "metal"',
+        "",
+    ]
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -1183,6 +1206,396 @@ def _check_atomic_fence_contract(
         "semanticTrackedIssues": list(FENCE_CONTRACT_TRACKED_ISSUES),
         "shaderArtifactsOnly": True,
         "runtimeIntegrationIncluded": False,
+        "runtimeParityClaimed": False,
+    }
+
+
+def _strip_shader_comments(source: str) -> str:
+    return re.sub(r"/\*.*?\*/|//[^\n]*", "", source, flags=re.DOTALL)
+
+
+def _reference_accessor_write_evidence(
+    generated: str,
+    *,
+    target: str,
+) -> dict[str, Any]:
+    source = _strip_shader_comments(generated)
+    target_name = {"directx": "DirectX", "opengl": "OpenGL"}.get(target, target)
+    helper_write = re.search(
+        r"\b(?:frag_at[A-Za-z_0-9]*|[A-Za-z_]\w*frag_at[A-Za-z_0-9]*)"
+        r"\s*\([^;{}]*\)\s*=(?!=)",
+        source,
+    )
+    _require(
+        helper_write is None,
+        f"{target_name} reference accessor write still targets the accessor "
+        "or a value-return helper",
+    )
+
+    sentinel = rf"{re.escape(REFERENCE_ACCESSOR_SENTINEL)}0*[fF]?"
+    written_value = (
+        rf"(?:{sentinel}|float\s*\(\s*{sentinel}\s*\)|"
+        rf"\(\s*float\s*\)\s*{sentinel})"
+    )
+    write = re.search(
+        rf"(?P<storage>(?P<owner>\b[A-Za-z_]\w*"
+        rf"(?:\s*\.\s*[A-Za-z_]\w*)*)\s*\.\s*val_frags\s*"
+        rf"\[[^\]\n;]+\])\s*=(?!=)\s*{written_value}\s*;",
+        source,
+    )
+    _require(
+        write is not None,
+        f"{target_name} reference accessor did not write the sentinel directly "
+        "to original val_frags storage",
+    )
+
+    owner = re.sub(r"\s+", "", write.group("owner"))
+    _require(
+        owner == "tile",
+        f"{target_name} reference accessor wrote a copied receiver instead of "
+        "the original tile storage",
+    )
+    owner_parts = re.findall(r"[A-Za-z_]\w*", write.group("owner"))
+    owner_pattern = r"\s*\.\s*".join(re.escape(part) for part in owner_parts)
+    storage_lvalue = re.sub(r"\s+", "", write.group("storage"))
+    readback_lvalues = [
+        re.sub(r"\s+", "", match.group("storage"))
+        for match in re.finditer(
+            rf"(?<![=!<>])=(?!=)\s*(?P<storage>\b{owner_pattern}\s*\.\s*"
+            rf"val_frags\s*\[[^\]\n;]+\])\s*;",
+            source[write.end() :],
+        )
+    ]
+    _require(
+        storage_lvalue in readback_lvalues,
+        f"{target_name} reference accessor fixture did not read back the exact "
+        "val_frags lvalue written through the accessor",
+    )
+
+    return {
+        "status": "verified-original-storage-write",
+        "storageMember": "val_frags",
+        "storageLvalue": storage_lvalue,
+        "sentinel": REFERENCE_ACCESSOR_SENTINEL,
+        "readBackFromSameStorage": True,
+        "readBackFromWrittenLvalue": True,
+        "readBackLvalue": storage_lvalue,
+        "valueReturningHelperUsedForWrite": False,
+    }
+
+
+def _validate_reference_accessor_directx(
+    mlx_root: Path,
+    work_dir: Path,
+    log_dir: Path,
+    artifact_path: Path,
+    *,
+    required: bool,
+) -> dict[str, Any]:
+    if not required:
+        return {
+            "status": "not-required",
+            "required": False,
+            "nativeCompiler": "dxc",
+        }
+
+    dxc = shutil.which("dxc")
+    _require(dxc is not None, "reference accessor DirectX validation requires dxc")
+    output_path = work_dir / "validation" / "reference-accessor.dxil"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.unlink(missing_ok=True)
+    result = _run_command(
+        "validate-reference-accessor-directx",
+        [
+            dxc,
+            "-T",
+            "cs_6_0",
+            "-E",
+            REFERENCE_ACCESSOR_DXC_ENTRY_POINT,
+            str(artifact_path),
+            "-Fo",
+            str(output_path),
+        ],
+        log_dir=log_dir,
+        check=False,
+    )
+    _require(
+        result.returncode == 0,
+        "reference accessor DirectX compilation failed; inspect "
+        "validate-reference-accessor-directx logs",
+    )
+    _require(
+        output_path.is_file() and output_path.stat().st_size > 0,
+        "reference accessor DirectX compilation did not produce DXIL",
+    )
+    return {
+        "status": "validated",
+        "required": True,
+        "nativeCompiler": "dxc",
+        "entryPoint": REFERENCE_ACCESSOR_DXC_ENTRY_POINT,
+        "profile": "cs_6_0",
+        "compiledArtifact": _relpath(output_path, mlx_root),
+        "stdout": _relpath(result.stdout_path, mlx_root),
+        "stderr": _relpath(result.stderr_path, mlx_root),
+    }
+
+
+def _validate_reference_accessor_opengl(
+    mlx_root: Path,
+    work_dir: Path,
+    log_dir: Path,
+    artifact_path: Path,
+    *,
+    required: bool,
+) -> dict[str, Any]:
+    if not required:
+        return {
+            "status": "not-required",
+            "required": False,
+            "nativeCompiler": "glslangValidator",
+            "spirvValidator": "spirv-val",
+        }
+
+    tools = {
+        "glslangValidator": shutil.which("glslangValidator"),
+        "spirv-val": shutil.which("spirv-val"),
+    }
+    missing_tools = sorted(name for name, value in tools.items() if value is None)
+    _require(
+        not missing_tools,
+        "reference accessor OpenGL validation requires: " + ", ".join(missing_tools),
+    )
+    output_path = work_dir / "validation" / "reference-accessor-opengl.spv"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.unlink(missing_ok=True)
+    compile_result = _run_command(
+        "validate-reference-accessor-opengl",
+        [
+            str(tools["glslangValidator"]),
+            "--target-env",
+            "opengl",
+            "-S",
+            "comp",
+            str(artifact_path),
+            "-o",
+            str(output_path),
+        ],
+        log_dir=log_dir,
+        check=False,
+    )
+    _require(
+        compile_result.returncode == 0,
+        "reference accessor OpenGL compilation failed; inspect "
+        "validate-reference-accessor-opengl logs",
+    )
+    _require(
+        output_path.is_file() and output_path.stat().st_size > 0,
+        "reference accessor OpenGL compilation did not produce SPIR-V",
+    )
+    validation_result = _run_command(
+        "validate-reference-accessor-opengl-spirv",
+        [
+            str(tools["spirv-val"]),
+            "--target-env",
+            "opengl4.5",
+            str(output_path),
+        ],
+        log_dir=log_dir,
+        check=False,
+    )
+    _require(
+        validation_result.returncode == 0,
+        "reference accessor OpenGL SPIR-V validation failed; inspect "
+        "validate-reference-accessor-opengl-spirv logs",
+    )
+    return {
+        "status": "validated",
+        "required": True,
+        "nativeCompiler": "glslangValidator",
+        "spirvValidator": "spirv-val",
+        "targetEnvironments": ["opengl", "opengl4.5"],
+        "compiledArtifact": _relpath(output_path, mlx_root),
+        "compileStdout": _relpath(compile_result.stdout_path, mlx_root),
+        "compileStderr": _relpath(compile_result.stderr_path, mlx_root),
+        "validationStdout": _relpath(validation_result.stdout_path, mlx_root),
+        "validationStderr": _relpath(validation_result.stderr_path, mlx_root),
+    }
+
+
+def _check_reference_accessor_lvalue_identity(
+    mlx_root: Path,
+    work_dir: Path,
+    config_dir: Path,
+    report_dir: Path,
+    log_dir: Path,
+    python: str,
+    *,
+    require_directx_toolchain: bool,
+    require_opengl_toolchain: bool,
+) -> dict[str, Any]:
+    _require(
+        REFERENCE_ACCESSOR_FIXTURE_PATH.is_file(),
+        f"reference accessor fixture is missing: {REFERENCE_ACCESSOR_FIXTURE_PATH}",
+    )
+    project_dir = work_dir / "reference-accessor-project"
+    output_dir = project_dir / "generated"
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    project_dir.mkdir(parents=True, exist_ok=True)
+    staged_source = project_dir / REFERENCE_ACCESSOR_FIXTURE_NAME
+    shutil.copyfile(REFERENCE_ACCESSOR_FIXTURE_PATH, staged_source)
+
+    config_path = config_dir / "reference-accessor.toml"
+    report_path = report_dir / "reference-accessor.json"
+    report_path.unlink(missing_ok=True)
+    _write_reference_accessor_project_config(config_path, "generated")
+    result = _run_command(
+        "translate-reference-accessor",
+        [
+            python,
+            "-m",
+            "crosstl",
+            "translate-project",
+            str(project_dir),
+            "--config",
+            str(config_path),
+            "--report",
+            str(report_path),
+        ],
+        log_dir=log_dir,
+        check=False,
+    )
+    _require(
+        report_path.is_file(),
+        "reference accessor project translation did not produce a report",
+    )
+    payload = _load_json(report_path)
+    if result.returncode != 0:
+        messages = [
+            str(item.get("message"))
+            for item in payload.get("diagnostics", [])
+            if isinstance(item, Mapping) and isinstance(item.get("message"), str)
+        ]
+        detail = f": {messages[0]}" if messages else ""
+        raise PortingCheckError(f"reference accessor translation failed{detail}")
+
+    summary = payload.get("summary", {})
+    diagnostics = payload.get("diagnostics", [])
+    artifacts = payload.get("artifacts", [])
+    diagnostic_counts = (
+        summary.get("diagnosticCounts", {}) if isinstance(summary, Mapping) else {}
+    )
+    _require(
+        isinstance(summary, Mapping)
+        and isinstance(diagnostics, list)
+        and isinstance(artifacts, list)
+        and isinstance(diagnostic_counts, Mapping),
+        "reference accessor report must contain structured summary collections",
+    )
+    _require(
+        summary.get("unitCount") == 1
+        and summary.get("artifactCount") == len(REFERENCE_ACCESSOR_TARGETS)
+        and summary.get("translatedCount") == len(REFERENCE_ACCESSOR_TARGETS)
+        and summary.get("failedCount") == 0,
+        "reference accessor project translation did not emit both clean artifacts",
+    )
+    _require(
+        len(artifacts) == len(REFERENCE_ACCESSOR_TARGETS)
+        and all(isinstance(artifact, Mapping) for artifact in artifacts),
+        "reference accessor report must contain exactly one artifact per target",
+    )
+    _require(
+        not diagnostics
+        and all(
+            diagnostic_counts.get(severity) == 0
+            for severity in ("note", "warning", "error")
+        ),
+        "reference accessor project translation must have zero diagnostics",
+    )
+
+    artifacts_by_target = {
+        artifact.get("target"): artifact
+        for artifact in artifacts
+        if isinstance(artifact, Mapping)
+        and artifact.get("source") == REFERENCE_ACCESSOR_FIXTURE_NAME
+        and artifact.get("status") == "translated"
+        and artifact.get("target") in REFERENCE_ACCESSOR_TARGETS
+    }
+    _require(
+        set(artifacts_by_target) == set(REFERENCE_ACCESSOR_TARGETS),
+        "reference accessor report does not contain the expected target artifacts",
+    )
+
+    target_proofs: dict[str, Any] = {}
+    for target in REFERENCE_ACCESSOR_TARGETS:
+        artifact_path = artifacts_by_target[target].get("path")
+        _require(
+            isinstance(artifact_path, str) and bool(artifact_path),
+            f"reference accessor {target} artifact path is missing",
+        )
+        generated_path = (project_dir / artifact_path).resolve()
+        _require(
+            _is_relative_to(generated_path, output_dir.resolve()),
+            f"reference accessor {target} artifact escaped its output directory",
+        )
+        _require(
+            generated_path.is_file(),
+            f"reference accessor {target} artifact is missing: {artifact_path}",
+        )
+        write_evidence = _reference_accessor_write_evidence(
+            generated_path.read_text(encoding="utf-8"),
+            target=target,
+        )
+        if target == "directx":
+            native_validation = _validate_reference_accessor_directx(
+                mlx_root,
+                work_dir,
+                log_dir,
+                generated_path,
+                required=require_directx_toolchain,
+            )
+        else:
+            native_validation = _validate_reference_accessor_opengl(
+                mlx_root,
+                work_dir,
+                log_dir,
+                generated_path,
+                required=require_opengl_toolchain,
+            )
+        target_proofs[target] = {
+            "artifact": _relpath(generated_path, mlx_root),
+            "artifactSha256": _sha256(generated_path),
+            "writeEvidence": write_evidence,
+            "nativeValidation": native_validation,
+        }
+
+    return {
+        "name": "reference-accessor-lvalue-identity",
+        "status": "passed",
+        "proofStatus": "verified-original-storage-write",
+        "scope": "reduced-mlx-shaped-fixture",
+        "translationSurface": "crosstl translate-project",
+        "report": _relpath(report_path, mlx_root),
+        "sourceFixture": (
+            "demos/integrations/mlx/fixtures/" + REFERENCE_ACCESSOR_FIXTURE_NAME
+        ),
+        "stagedSource": _relpath(staged_source, mlx_root),
+        "sourceSha256": _sha256(staged_source),
+        "accessorContract": {
+            "method": "frag_at",
+            "returnType": "thread float&",
+            "storageExpression": "val_frags[i * width + j]",
+            "writeExpression": "tile.frag_at(1, 1) = 73.25f",
+        },
+        "targets": list(REFERENCE_ACCESSOR_TARGETS),
+        "artifactCount": len(REFERENCE_ACCESSOR_TARGETS),
+        "projectDiagnosticCount": 0,
+        "targetProofs": target_proofs,
+        "nativeToolchainRequiredByTarget": {
+            "directx": require_directx_toolchain,
+            "opengl": require_opengl_toolchain,
+        },
+        "upstreamMlxRuntimeExecuted": False,
         "runtimeParityClaimed": False,
     }
 
@@ -3395,6 +3808,18 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             )
         )
         checks.append(
+            _check_reference_accessor_lvalue_identity(
+                mlx_root,
+                work_dir,
+                config_dir,
+                report_dir,
+                log_dir,
+                args.python,
+                require_directx_toolchain=args.require_directx_toolchain,
+                require_opengl_toolchain=require_opengl_frontier_toolchain,
+            )
+        )
+        checks.append(
             _translate_directx_vulkan_frontier(
                 mlx_root,
                 work_dir,
@@ -3469,6 +3894,7 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
         )
     else:
         raise PortingCheckError(f"unsupported MLX porting mode: {args.mode}")
+    reference_accessor_included = args.mode == REDUCED_FRONTIER_MODE
     return {
         "schema_version": 1,
         "repository": {
@@ -3500,9 +3926,20 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             "runtimeReadinessIncluded": args.mode == REDUCED_FRONTIER_MODE,
             "runtimeFixtureExecutionIncluded": args.mode == REDUCED_FRONTIER_MODE,
             "nativeRuntimeExecutionIncluded": args.mode == REDUCED_FRONTIER_MODE,
+            "referenceAccessorProofIncluded": reference_accessor_included,
+            "referenceAccessorTargets": (
+                list(REFERENCE_ACCESSOR_TARGETS) if reference_accessor_included else []
+            ),
+            "referenceAccessorDirectxToolchainRequired": bool(
+                reference_accessor_included and args.require_directx_toolchain
+            ),
+            "referenceAccessorOpenglToolchainRequired": bool(
+                reference_accessor_included and require_opengl_frontier_toolchain
+            ),
             "openglFrontierToolchainRequired": require_opengl_frontier_toolchain,
             "openglGemvToolchainRequired": require_opengl_gemv_toolchain,
             "vulkanGemvToolchainRequired": require_vulkan_gemv_toolchain,
+            "runtimeParityClaimed": False,
         },
         "trackedIssues": list(FULL_CORPUS_TRACKED_ISSUES),
         "resolvedFrontierIssues": list(RESOLVED_FRONTIER_ISSUES),

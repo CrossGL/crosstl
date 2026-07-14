@@ -192,6 +192,41 @@ jobs:
           fence = checks["atomic-fence-contract"]
           if fence["failedArtifactCount"] != 3 or fence["emittedArtifactCount"] != 0:
               raise SystemExit("fence contract accounting must be 3 failed, 0 emitted")
+          reference_accessor = checks["reference-accessor-lvalue-identity"]
+          if (
+              scope["referenceAccessorProofIncluded"] is not True
+              or scope["referenceAccessorTargets"] != ["directx", "opengl"]
+              or reference_accessor["proofStatus"] != "verified-original-storage-write"
+              or reference_accessor["artifactCount"] != 2
+              or reference_accessor["projectDiagnosticCount"] != 0
+              or reference_accessor["runtimeParityClaimed"] is not False
+              or reference_accessor["upstreamMlxRuntimeExecuted"] is not False
+          ):
+              raise SystemExit("reference accessor proof accounting is incomplete")
+          expected_native_target = {
+              "Linux": "opengl",
+              "Windows": "directx",
+          }.get(os.environ["RUNNER_OS"])
+          for target in ("directx", "opengl"):
+              proof = reference_accessor["targetProofs"][target]
+              evidence = proof["writeEvidence"]
+              if (
+                  evidence["status"] != "verified-original-storage-write"
+                  or evidence["storageMember"] != "val_frags"
+                  or evidence["readBackFromWrittenLvalue"] is not True
+                  or evidence["valueReturningHelperUsedForWrite"] is not False
+              ):
+                  raise SystemExit(
+                      f"reference accessor {target} storage evidence is incomplete"
+                  )
+              expected_status = (
+                  "validated" if target == expected_native_target else "not-required"
+              )
+              if proof["nativeValidation"]["status"] != expected_status:
+                  raise SystemExit(
+                      f"reference accessor {target} native validation must be "
+                      f"{expected_status} on {os.environ['RUNNER_OS']}"
+                  )
           opengl = checks["opengl-frontier"]
           if set(opengl["sources"]) != opengl_frontier_sources:
               raise SystemExit("expected 4 OpenGL toolchain frontier sources")

@@ -2405,23 +2405,53 @@ def test_preprocessor_const_method_receiver_is_read_only():
     assert "State__read(thread State& self)" not in output
 
 
+def test_preprocessor_inlines_direct_reference_accessor_as_original_storage():
+    code = """
+    struct State {
+        int scalar;
+        int values[4];
+        thread int& current() { return scalar; }
+        thread int& element(int index) { return values[index]; }
+        int read(int index) { return element(index); }
+    };
+
+    void mutate(thread int& value);
+    void assign(thread State& state, int index) {
+        state.current() = 9;
+        state.element(index) += 2;
+        ++state.element(index);
+        mutate(state.element(index));
+        thread int* address = &state.element(index);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "State__element" not in output
+    assert "State__current" not in output
+    assert "state.scalar = 9;" in output
+    assert "state.values[(index)] += 2;" in output
+    assert "++state.values[(index)];" in output
+    assert "mutate(state.values[(index)]);" in output
+    assert "thread int* address = &state.values[(index)];" in output
+    assert "return self.values[(index)];" in output
+
+
+def test_preprocessor_leaves_unknown_struct_member_calls_unchanged():
+    code = """
+    void invoke(thread ExternalState& state) {
+        state.update();
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "state.update();" in output
+
+
 @pytest.mark.parametrize(
     ("code", "struct_name", "method_name", "signature", "return_type"),
     [
-        pytest.param(
-            """
-            struct State {
-                int value;
-                thread int& element() { return value; }
-            };
-            void assign(thread State& state) { state.element() = 1; }
-            """,
-            "State",
-            "element",
-            "State::element()",
-            "thread int&",
-            id="direct-instance",
-        ),
         pytest.param(
             """
             struct Leaf {
@@ -2498,21 +2528,6 @@ def test_preprocessor_const_method_receiver_is_read_only():
             """
             struct State {
                 int value;
-                thread int& element() { return value; }
-                int read() { return element(); }
-            };
-            int inspect(thread State& state) { return state.read(); }
-            """,
-            "State",
-            "element",
-            "State::element()",
-            "thread int&",
-            id="internal-concrete",
-        ),
-        pytest.param(
-            """
-            struct State {
-                int value;
                 thread int& operator()(int index) { return value; }
                 int read() { return operator()(0); }
             };
@@ -2562,6 +2577,116 @@ def test_preprocessor_const_method_receiver_is_read_only():
             "device int&",
             id="promoted-receiver",
         ),
+        pytest.param(
+            """
+            struct State {
+                int values[2];
+                thread int& element(int index) { return values[index]; }
+            };
+            void assign(thread State& state, int index) {
+                state.element(index++) = 1;
+            }
+            """,
+            "State",
+            "element",
+            "State::element(index++)",
+            "thread int&",
+            id="side-effectful-argument",
+        ),
+        pytest.param(
+            """
+            struct State {
+                int values[2];
+                thread int& element(int index) { return values[index]; }
+            };
+            void bind(thread State& state) {
+                thread int& alias = state.element(0);
+            }
+            """,
+            "State",
+            "element",
+            "State::element(0)",
+            "thread int&",
+            id="reference-binding",
+        ),
+        pytest.param(
+            """
+            struct State {
+                int value;
+                thread int& element() { return value; }
+                const thread int& element() const { return value; }
+            };
+            int inspect(thread const State& state) { return state.element(); }
+            """,
+            "State",
+            "element",
+            "State::element()",
+            "thread int&",
+            id="const-receiver",
+        ),
+        pytest.param(
+            """
+            struct State {
+                int value;
+                const thread int& element() { return value; }
+            };
+            int inspect(thread State& state) { return state.element(); }
+            """,
+            "State",
+            "element",
+            "State::element()",
+            "const thread int&",
+            id="const-reference-return",
+        ),
+        pytest.param(
+            """
+            struct State {
+                int value;
+                thread int& element() { return value; }
+            };
+            void assign(constant State& state) { state.element() = 1; }
+            """,
+            "State",
+            "element",
+            "State::element()",
+            "thread int&",
+            id="constant-address-space-receiver",
+        ),
+        pytest.param(
+            """
+            struct State {
+                int values[2];
+                thread int& element(int index) { return values[index]; }
+                int element(float index) { return int(index); }
+            };
+            int inspect(thread State& state, float index) {
+                return state.element(index);
+            }
+            """,
+            "State",
+            "element",
+            "State::element(index)",
+            "thread int&",
+            id="same-arity-value-overload",
+        ),
+        pytest.param(
+            """
+            struct State {
+                int values[2];
+                thread int& element(int index) { return values[index]; }
+                template <typename T>
+                int element(T index) { return int(index); }
+            };
+            int inspect(thread State& state, float index) {
+                return state.element(index);
+            }
+            """,
+            "State",
+            "element",
+            "State::element(index)",
+            "thread int&",
+            id="same-arity-template-overload",
+        ),
     ],
 )
 def test_preprocessor_called_reference_returning_paths_fail_closed(
@@ -2588,7 +2713,7 @@ def test_preprocessor_called_reference_returning_paths_fail_closed(
     [
         pytest.param(
             "thread int& element() { return value; }",
-            "thread int& State__element(thread State& self)",
+            None,
             id="concrete",
         ),
         pytest.param(

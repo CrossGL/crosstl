@@ -19,6 +19,17 @@ The current harness verifies:
   preservation remain blocked by
   [#1660](https://github.com/CrossGL/crosstl/issues/1660), so this is not yet a
   complete semantic-equivalence claim;
+- a checked-in reduced Metal fixture that mirrors MLX's reference-returning
+  `frag_at` accessor over `val_frags[i * width + j]`. The fixture is translated
+  to DirectX and OpenGL through the public `translate-project` CLI, and the
+  harness requires each generated target to assign the sentinel directly to
+  the original `val_frags[...]` lvalue and read back from that exact array
+  element.
+  A value-return helper or temporary does not satisfy the proof. DXC runs when
+  `--require-directx-toolchain` is active; `glslangValidator` and `spirv-val`
+  validate OpenGL 4.5 semantics when `--require-opengl-frontier-toolchain` is
+  active. This is focused generated-artifact evidence, not execution of MLX or
+  a runtime-parity claim;
 - DirectX and Vulkan artifact generation for the 11-source clean reduced
   frontier: `arange.metal`, `arg_reduce.metal`, `binary_two.metal`,
   `layer_norm.metal`, `logsumexp.metal`, `random.metal`, `rms_norm.metal`,
@@ -74,10 +85,12 @@ The current harness verifies:
   `arange.metal` unsigned 32-bit, signed 32-bit, and floating-point entry points
   through the optional Vulkan compute runtime and Mesa Vulkan software driver.
 
-Pull requests run the 12-source reduced scope: 11 clean frontier sources and
-the explicitly blocked `fence.metal` contract source. Scheduled and manually
-triggered CI also run the full-corpus artifact scout with finite Metal template
-materialization budgets. The generated full-corpus project config caps
+Pull requests run the 12-source pinned reduced scope: 11 clean frontier sources
+and the explicitly blocked `fence.metal` contract source. They also run the
+separate checked-in reference-accessor fixture; that fixture does not change
+the pinned MLX source count. Scheduled and manually triggered CI also run the
+full-corpus artifact scout with finite Metal template materialization budgets.
+The generated full-corpus project config caps
 `max_template_specializations` at 4096 and
 `max_template_materialization_work` at 131072. The full scout translates all 40
 pinned MLX Metal kernel units to DirectX, OpenGL, and Vulkan and records 120
@@ -176,7 +189,7 @@ python demos/integrations/mlx/run_mlx_porting.py \
 ```
 
 On Windows, install DXC to require DirectX HLSL validation for the reduced
-frontier:
+frontier and the reference-accessor proof:
 
 ```bash
 python demos/integrations/mlx/run_mlx_porting.py \
@@ -259,6 +272,13 @@ cbuffer. The aggregate OpenGL module typechecks every generated kernel body but
 exposes only the first as `main`; entry-scoped packaging for the other 23 kernels
 remains tracked in
 [#1523](https://github.com/CrossGL/crosstl/issues/1523).
+The reduced reference-accessor proof covers one non-const, non-template call
+whose method body returns the direct `val_frags[i * width + j]` lvalue. It
+demonstrates that assignment through that generated call site retains original
+storage identity for DirectX and OpenGL and requires a subsequent read from the
+same generated array element. It does not cover the const overloads,
+template-indexed overloads, nested forwarding overloads, numerical execution,
+or the upstream MLX host/runtime integration.
 `binary_two.metal` now also belongs to the required OpenGL toolchain frontier.
 CrossTL commit `db593d19b` specializes fixed-array helper views to their concrete
 runtime storage resources while retaining fixed extents and offsets. For the
