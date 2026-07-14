@@ -506,6 +506,7 @@ def test_project_package_exposes_public_api_surface():
         "REFLECTION_TOOL_UNAVAILABLE",
         "REFLECTION_UNSUPPORTED_FORMAT",
         "ReflectionDiagnostic",
+        "DirectXComputeRuntime",
         "DirectXRuntimeParityAdapter",
         "NativeRuntimeBufferBinding",
         "NativeRuntimeConstantBinding",
