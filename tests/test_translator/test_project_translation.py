@@ -8691,6 +8691,63 @@ def test_translate_project_reports_directx_dynamic_workgroup_pointer_backing(tmp
     assert not (repo / artifact["path"]).exists()
 
 
+def test_translate_project_reports_directx_trailing_zero_builtin_contract(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "trailing_zero.cgl").write_text(
+        textwrap.dedent("""
+            shader InvalidTrailingZeroOperand {
+                int probe(float value) {
+                    return __builtin_ctz(value);
+                }
+
+                compute {
+                    void main() {}
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="translated",
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.directx-trailing-zero-unsupported": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "directx.trailing-zero-builtin-lowering": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == (
+        "project.translate.directx-trailing-zero-unsupported"
+    )
+    assert diagnostic["target"] == "directx"
+    assert diagnostic["sourceBackend"] == "cgl"
+    assert diagnostic["location"]["file"] == "trailing_zero.cgl"
+    assert diagnostic["missingCapabilities"] == [
+        "directx.trailing-zero-builtin-lowering"
+    ]
+    assert diagnostic["details"] == {
+        "sourcePath": "trailing_zero.cgl",
+        "targetArtifact": "translated/directx/trailing_zero.hlsl",
+        "trailingZeroBuiltin": {
+            "builtin": "__builtin_ctz",
+            "operandType": "float",
+            "reason": "unsupported-operand-type",
+        },
+    }
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["target"] == "directx"
+    assert not (repo / artifact["path"]).exists()
+
+
 def test_translate_project_reports_unsupported_opengl_index_type(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
@@ -45554,6 +45611,91 @@ def test_translate_project_metal_reference_return_reports_struct_method_details(
         "targetArtifact": "out/directx/reference_return.hlsl",
     }
     assert "templateMaterialization" not in diagnostic["details"]
+
+
+def test_translate_project_reports_unresolved_metal_struct_sibling_call(
+    tmp_path,
+    monkeypatch,
+):
+    from crosstl.backend.Metal.MetalCrossGLCodeGen import (
+        MetalStructMethodCallResolutionError,
+    )
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "reader.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            kernel void read_value(device int* out [[buffer(0)]]) {
+                out[0] = 1;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    def raise_unresolved_sibling_call(*_args, **_kwargs):
+        raise MetalStructMethodCallResolutionError(
+            "Reader",
+            "post_in",
+            ("int64",),
+            ("Reader__post_in(long)", "Reader__post_in(int64_t)"),
+            "multiple exact overloads remain after type matching",
+            {"line": 5, "column": 14},
+        )
+
+    monkeypatch.setattr(
+        project_pipeline,
+        "translate",
+        raise_unresolved_sibling_call,
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-struct-method-call-unresolved": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "metal.struct-method-call-lowering": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == (
+        "project.translate.metal-struct-method-call-unresolved"
+    )
+    assert diagnostic["target"] == "directx"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["location"]["file"] == "reader.metal"
+    assert diagnostic["location"]["line"] == 5
+    assert diagnostic["location"]["column"] == 14
+    assert diagnostic["missingCapabilities"] == [
+        "metal.struct-method-call-lowering"
+    ]
+    assert diagnostic["details"] == {
+        "sourcePath": "reader.metal",
+        "structMethodCall": {
+            "argumentTypes": ["int64"],
+            "candidates": [
+                "Reader__post_in(long)",
+                "Reader__post_in(int64_t)",
+            ],
+            "methodName": "post_in",
+            "owner": "Reader",
+            "reason": "multiple exact overloads remain after type matching",
+        },
+        "targetArtifact": "out/directx/reader.hlsl",
+    }
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["target"] == "directx"
+    assert not (repo / artifact["path"]).exists()
 
 
 def test_translate_project_metal_implicit_type_environment_cache_bounds_repeated_work(
