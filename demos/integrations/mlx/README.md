@@ -222,10 +222,12 @@ verification target for MLX commit
 configured work budgets to unique reachable concrete entries, helpers, and
 struct specializations plus actual type-environment resolution, rather than an
 eager whole-source instantiation-by-template Cartesian estimate or repeated
-expanded-text scans. Focused tests establish the accounting behavior. An
-isolated project replay of `quantized.metal` at the pinned revision now advances
-both DirectX and OpenGL past the former 522,068-item eager planning failure
-without raising the 131,072 work limit. Both targets then fail closed with
+expanded-text scans. Artifact metadata and budget diagnostics report reachable
+specializations, dependency-discovery work, and pruned eager candidate pairs as
+separate counts. Focused tests establish the accounting behavior. An isolated
+project replay of `quantized.metal` at the pinned revision now advances both
+DirectX and OpenGL past the former 522,068-item eager planning failure without
+raising the 131,072 work limit. Both targets then fail closed with
 `project.translate.metal-struct-method` while lowering the reference-returning
 `MMATile::frag_at(i, j)` accessor tracked by CrossGL/crosstl#1557; neither target
 emits an artifact, so no validator acceptance or runtime parity is claimed. A

@@ -1204,7 +1204,16 @@ Project reports are JSON documents with:
   templates with missing parameter names, and concrete specializations with the
   original template name, materialized function name, parameter map,
   specialization source, and optional ``hostName`` for source-instantiated
-  kernels.
+  kernels. Source-instantiated Metal artifacts can also include an ``accounting``
+  object. ``reachableSpecializationCount`` counts unique concrete function and
+  struct specializations selected for the artifact,
+  ``dependencyDiscoveryWorkCount`` counts uncached type-environment and type
+  resolution charged separately from those specializations, and
+  ``prunedCandidateCount`` records source-instantiation/template-declaration
+  pairs from the former eager candidate space that were not selected. The same
+  accounting object is included in a materialization-work budget diagnostic
+  when all three counts are available. Report validation rejects missing,
+  negative, boolean, or unknown accounting fields.
   Full reports require failed artifacts to carry an actionable error string and
   reject failed artifacts that claim
   generated hashes or source-map records. Full reports also reject translated

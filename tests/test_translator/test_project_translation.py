@@ -16361,6 +16361,11 @@ def test_translate_project_opengl_rejects_post_materialization_template_type_lea
     assert artifact["templateMaterialization"] == {
         "status": "unsupported",
         "specializationCount": 1,
+        "accounting": {
+            "reachableSpecializationCount": 2,
+            "dependencyDiscoveryWorkCount": 0,
+            "prunedCandidateCount": 0,
+        },
         "configuredParameterCount": 0,
         "configuredParameters": {},
         "configuredParameterSources": {},
@@ -45401,7 +45406,8 @@ def test_translate_project_metal_materialization_budget_tracks_reachable_graph(
         encoding="utf-8",
     )
 
-    payload = translate_project(load_project_config(repo)).to_json()
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
 
     assert payload["diagnostics"] == []
     artifact = payload["artifacts"][0]
@@ -45409,6 +45415,13 @@ def test_translate_project_metal_materialization_budget_tracks_reachable_graph(
     materialization = artifact["templateMaterialization"]
     assert materialization["status"] == "materialized"
     assert materialization["specializationCount"] == 28
+    assert materialization["accounting"] == {
+        "reachableSpecializationCount": 28,
+        "dependencyDiscoveryWorkCount": 0,
+        # The retired eager planner considered 26 instantiations x 7 declarations;
+        # one declaration pair is retained for each concrete host entry.
+        "prunedCandidateCount": (26 * 7) - 26,
+    }
     specializations = materialization["specializations"]
     expected_entries = {f"independent_{index}" for index in range(24)} | {
         "entry_left_float",
@@ -45438,6 +45451,71 @@ def test_translate_project_metal_materialization_budget_tracks_reachable_graph(
     assert len(re.findall(r"float shared_stage_float\(float value\)\s*\{", output)) == 1
     assert "unreachable_helper" not in output
     assert "unreachable_entry" not in output
+
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert "project.validate.invalid-report" not in validation["diagnosticsByCode"]
+
+
+def test_validate_project_report_template_materialization_accounting_is_optional_and_closed(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "accounting.metal").write_text(
+        textwrap.dedent("""
+            template <typename T>
+            T unrelated(T value) {
+                return value;
+            }
+
+            template <typename T>
+            [[kernel]] void launch(device T* out [[buffer(0)]]) {
+                out[0] = T(1);
+            }
+
+            instantiate_kernel("launch_float", launch, float)
+            """).strip(),
+        encoding="utf-8",
+    )
+    payload = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+    accounting = payload["artifacts"][0]["templateMaterialization"]["accounting"]
+    assert accounting == {
+        "reachableSpecializationCount": 1,
+        "dependencyDiscoveryWorkCount": 0,
+        "prunedCandidateCount": 1,
+    }
+    legacy_payload = copy.deepcopy(payload)
+    legacy_payload["artifacts"][0]["templateMaterialization"].pop("accounting")
+    legacy_report_path = repo / "out" / "legacy-accounting-report.json"
+    legacy_report_path.write_text(json.dumps(legacy_payload), encoding="utf-8")
+    legacy_validation = validate_project_report(legacy_report_path)
+    assert legacy_validation["success"] is True
+
+    accounting.pop("dependencyDiscoveryWorkCount")
+    accounting["sourceScanCount"] = 7
+    report_path = repo / "out" / "malformed-accounting-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "artifacts[0].templateMaterialization.accounting.sourceScanCount "
+        "is not allowed"
+    ) in diagnostic["message"]
+    assert (
+        "artifacts[0].templateMaterialization.accounting."
+        "dependencyDiscoveryWorkCount must be a non-negative integer"
+    ) in diagnostic["message"]
 
 
 def test_translate_project_metal_source_instantiation_work_limit_blocks_opengl_materialization(
@@ -45510,6 +45588,11 @@ def test_translate_project_metal_source_instantiation_work_limit_blocks_opengl_m
     assert diagnostic["location"]["column"] == 1
     assert "reachable source entry 'launch_f32_c'" in diagnostic["message"]
     assert diagnostic["details"]["templateMaterialization"] == {
+        "accounting": {
+            "reachableSpecializationCount": 3,
+            "dependencyDiscoveryWorkCount": 0,
+            "prunedCandidateCount": 3,
+        },
         "limit": 2,
         "limitSource": "project.source_options.metal.max_template_materialization_work",
         "requiredWorkItems": 3,
@@ -46058,6 +46141,11 @@ def test_translate_project_metal_implicit_type_environment_budget_diagnostic(
     assert "implicit-template-materialization/type-environment" in diagnostic["message"]
     assert "templates=1" in diagnostic["message"]
     detail = diagnostic["details"]["templateMaterialization"]
+    assert detail["accounting"] == {
+        "reachableSpecializationCount": 0,
+        "dependencyDiscoveryWorkCount": 4,
+        "prunedCandidateCount": 0,
+    }
     assert detail["limit"] == 3
     assert (
         detail["limitSource"]
@@ -46519,6 +46607,11 @@ def test_translate_project_signature_instantiation_materializes_convolution_help
     expected_materialization = {
         "status": "materialized",
         "specializationCount": 2,
+        "accounting": {
+            "reachableSpecializationCount": 2,
+            "dependencyDiscoveryWorkCount": 0,
+            "prunedCandidateCount": 1,
+        },
         "configuredParameterCount": 0,
         "configuredParameters": {},
         "configuredParameterSources": {},
@@ -46804,6 +46897,11 @@ def test_translate_project_metal_reduction_source_instantiation_records_nontype_
     expected_materialization = {
         "status": "materialized",
         "specializationCount": 1,
+        "accounting": {
+            "reachableSpecializationCount": 1,
+            "dependencyDiscoveryWorkCount": 0,
+            "prunedCandidateCount": 0,
+        },
         "configuredParameterCount": 0,
         "configuredParameters": {},
         "configuredParameterSources": {},
@@ -46892,6 +46990,11 @@ def test_translate_project_metal_reduction_materializes_shared_helper_templates(
     expected_materialization = {
         "status": "materialized",
         "specializationCount": 3,
+        "accounting": {
+            "reachableSpecializationCount": 3,
+            "dependencyDiscoveryWorkCount": 4,
+            "prunedCandidateCount": 2,
+        },
         "configuredParameterCount": 0,
         "configuredParameters": {},
         "configuredParameterSources": {},
@@ -46983,6 +47086,11 @@ def test_translate_project_metal_const_for_loop_partial_template_materializes_to
     expected_materialization = {
         "status": "materialized",
         "specializationCount": 2,
+        "accounting": {
+            "reachableSpecializationCount": 2,
+            "dependencyDiscoveryWorkCount": 3,
+            "prunedCandidateCount": 1,
+        },
         "configuredParameterCount": 0,
         "configuredParameters": {},
         "configuredParameterSources": {},
@@ -48224,6 +48332,11 @@ def test_translate_project_metal_norm_materializes_variadic_shared_helper(
     assert artifact["templateMaterialization"] == {
         "status": "materialized",
         "specializationCount": 2,
+        "accounting": {
+            "reachableSpecializationCount": 2,
+            "dependencyDiscoveryWorkCount": 4,
+            "prunedCandidateCount": 1,
+        },
         "configuredParameterCount": 0,
         "configuredParameters": {},
         "configuredParameterSources": {},
