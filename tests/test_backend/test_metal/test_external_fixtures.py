@@ -2042,7 +2042,7 @@ EXTERNAL_FIXTURES = [
             "int[3] extent;",
             "StructuredBuffer<float> input_data @buffer(1)",
             "vec4 output;",
-            "output[i] = float(buffer_load(input_data, index + i));",
+            "CrossGLMetalVectorIndex_vec4_set(output, i, float(buffer_load(input_data, index + i)));",
             "imageStore(update_tex, uvec2(params.offset[0], params.offset[1]) + uvec2(xx, yy), output);",
         ],
         "not_contains": ["vec<float> output"],
@@ -2087,7 +2087,7 @@ EXTERNAL_FIXTURES = [
             "uint convert_type_u3cuint_u3e(float val)",
             "image2DArray read_tex @texture(0) @readonly",
             "imageLoad(read_tex, uvec3(uvec2(params.offset[0], params.offset[1]) + uvec2(xx, yy), uint(params.offset[2] + layer)))",
-            "buffer_store(output_data, index + i, convert_type_u3cuint_u3e(read_colour[i]));",
+            "buffer_store(output_data, index + i, convert_type_u3cuint_u3e(CrossGLMetalVectorIndex_vec4_get(read_colour, i)));",
         ],
         "not_contains": ["convert_type<uint>"],
         "source": (

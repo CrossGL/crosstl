@@ -8003,13 +8003,10 @@ def test_mlx_random_vector_subscripts_keep_scalar_component_contract(tmp_path):
     assert f"uint constant_component = {helper}_get(ks, 1);" in normalized
     assert f"uint runtime_component = {helper}_get(ks, lane);" in normalized
     assert (
-        f"uint selected_call = select_component({helper}_get(ks, lane));"
-        in normalized
+        f"uint selected_call = select_component({helper}_get(ks, lane));" in normalized
     )
     assert f"{helper}_set(assigned, 0, constant_component);" in normalized
-    assert (
-        f"{helper}_add_assign(assigned, lane, runtime_component);" in normalized
-    )
+    assert f"{helper}_add_assign(assigned, lane, runtime_component);" in normalized
     assert f"{helper}_pre_increment(assigned, lane);" in normalized
     assert f"{helper}_post_increment(assigned, lane);" in normalized
     assert f"uvec4({helper}_get" not in normalized
@@ -8144,21 +8141,278 @@ def test_codegen_resource_vector_components_preserve_buffer_indexing(tmp_path):
         in normalized
     )
     assert (
-        "buffer_store(values, index.x, "
-        f"{helper}_set_value(buffer_load(values, index.x), index.y, "
-        "selected + 1u));" in normalized
+        f"{helper}_set_resource(values, index.x, index.y, selected + 1u);" in normalized
     )
+    assert f"{helper}_add_assign_resource(values, index.x, 0, 2u);" in normalized
     assert (
-        "buffer_store(values, index.x, "
-        f"{helper}_add_assign_value(buffer_load(values, index.x), 0, 2u));"
-        in normalized
+        f"uint {helper}_set_resource(device uvec4* data, "
+        "uint element_index, uint lane, uint selected)" in normalized
     )
+    assert "buffer_load(data, element_index)" in normalized
+    assert "buffer_store(data, element_index, value)" in normalized
     assert "buffer_load(buffer_load(values" not in normalized
 
     glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
-    assert "values[index.x] =" in glsl
+    assert f"{helper}_set_resource__glsl_data_values_uvec4" in glsl
+    assert "values[(data_offset + int(element_index))] = value;" in glsl
     assert_opengl_compute_validates_if_available(
         glsl, tmp_path, "metal-resource-vector-components"
+    )
+
+
+@pytest.mark.parametrize(
+    ("vector_type", "component_type", "mapped_vector", "mapped_component"),
+    [
+        ("simd_short4", "short", "i16vec4", "int16"),
+        ("vector_uchar4", "uchar", "u8vec4", "uint8"),
+        ("packed_bfloat4", "bfloat", "bfloat16vec4", "bfloat16"),
+    ],
+)
+def test_codegen_named_vector_aliases_use_canonical_component_helpers(
+    vector_type, component_type, mapped_vector, mapped_component
+):
+    source = f"""
+    {component_type} extract_alias_component({vector_type} value, uint lane) {{
+        return value[lane];
+    }}
+    """
+
+    crossgl = convert(source)
+    normalized = normalize(crossgl)
+
+    assert (
+        f"{mapped_component} CrossGLMetalVectorIndex_{mapped_vector}_get("
+        f"{mapped_vector} value, uint lane)" in normalized
+    )
+    assert f"{mapped_component} extract_alias_component({mapped_vector} value" in (
+        normalized
+    )
+    assert vector_type not in crossgl
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_narrow_and_bool_component_updates_restore_lane_types(tmp_path):
+    source = """
+    kernel void narrow_updates(
+        device int* out_values [[buffer(0)]],
+        uint lane [[thread_position_in_grid]]) {
+        char4 signed_values = char4(127);
+        ushort4 unsigned_values = ushort4(65535u);
+        bool4 flags = bool4(true);
+        int signed_divisor = 300;
+        uint unsigned_divisor = 70000u;
+        int flag_mask = 2;
+        auto signed_result = (signed_values[lane] /= signed_divisor);
+        auto unsigned_result = (unsigned_values[lane] %= unsigned_divisor);
+        auto flag_result = (flags[lane] &= flag_mask);
+        auto signed_before = signed_values[lane]++;
+        auto unsigned_after = ++unsigned_values[lane];
+        out_values[0] = int(signed_result) + int(unsigned_result)
+            + int(flag_result) + int(signed_before) + int(unsigned_after);
+    }
+    """
+
+    crossgl = convert(source)
+    normalized = normalize(crossgl)
+
+    assert (
+        "int8 CrossGLMetalVectorIndex_i8vec4_div_assign("
+        "inout i8vec4 value, uint lane, int right)" in normalized
+    )
+    assert (
+        "int8 original = value.x; int computed = int(original) / right; "
+        "int8 updated = computed; value.x = updated; return updated;" in normalized
+    )
+    assert (
+        "uint16 CrossGLMetalVectorIndex_u16vec4_mod_assign("
+        "inout u16vec4 value, uint lane, uint right)" in normalized
+    )
+    assert (
+        "bool CrossGLMetalVectorIndex_bvec4_bit_and_assign("
+        "inout bvec4 value, uint lane, int right)" in normalized
+    )
+    assert (
+        "bool original = value.x; int computed = int(original) & right; "
+        "bool updated = computed; value.x = updated; return updated;" in normalized
+    )
+    assert "int8 updated = computed; value.x = updated; return original;" in normalized
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "int updated = bitfieldExtract(computed, 0, 8);" in glsl
+    assert "uint updated = bitfieldExtract(computed, 0, 16);" in glsl
+    assert "bool updated = (computed != 0);" in glsl
+    assert_opengl_compute_validates_if_available(
+        glsl, tmp_path, "metal-narrow-vector-component-updates"
+    )
+
+
+def test_codegen_component_updates_accept_enum_and_ptrdiff_contracts():
+    source = """
+    enum ResourceIndex : uint {
+        First = 0,
+        Delta = 2,
+    };
+
+    void update_local(thread uint4& values, uint lane, ptrdiff_t delta) {
+        enum LocalDelta { LocalStep = 1 };
+        values[lane] += LocalStep;
+        values[lane] += delta;
+    }
+
+    kernel void update_resource(
+        device uint4* values [[buffer(0)]],
+        uint lane [[thread_position_in_grid]]) {
+        values[First][lane] += Delta;
+    }
+    """
+
+    crossgl = convert(source)
+    normalized = normalize(crossgl)
+    helper = "CrossGLMetalVectorIndex_uvec4_add_assign"
+
+    assert f"uint {helper}(inout uvec4 value, uint lane, int64 right)" in normalized
+    assert f"uint {helper}(inout uvec4 value, uint lane, uint right)" in normalized
+    assert f"{helper}(values, lane, LocalStep);" in normalized
+    assert f"{helper}(values, lane, delta);" in normalized
+    assert f"{helper}_resource(values, First, lane, Delta);" in normalized
+    assert (
+        f"uint {helper}_resource(device uvec4* data, "
+        "uint element_index, uint lane, uint right)" in normalized
+    )
+
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_resource_component_updates_evaluate_operands_once(tmp_path):
+    source = """
+    uint next_index(thread uint& value) {
+        return value++;
+    }
+
+    uint next_lane(thread uint& value) {
+        return value++;
+    }
+
+    uint next_value(thread uint& value) {
+        return value++;
+    }
+
+    kernel void resource_update_results(
+        device uint4* values [[buffer(0)]],
+        device uint* out_values [[buffer(1)]],
+        uint gid [[thread_position_in_grid]]) {
+        uint element = gid;
+        uint lane = 0u;
+        uint payload = 1u;
+        auto assigned = (
+            values[next_index(element)][next_lane(lane)] = next_value(payload));
+        auto compounded = (
+            values[next_index(element)][next_lane(lane)] += next_value(payload));
+        auto prefixed = ++values[next_index(element)][next_lane(lane)];
+        auto postfixed = values[next_index(element)][next_lane(lane)]++;
+        out_values[0] = assigned + compounded + prefixed + postfixed;
+    }
+    """
+
+    crossgl = convert(source)
+    normalized = normalize(crossgl)
+    helper = "CrossGLMetalVectorIndex_uvec4"
+
+    assert (
+        f"{helper}_set_resource(values, next_index(element), "
+        "next_lane(lane), next_value(payload))" in normalized
+    )
+    assert (
+        f"{helper}_add_assign_resource(values, next_index(element), "
+        "next_lane(lane), next_value(payload))" in normalized
+    )
+    assert (
+        f"{helper}_pre_increment_resource(values, next_index(element), "
+        "next_lane(lane))" in normalized
+    )
+    assert (
+        f"{helper}_post_increment_resource(values, next_index(element), "
+        "next_lane(lane))" in normalized
+    )
+    assert normalized.count("next_index(element)") == 4
+    assert normalized.count("next_lane(lane)") == 4
+    assert normalized.count("next_value(payload)") == 2
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert_opengl_compute_validates_if_available(
+        glsl, tmp_path, "metal-resource-vector-update-results"
+    )
+
+
+def test_codegen_nested_resource_vector_paths_load_and_store_root_once(tmp_path):
+    source = """
+    struct Payload {
+        uint4 lanes[2];
+        float3x3 matrix;
+    };
+
+    uint next_element(thread uint& value) {
+        return value++;
+    }
+
+    uint next_path(thread uint& value) {
+        return value++;
+    }
+
+    uint next_lane(thread uint& value) {
+        return value++;
+    }
+
+    kernel void nested_resource_components(
+        device Payload* values [[buffer(0)]],
+        device uint* out_values [[buffer(1)]],
+        uint gid [[thread_position_in_grid]]) {
+        uint element = gid;
+        uint path = 0u;
+        uint lane = 0u;
+        auto selected = values[next_element(element)]
+            .lanes[next_path(path)][next_lane(lane)];
+        values[next_element(element)].lanes[next_path(path)][next_lane(lane)]
+            += 2u;
+        auto matrix_value = values[next_element(element)]
+            .matrix[next_path(path)][next_lane(lane)];
+        values[next_element(element)].matrix[next_path(path)][next_lane(lane)]
+            = matrix_value + 1.0;
+        out_values[0] = selected + uint(matrix_value);
+    }
+    """
+
+    crossgl = convert(source)
+    normalized = normalize(crossgl)
+
+    assert (
+        "CrossGLMetalVectorIndex_uvec4_get(buffer_load(values, "
+        "next_element(element)).lanes[next_path(path)], next_lane(lane))" in normalized
+    )
+    assert (
+        "CrossGLMetalVectorIndex_uvec4_add_assign_resource_lanes_index("
+        "values, next_element(element), next_path(path), next_lane(lane), 2u)"
+        in normalized
+    )
+    assert (
+        "CrossGLMetalVectorIndex_vec3_get(buffer_load(values, "
+        "next_element(element)).matrix[next_path(path)], next_lane(lane))" in normalized
+    )
+    assert (
+        "CrossGLMetalVectorIndex_vec3_set_resource_matrix_index("
+        "values, next_element(element), next_path(path), next_lane(lane), "
+        "matrix_value + 1.0)" in normalized
+    )
+    assert normalized.count("next_element(element)") == 4
+    assert normalized.count("next_path(path)") == 4
+    assert normalized.count("next_lane(lane)") == 4
+    assert "buffer_load(values[next_element" not in normalized
+    assert "buffer_load(values, next_element(element)).lanes" in normalized
+    assert "buffer_load(values, next_element(element)).matrix" in normalized
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert_opengl_compute_validates_if_available(
+        glsl, tmp_path, "metal-nested-resource-vector-components"
     )
 
 
@@ -8187,6 +8441,83 @@ def test_codegen_reports_unresolved_indexed_component_type():
     assert diagnostic.index_expression == "lane"
     assert diagnostic.reason == (
         "the indexed base expression type could not be inferred"
+    )
+
+
+@pytest.mark.parametrize(
+    ("return_type", "statement"),
+    [
+        ("void", "uint selected = external_vector()[lane];"),
+        ("uint", "return external_vector()[lane];"),
+    ],
+)
+def test_codegen_reports_unresolved_indexed_rvalue_with_expected_type(
+    return_type, statement
+):
+    source = f"""
+    {return_type} unresolved_rvalue(uint lane) {{
+        {statement}
+    }}
+    """
+
+    with pytest.raises(MetalIndexedComponentTypeResolutionError) as exc_info:
+        convert(source)
+
+    diagnostic = exc_info.value
+    assert diagnostic.base_type is None
+    assert diagnostic.access_kind == "subscript"
+    assert diagnostic.index_expression == "lane"
+    assert diagnostic.reason == (
+        "the indexed base expression type could not be inferred"
+    )
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "external_vector()[lane] = 1u;",
+        "external_vector()[lane] += 1u;",
+        "++external_vector()[lane];",
+        "external_vector()[lane]++;",
+    ],
+)
+def test_codegen_reports_unresolved_indexed_update_target_type(statement):
+    source = f"""
+    void unresolved_update(uint lane) {{
+        {statement}
+    }}
+    """
+
+    with pytest.raises(MetalIndexedComponentTypeResolutionError) as exc_info:
+        convert(source)
+
+    diagnostic = exc_info.value
+    assert diagnostic.base_type is None
+    assert diagnostic.access_kind == "subscript"
+    assert diagnostic.index_expression == "lane"
+    assert diagnostic.reason == (
+        "the indexed base expression type could not be inferred"
+    )
+
+
+def test_codegen_reports_user_aggregate_subscript_result_type():
+    source = """
+    struct IndexedTable {};
+
+    void unresolved_aggregate(IndexedTable table, uint lane) {
+        auto selected = table[lane];
+    }
+    """
+
+    with pytest.raises(MetalIndexedComponentTypeResolutionError) as exc_info:
+        convert(source)
+
+    diagnostic = exc_info.value
+    assert diagnostic.base_type == "IndexedTable"
+    assert diagnostic.access_kind == "aggregate-subscript"
+    assert diagnostic.index_expression == "lane"
+    assert diagnostic.reason == (
+        "the user-defined aggregate subscript result type cannot be inferred"
     )
 
 
