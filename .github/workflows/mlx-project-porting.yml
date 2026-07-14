@@ -193,12 +193,24 @@ jobs:
           if fence["failedArtifactCount"] != 3 or fence["emittedArtifactCount"] != 0:
               raise SystemExit("fence contract accounting must be 3 failed, 0 emitted")
           reference_accessor = checks["reference-accessor-lvalue-identity"]
+          expected_directx_required = os.environ["RUNNER_OS"] == "Windows"
+          expected_opengl_required = os.environ["RUNNER_OS"] == "Linux"
           if (
               scope["referenceAccessorProofIncluded"] is not True
               or scope["referenceAccessorTargets"] != ["directx", "opengl"]
+              or (
+                  scope["referenceAccessorDirectxToolchainRequired"]
+                  is not expected_directx_required
+              )
+              or (
+                  scope["referenceAccessorOpenglToolchainRequired"]
+                  is not expected_opengl_required
+              )
               or reference_accessor["proofStatus"] != "verified-original-storage-write"
               or reference_accessor["constReadProofStatus"]
               != "verified-original-storage-const-read"
+              or reference_accessor["nestedConstAliasProofStatus"]
+              != "verified-original-nested-storage-const-alias-read"
               or reference_accessor["artifactCount"] != 2
               or reference_accessor["projectDiagnosticCount"] != 0
               or reference_accessor["runtimeParityClaimed"] is not False
@@ -213,6 +225,7 @@ jobs:
               proof = reference_accessor["targetProofs"][target]
               evidence = proof["writeEvidence"]
               const_read = proof["constReadEvidence"]
+              nested_const_alias = proof["nestedConstAliasEvidence"]
               if (
                   evidence["status"] != "verified-original-storage-write"
                   or evidence["storageMember"] != "val_frags"
@@ -234,10 +247,43 @@ jobs:
                   raise SystemExit(
                       f"reference accessor {target} const-read evidence is incomplete"
                   )
+              if (
+                  nested_const_alias["status"]
+                  != "verified-original-nested-storage-const-alias-read"
+                  or nested_const_alias["storageMember"] != "val_frags"
+                  or nested_const_alias["storagePath"]
+                  != "self.nestedTile.val_frags"
+                  or nested_const_alias["outerReceiver"] != "self"
+                  or nested_const_alias["tileMember"] != "nestedTile"
+                  or nested_const_alias["fragmentType"] != "float2"
+                  or nested_const_alias["aliasName"] != "accum"
+                  or nested_const_alias["aliasEliminated"] is not True
+                  or nested_const_alias["accessorCallEliminated"] is not True
+                  or nested_const_alias["indexedAliasRead"] != "accum[k]"
+                  or nested_const_alias["readFromOriginalStorage"] is not True
+                  or nested_const_alias["kernelPathInvoked"] is not True
+              ):
+                  raise SystemExit(
+                      f"reference accessor {target} nested const-alias evidence is incomplete"
+                  )
               expected_status = (
                   "validated" if target == expected_native_target else "not-required"
               )
-              if proof["nativeValidation"]["status"] != expected_status:
+              expected_required = expected_status == "validated"
+              native_validation = proof["nativeValidation"]
+              expected_compiler = {
+                  "directx": "dxc",
+                  "opengl": "glslangValidator",
+              }[target]
+              if (
+                  native_validation["status"] != expected_status
+                  or native_validation["required"] is not expected_required
+                  or native_validation["nativeCompiler"] != expected_compiler
+                  or (
+                      target == "opengl"
+                      and native_validation["spirvValidator"] != "spirv-val"
+                  )
+              ):
                   raise SystemExit(
                       f"reference accessor {target} native validation must be "
                       f"{expected_status} on {os.environ['RUNNER_OS']}"

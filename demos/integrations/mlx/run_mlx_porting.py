@@ -1214,6 +1214,31 @@ def _strip_shader_comments(source: str) -> str:
     return re.sub(r"/\*.*?\*/|//[^\n]*", "", source, flags=re.DOTALL)
 
 
+def _shader_function_definition(
+    source: str,
+    function_pattern: str,
+) -> tuple[re.Match[str], str] | None:
+    header = re.search(
+        rf"\bvoid\s+(?P<helper>{function_pattern})\s*"
+        rf"\((?P<parameters>[^)]*)\)\s*\{{",
+        source,
+        flags=re.DOTALL,
+    )
+    if header is None:
+        return None
+
+    depth = 1
+    body_start = header.end()
+    for index in range(body_start, len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return header, source[body_start:index]
+    return None
+
+
 def _reference_accessor_write_evidence(
     generated: str,
     *,
@@ -1365,6 +1390,95 @@ def _reference_accessor_const_read_evidence(
         "kernelPathInvoked": True,
         "loweredTileHelper": tile_store.group("helper"),
         "loweredReadHelper": direct_read.group("helper"),
+    }
+
+
+def _reference_accessor_nested_const_alias_evidence(
+    generated: str,
+    *,
+    target: str,
+) -> dict[str, Any]:
+    source = _strip_shader_comments(generated)
+    target_name = {"directx": "DirectX", "opengl": "OpenGL"}.get(target, target)
+    accessor_helper = re.search(
+        r"\b(?:frag_at[A-Za-z_0-9]*|[A-Za-z_]\w*frag_at[A-Za-z_0-9]*)" r"\s*\(",
+        source,
+    )
+    _require(
+        accessor_helper is None,
+        f"{target_name} nested reference accessor artifact still contains a "
+        "frag_at helper or call",
+    )
+    _require(
+        re.search(r"\baccum\b", source) is None,
+        f"{target_name} nested reference accessor artifact still contains the "
+        "accum reference alias",
+    )
+
+    helper_patterns = {
+        "directx": r"ReferenceAccessorStoreLoop__store",
+        "opengl": r"ReferenceAccessorStoreLoop_+store[A-Za-z_0-9]*",
+    }
+    _require(
+        target in helper_patterns,
+        f"unsupported nested reference accessor evidence target: {target}",
+    )
+    store_definition = _shader_function_definition(
+        source,
+        helper_patterns[target],
+    )
+    _require(
+        store_definition is not None,
+        f"{target_name} nested reference accessor artifact is missing the "
+        "lowered const store helper",
+    )
+    store_header, store_body = store_definition
+    _require(
+        re.search(
+            r"\bReferenceAccessorStoreLoop\s+self\b",
+            store_header.group("parameters"),
+        )
+        is not None,
+        f"{target_name} lowered nested const store helper is missing its "
+        "outer value receiver",
+    )
+
+    direct_read = re.search(
+        r"(?<![=!<>])=(?!=)\s*"
+        r"(?P<storage>self\s*\.\s*nestedTile\s*\.\s*val_frags\s*"
+        r"\[[^\]\n;]+\]\s*\[\s*k\s*\])\s*;",
+        store_body,
+    )
+    _require(
+        direct_read is not None,
+        f"{target_name} nested const reference alias was not eliminated to "
+        "self.nestedTile.val_frags storage indexed by k",
+    )
+    kernel_call = re.search(
+        rf"\b{re.escape(store_header.group('helper'))}\s*\(\s*nestedStore\s*,",
+        source,
+    )
+    _require(
+        kernel_call is not None,
+        f"{target_name} reference accessor kernel does not invoke the lowered "
+        "nested const store path",
+    )
+
+    return {
+        "status": "verified-original-nested-storage-const-alias-read",
+        "storageMember": "val_frags",
+        "storagePath": "self.nestedTile.val_frags",
+        "storageLvalue": re.sub(r"\s+", "", direct_read.group("storage")),
+        "outerReceiver": "self",
+        "tileMember": "nestedTile",
+        "fragmentType": "float2",
+        "aliasName": "accum",
+        "aliasEliminated": True,
+        "accessorCallEliminated": True,
+        "indexedAliasRead": "accum[k]",
+        "readFromOriginalStorage": True,
+        "kernelPathInvoked": True,
+        "loweredStoreHelper": store_header.group("helper"),
     }
 
 
@@ -1635,6 +1749,10 @@ def _check_reference_accessor_lvalue_identity(
             generated,
             target=target,
         )
+        nested_const_alias_evidence = _reference_accessor_nested_const_alias_evidence(
+            generated,
+            target=target,
+        )
         if target == "directx":
             native_validation = _validate_reference_accessor_directx(
                 mlx_root,
@@ -1656,6 +1774,7 @@ def _check_reference_accessor_lvalue_identity(
             "artifactSha256": _sha256(generated_path),
             "writeEvidence": write_evidence,
             "constReadEvidence": const_read_evidence,
+            "nestedConstAliasEvidence": nested_const_alias_evidence,
             "nativeValidation": native_validation,
         }
 
@@ -1664,6 +1783,9 @@ def _check_reference_accessor_lvalue_identity(
         "status": "passed",
         "proofStatus": "verified-original-storage-write",
         "constReadProofStatus": "verified-original-storage-const-read",
+        "nestedConstAliasProofStatus": (
+            "verified-original-nested-storage-const-alias-read"
+        ),
         "scope": "reduced-mlx-shaped-fixture",
         "translationSurface": "crosstl translate-project",
         "report": _relpath(report_path, mlx_root),
@@ -1682,6 +1804,17 @@ def _check_reference_accessor_lvalue_identity(
                 "enclosingMethod": "store(...) const",
                 "implicitCall": "frag_at(i, j)",
                 "helperParameterType": "const thread float&",
+            },
+            "nestedConstAliasRead": {
+                "outerType": "ReferenceAccessorStoreLoop",
+                "tileMember": "nestedTile",
+                "fragmentReturnType": "const thread float2&",
+                "enclosingMethod": "store(...) const",
+                "aliasDeclaration": (
+                    "thread const auto& accum = nestedTile.frag_at(i, j)"
+                ),
+                "readExpression": "accum[k]",
+                "storageExpression": "nestedTile.val_frags[i * width + j][k]",
             },
         },
         "targets": list(REFERENCE_ACCESSOR_TARGETS),

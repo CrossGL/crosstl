@@ -24,19 +24,22 @@ The current harness verifies:
   complete semantic-equivalence claim;
 - a checked-in reduced Metal fixture that mirrors MLX's reference-returning
   `frag_at` accessor over `val_frags[i * width + j]`. The fixture is translated
-  to DirectX and OpenGL through the public `translate-project` CLI. Its mutable
-  receiver is declared through a function-local `using` alias, matching the
-  concrete alias declarations produced while materializing repository
-  templates. A paired const accessor is also exercised from a const store-like
-  method that passes the implicit accessor call to a read-only helper. The
-  harness requires each generated target to assign the sentinel directly to the
-  original `val_frags[...]` lvalue, read back from that exact array element, and
-  lower the const accessor argument to the same backing storage.
-  A value-return helper or temporary does not satisfy the proof. DXC runs when
-  `--require-directx-toolchain` is active; `glslangValidator` and `spirv-val`
-  validate OpenGL 4.5 semantics when `--require-opengl-frontier-toolchain` is
-  active. This is focused generated-artifact evidence, not execution of MLX or
-  a runtime-parity claim;
+  to DirectX and OpenGL through the public `translate-project` CLI and retains
+  three separate source contracts. The mutable scalar receiver is declared
+  through a function-local `using` alias and assigned through `frag_at`. An
+  implicit const scalar call is passed directly to a read-only helper. A second
+  outer value owns a `float2`-backed `nestedTile`; its const `store` method binds
+  `thread const auto& accum = nestedTile.frag_at(i, j)` and reads `accum[k]`.
+  Each generated target must assign the scalar sentinel directly to the original
+  `val_frags[...]` lvalue, read back that exact element, lower the implicit const
+  call to its backing storage, and replace the nested accessor and `accum` alias
+  with a read from `self.nestedTile.val_frags[...][k]`. A value-return helper,
+  retained alias, or copied tile does not satisfy the proof. Windows CI requires
+  DXC compilation; Linux CI requires `glslangValidator` compilation and
+  `spirv-val` validation for OpenGL 4.5. The macOS matrix leg verifies the same
+  proof set in both generated artifacts without requiring either target
+  compiler. These checks do not execute an MLX runtime or establish numerical
+  parity;
 - DirectX and Vulkan artifact generation for the 11-source clean reduced
   frontier: `arange.metal`, `arg_reduce.metal`, `binary_two.metal`,
   `layer_norm.metal`, `logsumexp.metal`, `random.metal`, `rms_norm.metal`,
@@ -129,6 +132,8 @@ visible in CI reports without claiming runtime parity. The current readiness
 manifests consume reflected runtime artifact metadata, including entry points,
 resource bindings, and dispatch geometry. Runtime-test plans now resolve
 source-level fixture names against common generated resource aliases. The
+reference-accessor fixture is not included in those runtime manifests; its
+scope ends at generated-source inspection and native compiler validation. The
 reduced arange fixtures select the translated artifact by source and target,
 then select `CSMain`, `main`, or `arangeuint32` independently for DirectX,
 OpenGL, or Vulkan dispatch. The aggregate DirectX and OpenGL artifacts currently
@@ -181,8 +186,8 @@ python demos/integrations/mlx/run_mlx_porting.py \
 ```
 
 On Linux, install SPIR-V tools and the Vulkan runtime dependencies to require
-both Vulkan validation and native execution of the generated MLX `arange`
-artifact:
+OpenGL compilation and validation for the reference-accessor fixture as well as
+Vulkan validation and native execution of the generated MLX `arange` artifact:
 
 ```bash
 sudo apt-get update
@@ -198,7 +203,7 @@ python demos/integrations/mlx/run_mlx_porting.py \
 ```
 
 On Windows, install DXC to require DirectX HLSL validation for the reduced
-frontier and the reference-accessor proof:
+frontier and all three reference-accessor artifact proofs:
 
 ```bash
 python demos/integrations/mlx/run_mlx_porting.py \
@@ -228,16 +233,20 @@ struct specializations plus actual type-environment resolution, rather than an
 eager whole-source instantiation-by-template Cartesian estimate or repeated
 expanded-text scans. Artifact metadata and budget diagnostics report reachable
 specializations, dependency-discovery work, and pruned eager candidate pairs as
-separate counts. Focused tests establish the accounting behavior. An isolated
-project replay of `quantized.metal` at the pinned revision now advances both
-DirectX and OpenGL past the former 522,068-item eager planning failure without
-raising the 131,072 work limit. Both targets then fail closed with
-`project.translate.metal-struct-method` while lowering the reference-returning
-`MMATile::frag_at(i, j)` accessor tracked by CrossGL/crosstl#1557; neither target
-emits an artifact, so no validator acceptance or runtime parity is claimed. A
-fresh pinned full-corpus report is still required to identify every kernel that
-advances past the former budget failure and to satisfy the repository-level
-acceptance criteria for CrossGL/crosstl#1676. The checked-in evidence also
+separate counts. Focused tests establish the accounting behavior. A DirectX-only
+project replay of `quantized.metal` at the pinned revision advances past both the
+former 522,068-item eager planning failure and
+`thread const auto& accum = self.Ctile.frag_at(i, j)`. It next fails closed with
+`project.translate.metal-struct-method` and missing capability
+`struct.template-method` while inferring the pointer expression
+`&(src[(i * 8) * 36 + (j * 8)])` for
+`BaseMMAFrag_float_8_8::load(...)`. Existing issue
+[#1476](https://github.com/CrossGL/crosstl/issues/1476) covers that blocker. The
+replay emits no DirectX artifact and establishes no validator result, runtime
+execution, or numerical parity. OpenGL was not replayed in this run, and no
+updated OpenGL full-source frontier is claimed. A fresh pinned full-corpus
+report is still required to satisfy the repository-level acceptance criteria
+for CrossGL/crosstl#1676. The checked-in evidence also
 records full-kernel Vulkan replays of `fp_quantized.metal` and
 `quantized_nax.metal` as failed after selected materialization contracts; only
 the explicitly documented reduced quantized fixtures carry validator evidence.
@@ -299,13 +308,17 @@ cbuffer. The aggregate OpenGL module typechecks every generated kernel body but
 exposes only the first as `main`; entry-scoped packaging for the other 23 kernels
 remains tracked in
 [#1523](https://github.com/CrossGL/crosstl/issues/1523).
-The reduced reference-accessor proof covers one non-const, non-template call
-whose method body returns the direct `val_frags[i * width + j]` lvalue. It
-demonstrates that assignment through that generated call site retains original
-storage identity for DirectX and OpenGL and requires a subsequent read from the
-same generated array element. It does not cover the const overloads,
-template-indexed overloads, nested forwarding overloads, numerical execution,
-or the upstream MLX host/runtime integration.
+The reduced reference-accessor fixture covers three non-template paths. The
+mutable scalar call returns the direct `val_frags[i * width + j]` lvalue and
+must retain storage identity through assignment and readback. The implicit const
+scalar call must lower directly into its read-only helper argument. The nested
+const path matches the pinned `BlockMMA`/`Ctile` shape with a reduced outer value,
+a `float2` fragment tile, a `thread const auto&` alias, and an `accum[k]` read.
+For DirectX and OpenGL, the last path must contain neither `frag_at` nor `accum`
+and must read `self.nestedTile.val_frags[...][k]`. This proof does not cover
+template-indexed or nested forwarding overloads, full `quantized.metal`
+translation, shader execution, numerical parity, or upstream MLX host/runtime
+integration.
 `binary_two.metal` now also belongs to the required OpenGL toolchain frontier.
 CrossTL commit `db593d19b` specializes fixed-array helper views to their concrete
 runtime storage resources while retaining fixed extents and offsets. For the
@@ -419,8 +432,9 @@ fixtures containing the five-argument `Atile.load` and `Btile.load` forms from
 Calls that reach a target without a concrete specialization fail with a
 structured diagnostic instead of losing the generic suffix or computation.
 
-Pinned Vulkan replays confirm that both affected kernels advance past this
-contract without producing a full artifact. `fp_quantized.metal` next stops at
+The previously recorded pinned Vulkan replays confirmed that both affected
+kernels advanced past this contract without producing a full artifact.
+`fp_quantized.metal` then stopped at
 type inference for the reference-returning `frag_at(i, j)` argument tracked in
 CrossGL/crosstl#1557. `quantized_nax.metal` next stops because the dependent
 static owner of `mma` is absent, so its empty tag argument has no selected
@@ -428,10 +442,11 @@ parameter type. Dependent static-owner materialization remains tracked in
 CrossGL/crosstl#1574. These results establish translation-frontier progress
 only; they do not include runtime integration or numerical parity.
 
-The full pinned Vulkan run now advances beyond the generic-vector-width
-diagnostic. The contextual initializer contract implemented for
-CrossGL/crosstl#1573 now rejects the empty `metal::bool_constant<...>{}` argument
-instead of inferring a zero-length array. The selected parameter type is still
+The previously recorded full pinned Vulkan run advanced beyond the
+generic-vector-width diagnostic. The contextual initializer contract
+implemented for CrossGL/crosstl#1573 now rejects the empty
+`metal::bool_constant<...>{}` argument instead of inferring a zero-length array.
+The selected parameter type is still
 unavailable because the captured intermediate drops the dependent static owner
 from `CTile::NAXFrag_t::mma`; CrossGL/crosstl#1574 tracks that remaining
 materialization contract. The intermediate also retains unresolved
