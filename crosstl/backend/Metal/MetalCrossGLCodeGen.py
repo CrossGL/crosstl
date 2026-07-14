@@ -42,6 +42,37 @@ class MetalBuiltinOverloadResolutionError(ValueError):
         )
 
 
+class MetalStructMethodCallResolutionError(ValueError):
+    """Raised when a lowered sibling method call cannot be rebound safely."""
+
+    project_diagnostic_code = "project.translate.metal-struct-method-call-unresolved"
+    missing_capabilities = ("metal.struct-method-call-lowering",)
+
+    def __init__(
+        self,
+        owner,
+        method_name,
+        argument_types,
+        candidates,
+        reason,
+        source_location=None,
+    ):
+        self.owner = owner
+        self.method_name = method_name
+        self.argument_types = tuple(argument_types)
+        self.candidates = tuple(candidates)
+        self.reason = reason
+        self.source_location = source_location
+        signature = ", ".join(self.argument_types)
+        candidate_text = ", ".join(self.candidates) or "<none>"
+        super().__init__(
+            "Cannot resolve lowered Metal struct method call "
+            f"{owner}::{method_name}({signature}): {reason}; candidates are "
+            f"{candidate_text}; qualify the intended call before lowering or "
+            "make the overload argument types exact."
+        )
+
+
 class MetalSizeofResolutionError(ValueError):
     """Raised when a concrete Metal object size cannot be represented safely."""
 
@@ -806,6 +837,7 @@ class MetalToCrossGLConverter:
         self.metal_atomic_fence_transport_declaration_ids = set()
         self.current_function_name = None
         self.current_function_return_type = None
+        self.current_function = None
         self.wide_vector_types = {}
         self.wide_vector_binary_helpers = set()
         self.wide_vector_compound_helpers = set()
@@ -2885,6 +2917,7 @@ class MetalToCrossGLConverter:
         self.pending_value_template_specializations = []
         self.suppressed_value_template_function_ids = set()
         self.current_function_name = None
+        self.current_function = None
 
     def format_array_suffix(self, var, include_declarator_arrays=True):
         array_type = self.metal_array_type_parts(getattr(var, "vtype", None))
@@ -3328,8 +3361,10 @@ class MetalToCrossGLConverter:
         )
         previous_function_name = self.current_function_name
         previous_function_return_type = self.current_function_return_type
+        previous_function = self.current_function
         self.current_function_name = func.name
         self.current_function_return_type = func.return_type
+        self.current_function = func
         self.current_stage_entry_resource_parameter_ids = (
             {id(param) for param in func.params} if stage_entry else set()
         )
@@ -3404,6 +3439,7 @@ class MetalToCrossGLConverter:
             )
             self.current_function_name = previous_function_name
             self.current_function_return_type = previous_function_return_type
+            self.current_function = previous_function
         return code
 
     def format_value_template_parameter_declarations(
@@ -4239,6 +4275,11 @@ class MetalToCrossGLConverter:
             right = self.generate_binary_operand(expr.right, expr.op, True, is_main)
             return f"{left} {expr.op} {right}"
         elif isinstance(expr, FunctionCallNode):
+            lowered_method_call = self.generate_lowered_struct_method_call(
+                expr, is_main
+            )
+            if lowered_method_call is not None:
+                return lowered_method_call
             cooperative_matrix_call = self.generate_cooperative_matrix_function_call(
                 expr, is_main
             )
@@ -4783,6 +4824,271 @@ class MetalToCrossGLConverter:
             if name.startswith("mem_"):
                 return {name}
         return None
+
+    def lowered_struct_method_context(self, function):
+        """Return the concrete receiver contract for a lowered instance helper."""
+        if not isinstance(function, FunctionNode):
+            return None
+        params = list(getattr(function, "params", []) or [])
+        if not params:
+            return None
+        receiver = params[0]
+        if (
+            getattr(receiver, "name", None) != "self"
+            or not self.reference_parameter(receiver)
+        ):
+            return None
+
+        owner = self.normalized_metal_type(
+            self.resolve_type_alias(getattr(receiver, "vtype", None))
+        )
+        if not owner or (
+            owner not in self.struct_declarations
+            and owner not in self.struct_name_map
+            and owner not in self.struct_name_map.values()
+        ):
+            return None
+
+        helper_name = str(getattr(function, "name", ""))
+        prefixes = list(
+            dict.fromkeys(
+                (owner, self.map_struct_name(owner), self.sanitize_identifier(owner))
+            )
+        )
+        helper_prefix = next(
+            (
+                prefix
+                for prefix in prefixes
+                if helper_name.startswith(f"{prefix}__")
+            ),
+            None,
+        )
+        if helper_prefix is None:
+            return None
+        return {
+            "owner": owner,
+            "helper_prefix": helper_prefix,
+            "receiver": receiver,
+        }
+
+    @staticmethod
+    def lowered_method_transport_parameters(function):
+        transported = []
+        for param in list(getattr(function, "params", []) or [])[1:]:
+            if not str(getattr(param, "name", "")).startswith("crosstl_ptr_"):
+                break
+            transported.append(param)
+        return transported
+
+    def lowered_method_parameter_contract(self, parameter):
+        metal_type = self.resolve_type_alias(
+            self.metal_declaration_expression_type(parameter)
+        )
+        qualifiers = tuple(self.effective_declaration_qualifiers(parameter))
+        return re.sub(r"\s+", " ", str(metal_type).strip()), qualifiers
+
+    def lowered_method_explicit_parameter_types(self, function, transport_count):
+        params = list(getattr(function, "params", []) or [])
+        explicit = params[1 + transport_count :]
+        mapped = tuple(
+            self.map_type(
+                self.resolve_type_alias(self.metal_declaration_expression_type(param))
+            )
+            for param in explicit
+        )
+        source = tuple(
+            self.normalized_metal_parameter_type(param) for param in explicit
+        )
+        return mapped, source
+
+    def normalized_metal_parameter_type(self, parameter):
+        return re.sub(
+            r"\s+",
+            " ",
+            str(
+                self.resolve_type_alias(
+                    self.metal_declaration_expression_type(parameter)
+                )
+            ).strip(),
+        )
+
+    def lowered_method_candidate_signature(self, function, transport_count):
+        _mapped, source = self.lowered_method_explicit_parameter_types(
+            function, transport_count
+        )
+        return f"{function.name}({', '.join(source)})"
+
+    def resolve_lowered_struct_method_call(self, expression):
+        """Bind one retained implicit-this call to a concrete lowered helper."""
+        context = self.lowered_struct_method_context(self.current_function)
+        if context is None:
+            return None
+
+        method_name = str(getattr(expression, "name", ""))
+        if not self.crossgl_identifier_pattern.fullmatch(method_name):
+            return None
+        # A value/callable or an ordinary free function with this name wins over
+        # the structural lowered-helper inference.
+        if (
+            method_name in self.current_variable_types
+            or method_name in self.global_variable_types
+            or method_name in self.user_function_overloads_by_name
+        ):
+            return None
+
+        helper_name = f"{context['helper_prefix']}__{method_name}"
+        all_candidates = list(
+            self.user_function_overloads_by_name.get(helper_name, [])
+        )
+        if not all_candidates:
+            return None
+
+        current_transport = self.lowered_method_transport_parameters(
+            self.current_function
+        )
+        current_transport_names = [param.name for param in current_transport]
+        current_transport_contracts = {
+            param.name: self.lowered_method_parameter_contract(param)
+            for param in current_transport
+        }
+        current_receiver_readonly = self.readonly_parameter(
+            context["receiver"],
+            self.effective_declaration_qualifiers(context["receiver"]),
+        )
+        argument_types = tuple(
+            self.expression_mapped_type(argument) for argument in expression.args
+        )
+        diagnostic_argument_types = tuple(
+            argument_type or "<unknown>" for argument_type in argument_types
+        )
+
+        viable = []
+        rejected_receiver = False
+        for candidate in all_candidates:
+            candidate_context = self.lowered_struct_method_context(candidate)
+            params = list(getattr(candidate, "params", []) or [])
+            if (
+                candidate_context is None
+                or candidate_context["owner"] != context["owner"]
+                or len(params)
+                != 1 + len(current_transport) + len(expression.args)
+            ):
+                continue
+            candidate_transport = params[1 : 1 + len(current_transport)]
+            candidate_transport_names = [param.name for param in candidate_transport]
+            if candidate_transport_names != current_transport_names:
+                continue
+            if any(
+                self.lowered_method_parameter_contract(param)
+                != current_transport_contracts.get(param.name)
+                for param in candidate_transport
+            ):
+                continue
+            candidate_readonly = self.readonly_parameter(
+                candidate_context["receiver"],
+                self.effective_declaration_qualifiers(candidate_context["receiver"]),
+            )
+            if current_receiver_readonly and not candidate_readonly:
+                rejected_receiver = True
+                continue
+            mapped_types, source_types = self.lowered_method_explicit_parameter_types(
+                candidate, len(current_transport)
+            )
+            viable.append((candidate, mapped_types, source_types, candidate_readonly))
+
+        candidate_signatures = tuple(
+            self.lowered_method_candidate_signature(
+                candidate, len(current_transport)
+            )
+            for candidate in all_candidates
+        )
+        if not viable:
+            reason = (
+                "a read-only receiver cannot call a mutating sibling helper"
+                if rejected_receiver
+                else "no helper preserves the receiver and transported-resource contract"
+            )
+            raise MetalStructMethodCallResolutionError(
+                context["owner"],
+                method_name,
+                diagnostic_argument_types,
+                candidate_signatures,
+                reason,
+                getattr(expression, "source_location", None),
+            )
+
+        if any(argument_type is None for argument_type in argument_types):
+            matches = viable
+        else:
+            matches = [
+                candidate
+                for candidate in viable
+                if candidate[1] == argument_types
+            ]
+            if not matches:
+                raise MetalStructMethodCallResolutionError(
+                    context["owner"],
+                    method_name,
+                    diagnostic_argument_types,
+                    tuple(
+                        self.lowered_method_candidate_signature(
+                            candidate, len(current_transport)
+                        )
+                        for candidate, _mapped, _source, _readonly in viable
+                    ),
+                    "no exact overload matches the available argument types",
+                    getattr(expression, "source_location", None),
+                )
+
+        source_groups = {}
+        for candidate in matches:
+            source_groups.setdefault((candidate[2], candidate[3]), []).append(candidate)
+        if len(source_groups) != 1:
+            raise MetalStructMethodCallResolutionError(
+                context["owner"],
+                method_name,
+                diagnostic_argument_types,
+                tuple(
+                    self.lowered_method_candidate_signature(
+                        candidates[0][0], len(current_transport)
+                    )
+                    for candidates in source_groups.values()
+                ),
+                "multiple exact overloads remain after type matching",
+                getattr(expression, "source_location", None),
+            )
+
+        declarations = next(iter(source_groups.values()))
+        selected = next(
+            (
+                candidate
+                for candidate, _mapped, _source, _readonly in declarations
+                if getattr(candidate, "body", None)
+            ),
+            declarations[0][0],
+        )
+        if self.reference_element_type(getattr(selected, "return_type", None)):
+            raise MetalStructMethodCallResolutionError(
+                context["owner"],
+                method_name,
+                diagnostic_argument_types,
+                (self.lowered_method_candidate_signature(selected, len(current_transport)),),
+                "reference-returning sibling helpers require lvalue-preserving lowering",
+                getattr(expression, "source_location", None),
+            )
+        return selected, current_transport
+
+    def generate_lowered_struct_method_call(self, expression, is_main=False):
+        resolved = self.resolve_lowered_struct_method_call(expression)
+        if resolved is None:
+            return None
+        selected, transported = resolved
+        arguments = [self.render_identifier("self")]
+        arguments.extend(self.render_identifier(param.name) for param in transported)
+        arguments.extend(
+            self.generate_expression(argument, is_main) for argument in expression.args
+        )
+        return f"{self.sanitize_identifier(selected.name)}({', '.join(arguments)})"
 
     def map_function_call_name(self, name, args=None):
         match = re.fullmatch(r"(?:metal::)?as_type<(.+)>", name)
@@ -6547,6 +6853,10 @@ class MetalToCrossGLConverter:
             constructor_type = self.metal_constructor_result_type(expr.name)
             if constructor_type is not None:
                 return constructor_type
+            lowered_method = self.resolve_lowered_struct_method_call(expr)
+            if lowered_method is not None:
+                function, _transported = lowered_method
+                return getattr(function, "return_type", None)
             binding, function = self.resolve_metal_user_function_overload(
                 str(expr.name), expr.args
             )

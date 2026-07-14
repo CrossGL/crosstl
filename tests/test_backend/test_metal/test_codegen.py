@@ -13,6 +13,7 @@ from crosstl.backend.Metal.MetalCrossGLCodeGen import (
     MetalSizeofResolutionError,
     MetalStageEntryArrayResourceError,
     MetalStaticConstantResolutionError,
+    MetalStructMethodCallResolutionError,
     MetalTemplateArgumentResolutionError,
     MetalToCrossGLConverter,
     MetalWideVectorLoweringError,
@@ -993,6 +994,174 @@ def test_codegen_struct_method_receiver_directions_reach_native_targets():
         assert "self.scalar += amount;" in generated
         assert "self.values[1] = amount;" in generated
         assert "self.nested.value += amount;" in generated
+
+
+def test_codegen_rebinds_lowered_struct_sibling_overload_with_resources():
+    source = """
+    struct ReadWriter_float2_float2 {
+        const device float* input;
+        device float* output;
+        int bias;
+
+        ReadWriter_float2_float2(
+            const device float* input_, device float* output_, int bias_)
+            : input(input_), output(output_), bias(bias_) {}
+
+        float post_in(float elem) const {
+            return elem + input[0] + float(bias);
+        }
+
+        int post_in(int elem) const {
+            return elem + int(input[0]) + bias;
+        }
+
+        float load(float elem) const {
+            return post_in(elem);
+        }
+    };
+
+    kernel void k(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+        ReadWriter_float2_float2 rw(input, output, 2);
+        output[0] = rw.load(1.0f);
+    }
+    """
+
+    lowered = MetalPreprocessor().preprocess(source)
+    assert "return post_in(elem);" in lowered
+
+    crossgl = convert(lowered)
+    load_body = crossgl.rsplit(
+        "ReadWriter_float2_float2__load", 1
+    )[1].split("}", 1)[0]
+
+    assert (
+        "ReadWriter_float2_float2__post_in(self, crosstl_ptr_input, "
+        "crosstl_ptr_output, elem)" in load_body
+    )
+    assert "return post_in(elem);" not in load_body
+    assert (
+        "float ReadWriter_float2_float2__load(in thread "
+        "ReadWriter_float2_float2& self" in normalize(crossgl)
+    )
+
+
+def test_codegen_does_not_rebind_global_call_from_lowered_struct_method():
+    lowered = """
+    struct Reader { int bias; };
+
+    float post_in(float elem) {
+        return elem * 2.0f;
+    }
+
+    float Reader__post_in(thread const Reader& self, float elem) {
+        return elem + float(self.bias);
+    }
+
+    float Reader__load(thread const Reader& self, float elem) {
+        return post_in(elem);
+    }
+    """
+
+    crossgl = convert(lowered)
+    load_body = crossgl.split("Reader__load", 1)[1].split("}", 1)[0]
+
+    assert "return post_in(elem);" in load_body
+    assert "Reader__post_in(self" not in load_body
+
+
+def test_codegen_does_not_rebind_lexically_shadowed_callable():
+    lowered = """
+    struct Reader { int bias; };
+    struct Callable { int tag; };
+
+    float Reader__post_in(thread const Reader& self, float elem) {
+        return elem + float(self.bias);
+    }
+
+    float Reader__load(
+        thread const Reader& self, Callable post_in, float elem) {
+        return post_in(elem);
+    }
+    """
+
+    crossgl = convert(lowered)
+    load_body = crossgl.split("Reader__load", 1)[1].split("}", 1)[0]
+
+    assert "return post_in(elem);" in load_body
+    assert "Reader__post_in(self" not in load_body
+
+
+def test_codegen_fails_closed_for_ambiguous_lowered_sibling_overload():
+    lowered = """
+    struct Reader { int bias; };
+
+    long Reader__post_in(thread const Reader& self, long elem) {
+        return elem;
+    }
+
+    int64_t Reader__post_in(thread const Reader& self, int64_t elem) {
+        return elem;
+    }
+
+    long Reader__load(thread const Reader& self, long elem) {
+        return post_in(elem);
+    }
+    """
+
+    with pytest.raises(MetalStructMethodCallResolutionError) as exc_info:
+        convert(lowered)
+
+    error = exc_info.value
+    assert error.owner == "Reader"
+    assert error.method_name == "post_in"
+    assert error.argument_types == ("int64",)
+    assert error.reason == "multiple exact overloads remain after type matching"
+    assert error.candidates == (
+        "Reader__post_in(long)",
+        "Reader__post_in(int64_t)",
+    )
+    assert "qualify the intended call" in str(error)
+
+
+def test_codegen_rebinds_nested_lowered_sibling_calls():
+    source = """
+    struct Reader {
+        const device float* input;
+
+        Reader(const device float* input_) : input(input_) {}
+
+        float post_in(float elem) const {
+            return elem + input[0];
+        }
+
+        int post_in(int elem) const {
+            return elem + int(input[0]);
+        }
+
+        float load(float elem) const {
+            return float(post_in(post_in(int(elem)))) + post_in(elem);
+        }
+    };
+
+    kernel void k(
+        const device float* input [[buffer(0)]],
+        device float* output [[buffer(1)]]) {
+        Reader reader(input);
+        output[0] = reader.load(1.0f);
+    }
+    """
+
+    crossgl = convert(MetalPreprocessor().preprocess(source))
+    load_body = normalize(crossgl.rsplit("Reader__load", 1)[1].split("}", 1)[0])
+
+    assert (
+        "Reader__post_in(self, crosstl_ptr_input, "
+        "Reader__post_in(self, crosstl_ptr_input, int(elem)))" in load_body
+    )
+    assert "Reader__post_in(self, crosstl_ptr_input, elem)" in load_body
+    assert "post_in(post_in" not in load_body
 
 
 def test_codegen_fragment_early_tests_attribute_becomes_stage_layout():
