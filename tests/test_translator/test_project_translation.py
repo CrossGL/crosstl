@@ -32365,6 +32365,66 @@ def test_translate_project_resolves_vulkan_storage_buffer_overload_with_auto_poi
     assert_spirv_asm_validates_if_available(generated, tmp_path)
 
 
+def test_translate_project_lowers_mlx_auto_pointer_alias_to_directx(tmp_path):
+    # Reduced from MLX gemv.h at
+    # 4367c73b60541ddd5a266ce4644fd93d20223b6e.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source_path = repo / "gemv_auto_pointer_alias.metal"
+    source_path.write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            int64_t read_stride(const device int64_t* strides, uint index) {
+                return strides[index];
+            }
+
+            kernel void launch(
+                const device int64_t* index_batch_strides [[buffer(0)]],
+                device int64_t* out [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]
+            ) {
+                const auto* mati_bstrides = index_batch_strides + 3;
+                out[gid] = read_stride(mati_bstrides, gid);
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["schemaVersion"] == 1
+    assert payload["kind"] == "crosstl-project-portability-report"
+    assert payload["summary"]["artifactCount"] == 1
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["target"] == "directx"
+    assert artifact["source"] == "gemv_auto_pointer_alias.metal"
+
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "StructuredBuffer<int64_t> index_batch_strides : register(t0);" in generated
+    assert "int64_t mati_bstrides_offset = int64_t(3);" in generated
+    assert "return strides[uint((strides_offset + index))];" in generated
+    assert (
+        "read_stride(index_batch_strides, int64_t(mati_bstrides_offset), gid)"
+        in generated
+    )
+    assert re.search(r"\b(?:auto|int64_t)\s*\*", generated) is None
+    assert "&index_batch_strides[" not in generated
+
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
 def test_translate_project_resolves_mlx_sort_reference_thread_ids_for_vulkan(
     tmp_path,
 ):
