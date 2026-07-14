@@ -216,9 +216,13 @@ mapping. Current DXC checks use Shader Model 6 compute profiles and do not prove
 Direct3D 10 or 11 compatibility; CrossGL/crosstl#1670 tracks explicit target
 profiles, feature gates, and compiler selection. CrossGL/crosstl#1669 tracks
 the fixed arrays of resource aliases introduced by the pinned revision's wide
-quantized matrix-vector helpers. CrossGL/crosstl#1491 tracks the current
-scaled-attention qualified-static-constant materialization blocker. Built-in
-overloads are resolved alongside user-defined wrappers by source signature.
+quantized matrix-vector helpers. CrossGL/crosstl#1671 tracks workgroup backing
+provenance through nested FFT helper parameters. CrossGL/crosstl#1672 tracks
+owner-dependent `constexpr` helper calls in quantized struct static members.
+CrossGL/crosstl#1491 tracks the current scaled-attention
+qualified-static-constant materialization blocker.
+Built-in overloads are resolved alongside user-defined wrappers by source
+signature.
 Before native validation, the harness verifies
 the four numeric-to-Boolean SIMD wrapper conversions and the signed 8-, 16-,
 32-, and 64-bit `arange` arithmetic conversions in the generated artifact.

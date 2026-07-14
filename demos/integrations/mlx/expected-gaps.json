@@ -506,7 +506,9 @@
       "https://github.com/CrossGL/crosstl/issues/1566",
       "https://github.com/CrossGL/crosstl/issues/1567",
       "https://github.com/CrossGL/crosstl/issues/1659",
-      "https://github.com/CrossGL/crosstl/issues/1669"
+      "https://github.com/CrossGL/crosstl/issues/1669",
+      "https://github.com/CrossGL/crosstl/issues/1671",
+      "https://github.com/CrossGL/crosstl/issues/1672"
     ],
     "semantic_blocked_by": [
       "https://github.com/CrossGL/crosstl/issues/1491",
@@ -516,7 +518,9 @@
       "https://github.com/CrossGL/crosstl/issues/1568",
       "https://github.com/CrossGL/crosstl/issues/1569",
       "https://github.com/CrossGL/crosstl/issues/1669",
-      "https://github.com/CrossGL/crosstl/issues/1670"
+      "https://github.com/CrossGL/crosstl/issues/1670",
+      "https://github.com/CrossGL/crosstl/issues/1671",
+      "https://github.com/CrossGL/crosstl/issues/1672"
     ],
     "runtime_integration_included": false,
     "runtime_parity_claimed": false,
@@ -546,6 +550,8 @@
   "tracked_issues": [
     "https://github.com/CrossGL/crosstl/issues/1669",
     "https://github.com/CrossGL/crosstl/issues/1670",
+    "https://github.com/CrossGL/crosstl/issues/1671",
+    "https://github.com/CrossGL/crosstl/issues/1672",
     "https://github.com/CrossGL/crosstl/issues/1312",
     "https://github.com/CrossGL/crosstl/issues/1376",
     "https://github.com/CrossGL/crosstl/issues/1388",

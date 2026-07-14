@@ -142,6 +142,8 @@ FULL_CORPUS_TRANSLATION_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1562",
     "https://github.com/CrossGL/crosstl/issues/1659",
     "https://github.com/CrossGL/crosstl/issues/1669",
+    "https://github.com/CrossGL/crosstl/issues/1671",
+    "https://github.com/CrossGL/crosstl/issues/1672",
 )
 RUNTIME_READINESS_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1388",

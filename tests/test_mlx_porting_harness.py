@@ -3174,7 +3174,7 @@ def test_binary_resource_relocation_issue_is_full_corpus_only():
     assert issue not in module.RUNTIME_READINESS_TRACKED_ISSUES
 
 
-def test_new_pin_resource_and_profile_contracts_are_tracked():
+def test_new_pin_resource_profile_and_workgroup_contracts_are_tracked():
     module = _load_harness()
     gaps = json.loads(
         (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
@@ -3183,16 +3183,28 @@ def test_new_pin_resource_and_profile_contracts_are_tracked():
     )
     resource_issue = "https://github.com/CrossGL/crosstl/issues/1669"
     profile_issue = "https://github.com/CrossGL/crosstl/issues/1670"
+    workgroup_issue = "https://github.com/CrossGL/crosstl/issues/1671"
+    struct_constant_issue = "https://github.com/CrossGL/crosstl/issues/1672"
 
     assert resource_issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
     assert resource_issue in module.FULL_CORPUS_TRACKED_ISSUES
     assert profile_issue in module.FULL_CORPUS_TRACKED_ISSUES
+    assert workgroup_issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
+    assert workgroup_issue in module.FULL_CORPUS_TRACKED_ISSUES
+    assert struct_constant_issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
+    assert struct_constant_issue in module.FULL_CORPUS_TRACKED_ISSUES
     assert resource_issue not in module.RESOLVED_FRONTIER_ISSUES
     assert profile_issue not in module.RESOLVED_FRONTIER_ISSUES
+    assert workgroup_issue not in module.RESOLVED_FRONTIER_ISSUES
+    assert struct_constant_issue not in module.RESOLVED_FRONTIER_ISSUES
     assert resource_issue in gaps["tracked_issues"]
     assert profile_issue in gaps["tracked_issues"]
+    assert workgroup_issue in gaps["tracked_issues"]
+    assert struct_constant_issue in gaps["tracked_issues"]
     assert resource_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
     assert profile_issue in gaps["full_corpus_scout"]["validation_blocked_by"]
+    assert workgroup_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
+    assert struct_constant_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
 
 
 def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatch):
