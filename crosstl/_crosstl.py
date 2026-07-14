@@ -134,6 +134,8 @@ def translate(
     register_default_sources()
     discover_backend_plugins()
     backend = (backend or "cgl").strip().lower()
+    requested_backend = backend
+    normalized_backend = normalize_backend_name(requested_backend) or requested_backend
 
     source_spec = (
         SOURCE_REGISTRY.get(source_backend)
@@ -153,6 +155,26 @@ def translate(
 
     shader_code = _read_shader_source(file_path, source_spec.name)
 
+    if source_spec.name == "metal" and normalized_backend not in {
+        "cgl",
+        "crossgl",
+        "metal",
+    }:
+        from .project.pipeline import materialize_metal_source_for_target
+
+        materialized_source = materialize_metal_source_for_target(
+            source=shader_code,
+            file_path=file_path,
+            target=normalized_backend,
+            include_paths=include_paths or (),
+            defines=defines,
+            source_options=source_options,
+        )
+        if materialized_source is not None:
+            shader_code = materialized_source.text
+            defines = materialized_source.defines
+            source_options = materialized_source.source_options
+
     ast = source_spec.parse(
         shader_code,
         file_path=file_path,
@@ -160,9 +182,6 @@ def translate(
         defines=defines,
         source_options=source_options,
     )
-
-    requested_backend = backend
-    normalized_backend = normalize_backend_name(requested_backend) or requested_backend
 
     if source_spec.name == "cgl":
         if normalized_backend in ["cgl", "crossgl"]:

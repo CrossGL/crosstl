@@ -1,4 +1,5 @@
 import ast
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -6734,6 +6735,32 @@ kernel void read_alias(
 """
 
 
+METAL_MATERIALIZED_TYPED_RESOURCE_TEMPLATE_SOURCE = """\
+#include <metal_stdlib>
+using namespace metal;
+
+template <typename T, int Width = 4>
+T add_bias(T value, uint bias = 1u) {
+    return value + T(Width) + T(bias);
+}
+
+template <typename T, int Width = 4>
+[[kernel]] void copy_values(
+    const device T* values [[buffer(0)]],
+    device T* results [[buffer(1)]],
+    uint gid [[thread_position_in_grid]],
+    uint lid [[thread_position_in_threadgroup]]) {
+    threadgroup T scratch[Width];
+    scratch[lid] = add_bias<T, Width>(values[gid]);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    results[gid] = scratch[lid];
+}
+
+template [[host_name("copy_float")]] [[kernel]]
+decltype(copy_values<float>) copy_values<float>;
+"""
+
+
 def run_validator(command):
     result = subprocess.run(command, capture_output=True, text=True)
     diagnostics = f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
@@ -11919,6 +11946,49 @@ def test_translated_metal_conditional_typed_resource_pointer_alias_validates_wit
     run_validator([glslang, "-S", "comp", str(source)])
 
 
+def test_translated_metal_materialized_template_validates_with_glslang(tmp_path):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    metal_source = tmp_path / "materialized_typed_resource_template.metal"
+    source = tmp_path / "materialized_typed_resource_template.comp"
+    output = tmp_path / "materialized_typed_resource_template.spv"
+    metal_source.write_text(
+        METAL_MATERIALIZED_TYPED_RESOURCE_TEMPLATE_SOURCE,
+        encoding="utf-8",
+    )
+    code = crosstl.translate(
+        str(metal_source),
+        backend="opengl",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "float add_bias_float_4(float value, uint bias)" in code
+    assert "shared float copy_float_scratch[4];" in code
+    assert re.search(r"\b(?:T|Width)\b", code) is None
+    assert "template <" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            glslang,
+            "-G",
+            "--target-env",
+            "opengl",
+            "-S",
+            "comp",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+    spirv_val = shutil.which("spirv-val")
+    if spirv_val is not None:
+        run_validator([spirv_val, "--target-env", "spv1.0", str(output)])
+
+
 def test_generated_glsl_wave_intrinsics_compute_validates_with_glslang(tmp_path):
     glslang = shutil.which("glslangValidator")
     if glslang is None:
@@ -12728,6 +12798,36 @@ def test_translated_metal_conditional_typed_resource_pointer_alias_validates_wit
     assert "int*" not in code
     assert "int *" not in code
     assert "(values + flag) ?" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_translated_metal_materialized_template_validates_with_dxc(tmp_path):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    metal_source = tmp_path / "materialized_typed_resource_template.metal"
+    source = tmp_path / "materialized_typed_resource_template.hlsl"
+    output = tmp_path / "materialized_typed_resource_template.dxil"
+    metal_source.write_text(
+        METAL_MATERIALIZED_TYPED_RESOURCE_TEMPLATE_SOURCE,
+        encoding="utf-8",
+    )
+    code = crosstl.translate(
+        str(metal_source),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "float add_bias_float_4(float value, uint bias)" in code
+    assert "groupshared float copy_float_scratch[4];" in code
+    assert re.search(r"\b(?:T|Width)\b", code) is None
+    assert "template <" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

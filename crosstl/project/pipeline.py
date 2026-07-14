@@ -7124,6 +7124,30 @@ class ProjectTemplateMaterializedSource:
     error: str | None = None
 
 
+class MetalSourceMaterializationError(ValueError):
+    """A direct Metal translation blocked by template materialization."""
+
+    project_diagnostic_code = "project.translate.template-materialization-unsupported"
+    missing_capabilities = ("template.specialization",)
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        metadata: Mapping[str, Any],
+        diagnostics: Sequence[ProjectDiagnostic],
+    ) -> None:
+        super().__init__(message)
+        self.metadata = dict(metadata)
+        self.diagnostics = tuple(diagnostics)
+        if self.diagnostics:
+            diagnostic = self.diagnostics[0]
+            self.project_diagnostic_code = diagnostic.code
+            self.missing_capabilities = tuple(diagnostic.missing_capabilities)
+            self.source_location = diagnostic.location
+            self.details = dict(diagnostic.details)
+
+
 def _configuration_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]:
     diagnostics: list[ProjectDiagnostic] = []
     location = _config_location(config)
@@ -15612,14 +15636,19 @@ def _project_template_materialization_for_artifact(
     include_paths: Sequence[str],
     source_options: Mapping[str, Any],
     target_artifact: str | None = None,
+    source: str | None = None,
+    fail_closed: bool = False,
 ) -> ProjectTemplateMaterializedSource | None:
     if unit.source_backend != "metal" or not _is_template_hostile_target(target):
         return None
 
-    try:
-        source = unit.path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return None
+    if source is None:
+        try:
+            source = unit.path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            if fail_closed:
+                raise
+            return None
     if "template" not in source and "#include" not in source:
         return None
 
@@ -15664,6 +15693,8 @@ def _project_template_materialization_for_artifact(
             discovery_source,
         )
     except Exception:  # noqa: BLE001
+        if fail_closed:
+            raise
         return None
 
     source_template_parameters = _metal_template_parameter_names(discovery_source)
@@ -15721,6 +15752,8 @@ def _project_template_materialization_for_artifact(
         )
         templates = preprocessor._find_template_functions(preprocessed)
     except Exception:  # noqa: BLE001
+        if fail_closed:
+            raise
         return None
     source_instantiations = preprocessor._find_project_template_instantiations(
         preprocessed
@@ -16536,6 +16569,59 @@ def _project_template_materialization_for_artifact(
             "preprocess": False,
         },
     )
+
+
+def materialize_metal_source_for_target(
+    *,
+    source: str,
+    file_path: str | os.PathLike[str],
+    target: str,
+    include_paths: Sequence[str] = (),
+    defines: Mapping[str, str] | None = None,
+    source_options: Mapping[str, Any] | None = None,
+) -> ProjectTemplateMaterializedSource | None:
+    """Materialize reachable Metal specializations for a direct translation."""
+
+    normalized_target = normalize_backend_name(target) or target.strip().lower()
+    if normalized_target in {"cgl", "crossgl", "metal"}:
+        return None
+
+    options = dict(source_options or {})
+    if options.get("preprocess") is False:
+        return None
+
+    path = Path(file_path)
+    relative_path = path.as_posix() if not path.is_absolute() else path.name
+    encoded_source = source.encode("utf-8")
+    unit = ProjectTranslationUnit(
+        path=path,
+        relative_path=relative_path,
+        source_backend="metal",
+        extension=path.suffix.lower(),
+        source_hash={
+            "algorithm": "sha256",
+            "value": hashlib.sha256(encoded_source).hexdigest(),
+        },
+        source_size_bytes=len(encoded_source),
+    )
+    materialized = _project_template_materialization_for_artifact(
+        unit=unit,
+        target=normalized_target,
+        variant=None,
+        defines=dict(defines or {}),
+        include_paths=tuple(include_paths),
+        source_options=options,
+        source=source,
+        fail_closed=True,
+    )
+    if materialized is not None and materialized.blocked:
+        detail = materialized.error or "required specializations remain unresolved."
+        raise MetalSourceMaterializationError(
+            f"Metal template materialization failed: {detail}",
+            metadata=materialized.metadata,
+            diagnostics=materialized.diagnostics,
+        )
+    return materialized
 
 
 def _translation_failure_diagnostic_code(exc: Exception) -> str:

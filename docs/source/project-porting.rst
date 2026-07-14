@@ -912,6 +912,19 @@ whole-source ``source instantiations x template declarations`` Cartesian
 estimate, and repeated scans of progressively expanded source text are not work
 items merely because the text was scanned again.
 
+Direct ``translate()`` calls from Metal to template-hostile targets use the
+same reachable-specialization preparation as one-unit project translation.
+Explicit instantiations, ``host_name`` attributes, template defaults, include
+paths, defines, and materialization budgets are therefore applied before
+DirectX or OpenGL code generation. If a reachable declaration still requires
+template arguments, direct translation raises a ``ValueError`` carrying the
+``project.translate.template-materialization-unsupported`` diagnostic code,
+missing-capability list, materialization metadata, and source location instead
+of returning an artifact with unresolved target resource types. Metal,
+CrossGL, and already-preprocessed source paths retain their existing behavior.
+This contract does not infer variants for which the source supplies no concrete
+evidence, and it is not a full-corpus or runtime-parity claim.
+
 During project translation, Metal template-member inference preserves a
 generic pointer template parameter as a pointer rather than reducing it to its
 pointee type. For a parameter such as ``Pointer src``, a bare tracked pointer,
