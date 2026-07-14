@@ -57,6 +57,22 @@ shader MetalFunctionConstantValidation {
 """
 
 
+METAL_TO_OPENGL_FUNCTION_CONSTANT_SOURCE = """\
+#include <metal_stdlib>
+using namespace metal;
+
+constant bool has_w [[function_constant(20)]];
+constant int mode [[function_constant(21)]] = 2;
+constant float scale [[function_constant(22)]] = 0.5f;
+
+kernel void use_specialization_constants() {
+    if (has_w) {
+        float value = float(mode) * scale;
+    }
+}
+"""
+
+
 METAL_WAVE_INTRINSICS_COMPUTE_SHADER = """
 shader MetalWaveIntrinsicsValidation {
     uint helperLane(uint seed) {
@@ -11914,6 +11930,90 @@ def test_generated_glsl_compute_stage_validates_with_glslang(tmp_path):
     source.write_text(code, encoding="utf-8")
 
     run_validator([glslang, "-S", "comp", str(source)])
+
+
+def test_translated_metal_function_constants_validate_as_opengl_spirv13(tmp_path):
+    glslang = shutil.which("glslangValidator")
+    spirv_val = shutil.which("spirv-val")
+    if glslang is None or spirv_val is None:
+        pytest.skip("glslangValidator and spirv-val are not installed")
+
+    metal_source = tmp_path / "function_constants.metal"
+    glsl_source = tmp_path / "function_constants.comp"
+    spirv_output = tmp_path / "function_constants.spv"
+    metal_source.write_text(
+        METAL_TO_OPENGL_FUNCTION_CONSTANT_SOURCE,
+        encoding="utf-8",
+    )
+    code = crosstl.translate(
+        str(metal_source),
+        backend="opengl",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert (
+        "/* CrossGL specialization metadata: name=has_w; constant_id=20; "
+        "required_override=true; encoding_default=false */"
+    ) in code
+    assert "layout(constant_id = 20) const bool has_w = false;" in code
+    assert "layout(constant_id = 21) const int mode = 2;" in code
+    assert "layout(constant_id = 22) const float scale = 0.5;" in code
+    assert not re.search(
+        r"\buniform\s+(?:bool|int|float)\s+(?:has_w|mode|scale)\b", code
+    )
+    glsl_source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            glslang,
+            "-G",
+            "--target-env",
+            "opengl",
+            "--target-env",
+            "spirv1.3",
+            "-S",
+            "comp",
+            str(glsl_source),
+            "-o",
+            str(spirv_output),
+        ]
+    )
+    run_validator([spirv_val, "--target-env", "spv1.3", str(spirv_output)])
+
+    spirv_dis = shutil.which("spirv-dis")
+    if spirv_dis is None:
+        return
+    disassembly = subprocess.run(
+        [spirv_dis, str(spirv_output)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert disassembly.returncode == 0, disassembly.stderr
+    named_ids = {
+        name: result_id
+        for result_id, name in re.findall(
+            r'OpName\s+(%\w+)\s+"([^"]+)"', disassembly.stdout
+        )
+    }
+    for name, specialization_id in (("has_w", 20), ("mode", 21), ("scale", 22)):
+        result_id = named_ids[name]
+        assert (
+            f"OpDecorate {result_id} SpecId {specialization_id}" in disassembly.stdout
+        )
+    assert re.search(
+        rf"{re.escape(named_ids['has_w'])}\s+=\s+OpSpecConstantFalse\b",
+        disassembly.stdout,
+    )
+    assert re.search(
+        rf"{re.escape(named_ids['mode'])}\s+=\s+OpSpecConstant\b",
+        disassembly.stdout,
+    )
+    assert re.search(
+        rf"{re.escape(named_ids['scale'])}\s+=\s+OpSpecConstant\b",
+        disassembly.stdout,
+    )
 
 
 def test_translated_metal_conditional_typed_resource_pointer_alias_validates_with_glslang(
