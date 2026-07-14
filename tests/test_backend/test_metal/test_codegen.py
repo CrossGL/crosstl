@@ -6650,6 +6650,7 @@ def test_codegen_nested_const_reference_alias_reaches_native_targets(tmp_path):
 
     dxc = shutil.which("dxc")
     glslang = shutil.which("glslangValidator")
+    spirv_val = shutil.which("spirv-val")
     hlsl_path = tmp_path / "nested-const-reference-alias.hlsl"
     hlsl_path.write_text(hlsl, encoding="utf-8")
     if dxc is not None:
@@ -6669,6 +6670,7 @@ def test_codegen_nested_const_reference_alias_reaches_native_targets(tmp_path):
             text=True,
         )
     elif glslang is not None:
+        hlsl_spirv_path = tmp_path / "nested-const-reference-alias-hlsl.spv"
         subprocess.run(
             [
                 glslang,
@@ -6680,30 +6682,46 @@ def test_codegen_nested_const_reference_alias_reaches_native_targets(tmp_path):
                 "CSMain",
                 str(hlsl_path),
                 "-o",
-                str(tmp_path / "nested-const-reference-alias-hlsl.spv"),
+                str(hlsl_spirv_path),
             ],
             check=True,
             capture_output=True,
             text=True,
         )
+        if spirv_val is not None:
+            subprocess.run(
+                [spirv_val, str(hlsl_spirv_path)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
 
     if glslang is not None:
         glsl_path = tmp_path / "nested-const-reference-alias.comp"
+        glsl_spirv_path = tmp_path / "nested-const-reference-alias-glsl.spv"
         glsl_path.write_text(glsl, encoding="utf-8")
         subprocess.run(
             [
                 glslang,
+                "--target-env",
+                "opengl",
                 "-S",
                 "comp",
-                "-V",
                 str(glsl_path),
                 "-o",
-                str(tmp_path / "nested-const-reference-alias-glsl.spv"),
+                str(glsl_spirv_path),
             ],
             check=True,
             capture_output=True,
             text=True,
         )
+        if spirv_val is not None:
+            subprocess.run(
+                [spirv_val, "--target-env", "opengl4.5", str(glsl_spirv_path)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
 
 
 def test_codegen_preserves_threadgroup_imageblock_local_pointer_roundtrip():
