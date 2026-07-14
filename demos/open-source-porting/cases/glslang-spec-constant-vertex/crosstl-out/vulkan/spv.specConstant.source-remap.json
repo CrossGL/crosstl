@@ -5,12 +5,12 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 66,
-        "endOffset": 1678,
+        "endLine": 68,
+        "endOffset": 1733,
         "file": "crosstl-out/vulkan/spv.specConstant.spvasm",
         "length": 29,
-        "line": 65,
-        "offset": 1649
+        "line": 67,
+        "offset": 1704
       },
       "original": {
         "column": 1,

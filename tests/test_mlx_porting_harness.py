@@ -1303,13 +1303,16 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES
     )
     assert opengl_frontier["project_diagnostic_count"] == 0
-    assert opengl_frontier["glslang_compiled_artifact_count"] == 4
-    assert opengl_frontier["spirv_validated_artifact_count"] == 4
+    assert opengl_frontier["glslang_compiled_artifact_count"] == 7
+    assert opengl_frontier["spirv_validated_artifact_count"] == 7
     assert opengl_frontier["glslang_target_environments"] == [
         "opengl",
         "spirv1.3",
     ]
     assert opengl_frontier["spirv_val_target_environment"] == "spv1.3"
+    assert opengl_frontier["specialization_constants"] == (
+        module.MLX_OPENGL_SPECIALIZATION_CONSTANT_IDS
+    )
     assert opengl_frontier["runtime_integration_included"] is False
     assert opengl_frontier["runtime_parity_claimed"] is False
 
@@ -1694,6 +1697,9 @@ def test_arg_reduce_advances_into_clean_toolchain_frontiers():
         module.MLX_ARG_REDUCE_SOURCE,
         module.MLX_BINARY_TWO_SOURCE,
         "mlx/backend/metal/kernels/logsumexp.metal",
+        "mlx/backend/metal/kernels/rms_norm.metal",
+        module.MLX_ROPE_SOURCE,
+        module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
         "mlx/backend/metal/kernels/softmax.metal",
     )
     assert module.MLX_REDUCED_FRONTIER_SOURCES == tuple(
@@ -1810,7 +1816,7 @@ def test_empty_initializer_issue_is_resolved_for_pinned_quantized_nax():
     )
 
 
-def test_scaled_dot_product_attention_tracks_opengl_function_constant_blocker():
+def test_scaled_dot_product_attention_enters_opengl_function_constant_frontier():
     module = _load_harness()
     source = module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE
     resolved_issue = "https://github.com/CrossGL/crosstl/issues/1535"
@@ -1825,6 +1831,7 @@ def test_scaled_dot_product_attention_tracks_opengl_function_constant_blocker():
     )
     assert resolved_issue in module.RESOLVED_FRONTIER_ISSUES
     assert resolved_issue not in module.FULL_CORPUS_TRACKED_ISSUES
+    assert source in module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES
     assert module.OPENGL_SCALED_DOT_PRODUCT_ATTENTION_TRACKED_ISSUES == (
         function_constant_issue,
     )
@@ -2196,18 +2203,38 @@ def _prepare_opengl_frontier_check(module, tmp_path):
     for source in module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES:
         generated_path = work_dir / "out" / "opengl" / f"{Path(source).stem}.glsl"
         generated_path.parent.mkdir(parents=True, exist_ok=True)
+        expected_constants = module.MLX_OPENGL_SPECIALIZATION_CONSTANT_IDS.get(
+            source, {}
+        )
+        declarations = [
+            "layout(constant_id = {}) const {} {} = {};".format(
+                constant_id,
+                "int" if name == "blocks" else "bool",
+                name,
+                "1" if name == "blocks" else "false",
+            )
+            for name, constant_id in expected_constants.items()
+        ]
         generated_path.write_text(
-            "#version 450 core\nvoid main() {}\n",
+            "\n".join(["#version 450 core", *declarations, "void main() {}", ""]),
             encoding="utf-8",
         )
-        artifacts.append(
-            {
-                "source": source,
-                "target": "opengl",
-                "path": generated_path.relative_to(mlx_root).as_posix(),
-                "status": "translated",
+        artifact = {
+            "source": source,
+            "target": "opengl",
+            "path": generated_path.relative_to(mlx_root).as_posix(),
+            "status": "translated",
+        }
+        if expected_constants:
+            artifact["specializationConstants"] = [
+                {"name": name, "id": constant_id}
+                for name, constant_id in expected_constants.items()
+            ]
+            artifact["specializationMaterialization"] = {
+                "mode": "deferred",
+                "targetSupportsDeferredSpecialization": True,
             }
-        )
+        artifacts.append(artifact)
     frontier_count = len(module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES)
     report = {
         "summary": {
@@ -2274,6 +2301,9 @@ def test_opengl_frontier_required_toolchain_compiles_and_validates_artifacts(
     )
     assert result["nativeValidationStatus"] == "validated"
     assert result["spirvValidator"] == "spirv-val"
+    assert result["specializationConstants"] == (
+        module.MLX_OPENGL_SPECIALIZATION_CONSTANT_IDS
+    )
     assert result["runtimeIntegrationIncluded"] is False
     assert [name for name, _command in commands] == [
         "translate-opengl-frontier",
@@ -2283,6 +2313,12 @@ def test_opengl_frontier_required_toolchain_compiles_and_validates_artifacts(
         "validate-binary-two-opengl-spirv",
         "validate-logsumexp-opengl",
         "validate-logsumexp-opengl-spirv",
+        "validate-rms-norm-opengl",
+        "validate-rms-norm-opengl-spirv",
+        "validate-rope-opengl",
+        "validate-rope-opengl-spirv",
+        "validate-scaled-dot-product-attention-opengl",
+        "validate-scaled-dot-product-attention-opengl-spirv",
         "validate-softmax-opengl",
         "validate-softmax-opengl-spirv",
     ]
@@ -2317,8 +2353,8 @@ def test_opengl_frontier_required_toolchain_compiles_and_validates_artifacts(
     config = (paths[2] / "opengl-frontier.toml").read_text(encoding="utf-8")
     for source in module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES:
         assert source in config
-    assert module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE not in config
-    assert "mlx/backend/metal/kernels/rms_norm.metal" not in config
+    assert module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE in config
+    assert "mlx/backend/metal/kernels/rms_norm.metal" in config
     assert 'targets = ["opengl"]' in config
 
 
@@ -3703,6 +3739,9 @@ def test_reduced_frontier_requires_directx_toolchain_runs_per_artifact(
         encoding="utf-8"
     )
     assert 'targets = ["directx"]' in toolchain_config
+    assert "[project.specialization_constants]" in toolchain_config
+    for selector, value in module.MLX_FRONTIER_SPECIALIZATION_CONSTANTS.items():
+        assert f"{json.dumps(selector)} = {json.dumps(value)}" in toolchain_config
     # The DXC compile gate is scoped to the verified subset, not the whole
     # frontier, so only those sources appear in the toolchain config.
     for source in module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES:
@@ -3720,6 +3759,9 @@ def test_directx_toolchain_frontier_includes_rope_and_gap_ledger_matches():
     assert module.MLX_ROPE_SOURCE in module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
     assert module.MLX_ROPE_SOURCE in module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
     directx_status = gaps["directx_toolchain_status"]
+    assert directx_status["specialization_constants"] == (
+        module.MLX_FRONTIER_SPECIALIZATION_CONSTANTS
+    )
     assert module.MLX_ROPE_SOURCE in directx_status["dxc_validated_sources"]
     assert module.MLX_ROPE_SOURCE not in directx_status["directx_toolchain_gaps"]
 

@@ -116,19 +116,41 @@
       "mlx/backend/metal/kernels/arg_reduce.metal",
       "mlx/backend/metal/kernels/binary_two.metal",
       "mlx/backend/metal/kernels/logsumexp.metal",
+      "mlx/backend/metal/kernels/rms_norm.metal",
+      "mlx/backend/metal/kernels/rope.metal",
+      "mlx/backend/metal/kernels/scaled_dot_product_attention.metal",
       "mlx/backend/metal/kernels/softmax.metal"
     ],
-    "source_count": 4,
+    "source_count": 7,
     "target": "opengl",
-    "artifact_count": 4,
+    "artifact_count": 7,
     "project_diagnostic_count": 0,
-    "glslang_compiled_artifact_count": 4,
-    "spirv_validated_artifact_count": 4,
+    "glslang_compiled_artifact_count": 7,
+    "spirv_validated_artifact_count": 7,
     "glslang_target_environments": [
       "opengl",
       "spirv1.3"
     ],
     "spirv_val_target_environment": "spv1.3",
+    "specialization_constants": {
+      "mlx/backend/metal/kernels/rms_norm.metal": {
+        "has_w": 20
+      },
+      "mlx/backend/metal/kernels/rope.metal": {
+        "forward": 1,
+        "hs_transpose": 3,
+        "traditional": 2
+      },
+      "mlx/backend/metal/kernels/scaled_dot_product_attention.metal": {
+        "blocks": 26,
+        "bool_mask": 23,
+        "do_causal": 22,
+        "float_mask": 24,
+        "has_mask": 20,
+        "has_sinks": 25,
+        "query_transposed": 21
+      }
+    },
     "binary_two_fixed_array_resource_status": {
       "status": "validated",
       "resolved_issue": "https://github.com/CrossGL/crosstl/issues/1661",
@@ -373,6 +395,18 @@
   "directx_toolchain_status": {
     "status": "passing",
     "note": "Windows CI compiles every discovered entry in the generated DirectX HLSL for the verified subset below. Other clean frontier kernels translate to DirectX but remain outside the compile gate for the listed structural or semantic defects. fence.metal is a separate blocked source and emits no DirectX artifact under its atomic-fence contract diagnostic.",
+    "specialization_constants": {
+      "1": false,
+      "2": false,
+      "3": false,
+      "20": false,
+      "21": false,
+      "22": false,
+      "23": false,
+      "24": false,
+      "25": false,
+      "26": 1
+    },
     "dxc_validated_sources": [
       "mlx/backend/metal/kernels/arange.metal",
       "mlx/backend/metal/kernels/arg_reduce.metal",

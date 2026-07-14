@@ -38,6 +38,7 @@ MLX_FENCE_SOURCE = "mlx/backend/metal/kernels/fence.metal"
 MLX_FENCE_EXPECTED_ATOMIC_FENCE_COUNT = 3
 MLX_GEMV_SOURCE = "mlx/backend/metal/kernels/gemv.metal"
 MLX_METAL_ROUNDTRIP_SOURCE = MLX_FENCE_SOURCE
+MLX_RMS_NORM_SOURCE = "mlx/backend/metal/kernels/rms_norm.metal"
 MLX_ROPE_SOURCE = "mlx/backend/metal/kernels/rope.metal"
 MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE = (
     "mlx/backend/metal/kernels/scaled_dot_product_attention.metal"
@@ -53,6 +54,9 @@ MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES = (
     MLX_ARG_REDUCE_SOURCE,
     MLX_BINARY_TWO_SOURCE,
     "mlx/backend/metal/kernels/logsumexp.metal",
+    MLX_RMS_NORM_SOURCE,
+    MLX_ROPE_SOURCE,
+    MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
     "mlx/backend/metal/kernels/softmax.metal",
 )
 MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
@@ -62,7 +66,7 @@ MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
     "mlx/backend/metal/kernels/layer_norm.metal",
     "mlx/backend/metal/kernels/logsumexp.metal",
     "mlx/backend/metal/kernels/random.metal",
-    "mlx/backend/metal/kernels/rms_norm.metal",
+    MLX_RMS_NORM_SOURCE,
     MLX_ROPE_SOURCE,
     MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
     "mlx/backend/metal/kernels/softmax.metal",
@@ -96,6 +100,31 @@ MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES = (
     MLX_ARG_REDUCE_SOURCE,
     MLX_ROPE_SOURCE,
 )
+MLX_FRONTIER_SPECIALIZATION_CONSTANTS = {
+    "1": False,
+    "2": False,
+    "3": False,
+    "20": False,
+    "21": False,
+    "22": False,
+    "23": False,
+    "24": False,
+    "25": False,
+    "26": 1,
+}
+MLX_OPENGL_SPECIALIZATION_CONSTANT_IDS = {
+    MLX_RMS_NORM_SOURCE: {"has_w": 20},
+    MLX_ROPE_SOURCE: {"forward": 1, "traditional": 2, "hs_transpose": 3},
+    MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE: {
+        "has_mask": 20,
+        "query_transposed": 21,
+        "do_causal": 22,
+        "bool_mask": 23,
+        "float_mask": 24,
+        "has_sinks": 25,
+        "blocks": 26,
+    },
+}
 MLX_FENCE_REQUESTED_CONTRACT = {
     "memoryFlags": ["mem_device"],
     "memoryOrder": "memory_order_seq_cst",
@@ -585,6 +614,7 @@ def _write_project_config(
     include: str | Sequence[str],
     targets: Sequence[str],
     output_dir: str,
+    specialization_constants: Mapping[str, bool | int | float] | None = None,
     metal_source_options: Mapping[str, int] | None = None,
     metal_target_options: Mapping[str, Mapping[str, int]] | None = None,
 ) -> None:
@@ -603,6 +633,11 @@ def _write_project_config(
         '"**/*.metal" = "metal"',
         "",
     ]
+    if specialization_constants:
+        lines.append("[project.specialization_constants]")
+        for selector, value in specialization_constants.items():
+            lines.append(f"{json.dumps(str(selector))} = {json.dumps(value)}")
+        lines.append("")
     if metal_source_options or metal_target_options:
         lines.append("[project.source_options.metal]")
         for key, value in (metal_source_options or {}).items():
@@ -1946,6 +1981,7 @@ def _translate_directx_vulkan_frontier(
         include=MLX_DIRECTX_VULKAN_FRONTIER_SOURCES,
         targets=("directx", "vulkan"),
         output_dir=_relpath(work_dir / "out-directx-vulkan-frontier", mlx_root),
+        specialization_constants=MLX_FRONTIER_SPECIALIZATION_CONSTANTS,
     )
     run_toolchains = not FRONTIER_VALIDATION_TRACKED_ISSUES
     _run_command(
@@ -2037,6 +2073,7 @@ def _translate_directx_vulkan_frontier(
             output_dir=_relpath(
                 work_dir / f"out-{toolchain_name}-frontier-toolchain", mlx_root
             ),
+            specialization_constants=MLX_FRONTIER_SPECIALIZATION_CONSTANTS,
         )
         _run_command(
             f"validate-{toolchain_name}-frontier-toolchain",
@@ -2517,6 +2554,48 @@ def _check_opengl_frontier(
         )
         generated_paths[source] = generated_path
 
+    specialization_evidence: dict[str, dict[str, int]] = {}
+    for source, expected_constants in MLX_OPENGL_SPECIALIZATION_CONSTANT_IDS.items():
+        artifact = artifacts_by_source[source]
+        reflected_constants = artifact.get("specializationConstants", [])
+        _require(
+            isinstance(reflected_constants, list),
+            f"OpenGL specialization metadata is missing for {source}",
+        )
+        reflected_ids = {
+            constant.get("name"): constant.get("id")
+            for constant in reflected_constants
+            if isinstance(constant, Mapping)
+        }
+        _require(
+            reflected_ids == expected_constants,
+            f"OpenGL specialization metadata does not match {source}",
+        )
+        materialization = artifact.get("specializationMaterialization")
+        _require(
+            isinstance(materialization, Mapping)
+            and materialization.get("mode") == "deferred"
+            and materialization.get("targetSupportsDeferredSpecialization") is True,
+            f"OpenGL specialization deferral is not recorded for {source}",
+        )
+        generated = generated_paths[source].read_text(encoding="utf-8")
+        for name, constant_id in expected_constants.items():
+            _require(
+                re.search(
+                    rf"layout\s*\(\s*constant_id\s*=\s*{constant_id}\s*\)"
+                    rf"\s*const\s+\w+\s+{re.escape(name)}\s*=",
+                    generated,
+                )
+                is not None,
+                f"OpenGL artifact did not preserve specialization id {constant_id} "
+                f"for {name}",
+            )
+            _require(
+                re.search(rf"\buniform\s+\w+\s+{re.escape(name)}\b", generated) is None,
+                f"OpenGL artifact lowered specialization input {name} as a uniform",
+            )
+        specialization_evidence[source] = dict(expected_constants)
+
     validation_status = "not-required"
     validation_outputs: dict[str, str] = {}
     toolchain_validated_sources: list[str] = []
@@ -2608,6 +2687,7 @@ def _check_opengl_frontier(
         "nativeValidator": "glslangValidator",
         "spirvValidator": "spirv-val",
         "nativeValidationOutputs": validation_outputs,
+        "specializationConstants": specialization_evidence,
         "runtimeIntegrationIncluded": False,
     }
 

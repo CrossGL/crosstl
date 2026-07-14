@@ -1942,9 +1942,10 @@ def test_mixed_glsl_specialization_constants_lower_for_target_codegen():
     shader_ast = _glsl_specialization_constant_ast()
 
     glsl = GLSLCodeGen().generate(shader_ast)
-    assert "layout(constant_id" not in glsl
-    assert "CrossGL fallback: OpenGL source validation cannot preserve" in glsl
-    assert "const int arraySize = 5;" in glsl
+    assert "layout(constant_id = 16) const int arraySize = 5;" in glsl
+    assert "layout(constant_id = 17) const bool spBool = true;" in glsl
+    assert "layout(constant_id = 18) const float spFloat = 3.14;" in glsl
+    assert "CrossGL fallback" not in glsl
     foo_prototype = "void foo(vec4 p[arraySize]);"
     foo_definition = "void foo(vec4 p[arraySize]) {"
     assert glsl.count(foo_prototype) == 1
@@ -1960,7 +1961,7 @@ def test_mixed_glsl_specialization_constants_lower_for_target_codegen():
     assert "Metal does not support double specialization constant" in metal
     assert "constant double spDouble" not in metal
     assert "thread VertexOutput& output" in metal
-    assert "constant int gl_MaxImageUnits = 8;" in metal
+    assert metal.count("constant int gl_MaxImageUnits = 8;") == 1
     assert "Metal vertex entry points require a position output" in metal
     assert "float4 __crossgl_position [[position]];" in metal
 
@@ -1981,14 +1982,32 @@ def test_mixed_glsl_specialization_constants_opengl_validates_with_glslangvalida
     tmp_path,
 ):
     glslang = _require_tool("glslangValidator")
+    spirv_val = _require_tool("spirv-val")
     shader_path = tmp_path / "specialization_constants.vert"
+    spirv_path = tmp_path / "specialization_constants.spv"
 
     shader_path.write_text(
         GLSLCodeGen().generate(_glsl_specialization_constant_ast()),
         encoding="utf-8",
     )
 
-    _run_validator([glslang, "-S", "vert", str(shader_path)])
+    _run_validator(
+        [
+            glslang,
+            "-G",
+            "--target-env",
+            "opengl",
+            "--target-env",
+            "spirv1.3",
+            "--auto-map-locations",
+            "-S",
+            "vert",
+            str(shader_path),
+            "-o",
+            str(spirv_path),
+        ]
+    )
+    _run_validator([spirv_val, "--target-env", "spv1.3", str(spirv_path)])
 
 
 def test_mixed_glsl_specialization_constants_metal_output_compiles_with_xcrun_metal(

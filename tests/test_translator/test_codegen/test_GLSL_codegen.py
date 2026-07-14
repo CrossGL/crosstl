@@ -46,6 +46,7 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLReferenceParameterError,
     OpenGLResourceMemoryQualifierError,
     OpenGLScalarConversionError,
+    OpenGLSpecializationConstantError,
     OpenGLStructConstructionError,
     OpenGLWorkgroupPointerError,
 )
@@ -436,13 +437,8 @@ def test_glsl_specialization_constant_metadata_emits_layout():
 
     generated = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "layout(constant_id" not in generated
-    assert (
-        "/* CrossGL fallback: OpenGL source validation cannot preserve "
-        "specialization constant id 0 for 'LIGHTING_MODEL'; using the default "
-        "literal. */"
-    ) in generated
-    assert "const int LIGHTING_MODEL = 0;" in generated
+    assert "layout(constant_id = 0) const int LIGHTING_MODEL = 0;" in generated
+    assert "CrossGL fallback" not in generated
 
 
 def test_glsl_specialization_constant_branch_is_not_statically_pruned():
@@ -462,8 +458,203 @@ def test_glsl_specialization_constant_branch_is_not_statically_pruned():
 
     generated = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "const bool ENABLE_FEATURE = true;" in generated
+    assert "layout(constant_id = 1) const bool ENABLE_FEATURE = true;" in generated
     assert "if (ENABLE_FEATURE) {" in generated
+
+
+def test_glsl_specialization_constant_dependency_is_not_statically_pruned(tmp_path):
+    shader = """
+    shader DependentSpecializationConstantBranch {
+        const int MODE @constant_id(3) = 1;
+        const int DERIVED_MODE = MODE + 1;
+
+        compute {
+            void main() {
+                int result = 0;
+                if (DERIVED_MODE == 2) {
+                    result = 10;
+                } else {
+                    result = 20;
+                }
+            }
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "layout(constant_id = 3) const int MODE = 1;" in generated
+    assert "const int DERIVED_MODE = (MODE + 1);" in generated
+    assert "if ((DERIVED_MODE == 2)) {" in generated
+    assert "result = 10;" in generated
+    assert "result = 20;" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "dependent_specialization_constant",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_builtin_limit_specialization_uses_native_redeclaration():
+    shader = """
+    shader BuiltinSpecializationConstant {
+        const int gl_MaxImageUnits @constant_id(24) = 8;
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "layout(constant_id = 24) gl_MaxImageUnits;" in generated
+    assert "const int gl_MaxImageUnits" not in generated
+
+
+def test_glsl_global_function_constants_emit_scalar_specializations_and_validate(
+    tmp_path,
+):
+    shader = """
+    shader GlobalFunctionConstants {
+        constant bool has_w @function_constant(20);
+        constant int mode @constant_id(21) = 2;
+        constant float scale @function_constant(22) = 0.5;
+
+        compute {
+            layout(local_size_x = 1) in;
+
+            void main() {
+                if (has_w) {
+                    float value = float(mode) * scale;
+                }
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(
+        parse_code(tokenize_code(shader)), "compute"
+    )
+
+    assert (
+        "/* CrossGL specialization metadata: name=has_w; constant_id=20; "
+        "required_override=true; encoding_default=false */"
+    ) in generated
+    assert "layout(constant_id = 20) const bool has_w = false;" in generated
+    assert "layout(constant_id = 21) const int mode = 2;" in generated
+    assert "layout(constant_id = 22) const float scale = 0.5;" in generated
+    assert not re.search(
+        r"\buniform\s+(?:bool|int|float)\s+(?:has_w|mode|scale)\b", generated
+    )
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "global_function_constants",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_specialization_constant_rejects_duplicate_ids_with_location():
+    shader = """
+    shader DuplicateSpecializationIds {
+        const bool enabled @constant_id(7) = true;
+        constant int mode @function_constant(7) = 2;
+    }
+    """
+    ast = parse_code(tokenize_code(shader))
+    source_location = {"line": 4, "column": 9}
+    ast.global_variables[0].source_location = source_location
+
+    with pytest.raises(
+        OpenGLSpecializationConstantError,
+        match="Duplicate OpenGL specialization constant id 7",
+    ) as exc_info:
+        GLSLCodeGen().generate(ast)
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.opengl-specialization-constant-invalid"
+    )
+    assert diagnostic.missing_capabilities == (
+        "opengl.specialization-constant-lowering",
+    )
+    assert diagnostic.constant_name == "mode"
+    assert diagnostic.specialization_id == 7
+    assert diagnostic.conflicting_name == "enabled"
+    assert diagnostic.reason == "duplicate-id"
+    assert diagnostic.source_location == source_location
+
+
+def test_glsl_specialization_constant_rejects_duplicate_names_with_location():
+    shader = """
+    shader DuplicateSpecializationNames {
+        const bool mode @constant_id(7) = true;
+        constant int mode @function_constant(8) = 2;
+    }
+    """
+    ast = parse_code(tokenize_code(shader))
+    source_location = {"line": 4, "column": 9}
+    ast.global_variables[0].source_location = source_location
+
+    with pytest.raises(
+        OpenGLSpecializationConstantError,
+        match="Duplicate OpenGL specialization constant name 'mode'",
+    ) as exc_info:
+        GLSLCodeGen().generate(ast)
+
+    diagnostic = exc_info.value
+    assert diagnostic.constant_name == "mode"
+    assert diagnostic.specialization_id == 8
+    assert diagnostic.conflicting_name == "mode"
+    assert diagnostic.conflicting_id == 7
+    assert diagnostic.reason == "duplicate-name"
+    assert diagnostic.source_location == source_location
+
+
+def test_glsl_specialization_constant_rejects_conflicting_attribute_ids():
+    shader = """
+    shader ConflictingSpecializationIds {
+        constant int mode @function_constant(21) @constant_id(22) = 2;
+    }
+    """
+
+    with pytest.raises(
+        OpenGLSpecializationConstantError,
+        match="21 differs from 22",
+    ) as exc_info:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    assert exc_info.value.constant_name == "mode"
+    assert exc_info.value.specialization_id == 22
+    assert exc_info.value.reason == "conflicting-id"
+
+
+@pytest.mark.parametrize(
+    ("declaration", "reason"),
+    [
+        ("constant int mode @function_constant(symbolic_id) = 2;", "invalid-id"),
+        ("constant int mode @function_constant(-1) = 2;", "negative-id"),
+        (
+            "constant int mode @function_constant(2147483648) = 2;",
+            "id-out-of-range",
+        ),
+        ("constant vec2 mode @function_constant(21) = vec2(2.0);", "unsupported-type"),
+    ],
+)
+def test_glsl_specialization_constant_validates_ids_and_scalar_types(
+    declaration, reason
+):
+    shader = f"""
+    shader InvalidSpecializationConstant {{
+        {declaration}
+    }}
+    """
+
+    with pytest.raises(OpenGLSpecializationConstantError) as exc_info:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    assert exc_info.value.constant_name == "mode"
+    assert exc_info.value.reason == reason
 
 
 def test_glsl_codegen_drops_metal_system_includes_but_preserves_glsl_includes():

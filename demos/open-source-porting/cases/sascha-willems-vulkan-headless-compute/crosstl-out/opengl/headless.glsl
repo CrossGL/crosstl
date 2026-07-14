@@ -1,6 +1,5 @@
 #version 450
-/* CrossGL fallback: OpenGL source validation cannot preserve specialization constant id 0 for 'BUFFER_ELEMENTS'; using the default literal. */
-const uint BUFFER_ELEMENTS = 32;
+layout(constant_id = 0) const uint BUFFER_ELEMENTS = 32;
 
 layout(std430, binding = 0) buffer Pos {
     uint values[];

@@ -4,6 +4,7 @@ import re
 from copy import deepcopy
 from types import SimpleNamespace
 
+from ...glsl_builtins import GLSL_BUILTIN_INT_LIMITS
 from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
@@ -659,6 +660,34 @@ class OpenGLReferenceParameterError(ValueError):
         self.function_name = function_name
         self.parameter_name = parameter_name
         self.argument = argument
+        self.reason = reason
+        self.source_location = source_location
+
+
+class OpenGLSpecializationConstantError(ValueError):
+    """Raised when a specialization constant has no faithful GLSL contract."""
+
+    project_diagnostic_code = "project.translate.opengl-specialization-constant-invalid"
+    missing_capabilities = ("opengl.specialization-constant-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        constant_name=None,
+        specialization_id=None,
+        constant_type=None,
+        conflicting_name=None,
+        conflicting_id=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.constant_name = constant_name
+        self.specialization_id = specialization_id
+        self.constant_type = constant_type
+        self.conflicting_name = conflicting_name
+        self.conflicting_id = conflicting_id
         self.reason = reason
         self.source_location = source_location
 
@@ -1661,6 +1690,7 @@ class GLSLCodeGen:
         self.current_glsl_private_pointer_function_name = None
         self.literal_int_constants = {}
         self.glsl_specialization_constant_names = set()
+        self.glsl_global_specialization_constants = []
         self.literal_int_vector_constants = {}
         self.literal_int_vector_array_constants = {}
         self.current_compile_time_int_constants = {}
@@ -3295,6 +3325,7 @@ class GLSLCodeGen:
         self.current_glsl_private_pointer_variant = {}
         self.current_glsl_private_pointer_base_names = {}
         self.current_glsl_private_pointer_function_name = None
+        self.glsl_global_specialization_constants = []
         self.function_image_access_requirements = (
             collect_function_image_access_requirements(
                 functions,
@@ -3307,15 +3338,22 @@ class GLSLCodeGen:
         self.function_structured_buffer_access_requirements = (
             self.collect_function_structured_buffer_access_requirements(functions)
         )
-        self.literal_int_constants = collect_literal_int_constants(
-            getattr(ast, "constants", [])
-        )
+        constants = list(getattr(ast, "constants", []) or [])
         self.glsl_specialization_constant_names = {
             node.name
-            for node in getattr(ast, "constants", []) or []
+            for node in constants + list(getattr(ast, "global_variables", []) or [])
             if getattr(node, "name", None)
-            and self.glsl_specialization_constant_id(node) is not None
+            and self.glsl_specialization_constant_attributes(node)
         }
+        # Constants derived from a specialization default remain runtime-dependent.
+        self.literal_int_constants = collect_literal_int_constants(
+            [
+                node
+                for node in constants
+                if getattr(node, "name", None)
+                not in self.glsl_specialization_constant_names
+            ]
+        )
         self.literal_int_vector_constants = (
             self.collect_literal_int_vector_constants_from_variables(
                 getattr(ast, "global_variables", []),
@@ -3537,6 +3575,7 @@ class GLSLCodeGen:
                 self.generic_enum_struct_definitions
             ),
         }
+        self.prepare_glsl_specialization_constants(ast)
         (
             self.resource_array_size_hints,
             self.function_resource_array_size_hints,
@@ -3616,12 +3655,21 @@ class GLSLCodeGen:
             )
         )
         code += self.generate_constants(ast, leading_constants)
+        code += self.generate_glsl_global_specialization_constants()
         code += self.generate_glsl_wave_helpers(ast, target_stage)
 
-        global_vars = [
+        all_global_vars = [
             node
             for node in list(getattr(ast, "global_variables", []) or [])
             if not self.is_elided_glsl_type_alias_global(node)
+        ]
+        specialization_global_ids = {
+            id(node) for node in self.glsl_global_specialization_constants
+        }
+        global_vars = [
+            node
+            for node in all_global_vars
+            if id(node) not in specialization_global_ids
         ]
         empty_struct_global_ids = self.collect_glsl_empty_struct_global_ids(global_vars)
         runtime_initialized_global_vars = [
@@ -3660,7 +3708,8 @@ class GLSLCodeGen:
             global_vars + stage_local_resource_vars + stage_resource_params
         )
         self.global_variable_types = self.collect_global_variable_types(
-            global_vars
+            self.glsl_global_specialization_constants
+            + global_vars
             + stage_local_resource_vars
             + stage_local_interface_vars
             + stage_resource_params
@@ -6018,26 +6067,89 @@ class GLSLCodeGen:
         for node in (
             getattr(ast, "constants", []) or [] if constants is None else constants
         ):
-            name = getattr(node, "name", None)
-            if not name:
-                continue
-
-            const_type = getattr(node, "const_type", getattr(node, "vtype", "float"))
-            value = getattr(node, "value", None)
-            value_code = self.generate_constant_expression(value, const_type)
-            constant_id = self.glsl_specialization_constant_id(node)
-            declaration = format_c_style_array_declaration(
-                self.map_type(const_type), name
-            )
-            if constant_id is not None:
-                code += (
-                    "/* CrossGL fallback: OpenGL source validation cannot preserve "
-                    f"specialization constant id {constant_id} for "
-                    f"'{name}'; using the default literal. */\n"
-                )
-            code += f"const {declaration} = {value_code};\n"
+            code += self.generate_glsl_constant_declaration(node)
 
         return f"{code}\n" if code else ""
+
+    def generate_glsl_global_specialization_constants(self):
+        code = "".join(
+            self.generate_glsl_constant_declaration(node)
+            for node in self.glsl_global_specialization_constants
+        )
+        return f"{code}\n" if code else ""
+
+    def generate_glsl_constant_declaration(self, node):
+        name = self.glsl_specialization_constant_name(node)
+        if not name:
+            return ""
+
+        const_type = self.glsl_specialization_constant_type(node)
+        mapped_type = self.map_type(const_type)
+        declaration = format_c_style_array_declaration(mapped_type, name)
+        constant_id = self.glsl_specialization_constant_id(node)
+        value = self.glsl_specialization_constant_value(node)
+        builtin_declaration = self.glsl_builtin_specialization_constant_declaration(
+            node,
+            name=name,
+            const_type=const_type,
+            constant_id=constant_id,
+            value=value,
+        )
+        if builtin_declaration is not None:
+            return builtin_declaration
+        metadata = ""
+        layout = ""
+        if constant_id is not None:
+            self.validate_glsl_specialization_constant_type(node, const_type)
+            layout = f"layout(constant_id = {constant_id}) "
+            if value is None:
+                value_code = self.zero_value_expression(const_type)
+                metadata = (
+                    "/* CrossGL specialization metadata: "
+                    f"name={name}; constant_id={constant_id}; "
+                    "required_override=true; "
+                    f"encoding_default={value_code} */\n"
+                )
+            else:
+                value_code = self.generate_constant_expression(value, const_type)
+        else:
+            value_code = self.generate_constant_expression(value, const_type)
+
+        return f"{metadata}{layout}const {declaration} = {value_code};\n"
+
+    def glsl_builtin_specialization_constant_declaration(
+        self,
+        node,
+        *,
+        name,
+        const_type,
+        constant_id,
+        value,
+    ):
+        default = GLSL_BUILTIN_INT_LIMITS.get(name)
+        if default is None or constant_id is None:
+            return None
+        self.validate_glsl_specialization_constant_type(node, const_type)
+        if self.map_type(const_type) != "int":
+            raise OpenGLSpecializationConstantError(
+                f"OpenGL built-in specialization constant '{name}' must use int",
+                constant_name=name,
+                specialization_id=constant_id,
+                constant_type=self.type_name_string(const_type),
+                reason="builtin-type-mismatch",
+                source_location=self.glsl_specialization_constant_source_location(node),
+            )
+        if value is not None and evaluate_literal_int_expression(value) != default:
+            raise OpenGLSpecializationConstantError(
+                f"OpenGL built-in specialization constant '{name}' must retain "
+                f"its implicit default {default}",
+                constant_name=name,
+                specialization_id=constant_id,
+                constant_type=self.type_name_string(const_type),
+                reason="builtin-default-mismatch",
+                source_location=self.glsl_specialization_constant_source_location(node),
+            )
+        return f"layout(constant_id = {constant_id}) {name};\n"
 
     def glsl_constant_layout_prefix(self, node):
         constant_id = self.glsl_specialization_constant_id(node)
@@ -6045,29 +6157,212 @@ class GLSLCodeGen:
             return ""
         return f"layout(constant_id = {constant_id}) "
 
-    def glsl_specialization_constant_id(self, node):
-        constant_id = None
+    def glsl_specialization_constant_attributes(self, node):
+        attributes = []
         for attr in getattr(node, "attributes", []) or []:
             attr_name = getattr(attr, "name", None)
             if not attr_name:
                 continue
             normalized = str(attr_name).lower().replace("-", "_")
-            if normalized.startswith("glsl_"):
-                normalized = normalized[len("glsl_") :]
-            if normalized != "constant_id":
-                continue
-            arguments = getattr(attr, "arguments", []) or []
+            for prefix in ("glsl_", "metal_", "msl_"):
+                if normalized.startswith(prefix):
+                    normalized = normalized[len(prefix) :]
+                    break
+            if normalized in {"constant_id", "function_constant"}:
+                attributes.append(attr)
+        return attributes
+
+    def glsl_specialization_constant_name(self, node):
+        return getattr(node, "name", getattr(node, "variable_name", None))
+
+    def glsl_specialization_constant_type(self, node):
+        return getattr(
+            node,
+            "const_type",
+            getattr(node, "var_type", getattr(node, "vtype", "float")),
+        )
+
+    def glsl_specialization_constant_value(self, node):
+        if hasattr(node, "const_type"):
+            return getattr(node, "value", None)
+        return getattr(node, "initial_value", getattr(node, "value", None))
+
+    def glsl_specialization_constant_source_location(self, node, attr=None):
+        return getattr(attr, "source_location", None) or getattr(
+            node, "source_location", None
+        )
+
+    def glsl_specialization_constant_integer_id(self, value):
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, UnaryOpNode) and getattr(value, "op", None) in {"+", "-"}:
+            operand = self.glsl_specialization_constant_integer_id(value.operand)
+            if operand is None:
+                return None
+            return operand if value.op == "+" else -operand
+
+        value_text = self.attribute_value_to_string(value)
+        if value_text is None:
+            return None
+        try:
+            return int(str(value_text).strip(), 0)
+        except ValueError:
+            return None
+
+    def glsl_specialization_constant_id(self, node):
+        constant_id = None
+        name = self.glsl_specialization_constant_name(node) or "<unnamed>"
+        for attr in self.glsl_specialization_constant_attributes(node):
+            arguments = getattr(attr, "arguments", getattr(attr, "args", [])) or []
             if len(arguments) != 1:
-                continue
-            value = self.attribute_value_to_string(arguments[0])
+                raise OpenGLSpecializationConstantError(
+                    f"OpenGL specialization constant '{name}' requires one "
+                    "non-negative integer id",
+                    constant_name=name,
+                    reason="invalid-id",
+                    source_location=self.glsl_specialization_constant_source_location(
+                        node, attr
+                    ),
+                )
+            value = self.glsl_specialization_constant_integer_id(arguments[0])
+            if value is None:
+                source = self.attribute_value_to_string(arguments[0])
+                raise OpenGLSpecializationConstantError(
+                    f"OpenGL specialization constant '{name}' requires a concrete "
+                    f"integer id, got {source or '<missing>'}",
+                    constant_name=name,
+                    reason="invalid-id",
+                    source_location=self.glsl_specialization_constant_source_location(
+                        node, attr
+                    ),
+                )
+            if value < 0:
+                raise OpenGLSpecializationConstantError(
+                    f"OpenGL specialization constant '{name}' requires a "
+                    f"non-negative id, got {value}",
+                    constant_name=name,
+                    specialization_id=value,
+                    reason="negative-id",
+                    source_location=self.glsl_specialization_constant_source_location(
+                        node, attr
+                    ),
+                )
+            if value > 0x7FFFFFFF:
+                raise OpenGLSpecializationConstantError(
+                    f"OpenGL specialization constant '{name}' id {value} exceeds "
+                    "the signed 32-bit GLSL constant_id range",
+                    constant_name=name,
+                    specialization_id=value,
+                    reason="id-out-of-range",
+                    source_location=self.glsl_specialization_constant_source_location(
+                        node, attr
+                    ),
+                )
             if constant_id is not None and constant_id != value:
-                name = getattr(node, "name", "<unnamed>")
-                raise ValueError(
+                raise OpenGLSpecializationConstantError(
                     "Conflicting OpenGL specialization constant ids for "
-                    f"'{name}': {constant_id} differs from {value}"
+                    f"'{name}': {constant_id} differs from {value}",
+                    constant_name=name,
+                    specialization_id=value,
+                    reason="conflicting-id",
+                    source_location=self.glsl_specialization_constant_source_location(
+                        node, attr
+                    ),
                 )
             constant_id = value
         return constant_id
+
+    def validate_glsl_specialization_constant_type(self, node, const_type):
+        name = self.glsl_specialization_constant_name(node) or "<unnamed>"
+        source_type = self.type_name_string(const_type)
+        mapped_type = self.map_type(const_type)
+        normalized_source = str(source_type or "").lower().replace(" ", "")
+        scalar_types = {
+            "bool",
+            "int",
+            "uint",
+            "float",
+            "double",
+            "int64_t",
+            "uint64_t",
+        }
+        invalid_atomic = "atomic<" in normalized_source or normalized_source.startswith(
+            "atomic_"
+        )
+        if (
+            mapped_type in scalar_types
+            and not isinstance(const_type, ReferenceType)
+            and not invalid_atomic
+        ):
+            return
+
+        raise OpenGLSpecializationConstantError(
+            f"OpenGL specialization constant '{name}' cannot use non-scalar "
+            f"type '{source_type}'",
+            constant_name=name,
+            specialization_id=self.glsl_specialization_constant_id(node),
+            constant_type=source_type,
+            reason="unsupported-type",
+            source_location=self.glsl_specialization_constant_source_location(node),
+        )
+
+    def prepare_glsl_specialization_constants(self, ast):
+        constants = list(getattr(ast, "constants", []) or [])
+        globals_ = list(getattr(ast, "global_variables", []) or [])
+        declarations = [
+            node
+            for node in constants + globals_
+            if self.glsl_specialization_constant_attributes(node)
+        ]
+        used_ids = {}
+        used_names = {}
+        for node in declarations:
+            constant_id = self.glsl_specialization_constant_id(node)
+            const_type = self.glsl_specialization_constant_type(node)
+            self.validate_glsl_specialization_constant_type(node, const_type)
+            name = self.glsl_specialization_constant_name(node) or "<unnamed>"
+            previous = used_names.get(name)
+            if previous is not None and previous is not node:
+                previous_id = self.glsl_specialization_constant_id(previous)
+                raise OpenGLSpecializationConstantError(
+                    f"Duplicate OpenGL specialization constant name '{name}' "
+                    f"for ids {previous_id} and {constant_id}",
+                    constant_name=name,
+                    specialization_id=constant_id,
+                    constant_type=self.type_name_string(const_type),
+                    conflicting_name=name,
+                    conflicting_id=previous_id,
+                    reason="duplicate-name",
+                    source_location=self.glsl_specialization_constant_source_location(
+                        node
+                    ),
+                )
+            previous = used_ids.get(constant_id)
+            if previous is not None and previous is not node:
+                previous_name = (
+                    self.glsl_specialization_constant_name(previous) or "<unnamed>"
+                )
+                raise OpenGLSpecializationConstantError(
+                    f"Duplicate OpenGL specialization constant id {constant_id} "
+                    f"for '{previous_name}' and '{name}'",
+                    constant_name=name,
+                    specialization_id=constant_id,
+                    constant_type=self.type_name_string(const_type),
+                    conflicting_name=previous_name,
+                    reason="duplicate-id",
+                    source_location=self.glsl_specialization_constant_source_location(
+                        node
+                    ),
+                )
+            used_ids[constant_id] = node
+            used_names[name] = node
+
+        global_ids = {id(node) for node in globals_}
+        self.glsl_global_specialization_constants = [
+            node for node in declarations if id(node) in global_ids
+        ]
 
     def generate_constant_expression(self, expr, expected_type=None):
         value_code = self.generate_expression_with_expected(expr, expected_type)

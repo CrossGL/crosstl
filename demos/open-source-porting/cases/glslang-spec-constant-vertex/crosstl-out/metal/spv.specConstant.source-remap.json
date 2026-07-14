@@ -445,12 +445,34 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 30,
-        "endOffset": 2424,
+        "endLine": 28,
+        "endOffset": 2376,
+        "file": "crosstl-out/metal/spv.specConstant.metal",
+        "length": 146,
+        "line": 27,
+        "offset": 2230
+      },
+      "original": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 12,
+        "endOffset": 369,
+        "file": "spv.specConstant.vert",
+        "length": 43,
+        "line": 11,
+        "offset": 326
+      }
+    },
+    {
+      "generated": {
+        "column": 1,
+        "endColumn": 1,
+        "endLine": 29,
+        "endOffset": 2435,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 59,
-        "line": 29,
-        "offset": 2365
+        "line": 28,
+        "offset": 2376
       },
       "original": {
         "column": 1,
@@ -468,11 +490,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 32,
-        "endOffset": 2481,
+        "endOffset": 2493,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 36,
         "line": 31,
-        "offset": 2445
+        "offset": 2457
       },
       "original": {
         "column": 1,
@@ -490,11 +512,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 33,
-        "endOffset": 2517,
+        "endOffset": 2529,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 36,
         "line": 32,
-        "offset": 2481
+        "offset": 2493
       },
       "original": {
         "column": 1,
@@ -512,11 +534,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 35,
-        "endOffset": 2589,
+        "endOffset": 2601,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 36,
         "line": 34,
-        "offset": 2553
+        "offset": 2565
       },
       "original": {
         "column": 1,
@@ -534,11 +556,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 36,
-        "endOffset": 2625,
+        "endOffset": 2637,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 36,
         "line": 35,
-        "offset": 2589
+        "offset": 2601
       },
       "original": {
         "column": 1,
@@ -556,11 +578,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 37,
-        "endOffset": 2664,
+        "endOffset": 2676,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 39,
         "line": 36,
-        "offset": 2625
+        "offset": 2637
       },
       "original": {
         "column": 1,
@@ -578,11 +600,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 38,
-        "endOffset": 2703,
+        "endOffset": 2715,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 39,
         "line": 37,
-        "offset": 2664
+        "offset": 2676
       },
       "original": {
         "column": 1,
@@ -600,11 +622,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 40,
-        "endOffset": 2781,
+        "endOffset": 2793,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 39,
         "line": 39,
-        "offset": 2742
+        "offset": 2754
       },
       "original": {
         "column": 1,
@@ -622,11 +644,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 41,
-        "endOffset": 2820,
+        "endOffset": 2832,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 39,
         "line": 40,
-        "offset": 2781
+        "offset": 2793
       },
       "original": {
         "column": 1,
@@ -644,11 +666,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 42,
-        "endOffset": 2860,
+        "endOffset": 2872,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 40,
         "line": 41,
-        "offset": 2820
+        "offset": 2832
       },
       "original": {
         "column": 1,
@@ -666,11 +688,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 43,
-        "endOffset": 2900,
+        "endOffset": 2912,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 40,
         "line": 42,
-        "offset": 2860
+        "offset": 2872
       },
       "original": {
         "column": 1,
@@ -688,11 +710,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 44,
-        "endOffset": 2940,
+        "endOffset": 2952,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 40,
         "line": 43,
-        "offset": 2900
+        "offset": 2912
       },
       "original": {
         "column": 1,
@@ -710,11 +732,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 45,
-        "endOffset": 2980,
+        "endOffset": 2992,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 40,
         "line": 44,
-        "offset": 2940
+        "offset": 2952
       },
       "original": {
         "column": 1,
@@ -732,11 +754,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 46,
-        "endOffset": 3020,
+        "endOffset": 3032,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 40,
         "line": 45,
-        "offset": 2980
+        "offset": 2992
       },
       "original": {
         "column": 1,
@@ -754,11 +776,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 47,
-        "endOffset": 3061,
+        "endOffset": 3073,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 41,
         "line": 46,
-        "offset": 3020
+        "offset": 3032
       },
       "original": {
         "column": 1,
@@ -776,11 +798,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 48,
-        "endOffset": 3102,
+        "endOffset": 3114,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 41,
         "line": 47,
-        "offset": 3061
+        "offset": 3073
       },
       "original": {
         "column": 1,
@@ -798,11 +820,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 51,
-        "endOffset": 3145,
+        "endOffset": 3157,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 18,
         "line": 50,
-        "offset": 3127
+        "offset": 3139
       },
       "original": {
         "column": 1,
@@ -820,11 +842,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 52,
-        "endOffset": 3159,
+        "endOffset": 3171,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 14,
         "line": 51,
-        "offset": 3145
+        "offset": 3157
       },
       "original": {
         "column": 1,
@@ -842,11 +864,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 56,
-        "endOffset": 3459,
+        "endOffset": 3471,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 120,
         "line": 55,
-        "offset": 3339
+        "offset": 3351
       },
       "original": {
         "column": 1,
@@ -864,11 +886,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 60,
-        "endOffset": 3588,
+        "endOffset": 3600,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 36,
         "line": 59,
-        "offset": 3552
+        "offset": 3564
       },
       "original": {
         "column": 1,
@@ -886,11 +908,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 74,
-        "endOffset": 4073,
+        "endOffset": 4085,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 117,
         "line": 73,
-        "offset": 3956
+        "offset": 3968
       },
       "original": {
         "column": 1,
@@ -908,11 +930,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 78,
-        "endOffset": 4193,
+        "endOffset": 4205,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 33,
         "line": 77,
-        "offset": 4160
+        "offset": 4172
       },
       "original": {
         "column": 1,
@@ -930,11 +952,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 86,
-        "endOffset": 4395,
+        "endOffset": 4407,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 37,
         "line": 85,
-        "offset": 4358
+        "offset": 4370
       },
       "original": {
         "column": 1,
@@ -952,11 +974,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 87,
-        "endOffset": 4428,
+        "endOffset": 4440,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 33,
         "line": 86,
-        "offset": 4395
+        "offset": 4407
       },
       "original": {
         "column": 1,
@@ -974,11 +996,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 89,
-        "endOffset": 4483,
+        "endOffset": 4495,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 34,
         "line": 88,
-        "offset": 4449
+        "offset": 4461
       },
       "original": {
         "column": 1,
@@ -996,11 +1018,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 91,
-        "endOffset": 4542,
+        "endOffset": 4554,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 53,
         "line": 90,
-        "offset": 4489
+        "offset": 4501
       },
       "original": {
         "column": 1,
@@ -1018,11 +1040,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 94,
-        "endOffset": 4575,
+        "endOffset": 4587,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 30,
         "line": 93,
-        "offset": 4545
+        "offset": 4557
       },
       "original": {
         "column": 1,
@@ -1040,11 +1062,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 95,
-        "endOffset": 4610,
+        "endOffset": 4622,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 35,
         "line": 94,
-        "offset": 4575
+        "offset": 4587
       },
       "original": {
         "column": 1,
@@ -1062,11 +1084,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 102,
-        "endOffset": 4773,
+        "endOffset": 4785,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 33,
         "line": 101,
-        "offset": 4740
+        "offset": 4752
       },
       "original": {
         "column": 1,
@@ -1084,11 +1106,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 103,
-        "endOffset": 4802,
+        "endOffset": 4814,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 29,
         "line": 102,
-        "offset": 4773
+        "offset": 4785
       },
       "original": {
         "column": 1,
@@ -1106,11 +1128,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 105,
-        "endOffset": 4851,
+        "endOffset": 4863,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 31,
         "line": 104,
-        "offset": 4820
+        "offset": 4832
       },
       "original": {
         "column": 1,
@@ -1128,11 +1150,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 107,
-        "endOffset": 4904,
+        "endOffset": 4916,
         "file": "crosstl-out/metal/spv.specConstant.metal",
         "length": 47,
         "line": 106,
-        "offset": 4857
+        "offset": 4869
       },
       "original": {
         "column": 1,

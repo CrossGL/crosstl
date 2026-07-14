@@ -386,10 +386,15 @@ document derived from the validated portability report and runtime artifact
 metadata. Each entry is backend-neutral and includes ``sourceFile``,
 ``sourceBackend``, ``targetBackend``, ``artifactPath``, ``entryPoint``,
 ``resourceBindings``, ``bufferMutability``, ``scalarConstants``,
-``dispatchDimensions``, ``sourceProvenance``, and ``validation``. Resource
-bindings include set/binding coordinates, access, and derived mutability.
+``specializationConstants``, ``dispatchDimensions``, ``sourceProvenance``, and
+``validation``. Resource bindings include set/binding coordinates, access, and
+derived mutability.
 Dispatch dimensions record reflected workgroup size data when available while
 leaving workgroup, global, and grid counts unset for host code to provide.
+Reflection, runtime artifact manifests, and runtime binding manifests keep
+function and specialization constants in dedicated ``specializationConstants``
+records with their own counts. They are not reported as ``resources`` or
+``resourceBindings``, nor as ordinary ``constants`` or ``scalarConstants``.
 
 Build a deterministic runtime handoff package from a runtime artifact manifest:
 
@@ -866,11 +871,50 @@ configuration contract is intentionally small:
    [project.variants.debug]
    USE_FAST_PATH = "0"
 
+   [project.specialization_constants]
+   useFastPath = true
+   "2" = 16
+
+   [project.variants.debug.specialization_constants]
+   useFastPath = false
+   "2" = 8
+
 An explicit ``--config`` path may be absolute or repository-relative. Relative
 config paths are resolved against the repository root passed to the command, not
 against the shell's current working directory. When ``--config`` is provided,
 the referenced file must exist; otherwise the command exits with an error
 instead of silently falling back to default scan settings.
+
+Function and specialization constant values are configured under
+``[project.specialization_constants]``. Each key selects a source declaration
+by its exact name or by a quoted, non-negative numeric ID such as ``"2"``.
+Configured values are checked against the declaration's scalar source type. If
+both selectors address the same declaration, their values must agree; a
+name/id conflict fails the artifact instead of choosing one silently.
+
+``[project.variants.<name>.specialization_constants]`` applies after the
+project-level table and overrides the same selector for that named variant.
+Artifact ``specializationConstants`` records retain the effective value and
+``valueProvenance`` with the project or variant configuration path, selector,
+selector kind, and variant name. Using a name in one table and the corresponding
+ID in another still creates two matches, so different values fail as a
+conflicting contract rather than relying on table precedence.
+
+A declaration without a source initializer is required; one with an initializer
+has a source default. Explicit project or variant values override source
+defaults. Targets with native specialization retain required declarations for
+the host runtime to provide, while targets without it must receive a concrete
+configured value or a materializable source default.
+
+OpenGL defers specialization natively as
+``layout(constant_id = N) const ...`` and does not lower these declarations to
+uniforms or resources. A required declaration without a source default receives
+only an encoding initializer needed for valid GLSL; its report record remains
+``required`` and the host must provide the value before execution. DirectX
+instead materializes a concrete CrossGL variant before HLSL generation. It uses
+the selected variant override, project value, or source default and fails closed
+without emitting HLSL when a required value is missing, conflicting, or
+incompatible with the source type.
 
 ``source_roots`` limits discovery to selected directories. ``include`` and
 ``exclude`` use shell-style patterns against repository-relative paths. Project
@@ -1163,10 +1207,11 @@ skipped. Inspection samples for missing and present-but-undiscovered entries
 retain repository, commit, and source URL metadata when the manifest provides
 those provenance fields.
 
-Project reports include configured define and variant names and values, and
-artifact records include the applied define map used for that translation
-attempt. Review reports before sharing them outside the repository if those
-values include private build metadata. Compact inspection summaries list
+Project reports include configured define, variant, and specialization constant
+selectors and values, and artifact records include the applied define map used
+for that translation attempt. Review reports before sharing them outside the
+repository if those values include private build metadata. Compact inspection
+summaries list
 configured define names, deterministic define fingerprints, variant names,
 per-variant define counts, variant define names, and deterministic per-variant
 define fingerprints without printing define values.
@@ -1182,9 +1227,10 @@ Project reports are JSON documents with:
   source-root status records and status counts, include/exclude
   patterns, targets, output directory, source override map, include
   directories, include-directory status records and status counts, define and
-  variant maps, per-variant define counts, and counts for source roots,
-  include patterns, exclude patterns, source overrides, include directories,
-  defines, and variants.
+  variant maps, project and per-variant specialization constant maps,
+  per-variant define and specialization constant counts, and counts for source
+  roots, include patterns, exclude patterns, source overrides, include
+  directories, defines, variants, and project specialization constants.
 - ``summary``: total unit/artifact/diagnostic/source-map counts plus rollups by
   unit source backend, unit file extension, skipped reason, skipped file
   extension, unit source override, skipped source override, artifact source
@@ -1252,6 +1298,11 @@ Project reports are JSON documents with:
   ``includePathProcessing`` metadata to match active include-directory records,
   registered source frontend support, and summary rollups including
   named-variant rollups.
+  Artifacts with function or specialization constant declarations also carry
+  dedicated ``specializationConstants`` records for identity, required/default
+  state, effective values, and value provenance, plus
+  ``specializationMaterialization`` metadata that distinguishes native deferred
+  specialization from a concrete CrossGL variant.
   Successful artifact records in full reports must include file-level
   source-map anchors. Generated CrossGL artifacts also include a
   compiler-compatible ``source-remap`` sidecar with a file-level
