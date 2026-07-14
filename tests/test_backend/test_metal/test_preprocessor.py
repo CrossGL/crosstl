@@ -2722,12 +2722,8 @@ def test_preprocessor_substitutes_nested_const_reference_alias_through_value_cha
 
     assert "const auto& accum" not in output
     assert "layer.tile.frag_at(i, j)" not in output
-    assert (
-        "output[0] = self.layer.tile.val_frags[(i) * 2 + (j)][0];" in output
-    )
-    assert (
-        "output[1] = self.layer.tile.val_frags[(i) * 2 + (j)][1];" in output
-    )
+    assert "output[0] = self.layer.tile.val_frags[(i) * 2 + (j)][0];" in output
+    assert "output[1] = self.layer.tile.val_frags[(i) * 2 + (j)][1];" in output
 
 
 def test_preprocessor_substitutes_sequential_nested_const_reference_aliases():

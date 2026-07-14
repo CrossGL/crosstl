@@ -7854,9 +7854,18 @@ class MetalPreprocessor(HLSLPreprocessor):
         working = code
         while True:
             masked = self._mask_comments_and_literals(working)
+            bindings = list(pattern.finditer(masked))
+            if not bindings:
+                return working
             scopes = self._find_lexical_brace_scopes(working)
-            rewrite = None
-            for binding in pattern.finditer(masked):
+            call_argument_spans = self._potential_call_argument_spans(
+                working,
+                masked,
+                0,
+                len(working),
+            )
+            rewrites: List[Tuple[int, int, str]] = []
+            for binding in bindings:
                 qualifiers = binding.group("qualifiers").split()
                 if qualifiers.count("const") != 1 or qualifiers.count("thread") > 1:
                     continue
@@ -7872,7 +7881,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 )
                 if initializer is None:
                     continue
-                receiver_parts, method_name, arg_open, _arg_close, statement_end = (
+                receiver_parts, method_name, arg_open, arg_close, statement_end = (
                     initializer
                 )
                 if len(receiver_parts) < 2:
@@ -7958,6 +7967,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                     continue
                 alias_replacements = self._const_reference_alias_use_replacements(
                     working,
+                    masked,
                     binding.group("alias"),
                     statement_end,
                     scope_end,
@@ -7967,10 +7977,22 @@ class MetalPreprocessor(HLSLPreprocessor):
                     alias_replacements is None
                     or not self._reference_alias_capture_is_stable(
                         working,
+                        masked,
+                        call_argument_spans,
+                        scope_start,
                         statement_end,
                         scope_end,
                         storage,
-                        receiver_parts,
+                        {
+                            match.group(0)
+                            for argument in self._split_top_level_commas(
+                                working[arg_open + 1 : arg_close]
+                            )
+                            for match in re.finditer(r"\b[A-Za-z_]\w*\b", argument)
+                            if not self._is_member_identifier_context(
+                                argument, match.start()
+                            )
+                        },
                     )
                 ):
                     continue
@@ -7978,14 +8000,15 @@ class MetalPreprocessor(HLSLPreprocessor):
                     "\n" if char == "\n" else " "
                     for char in working[binding.start() : statement_end]
                 )
-                rewrite = [
-                    (binding.start(), statement_end, erased_binding),
-                    *alias_replacements,
-                ]
-                break
-            if rewrite is None:
+                rewrites.extend(
+                    [
+                        (binding.start(), statement_end, erased_binding),
+                        *alias_replacements,
+                    ]
+                )
+            if not rewrites:
                 return working
-            working = self._apply_text_replacements(working, rewrite)
+            working = self._apply_text_replacements(working, rewrites)
 
     def _parse_dotted_reference_alias_initializer(
         self,
@@ -8028,6 +8051,7 @@ class MetalPreprocessor(HLSLPreprocessor):
     def _const_reference_alias_use_replacements(
         self,
         code: str,
+        masked: str,
         alias: str,
         lifetime_start: int,
         lifetime_end: int,
@@ -8039,7 +8063,6 @@ class MetalPreprocessor(HLSLPreprocessor):
             for statement in self._iter_simple_declarations(lifetime)
         ):
             return None
-        masked = self._mask_comments_and_literals(code)
         replacements: List[Tuple[int, int, str]] = []
         alias_pattern = re.compile(rf"\b{re.escape(alias)}\b")
         for match in alias_pattern.finditer(masked, lifetime_start, lifetime_end):
@@ -8080,10 +8103,13 @@ class MetalPreprocessor(HLSLPreprocessor):
     def _reference_alias_capture_is_stable(
         self,
         code: str,
+        masked: str,
+        call_argument_spans: List[Tuple[int, int]],
+        capture_scope_start: int,
         lifetime_start: int,
         lifetime_end: int,
         storage: str,
-        receiver_parts: List[str],
+        argument_captures: Set[str],
     ) -> bool:
         captured = {
             match.group(0)
@@ -8096,47 +8122,108 @@ class MetalPreprocessor(HLSLPreprocessor):
             for statement in self._iter_simple_declarations(lifetime)
         ):
             return False
-        masked = self._mask_comments_and_literals(code)
         for name in captured:
             name_pattern = re.compile(rf"\b{re.escape(name)}\b")
             for match in name_pattern.finditer(
                 masked,
-                lifetime_start,
+                capture_scope_start,
                 lifetime_end,
             ):
                 if self._is_member_identifier_context(masked, match.start()):
                     continue
                 previous = match.start() - 1
-                while previous >= lifetime_start and masked[previous].isspace():
+                while previous >= capture_scope_start and masked[previous].isspace():
                     previous -= 1
-                if previous >= lifetime_start and masked[previous] == "&":
+                statement_boundary = max(
+                    masked.rfind(token, capture_scope_start, match.start())
+                    for token in (";", "{", "}")
+                )
+                prefix = masked[statement_boundary + 1 : match.start()]
+                reference_escape = (
+                    previous >= capture_scope_start and masked[previous] == "&"
+                ) or re.search(r"&\s*[A-Za-z_]\w*\s*=\s*$", prefix)
+                if reference_escape and (
+                    match.start() >= lifetime_start or name in argument_captures
+                ):
                     return False
+                if match.start() < lifetime_start:
+                    continue
                 if previous >= lifetime_start - 1 and masked[
                     max(lifetime_start, previous - 1) : previous + 1
                 ] in {"++", "--"}:
                     return False
-                statement_boundary = max(
-                    masked.rfind(token, lifetime_start, match.start())
-                    for token in (";", "{", "}")
-                )
-                prefix = masked[statement_boundary + 1 : match.start()]
-                if re.search(r"&\s*[A-Za-z_]\w*\s*=\s*$", prefix):
+                if name in argument_captures and any(
+                    lifetime_start <= start < match.start() < end <= lifetime_end
+                    for start, end in call_argument_spans
+                ):
                     return False
-                cursor = match.end()
-                while cursor < lifetime_end and masked[cursor].isspace():
-                    cursor += 1
+                cursor = self._reference_capture_access_end(
+                    code,
+                    masked,
+                    match.end(),
+                    lifetime_end,
+                )
                 if re.match(
                     r"(?:\+\+|--|(?:(?:<<|>>|[+\-*/%&|^])?=(?!=)))",
                     masked[cursor:lifetime_end],
                 ):
                     return False
-        receiver_pattern = r"\s*\.\s*".join(re.escape(part) for part in receiver_parts)
-        mutation = (
-            rf"\b{receiver_pattern}\b"
-            r"(?:\s*\.\s*[A-Za-z_]\w*|\s*\[[^\[\]]+\])*\s*"
-            r"(?:\+\+|--|(?:(?:<<|>>|[+\-*/%&|^])?=(?!=)))"
+        return True
+
+    def _reference_capture_access_end(
+        self,
+        code: str,
+        masked: str,
+        start: int,
+        limit: int,
+    ) -> int:
+        cursor = start
+        while cursor < limit:
+            while cursor < limit and masked[cursor].isspace():
+                cursor += 1
+            if masked.startswith("->", cursor):
+                cursor += 2
+            elif masked[cursor : cursor + 1] == ".":
+                cursor += 1
+            elif masked[cursor : cursor + 1] == "[":
+                close = self._find_matching_delimiter(code, cursor, "[", "]")
+                if close is None or close >= limit:
+                    return cursor
+                cursor = close + 1
+                continue
+            else:
+                break
+            while cursor < limit and masked[cursor].isspace():
+                cursor += 1
+            _member, consumed = self._read_identifier(masked, cursor)
+            if not consumed:
+                break
+            cursor += consumed
+        while cursor < limit and masked[cursor].isspace():
+            cursor += 1
+        return cursor
+
+    def _potential_call_argument_spans(
+        self,
+        code: str,
+        masked: str,
+        start: int,
+        end: int,
+    ) -> List[Tuple[int, int]]:
+        pattern = re.compile(
+            r"\b(?P<callee>[A-Za-z_]\w*" r"(?:\s*(?:\.|->|::)\s*[A-Za-z_]\w*)*)\s*\("
         )
-        return re.search(mutation, masked[lifetime_start:lifetime_end]) is None
+        spans: List[Tuple[int, int]] = []
+        control_names = {"if", "for", "while", "switch", "sizeof", "decltype"}
+        for match in pattern.finditer(masked, start, end):
+            callee_names = IDENTIFIER_RE.findall(match.group("callee"))
+            if not callee_names or callee_names[-1] in control_names:
+                continue
+            open_paren = match.end() - 1
+            close_paren = self._find_matching_delimiter(code, open_paren, "(", ")")
+            if close_paren is not None and close_paren < end:
+                spans.append((open_paren, close_paren))
+        return spans
 
     def _mask_comments_and_literals(self, code: str) -> str:
         masked = list(code)
