@@ -2156,12 +2156,12 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         "reference accessor {target} const-read evidence is incomplete" in mlx_porting
     )
     assert "reference accessor {target} native validation must be" in mlx_porting
-    assert "expected 4 OpenGL toolchain frontier sources" in mlx_porting
+    assert "expected 7 OpenGL toolchain frontier sources" in mlx_porting
     assert (
-        "OpenGL frontier accounting must be 4 sources, 4 artifacts, "
+        "OpenGL frontier accounting must be 7 sources, 7 artifacts, "
         "and 0 project diagnostics"
     ) in mlx_porting
-    assert "OpenGL frontier toolchain must validate all 4 source paths" in mlx_porting
+    assert "OpenGL frontier toolchain must validate all 7 source paths" in mlx_porting
     assert "mlx/backend/metal/kernels/binary_two.metal" in mlx_porting
     assert "mesa-vulkan-drivers" in mlx_porting
     assert "python -m pip install vulkan==1.3.275.1" in mlx_porting
