@@ -392,8 +392,17 @@ def test_hlsl_required_specialization_constant_fails_before_global_emission(
             9,
             "use_fast",
         ),
+        (
+            """
+            constant bool mode @function_constant(10) = true;
+            constant int mode @constant_id(11) = 1;
+            """,
+            "duplicate-name",
+            11,
+            10,
+        ),
     ],
-    ids=["metadata", "type", "duplicate"],
+    ids=["metadata", "type", "duplicate-id", "duplicate-name"],
 )
 def test_hlsl_specialization_constant_conflicts_are_structured(
     declarations, reason, constant_id, conflicting_value
@@ -418,6 +427,12 @@ def test_hlsl_specialization_constant_conflicts_are_structured(
         assert diagnostic.conflicting_id == conflicting_value
     elif reason == "duplicate-id":
         assert diagnostic.conflicting_name == conflicting_value
+    elif reason == "duplicate-name":
+        assert diagnostic.constant_name == "mode"
+        assert diagnostic.constant_type == "int"
+        assert diagnostic.conflicting_name == "mode"
+        assert diagnostic.conflicting_id == conflicting_value
+        assert diagnostic.conflicting_type == "bool"
     else:
         assert diagnostic.constant_type == "int"
         assert diagnostic.conflicting_type == conflicting_value

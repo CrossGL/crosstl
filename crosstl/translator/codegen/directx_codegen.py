@@ -4298,6 +4298,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         declarations = list(getattr(ast, "constants", []) or []) + global_nodes
         records = []
         records_by_id = {}
+        records_by_name = {}
 
         for node in declarations:
             attributes = self.directx_specialization_constant_attributes(node)
@@ -4367,6 +4368,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     conflicting_type=previous["source_type"],
                 )
 
+            previous = records_by_name.get(name)
+            if previous is not None:
+                raise DirectXSpecializationConstantError(
+                    f"DirectX specialization constant name '{name}' is assigned "
+                    f"to both id {previous['id']} and id {constant_id}",
+                    constant_name=name,
+                    constant_id=constant_id,
+                    constant_type=source_type,
+                    reason="duplicate-name",
+                    source_location=source_location,
+                    conflicting_name=previous["name"],
+                    conflicting_id=previous["id"],
+                    conflicting_type=previous["source_type"],
+                )
+
             record = {
                 "node": node,
                 "name": name,
@@ -4379,6 +4395,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             }
             records.append(record)
             records_by_id[constant_id] = record
+            records_by_name[name] = record
 
         return records
 
