@@ -456,6 +456,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 Optional[Dict[str, _MetalStructDefinition]],
             ],
         ] = {}
+        self._source_type_alias_bindings: Dict[str, List[_MetalTypeAliasBinding]] = {}
         self._integral_constant_binary_operators: Set[str] = set()
         self._integral_constant_contract_verified = False
         self._integral_constant_conversion_contract_verified = False
@@ -495,6 +496,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         self._materialized_struct_specializations.clear()
         self._known_member_function_return_types.clear()
         self._instantiated_template_member_calls.clear()
+        self._source_type_alias_bindings.clear()
         self._integral_constant_binary_operators.clear()
         self._integral_constant_contract_verified = False
         self._integral_constant_conversion_contract_verified = False
@@ -1032,6 +1034,12 @@ class MetalPreprocessor(HLSLPreprocessor):
             return code
 
     def _lower_struct_member_functions_impl(self, code: str) -> str:
+        template_declaration_spans = self._find_template_declaration_spans(code)
+        self._source_type_alias_bindings = self._collect_local_type_alias_bindings(
+            code,
+            [(0, len(code))],
+            skip_spans=template_declaration_spans,
+        )
         structs = self._find_concrete_struct_definitions(code)
         if not structs:
             return code
@@ -1690,9 +1698,13 @@ class MetalPreprocessor(HLSLPreprocessor):
         self,
         code: str,
         owner_spans: List[Tuple[int, int]],
+        *,
+        skip_spans: Optional[List[Tuple[int, int]]] = None,
     ) -> Dict[str, List[_MetalTypeAliasBinding]]:
         raw_aliases: List[Tuple[int, str, str]] = []
-        ignored_spans = self._find_comment_and_literal_spans(code)
+        ignored_spans = sorted(
+            [*(skip_spans or []), *self._find_comment_and_literal_spans(code)]
+        )
 
         for match in re.finditer(
             r"\busing\s+(?P<alias>[A-Za-z_]\w*)\s*=\s*" r"(?P<target>[^;{}]+?)\s*;",
@@ -1762,6 +1774,75 @@ class MetalPreprocessor(HLSLPreprocessor):
                 break
             resolved = candidate
         return self._normalize_template_argument_text(resolved)
+
+    def _canonicalize_type_aliases_at(
+        self,
+        type_text: str,
+        aliases: Dict[str, List[_MetalTypeAliasBinding]],
+        position: int,
+        *,
+        excluded_aliases: Optional[Set[str]] = None,
+    ) -> Optional[str]:
+        """Resolve aliases visible at ``position`` without crossing a cycle.
+
+        Alias targets are resolved at their own declaration positions. This
+        preserves lexical shadowing and prevents a later declaration from
+        retroactively satisfying an unresolved or forward alias target.
+        """
+        normalized = self._normalize_template_argument_text(type_text)
+        if not normalized:
+            return None
+
+        cache: Dict[Tuple[str, int, int, int], Optional[str]] = {}
+
+        def canonicalize(
+            text: str,
+            context_position: int,
+            resolving: Set[Tuple[str, int, int, int]],
+        ) -> Optional[str]:
+            candidate = self._normalize_template_argument_text(text)
+            if not candidate:
+                return None
+            replacements: Dict[str, str] = {}
+            for identifier in dict.fromkeys(IDENTIFIER_RE.findall(candidate)):
+                if identifier in (excluded_aliases or set()):
+                    continue
+                binding = self._resolve_type_alias_binding_at(
+                    aliases,
+                    identifier,
+                    context_position,
+                )
+                if binding is None:
+                    if any(
+                        future.declaration_position > context_position
+                        and future.scope_start <= context_position < future.scope_end
+                        for future in aliases.get(identifier, [])
+                    ):
+                        return None
+                    continue
+                key = (
+                    identifier,
+                    binding.declaration_position,
+                    binding.scope_start,
+                    binding.scope_end,
+                )
+                if key in resolving:
+                    return None
+                if key not in cache:
+                    cache[key] = canonicalize(
+                        binding.target,
+                        binding.declaration_position,
+                        {*resolving, key},
+                    )
+                resolved = cache[key]
+                if resolved is None:
+                    return None
+                replacements[identifier] = resolved
+            return self._normalize_template_argument_text(
+                self._replace_identifiers(candidate, replacements)
+            )
+
+        return canonicalize(normalized, position, set())
 
     def _collect_local_integral_constant_bindings(
         self,
@@ -4614,6 +4695,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                     field_structs_by_name=field_structs_by_name,
                     struct_type_aliases=struct_type_aliases,
                     local_integral_constants=local_integral_constants,
+                    type_aliases=self._source_type_alias_bindings,
                 )
                 if rewrite is not None:
                     end, replacement = rewrite
@@ -4646,6 +4728,8 @@ class MetalPreprocessor(HLSLPreprocessor):
         local_integral_constants: Optional[
             Dict[str, List[_MetalIntegralConstantBinding]]
         ] = None,
+        type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]] = None,
+        type_alias_fallback_position: Optional[int] = None,
     ) -> Optional[Tuple[int, str]]:
         # `field_variable_types` / `field_structs_by_name` cover EVERY struct/union
         # type (including method-less data carriers) and are used only to resolve
@@ -4672,6 +4756,8 @@ class MetalPreprocessor(HLSLPreprocessor):
             field_structs_by_name,
             local_integral_constants,
             struct_type_aliases,
+            type_aliases,
+            type_alias_fallback_position,
         )
         if nested_member_rewrite is not None:
             return nested_member_rewrite
@@ -4743,6 +4829,8 @@ class MetalPreprocessor(HLSLPreprocessor):
                     rewrite_structs_by_name=structs_by_name,
                     explicit_template_arguments=explicit_template_arguments,
                     local_integral_constants=local_integral_constants,
+                    argument_type_aliases=type_aliases,
+                    argument_type_fallback_position=type_alias_fallback_position,
                 )
                 if rewrite is not None:
                     return rewrite
@@ -4799,6 +4887,8 @@ class MetalPreprocessor(HLSLPreprocessor):
                         operator_call_structs=operator_call_structs,
                         rewrite_structs_by_name=structs_by_name,
                         local_integral_constants=local_integral_constants,
+                        argument_type_aliases=type_aliases,
+                        argument_type_fallback_position=type_alias_fallback_position,
                     )
                 return None
 
@@ -4890,6 +4980,8 @@ class MetalPreprocessor(HLSLPreprocessor):
                     rewrite_structs_by_name=structs_by_name,
                     explicit_template_arguments=explicit_template_arguments,
                     local_integral_constants=local_integral_constants,
+                    argument_type_aliases=type_aliases,
+                    argument_type_fallback_position=type_alias_fallback_position,
                 )
             return None
 
@@ -4936,6 +5028,8 @@ class MetalPreprocessor(HLSLPreprocessor):
                     operator_call_structs=operator_call_structs,
                     rewrite_structs_by_name=structs_by_name,
                     local_integral_constants=local_integral_constants,
+                    argument_type_aliases=type_aliases,
+                    argument_type_fallback_position=type_alias_fallback_position,
                 )
 
         return None
@@ -4960,6 +5054,8 @@ class MetalPreprocessor(HLSLPreprocessor):
             Dict[str, List[_MetalIntegralConstantBinding]]
         ],
         struct_type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]],
+        type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]],
+        type_alias_fallback_position: Optional[int],
     ) -> Optional[Tuple[int, str]]:
         """Rewrite a method call whose receiver is a nested struct field."""
         if self._is_member_identifier_context(code, ident_start):
@@ -5081,6 +5177,8 @@ class MetalPreprocessor(HLSLPreprocessor):
                         rewrite_structs_by_name=structs_by_name,
                         explicit_template_arguments=explicit_template_arguments,
                         local_integral_constants=local_integral_constants,
+                        argument_type_aliases=type_aliases,
+                        argument_type_fallback_position=type_alias_fallback_position,
                     )
                 return None
             if explicit_template_marker:
@@ -5264,6 +5362,8 @@ class MetalPreprocessor(HLSLPreprocessor):
         local_integral_constants: Optional[
             Dict[str, List[_MetalIntegralConstantBinding]]
         ] = None,
+        argument_type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]] = None,
+        argument_type_fallback_position: Optional[int] = None,
     ) -> Optional[Tuple[int, str]]:
         arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
         if arg_close is None:
@@ -5343,6 +5443,9 @@ class MetalPreprocessor(HLSLPreprocessor):
                 methods_by_struct=methods_by_struct,
                 operator_call_structs=operator_call_structs,
                 rewrite_structs_by_name=rewrite_structs_by_name,
+                argument_type_aliases=argument_type_aliases,
+                argument_type_position=arg_open,
+                argument_type_fallback_position=argument_type_fallback_position,
             )
         except MetalStructMethodError as exc:
             if exc.source_location is None:
@@ -5431,6 +5534,8 @@ class MetalPreprocessor(HLSLPreprocessor):
         local_integral_constants: Optional[
             Dict[str, List[_MetalIntegralConstantBinding]]
         ] = None,
+        argument_type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]] = None,
+        argument_type_fallback_position: Optional[int] = None,
     ) -> Optional[Tuple[int, str]]:
         # Instantiate a CALLED template member method from its call-site argument
         # types and rewrite the call to the concrete free function. `overloads`
@@ -5534,6 +5639,9 @@ class MetalPreprocessor(HLSLPreprocessor):
                 operator_call_structs=operator_call_structs,
                 rewrite_structs_by_name=rewrite_structs_by_name,
                 explicit_template_arguments=resolved_explicit_template_arguments,
+                argument_type_aliases=argument_type_aliases,
+                argument_type_position=arg_open,
+                argument_type_fallback_position=argument_type_fallback_position,
             )
         except MetalStructMethodError as exc:
             if exc.source_location is None:
@@ -5578,6 +5686,9 @@ class MetalPreprocessor(HLSLPreprocessor):
         operator_call_structs: Optional[Set[str]] = None,
         rewrite_structs_by_name: Optional[Dict[str, _MetalStructDefinition]] = None,
         explicit_template_arguments: Optional[List[str]] = None,
+        argument_type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]] = None,
+        argument_type_position: Optional[int] = None,
+        argument_type_fallback_position: Optional[int] = None,
     ) -> str:
         # Bind, select the enabled overload, materialize it (recursively lowering
         # any internal template-member calls in its body), and return the
@@ -5592,6 +5703,9 @@ class MetalPreprocessor(HLSLPreprocessor):
                 explicit_template_arguments=explicit_template_arguments,
                 owner_struct=struct,
                 structs_by_name=rewrite_structs_by_name,
+                argument_type_aliases=argument_type_aliases,
+                argument_type_position=argument_type_position,
+                argument_type_fallback_position=argument_type_fallback_position,
             )
             if bindings is not None:
                 candidates.append((overload, bindings))
@@ -5692,12 +5806,58 @@ class MetalPreprocessor(HLSLPreprocessor):
         explicit_template_arguments: Optional[List[str]] = None,
         owner_struct: Optional[_MetalStructDefinition] = None,
         structs_by_name: Optional[Dict[str, _MetalStructDefinition]] = None,
+        argument_type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]] = None,
+        argument_type_position: Optional[int] = None,
+        argument_type_fallback_position: Optional[int] = None,
     ) -> Optional[Dict[str, str]]:
         # Match each declared method-parameter type (which may contain the
         # template parameters) against the inferred concrete argument type and
         # collect consistent bindings. Returns None if any template parameter is
         # left unbound or a parameter binds inconsistently.
         template_parameter_set = set(method.template_parameters)
+        source_type_aliases = self._source_type_alias_bindings
+
+        def canonicalize_declared_aliases(
+            type_text: str,
+            *,
+            excluded_aliases: Optional[Set[str]] = None,
+        ) -> Optional[str]:
+            if not source_type_aliases:
+                return self._normalize_template_argument_text(type_text)
+            return self._canonicalize_type_aliases_at(
+                type_text,
+                source_type_aliases,
+                method.span[0],
+                excluded_aliases=excluded_aliases,
+            )
+
+        def canonicalize_argument_aliases(type_text: str) -> Optional[str]:
+            canonical = self._normalize_template_argument_text(type_text)
+            primary_aliases = (
+                source_type_aliases
+                if argument_type_aliases is None
+                else argument_type_aliases
+            )
+            if primary_aliases and argument_type_position is not None:
+                canonical = self._canonicalize_type_aliases_at(
+                    canonical,
+                    primary_aliases,
+                    argument_type_position,
+                )
+                if canonical is None:
+                    return None
+            if (
+                primary_aliases is not source_type_aliases
+                and source_type_aliases
+                and argument_type_fallback_position is not None
+            ):
+                canonical = self._canonicalize_type_aliases_at(
+                    canonical,
+                    source_type_aliases,
+                    argument_type_fallback_position,
+                )
+            return canonical
+
         # `method.parameters` is the already-extracted parameter list (the
         # `operator()` declarator is handled at parse time), so split it directly
         # rather than reparsing a synthesized header — a synthesized
@@ -5779,9 +5939,25 @@ class MetalPreprocessor(HLSLPreprocessor):
                 self._normalize_template_binding_type(concrete_type).rstrip("&").strip()
             )
             if is_indirect and concrete_value_type.endswith("*"):
-                if declared_pointer_type is None or not (
-                    self._pointer_argument_matches_declared_type(
-                        declared_pointer_type, concrete_value_type
+                canonical_declared_pointer = (
+                    canonicalize_declared_aliases(
+                        declared_pointer_type,
+                        excluded_aliases=template_parameter_set,
+                    )
+                    if declared_pointer_type is not None
+                    else None
+                )
+                canonical_concrete_pointer = canonicalize_argument_aliases(
+                    concrete_value_type
+                )
+                if (
+                    canonical_declared_pointer is None
+                    or canonical_concrete_pointer is None
+                    or not (
+                        self._pointer_argument_matches_declared_type(
+                            canonical_declared_pointer,
+                            canonical_concrete_pointer,
+                        )
                     )
                 ):
                     return None
@@ -5830,6 +6006,12 @@ class MetalPreprocessor(HLSLPreprocessor):
                 resolved_declared_type = self._canonicalize_struct_scoped_type(
                     resolved_declared_type, owner_struct, structs_by_name
                 )
+            resolved_declared_type = canonicalize_declared_aliases(
+                resolved_declared_type
+            )
+            concrete_value_type = canonicalize_argument_aliases(concrete_value_type)
+            if resolved_declared_type is None or concrete_value_type is None:
+                return None
             resolved_declared_type = self._canonical_template_binding_pointee_type(
                 resolved_declared_type
             )
@@ -7107,6 +7289,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                     instantiated_template_functions,
                     template_methods_by_struct,
                     local_integral_constants,
+                    local_constant_type_aliases,
                 )
                 if rewrite is not None:
                     end, replacement = rewrite
@@ -7131,6 +7314,8 @@ class MetalPreprocessor(HLSLPreprocessor):
                     field_structs_by_name=rewrite_structs_by_name,
                     struct_type_aliases=struct_type_aliases,
                     local_integral_constants=local_integral_constants,
+                    type_aliases=local_constant_type_aliases,
+                    type_alias_fallback_position=method.span[0],
                 )
                 if rewrite is not None:
                     end, replacement = rewrite
@@ -7371,6 +7556,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         instantiated_template_functions: Dict[str, str],
         template_methods_by_struct: Dict[str, Dict[str, List[_MetalStructMethod]]],
         local_integral_constants: Dict[str, List[_MetalIntegralConstantBinding]],
+        local_type_aliases: Dict[str, List[_MetalTypeAliasBinding]],
     ) -> Optional[Tuple[int, str]]:
         # A receiver-less `name(args)` where `name` is a sibling member method
         # (template OR concrete) is lowered to its concrete free function with an
@@ -7409,6 +7595,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                     instantiated_template_functions,
                     template_methods_by_struct,
                     local_integral_constants,
+                    local_type_aliases,
                 )
             return None
 
@@ -7542,6 +7729,9 @@ class MetalPreprocessor(HLSLPreprocessor):
             instantiated_template_functions,
             template_methods_by_struct,
             explicit_template_arguments=resolved_explicit_template_arguments,
+            argument_type_aliases=local_type_aliases,
+            argument_type_position=arg_open,
+            argument_type_fallback_position=method.span[0],
         )
         args = self._expanded_template_member_call_arguments(free_name, raw_args)
         if representative.is_static:
@@ -7621,6 +7811,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         instantiated_template_functions: Dict[str, str],
         template_methods_by_struct: Dict[str, Dict[str, List[_MetalStructMethod]]],
         local_integral_constants: Dict[str, List[_MetalIntegralConstantBinding]],
+        local_type_aliases: Dict[str, List[_MetalTypeAliasBinding]],
     ) -> Optional[Tuple[int, str]]:
         # Lower an implicit-this `operator()(args)` call. `empty_paren_open` is the
         # `(` of the empty `()` after `operator`; the real argument list follows.
@@ -7698,6 +7889,9 @@ class MetalPreprocessor(HLSLPreprocessor):
             signature,
             instantiated_template_functions,
             template_methods_by_struct,
+            argument_type_aliases=local_type_aliases,
+            argument_type_position=arg_open,
+            argument_type_fallback_position=method.span[0],
         )
         args = self._expanded_template_member_call_arguments(free_name, raw_args)
         replacement = f"{free_name}(self, {args})" if args else f"{free_name}(self)"
@@ -8725,11 +8919,11 @@ class MetalPreprocessor(HLSLPreprocessor):
         return max(containing, key=lambda scope: scope[0])
 
     @staticmethod
-    def _resolve_struct_type_alias_at(
+    def _resolve_type_alias_binding_at(
         type_aliases: Dict[str, List[_MetalTypeAliasBinding]],
         name: str,
         position: int,
-    ) -> Optional[str]:
+    ) -> Optional[_MetalTypeAliasBinding]:
         best: Optional[_MetalTypeAliasBinding] = None
         for binding in type_aliases.get(name, []):
             if binding.declaration_position > position:
@@ -8738,7 +8932,20 @@ class MetalPreprocessor(HLSLPreprocessor):
                 continue
             if best is None or binding.declaration_position > best.declaration_position:
                 best = binding
-        return None if best is None else best.target
+        return best
+
+    @staticmethod
+    def _resolve_struct_type_alias_at(
+        type_aliases: Dict[str, List[_MetalTypeAliasBinding]],
+        name: str,
+        position: int,
+    ) -> Optional[str]:
+        binding = MetalPreprocessor._resolve_type_alias_binding_at(
+            type_aliases,
+            name,
+            position,
+        )
+        return None if binding is None else binding.target
 
     def _resolve_promotable_type_token(
         self,

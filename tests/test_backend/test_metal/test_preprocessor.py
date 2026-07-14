@@ -3939,6 +3939,202 @@ def test_preprocessor_matches_concrete_pointer_template_member_parameters():
 
 
 @pytest.mark.parametrize(
+    ("alias_declarations", "declared_pointee", "argument_pointee"),
+    [
+        pytest.param(
+            "typedef half float16_t;",
+            "half",
+            "float16_t",
+            id="typedef-argument",
+        ),
+        pytest.param(
+            "using scalar_t = half;\nusing source_t = scalar_t;",
+            "half",
+            "source_t",
+            id="using-argument-chain",
+        ),
+        pytest.param(
+            "typedef half scalar_t;\ntypedef scalar_t source_t;",
+            "source_t",
+            "half",
+            id="typedef-declaration-chain",
+        ),
+    ],
+)
+def test_preprocessor_matches_global_pointer_pointee_aliases(
+    alias_declarations, declared_pointee, argument_pointee
+):
+    code = f"""
+    {alias_declarations}
+
+    struct Loader {{
+      template <typename Tag>
+      float load(const device {declared_pointee}* src, Tag tag) {{
+        return float(src[0]) + tag;
+      }}
+    }};
+
+    kernel void k(
+        const device {argument_pointee}* src [[buffer(0)]],
+        device float* out [[buffer(1)]]) {{
+      Loader loader;
+      out[0] = loader.load(src, 1);
+    }}
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Loader__load__int(loader, src, 1)" in output
+    assert "loader.load(" not in output
+
+
+def test_preprocessor_matches_local_pointer_pointee_alias_chain():
+    code = """
+    struct Loader {
+      template <typename Tag>
+      float load(const device half* src, Tag tag) {
+        return float(src[0]) + tag;
+      }
+    };
+
+    kernel void k(
+        const device half* src [[buffer(0)]],
+        device float* out [[buffer(1)]]) {
+      typedef half scalar_t;
+      using source_t = scalar_t;
+      const device source_t* local_src = src;
+      Loader loader;
+      out[0] = loader.load(local_src, 1);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Loader__load__int(loader, local_src, 1)" in output
+
+
+def test_preprocessor_resolves_shadowed_pointer_pointee_alias_at_each_call():
+    code = """
+    using element_t = int;
+
+    struct Loader {
+      template <typename Tag>
+      int load_half(const device half* src, Tag tag) {
+        return int(src[0]) + tag;
+      }
+
+      template <typename Tag>
+      int load_int(const device int* src, Tag tag) {
+        return src[0] + tag;
+      }
+    };
+
+    kernel void k(
+        const device half* half_src [[buffer(0)]],
+        const device int* int_src [[buffer(1)]],
+        device int* out [[buffer(2)]]) {
+      Loader loader;
+      {
+        using element_t = half;
+        const device element_t* inner_src = half_src;
+        out[0] = loader.load_half(inner_src, 1);
+      }
+      const device element_t* outer_src = int_src;
+      out[1] = loader.load_int(outer_src, 2);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Loader__load_half__int(loader, inner_src, 1)" in output
+    assert "Loader__load_int__int(loader, outer_src, 2)" in output
+
+
+@pytest.mark.parametrize(
+    ("alias_declarations", "argument_pointee"),
+    [
+        pytest.param("using source_t = int;", "source_t", id="incompatible"),
+        pytest.param(
+            "using source_t = later_t;\nusing later_t = half;",
+            "source_t",
+            id="unresolved-forward",
+        ),
+        pytest.param(
+            "using first_t = second_t;\nusing second_t = first_t;",
+            "first_t",
+            id="cycle",
+        ),
+    ],
+)
+def test_preprocessor_rejects_unproved_pointer_pointee_alias_equivalence(
+    alias_declarations, argument_pointee
+):
+    code = f"""
+    {alias_declarations}
+
+    struct Loader {{
+      template <typename Tag>
+      float load(const device half* src, Tag tag) {{ return float(tag); }}
+    }};
+
+    kernel void k(
+        const device {argument_pointee}* src [[buffer(0)]],
+        device float* out [[buffer(1)]]) {{
+      Loader loader;
+      out[0] = loader.load(src, 1);
+    }}
+    """
+
+    with pytest.raises(MetalStructMethodError, match="did not bind consistently"):
+        MetalPreprocessor().preprocess(code)
+
+
+def test_preprocessor_allows_pointer_qualification_added_through_pointee_alias():
+    code = """
+    using readonly_half_t = const half;
+
+    struct Loader {
+      template <typename Tag>
+      float load(device readonly_half_t* src, Tag tag) {
+        return float(src[0]) + tag;
+      }
+    };
+
+    kernel void k(
+        device half* src [[buffer(0)]],
+        device float* out [[buffer(1)]]) {
+      Loader loader;
+      out[0] = loader.load(src, 1);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Loader__load__int(loader, src, 1)" in output
+
+
+def test_preprocessor_rejects_pointer_qualification_dropped_through_pointee_alias():
+    code = """
+    using readonly_half_t = const half;
+
+    struct Loader {
+      template <typename Tag>
+      float load(device half* src, Tag tag) { return float(tag); }
+    };
+
+    kernel void k(
+        device readonly_half_t* src [[buffer(0)]],
+        device float* out [[buffer(1)]]) {
+      Loader loader;
+      out[0] = loader.load(src, 1);
+    }
+    """
+
+    with pytest.raises(MetalStructMethodError, match="did not bind consistently"):
+        MetalPreprocessor().preprocess(code)
+
+
+@pytest.mark.parametrize(
     ("declared_type", "actual_parameter"),
     [
         pytest.param(
