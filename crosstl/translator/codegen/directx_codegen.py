@@ -430,6 +430,30 @@ class DirectXAggregateConditionalError(ValueError):
         self.source_location = source_location
 
 
+class DirectXMappedOverloadError(ValueError):
+    """Raised when source overload binding cannot survive HLSL type mapping."""
+
+    project_diagnostic_code = "project.translate.directx-mapped-overload-ambiguous"
+    missing_capabilities = ("directx.mapped-overload-resolution",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        function_name=None,
+        argument_types=None,
+        candidates=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.function_name = function_name
+        self.argument_types = tuple(argument_types or ())
+        self.candidates = tuple(candidates or ())
+        self.reason = reason
+        self.source_location = source_location
+
+
 class DirectXPrivatePointerParameterError(ValueError):
     """Raised when a private pointer cannot become a fixed HLSL array."""
 
@@ -1071,6 +1095,10 @@ class HLSLCodeGen:
         self.function_parameter_names = {}
         self.function_parameter_types = {}
         self.hlsl_function_name_aliases = {}
+        self.hlsl_function_overloads_by_name = {}
+        self.hlsl_function_target_names = {}
+        self.hlsl_function_target_names_by_signature = {}
+        self.hlsl_mapped_overload_names = set()
         self.function_stage_parameter_dependencies = {}
         self.function_hlsl_fragment_builtin_dependencies = {}
         self.function_hlsl_fragment_builtin_parameter_names = {}
@@ -1125,6 +1153,7 @@ class HLSLCodeGen:
         self.allow_hlsl_byteaddress_interlocked_member_expression = False
         self.current_generic_function_substitutions = {}
         self.local_variable_types = {}
+        self.local_variable_source_types = {}
         self.global_variable_types = {}
         self.hlsl_struct_buffer_resource_types = {}
         self.hlsl_promoted_entry_resource_parameter_names = {}
@@ -1678,6 +1707,10 @@ class HLSLCodeGen:
         self.implicit_texture_sampler_parameters = {}
         self.function_parameter_types = {}
         self.hlsl_function_name_aliases = {}
+        self.hlsl_function_overloads_by_name = {}
+        self.hlsl_function_target_names = {}
+        self.hlsl_function_target_names_by_signature = {}
+        self.hlsl_mapped_overload_names = set()
         self.function_private_pointer_array_size_hints = {}
         self.function_private_pointer_required_spans = {}
         self.function_private_pointer_parameters = {}
@@ -1723,6 +1756,7 @@ class HLSLCodeGen:
         self.current_hlsl_stage_output_lowering = None
         self.allow_hlsl_byteaddress_interlocked_member_expression = False
         self.local_variable_types = {}
+        self.local_variable_source_types = {}
         self.global_variable_types = {}
         self.hlsl_struct_buffer_resource_types = {}
         self.hlsl_promoted_entry_resource_parameter_names = {}
@@ -2088,6 +2122,10 @@ class HLSLCodeGen:
                 self.function_overloads.setdefault(name, []).extend(overloads)
         resource_pointer_functions = list(functions)
         resource_pointer_functions.extend(generic_function_specializations.values())
+        self.prepare_hlsl_mapped_function_overloads(
+            resource_pointer_functions,
+            reserved_names=self.hlsl_mapped_overload_reserved_names(ast),
+        )
         self.collect_hlsl_resource_pointer_parameters(resource_pointer_functions)
         self.function_stage_parameter_dependencies = (
             self.collect_hlsl_function_stage_parameter_dependencies(ast, target_stage)
@@ -4964,6 +5002,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         emitted_param_names = set(param_names)
         previous_function_return_type = self.current_function_return_type
         previous_local_variable_types = self.local_variable_types
+        previous_local_variable_source_types = self.local_variable_source_types
         previous_identifier_aliases = self.current_identifier_aliases
         previous_identifier_reserved_names = self.current_identifier_reserved_names
         previous_stage_output_lowering = self.current_hlsl_stage_output_lowering
@@ -5002,6 +5041,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         self.current_function_name = getattr(func, "name", None) or entry_name
         self.local_variable_types = {}
+        self.local_variable_source_types = {}
         self.current_identifier_aliases = {}
         self.current_hlsl_resource_pointer_offsets = {}
         self.current_hlsl_resource_pointer_aliases = {
@@ -5066,7 +5106,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 raw_param_type = p.vtype
             else:
                 raw_param_type = "float"
-            self.local_variable_types[p.name] = self.type_name_string(raw_param_type)
+            raw_param_type_name = self.type_name_string(raw_param_type)
+            self.local_variable_types[p.name] = raw_param_type_name
+            self.local_variable_source_types[p.name] = raw_param_type_name
 
             param_decl_type = self.type_name_string(raw_param_type)
             resource_pointer_contract = self.hlsl_resource_pointer_parameter_contract(
@@ -5688,6 +5730,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.current_function_return_type = previous_function_return_type
         self.current_function_name = previous_function_name
         self.local_variable_types = previous_local_variable_types
+        self.local_variable_source_types = previous_local_variable_source_types
         self.current_identifier_aliases = previous_identifier_aliases
         self.current_identifier_reserved_names = previous_identifier_reserved_names
         self.current_hlsl_stage_output_lowering = previous_stage_output_lowering
@@ -5720,8 +5763,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         indent_str = "    " * indent
 
         if isinstance(stmt, VariableNode):
+            source_vtype = self.hlsl_source_variable_declared_type(stmt)
             vtype = self.local_variable_declared_type(stmt)
             self.local_variable_types[stmt.name] = self.type_name_string(vtype)
+            self.local_variable_source_types[stmt.name] = self.type_name_string(
+                source_vtype
+            )
             if id(stmt) in self.hlsl_hoisted_groupshared_declaration_ids:
                 return ""
             resource_pointer_alias = (
@@ -6160,6 +6207,24 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if vtype is None:
             vtype = self.expression_result_type(getattr(stmt, "initial_value", None))
         return vtype or "float"
+
+    def hlsl_source_variable_declared_type(self, stmt):
+        vtype = getattr(stmt, "var_type", None)
+        if vtype is None:
+            vtype = getattr(stmt, "vtype", None)
+        vtype_name = self.type_name_string(vtype)
+        if isinstance(vtype_name, str) and vtype_name.strip().lower() in {
+            "auto",
+            "let",
+        }:
+            return self.hlsl_source_expression_type(
+                getattr(stmt, "initial_value", None)
+            ) or self.local_variable_declared_type(stmt)
+        if vtype is None:
+            return self.hlsl_source_expression_type(
+                getattr(stmt, "initial_value", None)
+            ) or self.local_variable_declared_type(stmt)
+        return vtype
 
     def local_variable_qualifier(self, node, *, omit_const=False):
         qualifiers = {str(value).lower() for value in getattr(node, "qualifiers", [])}
@@ -9187,8 +9252,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return self.generate_expression(init).strip().rstrip(";")
 
     def generate_for_variable_initializer(self, node, include_type=True):
+        source_vtype = self.hlsl_source_variable_declared_type(node)
         vtype = self.local_variable_declared_type(node)
         self.local_variable_types[node.name] = self.type_name_string(vtype)
+        self.local_variable_source_types[node.name] = self.type_name_string(
+            source_vtype
+        )
         name = self.hlsl_declaration_identifier_name(node.name)
         mapped_type = self.map_type(vtype)
         declaration = format_c_style_array_declaration(mapped_type, name)
@@ -9621,6 +9690,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if specialized_func_name is not None:
                 callee = specialized_func_name
                 func_name = specialized_func_name
+
+            if func_name in self.hlsl_mapped_overload_names:
+                resolved_overload = self.resolve_hlsl_function_overload(
+                    func_name,
+                    args,
+                    call_node=expr,
+                )
+                if resolved_overload is not None:
+                    target_name = self.hlsl_function_declaration_name(resolved_overload)
+                    callee = target_name
+                    func_name = target_name
+                    call_argument_func_name = target_name
 
             constructor_type = self.hlsl_type_constructor_name(func_name)
             if constructor_type is not None:
@@ -19907,10 +19988,193 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             used_names.add(alias)
         return aliases
 
+    def prepare_hlsl_mapped_function_overloads(self, functions, reserved_names=()):
+        """Assign target names when distinct source overloads collapse in HLSL."""
+        groups = {}
+        for function in functions or []:
+            function_name = getattr(function, "name", None)
+            if not function_name or function_stage_name(function):
+                continue
+            groups.setdefault(function_name, []).append(function)
+
+        self.hlsl_function_overloads_by_name = groups
+        self.hlsl_function_target_names = {}
+        self.hlsl_function_target_names_by_signature = {}
+        self.hlsl_mapped_overload_names = set()
+        used_names = set(groups)
+        used_names.update(self.hlsl_function_name_aliases.values())
+        used_names.update(reserved_names)
+
+        for function_name, overloads in groups.items():
+            mapped_groups = {}
+            for function in overloads:
+                target_key = self.hlsl_mapped_function_signature_key(function)
+                mapped_groups.setdefault(target_key, []).append(function)
+
+            for mapped_overloads in mapped_groups.values():
+                source_groups = {}
+                for function in mapped_overloads:
+                    source_key = self.hlsl_source_function_signature(function)
+                    source_groups.setdefault(source_key, []).append(function)
+                if len(source_groups) < 2:
+                    continue
+
+                if any(
+                    self.hlsl_function_has_resource_contract(function)
+                    for function in mapped_overloads
+                ):
+                    candidates = [
+                        self.hlsl_function_candidate_signature(declarations[0])
+                        for _source_key, declarations in sorted(
+                            source_groups.items(), key=lambda item: repr(item[0])
+                        )
+                    ]
+                    raise DirectXMappedOverloadError(
+                        "DirectX codegen cannot preserve mapped overloads with "
+                        f"resource parameters for '{function_name}'; candidates "
+                        f"are {', '.join(candidates)}",
+                        function_name=function_name,
+                        candidates=candidates,
+                        reason="resource-parameter-collision",
+                    )
+
+                self.hlsl_mapped_overload_names.add(function_name)
+                for source_key, declarations in sorted(
+                    source_groups.items(), key=lambda item: repr(item[0])
+                ):
+                    suffix = self.hlsl_function_overload_suffix(source_key)
+                    base_name = self.hlsl_sanitized_identifier(
+                        f"{function_name}_{suffix}"
+                    )
+                    target_name = base_name
+                    suffix_index = 2
+                    while (
+                        target_name in used_names
+                        or target_name in self.HLSL_RESERVED_LOCAL_IDENTIFIER_NAMES
+                    ):
+                        target_name = f"{base_name}_{suffix_index}"
+                        suffix_index += 1
+                    used_names.add(target_name)
+                    signature_key = (function_name, source_key)
+                    self.hlsl_function_target_names_by_signature[signature_key] = (
+                        target_name
+                    )
+                    for declaration in declarations:
+                        self.hlsl_function_target_names[id(declaration)] = target_name
+                    representative = next(
+                        (
+                            declaration
+                            for declaration in declarations
+                            if getattr(declaration, "body", None) is not None
+                        ),
+                        declarations[0],
+                    )
+                    self.register_hlsl_function_target_metadata(
+                        target_name, representative
+                    )
+
+    def hlsl_source_function_signature(self, function):
+        return tuple(
+            self.hlsl_source_type_signature(
+                getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+            )
+            for parameter in (
+                getattr(function, "parameters", getattr(function, "params", [])) or []
+            )
+        )
+
+    def hlsl_source_type_signature(self, value_type):
+        type_name = self.type_name_string(value_type) or "void"
+        return re.sub(r"\s+", " ", str(type_name).strip())
+
+    def hlsl_mapped_function_signature_key(self, function):
+        function_name = getattr(function, "name", None)
+        parameters = []
+        for parameter in (
+            getattr(function, "parameters", getattr(function, "params", [])) or []
+        ):
+            raw_type = self.type_name_string(
+                getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+            )
+            mapped_type = self.map_resource_parameter_type_with_hint(
+                raw_type, parameter, function_name
+            )
+            parameters.append(re.sub(r"\s+", " ", str(mapped_type).strip()))
+        return tuple(parameters)
+
+    def hlsl_function_has_resource_contract(self, function):
+        function_name = getattr(function, "name", None)
+        for parameter in (
+            getattr(function, "parameters", getattr(function, "params", [])) or []
+        ):
+            raw_type = self.type_name_string(
+                getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+            )
+            mapped_type = self.map_resource_parameter_type_with_hint(
+                raw_type, parameter, function_name
+            )
+            if self.is_resource_parameter_type(raw_type) or (
+                self.is_hlsl_global_resource_type(mapped_type)
+            ):
+                return True
+        return False
+
+    def hlsl_function_overload_suffix(self, source_signature):
+        parts = []
+        for type_name in source_signature:
+            part = re.sub(r"[^0-9A-Za-z]+", "_", type_name).strip("_")
+            parts.append(part or "value")
+        return "_".join(parts) or "void"
+
+    def hlsl_mapped_overload_reserved_names(self, ast):
+        names = set(self.global_variable_types)
+        names.update(self.structs_by_name)
+        for directive in getattr(ast, "preprocessors", []) or []:
+            if getattr(directive, "directive", None) != "define":
+                continue
+            content = str(getattr(directive, "content", "") or "")
+            match = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)", content)
+            if match is not None:
+                names.add(match.group(1))
+        for node in self.walk_ast(ast):
+            name = getattr(node, "name", None)
+            if isinstance(name, str) and name:
+                names.add(name)
+        return names
+
+    def register_hlsl_function_target_metadata(self, target_name, function):
+        parameters = (
+            getattr(function, "parameters", getattr(function, "params", [])) or []
+        )
+        self.function_return_types[target_name] = self.hlsl_function_return_type_name(
+            self.type_name_string(getattr(function, "return_type", "void"))
+        )
+        self.function_parameter_names[target_name] = [
+            getattr(parameter, "name", None) for parameter in parameters
+        ]
+        self.function_parameter_types[target_name] = [
+            self.function_parameter_type_name(parameter) for parameter in parameters
+        ]
+
+    def hlsl_function_candidate_signature(self, function):
+        parameters = ", ".join(self.hlsl_source_function_signature(function))
+        return_type = self.hlsl_source_type_signature(
+            getattr(function, "return_type", None)
+        )
+        return f"{getattr(function, 'name', '')}({parameters}) -> {return_type}"
+
     def hlsl_function_declaration_name(self, func, entry_name=None):
         if entry_name:
             return entry_name
         name = getattr(func, "name", None)
+        target_name = self.hlsl_function_target_names.get(id(func))
+        if target_name is None and name:
+            source_key = self.hlsl_source_function_signature(func)
+            target_name = self.hlsl_function_target_names_by_signature.get(
+                (name, source_key)
+            )
+        if target_name is not None:
+            return target_name
         return self.hlsl_function_name_aliases.get(name, name)
 
     def hlsl_materialized_function_name(self, name):
@@ -19937,6 +20201,178 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def hlsl_dependency_function_call_name(self, call):
         return self.hlsl_function_call_name(self.function_call_name(call))
+
+    def resolve_hlsl_function_overload(
+        self, function_name, arguments, *, call_node=None
+    ):
+        candidates = [
+            function
+            for function in self.hlsl_function_overloads_by_name.get(function_name, ())
+            if len(
+                getattr(function, "parameters", getattr(function, "params", [])) or []
+            )
+            == len(arguments)
+        ]
+        if not candidates:
+            return None
+
+        unique_candidates = {}
+        for function in candidates:
+            source_key = self.hlsl_source_function_signature(function)
+            previous = unique_candidates.get(source_key)
+            if previous is None or (
+                getattr(previous, "body", None) is None
+                and getattr(function, "body", None) is not None
+            ):
+                unique_candidates[source_key] = function
+        candidates = list(unique_candidates.values())
+        if len(candidates) == 1:
+            return candidates[0]
+
+        argument_types = [
+            self.hlsl_source_expression_type(argument) for argument in arguments
+        ]
+        scored = []
+        for function in candidates:
+            parameters = (
+                getattr(function, "parameters", getattr(function, "params", [])) or []
+            )
+            score = 0
+            compatible = True
+            for argument_type, parameter in zip(argument_types, parameters):
+                if argument_type is None:
+                    continue
+                parameter_type = getattr(
+                    parameter, "param_type", getattr(parameter, "vtype", None)
+                )
+                match_score = self.hlsl_function_type_match_score(
+                    argument_type, parameter_type
+                )
+                if match_score is None:
+                    compatible = False
+                    break
+                score += match_score
+            if compatible:
+                scored.append((score, function))
+
+        if scored:
+            highest_score = max(score for score, _function in scored)
+            winners = [function for score, function in scored if score == highest_score]
+            if len(winners) == 1:
+                return winners[0]
+        else:
+            winners = candidates
+
+        argument_names = [
+            (
+                self.hlsl_source_type_signature(argument_type)
+                if argument_type is not None
+                else "unknown"
+            )
+            for argument_type in argument_types
+        ]
+        candidate_names = [
+            self.hlsl_function_candidate_signature(function) for function in winners
+        ]
+        raise DirectXMappedOverloadError(
+            "DirectX codegen cannot preserve source overload binding for "
+            f"'{function_name}({', '.join(argument_names)})' after HLSL type "
+            f"mapping; candidates are {', '.join(candidate_names)}",
+            function_name=function_name,
+            argument_types=argument_names,
+            candidates=candidate_names,
+            reason="call-binding-ambiguous",
+            source_location=getattr(call_node, "source_location", None),
+        )
+
+    def hlsl_function_type_match_score(self, actual_type, parameter_type):
+        if actual_type is None or parameter_type is None:
+            return None
+        actual_signature = self.hlsl_source_type_signature(actual_type)
+        parameter_signature = self.hlsl_source_type_signature(parameter_type)
+        if actual_signature == parameter_signature:
+            return 8
+        if self.map_type(actual_type) == self.map_type(parameter_type):
+            return 2
+        if self.is_scalar_value_type(actual_type) and self.is_scalar_value_type(
+            parameter_type
+        ):
+            return 1
+        return None
+
+    def hlsl_source_expression_type(self, expression):
+        if expression is None:
+            return None
+        if isinstance(expression, (VariableNode, IdentifierNode)) or (
+            hasattr(expression, "__class__")
+            and "IdentifierNode" in str(expression.__class__)
+        ):
+            name = getattr(expression, "name", None)
+            return (
+                self.local_variable_source_types.get(name)
+                or self.local_variable_types.get(name)
+                or self.global_variable_types.get(name)
+                or self.expression_result_type(expression)
+            )
+        if isinstance(expression, ArrayAccessNode):
+            array_type = self.hlsl_source_expression_type(expression.array)
+            type_name = self.type_name_string(array_type)
+            if not type_name:
+                return None
+            base_type, array_suffix = split_array_type_suffix(type_name)
+            if array_suffix:
+                remaining_suffix = re.sub(r"^\s*\[[^\]]*\]", "", array_suffix)
+                return f"{base_type}{remaining_suffix}"
+            if type_name.rstrip().endswith(("*", "&")):
+                return type_name.rstrip()[:-1].strip()
+            return self.expression_result_type(expression)
+        if isinstance(expression, BinaryOpNode):
+            operator = self.map_operator(
+                getattr(expression, "op", getattr(expression, "operator", None))
+            )
+            if operator in {"==", "!=", "<", "<=", ">", ">=", "&&", "||"}:
+                return self.expression_result_type(expression)
+            left_type = self.hlsl_source_expression_type(expression.left)
+            right_type = self.hlsl_source_expression_type(expression.right)
+            if left_type is None:
+                return right_type
+            if right_type is None:
+                return left_type
+            if self.hlsl_source_type_signature(
+                left_type
+            ) == self.hlsl_source_type_signature(right_type):
+                return left_type
+            return self.expression_result_type(expression)
+        if isinstance(expression, UnaryOpNode):
+            return self.hlsl_source_expression_type(
+                getattr(expression, "operand", getattr(expression, "expr", None))
+            )
+        if isinstance(expression, TernaryOpNode):
+            true_type = self.hlsl_source_expression_type(expression.true_expr)
+            false_type = self.hlsl_source_expression_type(expression.false_expr)
+            if true_type is None:
+                return false_type
+            if false_type is None:
+                return true_type
+            if self.hlsl_source_type_signature(
+                true_type
+            ) == self.hlsl_source_type_signature(false_type):
+                return true_type
+            return self.expression_result_type(expression)
+        if isinstance(expression, ConstructorNode):
+            return self.type_name_string(getattr(expression, "constructor_type", None))
+        if isinstance(expression, FunctionCallNode):
+            function_name = self.function_call_name(expression)
+            if self.hlsl_type_constructor_name(function_name) is not None:
+                return function_name
+            resolved = self.resolve_hlsl_function_overload(
+                function_name,
+                expression.arguments,
+                call_node=expression,
+            )
+            if resolved is not None:
+                return self.type_name_string(getattr(resolved, "return_type", None))
+        return self.expression_result_type(expression)
 
     def collect_function_parameters(self, functions):
         parameters = []
