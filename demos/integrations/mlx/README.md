@@ -2,7 +2,7 @@
 
 This directory contains the project-level MLX porting checks used by CrossTL.
 The checks are pinned to MLX commit
-`968d264f2903d578e699c4452a4dbf48633921aa` and exercise the Metal kernel tree
+`4367c73b60541ddd5a266ce4644fd93d20223b6e` and exercise the Metal kernel tree
 as a source repository, not as isolated parser snippets.
 
 ## Scope
@@ -89,7 +89,8 @@ generated logs, available generated artifacts, and a concise JSON summary.
 Because `binary_two.metal` was already in the DirectX/Vulkan frontier, its OpenGL
 promotion does not change either reduced source count.
 
-The checked-in historical full-corpus scout snapshot against the same pinned MLX revision
+The checked-in historical full-corpus scout snapshot against MLX revision
+`968d264f2903d578e699c4452a4dbf48633921aa`
 scanned 40 Metal kernels and attempted 120 target artifacts across DirectX,
 OpenGL, and Vulkan. It translated 24 artifacts and reported 96 structured
 artifact failures behind tracked issues. The current materialization pass
@@ -139,7 +140,7 @@ Clone MLX and check out the pinned revision:
 
 ```bash
 git clone https://github.com/ml-explore/mlx.git /tmp/mlx
-git -C /tmp/mlx checkout 968d264f2903d578e699c4452a4dbf48633921aa
+git -C /tmp/mlx checkout 4367c73b60541ddd5a266ce4644fd93d20223b6e
 ```
 
 Run the project-porting harness from the CrossTL repository:
@@ -211,10 +212,14 @@ ownership for reflected constants in runtime reports. CrossGL/crosstl#1472
 tracks the Direct3D compute runtime driver needed to move Windows DirectX
 coverage from DXC validation to native dispatch/readback. CrossGL/crosstl#1474
 tracks exact DirectX bfloat16 lowering beyond the current compile-time smoke
-mapping. CrossGL/crosstl#1491 tracks the current scaled-attention
-qualified-static-constant materialization blocker. Built-in overloads are
-resolved alongside user-defined wrappers by source signature. Before native
-validation, the harness verifies
+mapping. Current DXC checks use Shader Model 6 compute profiles and do not prove
+Direct3D 10 or 11 compatibility; CrossGL/crosstl#1670 tracks explicit target
+profiles, feature gates, and compiler selection. CrossGL/crosstl#1669 tracks
+the fixed arrays of resource aliases introduced by the pinned revision's wide
+quantized matrix-vector helpers. CrossGL/crosstl#1491 tracks the current
+scaled-attention qualified-static-constant materialization blocker. Built-in
+overloads are resolved alongside user-defined wrappers by source signature.
+Before native validation, the harness verifies
 the four numeric-to-Boolean SIMD wrapper conversions and the signed 8-, 16-,
 32-, and 64-bit `arange` arithmetic conversions in the generated artifact.
 Ubuntu CI installs `glslangValidator` and runs it with an OpenGL/SPIR-V 1.3
@@ -228,7 +233,7 @@ the function-constant contract in
 [#1538](https://github.com/CrossGL/crosstl/issues/1538). Function-local scalar
 and vector aliases now retain lexical scope and resolve across declarations,
 constructors, casts, and generic static-member owners. For the pinned attention
-source this resolves 444 concrete uses across all 36 entries, including the
+source this resolves 531 concrete uses across all 42 entries, including the
 float accumulation type used by the half and bfloat input families. The full
 source translates to DirectX, OpenGL, and Vulkan; local OpenGL and Vulkan native
 validation passes. DirectX remains outside the DXC gate for the independent

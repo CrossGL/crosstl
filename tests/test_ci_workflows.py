@@ -2114,7 +2114,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     harness = (
         ROOT / "demos" / "integrations" / "mlx" / "run_mlx_porting.py"
     ).read_text(encoding="utf-8")
-    mlx_commit = "968d264f2903d578e699c4452a4dbf48633921aa"
+    mlx_commit = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
 
     assert mlx_porting, "mlx-project-porting.yml must exist"
     assert "demos/integrations/mlx/run_mlx_porting.py" in mlx_porting

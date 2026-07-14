@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "repository": "https://github.com/ml-explore/mlx",
-  "commit": "968d264f2903d578e699c4452a4dbf48633921aa",
+  "commit": "4367c73b60541ddd5a266ce4644fd93d20223b6e",
   "frontier_status": {
     "status": "structurally-validated",
     "scope": "clean-frontier",
@@ -308,11 +308,11 @@
       "vulkan"
     ],
     "supported_contract": "lexically scoped function-body using and typedef aliases that resolve to concrete scalar or vector types, including declarations, constructors, casts, array element types, and generic static-member owners",
-    "entry_count": 36,
+    "entry_count": 42,
     "resolved_use_counts": {
-      "declaration_types": 336,
-      "casts": 72,
-      "static_members": 36
+      "declaration_types": 402,
+      "casts": 87,
+      "static_members": 42
     },
     "native_validation": {
       "directx": "translated-dxc-blocked-by-existing-issues",
@@ -487,7 +487,8 @@
       "project.translate.vulkan-atomic-fence-unsupported": 1
     },
     "validation_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1312"
+      "https://github.com/CrossGL/crosstl/issues/1312",
+      "https://github.com/CrossGL/crosstl/issues/1670"
     ],
     "runtime_blocked_by": [
       "https://github.com/CrossGL/crosstl/issues/1376"
@@ -504,7 +505,8 @@
       "https://github.com/CrossGL/crosstl/issues/1562",
       "https://github.com/CrossGL/crosstl/issues/1566",
       "https://github.com/CrossGL/crosstl/issues/1567",
-      "https://github.com/CrossGL/crosstl/issues/1659"
+      "https://github.com/CrossGL/crosstl/issues/1659",
+      "https://github.com/CrossGL/crosstl/issues/1669"
     ],
     "semantic_blocked_by": [
       "https://github.com/CrossGL/crosstl/issues/1491",
@@ -512,11 +514,14 @@
       "https://github.com/CrossGL/crosstl/issues/1557",
       "https://github.com/CrossGL/crosstl/issues/1560",
       "https://github.com/CrossGL/crosstl/issues/1568",
-      "https://github.com/CrossGL/crosstl/issues/1569"
+      "https://github.com/CrossGL/crosstl/issues/1569",
+      "https://github.com/CrossGL/crosstl/issues/1669",
+      "https://github.com/CrossGL/crosstl/issues/1670"
     ],
     "runtime_integration_included": false,
     "runtime_parity_claimed": false,
     "last_completed": {
+      "commit": "968d264f2903d578e699c4452a4dbf48633921aa",
       "snapshot_scope": "pre-canonical-fence-contract",
       "translated_artifacts": 24,
       "failed_artifacts": 96,
@@ -539,6 +544,8 @@
     }
   },
   "tracked_issues": [
+    "https://github.com/CrossGL/crosstl/issues/1669",
+    "https://github.com/CrossGL/crosstl/issues/1670",
     "https://github.com/CrossGL/crosstl/issues/1312",
     "https://github.com/CrossGL/crosstl/issues/1376",
     "https://github.com/CrossGL/crosstl/issues/1388",
@@ -576,6 +583,8 @@
     "https://github.com/CrossGL/crosstl/issues/1660"
   ],
   "resolved_issues": [
+    "https://github.com/CrossGL/crosstl/issues/1667",
+    "https://github.com/CrossGL/crosstl/issues/1668",
     "https://github.com/CrossGL/crosstl/issues/1661",
     "https://github.com/CrossGL/crosstl/issues/1573",
     "https://github.com/CrossGL/crosstl/issues/1555",

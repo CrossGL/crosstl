@@ -910,11 +910,11 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     function_local_alias = expected_gaps["function_local_alias_status"]
     assert function_local_alias["status"] == "partial"
     assert function_local_alias["targets"] == list(module.FULL_CORPUS_TARGETS)
-    assert function_local_alias["entry_count"] == 36
+    assert function_local_alias["entry_count"] == 42
     assert function_local_alias["resolved_use_counts"] == {
-        "declaration_types": 336,
-        "casts": 72,
-        "static_members": 36,
+        "declaration_types": 402,
+        "casts": 87,
+        "static_members": 42,
     }
     assert function_local_alias["native_validation"] == {
         "directx": "translated-dxc-blocked-by-existing-issues",
@@ -1282,10 +1282,10 @@ def test_scaled_attention_local_alias_evidence_requires_complete_entries(tmp_pat
         (mlx_root / path).parent.mkdir(parents=True, exist_ok=True)
 
     directx = "\n".join(
-        f"[numthreads(1, 1, 1)]\nvoid CSMain_{index}() {{}}" for index in range(36)
+        f"[numthreads(1, 1, 1)]\nvoid CSMain_{index}() {{}}" for index in range(42)
     )
     vulkan = "\n".join(
-        f'  OpEntryPoint GLCompute %{index + 1} "sdpa_{index}"' for index in range(36)
+        f'  OpEntryPoint GLCompute %{index + 1} "sdpa_{index}"' for index in range(42)
     )
     (mlx_root / directx_path).write_text(directx, encoding="utf-8")
     (mlx_root / vulkan_path).write_text(vulkan, encoding="utf-8")
@@ -1306,10 +1306,10 @@ def test_scaled_attention_local_alias_evidence_requires_complete_entries(tmp_pat
 
     evidence = module._scaled_attention_local_alias_evidence(mlx_root, payload)
 
-    assert evidence["entryCountByTarget"] == {"directx": 36, "vulkan": 36}
-    assert evidence["resolvedDeclarationTypeCount"] == 336
-    assert evidence["resolvedCastCount"] == 72
-    assert evidence["resolvedStaticMemberCount"] == 36
+    assert evidence["entryCountByTarget"] == {"directx": 42, "vulkan": 42}
+    assert evidence["resolvedDeclarationTypeCount"] == 402
+    assert evidence["resolvedCastCount"] == 87
+    assert evidence["resolvedStaticMemberCount"] == 42
     assert evidence["vulkanProjectWarningCount"] == 0
 
 
@@ -3172,6 +3172,27 @@ def test_binary_resource_relocation_issue_is_full_corpus_only():
     assert issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
     assert issue not in module.FRONTIER_VALIDATION_TRACKED_ISSUES
     assert issue not in module.RUNTIME_READINESS_TRACKED_ISSUES
+
+
+def test_new_pin_resource_and_profile_contracts_are_tracked():
+    module = _load_harness()
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    resource_issue = "https://github.com/CrossGL/crosstl/issues/1669"
+    profile_issue = "https://github.com/CrossGL/crosstl/issues/1670"
+
+    assert resource_issue in module.FULL_CORPUS_TRANSLATION_TRACKED_ISSUES
+    assert resource_issue in module.FULL_CORPUS_TRACKED_ISSUES
+    assert profile_issue in module.FULL_CORPUS_TRACKED_ISSUES
+    assert resource_issue not in module.RESOLVED_FRONTIER_ISSUES
+    assert profile_issue not in module.RESOLVED_FRONTIER_ISSUES
+    assert resource_issue in gaps["tracked_issues"]
+    assert profile_issue in gaps["tracked_issues"]
+    assert resource_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
+    assert profile_issue in gaps["full_corpus_scout"]["validation_blocked_by"]
 
 
 def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatch):

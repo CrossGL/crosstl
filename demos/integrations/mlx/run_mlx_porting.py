@@ -29,7 +29,7 @@ from crosstl.project.runtime_verification import (
 )
 
 MLX_REPOSITORY = "https://github.com/ml-explore/mlx"
-MLX_COMMIT = "968d264f2903d578e699c4452a4dbf48633921aa"
+MLX_COMMIT = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
 MLX_METAL_KERNEL_ROOT = "mlx/backend/metal/kernels"
 MLX_ARANGE_SOURCE = "mlx/backend/metal/kernels/arange.metal"
 MLX_ARG_REDUCE_SOURCE = "mlx/backend/metal/kernels/arg_reduce.metal"
@@ -141,6 +141,7 @@ FULL_CORPUS_TRANSLATION_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1559",
     "https://github.com/CrossGL/crosstl/issues/1562",
     "https://github.com/CrossGL/crosstl/issues/1659",
+    "https://github.com/CrossGL/crosstl/issues/1669",
 )
 RUNTIME_READINESS_TRACKED_ISSUES = (
     "https://github.com/CrossGL/crosstl/issues/1388",
@@ -207,6 +208,7 @@ RUNTIME_READINESS_PLAN_DIAGNOSTIC_CODES = frozenset(
 FULL_CORPUS_TRACKED_ISSUES = (
     *FRONTIER_VALIDATION_TRACKED_ISSUES,
     "https://github.com/CrossGL/crosstl/issues/1312",
+    "https://github.com/CrossGL/crosstl/issues/1670",
     *FULL_CORPUS_TRANSLATION_TRACKED_ISSUES,
     *OPENGL_ARANGE_VALIDATION_TRACKED_ISSUES,
     *OPENGL_SCALED_DOT_PRODUCT_ATTENTION_TRACKED_ISSUES,
@@ -218,6 +220,8 @@ FULL_CORPUS_TRACKED_ISSUES = (
     *METAL_ROUNDTRIP_SEMANTIC_TRACKED_ISSUES,
 )
 RESOLVED_FRONTIER_ISSUES = (
+    "https://github.com/CrossGL/crosstl/issues/1667",
+    "https://github.com/CrossGL/crosstl/issues/1668",
     "https://github.com/CrossGL/crosstl/issues/1661",
     "https://github.com/CrossGL/crosstl/issues/1573",
     "https://github.com/CrossGL/crosstl/issues/1555",
@@ -1250,11 +1254,12 @@ def _scaled_attention_local_alias_evidence(
             generated_by_target["vulkan"],
         )
     )
-    expected_entry_count = 36
+    expected_entry_count = 42
     _require(
         directx_entry_count == expected_entry_count
         and vulkan_entry_count == expected_entry_count,
-        "scaled-attention artifacts did not retain all 36 materialized entries",
+        "scaled-attention artifacts did not retain all "
+        f"{expected_entry_count} materialized entries",
     )
 
     return {
@@ -1264,9 +1269,9 @@ def _scaled_attention_local_alias_evidence(
             "directx": directx_entry_count,
             "vulkan": vulkan_entry_count,
         },
-        "resolvedDeclarationTypeCount": 336,
-        "resolvedCastCount": 72,
-        "resolvedStaticMemberCount": 36,
+        "resolvedDeclarationTypeCount": 402,
+        "resolvedCastCount": 87,
+        "resolvedStaticMemberCount": 42,
         "vulkanProjectWarningCount": 0,
         "remainingAliasShapesTrackedBy": (
             "https://github.com/CrossGL/crosstl/issues/1567"
