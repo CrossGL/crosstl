@@ -46,6 +46,7 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXAggregateConditionalError,
     DirectXAtomicFenceLoweringError,
     DirectXCooperativeMatrixUnsupportedError,
+    DirectXMappedOverloadError,
     DirectXPrivatePointerParameterError,
     DirectXResourcePointerArrayError,
     DirectXResourcePointerParameterError,
@@ -10281,6 +10282,278 @@ def test_hlsl_forward_declares_helper_overloads_before_definitions():
         assert generated_code.index(declaration) < first_definition
     assert "float3 rgb = linearToSrgb(linear_.rgb);" in generated_code
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
+def test_hlsl_renames_collapsed_bfloat_overloads_and_rewrites_nested_calls(
+    tmp_path,
+):
+    shader = """
+    shader MappedBFloatOverloads {
+        float16 adjust(float16 value) {
+            return value + float16(1.0);
+        }
+
+        bfloat16_t adjust(bfloat16_t value) {
+            return bfloat16_t(float(value) + 2.0);
+        }
+
+        float16 callHalf(float16 value) {
+            return adjust(adjust(value));
+        }
+
+        bfloat16_t callBFloat(bfloat16_t value) {
+            return adjust(adjust(value));
+        }
+
+        bfloat16_t callConstructed() {
+            return adjust(bfloat16_t(3.0));
+        }
+
+        bfloat16_t callExpression(bfloat16_t left, bfloat16_t right) {
+            return adjust(left + right);
+        }
+
+        bfloat16_t callElement(bfloat16_t values[2], int index) {
+            return adjust(values[index]);
+        }
+
+        bfloat16_t callInferred() {
+            auto value = bfloat16_t(6.0);
+            return adjust(value);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                float16 first = callHalf(float16(1.0));
+                float16 second = callBFloat(bfloat16_t(2.0));
+                float16 third = callConstructed();
+                float16 fourth = callExpression(
+                    bfloat16_t(4.0), bfloat16_t(5.0));
+                float16 fifth = callInferred();
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "half adjust_float16(half value)" in generated_code
+    assert "half adjust_bfloat16_t(half value)" in generated_code
+    assert "return adjust_float16(adjust_float16(value));" in generated_code
+    assert "return adjust_bfloat16_t(adjust_bfloat16_t(value));" in generated_code
+    assert "return adjust_bfloat16_t(half(3.0));" in generated_code
+    assert "return adjust_bfloat16_t((left + right));" in generated_code
+    assert "return adjust_bfloat16_t(values[index]);" in generated_code
+    assert "return adjust_bfloat16_t(value);" in generated_code
+    assert "half adjust(half value)" not in generated_code
+    assert_directx_compute_validates_if_available(generated_code, tmp_path)
+
+
+def test_hlsl_renames_collapsed_fixed_width_integer_overloads(tmp_path):
+    shader = """
+    shader MappedIntegerOverloads {
+        int widen(int8_t value) {
+            return int(value) + 8;
+        }
+
+        int widen(int32_t value) {
+            return value + 32;
+        }
+
+        int callByte(int8_t value) {
+            return widen(value);
+        }
+
+        int callInt(int32_t value) {
+            return widen(value);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                int byteValue = callByte(int8_t(1));
+                int intValue = callInt(int32_t(2));
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "int widen_int8_t(int value)" in generated_code
+    assert "int widen_int32_t(int value)" in generated_code
+    assert "return widen_int8_t(value);" in generated_code
+    assert "return widen_int32_t(value);" in generated_code
+    assert_directx_compute_validates_if_available(generated_code, tmp_path)
+
+
+def test_hlsl_preserves_overload_names_when_mapped_signatures_remain_distinct(
+    tmp_path,
+):
+    shader = """
+    shader DistinctMappedOverloads {
+        int select(int value) {
+            return value;
+        }
+
+        float select(float value) {
+            return value;
+        }
+
+        int callInt() {
+            return select(1);
+        }
+
+        float callFloat() {
+            return select(2.0);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                int selectedInt = callInt();
+                float selectedFloat = callFloat();
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "int select(int value)" in generated_code
+    assert "float select(float value)" in generated_code
+    assert "return select(1);" in generated_code
+    assert "return select(2.0);" in generated_code
+    assert "select_int" not in generated_code
+    assert_directx_compute_validates_if_available(generated_code, tmp_path)
+
+
+def test_hlsl_mapped_overload_names_avoid_existing_declarations(tmp_path):
+    shader = """
+    shader HygienicMappedOverloads {
+        const int adjust_bfloat16_t = 7;
+
+        float16 adjust(float16 value) {
+            return value + float16(adjust_bfloat16_t);
+        }
+
+        bfloat16_t adjust(bfloat16_t value) {
+            return value;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                float16 value = adjust(float16(1.0));
+                float16 narrowValue = adjust(bfloat16_t(2.0));
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "static const int adjust_bfloat16_t = 7;" in generated_code
+    assert "half adjust_float16(half value)" in generated_code
+    assert "half adjust_bfloat16_t_2(half value)" in generated_code
+    assert "half value = adjust_float16(half(1.0));" in generated_code
+    assert "half narrowValue = adjust_bfloat16_t_2(half(2.0));" in generated_code
+    assert_directx_compute_validates_if_available(generated_code, tmp_path)
+
+
+def test_hlsl_reports_resource_overloads_with_collapsed_emitted_signatures():
+    shader = """
+    shader ResourceMappedOverloads {
+        float16 readValue(StructuredBuffer<float16> values, float16 fallback) {
+            return values[0] + fallback;
+        }
+
+        bfloat16_t readValue(
+            StructuredBuffer<float16> values,
+            bfloat16_t fallback
+        ) {
+            return bfloat16_t(values[0]) + fallback;
+        }
+    }
+    """
+
+    with pytest.raises(DirectXMappedOverloadError) as exc_info:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.function_name == "readValue"
+    assert diagnostic.reason == "resource-parameter-collision"
+    assert diagnostic.argument_types == ()
+    assert diagnostic.candidates == (
+        "readValue(StructuredBuffer<float16>, bfloat16_t) -> bfloat16_t",
+        "readValue(StructuredBuffer<float16>, float16) -> float16",
+    )
+
+
+def test_hlsl_reports_ambiguous_call_after_overload_type_mapping():
+    shader = """
+    shader AmbiguousMappedOverloads {
+        float16 select(float16 value) {
+            return value;
+        }
+
+        bfloat16_t select(bfloat16_t value) {
+            return value;
+        }
+
+        float16 choose() {
+            return select(1);
+        }
+    }
+    """
+
+    with pytest.raises(DirectXMappedOverloadError) as exc_info:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.directx-mapped-overload-ambiguous"
+    )
+    assert diagnostic.function_name == "select"
+    assert diagnostic.argument_types == ("int",)
+    assert diagnostic.reason == "call-binding-ambiguous"
+    assert diagnostic.candidates == (
+        "select(float16) -> float16",
+        "select(bfloat16_t) -> bfloat16_t",
+    )
+
+
+def test_hlsl_mapped_overload_ambiguity_reaches_project_report(tmp_path):
+    from crosstl.project import translate_project
+
+    source = """
+    shader AmbiguousMappedOverloads {
+        float16 select(float16 value) {
+            return value;
+        }
+
+        bfloat16_t select(bfloat16_t value) {
+            return value;
+        }
+
+        float16 choose() {
+            return select(1);
+        }
+    }
+    """
+    source_path = tmp_path / "ambiguous-overloads.cgl"
+    source_path.write_text(source, encoding="utf-8")
+
+    payload = translate_project(tmp_path, targets=["directx"]).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert len(payload["diagnostics"]) == 1
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == ("project.translate.directx-mapped-overload-ambiguous")
+    assert diagnostic["missingCapabilities"] == ["directx.mapped-overload-resolution"]
+    assert "select(int)" in diagnostic["message"]
 
 
 def test_hlsl_orders_late_array_helper_overloads_before_caller(tmp_path):

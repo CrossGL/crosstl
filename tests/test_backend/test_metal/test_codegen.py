@@ -6,6 +6,8 @@ from typing import List
 import pytest
 
 import crosstl
+from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
+from crosstl.backend.DirectX.DirectxParser import HLSLParser
 from crosstl.backend.Metal.MetalCrossGLCodeGen import (
     MetalAtomicFenceLoweringError,
     MetalBuiltinOverloadResolutionError,
@@ -7664,6 +7666,86 @@ def test_mlx_random_auto_local_overload_matches_direct_and_project_opengl(
     assert_opengl_compute_validates_if_available(
         direct, tmp_path, "mlx-random-auto-local-overload"
     )
+
+
+def test_mlx_collapsed_float16_overloads_match_direct_and_project_hlsl(tmp_path):
+    # Reduced from MLX 4367c73b60541ddd5a266ce4644fd93d20223b6e,
+    # mlx/backend/metal/kernels/binary_two.metal.
+    source = """
+    typedef bfloat bfloat16_t;
+
+    struct Divide {};
+
+    half Divide__operator_call(thread Divide& self, half x, half y) {
+      return x / y;
+    }
+
+    bfloat16_t Divide__operator_call(
+        thread Divide& self, bfloat16_t x, bfloat16_t y) {
+      return x - y;
+    }
+
+    kernel void exercise_collapsed_overloads(
+        device half* output [[buffer(0)]],
+        uint index [[thread_position_in_grid]]) {
+      Divide operation;
+      half half_value = half(index + 2u);
+      bfloat16_t bfloat_value = bfloat16_t(index + 2u);
+      output[index * 2u] = Divide__operator_call(
+          operation, half_value, half(2.0h));
+      output[index * 2u + 1u] = half(Divide__operator_call(
+          operation, bfloat_value, bfloat16_t(2.0h)));
+    }
+    """
+    repo = tmp_path / "mlx-reduced"
+    repo.mkdir()
+    source_path = repo / "binary_two.metal"
+    source_path.write_text(source, encoding="utf-8")
+
+    direct = crosstl.translate(str(source_path), backend="directx", format_output=False)
+    report = translate_project(repo, targets=["directx"], output_dir="out")
+    payload = report.to_json()
+    assert payload["summary"]["translatedCount"] == 1, payload
+    assert payload["summary"]["failedCount"] == 0, payload
+    artifact = payload["artifacts"][0]
+    project = (repo / artifact["path"]).read_text(encoding="utf-8")
+
+    definition_pattern = (
+        r"half (Divide__operator_call_[A-Za-z0-9_]+)"
+        r"\(inout Divide self, half x, half y\) \{"
+    )
+    direct_helpers = re.findall(definition_pattern, direct)
+    project_helpers = re.findall(definition_pattern, project)
+    assert len(direct_helpers) == len(project_helpers) == 2
+    assert set(direct_helpers) == set(project_helpers)
+    assert len(set(direct_helpers)) == 2
+    for helper in direct_helpers:
+        assert f"{helper}(operation," in direct
+    assert "half Divide__operator_call(inout Divide self, half x, half y)" not in direct
+
+    HLSLParser(HLSLLexer(direct).tokenize()).parse()
+    dxc = shutil.which("dxc")
+    if dxc is not None:
+        source_output = tmp_path / "mlx-collapsed-overloads.hlsl"
+        binary_output = tmp_path / "mlx-collapsed-overloads.dxil"
+        source_output.write_text(direct, encoding="utf-8")
+        result = subprocess.run(
+            [
+                dxc,
+                "-T",
+                "cs_6_0",
+                "-E",
+                "exercise_collapsed_overloads",
+                str(source_output),
+                "-Fo",
+                str(binary_output),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert binary_output.stat().st_size > 0
 
 
 def test_metal_simd_reductions_reach_backend_wave_instructions():
