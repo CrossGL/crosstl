@@ -4,6 +4,7 @@ import ast as py_ast
 import re
 from hashlib import sha1
 
+from ...glsl_builtins import GLSL_BUILTIN_INT_LIMITS
 from ...backend.common_ast import AssignmentNode as BackendAssignmentNode
 from ...backend.common_ast import ReturnNode as BackendReturnNode
 from ...backend.common_ast import VariableNode as BackendVariableNode
@@ -17123,12 +17124,13 @@ class MetalCodeGen:
     def generate_metal_builtin_limit_fallbacks(self, ast, functions):
         if not self.functions_use_identifier(functions, "gl_MaxImageUnits"):
             return ""
+        default = GLSL_BUILTIN_INT_LIMITS["gl_MaxImageUnits"]
         return (
             "/* CrossGL fallback: GLSL builtin limit specialization "
             "gl_MaxImageUnits is not available in Metal; using the OpenGL "
             "minimum value. */\n"
             f"{self.metal_unused_declaration_qualifier('constant')} "
-            "int gl_MaxImageUnits = 8;\n"
+            f"int gl_MaxImageUnits = {default};\n"
         )
 
     def functions_use_identifier(self, functions, name):

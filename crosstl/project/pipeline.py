@@ -23,6 +23,7 @@ from types import SimpleNamespace
 from typing import Any, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 from crosstl._crosstl import translate
+from crosstl.glsl_builtins import GLSL_BUILTIN_INT_LIMITS
 from crosstl.project.host_reflection import (
     empty_host_interface_record,
     host_interface_record,
@@ -18552,12 +18553,21 @@ def _project_specialization_declarations(
                     missing_capabilities=["specialization.constant.identity"],
                 )
             )
+        builtin_default = (
+            GLSL_BUILTIN_INT_LIMITS.get(name)
+            if unit.source_backend == "opengl"
+            else None
+        )
         source_type = (
             _runtime_host_interface_type_name(getattr(node, "var_type", None))
             or _runtime_host_interface_type_name(getattr(node, "vtype", None))
             or _runtime_host_interface_type_name(getattr(node, "const_type", None))
+            or ("int" if builtin_default is not None else None)
             or "unknown"
         )
+        if not has_default and builtin_default is not None:
+            default_value = builtin_default
+            has_default = True
         declarations.append(
             _ProjectSpecializationDeclaration(
                 name=name,

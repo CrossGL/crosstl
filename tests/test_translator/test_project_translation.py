@@ -831,6 +831,15 @@ def test_translate_project_glslang_spec_constant_vertex_to_directx(tmp_path):
     generated = artifact_path.read_text(encoding="utf-8")
 
     assert payload["summary"]["translatedCount"] == 1
+    builtin = next(
+        constant
+        for constant in payload["artifacts"][0]["specializationConstants"]
+        if constant["name"] == "gl_MaxImageUnits"
+    )
+    assert builtin["sourceType"] == "int"
+    assert builtin["defaultValue"] == 8
+    assert builtin["concreteValue"] == 8
+    assert builtin["valueProvenance"]["kind"] == "source-default"
     assert "static const int gl_MaxImageUnits = 8;" in generated
     assert (
         "void foo(float4 p[arraySize], VertexInput input, " "inout VertexOutput output)"
@@ -19525,6 +19534,8 @@ def test_translate_project_emits_closed_portability_report_schema(tmp_path):
         "error",
         "stage",
         "templateMaterialization",
+        "specializationConstants",
+        "specializationMaterialization",
     }
     assert artifact["requiredCapabilities"] == []
     assert set(artifact["sourceHash"]) == project_pipeline.REPORT_HASH_FIELDS
@@ -39159,6 +39170,7 @@ def test_plan_runtime_adapters_uses_registered_target_parser_for_host_interface(
         "entryPointCount": 1,
         "resourceCount": 0,
         "constantCount": 0,
+        "specializationConstantCount": 0,
         "entryPoints": [
             {
                 "name": "main",
@@ -39168,6 +39180,7 @@ def test_plan_runtime_adapters_uses_registered_target_parser_for_host_interface(
         ],
         "resources": [],
         "constants": [],
+        "specializationConstants": [],
         "diagnostics": [],
         "diagnosticRecords": [],
     }
@@ -39244,11 +39257,13 @@ def test_plan_runtime_adapters_reports_webgpu_wgsl_adapter_metadata(tmp_path):
         "entryPointCount": 1,
         "resourceCount": 0,
         "constantCount": 0,
+        "specializationConstantCount": 0,
         "entryPoints": [
             {"name": "vertex_main", "stage": "vertex", "executionConfig": {}}
         ],
         "resources": [],
         "constants": [],
+        "specializationConstants": [],
         "diagnostics": [],
         "diagnosticRecords": [],
     }

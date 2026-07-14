@@ -4,6 +4,7 @@ import re
 from copy import deepcopy
 from hashlib import sha1
 
+from ...glsl_builtins import GLSL_BUILTIN_INT_LIMITS
 from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
@@ -1011,10 +1012,7 @@ class HLSLCodeGen:
         "nonuniform",
         "nonuniformEXT",
     }
-    # Matches glslang's default resource limit for this built-in constant.
-    HLSL_GLSL_BUILTIN_INT_CONSTANTS = {
-        "gl_MaxImageUnits": 8,
-    }
+    HLSL_GLSL_BUILTIN_INT_CONSTANTS = GLSL_BUILTIN_INT_LIMITS
     HLSL_SPECIALIZATION_CONSTANT_TYPES = frozenset({"bool", "int", "uint", "float"})
 
     def __init__(self, target_profile=None):

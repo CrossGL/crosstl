@@ -5,6 +5,7 @@ import struct
 from dataclasses import dataclass
 from typing import List, Optional, Set, Tuple, Union
 
+from ...glsl_builtins import GLSL_BUILTIN_INT_LIMITS
 from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
@@ -18964,10 +18965,7 @@ class VulkanSPIRVCodeGen:
         return None
 
     def glsl_builtin_limit_constant(self, name: str) -> Optional[SpirvId]:
-        limits = {
-            "gl_MaxImageUnits": 8,
-        }
-        value = limits.get(name)
+        value = GLSL_BUILTIN_INT_LIMITS.get(name)
         if value is None:
             return None
         return self.register_constant(value, self.register_primitive_type("int"))
