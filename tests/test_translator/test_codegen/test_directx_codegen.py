@@ -1360,6 +1360,52 @@ def test_hlsl_codegen_lowers_generic_int64_vector_type_names():
     assert "return int64_t2(x, y);" in generated
 
 
+def test_hlsl_codegen_maps_canonical_64_bit_vector_aliases(tmp_path):
+    shader = """
+    shader Canonical64BitVectors {
+        i64vec2 signedPair(i64vec2 value) {
+            return i64vec2(value.y, value.x);
+        }
+
+        u64vec4 unsignedQuad(u64vec4 value) {
+            return u64vec4(value.w, value.z, value.y, value.x);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<int64_t> output @ binding(0)) {
+                i64vec3 signedValues = i64vec3(1, 2, 3);
+                u64vec3 unsignedValues = u64vec3(4, 5, 6);
+                i64vec2 pair = signedPair(signedValues.xy);
+                u64vec4 quad = unsignedQuad(
+                    u64vec4(unsignedValues, uint64_t(7))
+                );
+                output[0] = pair.x + int64_t(quad.x);
+            }
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    for source_type in (
+        "i64vec2",
+        "i64vec3",
+        "i64vec4",
+        "u64vec2",
+        "u64vec3",
+        "u64vec4",
+    ):
+        assert source_type not in generated
+    assert "int64_t2 signedPair(int64_t2 value)" in generated
+    assert "uint64_t4 unsignedQuad(uint64_t4 value)" in generated
+    assert "int64_t3 signedValues = int64_t3(1, 2, 3);" in generated
+    assert "uint64_t3 unsignedValues = uint64_t3(4, 5, 6);" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
 def test_hlsl_codegen_casts_64_bit_resource_indices_for_dxc():
     ast = ShaderNode(
         "ResourceIndices",
