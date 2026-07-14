@@ -382,6 +382,114 @@ def _write_reference_accessor_report(
     )
 
 
+def _write_template_member_pointer_report(
+    module,
+    work_dir,
+    report_path,
+    *,
+    generated_by_target=None,
+    targets=None,
+):
+    defaults = {
+        "directx": (
+            """
+            struct ReducedMMATile { float value; };
+            StructuredBuffer<float> src : register(t0);
+            RWStructuredBuffer<float> out_ : register(u1);
+            float ReducedMMAFrag__load__const_device_float_ptr(
+                StructuredBuffer<float> src, int stride) {
+              return float(src[stride]);
+            }
+            void ReducedMMATile__load__float(
+                inout ReducedMMATile self,
+                StructuredBuffer<float> src,
+                int index) {
+              self.value = ReducedMMAFrag__load__const_device_float_ptr(
+                  &src[index], 1);
+            }
+            [numthreads(1, 1, 1)]
+            void CSMain(uint3 gid_dispatchThreadID : SV_DispatchThreadID) {
+              uint gid = gid_dispatchThreadID.x;
+              ReducedMMATile tile;
+              ReducedMMATile__load__float(tile, src, int(gid));
+              out_[gid] = tile.value;
+            }
+        """
+        ),
+        "opengl": (
+            """
+            #version 450 core
+            struct ReducedMMATile { float value; };
+            layout(std430, binding = 0) readonly buffer srcBuffer {
+              float src[];
+            };
+            layout(std430, binding = 1) buffer outBuffer { float out_[]; };
+            void ReducedMMATile_load_float__glsl_src_src_float(
+                inout ReducedMMATile self, int index, int src_offset) {
+              self.value =
+                  ReducedMMAFrag_load_const_device_float_ptr__glsl_src_src_float(
+                      1, int((src_offset + index)));
+            }
+            float ReducedMMAFrag_load_const_device_float_ptr__glsl_src_src_float(
+                int stride, int src_offset) {
+              return float(src[(src_offset + stride)]);
+            }
+            void main() {
+              uint gid = uint(gl_GlobalInvocationID.x);
+              ReducedMMATile tile;
+              ReducedMMATile_load_float__glsl_src_src_float(
+                  tile, int(gid), int(0));
+              out_[gid] = tile.value;
+            }
+        """
+        ),
+    }
+    generated_by_target = {**defaults, **(generated_by_target or {})}
+    selected_targets = tuple(targets or module.TEMPLATE_MEMBER_POINTER_TARGETS)
+    project_dir = work_dir / "template-member-pointer-project"
+    artifacts = []
+    suffixes = {"directx": ".hlsl", "opengl": ".glsl"}
+    for target in selected_targets:
+        generated_path = (
+            project_dir
+            / "generated"
+            / target
+            / Path(module.TEMPLATE_MEMBER_POINTER_FIXTURE_NAME).with_suffix(
+                suffixes[target]
+            )
+        )
+        generated_path.parent.mkdir(parents=True, exist_ok=True)
+        generated_path.write_text(
+            generated_by_target[target].strip() + "\n",
+            encoding="utf-8",
+        )
+        artifacts.append(
+            {
+                "source": module.TEMPLATE_MEMBER_POINTER_FIXTURE_NAME,
+                "sourceBackend": "metal",
+                "target": target,
+                "path": generated_path.relative_to(project_dir).as_posix(),
+                "status": "translated",
+            }
+        )
+    report_path.write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "unitCount": 1,
+                    "artifactCount": len(selected_targets),
+                    "translatedCount": len(selected_targets),
+                    "failedCount": 0,
+                    "diagnosticCounts": {"error": 0, "note": 0, "warning": 0},
+                },
+                "diagnostics": [],
+                "artifacts": artifacts,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def _write_metal_roundtrip_report(
     module,
     mlx_root,
@@ -749,6 +857,282 @@ def test_reference_accessor_check_records_structured_proof_and_native_validation
         assert proof["nativeValidation"]["status"] == "validated"
         assert proof["nativeValidation"]["nativeCompiler"] == tool
         assert (mlx_root / proof["artifact"]).is_file()
+
+
+def test_template_member_pointer_fixture_preserves_mlx_addressed_load_shape():
+    module = _load_harness()
+    source = module.TEMPLATE_MEMBER_POINTER_FIXTURE_PATH.read_text(encoding="utf-8")
+
+    fragment_template = "template <typename SrcPtrType>"
+    fragment_method = "static float load(SrcPtrType src, const int stride)"
+    indexed_read = "return static_cast<float>(src[stride]);"
+    tile_template = "template <typename U>"
+    tile_method = "void load(const device U* src, const int index)"
+    addressed_call = "value = ReducedMMAFrag::load(&(src[index]), 1);"
+    kernel_call = "tile.load(src, int(gid));"
+    assert source.index(fragment_template) < source.index(fragment_method)
+    assert source.index(fragment_method) < source.index(indexed_read)
+    assert source.index(tile_template, source.index(indexed_read)) < source.index(
+        tile_method
+    )
+    assert source.index(tile_method) < source.index(addressed_call)
+    assert source.index(addressed_call) < source.index(kernel_call)
+
+
+def test_template_member_pointer_check_records_precise_target_evidence(
+    tmp_path, monkeypatch
+):
+    module = _load_harness()
+    mlx_root = tmp_path / "mlx"
+    work_dir = mlx_root / ".crosstl-mlx-porting"
+    config_dir = work_dir / "configs"
+    report_dir = work_dir / "reports"
+    log_dir = work_dir / "logs"
+    for directory in (config_dir, report_dir, log_dir):
+        directory.mkdir(parents=True)
+    commands = []
+
+    def fake_run_command(name, command, *, log_dir, **_kwargs):
+        commands.append((name, list(command)))
+        _write_template_member_pointer_report(
+            module,
+            work_dir,
+            report_dir / "template-member-pointer.json",
+        )
+        stdout_path = log_dir / f"{name}.stdout"
+        stderr_path = log_dir / f"{name}.stderr"
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text("", encoding="utf-8")
+        return module.CommandResult(name, list(command), 0, stdout_path, stderr_path)
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+
+    result = module._check_template_member_buffer_pointer(
+        mlx_root,
+        work_dir,
+        config_dir,
+        report_dir,
+        log_dir,
+        "python",
+    )
+
+    config = (config_dir / "template-member-pointer.toml").read_text(encoding="utf-8")
+    assert 'source_roots = ["."]' in config
+    assert f'include = ["{module.TEMPLATE_MEMBER_POINTER_FIXTURE_NAME}"]' in config
+    assert 'targets = ["directx", "opengl"]' in config
+    assert [name for name, _command in commands] == [
+        "translate-template-member-pointer"
+    ]
+    assert commands[0][1][:4] == [
+        "python",
+        "-m",
+        "crosstl",
+        "translate-project",
+    ]
+    assert Path(commands[0][1][4]) == work_dir / "template-member-pointer-project"
+
+    assert result["status"] == "passed"
+    assert result["proofStatus"] == "verified-materialized-pointer-indexed-read"
+    assert result["sourceContract"] == {
+        "outerType": "ReducedMMATile",
+        "outerMethod": "load",
+        "outerTemplateParameter": "U",
+        "sourcePointerType": "const device U*",
+        "fragmentType": "ReducedMMAFrag",
+        "fragmentMethod": "load",
+        "fragmentTemplateParameter": "SrcPtrType",
+        "pointerArgument": "&(src[index])",
+        "indexedReadExpression": "src[stride]",
+    }
+    assert result["targets"] == ["directx", "opengl"]
+    assert result["artifactCount"] == 2
+    assert result["projectDiagnosticCount"] == 0
+    assert result["generatedArtifactEvidenceOnly"] is True
+    assert result["nativeToolchainValidationIncluded"] is False
+    assert result["upstreamMlxRuntimeExecuted"] is False
+    assert result["runtimeIntegrationIncluded"] is False
+    assert result["runtimeParityClaimed"] is False
+    assert result["sourceSha256"] == module._sha256(
+        module.TEMPLATE_MEMBER_POINTER_FIXTURE_PATH
+    )
+
+    directx = result["targetProofs"]["directx"]["structuralEvidence"]
+    assert directx["status"] == "verified-materialized-pointer-indexed-read"
+    assert directx["materializedHelper"] == (
+        "ReducedMMAFrag__load__const_device_float_ptr"
+    )
+    assert directx["materializedOuterHelper"] == "ReducedMMATile__load__float"
+    assert directx["sourceView"] == {
+        "representation": "structured-buffer-addressed-element",
+        "resourceName": "src",
+        "parameterName": "src",
+        "parameterType": "StructuredBuffer<float>",
+        "offsetParameter": None,
+        "scalarizedPointerParameter": False,
+    }
+    assert directx["sourceIndexExpression"] == "&src[index]"
+    assert directx["indexedReadExpression"] == "src[stride]"
+    assert directx["indexedReadIndex"] == "stride"
+    assert directx["scalarizedPointerParameter"] is False
+    assert directx["unresolvedSourceCallRetained"] is False
+    assert directx["sourceIndexPreserved"] is True
+    assert directx["kernelPathInvoked"] is True
+
+    opengl = result["targetProofs"]["opengl"]["structuralEvidence"]
+    assert opengl["status"] == "verified-materialized-pointer-indexed-read"
+    assert opengl["materializedHelper"] == (
+        "ReducedMMAFrag_load_const_device_float_ptr__glsl_src_src_float"
+    )
+    assert opengl["materializedOuterHelper"] == (
+        "ReducedMMATile_load_float__glsl_src_src_float"
+    )
+    assert opengl["sourceView"] == {
+        "representation": "global-storage-buffer-plus-offset",
+        "resourceName": "src",
+        "parameterName": "src_offset",
+        "parameterType": "int",
+        "offsetParameter": "src_offset",
+        "scalarizedPointerParameter": False,
+    }
+    assert opengl["sourceIndexExpression"] == "src_offset+index"
+    assert opengl["indexedReadExpression"] == "src[(src_offset+stride)]"
+    assert opengl["indexedReadIndex"] == "(src_offset+stride)"
+    assert opengl["sourceViewParameterRetained"] is True
+    assert opengl["indexedReadFromSourceView"] is True
+    assert opengl["scalarizedPointerParameter"] is False
+    assert opengl["unresolvedSourceCallRetained"] is False
+    assert opengl["kernelPathInvoked"] is True
+    for proof in result["targetProofs"].values():
+        assert (mlx_root / proof["artifact"]).is_file()
+        assert proof["artifactSha256"] == module._sha256(mlx_root / proof["artifact"])
+
+
+def test_template_member_pointer_check_requires_both_target_artifacts(
+    tmp_path, monkeypatch
+):
+    module = _load_harness()
+    mlx_root = tmp_path / "mlx"
+    work_dir = mlx_root / ".crosstl-mlx-porting"
+    config_dir = work_dir / "configs"
+    report_dir = work_dir / "reports"
+    log_dir = work_dir / "logs"
+    for directory in (config_dir, report_dir, log_dir):
+        directory.mkdir(parents=True)
+
+    def fake_run_command(name, command, *, log_dir, **_kwargs):
+        _write_template_member_pointer_report(
+            module,
+            work_dir,
+            report_dir / "template-member-pointer.json",
+            targets=("directx",),
+        )
+        stdout_path = log_dir / f"{name}.stdout"
+        stderr_path = log_dir / f"{name}.stderr"
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text("", encoding="utf-8")
+        return module.CommandResult(name, list(command), 0, stdout_path, stderr_path)
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+
+    with pytest.raises(
+        module.PortingCheckError,
+        match="did not emit both clean artifacts",
+    ):
+        module._check_template_member_buffer_pointer(
+            mlx_root,
+            work_dir,
+            config_dir,
+            report_dir,
+            log_dir,
+            "python",
+        )
+
+
+@pytest.mark.parametrize(
+    ("target", "generated", "message"),
+    [
+        pytest.param(
+            "directx",
+            """
+            float stale_path() {
+              return ReducedMMAFrag::load(&(src[index]), 1);
+            }
+            """,
+            "retained an unresolved source member call",
+            id="retained-source-member-call",
+        ),
+        pytest.param(
+            "opengl",
+            """
+            void main() {
+              ReducedMMATile tile;
+              tile.load(src, int(gid));
+            }
+            """,
+            "retained an unresolved source member call",
+            id="retained-outer-member-call",
+        ),
+        pytest.param(
+            "directx",
+            """
+            float ReducedMMAFrag__load__float(float src, int stride) {
+              return float(src[stride]);
+            }
+            """,
+            "scalarized float src parameter",
+            id="directx-scalarized-pointer-parameter",
+        ),
+        pytest.param(
+            "opengl",
+            """
+            float ReducedMMAFrag_load_float(float src, int stride) {
+              return float(src[stride]);
+            }
+            """,
+            "scalarized float src parameter",
+            id="opengl-scalarized-pointer-parameter",
+        ),
+        pytest.param(
+            "directx",
+            """
+            float ReducedMMAFrag__load__const_device_float_ptr(
+                StructuredBuffer<float> src, int stride) {
+              return float(src);
+            }
+            """,
+            "does not perform an indexed read",
+            id="directx-unindexed-source-read",
+        ),
+        pytest.param(
+            "opengl",
+            """
+            struct ReducedMMATile { float value; };
+            layout(std430, binding = 0) readonly buffer srcBuffer {
+              float src[];
+            };
+            float ReducedMMAFrag_load_const_device_float_ptr__glsl_src_src_float(
+                int stride, int src_offset) {
+              return float(src[(src_offset + stride)]);
+            }
+            void ReducedMMATile_load_float__glsl_src_src_float(
+                inout ReducedMMATile self, int index, int src_offset) {
+              self.value =
+                  ReducedMMAFrag_load_const_device_float_ptr__glsl_src_src_float(
+                      1, int(src_offset));
+            }
+            """,
+            "does not preserve index in the src_offset buffer view",
+            id="opengl-lost-addressed-index",
+        ),
+    ],
+)
+def test_template_member_pointer_evidence_rejects_unresolved_or_scalarized_paths(
+    target, generated, message
+):
+    module = _load_harness()
+
+    with pytest.raises(module.PortingCheckError, match=message):
+        module._template_member_pointer_evidence(generated, target=target)
 
 
 @pytest.mark.parametrize(
@@ -3805,6 +4189,13 @@ def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatc
     )
     monkeypatch.setattr(
         module,
+        "_check_template_member_buffer_pointer",
+        lambda *args: pytest.fail(
+            "reduced template member pointer proof should not run"
+        ),
+    )
+    monkeypatch.setattr(
+        module,
         "_translate_directx_vulkan_frontier",
         lambda *args, **kwargs: pytest.fail("reduced frontier should not run"),
     )
@@ -3847,6 +4238,11 @@ def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatc
     assert result["scope"]["referenceAccessorTargets"] == []
     assert result["scope"]["referenceAccessorDirectxToolchainRequired"] is False
     assert result["scope"]["referenceAccessorOpenglToolchainRequired"] is False
+    assert result["scope"]["templateMemberBufferPointerProofIncluded"] is False
+    assert result["scope"]["templateMemberBufferPointerTargets"] == []
+    assert (
+        result["scope"]["templateMemberBufferPointerNativeValidationIncluded"] is False
+    )
     assert result["scope"]["runtimeParityClaimed"] is False
 
 
@@ -3896,6 +4292,15 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
         module,
         "_check_reference_accessor_lvalue_identity",
         fake_reference_accessor_check,
+    )
+    monkeypatch.setattr(
+        module,
+        "_check_template_member_buffer_pointer",
+        lambda *args: {
+            "name": "template-member-buffer-pointer",
+            "status": "passed",
+            "runtimeParityClaimed": False,
+        },
     )
     monkeypatch.setattr(
         module,
@@ -3970,6 +4375,7 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
         "metal-roundtrip",
         "atomic-fence-contract",
         "reference-accessor-lvalue-identity",
+        "template-member-buffer-pointer",
         "directx-vulkan-frontier",
         "arange-opengl",
         "opengl-frontier",
@@ -3989,6 +4395,14 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
     assert result["scope"]["referenceAccessorTargets"] == ["directx", "opengl"]
     assert result["scope"]["referenceAccessorDirectxToolchainRequired"] is False
     assert result["scope"]["referenceAccessorOpenglToolchainRequired"] is True
+    assert result["scope"]["templateMemberBufferPointerProofIncluded"] is True
+    assert result["scope"]["templateMemberBufferPointerTargets"] == [
+        "directx",
+        "opengl",
+    ]
+    assert (
+        result["scope"]["templateMemberBufferPointerNativeValidationIncluded"] is False
+    )
     assert result["scope"]["runtimeParityClaimed"] is False
     assert result["scope"]["cleanFrontierSources"] == list(
         module.MLX_CLEAN_REDUCED_FRONTIER_SOURCES

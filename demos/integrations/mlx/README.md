@@ -40,6 +40,18 @@ The current harness verifies:
   proof set in both generated artifacts without requiring either target
   compiler. These checks do not execute an MLX runtime or establish numerical
   parity;
+- a separate checked-in Metal fixture for the MLX `BaseMMAFrag::load` call
+  shape in which a templated tile method passes `&(src[index])` to a templated
+  fragment helper. Project translation must emit both DirectX and OpenGL
+  artifacts with zero diagnostics. The materialized fragment helper must keep
+  a pointer-backed source view and read it at `stride`; a scalar `float src`
+  parameter is rejected. The DirectX proof requires a `StructuredBuffer<float>`
+  source and preserves the addressed `src[index]` argument. The OpenGL proof
+  requires the equivalent global storage-buffer plus `src_offset` form, carries
+  `index` into that offset, and reads `src[src_offset + stride]`. Source-style
+  unresolved member calls are rejected. This gate inspects generated structure;
+  it does not require native target compilation, execute a shader, or claim
+  runtime parity;
 - DirectX and Vulkan artifact generation for the 11-source clean reduced
   frontier: `arange.metal`, `arg_reduce.metal`, `binary_two.metal`,
   `layer_norm.metal`, `logsumexp.metal`, `random.metal`, `rms_norm.metal`,
@@ -97,9 +109,10 @@ The current harness verifies:
 
 Pull requests run the 12-source pinned reduced scope: 11 clean frontier sources
 and the explicitly blocked `fence.metal` contract source. They also run the
-separate checked-in reference-accessor fixture; that fixture does not change
-the pinned MLX source count. Scheduled and manually triggered CI also run the
-full-corpus artifact scout with finite Metal template materialization budgets.
+separate checked-in reference-accessor and template-member pointer fixtures;
+those fixtures do not change the pinned MLX source count. Scheduled and
+manually triggered CI also run the full-corpus artifact scout with finite Metal
+template materialization budgets.
 The generated full-corpus project config caps
 `max_template_specializations` at 4096 and
 `max_template_materialization_work` at 131072. The scout discovers all 40 pinned
@@ -319,6 +332,14 @@ and must read `self.nestedTile.val_frags[...][k]`. This proof does not cover
 template-indexed or nested forwarding overloads, full `quantized.metal`
 translation, shader execution, numerical parity, or upstream MLX host/runtime
 integration.
+The reduced template-member pointer fixture covers the next `BaseMMAFrag::load`
+boundary independently. It requires materialization of the generic
+`SrcPtrType` helper from `&(src[index])`, a pointer-backed helper parameter or
+equivalent OpenGL buffer-offset view, and an indexed `src[stride]` read whose
+base offset still contains the outer `index`. It rejects a scalarized `float`
+parameter even when no source-style call remains. The proof ends at artifact
+structure and does not establish target compiler acceptance, shader execution,
+or numerical parity.
 `binary_two.metal` now also belongs to the required OpenGL toolchain frontier.
 CrossTL commit `db593d19b` specializes fixed-array helper views to their concrete
 runtime storage resources while retaining fixed extents and offsets. For the

@@ -49,6 +49,11 @@ REFERENCE_ACCESSOR_FIXTURE_PATH = (
 REFERENCE_ACCESSOR_TARGETS = ("directx", "opengl")
 REFERENCE_ACCESSOR_SENTINEL = "73.25"
 REFERENCE_ACCESSOR_DXC_ENTRY_POINT = "CSMain"
+TEMPLATE_MEMBER_POINTER_FIXTURE_NAME = "template_member_buffer_pointer.metal"
+TEMPLATE_MEMBER_POINTER_FIXTURE_PATH = (
+    Path(__file__).resolve().parent / "fixtures" / TEMPLATE_MEMBER_POINTER_FIXTURE_NAME
+)
+TEMPLATE_MEMBER_POINTER_TARGETS = ("directx", "opengl")
 MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES = (
     MLX_ARG_REDUCE_SOURCE,
     MLX_BINARY_TWO_SOURCE,
@@ -622,6 +627,24 @@ def _write_reference_accessor_project_config(path: Path, output_dir: str) -> Non
         "[project]",
         'source_roots = ["."]',
         f'include = ["{REFERENCE_ACCESSOR_FIXTURE_NAME}"]',
+        f"targets = [{target_list}]",
+        f'output_dir = "{output_dir}"',
+        "",
+        "[project.sources]",
+        '"*.metal" = "metal"',
+        "",
+    ]
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _write_template_member_pointer_project_config(path: Path, output_dir: str) -> None:
+    target_list = ", ".join(
+        json.dumps(target) for target in TEMPLATE_MEMBER_POINTER_TARGETS
+    )
+    lines = [
+        "[project]",
+        'source_roots = ["."]',
+        f'include = ["{TEMPLATE_MEMBER_POINTER_FIXTURE_NAME}"]',
         f"targets = [{target_list}]",
         f'output_dir = "{output_dir}"',
         "",
@@ -1217,9 +1240,11 @@ def _strip_shader_comments(source: str) -> str:
 def _shader_function_definition(
     source: str,
     function_pattern: str,
+    *,
+    return_pattern: str = "void",
 ) -> tuple[re.Match[str], str] | None:
     header = re.search(
-        rf"\bvoid\s+(?P<helper>{function_pattern})\s*"
+        rf"\b(?:{return_pattern})\s+(?P<helper>{function_pattern})\s*"
         rf"\((?P<parameters>[^)]*)\)\s*\{{",
         source,
         flags=re.DOTALL,
@@ -1479,6 +1504,266 @@ def _reference_accessor_nested_const_alias_evidence(
         "readFromOriginalStorage": True,
         "kernelPathInvoked": True,
         "loweredStoreHelper": store_header.group("helper"),
+    }
+
+
+def _template_member_pointer_evidence(
+    generated: str,
+    *,
+    target: str,
+) -> dict[str, Any]:
+    source = _strip_shader_comments(generated)
+    target_name = {"directx": "DirectX", "opengl": "OpenGL"}.get(target, target)
+    helper_patterns = {
+        "directx": r"ReducedMMAFrag__load__[A-Za-z_0-9]+",
+        "opengl": r"ReducedMMAFrag_+load[A-Za-z_0-9]+",
+    }
+    outer_helper_patterns = {
+        "directx": r"ReducedMMATile__load__[A-Za-z_0-9]+",
+        "opengl": r"ReducedMMATile_+load[A-Za-z_0-9]+",
+    }
+    _require(
+        target in helper_patterns,
+        f"unsupported template member pointer evidence target: {target}",
+    )
+
+    unresolved_call = re.search(
+        r"(?:\bReducedMMAFrag\s*::\s*(?:template\s+)?load\b|"
+        r"\b[A-Za-z_]\w*\s*(?:\.|->)\s*(?:template\s+)?load\b)",
+        source,
+    )
+    _require(
+        unresolved_call is None,
+        f"{target_name} template member pointer artifact retained an unresolved "
+        "source member call",
+    )
+
+    helper_definition = _shader_function_definition(
+        source,
+        helper_patterns[target],
+        return_pattern="float",
+    )
+    _require(
+        helper_definition is not None,
+        f"{target_name} template member pointer artifact is missing the "
+        "materialized fragment load helper",
+    )
+    helper_header, helper_body = helper_definition
+    helper_name = helper_header.group("helper")
+    helper_parameters = helper_header.group("parameters")
+    scalarized_parameter = re.search(
+        r"(?:^|,)\s*(?:(?:in|out|inout|const)\s+)*float\s+src\b",
+        helper_parameters,
+    )
+    _require(
+        scalarized_parameter is None,
+        f"{target_name} materialized fragment load helper has a scalarized "
+        "float src parameter instead of a pointer-backed source view",
+    )
+
+    return_statement = re.search(
+        r"\breturn\s+(?P<expression>[^;]+);",
+        helper_body,
+        flags=re.DOTALL,
+    )
+    _require(
+        return_statement is not None,
+        f"{target_name} materialized fragment load helper is missing its "
+        "source read return",
+    )
+    return_expression = return_statement.group("expression")
+    indexed_read = re.search(
+        r"(?P<read>\bsrc\s*\[\s*(?P<index>[^\]\n;]+)\s*\])",
+        return_expression,
+    )
+    if indexed_read is None:
+        indexed_read = re.search(
+            r"(?P<read>\bsrc\s*\.\s*Load\s*\(\s*(?P<index>[^)\n;]+)\s*\))",
+            return_expression,
+        )
+    _require(
+        indexed_read is not None,
+        f"{target_name} materialized fragment load helper does not perform "
+        "an indexed read from its source view",
+    )
+    read_index = re.sub(r"\s+", "", indexed_read.group("index"))
+    _require(
+        re.search(r"\bstride\b", indexed_read.group("index")) is not None,
+        f"{target_name} materialized fragment load helper lost the stride in "
+        "its indexed source read",
+    )
+
+    outer_definition = _shader_function_definition(
+        source,
+        outer_helper_patterns[target],
+    )
+    _require(
+        outer_definition is not None,
+        f"{target_name} template member pointer artifact is missing the "
+        "materialized outer tile load helper",
+    )
+    outer_header, outer_body = outer_definition
+    outer_name = outer_header.group("helper")
+    outer_parameters = outer_header.group("parameters")
+    helper_call = re.search(
+        rf"\bself\s*\.\s*value\s*=(?!=)\s*"
+        rf"(?P<call>{re.escape(helper_name)}\s*\((?P<arguments>[^;]+)\))\s*;",
+        outer_body,
+        flags=re.DOTALL,
+    )
+    _require(
+        helper_call is not None,
+        f"{target_name} outer tile helper does not assign the materialized "
+        "fragment load result to self.value",
+    )
+    helper_call_arguments = helper_call.group("arguments")
+
+    if target == "directx":
+        helper_resource = re.search(
+            r"(?P<type>StructuredBuffer\s*<\s*float\s*>)\s+src\b",
+            helper_parameters,
+        )
+        _require(
+            helper_resource is not None,
+            "DirectX materialized fragment load helper must retain src as a "
+            "StructuredBuffer<float> parameter",
+        )
+        outer_resource = re.search(
+            r"StructuredBuffer\s*<\s*float\s*>\s+src\b",
+            outer_parameters,
+        )
+        _require(
+            outer_resource is not None,
+            "DirectX outer tile helper must retain src as a "
+            "StructuredBuffer<float> parameter",
+        )
+        offset_parameter = re.search(r"\b(?:u?int)\s+src_offset\b", helper_parameters)
+        addressed_argument = re.search(
+            r"(?P<index>&\s*\(?\s*src\s*\[\s*index\s*\]\s*\)?)",
+            helper_call_arguments,
+        )
+        resource_offset_argument = re.search(
+            r"\bsrc\b[^;]*,\s*(?:int\s*\(\s*)?index\b",
+            helper_call_arguments,
+        )
+        _require(
+            addressed_argument is not None
+            or (offset_parameter is not None and resource_offset_argument is not None),
+            "DirectX materialized fragment call does not preserve the addressed "
+            "src[index] source position",
+        )
+        if offset_parameter is not None:
+            _require(
+                "src_offset" in read_index,
+                "DirectX offset-backed fragment helper does not apply "
+                "src_offset in its indexed source read",
+            )
+        source_view = {
+            "representation": (
+                "structured-buffer-plus-offset"
+                if offset_parameter is not None
+                else "structured-buffer-addressed-element"
+            ),
+            "resourceName": "src",
+            "parameterName": "src",
+            "parameterType": re.sub(r"\s+", "", helper_resource.group("type")),
+            "offsetParameter": "src_offset" if offset_parameter is not None else None,
+            "scalarizedPointerParameter": False,
+        }
+        source_index_expression = (
+            "src,index"
+            if addressed_argument is None
+            else re.sub(r"\s+", "", addressed_argument.group("index"))
+        )
+    else:
+        global_source = re.search(
+            r"\blayout\s*\([^)]*\)\s*readonly\s+buffer\s+\w+\s*"
+            r"\{\s*float\s+src\s*\[\s*\]\s*;\s*\}\s*;",
+            source,
+            flags=re.DOTALL,
+        )
+        _require(
+            global_source is not None,
+            "OpenGL template member pointer artifact is missing the readonly "
+            "float src storage buffer",
+        )
+        _require(
+            re.search(r"\bint\s+src_offset\b", helper_parameters) is not None,
+            "OpenGL materialized fragment load helper must retain an int "
+            "src_offset buffer-view parameter",
+        )
+        _require(
+            re.search(r"\bint\s+src_offset\b", outer_parameters) is not None,
+            "OpenGL outer tile helper must retain an int src_offset "
+            "buffer-view parameter",
+        )
+        _require(
+            "src_offset" in read_index,
+            "OpenGL materialized fragment load helper does not apply "
+            "src_offset in its indexed source read",
+        )
+        source_index = re.search(
+            r"(?P<index>src_offset\s*\+\s*index|index\s*\+\s*src_offset)",
+            helper_call_arguments,
+        )
+        _require(
+            source_index is not None,
+            "OpenGL materialized fragment call does not preserve index in the "
+            "src_offset buffer view",
+        )
+        source_view = {
+            "representation": "global-storage-buffer-plus-offset",
+            "resourceName": "src",
+            "parameterName": "src_offset",
+            "parameterType": "int",
+            "offsetParameter": "src_offset",
+            "scalarizedPointerParameter": False,
+        }
+        source_index_expression = re.sub(r"\s+", "", source_index.group("index"))
+
+    kernel_call = re.search(
+        rf"\b{re.escape(outer_name)}\s*\(\s*tile\s*,"
+        rf"(?P<arguments>[^;]*\bgid\b[^;]*)\)\s*;",
+        source,
+        flags=re.DOTALL,
+    )
+    _require(
+        kernel_call is not None,
+        f"{target_name} kernel does not invoke the materialized outer tile "
+        "load path with gid",
+    )
+    if target == "directx":
+        _require(
+            re.search(r"\bsrc\b", kernel_call.group("arguments")) is not None,
+            "DirectX kernel does not pass the source buffer to the outer tile "
+            "load helper",
+        )
+    output_data_flow = re.search(
+        r"(?P<write>\bout_?\s*\[\s*gid\s*\]\s*=(?!=)\s*tile\s*\.\s*value\s*;)",
+        source,
+    )
+    _require(
+        output_data_flow is not None,
+        f"{target_name} kernel does not write the loaded tile value to out[gid]",
+    )
+
+    return {
+        "status": "verified-materialized-pointer-indexed-read",
+        "materializedHelper": helper_name,
+        "materializedOuterHelper": outer_name,
+        "helperParameters": re.sub(r"\s+", " ", helper_parameters).strip(),
+        "sourceView": source_view,
+        "sourceIndexExpression": source_index_expression,
+        "indexedReadExpression": re.sub(r"\s+", "", indexed_read.group("read")),
+        "indexedReadIndex": read_index,
+        "materializedHelperCall": re.sub(r"\s+", "", helper_call.group("call")),
+        "outputDataFlowExpression": re.sub(r"\s+", "", output_data_flow.group("write")),
+        "sourceIndexPreserved": True,
+        "sourceViewParameterRetained": True,
+        "indexedReadFromSourceView": True,
+        "scalarizedPointerParameter": False,
+        "unresolvedSourceCallRetained": False,
+        "kernelPathInvoked": True,
     }
 
 
@@ -1826,6 +2111,173 @@ def _check_reference_accessor_lvalue_identity(
             "opengl": require_opengl_toolchain,
         },
         "upstreamMlxRuntimeExecuted": False,
+        "runtimeParityClaimed": False,
+    }
+
+
+def _check_template_member_buffer_pointer(
+    mlx_root: Path,
+    work_dir: Path,
+    config_dir: Path,
+    report_dir: Path,
+    log_dir: Path,
+    python: str,
+) -> dict[str, Any]:
+    _require(
+        TEMPLATE_MEMBER_POINTER_FIXTURE_PATH.is_file(),
+        "template member pointer fixture is missing: "
+        f"{TEMPLATE_MEMBER_POINTER_FIXTURE_PATH}",
+    )
+    project_dir = work_dir / "template-member-pointer-project"
+    output_dir = project_dir / "generated"
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    project_dir.mkdir(parents=True, exist_ok=True)
+    staged_source = project_dir / TEMPLATE_MEMBER_POINTER_FIXTURE_NAME
+    shutil.copyfile(TEMPLATE_MEMBER_POINTER_FIXTURE_PATH, staged_source)
+
+    config_path = config_dir / "template-member-pointer.toml"
+    report_path = report_dir / "template-member-pointer.json"
+    report_path.unlink(missing_ok=True)
+    _write_template_member_pointer_project_config(config_path, "generated")
+    result = _run_command(
+        "translate-template-member-pointer",
+        [
+            python,
+            "-m",
+            "crosstl",
+            "translate-project",
+            str(project_dir),
+            "--config",
+            str(config_path),
+            "--report",
+            str(report_path),
+        ],
+        log_dir=log_dir,
+        check=False,
+    )
+    _require(
+        report_path.is_file(),
+        "template member pointer project translation did not produce a report",
+    )
+    payload = _load_json(report_path)
+    if result.returncode != 0:
+        messages = [
+            str(item.get("message"))
+            for item in payload.get("diagnostics", [])
+            if isinstance(item, Mapping) and isinstance(item.get("message"), str)
+        ]
+        detail = f": {messages[0]}" if messages else ""
+        raise PortingCheckError(f"template member pointer translation failed{detail}")
+
+    summary = payload.get("summary", {})
+    diagnostics = payload.get("diagnostics", [])
+    artifacts = payload.get("artifacts", [])
+    diagnostic_counts = (
+        summary.get("diagnosticCounts", {}) if isinstance(summary, Mapping) else {}
+    )
+    _require(
+        isinstance(summary, Mapping)
+        and isinstance(diagnostics, list)
+        and isinstance(artifacts, list)
+        and isinstance(diagnostic_counts, Mapping),
+        "template member pointer report must contain structured summary collections",
+    )
+    _require(
+        summary.get("unitCount") == 1
+        and summary.get("artifactCount") == len(TEMPLATE_MEMBER_POINTER_TARGETS)
+        and summary.get("translatedCount") == len(TEMPLATE_MEMBER_POINTER_TARGETS)
+        and summary.get("failedCount") == 0,
+        "template member pointer project translation did not emit both clean "
+        "artifacts",
+    )
+    _require(
+        len(artifacts) == len(TEMPLATE_MEMBER_POINTER_TARGETS)
+        and all(isinstance(artifact, Mapping) for artifact in artifacts),
+        "template member pointer report must contain exactly one artifact per "
+        "target",
+    )
+    _require(
+        not diagnostics
+        and all(
+            diagnostic_counts.get(severity) == 0
+            for severity in ("note", "warning", "error")
+        ),
+        "template member pointer project translation must have zero diagnostics",
+    )
+
+    artifacts_by_target = {
+        artifact.get("target"): artifact
+        for artifact in artifacts
+        if isinstance(artifact, Mapping)
+        and artifact.get("source") == TEMPLATE_MEMBER_POINTER_FIXTURE_NAME
+        and artifact.get("status") == "translated"
+        and artifact.get("target") in TEMPLATE_MEMBER_POINTER_TARGETS
+    }
+    _require(
+        set(artifacts_by_target) == set(TEMPLATE_MEMBER_POINTER_TARGETS),
+        "template member pointer report does not contain both DirectX and "
+        "OpenGL artifacts",
+    )
+
+    target_proofs: dict[str, Any] = {}
+    for target in TEMPLATE_MEMBER_POINTER_TARGETS:
+        artifact_path = artifacts_by_target[target].get("path")
+        _require(
+            isinstance(artifact_path, str) and bool(artifact_path),
+            f"template member pointer {target} artifact path is missing",
+        )
+        generated_path = (project_dir / artifact_path).resolve()
+        _require(
+            _is_relative_to(generated_path, output_dir.resolve()),
+            f"template member pointer {target} artifact escaped its output "
+            "directory",
+        )
+        _require(
+            generated_path.is_file(),
+            f"template member pointer {target} artifact is missing: {artifact_path}",
+        )
+        generated = generated_path.read_text(encoding="utf-8")
+        target_proofs[target] = {
+            "artifact": _relpath(generated_path, mlx_root),
+            "artifactSha256": _sha256(generated_path),
+            "structuralEvidence": _template_member_pointer_evidence(
+                generated,
+                target=target,
+            ),
+        }
+
+    return {
+        "name": "template-member-buffer-pointer",
+        "status": "passed",
+        "proofStatus": "verified-materialized-pointer-indexed-read",
+        "scope": "reduced-mlx-shaped-fixture",
+        "translationSurface": "crosstl translate-project",
+        "report": _relpath(report_path, mlx_root),
+        "sourceFixture": (
+            "demos/integrations/mlx/fixtures/" + TEMPLATE_MEMBER_POINTER_FIXTURE_NAME
+        ),
+        "stagedSource": _relpath(staged_source, mlx_root),
+        "sourceSha256": _sha256(staged_source),
+        "sourceContract": {
+            "outerType": "ReducedMMATile",
+            "outerMethod": "load",
+            "outerTemplateParameter": "U",
+            "sourcePointerType": "const device U*",
+            "fragmentType": "ReducedMMAFrag",
+            "fragmentMethod": "load",
+            "fragmentTemplateParameter": "SrcPtrType",
+            "pointerArgument": "&(src[index])",
+            "indexedReadExpression": "src[stride]",
+        },
+        "targets": list(TEMPLATE_MEMBER_POINTER_TARGETS),
+        "artifactCount": len(TEMPLATE_MEMBER_POINTER_TARGETS),
+        "projectDiagnosticCount": 0,
+        "targetProofs": target_proofs,
+        "generatedArtifactEvidenceOnly": True,
+        "nativeToolchainValidationIncluded": False,
+        "upstreamMlxRuntimeExecuted": False,
+        "runtimeIntegrationIncluded": False,
         "runtimeParityClaimed": False,
     }
 
@@ -4050,6 +4502,16 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             )
         )
         checks.append(
+            _check_template_member_buffer_pointer(
+                mlx_root,
+                work_dir,
+                config_dir,
+                report_dir,
+                log_dir,
+                args.python,
+            )
+        )
+        checks.append(
             _translate_directx_vulkan_frontier(
                 mlx_root,
                 work_dir,
@@ -4125,6 +4587,7 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
     else:
         raise PortingCheckError(f"unsupported MLX porting mode: {args.mode}")
     reference_accessor_included = args.mode == REDUCED_FRONTIER_MODE
+    template_member_pointer_included = args.mode == REDUCED_FRONTIER_MODE
     return {
         "schema_version": 1,
         "repository": {
@@ -4166,6 +4629,15 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             "referenceAccessorOpenglToolchainRequired": bool(
                 reference_accessor_included and require_opengl_frontier_toolchain
             ),
+            "templateMemberBufferPointerProofIncluded": (
+                template_member_pointer_included
+            ),
+            "templateMemberBufferPointerTargets": (
+                list(TEMPLATE_MEMBER_POINTER_TARGETS)
+                if template_member_pointer_included
+                else []
+            ),
+            "templateMemberBufferPointerNativeValidationIncluded": False,
             "openglFrontierToolchainRequired": require_opengl_frontier_toolchain,
             "openglGemvToolchainRequired": require_opengl_gemv_toolchain,
             "vulkanGemvToolchainRequired": require_vulkan_gemv_toolchain,
