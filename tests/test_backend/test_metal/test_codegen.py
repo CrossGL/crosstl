@@ -2218,7 +2218,12 @@ def test_codegen_stage_entry_arrays_lower_to_non_conflicting_resources(tmp_path)
     assert "StructuredBuffer<int> strides : register(t1);" in hlsl
     assert "RWStructuredBuffer<float> values : register(u2);" in hlsl
     assert "StructuredBuffer<float> source : register(t0);" in hlsl
-    assert "void copy_pair(int offsets[2], inout float scratch[2])" in hlsl
+    assert (
+        "void copy_pair(StructuredBuffer<int> offsets, "
+        "inout RWStructuredBuffer<float> scratch)"
+    ) in hlsl
+    assert "const int*" not in hlsl
+    assert "float*" not in hlsl
     assert "uint index = uint(strides.Load((gid % 3)));" in hlsl
     assert "values[gid] = (source.Load(index) + values.Load(gid));" in hlsl
 

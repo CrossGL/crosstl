@@ -26648,7 +26648,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if vtype is None:
             return self.map_type(vtype)
 
-        metal_buffer_type = self.hlsl_metal_buffer_pointer_resource_type(vtype, node)
+        metal_buffer_type = self.hlsl_metal_buffer_parameter_resource_type(vtype, node)
         if metal_buffer_type is not None:
             return metal_buffer_type
 
@@ -26775,7 +26775,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
         return f"{element_type}[{size}]"
 
-    def hlsl_metal_buffer_pointer_resource_type(self, vtype, node=None):
+    def hlsl_metal_buffer_parameter_resource_type(self, vtype, node=None):
         if node is None:
             return None
 
@@ -26796,6 +26796,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return None
 
         element_type = self.hlsl_pointer_element_type(vtype)
+        if not element_type:
+            element_type = self.hlsl_array_element_type_name(vtype)
         if not element_type:
             return None
 

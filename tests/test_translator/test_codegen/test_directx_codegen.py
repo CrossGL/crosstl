@@ -4234,6 +4234,77 @@ def test_hlsl_metal_matmul_pointer_params_lower_to_resources(tmp_path):
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
 
 
+def test_hlsl_metal_constant_array_helpers_preserve_resource_parameters(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    void read_stride(
+        constant const int64_t strides[3],
+        device int64_t* result) {
+      result[0] = strides[1];
+    }
+
+    void forward_stride(
+        constant const int64_t strides[3],
+        device int64_t* result) {
+      read_stride(strides, result);
+    }
+
+    kernel void apply_stride(
+        constant const int64_t strides[3] [[buffer(0)]],
+        device int64_t* result [[buffer(1)]]) {
+      forward_stride(strides, result);
+    }
+    """
+    shader_path = tmp_path / "constant_array_helper.metal"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "StructuredBuffer<int64_t> strides : register(t0);" in generated_code
+    assert "RWStructuredBuffer<int64_t> result : register(u1);" in generated_code
+    assert (
+        "void read_stride(StructuredBuffer<int64_t> strides, "
+        "RWStructuredBuffer<int64_t> result)" in generated_code
+    )
+    assert (
+        "void forward_stride(StructuredBuffer<int64_t> strides, "
+        "RWStructuredBuffer<int64_t> result)" in generated_code
+    )
+    assert "read_stride(strides, result);" in generated_code
+    assert "forward_stride(strides, result);" in generated_code
+    assert "int64_t strides[3]" not in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+    dxc = shutil.which("dxc")
+    if dxc is not None:
+        generated_path = tmp_path / "constant_array_helper.hlsl"
+        generated_path.write_text(generated_code, encoding="utf-8")
+        output_path = tmp_path / "constant_array_helper.dxil"
+        result = subprocess.run(
+            [
+                dxc,
+                "-T",
+                "cs_6_2",
+                "-E",
+                "CSMain",
+                str(generated_path),
+                "-Fo",
+                str(output_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_hlsl_metal_scalar_constant_kernel_params_promote_to_cbuffers(tmp_path):
     shader = """
     #include <metal_stdlib>
