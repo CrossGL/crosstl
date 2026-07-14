@@ -8674,8 +8674,18 @@ def test_translate_project_lowers_bounded_directx_resource_pointer_array(tmp_pat
     assert artifact["status"] == "translated"
     generated = (repo / artifact["path"]).read_text(encoding="utf-8")
     assert "int64_t rows_offsets[2];" in generated
-    assert "rows_offsets[uint(i)] = int64_t((i * row_stride));" in generated
-    assert "output[i] = input[uint(rows_offsets[uint(i)])];" in generated
+    assert (
+        "rows_offsets[uint(i)] = int64_t((input_offset + (i * row_stride)));"
+        in generated
+    )
+    assert (
+        "output[uint((output_offset + i))] = "
+        "input[uint(rows_offsets[uint(i)])];" in generated
+    )
+    assert (
+        "read_rows(input, int64_t(0), output, int64_t(0), "
+        "pointer_array_row_stride);" in generated
+    )
     assert "float* rows" not in generated
 
 
