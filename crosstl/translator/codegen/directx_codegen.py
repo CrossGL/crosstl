@@ -6968,9 +6968,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def hlsl_resource_pointer_parameter_access(self, parameter):
         pointer_type = self.hlsl_resource_pointer_parameter_type_node(parameter)
-        access_mode = str(
-            getattr(pointer_type, "access_mode", None) or ""
-        ).lower()
+        access_mode = str(getattr(pointer_type, "access_mode", None) or "").lower()
         access_aliases = {
             "read": "read",
             "readonly": "read",
@@ -6990,17 +6988,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return "read_write"
         if qualifiers.intersection({"write", "writeonly", "out"}):
             return "write"
-        if qualifiers.intersection(
-            {"const", "constant", "read", "readonly", "in"}
-        ):
+        if qualifiers.intersection({"const", "constant", "read", "readonly", "in"}):
             return "read"
         if pointer_type is not None and not getattr(pointer_type, "is_mutable", True):
             return "read"
         return "read_write"
 
-    def hlsl_resource_pointer_parameter_contract(
-        self, parameter, function_name=None
-    ):
+    def hlsl_resource_pointer_parameter_contract(self, parameter, function_name=None):
         if not self.hlsl_resource_pointer_parameter(parameter):
             return None
         pointer_type = self.hlsl_resource_pointer_parameter_type_node(parameter)
@@ -7078,9 +7072,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             materialized_name, {}
         )
 
-    def hlsl_resource_pointer_parameter_for_call(
-        self, function_name, argument_index
-    ):
+    def hlsl_resource_pointer_parameter_for_call(self, function_name, argument_index):
         parameter_name = self.hlsl_resource_pointer_parameter_indices_for_function(
             function_name
         ).get(argument_index)
@@ -7091,11 +7083,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             function_name
         ) or self.function_hlsl_resource_pointer_parameters.get(materialized_name, [])
         parameter = next(
-            (
-                candidate
-                for candidate in parameters
-                if candidate.name == parameter_name
-            ),
+            (candidate for candidate in parameters if candidate.name == parameter_name),
             None,
         )
         return parameter, materialized_name

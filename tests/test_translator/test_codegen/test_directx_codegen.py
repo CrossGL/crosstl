@@ -4273,13 +4273,11 @@ def test_hlsl_metal_constant_array_helpers_preserve_resource_parameters(tmp_path
     assert "RWStructuredBuffer<int64_t> result : register(u1);" in generated_code
     assert (
         "void read_stride(StructuredBuffer<int64_t> strides, "
-        "RWStructuredBuffer<int64_t> result, int64_t result_offset)"
-        in generated_code
+        "RWStructuredBuffer<int64_t> result, int64_t result_offset)" in generated_code
     )
     assert (
         "void forward_stride(StructuredBuffer<int64_t> strides, "
-        "RWStructuredBuffer<int64_t> result, int64_t result_offset)"
-        in generated_code
+        "RWStructuredBuffer<int64_t> result, int64_t result_offset)" in generated_code
     )
     assert "read_stride(strides, result, int64_t(result_offset));" in generated_code
     assert "forward_stride(strides, result, int64_t(0));" in generated_code
