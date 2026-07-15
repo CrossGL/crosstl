@@ -348,6 +348,30 @@ class DirectXUnresolvedSourceTypeError(ValueError):
         super().__init__(message)
 
 
+class DirectXForInIterableError(ValueError):
+    """Raised when a CrossGL for-in binding has no faithful HLSL lowering."""
+
+    project_diagnostic_code = "project.translate.directx-for-in-iterable-unsupported"
+    missing_capabilities = ("directx.fixed-array-for-in-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        pattern=None,
+        iterable_type=None,
+        binding_type=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.pattern = pattern
+        self.iterable_type = iterable_type
+        self.binding_type = binding_type
+        self.reason = reason
+        self.source_location = source_location
+
+
 class DirectXTrailingZeroBuiltinError(ValueError):
     """Raised when a Clang trailing-zero builtin has no faithful HLSL lowering."""
 
@@ -9428,6 +9452,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         pattern = getattr(node, "pattern", "item")
         iterable_node = getattr(node, "iterable", "")
         previous_local_variable_types = dict(self.local_variable_types)
+        previous_local_variable_source_types = dict(self.local_variable_source_types)
         previous_identifier_aliases = dict(self.current_identifier_aliases)
         previous_resource_pointer_aliases = dict(
             self.current_hlsl_resource_pointer_aliases
@@ -9442,11 +9467,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
 
         try:
-            self.local_variable_types[pattern] = "int"
             pattern_name = self.hlsl_declaration_identifier_name(pattern)
             self.current_unsupported_glsl_buffer_block_local_variables.discard(pattern)
 
             if isinstance(iterable_node, RangeNode):
+                self.local_variable_types[pattern] = "int"
+                self.local_variable_source_types[pattern] = "int"
                 start = self.generate_expression(iterable_node.start)
                 end = self.generate_expression(iterable_node.end)
                 comparator = "<=" if iterable_node.inclusive else "<"
@@ -9460,24 +9486,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 code += f"{indent_str}}}\n"
                 return code
 
-            container_binding = self.hlsl_for_in_container_binding(iterable_node)
-            if container_binding is not None:
-                # C++ range-based for over a fixed-size array: iterate an index
-                # over the element count and bind the loop variable to each
-                # element. HLSL has no range-for, and treating the container as
-                # a scalar loop bound (the historical fallback below) produced
-                # `for (int r = 0; r < arr; ...)`, which DXC rejects.
-                element_type, length = container_binding
+            binding_qualifier = self.validate_hlsl_for_in_binding(node, pattern)
+            iterable_type = self.hlsl_for_in_iterable_type(node, pattern, iterable_node)
+
+            # Preserve the established shorthand where an integer expression is
+            # the exclusive upper bound of a counted loop.
+            if self.is_scalar_integer_type(iterable_type):
+                self.local_variable_types[pattern] = "int"
+                self.local_variable_source_types[pattern] = "int"
                 iterable = self.generate_expression(iterable_node)
-                index_name = self.hlsl_declaration_identifier_name(
-                    f"{pattern}_crossgl_index"
-                )
-                self.local_variable_types[pattern] = element_type
                 code = (
-                    f"{indent_str}for (int {index_name} = 0; "
-                    f"{index_name} < {length}; ++{index_name}) {{\n"
-                    f"{indent_str}    {element_type} {pattern_name} = "
-                    f"({iterable})[{index_name}];\n"
+                    f"{indent_str}for (int {pattern_name} = 0; "
+                    f"{pattern_name} < {iterable}; ++{pattern_name}) {{\n"
                 )
                 code += self.generate_scoped_statement_body(
                     getattr(node, "body", []), indent + 1
@@ -9485,18 +9505,78 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 code += f"{indent_str}}}\n"
                 return code
 
-            iterable = self.generate_expression(iterable_node)
+            extent, element_type = self.hlsl_for_in_array_shape(
+                node, pattern, iterable_type
+            )
+            if extent == 0:
+                if not self.hlsl_expression_is_repeatable(iterable_node):
+                    self.raise_hlsl_for_in_iterable_error(
+                        node,
+                        pattern,
+                        iterable_type,
+                        reason="side-effecting-empty-array",
+                    )
+                return ""
+
+            mapped_iterable_type = self.map_type(iterable_type)
+            mapped_element_type = self.map_type(element_type)
+            element_base, _element_suffix = split_array_type_suffix(mapped_element_type)
+            if self.is_resource_parameter_type(
+                element_base
+            ) or self.is_hlsl_global_resource_type(element_base):
+                self.raise_hlsl_for_in_iterable_error(
+                    node,
+                    pattern,
+                    iterable_type,
+                    binding_type=element_type,
+                    reason="unsupported-element-type",
+                )
+
+            used_names = set(self.local_variable_types)
+            used_names.update(self.global_variable_types)
+            used_names.update(self.current_identifier_aliases.values())
+            used_names.update(self.current_identifier_reserved_names)
+            container_name = self.hlsl_unique_local_identifier(
+                f"{pattern}_crossgl_iterable", used_names
+            )
+            used_names.add(container_name)
+            index_name = self.hlsl_unique_local_identifier(
+                f"{pattern}_crossgl_index", used_names
+            )
+            iterable = self.generate_expression_with_expected(
+                iterable_node, iterable_type
+            )
+            container_declaration = format_c_style_array_declaration(
+                mapped_iterable_type, container_name
+            )
+            pattern_declaration = format_c_style_array_declaration(
+                mapped_element_type, pattern_name
+            )
+            pattern_declaration = f"{binding_qualifier}{pattern_declaration}"
+
+            self.local_variable_types[container_name] = iterable_type
+            self.local_variable_source_types[container_name] = iterable_type
+            self.local_variable_types[index_name] = "int"
+            self.local_variable_source_types[index_name] = "int"
+            self.local_variable_types[pattern] = element_type
+            self.local_variable_source_types[pattern] = element_type
             code = (
-                f"{indent_str}for (int {pattern_name} = 0; "
-                f"{pattern_name} < {iterable}; ++{pattern_name}) {{\n"
+                f"{indent_str}{{\n"
+                f"{indent_str}    {container_declaration} = {iterable};\n"
+                f"{indent_str}    for (int {index_name} = 0; "
+                f"{index_name} < {extent}; ++{index_name}) {{\n"
+                f"{indent_str}        {pattern_declaration} = "
+                f"{container_name}[{index_name}];\n"
             )
             code += self.generate_scoped_statement_body(
-                getattr(node, "body", []), indent + 1
+                getattr(node, "body", []), indent + 2
             )
+            code += f"{indent_str}    }}\n"
             code += f"{indent_str}}}\n"
             return code
         finally:
             self.local_variable_types = previous_local_variable_types
+            self.local_variable_source_types = previous_local_variable_source_types
             self.current_identifier_aliases = previous_identifier_aliases
             self.current_hlsl_resource_pointer_aliases = (
                 previous_resource_pointer_aliases
@@ -9506,39 +9586,135 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             self.current_hlsl_visible_int_constants = previous_visible_int_constants
 
-    def hlsl_for_in_container_binding(self, iterable_node):
-        """Return (element_type, length) for a range-for over a fixed array.
+    def validate_hlsl_for_in_binding(self, node, pattern):
+        binding_type = getattr(
+            node, "binding_type", getattr(node, "pattern_type", None)
+        )
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "binding_qualifiers", []) or []
+        }
+        binding_type_name = self.type_name_string(binding_type or "")
+        if isinstance(binding_type, ReferenceType):
+            binding_type_name = f"{binding_type_name}&"
+        readonly = bool(
+            qualifiers & {"const", "constant", "in", "readonly"}
+            or "const" in binding_type_name.lower().split()
+            or "readonly" in binding_type_name.lower().split()
+        )
+        mutable_reference = bool(
+            getattr(node, "is_mutable_reference", False)
+            or getattr(node, "mutable_reference", False)
+            or "mut" in qualifiers
+            or (
+                isinstance(binding_type, ReferenceType)
+                and getattr(binding_type, "is_mutable", False)
+            )
+            or (
+                not isinstance(binding_type, ReferenceType)
+                and binding_type_name.rstrip().endswith("&")
+                and not readonly
+            )
+        )
+        if mutable_reference:
+            self.raise_hlsl_for_in_iterable_error(
+                node,
+                pattern,
+                self.type_name_string(
+                    self.hlsl_source_expression_type(getattr(node, "iterable", None))
+                ),
+                binding_type=binding_type_name or None,
+                reason="mutable-reference-binding",
+            )
 
-        Resolves the declared array type of the iterated container so a C++
-        range-based ``for (auto x : container)`` can lower to an index loop that
-        binds ``x`` to each element. Returns ``None`` when the container is not a
-        statically-sized array (the caller then keeps the scalar-bound
-        fallback).
-        """
-        index_levels = 0
-        base = iterable_node
-        while isinstance(base, ArrayAccessNode):
-            index_levels += 1
-            base = getattr(base, "array", getattr(base, "array_expr", None))
-        if base is None:
-            return None
+        modifiers = []
+        if "precise" in qualifiers:
+            modifiers.append("precise")
+        if readonly or (
+            isinstance(binding_type, ReferenceType)
+            and not getattr(binding_type, "is_mutable", False)
+        ):
+            modifiers.append("const")
+        return f"{' '.join(modifiers)} " if modifiers else ""
 
-        base_type = self.type_name_string(self.expression_result_type(base))
-        if not base_type or "[" not in base_type:
-            return None
+    def hlsl_for_in_iterable_type(self, node, pattern, iterable_node):
+        iterable_type = self.type_name_string(
+            self.hlsl_source_expression_type(iterable_node)
+        )
+        if not iterable_type:
+            self.raise_hlsl_for_in_iterable_error(
+                node, pattern, None, reason="unresolved-iterable-type"
+            )
+        return iterable_type
 
-        element_base, suffix = split_array_type_suffix(base_type)
-        dimensions = re.findall(r"\[([^\]]*)\]", suffix)
-        if index_levels >= len(dimensions):
+    def hlsl_for_in_outer_array_type(self, iterable_type):
+        base_type, array_suffix = split_array_type_suffix(str(iterable_type or ""))
+        if not array_suffix:
             return None
+        match = re.fullmatch(r"\[([^\]]*)\](.*)", array_suffix)
+        if match is None:
+            return None
+        extent_text = match.group(1).strip()
+        remaining_suffix = match.group(2)
+        return extent_text, f"{base_type}{remaining_suffix}"
 
-        remaining = dimensions[index_levels:]
-        length = remaining[0].strip()
-        if not length:
-            return None
-        inner_suffix = "".join(f"[{dim}]" for dim in remaining[1:])
-        element_type = f"{element_base}{inner_suffix}"
-        return element_type, length
+    def hlsl_for_in_array_shape(self, node, pattern, iterable_type):
+        array_shape = self.hlsl_for_in_outer_array_type(iterable_type)
+        if array_shape is None:
+            self.raise_hlsl_for_in_iterable_error(
+                node, pattern, iterable_type, reason="not-fixed-array"
+            )
+        extent_text, element_type = array_shape
+        if not extent_text:
+            self.raise_hlsl_for_in_iterable_error(
+                node, pattern, iterable_type, reason="unknown-extent"
+            )
+        constants = dict(self.literal_int_constants)
+        constants.update(self.current_hlsl_visible_int_constants or {})
+        extent = evaluate_literal_int_expression(extent_text, constants)
+        if extent is None:
+            self.raise_hlsl_for_in_iterable_error(
+                node, pattern, iterable_type, reason="unknown-extent"
+            )
+        if extent < 0:
+            self.raise_hlsl_for_in_iterable_error(
+                node, pattern, iterable_type, reason="invalid-extent"
+            )
+        return extent, element_type
+
+    def raise_hlsl_for_in_iterable_error(
+        self,
+        node,
+        pattern,
+        iterable_type,
+        *,
+        binding_type=None,
+        reason,
+    ):
+        descriptions = {
+            "invalid-extent": "has a negative fixed-array extent",
+            "mutable-reference-binding": (
+                "requires mutable reference binding, which HLSL cannot preserve"
+            ),
+            "not-fixed-array": "is neither a fixed array nor an integer loop bound",
+            "side-effecting-empty-array": (
+                "is an empty array whose container expression has side effects"
+            ),
+            "unknown-extent": "does not have a compile-time fixed-array extent",
+            "unresolved-iterable-type": "has an unresolved iterable type",
+            "unsupported-element-type": "contains an unsupported resource element type",
+        }
+        detail = descriptions.get(reason, "has no faithful HLSL iterable contract")
+        type_label = iterable_type or "<unresolved>"
+        raise DirectXForInIterableError(
+            f"DirectX for-in binding '{pattern}' over '{type_label}' {detail}",
+            pattern=pattern,
+            iterable_type=iterable_type,
+            binding_type=binding_type,
+            reason=reason,
+            source_location=getattr(node, "source_location", None)
+            or getattr(getattr(node, "iterable", None), "source_location", None),
+        )
 
     def generate_while(self, node, indent):
         indent_str = "    " * indent

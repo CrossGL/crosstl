@@ -21,6 +21,7 @@ from crosstl.translator.ast import (
     CooperativeMatrixOpNode,
     CooperativeMatrixType,
     ExecutionModel,
+    ForInNode,
     FunctionCallNode,
     FunctionNode,
     GenericParameterNode,
@@ -46,6 +47,7 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXAggregateConditionalError,
     DirectXAtomicFenceLoweringError,
     DirectXCooperativeMatrixUnsupportedError,
+    DirectXForInIterableError,
     DirectXMappedOverloadError,
     DirectXMinimumPrecisionIntegerArithmeticError,
     DirectXPrivatePointerParameterError,
@@ -9684,6 +9686,264 @@ def test_for_in_statement_lowers_to_counted_loop():
     assert "total = (total + i);" in generated_code
     assert "return total;" in generated_code
     assert "ForInNode(" not in generated_code
+
+
+def test_for_in_fixed_arrays_materialize_once_and_preserve_element_types():
+    shader = """
+    shader FixedArrayForIn {
+        struct Pair {
+            uint first;
+            uint second;
+        };
+
+        int selectRow(inout uint calls) {
+            calls += 1u;
+            return int(calls & 1u);
+        }
+
+        uint helper() {
+            uint calls = 0u;
+            uint[2] scalars = {1u, 2u};
+            uvec2[2] vectors = {uvec2(3u, 4u), uvec2(5u, 6u)};
+            Pair[2] pairs = {Pair(7u, 8u), Pair(9u, 10u)};
+            uint[2][4] rotations = {
+                {13u, 15u, 26u, 6u},
+                {17u, 29u, 16u, 24u}
+            };
+            uint total = 0u;
+            for scalar in scalars {
+                total += scalar;
+            }
+            for vectorValue in vectors {
+                total += vectorValue.x;
+            }
+            for pairValue in pairs {
+                total += pairValue.first;
+            }
+            for rowValue in rotations {
+                for component in rowValue {
+                    total += component;
+                    break;
+                }
+                break;
+            }
+            for rotation in rotations[selectRow(calls)] {
+                if (rotation == 29u) {
+                    continue;
+                }
+                total += rotation;
+                if (total > 100u) {
+                    return total;
+                }
+            }
+            return total + calls;
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "uint scalar_crossgl_iterable[2] = scalars;" in generated_code
+    assert "uint scalar = scalar_crossgl_iterable[" in generated_code
+    assert "uint2 vectorValue_crossgl_iterable[2] = vectors;" in generated_code
+    assert "uint2 vectorValue = vectorValue_crossgl_iterable[" in generated_code
+    assert "Pair pairValue_crossgl_iterable[2] = pairs;" in generated_code
+    assert "Pair pairValue = pairValue_crossgl_iterable[" in generated_code
+    assert "uint rowValue_crossgl_iterable[2][4] = rotations;" in generated_code
+    assert "uint rowValue[4] = rowValue_crossgl_iterable[" in generated_code
+    assert "uint component_crossgl_iterable[4] = rowValue;" in generated_code
+    assert "uint component = component_crossgl_iterable[" in generated_code
+    assert (
+        "uint rotation_crossgl_iterable[4] = rotations[selectRow(calls)];"
+        in generated_code
+    )
+    assert "uint rotation = rotation_crossgl_iterable[" in generated_code
+    assert generated_code.count("rotations[selectRow(calls)]") == 1
+    assert "(rotations[selectRow(calls)])[" not in generated_code
+    assert "rotation_crossgl_index < 4" in generated_code
+    assert "continue;" in generated_code
+    assert generated_code.count("break;") == 2
+    assert "return total;" in generated_code
+
+
+def test_for_in_reduced_side_effecting_subarray_selector_is_evaluated_once():
+    shader = """
+    shader FixedArrayForInSingleEvaluation {
+        int selectRow(inout uint calls) {
+            calls += 1u;
+            return int(calls & 1u);
+        }
+
+        uint helper() {
+            uint calls = 0u;
+            uint[2][4] rotations = {
+                {13u, 15u, 26u, 6u},
+                {17u, 29u, 16u, 24u}
+            };
+            uint total = 0u;
+            for rotation in rotations[selectRow(calls)] {
+                total += rotation;
+            }
+            return total + calls;
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    materialization = "uint rotation_crossgl_iterable[4] = rotations[selectRow(calls)];"
+    assert materialization in generated_code
+    assert generated_code.count("selectRow(calls)") == 1
+    assert "uint rotation = rotation_crossgl_iterable[" in generated_code
+    assert "rotation_crossgl_index < 4" in generated_code
+
+
+def test_for_in_fixed_array_expression_extent_is_resolved():
+    shader = """
+    shader FixedArrayExpressionExtent {
+        void helper() {
+            uint[(2 + 2)] values = {1u, 2u, 3u, 4u};
+            for value in values {
+                uint copy = value;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "uint value_crossgl_iterable[(2 + 2)] = values;" in generated_code
+    assert "value_crossgl_index < 4" in generated_code
+
+
+@pytest.mark.parametrize(
+    ("declaration", "iterable", "expected_type", "reason"),
+    (
+        ("uint[] values", "values", "uint[]", "unknown-extent"),
+        ("Iterator values", "values", "Iterator", "not-fixed-array"),
+        ("float values", "values", "float", "not-fixed-array"),
+        (None, "missing", None, "unresolved-iterable-type"),
+    ),
+)
+def test_for_in_unknown_or_user_defined_iterables_are_structured_diagnostics(
+    declaration, iterable, expected_type, reason
+):
+    struct = "struct Iterator { int value; };" if expected_type == "Iterator" else ""
+    parameters = declaration or ""
+    shader = f"""
+    shader UnsupportedForIn {{
+        {struct}
+        void helper({parameters}) {{
+            for value in {iterable} {{
+                return;
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(DirectXForInIterableError) as exc_info:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.directx-for-in-iterable-unsupported"
+    )
+    assert diagnostic.missing_capabilities == ("directx.fixed-array-for-in-lowering",)
+    assert diagnostic.pattern == "value"
+    assert diagnostic.iterable_type == expected_type
+    assert diagnostic.reason == reason
+
+
+def test_for_in_mutable_reference_binding_is_structured_diagnostic():
+    shader = """
+    shader MutableReferenceForIn {
+        void helper() {
+            uint[2] values = {1u, 2u};
+            for value in values {
+                value += 1u;
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(shader)
+    loop = next(
+        node for node in HLSLCodeGen().walk_ast(ast) if isinstance(node, ForInNode)
+    )
+    loop.binding_type = ReferenceType(PrimitiveType("uint"), is_mutable=True)
+
+    with pytest.raises(DirectXForInIterableError) as exc_info:
+        HLSLCodeGen().generate(ast)
+
+    diagnostic = exc_info.value
+    assert diagnostic.binding_type == "uint&"
+    assert diagnostic.reason == "mutable-reference-binding"
+
+
+def test_for_in_immutable_reference_binding_lowers_to_const_value():
+    shader = """
+    shader ImmutableReferenceForIn {
+        void helper() {
+            uint[2] values = {1u, 2u};
+            for value in values {
+                uint copy = value;
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(shader)
+    loop = next(
+        node for node in HLSLCodeGen().walk_ast(ast) if isinstance(node, ForInNode)
+    )
+    loop.binding_type = ReferenceType(PrimitiveType("uint"), is_mutable=False)
+
+    generated_code = HLSLCodeGen().generate(ast)
+
+    assert "const uint value = value_crossgl_iterable[" in generated_code
+
+
+def test_for_in_empty_fixed_array_omits_unreachable_loop_body():
+    shader = """
+    shader EmptyFixedArrayForIn {
+        void helper() {
+            uint[0] values;
+            for value in values {
+                uint unreachable = value;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "uint values[0];" in generated_code
+    assert "crossgl_iterable" not in generated_code
+    assert "unreachable" not in generated_code
+
+
+def test_for_in_side_effecting_empty_array_is_structured_diagnostic():
+    shader = """
+    shader SideEffectingEmptyFixedArrayForIn {
+        int selectRow(inout uint calls) {
+            calls += 1u;
+            return 0;
+        }
+
+        void helper() {
+            uint calls = 0u;
+            uint[1][0] rows;
+            for value in rows[selectRow(calls)] {
+                return;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(DirectXForInIterableError) as exc_info:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.iterable_type == "uint[0]"
+    assert diagnostic.reason == "side-effecting-empty-array"
 
 
 def test_for_in_range_statement_lowers_to_counted_loop():

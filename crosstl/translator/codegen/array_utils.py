@@ -4,6 +4,7 @@ This module provides common functions for handling array types, array access,
 and type detection across different code generators.
 """
 
+import ast
 from typing import Any, Dict, Optional, Tuple
 
 
@@ -168,7 +169,9 @@ def evaluate_literal_int_expression(
         parsed = _parse_decimal_int_literal(expr)
         if parsed is not None:
             return parsed
-        return constants.get(expr)
+        if expr in constants:
+            return constants[expr]
+        return _evaluate_literal_int_text_expression(expr, constants)
 
     class_name = expr.__class__.__name__
     if hasattr(expr, "value"):
@@ -304,6 +307,72 @@ def evaluate_literal_int_expression(
         return _evaluate_literal_int_swizzle(expr, constants)
 
     return None
+
+
+def _evaluate_literal_int_text_expression(
+    expression: str, constants: Dict[str, int]
+) -> Optional[int]:
+    """Evaluate a parsed integer expression without executing source text."""
+    try:
+        root = ast.parse(expression, mode="eval").body
+    except (SyntaxError, ValueError):
+        return None
+
+    def evaluate(node):
+        if isinstance(node, ast.Constant):
+            if isinstance(node.value, bool) or not isinstance(node.value, int):
+                return None
+            return node.value
+        if isinstance(node, ast.Name):
+            value = constants.get(node.id)
+            return (
+                value
+                if isinstance(value, int) and not isinstance(value, bool)
+                else None
+            )
+        if isinstance(node, ast.UnaryOp):
+            operand = evaluate(node.operand)
+            if operand is None:
+                return None
+            if isinstance(node.op, ast.UAdd):
+                return operand
+            if isinstance(node.op, ast.USub):
+                return -operand
+            if isinstance(node.op, ast.Invert):
+                return ~operand
+            return None
+        if not isinstance(node, ast.BinOp):
+            return None
+        left = evaluate(node.left)
+        right = evaluate(node.right)
+        if left is None or right is None:
+            return None
+        if isinstance(node.op, ast.Add):
+            return left + right
+        if isinstance(node.op, ast.Sub):
+            return left - right
+        if isinstance(node.op, ast.Mult):
+            return left * right
+        if isinstance(node.op, (ast.Div, ast.FloorDiv)) and right != 0:
+            quotient = abs(left) // abs(right)
+            return -quotient if (left < 0) != (right < 0) else quotient
+        if isinstance(node.op, ast.Mod) and right != 0:
+            quotient = abs(left) // abs(right)
+            quotient = -quotient if (left < 0) != (right < 0) else quotient
+            return left - quotient * right
+        if isinstance(node.op, ast.LShift) and right >= 0:
+            return left << right
+        if isinstance(node.op, ast.RShift) and right >= 0:
+            return left >> right
+        if isinstance(node.op, ast.BitAnd):
+            return left & right
+        if isinstance(node.op, ast.BitOr):
+            return left | right
+        if isinstance(node.op, ast.BitXor):
+            return left ^ right
+        return None
+
+    return evaluate(root)
 
 
 def _evaluate_literal_int_cast(target_type, expression, constants) -> Optional[int]:
