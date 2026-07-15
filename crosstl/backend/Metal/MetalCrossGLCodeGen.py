@@ -2548,6 +2548,11 @@ class MetalToCrossGLConverter:
                 )
                 previous_type_resolution_context = self.current_type_resolution_context
                 self.current_type_resolution_context = declaration_context
+                if isinstance(declaration_context, VariableNode):
+                    self.validate_global_constructor_initialization(
+                        declaration_context,
+                        initialized=isinstance(glob, AssignmentNode),
+                    )
                 if isinstance(glob, AssignmentNode):
                     if isinstance(glob.left, VariableNode):
                         if self.is_sampler_variable(glob.left):
@@ -2587,6 +2592,7 @@ class MetalToCrossGLConverter:
                             if isinstance(glob.left, VariableNode)
                             else None
                         ),
+                        copy_initialize_lvalue=True,
                     )
                     code += f"    {left} {glob.operator} {right};\n"
                 elif isinstance(glob, VariableNode):
@@ -3344,6 +3350,60 @@ class MetalToCrossGLConverter:
             if value_bindings:
                 self.template_value_bindings.pop()
         return f"{helper}({rendered})"
+
+    def generate_default_constructor_initializer(self, declaration, is_main=False):
+        owner = self.metal_declaration_expression_type(declaration)
+        contract = self.metal_constructor_contract(owner)
+        if contract is None:
+            return None
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(declaration, "qualifiers", []) or []
+        }
+        if "extern" in qualifiers:
+            return None
+        if self.variable_has_array_initializer_shape(declaration):
+            raise MetalConstructorContractError(
+                owner,
+                (),
+                [
+                    self.constructor_candidate_signature(constructor)
+                    for constructor in contract[1]
+                ],
+                "array element construction cannot be represented by one "
+                "aggregate assignment",
+                getattr(declaration, "source_location", None),
+            )
+        return self.generate_explicit_constructor_call(
+            owner,
+            [],
+            is_main,
+            getattr(declaration, "source_location", None),
+            self.declaration_constructor_receiver_address_space(declaration),
+        )
+
+    def validate_global_constructor_initialization(self, declaration, *, initialized):
+        owner = self.metal_declaration_expression_type(declaration)
+        contract = self.metal_constructor_contract(owner)
+        if contract is None:
+            return
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(declaration, "qualifiers", []) or []
+        }
+        if "extern" in qualifiers and not initialized:
+            return
+        raise MetalConstructorContractError(
+            owner,
+            (),
+            [
+                self.constructor_candidate_signature(constructor)
+                for constructor in contract[1]
+            ],
+            "global object construction cannot be represented by a "
+            "target-independent runtime factory",
+            getattr(declaration, "source_location", None),
+        )
 
     def constructor_runtime_members(self, struct_node):
         return [
@@ -6992,27 +7052,8 @@ class MetalToCrossGLConverter:
                     self.current_structured_buffer_names.add(stmt.name)
                 decl = self.format_decl(stmt, include_semantic=False)
                 if not getattr(stmt, "is_metal_constructor_storage", False):
-                    contract = self.metal_constructor_contract(
-                        self.metal_declaration_expression_type(stmt)
-                    )
-                    if contract and self.variable_has_array_initializer_shape(stmt):
-                        raise MetalConstructorContractError(
-                            self.metal_declaration_expression_type(stmt),
-                            (),
-                            [
-                                self.constructor_candidate_signature(constructor)
-                                for constructor in contract[1]
-                            ],
-                            "array element construction cannot be represented by "
-                            "one aggregate assignment",
-                            getattr(stmt, "source_location", None),
-                        )
-                    initializer = self.generate_explicit_constructor_call(
-                        self.metal_declaration_expression_type(stmt),
-                        [],
-                        is_main,
-                        getattr(stmt, "source_location", None),
-                        self.declaration_constructor_receiver_address_space(stmt),
+                    initializer = self.generate_default_constructor_initializer(
+                        stmt, is_main
                     )
                     if initializer is not None:
                         decl += f" = {initializer}"
@@ -7059,10 +7100,18 @@ class MetalToCrossGLConverter:
                             )
                         )
                         try:
-                            if self.wide_vector_type_info(
-                                self.current_function_return_type,
-                                getattr(stmt, "source_location", None),
-                            ) is not None or isinstance(stmt.value, ArrayAccessNode):
+                            if (
+                                self.metal_constructor_contract(
+                                    self.current_function_return_type
+                                )
+                                is not None
+                                or self.wide_vector_type_info(
+                                    self.current_function_return_type,
+                                    getattr(stmt, "source_location", None),
+                                )
+                                is not None
+                                or isinstance(stmt.value, ArrayAccessNode)
+                            ):
                                 value = self.generate_initializer_value(
                                     stmt.value,
                                     is_main,
@@ -7589,19 +7638,20 @@ class MetalToCrossGLConverter:
                 required=True,
             )
         )
+        initializer_type = None
+        if component_info is not None:
+            initializer_type = component_info["element_type"]
+        elif isinstance(node.left, VariableNode):
+            initializer_type = getattr(node.left, "vtype", None)
+            if not initializer_type and isinstance(node.right, InitializerListNode):
+                initializer_type = self.expression_metal_type(node.left)
+        elif isinstance(node.right, InitializerListNode):
+            initializer_type = self.expression_metal_type(node.left)
         try:
             rhs = self.generate_initializer_value(
                 node.right,
                 is_main,
-                (
-                    component_info["element_type"]
-                    if component_info is not None
-                    else (
-                        getattr(node.left, "vtype", None)
-                        if isinstance(node.left, VariableNode)
-                        else None
-                    )
-                ),
+                initializer_type,
                 (
                     self.variable_has_array_initializer_shape(node.left)
                     if isinstance(node.left, VariableNode)
@@ -7611,6 +7661,10 @@ class MetalToCrossGLConverter:
                     self.declaration_constructor_receiver_address_space(node.left)
                     if isinstance(node.left, VariableNode)
                     else None
+                ),
+                copy_initialize_lvalue=(
+                    isinstance(node.left, VariableNode)
+                    and bool(getattr(node.left, "vtype", None))
                 ),
             )
         finally:
@@ -7681,6 +7735,7 @@ class MetalToCrossGLConverter:
         expected_type=None,
         expected_array=False,
         receiver_address_space=None,
+        copy_initialize_lvalue=False,
     ):
         if (
             expected_type
@@ -7689,7 +7744,22 @@ class MetalToCrossGLConverter:
             and self.metal_cooperative_matrix_element_access(expr) is None
         ):
             self.expression_metal_type(expr)
-        if expected_type and self.metal_constructor_contract(expected_type):
+        constructor_contract = (
+            self.metal_constructor_contract(expected_type) if expected_type else None
+        )
+        if constructor_contract and expected_array:
+            raise MetalConstructorContractError(
+                expected_type,
+                (),
+                [
+                    self.constructor_candidate_signature(constructor)
+                    for constructor in constructor_contract[1]
+                ],
+                "array element construction cannot be represented by one "
+                "aggregate assignment",
+                getattr(expr, "source_location", None),
+            )
+        if constructor_contract:
             expected_owner = self.normalized_metal_type(
                 self.resolve_type_alias(expected_type)
             )
@@ -7724,21 +7794,37 @@ class MetalToCrossGLConverter:
                     getattr(expr, "source_location", None),
                     receiver_address_space,
                 )
+            copy_source = isinstance(
+                expr, (VariableNode, MemberAccessNode, ArrayAccessNode)
+            ) or (isinstance(expr, UnaryOpNode) and expr.op == "*")
+            if copy_initialize_lvalue and copy_source:
+                expression_type = self.metal_source_overload_value_type(
+                    self.expression_metal_type(expr)
+                )
+                if self.metal_source_overload_type_identity(
+                    expression_type
+                ) == self.metal_source_overload_type_identity(expected_owner):
+                    return self.generate_explicit_constructor_call(
+                        expected_type,
+                        [expr],
+                        is_main,
+                        getattr(expr, "source_location", None),
+                        receiver_address_space,
+                    )
         if isinstance(expr, InitializerListNode):
-            if expected_type and self.metal_constructor_contract(expected_type):
+            if constructor_contract:
                 designated = [
                     element
                     for element in expr.elements
                     if isinstance(element, DesignatedInitializerNode)
                 ]
                 if designated:
-                    contract = self.metal_constructor_contract(expected_type)
                     raise MetalConstructorContractError(
                         expected_type,
                         (),
                         [
                             self.constructor_candidate_signature(constructor)
-                            for constructor in contract[1]
+                            for constructor in constructor_contract[1]
                         ],
                         "designated fields cannot select an explicit constructor",
                         getattr(expr, "source_location", None),

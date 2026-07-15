@@ -2054,6 +2054,7 @@ class MetalParser:
             self.eat("SEMICOLON")
 
     def parse_global_variable(self, pre_alignas=None):
+        start_token = self.current_token
         attributes = self.parse_attributes()
         alignas_specs = pre_alignas or self.parse_alignas_specifiers()
         vtype, qualifiers = self.parse_type_specifier(attributes=attributes)
@@ -2070,6 +2071,9 @@ class MetalParser:
         var_node.array_sizes = array_sizes
         self.apply_declarator_metadata(var_node, type_suffix, grouped_suffix)
         var_node.alignas = alignas_specs
+        var_node.source_location = self.source_span_from_tokens(
+            start_token, self.tokens[self.pos - 1]
+        )
         self.register_local_variable_name(name)
         if "const" in qualifiers or "constexpr" in qualifiers:
             var_node.is_const = True
@@ -4964,6 +4968,7 @@ class MetalParser:
         return self.format_generic_type_tokens(parts)
 
     def parse_initializer_list(self):
+        start_token = self.current_token
         self.eat("LBRACE")
         elements = []
 
@@ -4977,7 +4982,11 @@ class MetalParser:
             break
 
         self.eat("RBRACE")
-        return InitializerListNode(elements)
+        node = InitializerListNode(elements)
+        node.source_location = self.source_span_from_tokens(
+            start_token, self.tokens[self.pos - 1]
+        )
+        return node
 
     def parse_initializer_element(self):
         if self.current_token[0] in ("DOT", "LBRACKET"):

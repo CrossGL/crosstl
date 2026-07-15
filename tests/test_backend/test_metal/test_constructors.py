@@ -190,6 +190,98 @@ def test_default_constructor_runs_for_uninitialized_local():
     assert_crossgl_parses(generated)
 
 
+def test_stateful_global_constructor_reports_contract_error():
+    source = """
+    struct State {
+      int value;
+      constexpr State() constant : value(5) { value += 1; }
+    };
+
+    constant State state;
+    kernel void compute(device int* output [[buffer(0)]]) {
+      output[0] = state.value;
+    }
+    """
+
+    _preprocessed, ast = preprocess_and_parse(source, "constructor-global.metal")
+    with pytest.raises(MetalConstructorContractError) as raised:
+        MetalToCrossGLConverter().generate(ast)
+
+    error = raised.value
+    assert error.owner == "State"
+    assert "global object construction" in error.reason
+    assert error.source_location["file"] == "constructor-global.metal"
+    assert error.source_location["line"] == 7
+
+
+def test_braced_return_and_assignment_use_explicit_constructor_contract():
+    source = """
+    struct Value {
+      int value;
+      Value(int input) : value(input) { value += 1; }
+    };
+
+    Value make_value() { return {2}; }
+
+    kernel void compute(device int* output [[buffer(0)]]) {
+      Value current(1);
+      current = {3};
+      output[0] = current.value;
+    }
+    """
+
+    _preprocessed, generated = convert(source)
+
+    assert "return crosstl_ctor_Value_1(2);" in generated
+    assert "current = crosstl_ctor_Value_1(3);" in generated
+    assert_crossgl_parses(generated)
+
+
+def test_copy_initialization_uses_declared_copy_constructor():
+    source = """
+    struct Copyable {
+      int value;
+      Copyable(int input) : value(input) {}
+      Copyable(const thread Copyable& other) : value(other.value + 1) {}
+    };
+
+    kernel void compute(device int* output [[buffer(0)]]) {
+      Copyable source(1);
+      Copyable copy = source;
+      output[0] = copy.value;
+    }
+    """
+
+    _preprocessed, generated = convert(source)
+
+    assert "Copyable copy = crosstl_ctor_Copyable_2(source);" in generated
+    assert "crosstl_ctor_value.value = int(other.value + 1);" in generated
+    assert_crossgl_parses(generated)
+
+
+def test_explicit_constructor_array_reports_contract_error():
+    source = """
+    struct Value {
+      int value;
+      Value(int input) : value(input) {}
+    };
+
+    kernel void compute() {
+      Value values[2] = {Value(1), Value(2)};
+    }
+    """
+
+    _preprocessed, ast = preprocess_and_parse(source, "constructor-array.metal")
+    with pytest.raises(MetalConstructorContractError) as raised:
+        MetalToCrossGLConverter().generate(ast)
+
+    error = raised.value
+    assert error.owner == "Value"
+    assert "array element construction" in error.reason
+    assert error.source_location["file"] == "constructor-array.metal"
+    assert error.source_location["line"] == 8
+
+
 def test_constructor_body_calls_lowered_sibling_method_with_owned_receiver():
     source = """
     struct Counter {
@@ -320,7 +412,7 @@ def test_plain_aggregate_initialization_keeps_existing_lowering():
     assert_crossgl_parses(generated)
 
 
-@pytest.mark.parametrize("backend", ["directx", "opengl"])
+@pytest.mark.parametrize("backend", ["directx", "opengl", "vulkan"])
 def test_fp8_constructor_boundary_translates_to_native_targets(tmp_path, backend):
     source = """
     struct fp8_e4m3 {
@@ -350,6 +442,11 @@ def test_fp8_constructor_boundary_translates_to_native_targets(tmp_path, backend
         format_output=False,
     )
 
-    assert "crosstl_ctor_fp8_e4m3_1_float" in generated
-    assert "f_bits ^= sign;" in generated
-    assert "crosstl_ctor_value.bits" in generated
+    if backend == "vulkan":
+        assert "OpFunctionCall" in generated
+        assert "OpBitwiseXor" in generated
+        assert "crosstl_ctor_value" in generated
+    else:
+        assert "crosstl_ctor_fp8_e4m3_1_float" in generated
+        assert "f_bits ^= sign;" in generated
+        assert "crosstl_ctor_value.bits" in generated
