@@ -1,4 +1,6 @@
 import re
+import shutil
+import subprocess
 
 import pytest
 
@@ -259,7 +261,172 @@ def test_copy_initialization_uses_declared_copy_constructor():
     assert_crossgl_parses(generated)
 
 
-def test_explicit_constructor_array_reports_contract_error():
+def test_fully_initialized_constructor_array_lowers_each_element():
+    source = """
+    struct Value {
+      int value;
+      explicit Value(int input) : value(input) {}
+    };
+
+    kernel void compute(device int* output [[buffer(0)]]) {
+      Value values[2] = {Value(1), Value(2)};
+      output[0] = values[0].value + values[1].value;
+    }
+    """
+
+    _preprocessed, generated = convert(source)
+
+    assert re.search(
+        r"Value\[2\] values;\s*"
+        r"values\[0\] = crosstl_ctor_Value_1\(1\);\s*"
+        r"values\[1\] = crosstl_ctor_Value_1\(2\);",
+        generated,
+    )
+    assert "Value[2] values =" not in generated
+    assert_crossgl_parses(generated)
+
+
+def test_partially_initialized_constructor_array_default_constructs_tail():
+    source = """
+    struct Value {
+      int value;
+      Value(int input) : value(input) {}
+      Value() : value(0) {}
+    };
+
+    kernel void compute(device int* output [[buffer(0)]]) {
+      Value values[3] = {0};
+      output[0] = values[0].value + values[1].value + values[2].value;
+    }
+    """
+
+    _preprocessed, generated = convert(source)
+
+    assert re.search(
+        r"Value\[3\] values;\s*"
+        r"values\[0\] = crosstl_ctor_Value_1\(0\);\s*"
+        r"for \(int (?P<index>\w+) = 1; (?P=index) < 3; "
+        r"(?P=index)\+\+\) \{\s*"
+        r"values\[(?P=index)\] = crosstl_ctor_Value_2\(\);\s*\}",
+        generated,
+    )
+    assert generated.count("for (int _crosstl_constructor_index") == 1
+    assert "values[1] =" not in generated
+    assert "values[2] =" not in generated
+    assert_crossgl_parses(generated)
+
+
+def test_uninitialized_constructor_array_default_constructs_each_element():
+    source = """
+    struct Value {
+      int value;
+      Value() : value(0) {}
+      explicit Value(int input) : value(input) {}
+    };
+
+    kernel void compute(device int* output [[buffer(0)]]) {
+      Value values[2];
+      output[0] = values[0].value + values[1].value;
+    }
+    """
+
+    _preprocessed, generated = convert(source)
+
+    assert re.search(
+        r"Value\[2\] values;\s*"
+        r"for \(int (?P<index>\w+) = 0; (?P=index) < 2; "
+        r"(?P=index)\+\+\) \{\s*"
+        r"values\[(?P=index)\] = crosstl_ctor_Value_1\(\);\s*\}",
+        generated,
+    )
+    assert generated.count("for (int _crosstl_constructor_index") == 1
+    assert "values[0] =" not in generated
+    assert "values[1] =" not in generated
+    assert_crossgl_parses(generated)
+
+
+def test_constructor_array_loop_index_avoids_source_identifier_collision():
+    source = """
+    struct Value {
+      int value;
+      Value() : value(0) {}
+    };
+
+    kernel void compute(device int* output [[buffer(0)]]) {
+      int _crosstl_constructor_index = 7;
+      Value values[2];
+      output[0] = _crosstl_constructor_index + values[0].value;
+    }
+    """
+
+    _preprocessed, generated = convert(source)
+
+    assert "int _crosstl_constructor_index = 7;" in generated
+    assert re.search(
+        r"for \(int _crosstl_constructor_index_2 = 0; "
+        r"_crosstl_constructor_index_2 < 2; "
+        r"_crosstl_constructor_index_2\+\+\)",
+        generated,
+    )
+    assert "values[_crosstl_constructor_index_2]" in generated
+    assert_crossgl_parses(generated)
+
+
+def test_constructor_array_loop_uses_evaluated_conditional_extent():
+    source = """
+    struct Value {
+      int value;
+      Value() : value(0) {}
+    };
+
+    kernel void compute(device int* output [[buffer(0)]]) {
+      Value values[2 == 0 ? 1 : 2];
+      output[0] = values[1].value;
+    }
+    """
+
+    _preprocessed, generated = convert(source)
+
+    assert "Value[2 == 0 ? 1 : 2] values;" in generated
+    assert re.search(
+        r"for \(int (?P<index>\w+) = 0; (?P=index) < 2; " r"(?P=index)\+\+\)",
+        generated,
+    )
+    assert "< 2 == 0 ? 1 : 2" not in generated
+    assert_crossgl_parses(generated)
+
+
+def test_multidimensional_constructor_array_reports_contract_error():
+    source = """
+    struct Value {
+      int value;
+      explicit Value(int input) : value(input) {}
+    };
+
+    kernel void compute() {
+      Value values[2][2] = {
+        {Value(1), Value(2)},
+        {Value(3), Value(4)}
+      };
+    }
+    """
+
+    _preprocessed, ast = preprocess_and_parse(
+        source, "constructor-multidimensional-array.metal"
+    )
+    with pytest.raises(MetalConstructorContractError) as raised:
+        MetalToCrossGLConverter().generate(ast)
+
+    error = raised.value
+    assert error.owner == "Value"
+    assert error.reason == (
+        "only one-dimensional local constructor arrays can be lowered"
+    )
+    assert error.source_location["file"] == ("constructor-multidimensional-array.metal")
+    assert error.source_location["line"] == 8
+
+
+def test_const_constructor_array_reports_source_located_contract_error():
     source = """
     struct Value {
       int value;
@@ -267,19 +434,25 @@ def test_explicit_constructor_array_reports_contract_error():
     };
 
     kernel void compute() {
-      Value values[2] = {Value(1), Value(2)};
+      const Value values[2] = {Value(1), Value(2)};
     }
     """
 
-    _preprocessed, ast = preprocess_and_parse(source, "constructor-array.metal")
+    _preprocessed, ast = preprocess_and_parse(
+        source, "constructor-qualified-array.metal"
+    )
     with pytest.raises(MetalConstructorContractError) as raised:
         MetalToCrossGLConverter().generate(ast)
 
     error = raised.value
     assert error.owner == "Value"
-    assert "array element construction" in error.reason
-    assert error.source_location["file"] == "constructor-array.metal"
+    assert error.reason == (
+        "local constructor arrays with storage or immutability qualifier(s) const "
+        "cannot be lowered through runtime element assignments"
+    )
+    assert error.source_location["file"] == "constructor-qualified-array.metal"
     assert error.source_location["line"] == 8
+    assert error.source_location["column"] == 31
 
 
 def test_constructor_body_calls_lowered_sibling_method_with_owned_receiver():
@@ -410,6 +583,103 @@ def test_plain_aggregate_initialization_keeps_existing_lowering():
     assert "crosstl_ctor_Plain" not in generated
     assert "Plain value = Plain(2, 3.0f);" in generated
     assert_crossgl_parses(generated)
+
+
+@pytest.mark.parametrize(
+    ("backend", "extension", "compiler_name"),
+    [
+        pytest.param("directx", "hlsl", "dxc", id="directx"),
+        pytest.param("opengl", "comp", "glslangValidator", id="opengl"),
+    ],
+)
+def test_fixed_size_constructor_array_survives_crossgl_target_generation(
+    tmp_path, backend, extension, compiler_name
+):
+    source = """
+    struct Value {
+      int value;
+      Value(int input) : value(input) {}
+      Value() : value(0) {}
+    };
+
+    kernel void compute(
+        device int* output [[buffer(0)]],
+        uint index [[thread_position_in_grid]]) {
+      Value values[3] = {0};
+      output[index] = values[0].value + values[1].value + values[2].value;
+    }
+    """
+
+    _preprocessed, crossgl = convert(source, "constructor-array-target.metal")
+    crossgl_path = tmp_path / "constructor-array.cgl"
+    crossgl_path.write_text(crossgl, encoding="utf-8")
+
+    generated = crosstl.translate(
+        str(crossgl_path), backend=backend, format_output=False
+    )
+
+    assert "Value crosstl_ctor_Value_1(" in generated
+    assert "Value crosstl_ctor_Value_2()" in generated
+    assert "values[0] = crosstl_ctor_Value_1(0);" in generated
+    assert re.search(
+        r"for \(int (?P<index>_crosstl_constructor_index) = 1;[^{]+\{\s*"
+        r"values\[(?P=index)\] = crosstl_ctor_Value_2\(\);",
+        generated,
+    )
+
+    generated_path = tmp_path / f"constructor-array.{extension}"
+    generated_path.write_text(generated, encoding="utf-8")
+    compiler = shutil.which(compiler_name)
+    if compiler is None:
+        pytest.skip(f"{compiler_name} is not installed")
+
+    binary_path = tmp_path / f"constructor-array.{backend}.bin"
+    if backend == "directx":
+        command = [
+            compiler,
+            "-T",
+            "cs_6_0",
+            "-E",
+            "CSMain",
+            str(generated_path),
+            "-Fo",
+            str(binary_path),
+        ]
+    else:
+        command = [
+            compiler,
+            "--target-env",
+            "opengl",
+            "-S",
+            "comp",
+            str(generated_path),
+            "-o",
+            str(binary_path),
+        ]
+
+    result = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert binary_path.stat().st_size > 0
+    if backend == "opengl":
+        spirv_val = shutil.which("spirv-val")
+        if spirv_val is not None:
+            result = subprocess.run(
+                [
+                    spirv_val,
+                    "--target-env",
+                    "opengl4.5",
+                    str(binary_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.mark.parametrize("backend", ["directx", "opengl", "vulkan"])

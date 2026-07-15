@@ -3382,6 +3382,228 @@ class MetalToCrossGLConverter:
             self.declaration_constructor_receiver_address_space(declaration),
         )
 
+    def local_constructor_array_contract(self, declaration, source_location=None):
+        element_type = self.effective_metal_variable_type(declaration)
+        dimensions = list(getattr(declaration, "array_sizes", None) or [])
+        if not dimensions:
+            return None
+
+        contract = self.metal_constructor_contract(element_type)
+        if contract is None:
+            return None
+        candidates = [
+            self.constructor_candidate_signature(constructor)
+            for constructor in contract[1]
+        ]
+        location = source_location or getattr(declaration, "source_location", None)
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in self.effective_declaration_qualifiers(declaration)
+        }
+        if getattr(declaration, "is_const", False):
+            qualifiers.add("const")
+        if "extern" in qualifiers:
+            return None
+        unsupported_qualifiers = qualifiers & {
+            "const",
+            "constant",
+            "constexpr",
+            "constinit",
+            "static",
+        }
+        if unsupported_qualifiers:
+            rendered_qualifiers = ", ".join(sorted(unsupported_qualifiers))
+            raise MetalConstructorContractError(
+                element_type,
+                (),
+                candidates,
+                "local constructor arrays with storage or immutability qualifier(s) "
+                f"{rendered_qualifiers} cannot be lowered through runtime "
+                "element assignments",
+                location,
+            )
+        if len(dimensions) != 1:
+            raise MetalConstructorContractError(
+                element_type,
+                (),
+                candidates,
+                "only one-dimensional local constructor arrays can be lowered",
+                location,
+            )
+
+        extent = dimensions[0]
+        if extent is None:
+            raise MetalConstructorContractError(
+                element_type,
+                (),
+                candidates,
+                "an unsized local constructor array has no finite construction bound",
+                location,
+            )
+        rendered_extent = self.format_array_extent(extent)
+        extent_value = self.evaluate_value_template_constant_expression(rendered_extent)
+        if not isinstance(extent_value, int) or isinstance(extent_value, bool):
+            raise MetalConstructorContractError(
+                element_type,
+                (),
+                candidates,
+                "the local constructor array extent is not a concrete integral "
+                "constant",
+                location,
+            )
+        if extent_value <= 0:
+            raise MetalConstructorContractError(
+                element_type,
+                (),
+                candidates,
+                "the local constructor array extent must be positive",
+                location,
+            )
+        return {
+            "element_type": element_type,
+            "extent_value": extent_value,
+            "candidates": candidates,
+            "receiver_address_space": (
+                self.declaration_constructor_receiver_address_space(declaration)
+            ),
+        }
+
+    def generate_constructor_array_element_initializer(
+        self,
+        element_type,
+        expression,
+        is_main,
+        receiver_address_space,
+    ):
+        if isinstance(expression, DesignatedInitializerNode):
+            contract = self.metal_constructor_contract(element_type)
+            raise MetalConstructorContractError(
+                element_type,
+                (),
+                [
+                    self.constructor_candidate_signature(constructor)
+                    for constructor in contract[1]
+                ],
+                "designated array elements cannot select an explicit constructor",
+                getattr(expression, "source_location", None),
+            )
+
+        if isinstance(expression, InitializerListNode):
+            return self.generate_initializer_value(
+                expression,
+                is_main,
+                element_type,
+                receiver_address_space=receiver_address_space,
+                copy_initialize_lvalue=True,
+            )
+
+        expression_owner = None
+        if isinstance(expression, VectorConstructorNode):
+            expression_owner = expression.type_name
+        elif isinstance(expression, FunctionCallNode):
+            expression_owner = expression.name
+        elif isinstance(expression, CastNode):
+            expression_owner = expression.target_type
+        if expression_owner is not None and (
+            self.metal_source_overload_type_identity(expression_owner)
+            == self.metal_source_overload_type_identity(element_type)
+        ):
+            return self.generate_initializer_value(
+                expression,
+                is_main,
+                element_type,
+                receiver_address_space=receiver_address_space,
+                copy_initialize_lvalue=True,
+            )
+
+        expression_type = self.metal_source_overload_value_type(
+            self.expression_metal_type(expression)
+        )
+        if expression_type is not None and self.metal_source_overload_type_identity(
+            expression_type
+        ) == self.metal_source_overload_type_identity(element_type):
+            return self.generate_initializer_value(
+                expression,
+                is_main,
+                element_type,
+                receiver_address_space=receiver_address_space,
+                copy_initialize_lvalue=True,
+            )
+        return self.generate_explicit_constructor_call(
+            element_type,
+            [expression],
+            is_main,
+            getattr(expression, "source_location", None),
+            receiver_address_space,
+        )
+
+    def generate_local_constructor_array_declaration(
+        self,
+        declaration,
+        initializer,
+        is_main=False,
+        indent=0,
+    ):
+        location = getattr(initializer, "source_location", None) or getattr(
+            declaration, "source_location", None
+        )
+        info = self.local_constructor_array_contract(declaration, location)
+        if info is None:
+            return None
+        if initializer is None:
+            elements = []
+        elif isinstance(initializer, InitializerListNode):
+            elements = list(initializer.elements)
+        else:
+            raise MetalConstructorContractError(
+                info["element_type"],
+                (),
+                info["candidates"],
+                "a local constructor array requires a brace initializer list",
+                location,
+            )
+        if len(elements) > info["extent_value"]:
+            raise MetalConstructorContractError(
+                info["element_type"],
+                (),
+                info["candidates"],
+                "the initializer list contains more elements than the array extent",
+                location,
+            )
+
+        declaration_text = self.format_decl(declaration, include_semantic=False)
+        name = self.render_identifier(declaration.name)
+        lines = [f"{declaration_text};"]
+        for index, element in enumerate(elements):
+            value = self.generate_constructor_array_element_initializer(
+                info["element_type"],
+                element,
+                is_main,
+                info["receiver_address_space"],
+            )
+            lines.append(f"{name}[{index}] = {value};")
+
+        if len(elements) < info["extent_value"]:
+            index_name = self.reserve_generated_identifier("_crosstl_constructor_index")
+            default_value = self.generate_explicit_constructor_call(
+                info["element_type"],
+                [],
+                is_main,
+                location,
+                info["receiver_address_space"],
+            )
+            lines.extend(
+                [
+                    f"for (int {index_name} = {len(elements)}; "
+                    f"{index_name} < {info['extent_value']}; {index_name}++) {{",
+                    f"    {name}[{index_name}] = {default_value};",
+                    "}",
+                ]
+            )
+
+        indentation = "    " * indent
+        return ("\n" + indentation).join(lines)
+
     def validate_global_constructor_initialization(self, declaration, *, initialized):
         owner = self.metal_declaration_expression_type(declaration)
         contract = self.metal_constructor_contract(owner)
@@ -7050,6 +7272,15 @@ class MetalToCrossGLConverter:
                     self.current_storage_texture_names.add(stmt.name)
                 if self.structured_buffer_pointer_type(stmt):
                     self.current_structured_buffer_names.add(stmt.name)
+                constructor_array = self.generate_local_constructor_array_declaration(
+                    stmt,
+                    None,
+                    is_main,
+                    indent,
+                )
+                if constructor_array is not None:
+                    code += f"{constructor_array}\n"
+                    continue
                 decl = self.format_decl(stmt, include_semantic=False)
                 if not getattr(stmt, "is_metal_constructor_storage", False):
                     initializer = self.generate_default_constructor_initializer(
@@ -7079,6 +7310,17 @@ class MetalToCrossGLConverter:
                         self.current_storage_texture_names.add(declaration.name)
                     if self.structured_buffer_pointer_type(declaration):
                         self.current_structured_buffer_names.add(declaration.name)
+                    constructor_array = (
+                        self.generate_local_constructor_array_declaration(
+                            declaration,
+                            stmt.right,
+                            is_main,
+                            indent,
+                        )
+                    )
+                    if constructor_array is not None:
+                        code += f"{constructor_array}\n"
+                        continue
                 code += self.generate_assignment(stmt, is_main) + ";\n"
             elif isinstance(stmt, ReturnNode):
                 if not is_main:
