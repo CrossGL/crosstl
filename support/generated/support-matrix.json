@@ -123,7 +123,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1274
+        "test_count": 1275
       },
       "translator_codegen": {
         "exists": true,
@@ -5310,9 +5310,12 @@
         },
         "directx": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_array_handling"
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_array_handling",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_codegen_lowers_fixed_array_value_locals_and_indexing",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_fixed_array_value_locals_validate_with_dxc",
+            "tests/test_translator/test_project_translation.py::def test_metal_fixed_array_value_locals_match_direct_and_project_directx"
           ],
-          "notes": "",
+          "notes": "DirectX preserves native HLSL arrays for storage while lowering fixed-array return values to scalar-compatible vectors or generated carrier structs. Matching local declarations and initializers use the same value representation, retain source array types for overload resolution, and preserve constant and dynamic indexing. Direct and project Metal translation plus official DXC validation cover the value-local contract.",
           "status": "supported"
         },
         "hip": {

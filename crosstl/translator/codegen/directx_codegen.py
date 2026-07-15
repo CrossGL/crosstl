@@ -6288,7 +6288,32 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return "float"
         if vtype is None:
             vtype = self.expression_result_type(getattr(stmt, "initial_value", None))
-        return vtype or "float"
+        vtype = vtype or "float"
+        fixed_array_value_type = self.hlsl_fixed_array_local_value_type(
+            vtype,
+            getattr(stmt, "initial_value", None),
+        )
+        return fixed_array_value_type or vtype
+
+    def hlsl_fixed_array_local_value_type(self, declared_type, initializer):
+        if initializer is None:
+            return None
+        declared_components = self.hlsl_fixed_array_return_components(declared_type)
+        if declared_components is None:
+            return None
+
+        initializer_source_type = self.hlsl_source_expression_type(initializer)
+        if initializer_source_type is None or (
+            self.hlsl_source_type_signature(initializer_source_type)
+            != self.hlsl_source_type_signature(declared_type)
+        ):
+            return None
+
+        lowered_type = self.hlsl_fixed_array_return_type_name(declared_type)
+        initializer_value_type = self.expression_result_type(initializer)
+        if self.map_type(initializer_value_type) != self.map_type(lowered_type):
+            return None
+        return lowered_type
 
     def hlsl_source_variable_declared_type(self, stmt):
         vtype = getattr(stmt, "var_type", None)

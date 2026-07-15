@@ -1134,6 +1134,39 @@ def test_hlsl_codegen_lowers_fixed_struct_array_return_to_carrier_struct():
     assert "ComplexValue[2]" not in generated
 
 
+def test_hlsl_codegen_lowers_fixed_array_value_locals_and_indexing():
+    shader = """
+    shader FixedArrayValueLocals {
+        struct Record {
+            uint value;
+        };
+
+        bool[2] make_flags(bool x) {
+            return {x, !x};
+        }
+
+        Record[2] make_records(uint x) {
+            return {Record(x), Record(x + 1u)};
+        }
+
+        uint read_values(uint index) {
+            bool flags[2] = make_flags(index != 0u);
+            Record records[2] = make_records(index);
+            return uint(flags[index & 1u]) + records[index & 1u].value;
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "bool2 flags = make_flags((index != 0u));" in generated
+    assert "bool flags[2] = make_flags" not in generated
+    assert "CrossGLFixedArray_Record_2 records = make_records(index);" in generated
+    assert "Record records[2] = make_records" not in generated
+    assert "flags[(index & 1u)]" in generated
+    assert "CrossGLFixedArray_Record_2_read(records, (index & 1u)).value" in generated
+
+
 def test_hlsl_codegen_lowers_bool_division_and_modulo_through_uint():
     ast = ShaderNode(
         "BoolArithmetic",

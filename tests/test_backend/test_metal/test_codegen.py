@@ -7502,8 +7502,8 @@ def test_codegen_infers_materialized_callable_fixed_array_auto_local(tmp_path):
 
     shader = parse_crossgl(direct)
     hlsl = TranslatorHLSLCodeGen().generate(shader)
-    assert "int out_[2] = DivMod__operator_call__int__temporary(7, 3);" in hlsl
-    assert "int out_ = DivMod__operator_call__int__temporary" not in hlsl
+    assert "int2 out_ = DivMod__operator_call__int__temporary(7, 3);" in hlsl
+    assert "int out_[2] = DivMod__operator_call__int__temporary" not in hlsl
 
     dxc = shutil.which("dxc")
     if dxc is not None:

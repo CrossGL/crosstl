@@ -359,6 +359,32 @@ shader HLSLFixedArrayForInValidation {
 """
 
 
+HLSL_FIXED_ARRAY_VALUE_LOCAL_COMPUTE_SHADER = """
+shader HLSLFixedArrayValueLocalValidation {
+    struct Record {
+        uint value;
+    };
+
+    bool[2] divide_mod(bool x, bool y) {
+        return {x / y, x % y};
+    }
+
+    Record[2] make_records(uint value) {
+        return {Record(value), Record(value + 1u)};
+    }
+
+    compute {
+        void main() {
+            bool flags[2] = divide_mod(true, true);
+            Record records[2] = make_records(4u);
+            uint selected = uint(flags[0]);
+            uint total = selected + records[selected].value;
+        }
+    }
+}
+"""
+
+
 FRAGMENT_STRUCT_INPUT_SHADER = """
 shader FragmentStructInputValidation {
     struct VSOutput {
@@ -13000,6 +13026,29 @@ def test_generated_hlsl_fixed_array_for_in_validates_with_dxc(tmp_path):
     assert "uint2 vectorValue = vectorValue_crossgl_iterable[" in code
     assert "Pair pairValue = pairValue_crossgl_iterable[" in code
     assert "uint rowValue[4] = rowValue_crossgl_iterable[" in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_fixed_array_value_locals_validate_with_dxc(tmp_path):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "fixed_array_value_locals.hlsl"
+    output = tmp_path / "fixed_array_value_locals.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(HLSL_FIXED_ARRAY_VALUE_LOCAL_COMPUTE_SHADER),
+        "compute",
+    )
+    assert "bool2 flags = divide_mod(true, true);" in code
+    assert "bool flags[2] = divide_mod" not in code
+    assert "CrossGLFixedArray_Record_2 records = make_records(4u);" in code
+    assert "Record records[2] = make_records" not in code
+    assert "CrossGLFixedArray_Record_2_read(records, selected).value" in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(
