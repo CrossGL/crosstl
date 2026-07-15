@@ -1,6 +1,8 @@
+import math
 import os
 import re
 import shutil
+import struct
 import subprocess
 from pathlib import Path
 from typing import List
@@ -53,6 +55,7 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXCooperativeMatrixUnsupportedError,
     DirectXCopySignError,
     DirectXForInIterableError,
+    DirectXInverseHyperbolicError,
     DirectXMappedOverloadError,
     DirectXMinimumPrecisionIntegerArithmeticError,
     DirectXPrivatePointerParameterError,
@@ -108,6 +111,141 @@ def generate_code(ast_node):
 
 HLSL_M_PI_F_LITERAL = "3.14159265358979323846264338327950288f"
 HLSL_M_PI_LITERAL = "3.14159265358979323846264338327950288L"
+
+
+def float32_from_bits(bits):
+    return struct.unpack("<f", struct.pack("<I", bits))[0]
+
+
+def float32(value):
+    return struct.unpack("<f", struct.pack("<f", value))[0]
+
+
+def float32_ulp_distance(left, right):
+    def ordered_bits(value):
+        bits = struct.unpack("<I", struct.pack("<f", value))[0]
+        if bits & 0x80000000:
+            return 0x80000000 - (bits & 0x7FFFFFFF)
+        return 0x80000000 + bits
+
+    return abs(ordered_bits(left) - ordered_bits(right))
+
+
+def stable_log1p_float32_lowering(value):
+    value = float32(value)
+    if value > 0.5:
+        return float32(math.log(float32(1.0 + value)))
+    reduced = float32(value / float32(2.0 + value))
+    reduced_squared = float32(reduced * reduced)
+    series = float32(1.0 / 11.0)
+    for coefficient in (1.0 / 9.0, 1.0 / 7.0, 1.0 / 5.0, 1.0 / 3.0):
+        series = float32(float32(coefficient) + float32(reduced_squared * series))
+    series = float32(1.0 + float32(reduced_squared * series))
+    return float32(float32(2.0 * reduced) * series)
+
+
+def inverse_hyperbolic_float32_lowering(operation, value):
+    value = float32(value)
+    if math.isnan(value):
+        return value
+    if operation == "acosh":
+        if value < 1.0:
+            return math.nan
+        if value == 1.0:
+            return 0.0
+        if value > 4096.0:
+            return float32(float32(math.log(value)) + float32(0.69314718055994530942))
+        offset = float32(value - 1.0)
+        if offset <= 0.0625:
+            series = float32(35.0 / 18432.0)
+            series = float32(float32(-5.0 / 896.0) + float32(offset * series))
+            series = float32(float32(3.0 / 160.0) + float32(offset * series))
+            series = float32(float32(-1.0 / 12.0) + float32(offset * series))
+            series = float32(1.0 + float32(offset * series))
+            return float32(float32(math.sqrt(float32(2.0 * offset))) * series)
+        product = float32(offset * float32(value + 1.0))
+        return stable_log1p_float32_lowering(
+            float32(offset + float32(math.sqrt(product)))
+        )
+
+    magnitude = abs(value)
+    if operation == "asinh":
+        if magnitude < 0.000244140625:
+            return value
+        if magnitude > 4096.0:
+            result = float32(
+                float32(math.log(magnitude)) + float32(0.69314718055994530942)
+            )
+        else:
+            squared = float32(magnitude * magnitude)
+            root = float32(math.sqrt(float32(1.0 + squared)))
+            correction = float32(squared / float32(1.0 + root))
+            result = stable_log1p_float32_lowering(float32(magnitude + correction))
+        return float32(math.copysign(result, value))
+
+    if operation == "atanh":
+        if magnitude > 1.0:
+            return math.nan
+        if magnitude == 1.0:
+            return math.copysign(math.inf, value)
+        if magnitude < 0.000244140625:
+            return value
+        ratio = float32(float32(2.0 * magnitude) / float32(1.0 - magnitude))
+        result = float32(0.5 * stable_log1p_float32_lowering(ratio))
+        return float32(math.copysign(result, value))
+    raise AssertionError(f"unsupported operation {operation}")
+
+
+def inverse_hyperbolic_sweep_values(operation):
+    if operation == "acosh":
+        values = [float32_from_bits(0x3F800000 + offset) for offset in range(1, 4097)]
+        values.extend(float32(1.0 + index / 16.0) for index in range(1025))
+        values.extend(float32(10.0 ** (exponent / 8.0)) for exponent in range(305))
+        return values
+
+    if operation == "asinh":
+        magnitudes = [0.0]
+        magnitudes.extend(
+            float32(10.0 ** (-38.0 + exponent / 4.0)) for exponent in range(305)
+        )
+        magnitudes.extend(float32(index / 16.0) for index in range(1025))
+        return [
+            math.copysign(value, sign) for value in magnitudes for sign in (1.0, -1.0)
+        ]
+
+    magnitudes = [float32(index / 2048.0) for index in range(2048)]
+    magnitudes.extend(
+        float32_from_bits(0x3F800000 - offset) for offset in range(1, 4097)
+    )
+    magnitudes.extend(
+        float32(10.0 ** (-38.0 + exponent / 8.0)) for exponent in range(301)
+    )
+    return [math.copysign(value, sign) for value in magnitudes for sign in (1.0, -1.0)]
+
+
+INVERSE_HYPERBOLIC_PROFILE_SOURCE = """
+shader StableInverseHyperbolic {
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+        void main() {
+            float scalar_acosh = acosh(2.0);
+            float scalar_asinh = asinh(-0.5);
+            float scalar_atanh = atanh(0.5);
+            vec2 pair = acosh(vec2(1.0, 2.0));
+            vec2 pair_again = acosh(pair + vec2(1.0));
+            vec3 triple = asinh(vec3(-1.0, -0.0, 1.0));
+            vec4 quad = atanh(vec4(-0.5, -0.0, 0.0, 0.5));
+            half narrow_acosh = acosh(half(2.0));
+            half narrow_asinh = asinh(half(-0.5));
+            half narrow_atanh = atanh(half(0.5));
+            half2 narrow_pair = acosh(half2(1.0, 2.0));
+            half3 narrow_triple = asinh(half3(-1.0, -0.0, 1.0));
+            half4 narrow_quad = atanh(half4(-0.5, -0.0, 0.0, 0.5));
+        }
+    }
+}
+"""
 
 
 def test_hlsl_unresolved_standard_math_identifier_uses_exact_float_literal():
@@ -352,6 +490,317 @@ def test_hlsl_user_defined_copysign_remains_an_ordinary_call():
     assert "return copysign(value, -1.0);" in generated
     assert "0x7fffffffu" not in generated
     assert "0x80000000u" not in generated
+
+
+@pytest.mark.parametrize(
+    ("profile", "normalized_profile"),
+    [
+        ("directx-10", "dx10"),
+        ("directx-11", "dx11"),
+        ("directx-12", "dx12"),
+    ],
+)
+def test_hlsl_inverse_hyperbolic_helpers_cover_profiles_and_narrow_types(
+    tmp_path,
+    profile,
+    normalized_profile,
+):
+    codegen = HLSLCodeGen(target_profile=profile)
+    generated = codegen.generate(
+        crosstl.translator.parse(INVERSE_HYPERBOLIC_PROFILE_SOURCE)
+    )
+
+    assert codegen.target_profile == normalized_profile
+    assert generated.count("float __crossgl_log1p_float(float value)") == 1
+    for operation in ("acosh", "asinh", "atanh"):
+        assert generated.count(f"float __crossgl_{operation}_float(float value)") == 1
+        assert f"return {operation}(" not in generated
+        assert f"= {operation}(" not in generated
+        for narrow_type in ("half",):
+            assert (
+                f"{narrow_type} __crossgl_{operation}_{narrow_type}"
+                f"({narrow_type} value)"
+            ) in generated
+    assert generated.count("float2 __crossgl_acosh_float2(float2 value)") == 1
+    assert generated.count("float3 __crossgl_asinh_float3(float3 value)") == 1
+    assert generated.count("float4 __crossgl_atanh_float4(float4 value)") == 1
+    assert "return (half)__crossgl_acosh_float((float)value);" in generated
+    assert "return (half)__crossgl_asinh_float((float)value);" in generated
+    assert "return (half)__crossgl_atanh_float((float)value);" in generated
+    assert "half2 __crossgl_acosh_half2(half2 value)" in generated
+    assert "half3 __crossgl_asinh_half3(half3 value)" in generated
+    assert "half4 __crossgl_atanh_half4(half4 value)" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_inverse_hyperbolic_native_half_helpers_compile_with_dxc(tmp_path):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    generated = HLSLCodeGen(target_profile="dx12").generate(
+        crosstl.translator.parse(INVERSE_HYPERBOLIC_PROFILE_SOURCE)
+    )
+    source_path = tmp_path / "inverse_hyperbolic_native_half.hlsl"
+    output_path = tmp_path / "inverse_hyperbolic_native_half.dxil"
+    source_path.write_text(generated, encoding="utf-8")
+    result = subprocess.run(
+        [
+            dxc,
+            "-T",
+            "cs_6_2",
+            "-E",
+            "CSMain",
+            "-enable-16bit-types",
+            str(source_path),
+            "-Fo",
+            str(output_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert output_path.is_file()
+
+
+def test_hlsl_inverse_hyperbolic_min16_helpers_widen_deliberately(tmp_path):
+    source = """
+    shader MinimumPrecisionInverseHyperbolic {
+        min16float lower(min16float value) {
+            return asinh(value);
+        }
+
+        min16float2 lower2(min16float2 value) {
+            return atanh(value);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                min16float scalar = lower(min16float(0.5));
+                min16float2 pair = lower2(min16float2(-0.5, 0.5));
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen(target_profile="dx11").generate(
+        crosstl.translator.parse(source)
+    )
+
+    assert "return (min16float)__crossgl_asinh_float((float)value);" in generated
+    assert "min16float2 __crossgl_atanh_min16float2" in generated
+    assert generated.count("__crossgl_asinh_min16float(value)") == 1
+    assert generated.count("__crossgl_atanh_min16float2(value)") == 1
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("operation", "values"),
+    [
+        (
+            "acosh",
+            [
+                math.nan,
+                -math.inf,
+                0.5,
+                1.0,
+                float32_from_bits(0x3F800001),
+                1.5,
+                4096.0,
+                1.0e30,
+                math.inf,
+            ],
+        ),
+        (
+            "asinh",
+            [
+                math.nan,
+                -math.inf,
+                -1.0e30,
+                -1.0,
+                -1.0e-8,
+                -0.0,
+                0.0,
+                1.0e-8,
+                1.0,
+                1.0e30,
+                math.inf,
+            ],
+        ),
+        (
+            "atanh",
+            [
+                math.nan,
+                -math.inf,
+                -1.5,
+                -1.0,
+                -float32_from_bits(0x3F7FFFFF),
+                -0.5,
+                -1.0e-8,
+                -0.0,
+                0.0,
+                1.0e-8,
+                0.5,
+                float32_from_bits(0x3F7FFFFF),
+                1.0,
+                1.5,
+                math.inf,
+            ],
+        ),
+    ],
+)
+def test_hlsl_inverse_hyperbolic_piecewise_formulas_match_reference(
+    operation,
+    values,
+):
+    for value in values:
+        lowered = inverse_hyperbolic_float32_lowering(operation, value)
+        if math.isnan(value):
+            expected = value
+        elif operation == "acosh":
+            expected = math.acosh(value) if value >= 1.0 else math.nan
+        elif operation == "asinh":
+            expected = math.asinh(value)
+        elif abs(value) > 1.0:
+            expected = math.nan
+        elif abs(value) == 1.0:
+            expected = math.copysign(math.inf, value)
+        else:
+            expected = math.atanh(value)
+
+        if math.isnan(expected):
+            assert math.isnan(lowered)
+        elif math.isinf(expected):
+            assert lowered == expected
+        elif expected == 0.0:
+            assert lowered == expected
+            assert math.copysign(1.0, lowered) == math.copysign(1.0, expected)
+        else:
+            rounded_expected = float32(expected)
+            assert (
+                float32_ulp_distance(lowered, rounded_expected)
+                <= {
+                    "acosh": 2,
+                    "asinh": 2,
+                    "atanh": 3,
+                }[operation]
+            )
+
+
+@pytest.mark.parametrize(
+    ("operation", "maximum_ulp"),
+    [("acosh", 2), ("asinh", 2), ("atanh", 3)],
+)
+def test_hlsl_inverse_hyperbolic_float32_sweep_stays_within_ulp_budget(
+    operation,
+    maximum_ulp,
+):
+    worst_ulp = 0
+    worst_relative_error = 0.0
+    for value in inverse_hyperbolic_sweep_values(operation):
+        lowered = inverse_hyperbolic_float32_lowering(operation, value)
+        expected = float32(getattr(math, operation)(value))
+        worst_ulp = max(worst_ulp, float32_ulp_distance(lowered, expected))
+        if expected != 0.0:
+            worst_relative_error = max(
+                worst_relative_error,
+                abs((lowered - expected) / expected),
+            )
+
+    # atanh has one extra rounded division near |x| == 1; the other paths stay
+    # within two float32 ULP over boundary-adjacent and logarithmic sweeps.
+    assert worst_ulp <= maximum_ulp
+    assert worst_relative_error <= 3.6e-7
+
+
+@pytest.mark.parametrize(
+    ("profile", "operand_type", "reason"),
+    [
+        ("dx10", "double", "double-precision-profile-unsupported"),
+        ("dx11", "double2", "double-transcendental-contract-unavailable"),
+        ("dx12", "double4", "double-transcendental-contract-unavailable"),
+        ("dx10", "min16float", "minimum-precision-profile-unsupported"),
+        ("dx12", "min10float", "minimum-precision-contract-unsupported"),
+        ("dx12", "int", "unsupported-operand-type"),
+        ("dx12", "float8", "unsupported-operand-type"),
+    ],
+)
+def test_hlsl_inverse_hyperbolic_rejects_unrepresentable_contracts_with_metadata(
+    profile,
+    operand_type,
+    reason,
+):
+    codegen = HLSLCodeGen(target_profile=profile)
+    codegen.local_variable_source_types["value"] = operand_type
+    codegen.local_variable_types["value"] = operand_type
+    source_location = ("inverse-hyperbolic.cgl", 7, 16)
+    call = FunctionCallNode(
+        IdentifierNode("acosh"),
+        [IdentifierNode("value")],
+        source_location=source_location,
+    )
+
+    with pytest.raises(DirectXInverseHyperbolicError) as exc_info:
+        codegen.generate_expression(call)
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.directx-inverse-hyperbolic-unrepresentable"
+    )
+    assert diagnostic.missing_capabilities == ("directx.inverse-hyperbolic-lowering",)
+    assert diagnostic.operation == "acosh"
+    assert diagnostic.operand_type == operand_type
+    assert diagnostic.target_profile == profile
+    assert diagnostic.reason == reason
+    assert diagnostic.source_location == source_location
+
+
+@pytest.mark.parametrize("operation", ["acosh", "asinh", "atanh"])
+def test_hlsl_user_defined_inverse_hyperbolic_overloads_win(operation):
+    source = f"""
+    shader UserInverseHyperbolic {{
+        float {operation}(float value) {{
+            return value + 1.0;
+        }}
+
+        float apply(float value) {{
+            return {operation}(value);
+        }}
+    }}
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert f"float {operation}(float value)" in generated
+    assert f"return {operation}(value);" in generated
+    assert f"__crossgl_{operation}" not in generated
+
+
+def test_hlsl_inverse_hyperbolic_helper_names_avoid_source_collisions():
+    source = """
+    shader InverseHyperbolicHelperCollision {
+        float __crossgl_acosh_float(float value) {
+            return value;
+        }
+
+        float apply(float value) {
+            return acosh(value);
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert "float __crossgl_acosh_float(float value)" in generated
+    assert "float __crossgl_acosh_float_(float value)" in generated
+    assert "return __crossgl_acosh_float_(value);" in generated
 
 
 @pytest.mark.parametrize(

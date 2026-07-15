@@ -684,6 +684,34 @@ class DirectXCopySignError(ValueError):
         self.source_location = source_location
 
 
+class DirectXInverseHyperbolicError(ValueError):
+    """Raised when an inverse-hyperbolic call has no faithful HLSL lowering."""
+
+    project_diagnostic_code = (
+        "project.translate.directx-inverse-hyperbolic-unrepresentable"
+    )
+    missing_capabilities = ("directx.inverse-hyperbolic-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        operation=None,
+        operand_type=None,
+        result_type=None,
+        target_profile=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.operation = operation
+        self.operand_type = operand_type
+        self.result_type = result_type
+        self.target_profile = target_profile
+        self.reason = reason
+        self.source_location = source_location
+
+
 class DirectXPrivatePointerParameterError(ValueError):
     """Raised when a private pointer cannot become a fixed HLSL array."""
 
@@ -1030,6 +1058,22 @@ class HLSLCodeGen:
     )
     METAL_TYPE_ALIAS_GLOBALS = frozenset({"bfloat16_t", "float16_t"})
     HLSL_CANONICAL_NARROW_FLOAT_CONSTRUCTORS = frozenset({"bfloat", "bfloat16"})
+    HLSL_INVERSE_HYPERBOLIC_NAMES = frozenset({"acosh", "asinh", "atanh"})
+    HLSL_INVERSE_HYPERBOLIC_FLOAT_TYPES = frozenset(
+        {"float", "float2", "float3", "float4"}
+    )
+    HLSL_INVERSE_HYPERBOLIC_NARROW_TYPES = frozenset(
+        {
+            "half",
+            "half2",
+            "half3",
+            "half4",
+            "min16float",
+            "min16float2",
+            "min16float3",
+            "min16float4",
+        }
+    )
     HLSL_CANONICAL_64_BIT_VECTOR_CONSTRUCTORS = frozenset(
         {
             "i64vec2",
@@ -1533,6 +1577,8 @@ class HLSLCodeGen:
         self.required_hlsl_explicit_bitcast_helpers = set()
         self.required_hlsl_trailing_zero_helpers = set()
         self.hlsl_trailing_zero_helper_names = {}
+        self.required_hlsl_inverse_hyperbolic_helpers = set()
+        self.hlsl_inverse_hyperbolic_helper_names = {}
         self.required_hlsl_wave_shuffle_and_fill_up_types = set()
         self.hlsl_lowered_struct_resource_members = {}
         self.generic_struct_definitions = {}
@@ -1897,6 +1943,11 @@ class HLSLCodeGen:
 
         normalized = str(target_profile).strip().lower().replace("_", "-")
         aliases = {
+            "dx-10": "dx10",
+            "d3d-10": "dx10",
+            "d3d10": "dx10",
+            "direct3d-10": "dx10",
+            "directx-10": "dx10",
             "dx-11": "dx11",
             "d3d-11": "dx11",
             "d3d11": "dx11",
@@ -1909,10 +1960,10 @@ class HLSLCodeGen:
             "directx-12": "dx12",
         }
         normalized = aliases.get(normalized, normalized)
-        if normalized not in {"dx11", "dx12"}:
+        if normalized not in {"dx10", "dx11", "dx12"}:
             raise ValueError(
-                "DirectX target profile must be one of: dx11, dx12, "
-                "directx-11, directx-12"
+                "DirectX target profile must be one of: dx10, dx11, dx12, "
+                "directx-10, directx-11, directx-12"
             )
         return normalized
 
@@ -2150,6 +2201,8 @@ class HLSLCodeGen:
         self.required_hlsl_explicit_bitcast_helpers = set()
         self.required_hlsl_trailing_zero_helpers = set()
         self.hlsl_trailing_zero_helper_names = {}
+        self.required_hlsl_inverse_hyperbolic_helpers = set()
+        self.hlsl_inverse_hyperbolic_helper_names = {}
         self.required_hlsl_wave_shuffle_and_fill_up_types = set()
         self.current_hlsl_available_functions = {}
         self.current_hlsl_hull_output_control_points = None
@@ -2333,6 +2386,7 @@ class HLSLCodeGen:
             functions
         )
         self.prepare_hlsl_trailing_zero_helper_names(functions)
+        self.prepare_hlsl_inverse_hyperbolic_helper_names(functions)
         self.vertex_entry_output_struct_names = (
             self.collect_hlsl_vertex_entry_output_struct_names(ast, target_stage)
         )
@@ -3406,6 +3460,7 @@ class HLSLCodeGen:
         code += self.generate_hlsl_fragment_shading_rate_helper()
         code += self.generate_hlsl_wave_shuffle_and_fill_up_helpers()
         code += self.generate_hlsl_trailing_zero_helpers()
+        code += self.generate_hlsl_inverse_hyperbolic_helpers()
         code += self.generate_hlsl_complex64_helpers()
         code += self.generate_hlsl_explicit_bitcast_helpers()
         code += self.generate_hlsl_union_storage_helpers()
@@ -3435,7 +3490,7 @@ class HLSLCodeGen:
             declarations += declaration
         return declarations
 
-    def prepare_hlsl_trailing_zero_helper_names(self, functions):
+    def hlsl_helper_reserved_names(self, functions):
         used_names = set(self.global_variable_types)
         used_names.update(self.structs_by_name)
         used_names.update(getattr(self, "enum_type_names", set()))
@@ -3448,6 +3503,10 @@ class HLSLCodeGen:
         used_names.update(self.hlsl_function_name_aliases.values())
         for func in functions or []:
             used_names.update(self.collect_hlsl_function_identifier_names(func))
+        return used_names
+
+    def prepare_hlsl_trailing_zero_helper_names(self, functions):
+        used_names = self.hlsl_helper_reserved_names(functions)
 
         self.hlsl_trailing_zero_helper_names = {}
         for operand_type in ("uint", "uint64_t"):
@@ -3495,6 +3554,195 @@ class HLSLCodeGen:
 }}
 """)
         return "\n".join(helpers) + ("\n" if helpers else "")
+
+    def prepare_hlsl_inverse_hyperbolic_helper_names(self, functions):
+        used_names = self.hlsl_helper_reserved_names(functions)
+        used_names.update(self.hlsl_trailing_zero_helper_names.values())
+        self.hlsl_inverse_hyperbolic_helper_names = {}
+
+        helper_keys = [("log1p", "float")]
+        helper_types = sorted(
+            self.HLSL_INVERSE_HYPERBOLIC_FLOAT_TYPES
+            | self.HLSL_INVERSE_HYPERBOLIC_NARROW_TYPES
+        )
+        helper_keys.extend(
+            (operation, value_type)
+            for operation in sorted(self.HLSL_INVERSE_HYPERBOLIC_NAMES)
+            for value_type in helper_types
+        )
+        for operation, value_type in helper_keys:
+            base_name = f"__crossgl_{operation}_{value_type}"
+            helper_name = base_name
+            while helper_name in used_names:
+                helper_name += "_"
+            self.hlsl_inverse_hyperbolic_helper_names[(operation, value_type)] = (
+                helper_name
+            )
+            used_names.add(helper_name)
+
+    def hlsl_inverse_hyperbolic_helper_name(self, operation, value_type):
+        key = (operation, value_type)
+        helper_name = self.hlsl_inverse_hyperbolic_helper_names.get(key)
+        if helper_name is not None:
+            return helper_name
+
+        used_names = set(getattr(self, "function_return_types", {}))
+        used_names.update(getattr(self, "global_variable_types", {}))
+        used_names.update(getattr(self, "local_variable_types", {}))
+        used_names.update(self.hlsl_trailing_zero_helper_names.values())
+        used_names.update(self.hlsl_inverse_hyperbolic_helper_names.values())
+        helper_name = f"__crossgl_{operation}_{value_type}"
+        while helper_name in used_names:
+            helper_name += "_"
+        self.hlsl_inverse_hyperbolic_helper_names[key] = helper_name
+        return helper_name
+
+    def hlsl_inverse_hyperbolic_log1p_helper(self):
+        helper_name = self.hlsl_inverse_hyperbolic_helper_name("log1p", "float")
+        return f"""float {helper_name}(float value) {{
+    if (value > 0.5f) {{
+        return log(1.0f + value);
+    }}
+    float reduced = value / (2.0f + value);
+    float reduced_squared = reduced * reduced;
+    float series = 1.0f + reduced_squared * (
+        0.33333333333333333333f + reduced_squared * (
+            0.2f + reduced_squared * (
+                0.14285714285714285714f + reduced_squared * (
+                    0.11111111111111111111f
+                    + reduced_squared * 0.09090909090909090909f
+                )
+            )
+        )
+    );
+    return (2.0f * reduced) * series;
+}}
+"""
+
+    def hlsl_inverse_hyperbolic_scalar_helper(self, operation):
+        helper_name = self.hlsl_inverse_hyperbolic_helper_name(operation, "float")
+        log1p_name = self.hlsl_inverse_hyperbolic_helper_name("log1p", "float")
+        if operation == "acosh":
+            return f"""float {helper_name}(float value) {{
+    if (isnan(value)) {{
+        return value;
+    }}
+    if (value < 1.0f) {{
+        return asfloat(0x7fc00000u);
+    }}
+    if (value == 1.0f) {{
+        return 0.0f;
+    }}
+    if (value > 4096.0f) {{
+        return log(value) + 0.69314718055994530942f;
+    }}
+    float offset = value - 1.0f;
+    if (offset <= 0.0625f) {{
+        float series = 0.00189887152777777778f;
+        series = -0.00558035714285714286f + offset * series;
+        series = 0.01875f + offset * series;
+        series = -0.08333333333333333333f + offset * series;
+        series = 1.0f + offset * series;
+        return sqrt(2.0f * offset) * series;
+    }}
+    return {log1p_name}(offset + sqrt(offset * (value + 1.0f)));
+}}
+"""
+        if operation == "asinh":
+            return f"""float {helper_name}(float value) {{
+    if (isnan(value)) {{
+        return value;
+    }}
+    float magnitude = abs(value);
+    if (magnitude < 0.000244140625f) {{
+        return value;
+    }}
+    float result;
+    if (magnitude > 4096.0f) {{
+        result = log(magnitude) + 0.69314718055994530942f;
+    }} else {{
+        float squared = magnitude * magnitude;
+        result = {log1p_name}(
+            magnitude + squared / (1.0f + sqrt(1.0f + squared))
+        );
+    }}
+    return asfloat(
+        (asuint(result) & 0x7fffffffu) | (asuint(value) & 0x80000000u)
+    );
+}}
+"""
+        if operation == "atanh":
+            return f"""float {helper_name}(float value) {{
+    if (isnan(value)) {{
+        return value;
+    }}
+    float magnitude = abs(value);
+    if (magnitude > 1.0f) {{
+        return asfloat(0x7fc00000u);
+    }}
+    if (magnitude == 1.0f) {{
+        return asfloat(0x7f800000u | (asuint(value) & 0x80000000u));
+    }}
+    if (magnitude < 0.000244140625f) {{
+        return value;
+    }}
+    float result = 0.5f * {log1p_name}(
+        (2.0f * magnitude) / (1.0f - magnitude)
+    );
+    return asfloat(
+        (asuint(result) & 0x7fffffffu) | (asuint(value) & 0x80000000u)
+    );
+}}
+"""
+        raise ValueError(f"Unsupported inverse-hyperbolic operation: {operation}")
+
+    def hlsl_inverse_hyperbolic_wrapper_helper(self, operation, value_type):
+        helper_name = self.hlsl_inverse_hyperbolic_helper_name(operation, value_type)
+        scalar_helper = self.hlsl_inverse_hyperbolic_helper_name(operation, "float")
+        match = re.fullmatch(r"(float|half|min16float)([234]?)", value_type)
+        if match is None or value_type == "float":
+            raise ValueError(
+                f"Unsupported inverse-hyperbolic helper type: {value_type}"
+            )
+        scalar_type, lane_text = match.groups()
+        lanes = int(lane_text) if lane_text else 1
+        if lanes == 1:
+            return (
+                f"{value_type} {helper_name}({value_type} value) {{\n"
+                f"    return ({value_type}){scalar_helper}((float)value);\n"
+                "}\n"
+            )
+
+        components = "xyzw"[:lanes]
+        arguments = ",\n        ".join(
+            f"({scalar_type}){scalar_helper}((float)value.{component})"
+            for component in components
+        )
+        return (
+            f"{value_type} {helper_name}({value_type} value) {{\n"
+            f"    return {value_type}(\n        {arguments}\n    );\n"
+            "}\n"
+        )
+
+    def generate_hlsl_inverse_hyperbolic_helpers(self):
+        required_helpers = getattr(
+            self, "required_hlsl_inverse_hyperbolic_helpers", set()
+        )
+        if not required_helpers:
+            return ""
+
+        operations = sorted(operation for operation, _value_type in required_helpers)
+        helpers = [self.hlsl_inverse_hyperbolic_log1p_helper()]
+        helpers.extend(
+            self.hlsl_inverse_hyperbolic_scalar_helper(operation)
+            for operation in sorted(set(operations))
+        )
+        helpers.extend(
+            self.hlsl_inverse_hyperbolic_wrapper_helper(operation, value_type)
+            for operation, value_type in sorted(required_helpers)
+            if value_type != "float"
+        )
+        return "".join(helpers) + "\n"
 
     def hlsl_wave_shuffle_and_fill_up_helper_name(self, value_type):
         type_suffix = re.sub(r"[^A-Za-z0-9_]", "_", self.map_type(value_type))
@@ -9359,6 +9607,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             numeric_result_type = numeric_trait_method_result_type(self, expr)
             if numeric_result_type:
                 return numeric_result_type
+            if func_name in self.HLSL_INVERSE_HYPERBOLIC_NAMES:
+                resolved_inverse_hyperbolic = self.resolve_hlsl_function_overload(
+                    func_name,
+                    args,
+                    call_node=expr,
+                )
+                if resolved_inverse_hyperbolic is not None:
+                    return self.type_name_string(
+                        getattr(resolved_inverse_hyperbolic, "return_type", None)
+                    )
+                if args:
+                    return self.expression_result_type(args[0])
             if func_name == "copysign":
                 resolved_copysign = self.resolve_hlsl_function_overload(
                     func_name,
@@ -12422,6 +12682,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if copysign_call is not None:
                 return copysign_call
 
+            inverse_hyperbolic_call = self.generate_hlsl_inverse_hyperbolic_call(
+                func_name,
+                args,
+                call_node=expr,
+            )
+            if inverse_hyperbolic_call is not None:
+                return inverse_hyperbolic_call
+
             bitcast_call = self.generate_hlsl_bitcast_call(func_name, args)
             if bitcast_call is not None:
                 return bitcast_call
@@ -13668,6 +13936,142 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             sign_mask=sign_mask,
         )
 
+    def hlsl_inverse_hyperbolic_type_info(self, type_name):
+        if type_name is None:
+            return None
+        mapped_type = self.map_type(type_name)
+        match = re.fullmatch(
+            r"(float|half|min16float|min10float|double)([234]?)",
+            mapped_type or "",
+        )
+        if match is None:
+            return {"type": mapped_type, "precision": None, "lanes": None}
+        precision, lane_text = match.groups()
+        return {
+            "type": mapped_type,
+            "precision": precision,
+            "lanes": int(lane_text) if lane_text else 1,
+        }
+
+    def hlsl_inverse_hyperbolic_error(
+        self,
+        message,
+        *,
+        operation,
+        operand_type=None,
+        result_type=None,
+        reason,
+        source_location=None,
+    ):
+        return DirectXInverseHyperbolicError(
+            message,
+            operation=operation,
+            operand_type=operand_type,
+            result_type=result_type,
+            target_profile=self.target_profile or "default",
+            reason=reason,
+            source_location=source_location,
+        )
+
+    def generate_hlsl_inverse_hyperbolic_call(
+        self,
+        func_name,
+        args,
+        *,
+        call_node=None,
+    ):
+        if func_name not in self.HLSL_INVERSE_HYPERBOLIC_NAMES:
+            return None
+
+        resolved_overload = self.resolve_hlsl_function_overload(
+            func_name,
+            args,
+            call_node=call_node,
+        )
+        if resolved_overload is not None:
+            return None
+
+        source_location = getattr(call_node, "source_location", None)
+        if len(args) != 1:
+            raise self.hlsl_inverse_hyperbolic_error(
+                f"DirectX {func_name} requires exactly one operand",
+                operation=func_name,
+                reason="invalid-arity",
+                source_location=source_location,
+            )
+
+        source_type = self.hlsl_source_expression_type(args[0])
+        display_type = (
+            self.type_name_string(source_type) if source_type is not None else None
+        )
+        if source_type is None:
+            raise self.hlsl_inverse_hyperbolic_error(
+                f"DirectX {func_name} requires a statically known operand type",
+                operation=func_name,
+                reason="unresolved-operand-type",
+                source_location=source_location,
+            )
+
+        type_info = self.hlsl_inverse_hyperbolic_type_info(source_type)
+        mapped_type = type_info["type"]
+        precision = type_info["precision"]
+        if precision == "double":
+            if self.target_profile == "dx10":
+                reason = "double-precision-profile-unsupported"
+                detail = "DirectX 10 cannot represent the required double precision"
+            else:
+                reason = "double-transcendental-contract-unavailable"
+                detail = (
+                    "the selected DirectX profile has no portable double-precision "
+                    "transcendental contract"
+                )
+            raise self.hlsl_inverse_hyperbolic_error(
+                f"DirectX {func_name} cannot lower {display_type}: {detail}",
+                operation=func_name,
+                operand_type=display_type,
+                result_type=mapped_type,
+                reason=reason,
+                source_location=source_location,
+            )
+
+        if precision == "min10float":
+            raise self.hlsl_inverse_hyperbolic_error(
+                f"DirectX {func_name} cannot preserve exceptional-value behavior "
+                f"for {display_type}",
+                operation=func_name,
+                operand_type=display_type,
+                result_type=mapped_type,
+                reason="minimum-precision-contract-unsupported",
+                source_location=source_location,
+            )
+
+        if mapped_type in self.HLSL_INVERSE_HYPERBOLIC_NARROW_TYPES:
+            if precision == "min16float" and self.target_profile == "dx10":
+                raise self.hlsl_inverse_hyperbolic_error(
+                    f"DirectX {func_name} cannot use {display_type} with the "
+                    "DirectX 10 profile",
+                    operation=func_name,
+                    operand_type=display_type,
+                    result_type=mapped_type,
+                    reason="minimum-precision-profile-unsupported",
+                    source_location=source_location,
+                )
+        elif mapped_type not in self.HLSL_INVERSE_HYPERBOLIC_FLOAT_TYPES:
+            raise self.hlsl_inverse_hyperbolic_error(
+                f"DirectX {func_name} supports only scalar and 2/3/4-component "
+                f"floating operands, got {display_type}",
+                operation=func_name,
+                operand_type=display_type,
+                result_type=mapped_type,
+                reason="unsupported-operand-type",
+                source_location=source_location,
+            )
+
+        self.required_hlsl_inverse_hyperbolic_helpers.add((func_name, mapped_type))
+        helper_name = self.hlsl_inverse_hyperbolic_helper_name(func_name, mapped_type)
+        argument = self.generate_expression_with_expected(args[0], mapped_type)
+        return f"{helper_name}({argument})"
+
     def hlsl_bitcast_result_type(self, func_name, args):
         if (
             not func_name
@@ -14022,11 +14426,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return self.generate_hlsl_wave_intrinsic_call(operation, expr.arguments)
 
     def validate_directx_wave_intrinsic_profile(self, operation):
-        if self.target_profile != "dx11":
+        if self.target_profile not in {"dx10", "dx11"}:
             return
 
         raise ValueError(
-            f"DirectX profile dx11 does not support wave intrinsic '{operation}'; "
+            f"DirectX profile {self.target_profile} does not support wave intrinsic "
+            f"'{operation}'; "
             "wave intrinsics require DirectX 12 / Shader Model 6.0"
         )
 
