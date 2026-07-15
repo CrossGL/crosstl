@@ -10887,6 +10887,111 @@ def test_opengl_contextual_scalar_to_complex_return_conversion(tmp_path):
     )
 
 
+def test_opengl_registered_scalar_conversion_contexts_evaluate_once(tmp_path):
+    shader = """
+    shader RegisteredScalarStructureContexts {
+        struct complex64_t {
+            float real;
+            float imag;
+        };
+
+        float nextValue(inout uint counter) {
+            counter += 1u;
+            return float(counter);
+        }
+
+        complex64_t consume(complex64_t value) {
+            return value;
+        }
+
+        compute {
+            void main() {
+                uint counter = 0u;
+                complex64_t explicitValue = complex64_t(nextValue(counter));
+                complex64_t assigned = complex64_t(0.0, 0.0);
+                assigned = nextValue(counter);
+                complex64_t nested = consume(nextValue(counter));
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "complex64_t explicitValue = "
+        "complex64_t(float(nextValue(counter)), 0.0);" in generated
+    )
+    assert "assigned = complex64_t(float(nextValue(counter)), 0.0);" in generated
+    assert (
+        "complex64_t nested = "
+        "consume(complex64_t(float(nextValue(counter)), 0.0));" in generated
+    )
+    assert generated.count("nextValue(counter)") == 3
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "registered_scalar_structure_contexts",
+        spirv_target="spirv1.3",
+    )
+
+
+def test_opengl_registered_scalar_conversion_rejects_destination_shape():
+    shader = """
+    shader InvalidRegisteredStructureShape {
+        struct complex64_t {
+            float real;
+            int imag;
+        };
+
+        complex64_t promote(float value) {
+            return complex64_t(value);
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLStructConstructionError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.opengl-struct-construction-unsupported"
+    )
+    assert diagnostic.destination_type == "complex64_t"
+    assert diagnostic.source_type == "float"
+    assert diagnostic.conversion_kind == "scalar-promotion"
+    assert diagnostic.reason == "destination-shape-mismatch"
+
+
+def test_opengl_one_field_structure_constructor_remains_fieldwise(tmp_path):
+    shader = """
+    shader OneFieldStructureConstruction {
+        struct Wrapper {
+            float value;
+        };
+
+        Wrapper wrap(float value) {
+            return Wrapper(value);
+        }
+
+        compute {
+            void main() {
+                Wrapper wrapped = wrap(2.0);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "return Wrapper(value);" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "one_field_structure_constructor",
+    )
+
+
 def test_opengl_preserves_fieldwise_complex_aggregate_return(tmp_path):
     shader = """
     shader FieldwiseComplexAggregateReturn {

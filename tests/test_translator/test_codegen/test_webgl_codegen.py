@@ -8,7 +8,10 @@ import pytest
 import crosstl
 import crosstl.translator.codegen as codegen
 from crosstl.formatter import format_shader_code
-from crosstl.translator.codegen.webgl_codegen import WebGLCodeGen
+from crosstl.translator.codegen.webgl_codegen import (
+    WebGLCodeGen,
+    WebGLStructConstructionError,
+)
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 from tests.test_backend.test_SPIRV.test_codegen import (
@@ -200,6 +203,93 @@ def test_webgl_trailing_underscore_resource_names_share_glsl_mapping(
         tmp_path,
         f"trailing_underscore_{len(source_name) - len(source_name.rstrip('_'))}",
     )
+
+
+def test_webgl_structure_copy_and_registered_scalar_conversion_validate(tmp_path):
+    shader = """
+    shader WebGLStructureConversions {
+        struct Pair {
+            float first;
+            float second;
+        };
+
+        struct complex64_t {
+            float real;
+            float imag;
+        };
+
+        Pair copyPair(Pair value) {
+            return Pair(value);
+        }
+
+        complex64_t promote(float value) {
+            return value;
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                Pair pair = Pair(1.0, 2.0);
+                Pair copied = Pair(pair);
+                complex64_t promoted = complex64_t(3.0);
+                complex64_t returned = promote(4.0);
+                return vec4(
+                    copied.first,
+                    copied.second,
+                    promoted.real,
+                    returned.imag
+                );
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate_stage(parse_shader(shader), "fragment")
+
+    assert "return value;" in generated
+    assert "Pair copied = pair;" in generated
+    assert "complex64_t promoted = complex64_t(float(3.0), 0.0);" in generated
+    assert "return complex64_t(float(value), 0.0);" in generated
+    assert "Pair(value)" not in generated
+    assert "Pair(pair)" not in generated
+    assert_webgl_stage_validates_if_available(
+        generated,
+        tmp_path,
+        "webgl_structure_conversions",
+    )
+
+
+def test_webgl_registered_scalar_conversion_rejects_destination_shape():
+    shader = """
+    shader InvalidWebGLStructureConversion {
+        struct complex64_t {
+            float real;
+            int imag;
+        };
+
+        complex64_t promote(float value) {
+            return value;
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                complex64_t value = promote(1.0);
+                return vec4(value.real);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(WebGLStructConstructionError) as exc_info:
+        WebGLCodeGen().generate_stage(parse_shader(shader), "fragment")
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.webgl-struct-construction-unsupported"
+    )
+    assert diagnostic.destination_type == "complex64_t"
+    assert diagnostic.source_type == "float"
+    assert diagnostic.conversion_kind == "contextual-scalar-conversion"
+    assert diagnostic.reason == "destination-shape-mismatch"
 
 
 def test_webgl_codegen_reuses_fixed_array_for_in_contract():

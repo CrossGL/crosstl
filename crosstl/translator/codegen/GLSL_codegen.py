@@ -56,6 +56,12 @@ from ..ast import (
     WhileNode,
 )
 from ..standard_constants import render_standard_math_constant
+from ..structure_conversions import (
+    ScalarKind,
+    StructureConversionKind,
+    StructureFieldValue,
+    registered_scalar_to_structure_conversion,
+)
 from ..validation import (
     IMAGE_RESOURCE_INTRINSIC_NAMES,
     INTEGER_COORDINATE_INTRINSIC_NAMES,
@@ -882,6 +888,8 @@ class OpenGLCooperativeMatrixError(ValueError):
 class GLSLCodeGen:
     """Emit GLSL source from the shared CrossGL translator AST."""
 
+    GLSL_TARGET_DISPLAY_NAME = "OpenGL"
+    GLSL_STRUCT_CONSTRUCTION_ERROR = OpenGLStructConstructionError
     OPENGL_DESCRIPTOR_SET_BINDING_STRIDE = 1024
     METAL_ONLY_SYSTEM_INCLUDES = frozenset(
         {
@@ -1232,7 +1240,6 @@ class GLSLCodeGen:
         "|=": "|",
     }
     GLSL_BFLOAT16_ALIASES = {"bfloat", "bfloat16", "bfloat16_t"}
-    GLSL_REGISTERED_SCALAR_STRUCT_CONVERSIONS = {"complex64_t"}
     GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS = {
         "clamp",
         "floatBitsToInt",
@@ -15504,29 +15511,191 @@ complex64_t crossgl_complex64_mod_assign(
     def is_glsl_complex64_type(self, type_text):
         return self.map_type(type_text) == "complex64_t"
 
-    def glsl_complex64_operand(self, rendered, type_text):
+    def glsl_complex64_operand(self, rendered, type_text, expr=None):
         if self.is_glsl_complex64_type(type_text):
             return rendered
-        value_type = self.glsl_value_type_info(type_text)
+        return self.glsl_registered_scalar_to_struct_conversion(
+            expr,
+            rendered,
+            type_text,
+            "complex64_t",
+            StructureConversionKind.SCALAR_PROMOTION.value,
+        )
+
+    @staticmethod
+    def glsl_structure_conversion_scalar_kind(value_type):
         if value_type is None or value_type["width"] != 1:
             return None
-        if value_type["family"] == "bool":
-            real = f"(({rendered}) ? 1.0 : 0.0)"
-        elif value_type["family"] in {"int", "uint", "float"}:
-            real = f"float({rendered})"
-        else:
+        return {
+            "bool": ScalarKind.BOOLEAN,
+            "int": ScalarKind.SIGNED_INTEGER,
+            "uint": ScalarKind.UNSIGNED_INTEGER,
+            "float": ScalarKind.FLOATING,
+        }.get(value_type["family"])
+
+    def glsl_registered_scalar_structure_contract(self, destination_type):
+        destination_type_name = self.glsl_normalized_source_type(destination_type)
+        if not destination_type_name:
             return None
-        return f"complex64_t({real}, 0.0)"
+        source_destination_type = self.glsl_source_type_identifier_name(
+            destination_type_name
+        )
+        candidates = (
+            source_destination_type,
+            destination_type_name,
+            source_destination_type.rsplit("::", 1)[-1],
+            destination_type_name.rsplit("::", 1)[-1],
+        )
+        for candidate in candidates:
+            contract = registered_scalar_to_structure_conversion(candidate)
+            if contract is not None:
+                mapped_destination_type = self.map_type(destination_type_name)
+                source_destination_type = self.glsl_source_type_identifier_name(
+                    mapped_destination_type
+                )
+                return contract, source_destination_type, mapped_destination_type
+        return None
+
+    def glsl_registered_structure_destination_shape(self, binding):
+        contract, source_destination_type, _mapped_destination_type = binding
+        member_types = self.struct_member_types.get(source_destination_type)
+        if member_types is None:
+            member_types = self.struct_member_types.get(contract.destination_type)
+        if member_types is None:
+            return None
+        return tuple(
+            (
+                name,
+                self.glsl_normalized_source_type(member_type)
+                or self.type_name_string(member_type),
+            )
+            for name, member_type in member_types.items()
+        )
+
+    def glsl_validate_registered_structure_destination(
+        self,
+        expr,
+        binding,
+        source_type,
+        conversion_kind,
+    ):
+        contract, _source_destination_type, mapped_destination_type = binding
+        destination_shape = self.glsl_registered_structure_destination_shape(binding)
+        if destination_shape is None:
+            self.glsl_struct_construction_error(
+                expr,
+                mapped_destination_type,
+                source_type,
+                conversion_kind,
+                "destination-shape-unknown",
+            )
+        if not contract.matches_destination_shape(destination_shape):
+            self.glsl_struct_construction_error(
+                expr,
+                mapped_destination_type,
+                source_type,
+                conversion_kind,
+                "destination-shape-mismatch",
+            )
+
+    def glsl_render_scalar_structure_field(self, rendered, source_info, target_type):
+        target_info = self.glsl_value_type_info(target_type)
+        if target_info is None or target_info["width"] != 1:
+            return None
+        if target_info["family"] == "bool":
+            if source_info["family"] == "bool":
+                return rendered
+            source_zero = self.zero_value_expression(source_info["mapped"])
+            return f"({rendered} != {source_zero})"
+        if source_info["family"] == "bool":
+            target_zero = self.zero_value_expression(target_info["mapped"])
+            target_one = {
+                "int": "1",
+                "uint": "1u",
+                "float": "1.0",
+                "double": "1.0",
+            }.get(target_info["mapped"], f"{target_info['mapped']}(1)")
+            return f"(({rendered}) ? {target_one} : {target_zero})"
+        return f"{target_info['mapped']}({rendered})"
 
     def glsl_registered_scalar_to_struct_conversion(
-        self, rendered, source_type, destination_type
+        self,
+        expr,
+        rendered,
+        source_type,
+        destination_type,
+        conversion_kind,
     ):
-        destination_type = self.map_type(destination_type)
-        if destination_type not in self.GLSL_REGISTERED_SCALAR_STRUCT_CONVERSIONS:
+        binding = self.glsl_registered_scalar_structure_contract(destination_type)
+        if binding is None:
             return None
-        if destination_type == "complex64_t":
-            return self.glsl_complex64_operand(rendered, source_type)
-        return None
+        contract, _source_destination_type, mapped_destination_type = binding
+        source_info = self.glsl_value_type_info(source_type)
+        scalar_kind = self.glsl_structure_conversion_scalar_kind(source_info)
+        if scalar_kind not in contract.source_kinds:
+            return None
+        self.glsl_validate_registered_structure_destination(
+            expr,
+            binding,
+            source_type,
+            conversion_kind,
+        )
+        if contract.scalar_source_use_count != 1:
+            self.glsl_struct_construction_error(
+                expr,
+                mapped_destination_type,
+                source_type,
+                conversion_kind,
+                "source-single-evaluation-unsupported",
+            )
+
+        field_values = []
+        for field in contract.fields:
+            if field.scalar_value is StructureFieldValue.ZERO:
+                field_values.append(self.zero_value_expression(field.type_name))
+                continue
+            converted = self.glsl_render_scalar_structure_field(
+                rendered,
+                source_info,
+                field.type_name,
+            )
+            if converted is None:
+                self.glsl_struct_construction_error(
+                    expr,
+                    mapped_destination_type,
+                    source_type,
+                    conversion_kind,
+                    "field-conversion-unsupported",
+                )
+            field_values.append(converted)
+        return f"{mapped_destination_type}({', '.join(field_values)})"
+
+    def glsl_registered_default_struct_construction(self, expr, destination_type):
+        binding = self.glsl_registered_scalar_structure_contract(destination_type)
+        if binding is None:
+            return None
+        contract, _source_destination_type, mapped_destination_type = binding
+        if not contract.supports_default_construction:
+            return None
+        conversion_kind = StructureConversionKind.DEFAULT_CONSTRUCTION.value
+        self.glsl_validate_registered_structure_destination(
+            expr,
+            binding,
+            None,
+            conversion_kind,
+        )
+        field_values = []
+        for field in contract.fields:
+            if field.default_value is not StructureFieldValue.ZERO:
+                self.glsl_struct_construction_error(
+                    expr,
+                    mapped_destination_type,
+                    None,
+                    conversion_kind,
+                    "field-default-unsupported",
+                )
+            field_values.append(self.zero_value_expression(field.type_name))
+        return f"{mapped_destination_type}({', '.join(field_values)})"
 
     def glsl_struct_construction_error(
         self,
@@ -15536,9 +15705,12 @@ complex64_t crossgl_complex64_mod_assign(
         conversion_kind,
         reason,
     ):
+        if isinstance(conversion_kind, StructureConversionKind):
+            conversion_kind = conversion_kind.value
         rendered_source_type = self.type_name_string(source_type) or "unknown"
-        raise OpenGLStructConstructionError(
-            "OpenGL cannot preserve structure construction from "
+        raise self.GLSL_STRUCT_CONSTRUCTION_ERROR(
+            f"{self.GLSL_TARGET_DISPLAY_NAME} cannot preserve structure "
+            "construction from "
             f"'{rendered_source_type}' to '{destination_type}': "
             f"{reason.replace('-', ' ')}",
             destination_type=destination_type,
@@ -15567,9 +15739,7 @@ complex64_t crossgl_complex64_mod_assign(
                 "constructor-arguments-have-side-effects",
             )
         if not arguments:
-            if constructor == "complex64_t":
-                return "complex64_t(0.0, 0.0)"
-            return None
+            return self.glsl_registered_default_struct_construction(expr, constructor)
         if len(arguments) != 1:
             return None
 
@@ -15579,31 +15749,35 @@ complex64_t crossgl_complex64_mod_assign(
         if source_type is not None and self.map_type(source_type) == constructor:
             return rendered
 
-        promoted = self.glsl_registered_scalar_to_struct_conversion(
-            rendered, source_type, constructor
-        )
-        if promoted is not None:
-            return promoted
-
         constructor_fields = list(
             self.struct_member_types.get(source_constructor, {}).values()
         )
         if len(constructor_fields) == 1:
             return None
 
+        promoted = self.glsl_registered_scalar_to_struct_conversion(
+            expr,
+            rendered,
+            source_type,
+            constructor,
+            StructureConversionKind.SCALAR_PROMOTION.value,
+        )
+        if promoted is not None:
+            return promoted
+
         source_info = self.glsl_value_type_info(source_type)
         source_mapped = self.map_type(source_type) if source_type is not None else None
         if source_type is None:
-            conversion_kind = "unknown"
+            conversion_kind = StructureConversionKind.UNKNOWN.value
             reason = "source-type-unknown"
         elif self.glsl_struct_node(source_mapped) is not None:
-            conversion_kind = "structure-conversion"
+            conversion_kind = StructureConversionKind.STRUCTURE_CONVERSION.value
             reason = "structure-conversion-unsupported"
         elif source_info is not None and source_info["width"] == 1:
-            conversion_kind = "scalar-promotion"
+            conversion_kind = StructureConversionKind.SCALAR_PROMOTION.value
             reason = "scalar-conversion-unregistered"
         else:
-            conversion_kind = "value-conversion"
+            conversion_kind = StructureConversionKind.VALUE_CONVERSION.value
             reason = "source-shape-unsupported"
         self.glsl_struct_construction_error(
             expr,
@@ -15666,8 +15840,8 @@ complex64_t crossgl_complex64_mod_assign(
                 "operator-unsupported",
             )
 
-        left_operand = self.glsl_complex64_operand(left, left_type)
-        right_operand = self.glsl_complex64_operand(right, right_type)
+        left_operand = self.glsl_complex64_operand(left, left_type, expr.left)
+        right_operand = self.glsl_complex64_operand(right, right_type, expr.right)
         if left_operand is None or right_operand is None:
             self.glsl_complex64_error(
                 expr,
@@ -15724,7 +15898,7 @@ complex64_t crossgl_complex64_mod_assign(
             )
         right_type = self.glsl_source_expression_type(right_node)
         right = self.generate_expression(right_node)
-        right_operand = self.glsl_complex64_operand(right, right_type)
+        right_operand = self.glsl_complex64_operand(right, right_type, right_node)
         if right_operand is None:
             self.glsl_complex64_error(
                 node,
@@ -16122,30 +16296,39 @@ complex64_t crossgl_complex64_mod_assign(
     def glsl_expected_type_conversion(self, expr, generated, expected_type):
         if expected_type is None or not isinstance(generated, str):
             return generated
-        expected_type_name = self.type_name_string(expected_type)
-        resolved_expected_type = self.resolve_glsl_type_alias(expected_type_name)
-        registered_expected_type = next(
-            (
-                candidate
-                for candidate in (
-                    resolved_expected_type,
-                    resolved_expected_type.rsplit("::", 1)[-1],
-                )
-                if candidate in self.GLSL_REGISTERED_SCALAR_STRUCT_CONVERSIONS
-            ),
-            None,
+        registered_binding = self.glsl_registered_scalar_structure_contract(
+            expected_type
         )
-        if registered_expected_type is not None:
-            mapped_expected_type = self.map_type(registered_expected_type)
+        if registered_binding is not None:
+            _contract, _source_expected_type, mapped_expected_type = registered_binding
             actual_type = self.glsl_source_expression_type(expr)
-            actual = self.glsl_value_type_info(actual_type)
             is_destination_type = (
                 actual_type is not None
                 and self.map_type(actual_type) == mapped_expected_type
             )
-            if is_destination_type or (actual is not None and actual["width"] == 1):
+            if is_destination_type:
+                return generated
+            if self.glsl_is_explicit_type_constructor_expression(
+                generated, mapped_expected_type
+            ):
+                return generated
+            conversion_kind = StructureConversionKind.CONTEXTUAL_SCALAR_CONVERSION.value
+            if actual_type is None:
+                self.glsl_struct_construction_error(
+                    expr,
+                    mapped_expected_type,
+                    None,
+                    conversion_kind,
+                    "source-type-unknown",
+                )
+            actual = self.glsl_value_type_info(actual_type)
+            if actual is not None and actual["width"] == 1:
                 converted = self.glsl_registered_scalar_to_struct_conversion(
-                    generated, actual_type, mapped_expected_type
+                    expr,
+                    generated,
+                    actual_type,
+                    mapped_expected_type,
+                    conversion_kind,
                 )
                 if converted is not None:
                     return converted
@@ -16153,17 +16336,22 @@ complex64_t crossgl_complex64_mod_assign(
                     expr,
                     mapped_expected_type,
                     actual_type,
-                    "contextual-scalar-conversion",
-                    "source-shape-unsupported",
+                    conversion_kind,
+                    "scalar-source-kind-unsupported",
                 )
-            if actual is not None:
-                self.glsl_struct_construction_error(
-                    expr,
-                    mapped_expected_type,
-                    actual_type,
-                    "contextual-scalar-conversion",
-                    "source-shape-unsupported",
-                )
+            mapped_actual_type = self.map_type(actual_type)
+            reason = (
+                "structure-conversion-unsupported"
+                if self.glsl_struct_node(mapped_actual_type) is not None
+                else "source-shape-unsupported"
+            )
+            self.glsl_struct_construction_error(
+                expr,
+                mapped_expected_type,
+                actual_type,
+                conversion_kind,
+                reason,
+            )
         expected = self.glsl_value_type_info(expected_type)
         if expected is None:
             return generated

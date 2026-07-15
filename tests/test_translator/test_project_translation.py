@@ -8682,6 +8682,74 @@ def test_translate_project_reports_unsupported_opengl_struct_construction(tmp_pa
     )
 
 
+def test_translate_project_reports_unsupported_webgl_struct_conversion(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "construction.cgl").write_text(
+        textwrap.dedent("""
+            shader InvalidWebGLStructConversion {
+                struct complex64_t {
+                    float real;
+                    int imag;
+                };
+
+                complex64_t promote(float value) {
+                    return value;
+                }
+
+                fragment {
+                    vec4 main() @ gl_FragColor {
+                        complex64_t value = promote(1.0);
+                        return vec4(value.real);
+                    }
+                }
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["webgl"]
+            output_dir = "translated"
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.webgl-struct-construction-unsupported": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "webgl.struct-conversion-construction": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["target"] == "webgl"
+    assert diagnostic["location"]["file"] == "shaders/construction.cgl"
+    assert diagnostic["missingCapabilities"] == ["webgl.struct-conversion-construction"]
+    assert diagnostic["details"]["sourcePath"] == "shaders/construction.cgl"
+    assert diagnostic["details"]["structConstruction"] == {
+        "conversionKind": "contextual-scalar-conversion",
+        "destinationType": "complex64_t",
+        "reason": "destination-shape-mismatch",
+        "sourceType": "float",
+    }
+    assert not list((repo / "translated" / "webgl").rglob("*.glsl"))
+
+    report_path = repo / "translated" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert {diagnostic["code"] for diagnostic in validation["diagnostics"]}.isdisjoint(
+        {"project.validate.invalid-report"}
+    )
+
+
 def test_translate_project_reports_opengl_fixed_array_resource_contract(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
