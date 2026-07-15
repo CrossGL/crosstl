@@ -17585,9 +17585,10 @@ def _opengl_struct_construction_failure_details(
     unit: ProjectTranslationUnit,
     artifact_path: str | None,
 ) -> dict[str, Any]:
-    if _translation_failure_diagnostic_code(exc) != (
-        "project.translate.opengl-struct-construction-unsupported"
-    ):
+    if _translation_failure_diagnostic_code(exc) not in {
+        "project.translate.opengl-struct-construction-unsupported",
+        "project.translate.webgl-struct-construction-unsupported",
+    }:
         return {}
 
     details: dict[str, Any] = {

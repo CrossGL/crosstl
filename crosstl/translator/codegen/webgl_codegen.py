@@ -10,13 +10,22 @@ from ..ast import (
     TernaryOpNode,
 )
 from .array_utils import format_c_style_array_declaration
-from .GLSL_codegen import GLSLCodeGen
+from .GLSL_codegen import GLSLCodeGen, OpenGLStructConstructionError
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
+
+
+class WebGLStructConstructionError(OpenGLStructConstructionError):
+    """Raised when a source structure conversion has no faithful GLSL ES form."""
+
+    project_diagnostic_code = "project.translate.webgl-struct-construction-unsupported"
+    missing_capabilities = ("webgl.struct-conversion-construction",)
 
 
 class WebGLCodeGen(GLSLCodeGen):
     """Generate WebGL 2.0 compatible GLSL ES output from CrossGL ASTs."""
 
+    GLSL_TARGET_DISPLAY_NAME = "WebGL"
+    GLSL_STRUCT_CONSTRUCTION_ERROR = WebGLStructConstructionError
     BUILTIN_INTERFACE_BLOCK_NAMES = {"gl_PerVertex"}
     GLSL_RESERVED_IDENTIFIER_PREFIXES = ("gl_", "webgl_", "_webgl_")
     UNSUPPORTED_VERTEX_OUTPUT_BUILTINS = {"gl_ClipDistance", "gl_CullDistance"}

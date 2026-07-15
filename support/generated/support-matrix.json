@@ -152,7 +152,7 @@
         "path": "crosstl/backend/GLSL"
       },
       "signals": {
-        "unsupported_marker_count": 249,
+        "unsupported_marker_count": 253,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
@@ -247,7 +247,7 @@
           "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1424
+        "test_count": 1427
       },
       "translator_codegen": {
         "exists": true,
@@ -277,8 +277,12 @@
         "path": null
       },
       "signals": {
-        "unsupported_marker_count": 38,
+        "unsupported_marker_count": 39,
         "unsupported_marker_samples": [
+          {
+            "path": "crosstl/translator/codegen/webgl_codegen.py",
+            "text": "project_diagnostic_code = \"project.translate.webgl-struct-construction-unsupported\""
+          },
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
             "text": "UNSUPPORTED_VERTEX_OUTPUT_BUILTINS = {\"gl_ClipDistance\", \"gl_CullDistance\"}"
@@ -354,10 +358,6 @@
           {
             "path": "crosstl/translator/codegen/webgl_codegen.py",
             "text": "def webgl_unsupported_builtin_attribute_name(self, node):"
-          },
-          {
-            "path": "crosstl/translator/codegen/webgl_codegen.py",
-            "text": "if attr_name in self.UNSUPPORTED_VERTEX_OUTPUT_BUILTINS:"
           }
         ]
       },
@@ -373,7 +373,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_webgl_codegen.py"
         ],
-        "test_count": 43
+        "test_count": 45
       },
       "translator_codegen": {
         "exists": true,
