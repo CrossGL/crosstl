@@ -436,7 +436,7 @@
   },
   "directx_toolchain_status": {
     "status": "passing",
-    "note": "Windows CI compiles all 347 generated compute entries in the nine-source DirectX HLSL frontier below. This is native compiler validation only and does not establish Direct3D runtime execution or numerical parity. binary_two.metal and random.metal remain outside the clean-frontier DXC gate for the listed defects; fence.metal is a separate blocked source and emits no DirectX artifact under its atomic-fence contract diagnostic.",
+    "note": "Windows CI compiles all 574 generated compute entries in the full 11-source clean DirectX HLSL frontier below. This is native compiler validation only and does not establish Direct3D runtime execution or numerical parity. fence.metal is a separate blocked source and emits no DirectX artifact under its atomic-fence contract diagnostic.",
     "compiler": {
       "name": "dxc",
       "version": "v1.9.2602.24"
@@ -456,8 +456,10 @@
     "expected_entry_point_counts": {
       "mlx/backend/metal/kernels/arange.metal": 11,
       "mlx/backend/metal/kernels/arg_reduce.metal": 24,
+      "mlx/backend/metal/kernels/binary_two.metal": 225,
       "mlx/backend/metal/kernels/layer_norm.metal": 12,
       "mlx/backend/metal/kernels/logsumexp.metal": 6,
+      "mlx/backend/metal/kernels/random.metal": 2,
       "mlx/backend/metal/kernels/rms_norm.metal": 12,
       "mlx/backend/metal/kernels/rope.metal": 18,
       "mlx/backend/metal/kernels/scaled_dot_product_attention.metal": 42,
@@ -467,8 +469,10 @@
     "dxc_validated_sources": [
       "mlx/backend/metal/kernels/arange.metal",
       "mlx/backend/metal/kernels/arg_reduce.metal",
+      "mlx/backend/metal/kernels/binary_two.metal",
       "mlx/backend/metal/kernels/layer_norm.metal",
       "mlx/backend/metal/kernels/logsumexp.metal",
+      "mlx/backend/metal/kernels/random.metal",
       "mlx/backend/metal/kernels/rms_norm.metal",
       "mlx/backend/metal/kernels/rope.metal",
       "mlx/backend/metal/kernels/scaled_dot_product_attention.metal",
@@ -476,8 +480,6 @@
       "mlx/backend/metal/kernels/ternary.metal"
     ],
     "directx_toolchain_gaps": {
-      "mlx/backend/metal/kernels/binary_two.metal": "generated HLSL still has target-ABI signature collisions when distinct Metal scalar overloads collapse (https://github.com/CrossGL/crosstl/issues/1694) and minimum-precision signed integer division and remainder operations that require widening before DXC compilation (https://github.com/CrossGL/crosstl/issues/1701)",
-      "mlx/backend/metal/kernels/random.metal": "union-backed aliases still require storage-preserving HLSL lowering (https://github.com/CrossGL/crosstl/issues/1696); reflected dispatch-grid cbuffer binding and dispatch-plan metadata also remain required before native execution (https://github.com/CrossGL/crosstl/issues/1542)",
       "mlx/backend/metal/kernels/fence.metal": "the requested mem_device, memory_order_seq_cst, thread_scope_system atomic-fence contract is not representable in HLSL and fails with project.translate.directx-atomic-fence-unsupported (https://github.com/CrossGL/crosstl/issues/1537)"
     },
     "native_runtime_executed": false,
@@ -652,9 +654,7 @@
     "https://github.com/CrossGL/crosstl/issues/1670",
     "https://github.com/CrossGL/crosstl/issues/1671",
     "https://github.com/CrossGL/crosstl/issues/1672",
-    "https://github.com/CrossGL/crosstl/issues/1694",
     "https://github.com/CrossGL/crosstl/issues/1696",
-    "https://github.com/CrossGL/crosstl/issues/1701",
     "https://github.com/CrossGL/crosstl/issues/1750",
     "https://github.com/CrossGL/crosstl/issues/1312",
     "https://github.com/CrossGL/crosstl/issues/1376",
@@ -694,6 +694,9 @@
     "https://github.com/CrossGL/crosstl/issues/1660"
   ],
   "resolved_issues": [
+    "https://github.com/CrossGL/crosstl/issues/1728",
+    "https://github.com/CrossGL/crosstl/issues/1701",
+    "https://github.com/CrossGL/crosstl/issues/1694",
     "https://github.com/CrossGL/crosstl/issues/1695",
     "https://github.com/CrossGL/crosstl/issues/1667",
     "https://github.com/CrossGL/crosstl/issues/1668",
