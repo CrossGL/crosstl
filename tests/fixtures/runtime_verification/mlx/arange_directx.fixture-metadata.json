@@ -1,0 +1,151 @@
+{
+  "kind": "crosstl-project-runtime-fixture-metadata",
+  "metadata": {
+    "repository": "mlx",
+    "fixtureSet": "pinned-arange-directx-runtime",
+    "upstreamCommit": "4367c73b60541ddd5a266ce4644fd93d20223b6e",
+    "source": "mlx/backend/metal/kernels/arange.metal",
+    "sourceSha256": "ca29a59005b5ad54dccc369542e32804229490a41eb30d568adcd913d1ee68d1"
+  },
+  "adapters": [
+    {
+      "id": "mlx-arange-directx-native",
+      "executor": "directx",
+      "adapterKind": "directx-native-runtime",
+      "platformRequirements": {
+        "requiredTools": []
+      }
+    }
+  ],
+  "fixtures": [
+    {
+      "id": "mlx-pinned-arange-directx-uint32",
+      "adapter": "mlx-arange-directx-native",
+      "selector": {
+        "source": "mlx/backend/metal/kernels/arange.metal",
+        "target": "directx"
+      },
+      "entryPoint": "CSMain_3",
+      "inputs": [
+        {
+          "name": "start",
+          "kind": "scalar",
+          "dtype": "uint32",
+          "value": 300
+        },
+        {
+          "name": "step",
+          "kind": "scalar",
+          "dtype": "uint32",
+          "value": 17
+        }
+      ],
+      "expectedOutputs": [
+        {
+          "name": "out",
+          "kind": "buffer",
+          "dtype": "uint32",
+          "shape": [
+            7
+          ],
+          "values": [
+            300,
+            317,
+            334,
+            351,
+            368,
+            385,
+            402
+          ]
+        }
+      ],
+      "runtimeAdapter": {
+        "id": "mlx-pinned-arange-directx-contract-v1",
+        "entryPoints": [
+          {
+            "name": "CSMain_3",
+            "stage": "compute",
+            "workgroupSize": [
+              1,
+              1,
+              1
+            ],
+            "metadata": {
+              "sourceEntryPoint": "arangeuint32"
+            }
+          }
+        ],
+        "resourceBindings": [
+          {
+            "name": "arangeuint32_start_Constants",
+            "kind": "constant-buffer",
+            "type": "arangeuint32_start_Constants",
+            "set": 0,
+            "binding": 4,
+            "access": "read",
+            "value": "start",
+            "entryPoint": "CSMain_3",
+            "metadata": {
+              "required": true,
+              "parameterBlock": {
+                "field": "arangeuint32_start",
+                "byteOffset": 0,
+                "byteSize": 4
+              }
+            }
+          },
+          {
+            "name": "arangeuint32_step_Constants",
+            "kind": "constant-buffer",
+            "type": "arangeuint32_step_Constants",
+            "set": 0,
+            "binding": 5,
+            "access": "read",
+            "value": "step",
+            "entryPoint": "CSMain_3",
+            "metadata": {
+              "required": true,
+              "parameterBlock": {
+                "field": "arangeuint32_step",
+                "byteOffset": 0,
+                "byteSize": 4
+              }
+            }
+          },
+          {
+            "name": "out_",
+            "kind": "buffer",
+            "type": "RWStructuredBuffer<uint>",
+            "set": 0,
+            "binding": 2,
+            "access": "read_write",
+            "value": "out",
+            "entryPoint": "CSMain_3",
+            "metadata": {
+              "required": true,
+              "byteStride": 4
+            }
+          }
+        ],
+        "dispatch": {
+          "entryPoint": "CSMain_3",
+          "globalSize": [
+            7,
+            1,
+            1
+          ]
+        },
+        "metadata": {
+          "artifactContractMode": "replace",
+          "sourceEntryPoint": "arangeuint32",
+          "scope": "curated-generated-host-interface"
+        }
+      },
+      "metadata": {
+        "repository": "mlx",
+        "proof": "translated-pinned-arange-directx-exact-output",
+        "upstreamCommit": "4367c73b60541ddd5a266ce4644fd93d20223b6e"
+      }
+    }
+  ]
+}

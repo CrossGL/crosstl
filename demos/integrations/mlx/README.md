@@ -88,6 +88,19 @@ The current harness verifies:
   `[5, 19, 11, 13]`. Because every result selects a table entry, this is a
   value-sensitive proof that the generated `static const` initializer survives;
   it is independent of the compiler-only frontier gate above;
+- a second, independent Windows CI Direct3D 12 execution proof that translates
+  the actual pinned `mlx/backend/metal/kernels/arange.metal` source with the MLX
+  repository root as an include path. The proof verifies the pinned source hash,
+  builds the generated runtime artifact manifest and fixture plan, and uses a
+  curated replacement contract because aggregate HLSL reflection currently
+  reports an ambiguous host interface and exposes only the first compute entry.
+  The contract selects the generated `arangeuint32` entry `CSMain_3`, binds its
+  `b4` start and `b5` step parameter blocks and `u2` output resource, compiles
+  that entry to DXIL with DXC, and dispatches it through the built-in Direct3D
+  12 adapter. Seven invocations use `start = 300` and `step = 17`; the required
+  zero-tolerance readback is `[300, 317, 334, 351, 368, 385, 402]`. Internal
+  zeroed descriptors fill unused lower register slots required by compushady's
+  contiguous descriptor lists; they are not fixture inputs or shader resources;
 - Vulkan assembly and validator checks for the existing non-fence regression
   frontier when SPIR-V tools are available. Vulkan atomic-fence feature work is
   deferred; the separate `fence.metal` contract check prevents generated
@@ -133,9 +146,10 @@ The current harness verifies:
   reduced generated compute artifact. The native adapter compiles the GLSL to
   SPIR-V, applies numeric constant ID 7, and requires exact readback for two
   independently selected unsigned values;
-- on Windows CI, native Direct3D 12 execution and exact readback for the reduced
-  file-scope immutable lookup fixture. This proof does not claim execution of
-  the pinned MLX frontier or the upstream MLX host runtime.
+- on Windows CI, native Direct3D 12 execution and exact readback for both the
+  reduced file-scope immutable lookup fixture and one generated uint32 entry
+  from the pinned MLX `arange.metal` source. Neither proof executes the upstream
+  MLX host runtime.
 
 Pull requests run the 12-source pinned reduced scope: 11 clean frontier sources
 and the explicitly blocked `fence.metal` contract source. They also run the
@@ -183,17 +197,22 @@ then select `CSMain`, `main`, or `arangeuint32` independently for DirectX,
 OpenGL, or Vulkan dispatch. OpenGL project translation packages source entry
 `arangeuint32` as a standalone `main` artifact with an entry-scoped reflected
 interface; its unsigned fixture uses values above the 8-bit range to detect
-entry drift. DirectX still exercises the aggregate artifact's first `uint8`
-entry. Vulkan execution selects `arangeuint32`, `arangeint32`, and
+entry drift. The general DirectX readiness probe still describes the aggregate
+artifact's first `uint8` entry. The separate required Windows device proof
+selects `arangeuint32` as generated entry `CSMain_3`. Vulkan execution selects
+`arangeuint32`, `arangeint32`, and
 `arangefloat32` explicitly and uses the same wide unsigned probe.
 Plans report remaining non-blocking platform, layout, and entry-point ownership
 warnings. The reduced fixture execution
 report exercises the project runner and adapter contract with reference
 buffers. The native execution report attempts the built-in native adapter
 contract separately. On Windows CI the generated DirectX frontier HLSL must
-compile with DXC. A separate native test translates and executes the reduced
-immutable lookup fixture through Direct3D 12; it does not turn the frontier
-compiler gate into a runtime-parity claim. Current DirectX smoke artifacts lower
+compile with DXC. Separate native tests translate and execute the reduced
+immutable lookup fixture and the pinned source's generated uint32 arange entry
+through Direct3D 12. The arange test is numerical evidence for that one source,
+entry, dtype, dispatch shape, and fixture only; it does not turn the frontier
+compiler gate into a general runtime-parity claim. Current DirectX smoke
+artifacts lower
 MLX bfloat16 aliases to HLSL `half` for toolchain coverage; exact bfloat16
 storage and conversion semantics remain tracked separately. On macOS CI, the
 generated `fence.metal` round-trip artifact must compile to AIR with the native
@@ -271,6 +290,17 @@ python -m pytest -q -n auto `
   -k "directx_compute_runtime_executes_mlx_file_scope_lookup_on_device"
 ```
 
+With the pinned MLX checkout available, run the generated arange proof
+separately:
+
+```powershell
+$env:CROSTL_MLX_ROOT = "C:/path/to/mlx"
+$env:CROSTL_RUN_DIRECTX_MLX_ARANGE_DEVICE_TEST = "1"
+python -m pytest -q -n auto `
+  tests/test_translator/test_native_runtime_drivers.py `
+  -k "directx_compute_runtime_executes_translated_pinned_mlx_arange_on_device"
+```
+
 On macOS, require native compilation of the generated Metal round-trip artifact:
 
 ```bash
@@ -321,8 +351,9 @@ runtime-test manifests and native adapters. OpenGL type aliases are inlined
 before host-interface reflection and are not exposed as runtime resources.
 CrossGL/crosstl#1471 tracks entry-point
 ownership for reflected constants in runtime reports. The Direct3D compute
-runtime now covers the reduced immutable lookup fixture; CrossGL/crosstl#1472
-continues to track expansion from that bounded proof to the generated MLX
+runtime now covers the reduced immutable lookup fixture and one generated uint32
+entry from pinned `arange.metal`; CrossGL/crosstl#1472 continues to track
+expansion beyond that bounded source/entry/dtype proof across the generated MLX
 frontier. CrossGL/crosstl#1474
 tracks exact DirectX bfloat16 lowering beyond the current compile-time smoke
 mapping. Current DXC checks use Shader Model 6 compute profiles and do not prove

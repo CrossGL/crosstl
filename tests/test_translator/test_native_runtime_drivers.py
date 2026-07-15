@@ -4,6 +4,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -15,6 +16,7 @@ from crosstl.project.native_runtime_drivers import (
     DirectXComputeRuntime,
     OpenGLComputeRuntime,
     VulkanComputeRuntime,
+    _complete_directx_register_layout,
     _compushady_backend_name,
     _first_vulkan_handle,
     _prepare_directx_buffers,
@@ -45,6 +47,7 @@ from crosstl.project.runtime_verification import (
     RuntimeSpecializationConstant,
     VulkanRuntimeParityAdapter,
     build_runtime_test_manifest,
+    plan_runtime_test_manifest,
     verify_runtime_test_manifest,
 )
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
@@ -502,6 +505,79 @@ def test_prepare_directx_buffers_rejects_sparse_registers(tmp_path):
     assert excinfo.value.details["expectedBindings"] == [0]
 
 
+def test_complete_directx_register_layout_pads_descriptor_list_gaps(tmp_path):
+    request = _directx_dispatch_request(tmp_path)
+    params = request.buffers["params"]
+    out = request.buffers["out"]
+    sparse = _prepare_directx_buffers(
+        {
+            "params": NativeRuntimeBufferBinding(
+                **{
+                    **params.__dict__,
+                    "binding": RuntimeResourceBinding(
+                        **{**params.binding.__dict__, "binding": 4}
+                    ),
+                }
+            ),
+            "out": NativeRuntimeBufferBinding(
+                **{
+                    **out.__dict__,
+                    "binding": RuntimeResourceBinding(
+                        **{**out.binding.__dict__, "binding": 2}
+                    ),
+                }
+            ),
+        }
+    )
+
+    completed = _validate_directx_register_layout(
+        _complete_directx_register_layout(sparse)
+    )
+
+    assert [
+        (item.namespace, item.binding_index, item.source) for item in completed
+    ] == [
+        ("cbv", 0, "descriptor-gap"),
+        ("cbv", 1, "descriptor-gap"),
+        ("cbv", 2, "descriptor-gap"),
+        ("cbv", 3, "descriptor-gap"),
+        ("cbv", 4, "input"),
+        ("uav", 0, "descriptor-gap"),
+        ("uav", 1, "descriptor-gap"),
+        ("uav", 2, "expectedOutput"),
+    ]
+    assert all(
+        item.output_name is None
+        for item in completed
+        if item.source == "descriptor-gap"
+    )
+
+
+def test_complete_directx_register_layout_rejects_excessive_padding(tmp_path):
+    request = _directx_dispatch_request(tmp_path)
+    params = request.buffers["params"]
+    sparse = _prepare_directx_buffers(
+        {
+            "params": NativeRuntimeBufferBinding(
+                **{
+                    **params.__dict__,
+                    "binding": RuntimeResourceBinding(
+                        **{**params.binding.__dict__, "binding": 4096}
+                    ),
+                }
+            )
+        }
+    )
+
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        _complete_directx_register_layout(sparse)
+
+    assert excinfo.value.details["reasonKind"] == ("descriptor-padding-limit-exceeded")
+    assert excinfo.value.details["namespace"] == "cbv"
+    assert excinfo.value.details["requiredDescriptorCount"] == 4097
+    assert excinfo.value.details["maxDescriptorCount"] == 4096
+
+
 def test_prepare_directx_buffers_rejects_duplicate_registers(tmp_path):
     request = _directx_dispatch_request(tmp_path)
 
@@ -820,6 +896,162 @@ def test_directx_compute_runtime_executes_mlx_file_scope_lookup_on_device(tmp_pa
             "tolerance": {"absolute": 0.0, "relative": 0.0},
             "expected": {"dtype": "uint32", "shape": [4]},
             "actual": {"dtype": "uint32", "shape": [4]},
+            "mismatchCount": 0,
+            "maxAbsoluteError": 0.0,
+            "maxRelativeError": 0.0,
+        }
+    ]
+
+
+def test_directx_compute_runtime_executes_translated_pinned_mlx_arange_on_device():
+    if os.environ.get("CROSTL_RUN_DIRECTX_MLX_ARANGE_DEVICE_TEST") != "1":
+        pytest.skip(
+            "set CROSTL_RUN_DIRECTX_MLX_ARANGE_DEVICE_TEST=1 to run pinned MLX arange test"
+        )
+    if not sys.platform.startswith("win32"):
+        pytest.fail("Pinned MLX arange Direct3D runtime proof requires Windows")
+    if shutil.which("dxc") is None:
+        pytest.fail("DXC is required for the pinned MLX arange runtime proof")
+    try:
+        __import__("compushady")
+    except ImportError as exc:
+        pytest.fail(f"Direct3D arange runtime dependency is unavailable: {exc}")
+
+    pinned_commit = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
+    mlx_root_value = os.environ.get("CROSTL_MLX_ROOT")
+    if not mlx_root_value:
+        pytest.fail("CROSTL_MLX_ROOT must point to the pinned MLX checkout")
+    mlx_root = Path(mlx_root_value).resolve()
+    source_path = mlx_root / "mlx" / "backend" / "metal" / "kernels" / "arange.metal"
+    if not source_path.is_file():
+        pytest.fail(f"Pinned MLX arange source is missing: {source_path}")
+    checkout_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=mlx_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert checkout_commit == pinned_commit
+
+    fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / "mlx"
+    with tempfile.TemporaryDirectory(
+        prefix=".crosstl-arange-directx-", dir=mlx_root
+    ) as temporary_directory:
+        work_dir = Path(temporary_directory)
+        config_path = work_dir / "crosstl.toml"
+        shutil.copy2(fixture_dir / "arange_directx.crosstl.toml", config_path)
+        output_dir = work_dir / "out"
+        report_path = work_dir / "arange-directx-report.json"
+        config = project_api.load_project_config(mlx_root, config_path)
+        report = project_api.translate_project(
+            config,
+            targets=("directx",),
+            output_dir=str(output_dir.relative_to(mlx_root)),
+            format_output=False,
+            validate=True,
+        ).to_json()
+        report_path.write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        assert report["summary"]["unitCount"] == 1
+        assert report["summary"]["translatedCount"] == 1
+        assert report["summary"]["failedCount"] == 0
+        artifact = report["artifacts"][0]
+        assert artifact["source"] == "mlx/backend/metal/kernels/arange.metal"
+        assert artifact["sourceHash"] == {
+            "algorithm": "sha256",
+            "value": "ca29a59005b5ad54dccc369542e32804229490a41eb30d568adcd913d1ee68d1",
+        }
+        assert artifact["includePathProcessing"] == {
+            "frontend": "lexer",
+            "includePathCount": 1,
+            "status": "forwarded",
+            "supportsIncludePaths": True,
+        }
+        assert artifact["includeDependencyProcessing"]["resolvedDependencyCount"] == 7
+        assert artifact["includeDependencyProcessing"]["missingDependencyCount"] == 0
+
+        runtime_artifacts = project_api.build_runtime_artifact_manifest(report_path)
+        assert runtime_artifacts["success"] is True, json.dumps(
+            runtime_artifacts, indent=2
+        )
+        reflected = runtime_artifacts["artifacts"][0]
+        assert reflected["hostInterface"]["status"] == "ambiguous"
+        assert {block["name"] for block in reflected["parameterBlocks"]} >= {
+            "arangeuint32_start_Constants",
+            "arangeuint32_step_Constants",
+        }
+
+        manifest = build_runtime_test_manifest(
+            runtime_artifacts,
+            fixture_dir / "arange_directx.fixture-metadata.json",
+            project_root=mlx_root,
+        )
+        assert manifest["success"] is True, json.dumps(manifest, indent=2)
+        plan = plan_runtime_test_manifest(
+            runtime_artifacts,
+            manifest,
+            project_root=mlx_root,
+        )
+        case = plan["testCases"][0]
+        assert case["status"] == "planned", json.dumps(plan, indent=2)
+        assert case["runtimeExecution"]["dispatch"]["entryPoint"] == "CSMain_3"
+        assert [
+            (
+                item["binding"]["name"],
+                item["binding"]["kind"],
+                item["binding"]["binding"],
+            )
+            for item in case["runtimeExecution"]["resourceBindings"]
+        ] == [
+            ("arangeuint32_start_Constants", "constant-buffer", 4),
+            ("arangeuint32_step_Constants", "constant-buffer", 5),
+            ("out_", "buffer", 2),
+        ]
+        assert case["runtimeAdapter"]["metadata"]["sourceEntryPoint"] == (
+            "arangeuint32"
+        )
+
+        runtime_report = verify_runtime_test_manifest(
+            runtime_artifacts,
+            manifest,
+            project_root=mlx_root,
+            executors={
+                "directx": DirectXRuntimeParityAdapter(runtime=DirectXComputeRuntime())
+            },
+        )
+
+    assert runtime_report["success"] is True, json.dumps(runtime_report, indent=2)
+    assert runtime_report["summary"] == {
+        "fixtureCount": 1,
+        "passedCount": 1,
+        "skippedCount": 0,
+        "unavailableCount": 0,
+        "translationFailedCount": 0,
+        "runtimeFailedCount": 0,
+        "comparisonFailedCount": 0,
+        "failedCount": 0,
+    }
+    result = runtime_report["results"][0]
+    assert result["status"] == "passed", json.dumps(runtime_report, indent=2)
+    native_dispatch = result["executor"]["details"]["nativeRuntimeDispatch"]
+    assert native_dispatch["entryPoint"] == "CSMain_3"
+    assert set(native_dispatch["buffers"]) == {
+        "arangeuint32_start_Constants",
+        "arangeuint32_step_Constants",
+        "out_",
+    }
+    assert result["comparisons"] == [
+        {
+            "name": "out",
+            "kind": "buffer",
+            "status": "passed",
+            "tolerance": {"absolute": 0.0, "relative": 0.0},
+            "expected": {"dtype": "uint32", "shape": [7]},
+            "actual": {"dtype": "uint32", "shape": [7]},
             "mismatchCount": 0,
             "maxAbsoluteError": 0.0,
             "maxRelativeError": 0.0,
