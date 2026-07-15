@@ -97,6 +97,116 @@ class _PreparedOpenGLBuffer:
         return len(self.payload)
 
 
+@dataclass(frozen=True)
+class _PreparedOpenGLSpecialization:
+    name: str
+    constant_id: int
+    dtype: str
+    value: Any
+    encoded_word: int
+    source: str | None
+    value_provenance: Mapping[str, Any]
+
+    def to_json(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "name": self.name,
+            "id": self.constant_id,
+            "dtype": self.dtype,
+            "value": self.value,
+            "valueProvenance": dict(self.value_provenance),
+        }
+        if self.source is not None:
+            payload["source"] = self.source
+        return payload
+
+
+@dataclass(frozen=True)
+class _OpenGLSPIRVAPI:
+    gl: Any
+    specialize_shader: Any
+    specialize_entry_point: str
+    binary_format: int
+
+
+class _OpenGLSPIRVUnavailable(RuntimeError):
+    def __init__(self, message: str, *, details: Mapping[str, Any]):
+        super().__init__(message)
+        self.details = dict(details)
+
+
+_OPENGL_SPIRV_HEADER_BYTE_LENGTH = 5 * 4
+
+
+class _OpenGLSPIRVComputeShader:
+    def __init__(self, api: _OpenGLSPIRVAPI, *, shader: int, program: int):
+        self.api = api
+        self.shader = shader
+        self.program = program
+        self.released = False
+
+    def set_uniform(self, name: str, binding: Any) -> None:
+        gl = self.api.gl
+        try:
+            location = int(gl.glGetUniformLocation(self.program, name))
+        except Exception as exc:
+            raise _opengl_setup_error(
+                f"OpenGL runtime uniform {name!r} could not be queried: {exc}",
+                "uniform-query-failed",
+                constant=name,
+            ) from exc
+        if location < 0:
+            raise _opengl_setup_error(
+                f"OpenGL runtime constant {name!r} is not an active uniform.",
+                "active-uniform-missing",
+                constant=name,
+            )
+
+        values, suffix = _prepare_opengl_uniform_values(name, binding)
+        function_name = f"glUniform{len(values)}{suffix}"
+        function = getattr(gl, function_name, None)
+        if not _opengl_entry_point_available(function):
+            raise _opengl_setup_error(
+                f"OpenGL runtime uniform entry point {function_name} is unavailable.",
+                "uniform-entry-point-unavailable",
+                constant=name,
+                missingEntryPoints=[function_name],
+            )
+        try:
+            gl.glUseProgram(self.program)
+            function(location, *values)
+        except RuntimeAdapterSetupError:
+            raise
+        except Exception as exc:
+            raise _opengl_setup_error(
+                f"OpenGL runtime constant {name!r} could not be bound: {exc}",
+                "constant-binding-failed",
+                constant=name,
+            ) from exc
+        finally:
+            try:
+                gl.glUseProgram(0)
+            except Exception:
+                pass
+
+    def run(self, *, group_x: int, group_y: int, group_z: int) -> None:
+        gl = self.api.gl
+        gl.glUseProgram(self.program)
+        try:
+            gl.glDispatchCompute(group_x, group_y, group_z)
+        finally:
+            gl.glUseProgram(0)
+
+    def release(self) -> None:
+        if self.released:
+            return
+        self.released = True
+        gl = self.api.gl
+        try:
+            gl.glDeleteProgram(self.program)
+        finally:
+            gl.glDeleteShader(self.shader)
+
+
 class DirectXComputeRuntime:
     """Optional Direct3D 12 compute runtime for buffer fixtures.
 
@@ -535,7 +645,8 @@ class OpenGLComputeRuntime:
         adapter: Any,
         request: RuntimeExecutionRequest,
     ) -> RuntimeExecutorAvailability:
-        _ = adapter, request
+        _ = adapter
+        requires_specialization = _opengl_request_requires_specialization(request)
         try:
             moderngl = self._load_moderngl()
         except RuntimeExecutorUnavailable as exc:
@@ -552,12 +663,40 @@ class OpenGLComputeRuntime:
         context = None
         try:
             context, backend = self._create_context(moderngl)
-            version_code = int(getattr(context, "version_code", 0) or 0)
-            if version_code and version_code < self.require_version:
-                raise RuntimeExecutorUnavailable(
-                    "OpenGL compute requires context version "
-                    f"{self.require_version}, got {version_code}."
+            version_code = _opengl_context_version_code(context)
+            if version_code < self.require_version:
+                return RuntimeExecutorAvailability(
+                    False,
+                    reason=(
+                        "OpenGL compute requires context version "
+                        f"{self.require_version}, got {version_code}."
+                    ),
+                    details={
+                        "reasonKind": "opengl-version-unsupported",
+                        "target": "opengl",
+                        "runtime": self.name,
+                        "contextBackend": backend or "default",
+                        "requiredVersionCode": self.require_version,
+                        "versionCode": version_code,
+                    },
                 )
+            specialization_details: dict[str, Any] = {}
+            if requires_specialization:
+                api = self._load_opengl_spirv_api(context)
+                specialization_details = {
+                    "specializationMode": "spirv",
+                    "specializationEntryPoint": api.specialize_entry_point,
+                    "requiredExtension": "GL_ARB_gl_spirv",
+                }
+        except _OpenGLSPIRVUnavailable as exc:
+            return RuntimeExecutorAvailability(
+                False,
+                reason=str(exc),
+                details={
+                    "target": "opengl",
+                    **exc.details,
+                },
+            )
         except Exception as exc:  # pragma: no cover - depends on local GL loader
             return RuntimeExecutorAvailability(
                 False,
@@ -579,11 +718,40 @@ class OpenGLComputeRuntime:
                 "runtime": self.name,
                 "contextBackend": backend or "default",
                 "versionCode": version_code,
+                **specialization_details,
             },
         )
 
-    def load_artifact(self, adapter: Any, state: Any, module_path: Path) -> str:
+    def load_artifact(self, adapter: Any, state: Any, module_path: Path) -> str | bytes:
         _ = adapter, state
+        if Path(module_path).suffix.lower() == ".spv":
+            try:
+                binary = Path(module_path).read_bytes()
+            except OSError as exc:
+                raise RuntimeAdapterSetupError(
+                    f"OpenGL SPIR-V runtime artifact could not be read: {exc}",
+                    details={
+                        "target": "opengl",
+                        "modulePath": str(module_path),
+                        "reasonKind": "spirv-artifact-read-failed",
+                    },
+                ) from exc
+            if len(binary) < _OPENGL_SPIRV_HEADER_BYTE_LENGTH or len(binary) % 4:
+                raise _opengl_setup_error(
+                    "OpenGL SPIR-V runtime artifact must contain a complete, "
+                    "word-aligned header.",
+                    "spirv-artifact-layout-invalid",
+                    modulePath=str(module_path),
+                    byteLength=len(binary),
+                    minimumByteLength=_OPENGL_SPIRV_HEADER_BYTE_LENGTH,
+                )
+            if binary[:4] != b"\x03\x02#\x07":
+                raise _opengl_setup_error(
+                    "OpenGL SPIR-V runtime artifact has an invalid magic word.",
+                    "spirv-artifact-magic-invalid",
+                    modulePath=str(module_path),
+                )
+            return binary
         try:
             source = Path(module_path).read_text(encoding="utf-8")
         except (OSError, UnicodeError) as exc:
@@ -612,7 +780,13 @@ class OpenGLComputeRuntime:
             )
 
         moderngl = self._load_moderngl()
-        shader_source = self._shader_source(request)
+        specialization_bindings, uniform_bindings = _partition_opengl_constants(
+            request.constants
+        )
+        prepared_specializations = _prepare_opengl_specializations(
+            specialization_bindings
+        )
+        shader_artifact = self._shader_artifact(request)
         prepared_buffers = _prepare_opengl_buffers(request.buffers)
         workgroup_count = _workgroup_count(request, target="OpenGL")
         if not prepared_buffers:
@@ -635,8 +809,53 @@ class OpenGLComputeRuntime:
                         "reasonKind": "context-creation-failed",
                     },
                 ) from exc
+            version_code = _opengl_context_version_code(context)
+            if version_code < self.require_version:
+                raise _opengl_setup_error(
+                    "OpenGL compute requires context version "
+                    f"{self.require_version}, got {version_code}.",
+                    "opengl-version-unsupported",
+                    contextBackend=_backend or "default",
+                    requiredVersionCode=self.require_version,
+                    versionCode=version_code,
+                )
             try:
-                shader = context.compute_shader(shader_source)
+                if specialization_bindings:
+                    if not isinstance(shader_artifact, bytes):
+                        raise _opengl_setup_error(
+                            "OpenGL specialization constants require a compiled SPIR-V runtime artifact.",
+                            "spirv-artifact-required",
+                            modulePath=str(request.module_path),
+                        )
+                    api = self._load_opengl_spirv_api(context)
+                    shader = self._create_spirv_shader(
+                        api,
+                        shader_artifact,
+                        prepared_specializations,
+                        entry_point=request.entry_point or "main",
+                    )
+                    self._record_specialization_application(
+                        state,
+                        prepared_specializations,
+                        uniform_count=len(uniform_bindings),
+                        entry_point=request.entry_point or "main",
+                        api=api,
+                    )
+                else:
+                    if not isinstance(shader_artifact, str):
+                        raise _opengl_setup_error(
+                            "OpenGL source runtime dispatch requires a GLSL text artifact.",
+                            "glsl-source-artifact-required",
+                            modulePath=str(request.module_path),
+                        )
+                    shader = context.compute_shader(shader_artifact)
+            except (_OpenGLSPIRVUnavailable, RuntimeAdapterSetupError) as exc:
+                if isinstance(exc, _OpenGLSPIRVUnavailable):
+                    raise RuntimeAdapterSetupError(
+                        str(exc),
+                        details={"target": "opengl", **exc.details},
+                    ) from exc
+                raise
             except Exception as exc:
                 raise RuntimeAdapterSetupError(
                     f"OpenGL compute shader compilation or linking failed: {exc}",
@@ -662,7 +881,7 @@ class OpenGLComputeRuntime:
                         },
                     ) from exc
                 resources.append((prepared, buffer))
-            self._bind_constants(shader, request.constants)
+            self._bind_constants(shader, uniform_bindings)
             try:
                 shader.run(
                     group_x=workgroup_count[0],
@@ -729,6 +948,256 @@ class OpenGLComputeRuntime:
                 "to run OpenGL runtime fixtures."
             ) from exc
 
+    def _load_opengl_spirv_api(self, context: Any) -> _OpenGLSPIRVAPI:
+        version_code = int(getattr(context, "version_code", 0) or 0)
+        extensions = {
+            str(extension) for extension in getattr(context, "extensions", ()) or ()
+        }
+        extension_available = "GL_ARB_gl_spirv" in extensions
+        if version_code < 460 and not extension_available:
+            raise _OpenGLSPIRVUnavailable(
+                "OpenGL SPIR-V specialization requires OpenGL 4.6 or the "
+                "GL_ARB_gl_spirv extension.",
+                details={
+                    "reasonKind": "opengl-spirv-capability-unavailable",
+                    "requiredExtension": "GL_ARB_gl_spirv",
+                    "versionCode": version_code,
+                    "extensionAvailable": False,
+                },
+            )
+
+        try:
+            gl = self._module_loader("OpenGL.GL")
+        except Exception as exc:
+            raise _OpenGLSPIRVUnavailable(
+                "PyOpenGL is required to load and specialize OpenGL SPIR-V modules.",
+                details={
+                    "reasonKind": "dependency-unavailable",
+                    "missingPythonModules": ["PyOpenGL"],
+                    "requiredExtension": "GL_ARB_gl_spirv",
+                },
+            ) from exc
+        try:
+            gl_spirv = self._module_loader("OpenGL.GL.ARB.gl_spirv")
+        except Exception:
+            gl_spirv = None
+
+        specialize_shader = None
+        specialize_entry_point = None
+        arb_specialize = getattr(gl_spirv, "glSpecializeShaderARB", None)
+        if extension_available and _opengl_entry_point_available(arb_specialize):
+            specialize_shader = arb_specialize
+            specialize_entry_point = "glSpecializeShaderARB"
+        core_specialize = getattr(gl, "glSpecializeShader", None)
+        if (
+            specialize_shader is None
+            and version_code >= 460
+            and _opengl_entry_point_available(core_specialize)
+        ):
+            specialize_shader = core_specialize
+            specialize_entry_point = "glSpecializeShader"
+
+        required_entry_points = (
+            "glShaderBinary",
+            "glCreateShader",
+            "glGetShaderiv",
+            "glGetShaderInfoLog",
+            "glCreateProgram",
+            "glAttachShader",
+            "glLinkProgram",
+            "glGetProgramiv",
+            "glGetProgramInfoLog",
+            "glUseProgram",
+            "glDispatchCompute",
+            "glDeleteProgram",
+            "glDeleteShader",
+        )
+        missing_entry_points = [
+            name
+            for name in required_entry_points
+            if not _opengl_entry_point_available(getattr(gl, name, None))
+        ]
+        if specialize_shader is None:
+            missing_entry_points.append(
+                "glSpecializeShaderARB"
+                if extension_available and version_code < 460
+                else "glSpecializeShader"
+            )
+        if missing_entry_points:
+            raise _OpenGLSPIRVUnavailable(
+                "OpenGL SPIR-V specialization entry points are unavailable: "
+                + ", ".join(missing_entry_points)
+                + ".",
+                details={
+                    "reasonKind": "opengl-spirv-entry-points-unavailable",
+                    "requiredExtension": "GL_ARB_gl_spirv",
+                    "versionCode": version_code,
+                    "extensionAvailable": extension_available,
+                    "missingEntryPoints": missing_entry_points,
+                },
+            )
+
+        binary_format = getattr(gl, "GL_SHADER_BINARY_FORMAT_SPIR_V", None)
+        if binary_format is None and gl_spirv is not None:
+            binary_format = getattr(
+                gl_spirv, "GL_SHADER_BINARY_FORMAT_SPIR_V_ARB", None
+            )
+        if binary_format is None:
+            raise _OpenGLSPIRVUnavailable(
+                "OpenGL SPIR-V shader binary format token is unavailable.",
+                details={
+                    "reasonKind": "opengl-spirv-token-unavailable",
+                    "requiredExtension": "GL_ARB_gl_spirv",
+                    "missingTokens": ["GL_SHADER_BINARY_FORMAT_SPIR_V"],
+                },
+            )
+        return _OpenGLSPIRVAPI(
+            gl=gl,
+            specialize_shader=specialize_shader,
+            specialize_entry_point=str(specialize_entry_point),
+            binary_format=int(binary_format),
+        )
+
+    def _create_spirv_shader(
+        self,
+        api: _OpenGLSPIRVAPI,
+        binary: bytes,
+        specializations: Sequence[_PreparedOpenGLSpecialization],
+        *,
+        entry_point: str,
+    ) -> _OpenGLSPIRVComputeShader:
+        gl = api.gl
+        shader = 0
+        program = 0
+        try:
+            shader = int(gl.glCreateShader(gl.GL_COMPUTE_SHADER))
+            if not shader:
+                raise _opengl_setup_error(
+                    "OpenGL could not create a compute shader for SPIR-V.",
+                    "spirv-shader-creation-failed",
+                )
+            shader_handles = (ctypes.c_uint * 1)(shader)
+            binary_buffer = (ctypes.c_ubyte * len(binary)).from_buffer_copy(binary)
+            try:
+                gl.glShaderBinary(
+                    1,
+                    shader_handles,
+                    api.binary_format,
+                    binary_buffer,
+                    len(binary),
+                )
+            except Exception as exc:
+                raise _opengl_setup_error(
+                    f"OpenGL SPIR-V shader binary loading failed: {exc}",
+                    "spirv-shader-binary-load-failed",
+                ) from exc
+
+            constant_ids = (ctypes.c_uint * len(specializations))(
+                *(item.constant_id for item in specializations)
+            )
+            constant_values = (ctypes.c_uint * len(specializations))(
+                *(item.encoded_word for item in specializations)
+            )
+            try:
+                api.specialize_shader(
+                    shader,
+                    entry_point.encode("utf-8"),
+                    len(specializations),
+                    constant_ids if specializations else None,
+                    constant_values if specializations else None,
+                )
+            except Exception as exc:
+                raise _opengl_setup_error(
+                    f"OpenGL SPIR-V shader specialization failed: {exc}",
+                    "shader-specialization-failed",
+                    entryPoint=entry_point,
+                    specializationConstants=[
+                        item.to_json() for item in specializations
+                    ],
+                ) from exc
+            if not _opengl_status(gl.glGetShaderiv(shader, gl.GL_COMPILE_STATUS)):
+                raise _opengl_setup_error(
+                    "OpenGL SPIR-V shader specialization failed: "
+                    + _opengl_info_log(gl.glGetShaderInfoLog(shader)),
+                    "shader-specialization-failed",
+                    entryPoint=entry_point,
+                    specializationConstants=[
+                        item.to_json() for item in specializations
+                    ],
+                )
+
+            program = int(gl.glCreateProgram())
+            if not program:
+                raise _opengl_setup_error(
+                    "OpenGL could not create a program for specialized SPIR-V.",
+                    "spirv-program-creation-failed",
+                )
+            gl.glAttachShader(program, shader)
+            gl.glLinkProgram(program)
+            if not _opengl_status(gl.glGetProgramiv(program, gl.GL_LINK_STATUS)):
+                raise _opengl_setup_error(
+                    "OpenGL specialized SPIR-V program linking failed: "
+                    + _opengl_info_log(gl.glGetProgramInfoLog(program)),
+                    "spirv-program-linking-failed",
+                    entryPoint=entry_point,
+                )
+            return _OpenGLSPIRVComputeShader(
+                api,
+                shader=shader,
+                program=program,
+            )
+        except Exception:
+            if program:
+                try:
+                    gl.glDeleteProgram(program)
+                except Exception:
+                    pass
+            if shader:
+                try:
+                    gl.glDeleteShader(shader)
+                except Exception:
+                    pass
+            raise
+
+    def _record_specialization_application(
+        self,
+        state: Any,
+        specializations: Sequence[_PreparedOpenGLSpecialization],
+        *,
+        uniform_count: int,
+        entry_point: str,
+        api: _OpenGLSPIRVAPI,
+    ) -> None:
+        if state is None:
+            return
+        details = {
+            "mode": "spirv-specialization",
+            "entryPoint": entry_point,
+            "specializationEntryPoint": api.specialize_entry_point,
+            "appliedConstantCount": len(specializations),
+            "uniformConstantCount": uniform_count,
+            "appliedConstants": [item.to_json() for item in specializations],
+        }
+        state_details = getattr(state, "details", None)
+        if isinstance(state_details, dict):
+            state_details["openglSpecialization"] = details
+        record_step = getattr(state, "record_step", None)
+        if callable(record_step):
+            record_step(
+                "specialize",
+                "specialize-opengl-spirv",
+                details={
+                    "target": "opengl",
+                    "entryPoint": entry_point,
+                    "specializationEntryPoint": api.specialize_entry_point,
+                    "appliedConstantIds": [
+                        item.constant_id for item in specializations
+                    ],
+                    "appliedConstantCount": len(specializations),
+                    "uniformConstantCount": uniform_count,
+                },
+            )
+
     def _create_context(self, moderngl: Any) -> tuple[Any, str | None]:
         if self._context_factory is not None:
             return self._context_factory(moderngl), None
@@ -748,8 +1217,8 @@ class OpenGLComputeRuntime:
             + ")."
         )
 
-    def _shader_source(self, request: NativeRuntimeDispatchRequest) -> str:
-        if isinstance(request.loaded_artifact, str):
+    def _shader_artifact(self, request: NativeRuntimeDispatchRequest) -> str | bytes:
+        if isinstance(request.loaded_artifact, (str, bytes)):
             return request.loaded_artifact
         return self.load_artifact(None, None, request.module_path)
 
@@ -780,6 +1249,10 @@ class OpenGLComputeRuntime:
                         "constant": name,
                     },
                 )
+            set_uniform = getattr(shader, "set_uniform", None)
+            if callable(set_uniform):
+                set_uniform(name, binding)
+                continue
             try:
                 uniform = shader[name]
             except (KeyError, TypeError) as exc:
@@ -816,7 +1289,20 @@ class OpenGLComputeRuntime:
         for prepared, buffer in resources:
             if prepared.source != "expectedOutput":
                 continue
-            payload = buffer.read(size=prepared.size)
+            payload = bytes(buffer.read(size=prepared.size))
+            if len(payload) != prepared.size:
+                raise RuntimeAdapterDispatchError(
+                    f"OpenGL output readback for {prepared.name!r} returned "
+                    f"{len(payload)} bytes; expected {prepared.size}.",
+                    details={
+                        "target": "opengl",
+                        "runtime": self.name,
+                        "reasonKind": "readback-size-mismatch",
+                        "resource": prepared.name,
+                        "expectedByteLength": prepared.size,
+                        "actualByteLength": len(payload),
+                    },
+                )
             outputs[prepared.output_name or prepared.name] = {
                 "dtype": prepared.dtype,
                 "shape": list(prepared.shape),
@@ -1955,6 +2441,335 @@ def _align_to(value: int, alignment: int) -> int:
     return max(alignment, ((value + alignment - 1) // alignment) * alignment)
 
 
+_OPENGL_SPECIALIZATION_KINDS = frozenset(
+    ("specialization-constant", "function-constant")
+)
+_OPENGL_SPECIALIZATION_TYPE_ALIASES = {
+    "bool": "bool",
+    "boolean": "bool",
+    "int": "int32",
+    "i32": "int32",
+    "int32": "int32",
+    "int32_t": "int32",
+    "uint": "uint32",
+    "u32": "uint32",
+    "uint32": "uint32",
+    "uint32_t": "uint32",
+    "float": "float32",
+    "f32": "float32",
+    "float32": "float32",
+    "float32_t": "float32",
+}
+
+
+def _opengl_constant_is_specialization(binding: Any) -> bool:
+    kind = str(binding.constant.kind or "").strip().lower().replace("_", "-")
+    return kind in _OPENGL_SPECIALIZATION_KINDS
+
+
+def _opengl_request_requires_specialization(request: RuntimeExecutionRequest) -> bool:
+    return any(
+        str(constant.kind or "").strip().lower().replace("_", "-")
+        in _OPENGL_SPECIALIZATION_KINDS
+        for constant in request.adapter_contract.specialization_constants
+    )
+
+
+def _partition_opengl_constants(
+    bindings: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    specializations: dict[str, Any] = {}
+    uniforms: dict[str, Any] = {}
+    for name, binding in bindings.items():
+        target = (
+            specializations if _opengl_constant_is_specialization(binding) else uniforms
+        )
+        target[name] = binding
+    return specializations, uniforms
+
+
+def _prepare_opengl_specializations(
+    bindings: Mapping[str, Any],
+) -> tuple[_PreparedOpenGLSpecialization, ...]:
+    prepared: list[_PreparedOpenGLSpecialization] = []
+    seen_ids: dict[int, str] = {}
+    for name, binding in bindings.items():
+        constant_id = binding.constant.constant_id
+        if not isinstance(constant_id, int) or isinstance(constant_id, bool):
+            raise _opengl_setup_error(
+                f"OpenGL specialization constant {name!r} requires a numeric id.",
+                "specialization-id-invalid",
+                constant=name,
+                constantId=constant_id,
+            )
+        if constant_id < 0 or constant_id > 0xFFFFFFFF:
+            raise _opengl_setup_error(
+                f"OpenGL specialization constant {name!r} id is outside uint32 range.",
+                "specialization-id-out-of-range",
+                constant=name,
+                constantId=constant_id,
+            )
+        previous = seen_ids.get(constant_id)
+        if previous is not None:
+            raise _opengl_setup_error(
+                f"OpenGL specialization constant id {constant_id} is duplicated by "
+                f"{previous!r} and {name!r}.",
+                "specialization-id-duplicate",
+                constantId=constant_id,
+                constants=[previous, name],
+            )
+        seen_ids[constant_id] = name
+
+        if binding.value is None:
+            if binding.constant.required:
+                raise _opengl_setup_error(
+                    f"OpenGL specialization constant {name!r} has no bound value.",
+                    "specialization-value-missing",
+                    constant=name,
+                    constantId=constant_id,
+                    dtype=binding.constant.dtype,
+                )
+            continue
+        dtype = _normalize_opengl_specialization_dtype(name, binding.constant.dtype)
+        value, encoded_word = _encode_opengl_specialization_value(
+            name,
+            constant_id,
+            dtype,
+            binding.value,
+        )
+        provenance = dict(binding.constant.value_provenance)
+        if binding.source is not None:
+            provenance.setdefault("bindingSource", binding.source)
+        prepared.append(
+            _PreparedOpenGLSpecialization(
+                name=name,
+                constant_id=constant_id,
+                dtype=dtype,
+                value=value,
+                encoded_word=encoded_word,
+                source=binding.source,
+                value_provenance=provenance,
+            )
+        )
+    return tuple(sorted(prepared, key=lambda item: (item.constant_id, item.name)))
+
+
+def _normalize_opengl_specialization_dtype(name: str, dtype: Any) -> str:
+    normalized = re.sub(r"\s+", "", str(dtype or "")).lower()
+    resolved = _OPENGL_SPECIALIZATION_TYPE_ALIASES.get(normalized)
+    if resolved is not None:
+        return resolved
+    if re.search(r"(?:8|16|64)|double|half", normalized):
+        reason_kind = "specialization-width-unsupported"
+        message = (
+            f"OpenGL specialization constant {name!r} uses unsupported scalar "
+            f"width {dtype!r}; only bool and 32-bit scalar values are supported."
+        )
+    else:
+        reason_kind = "specialization-type-unsupported"
+        message = (
+            f"OpenGL specialization constant {name!r} requires a bool, int32, "
+            f"uint32, or float32 scalar type, not {dtype!r}."
+        )
+    raise _opengl_setup_error(
+        message,
+        reason_kind,
+        constant=name,
+        dtype=dtype,
+        supportedTypes=["bool", "int32", "uint32", "float32"],
+    )
+
+
+def _encode_opengl_specialization_value(
+    name: str,
+    constant_id: int,
+    dtype: str,
+    value: Any,
+) -> tuple[Any, int]:
+    details = {
+        "constant": name,
+        "constantId": constant_id,
+        "dtype": dtype,
+        "valueType": type(value).__name__,
+    }
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        details["value"] = value
+    if dtype == "bool":
+        if not isinstance(value, bool):
+            raise _opengl_setup_error(
+                f"OpenGL bool specialization constant {name!r} requires a bool value.",
+                "specialization-value-type-invalid",
+                **details,
+            )
+        return value, int(value)
+    if dtype in {"int32", "uint32"}:
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise _opengl_setup_error(
+                f"OpenGL {dtype} specialization constant {name!r} requires an integer value.",
+                "specialization-value-type-invalid",
+                **details,
+            )
+        minimum, maximum = (
+            (-0x80000000, 0x7FFFFFFF) if dtype == "int32" else (0, 0xFFFFFFFF)
+        )
+        if value < minimum or value > maximum:
+            raise _opengl_setup_error(
+                f"OpenGL {dtype} specialization constant {name!r} is out of range.",
+                "specialization-value-out-of-range",
+                minimum=minimum,
+                maximum=maximum,
+                **details,
+            )
+        if dtype == "int32":
+            encoded = struct.unpack("<I", struct.pack("<i", value))[0]
+        else:
+            encoded = value
+        return value, encoded
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise _opengl_setup_error(
+            f"OpenGL float32 specialization constant {name!r} requires a numeric value.",
+            "specialization-value-type-invalid",
+            **details,
+        )
+    try:
+        normalized_value = float(value)
+    except (OverflowError, ValueError) as exc:
+        raise _opengl_setup_error(
+            f"OpenGL float32 specialization constant {name!r} is out of range.",
+            "specialization-value-out-of-range",
+            **details,
+        ) from exc
+    if not math.isfinite(normalized_value):
+        raise _opengl_setup_error(
+            f"OpenGL float32 specialization constant {name!r} must be finite.",
+            "specialization-value-invalid",
+            **details,
+        )
+    try:
+        encoded = struct.unpack("<I", struct.pack("<f", normalized_value))[0]
+    except (OverflowError, struct.error) as exc:
+        raise _opengl_setup_error(
+            f"OpenGL float32 specialization constant {name!r} is out of range.",
+            "specialization-value-out-of-range",
+            **details,
+        ) from exc
+    return normalized_value, encoded
+
+
+def _prepare_opengl_uniform_values(name: str, binding: Any) -> tuple[list[Any], str]:
+    values = _flatten_values(binding.value)
+    if not 1 <= len(values) <= 4:
+        raise _opengl_setup_error(
+            f"OpenGL runtime uniform {name!r} requires one to four scalar values.",
+            "uniform-value-shape-unsupported",
+            constant=name,
+            valueCount=len(values),
+        )
+    normalized = re.sub(r"\s+", "", str(binding.constant.dtype or "")).lower()
+    dtype = _OPENGL_SPECIALIZATION_TYPE_ALIASES.get(normalized)
+    if dtype is None:
+        raise _opengl_setup_error(
+            f"OpenGL runtime uniform {name!r} has unsupported dtype "
+            f"{binding.constant.dtype!r}.",
+            "uniform-type-unsupported",
+            constant=name,
+            dtype=binding.constant.dtype,
+        )
+    if dtype == "bool":
+        if any(not isinstance(value, bool) for value in values):
+            raise _opengl_setup_error(
+                f"OpenGL bool uniform {name!r} requires bool values.",
+                "uniform-value-type-invalid",
+                constant=name,
+                dtype=dtype,
+            )
+        return [int(value) for value in values], "i"
+    if dtype in {"int32", "uint32"}:
+        if any(
+            not isinstance(value, int) or isinstance(value, bool) for value in values
+        ):
+            raise _opengl_setup_error(
+                f"OpenGL {dtype} uniform {name!r} requires integer values.",
+                "uniform-value-type-invalid",
+                constant=name,
+                dtype=dtype,
+            )
+        minimum, maximum = (
+            (-0x80000000, 0x7FFFFFFF) if dtype == "int32" else (0, 0xFFFFFFFF)
+        )
+        if any(value < minimum or value > maximum for value in values):
+            raise _opengl_setup_error(
+                f"OpenGL {dtype} uniform {name!r} is out of range.",
+                "uniform-value-out-of-range",
+                constant=name,
+                dtype=dtype,
+                minimum=minimum,
+                maximum=maximum,
+            )
+        return values, "i" if dtype == "int32" else "ui"
+    if any(
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or not math.isfinite(float(value))
+        for value in values
+    ):
+        raise _opengl_setup_error(
+            f"OpenGL float32 uniform {name!r} requires finite numeric values.",
+            "uniform-value-type-invalid",
+            constant=name,
+            dtype=dtype,
+        )
+    return [float(value) for value in values], "f"
+
+
+def _opengl_entry_point_available(function: Any) -> bool:
+    if not callable(function):
+        return False
+    try:
+        return bool(function)
+    except Exception:
+        return False
+
+
+def _opengl_context_version_code(context: Any) -> int:
+    try:
+        return int(getattr(context, "version_code", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _opengl_status(value: Any) -> bool:
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        value = value[0] if value else 0
+    try:
+        return bool(int(value))
+    except (TypeError, ValueError):
+        return bool(value)
+
+
+def _opengl_info_log(value: Any) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace").strip()
+    text = str(value or "").strip()
+    return text or "no driver log was provided"
+
+
+def _opengl_setup_error(
+    message: str,
+    reason_kind: str,
+    **details: Any,
+) -> RuntimeAdapterSetupError:
+    return RuntimeAdapterSetupError(
+        message,
+        details={
+            "target": "opengl",
+            "runtime": OpenGLComputeRuntime.name,
+            "reasonKind": reason_kind,
+            **details,
+        },
+    )
+
+
 def _release_opengl_object(value: Any) -> None:
     if value is None:
         return
@@ -2069,6 +2884,28 @@ def _prepare_opengl_buffers(
         namespace = (
             "uniform" if resource.kind in {"constant-buffer", "uniform"} else "storage"
         )
+        if binding.source == "expectedOutput" and namespace == "uniform":
+            raise _opengl_setup_error(
+                f"OpenGL uniform buffer {name!r} cannot be a runtime output resource.",
+                "unsupported-output-resource",
+                resource=name,
+                resourceKind=resource.kind,
+                binding=binding_index,
+            )
+        access = str(resource.access or "").strip().lower().replace("-", "_")
+        if binding.source == "expectedOutput" and access in {
+            "read",
+            "read_only",
+            "readonly",
+        }:
+            raise _opengl_setup_error(
+                f"OpenGL output resource {name!r} is reflected as read-only.",
+                "resource-access-mismatch",
+                resource=name,
+                resourceKind=resource.kind,
+                access=resource.access,
+                binding=binding_index,
+            )
         descriptor = (namespace, binding_index)
         if descriptor in seen_bindings:
             raise RuntimeExecutorUnavailable(

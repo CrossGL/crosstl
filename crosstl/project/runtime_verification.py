@@ -1532,8 +1532,48 @@ class OpenGLRuntimeParityAdapter(NativeRuntimeParityAdapter):
         *,
         temp_dir: Path,
     ) -> tuple[NativeRuntimeValidationCommand, ...]:
-        _ = temp_dir
         stage = _native_glsl_stage(state, artifact_path)
+        if _opengl_runtime_specialization_bindings(state):
+            if stage != "comp":
+                raise RuntimeAdapterSetupError(
+                    "OpenGL SPIR-V specialization runtime supports compute artifacts only.",
+                    details={
+                        "target": self.target,
+                        "artifactPath": str(artifact_path),
+                        "stage": stage,
+                        "reasonKind": "specialization-stage-unsupported",
+                    },
+                )
+            entry_point = _native_entry_point_name(state) or "main"
+            if entry_point != "main":
+                raise RuntimeAdapterSetupError(
+                    "OpenGL specialization runtime artifacts must expose their selected entry point as main.",
+                    details={
+                        "target": self.target,
+                        "artifactPath": str(artifact_path),
+                        "entryPoint": entry_point,
+                        "reasonKind": "specialization-entry-point-unsupported",
+                    },
+                )
+            output_path = temp_dir / f"{artifact_path.stem}.spv"
+            return (
+                NativeRuntimeValidationCommand(
+                    command=(
+                        self._tool_command("glslangValidator"),
+                        "--target-env",
+                        "opengl",
+                        "-S",
+                        stage,
+                        "-e",
+                        entry_point,
+                        "-o",
+                        str(output_path),
+                        str(artifact_path),
+                    ),
+                    action="compile-glsl-to-opengl-spirv-for-runtime",
+                    module_path=output_path,
+                ),
+            )
         return (
             NativeRuntimeValidationCommand(
                 command=(
@@ -1545,6 +1585,41 @@ class OpenGLRuntimeParityAdapter(NativeRuntimeParityAdapter):
                 action="validate-glsl-for-opengl-runtime",
             ),
         )
+
+    def _prepare_dispatch_request(
+        self, state: RuntimeExecutionState, artifact_path: Path, module_path: Path
+    ) -> NativeRuntimeDispatchRequest:
+        prepared = super()._prepare_dispatch_request(
+            state,
+            artifact_path,
+            module_path,
+        )
+        specialization_constants = {
+            name: binding
+            for name, binding in prepared.constants.items()
+            if _opengl_runtime_constant_is_specialization(binding.constant)
+        }
+        uniforms = {
+            name: binding
+            for name, binding in prepared.constants.items()
+            if not _opengl_runtime_constant_is_specialization(binding.constant)
+        }
+        details = {
+            "specializationConstantCount": len(specialization_constants),
+            "specializationConstantIds": [
+                binding.constant.constant_id
+                for _name, binding in sorted(specialization_constants.items())
+            ],
+            "uniformConstantCount": len(uniforms),
+            "uniformConstants": sorted(uniforms),
+        }
+        state.details["openglRuntimeConstants"] = details
+        state.record_step(
+            "bind",
+            "classify-opengl-runtime-constants",
+            details={"target": self.target, **details},
+        )
+        return prepared
 
 
 class VulkanRuntimeParityAdapter(NativeRuntimeParityAdapter):
@@ -3472,6 +3547,23 @@ def _native_entry_point_name(state: RuntimeExecutionState) -> str | None:
         return contract.entry_points[0].name
     entry_point = state.request.artifact.get("entryPoint")
     return entry_point if isinstance(entry_point, str) and entry_point.strip() else None
+
+
+def _opengl_runtime_constant_is_specialization(
+    constant: RuntimeSpecializationConstant,
+) -> bool:
+    kind = str(constant.kind or "").strip().lower().replace("_", "-")
+    return kind in {"specialization-constant", "function-constant"}
+
+
+def _opengl_runtime_specialization_bindings(
+    state: RuntimeExecutionState,
+) -> tuple[RuntimeBoundConstant, ...]:
+    return tuple(
+        binding
+        for binding in state.plan.constant_bindings
+        if _opengl_runtime_constant_is_specialization(binding.constant)
+    )
 
 
 def _native_hlsl_profile(state: RuntimeExecutionState) -> str:
