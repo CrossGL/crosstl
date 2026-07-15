@@ -4,7 +4,7 @@ import shutil
 import struct
 import subprocess
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -19,6 +19,7 @@ from crosstl.project.native_runtime_drivers import (
     _prepare_directx_buffers,
     _prepare_directx_constants,
     _prepare_opengl_buffers,
+    _prepare_opengl_specializations,
     _prepare_vulkan_buffers,
     _read_mapped_memory,
     _validate_directx_register_layout,
@@ -30,6 +31,8 @@ from crosstl.project.runtime_verification import (
     NativeRuntimeBufferBinding,
     NativeRuntimeConstantBinding,
     NativeRuntimeDispatchRequest,
+    OpenGLRuntimeParityAdapter,
+    RuntimeAdapterContract,
     RuntimeAdapterDispatchError,
     RuntimeAdapterSetupError,
     RuntimeArtifactSelector,
@@ -793,6 +796,196 @@ def test_directx_compute_runtime_is_exported_from_project_api():
     assert project_api.DirectXComputeRuntime is DirectXComputeRuntime
 
 
+_OPENGL_SPIRV_HEADER = struct.pack("<5I", 0x07230203, 0x00010000, 0, 1, 0)
+
+
+class _FakeOpenGLSPIRVBuffer:
+    def __init__(self, payload):
+        self.payload = bytearray(payload)
+        self.storage_binding = None
+        self.uniform_binding = None
+        self.released = False
+
+    def bind_to_storage_buffer(self, binding):
+        self.storage_binding = binding
+
+    def bind_to_uniform_block(self, binding):
+        self.uniform_binding = binding
+
+    def read(self, size):
+        return bytes(self.payload[:size])
+
+    def release(self):
+        self.released = True
+
+
+class _FakeOpenGLSPIRVContext:
+    version_code = 450
+
+    def __init__(self, *, extensions=("GL_ARB_gl_spirv",)):
+        self.extensions = set(extensions)
+        self.buffers = []
+        self.compute_shader_calls = []
+        self.barrier_called = False
+        self.finish_called = False
+        self.released = False
+
+    def compute_shader(self, source):
+        self.compute_shader_calls.append(source)
+        raise AssertionError("specialized artifacts must not use the GLSL source path")
+
+    def buffer(self, data=None, reserve=None):
+        payload = data if data is not None else b"\x00" * reserve
+        buffer = _FakeOpenGLSPIRVBuffer(payload)
+        self.buffers.append(buffer)
+        return buffer
+
+    def memory_barrier(self):
+        self.barrier_called = True
+
+    def finish(self):
+        self.finish_called = True
+
+    def release(self):
+        self.released = True
+
+
+class _FakeOpenGLSPIRVDriver:
+    GL_SHADER_BINARY_FORMAT_SPIR_V = 0x9551
+    GL_COMPUTE_SHADER = 0x91B9
+    GL_COMPILE_STATUS = 0x8B81
+    GL_LINK_STATUS = 0x8B82
+
+    def __init__(self):
+        self.shader_binary = None
+        self.specialization = None
+        self.uniform_queries = []
+        self.uniform_values = []
+        self.use_program_calls = []
+        self.dispatch_calls = []
+        self.deleted_programs = []
+        self.deleted_shaders = []
+
+    def glCreateShader(self, shader_type):
+        assert shader_type == self.GL_COMPUTE_SHADER
+        return 11
+
+    def glShaderBinary(self, count, shaders, binary_format, binary, length):
+        assert count == 1
+        assert list(shaders) == [11]
+        assert binary_format == self.GL_SHADER_BINARY_FORMAT_SPIR_V
+        self.shader_binary = bytes(binary[:length])
+
+    def glSpecializeShaderARB(
+        self,
+        shader,
+        entry_point,
+        constant_count,
+        constant_ids,
+        constant_values,
+    ):
+        self.specialization = {
+            "shader": shader,
+            "entryPoint": entry_point.decode("utf-8"),
+            "ids": list(constant_ids[:constant_count]),
+            "values": list(constant_values[:constant_count]),
+        }
+
+    def glGetShaderiv(self, shader, field):
+        assert shader == 11
+        assert field == self.GL_COMPILE_STATUS
+        return 1
+
+    def glGetShaderInfoLog(self, shader):
+        assert shader == 11
+        return b""
+
+    def glCreateProgram(self):
+        return 17
+
+    def glAttachShader(self, program, shader):
+        assert (program, shader) == (17, 11)
+
+    def glLinkProgram(self, program):
+        assert program == 17
+
+    def glGetProgramiv(self, program, field):
+        assert program == 17
+        assert field == self.GL_LINK_STATUS
+        return 1
+
+    def glGetProgramInfoLog(self, program):
+        assert program == 17
+        return b""
+
+    def glGetUniformLocation(self, program, name):
+        assert program == 17
+        self.uniform_queries.append(name)
+        return 3
+
+    def glUniform1f(self, location, value):
+        self.uniform_values.append((location, value))
+
+    def glUseProgram(self, program):
+        self.use_program_calls.append(program)
+
+    def glDispatchCompute(self, group_x, group_y, group_z):
+        self.dispatch_calls.append((group_x, group_y, group_z))
+
+    def glDeleteProgram(self, program):
+        self.deleted_programs.append(program)
+
+    def glDeleteShader(self, shader):
+        self.deleted_shaders.append(shader)
+
+
+def _opengl_specialization_binding(
+    name,
+    constant_id,
+    dtype,
+    value,
+    *,
+    required=False,
+):
+    return NativeRuntimeConstantBinding(
+        name=name,
+        constant=RuntimeSpecializationConstant(
+            name=name,
+            constant_id=constant_id,
+            kind="specialization-constant",
+            dtype=dtype,
+            required=required,
+            value_provenance={"fixture": "typed-specialization"},
+        ),
+        value=value,
+        source="value",
+    )
+
+
+def _opengl_spirv_dispatch_request(tmp_path, constants):
+    return NativeRuntimeDispatchRequest(
+        target="opengl",
+        artifact={"target": "opengl"},
+        artifact_path=tmp_path / "runtime.comp",
+        module_path=tmp_path / "runtime.spv",
+        loaded_artifact=_OPENGL_SPIRV_HEADER,
+        buffers={
+            "output_values": NativeRuntimeBufferBinding(
+                name="output_values",
+                binding=RuntimeResourceBinding(
+                    name="output_values", kind="storage-buffer", set=0, binding=0
+                ),
+                source="expectedOutput",
+                dtype="uint32",
+                shape=(1,),
+            )
+        },
+        constants=constants,
+        dispatch=RuntimeDispatchGeometry(entry_point="main", workgroup_count=(2, 1, 1)),
+        entry_point="main",
+    )
+
+
 def test_opengl_compute_runtime_reports_missing_python_binding(tmp_path):
     def missing_loader(name):
         assert name == "moderngl"
@@ -831,12 +1024,325 @@ def test_opengl_compute_runtime_probes_and_releases_headless_context(tmp_path):
     assert context.released is True
 
 
+@pytest.mark.parametrize(
+    ("version_code", "reported_version"),
+    [(0, 0), (420, 420), ("unknown", 0)],
+)
+def test_opengl_compute_runtime_rejects_unknown_or_old_context_version(
+    tmp_path, version_code, reported_version
+):
+    class FakeContext:
+        def __init__(self):
+            self.version_code = version_code
+            self.released = False
+
+        def release(self):
+            self.released = True
+
+    context = FakeContext()
+    runtime = OpenGLComputeRuntime(
+        module_loader=lambda name: object(),
+        context_factory=lambda module: context,
+    )
+
+    availability = runtime.is_available(None, _runtime_request(tmp_path))
+
+    assert availability.available is False
+    assert availability.details["reasonKind"] == "opengl-version-unsupported"
+    assert availability.details["requiredVersionCode"] == 430
+    assert availability.details["versionCode"] == reported_version
+    assert context.released is True
+
+
+def test_opengl_compute_runtime_rechecks_context_version_at_dispatch(tmp_path):
+    class FakeContext:
+        version_code = 420
+
+        def __init__(self):
+            self.released = False
+
+        def compute_shader(self, source):
+            raise AssertionError(f"unsupported context compiled shader: {source}")
+
+        def release(self):
+            self.released = True
+
+    context = FakeContext()
+    runtime = OpenGLComputeRuntime(
+        module_loader=lambda name: object(),
+        context_factory=lambda module: context,
+    )
+
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        runtime.dispatch(None, None, _opengl_dispatch_request(tmp_path))
+
+    assert excinfo.value.details["reasonKind"] == "opengl-version-unsupported"
+    assert excinfo.value.details["requiredVersionCode"] == 430
+    assert excinfo.value.details["versionCode"] == 420
+    assert context.released is True
+
+
+def test_opengl_compute_runtime_reports_missing_spirv_extension(tmp_path):
+    context = _FakeOpenGLSPIRVContext(extensions=())
+    runtime = OpenGLComputeRuntime(
+        module_loader=lambda name: object(),
+        context_factory=lambda module: context,
+    )
+    request = RuntimeExecutionRequest(
+        fixture=RuntimeFixture(
+            id="opengl-specialized",
+            selector=RuntimeArtifactSelector(target="opengl"),
+        ),
+        artifact={"target": "opengl"},
+        artifact_path=tmp_path / "runtime.comp",
+        project_root=tmp_path,
+        adapter_contract=RuntimeAdapterContract(
+            specialization_constants=(
+                RuntimeSpecializationConstant(
+                    name="mode", constant_id=7, dtype="uint32", value=2
+                ),
+            )
+        ),
+    )
+
+    availability = runtime.is_available(None, request)
+
+    assert availability.available is False
+    assert availability.details == {
+        "target": "opengl",
+        "reasonKind": "opengl-spirv-capability-unavailable",
+        "requiredExtension": "GL_ARB_gl_spirv",
+        "versionCode": 450,
+        "extensionAvailable": False,
+    }
+    assert context.released is True
+
+
+def test_opengl_compute_runtime_reports_missing_spirv_entry_points(tmp_path):
+    context = _FakeOpenGLSPIRVContext()
+    driver = _FakeOpenGLSPIRVDriver()
+    driver.glShaderBinary = None
+    modules = {
+        "moderngl": object(),
+        "OpenGL.GL": driver,
+        "OpenGL.GL.ARB.gl_spirv": SimpleNamespace(
+            glSpecializeShaderARB=driver.glSpecializeShaderARB
+        ),
+    }
+    runtime = OpenGLComputeRuntime(
+        module_loader=modules.__getitem__,
+        context_factory=lambda module: context,
+    )
+    request = RuntimeExecutionRequest(
+        fixture=RuntimeFixture(
+            id="opengl-specialized",
+            selector=RuntimeArtifactSelector(target="opengl"),
+        ),
+        artifact={"target": "opengl"},
+        artifact_path=tmp_path / "runtime.comp",
+        project_root=tmp_path,
+        adapter_contract=RuntimeAdapterContract(
+            specialization_constants=(
+                RuntimeSpecializationConstant(
+                    name="mode", constant_id=7, dtype="uint32", value=2
+                ),
+            )
+        ),
+    )
+
+    availability = runtime.is_available(None, request)
+
+    assert availability.available is False
+    assert availability.details["reasonKind"] == (
+        "opengl-spirv-entry-points-unavailable"
+    )
+    assert availability.details["missingEntryPoints"] == ["glShaderBinary"]
+    assert availability.details["requiredExtension"] == "GL_ARB_gl_spirv"
+    assert context.released is True
+
+
 def test_opengl_compute_runtime_loads_utf8_glsl(tmp_path):
     artifact_path = tmp_path / "add.comp"
     artifact_path.write_text("#version 430\nvoid main() {}\n", encoding="utf-8")
     runtime = OpenGLComputeRuntime(module_loader=lambda name: object())
 
     assert runtime.load_artifact(None, None, artifact_path).startswith("#version 430")
+
+
+def test_opengl_compute_runtime_loads_word_aligned_spirv(tmp_path):
+    artifact_path = tmp_path / "add.spv"
+    artifact_path.write_bytes(_OPENGL_SPIRV_HEADER)
+    runtime = OpenGLComputeRuntime(module_loader=lambda name: object())
+
+    assert runtime.load_artifact(None, None, artifact_path) == _OPENGL_SPIRV_HEADER
+
+
+def test_opengl_compute_runtime_rejects_truncated_spirv_header(tmp_path):
+    artifact_path = tmp_path / "truncated.spv"
+    artifact_path.write_bytes(_OPENGL_SPIRV_HEADER[:8])
+    runtime = OpenGLComputeRuntime(module_loader=lambda name: object())
+
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        runtime.load_artifact(None, None, artifact_path)
+
+    assert excinfo.value.details["reasonKind"] == "spirv-artifact-layout-invalid"
+    assert excinfo.value.details["byteLength"] == 8
+    assert excinfo.value.details["minimumByteLength"] == 20
+
+
+def test_opengl_compute_runtime_specializes_typed_values_and_binds_uniforms(
+    tmp_path,
+):
+    context = _FakeOpenGLSPIRVContext()
+    driver = _FakeOpenGLSPIRVDriver()
+    modules = {
+        "moderngl": object(),
+        "OpenGL.GL": driver,
+        "OpenGL.GL.ARB.gl_spirv": SimpleNamespace(
+            glSpecializeShaderARB=driver.glSpecializeShaderARB
+        ),
+    }
+    runtime = OpenGLComputeRuntime(
+        module_loader=modules.__getitem__,
+        context_factory=lambda module: context,
+    )
+    constants = {
+        "floating": _opengl_specialization_binding("floating", 40, "float32", 1.5),
+        "signed": _opengl_specialization_binding("signed", 20, "int32", -2),
+        "unsigned": _opengl_specialization_binding(
+            "unsigned", 30, "uint32", 0x80000000
+        ),
+        "enabled": _opengl_specialization_binding("enabled", 10, "bool", True),
+        "gain": NativeRuntimeConstantBinding(
+            name="gain",
+            constant=RuntimeSpecializationConstant(
+                name="gain", kind="uniform", dtype="float32"
+            ),
+            value=3.0,
+            source="input",
+        ),
+    }
+
+    class FakeState:
+        def __init__(self):
+            self.details = {}
+            self.steps = []
+
+        def record_step(self, phase, action, **kwargs):
+            self.steps.append((phase, action, kwargs))
+
+    state = FakeState()
+    outputs = runtime.dispatch(
+        None,
+        state,
+        _opengl_spirv_dispatch_request(tmp_path, constants),
+    )
+
+    assert outputs == {
+        "output_values": {"dtype": "uint32", "shape": [1], "values": [0]}
+    }
+    assert driver.shader_binary == _OPENGL_SPIRV_HEADER
+    assert driver.specialization == {
+        "shader": 11,
+        "entryPoint": "main",
+        "ids": [10, 20, 30, 40],
+        "values": [
+            1,
+            0xFFFFFFFE,
+            0x80000000,
+            struct.unpack("<I", struct.pack("<f", 1.5))[0],
+        ],
+    }
+    assert driver.uniform_queries == ["gain"]
+    assert driver.uniform_values == [(3, 3.0)]
+    assert driver.dispatch_calls == [(2, 1, 1)]
+    assert context.compute_shader_calls == []
+    assert context.barrier_called is True
+    assert context.finish_called is True
+    assert context.released is True
+    assert all(buffer.released for buffer in context.buffers)
+    assert driver.deleted_programs == [17]
+    assert driver.deleted_shaders == [11]
+    report = state.details["openglSpecialization"]
+    assert report["specializationEntryPoint"] == "glSpecializeShaderARB"
+    assert report["uniformConstantCount"] == 1
+    assert [item["id"] for item in report["appliedConstants"]] == [10, 20, 30, 40]
+    assert report["appliedConstants"][0]["valueProvenance"] == {
+        "fixture": "typed-specialization",
+        "bindingSource": "value",
+    }
+    assert state.steps[0][0:2] == (
+        "specialize",
+        "specialize-opengl-spirv",
+    )
+
+
+@pytest.mark.parametrize(
+    ("constant_id", "dtype", "value", "reason_kind"),
+    [
+        ("7", "uint32", 1, "specialization-id-invalid"),
+        (7, "int64", 1, "specialization-width-unsupported"),
+        (7, "vec2", [1.0, 2.0], "specialization-type-unsupported"),
+        (7, "bool", 1, "specialization-value-type-invalid"),
+        (7, "uint32", -1, "specialization-value-out-of-range"),
+        (7, "float32", "1.0", "specialization-value-type-invalid"),
+        pytest.param(
+            7,
+            "float32",
+            1 << 4096,
+            "specialization-value-out-of-range",
+            id="float32-overflowing-integer",
+        ),
+    ],
+)
+def test_prepare_opengl_specializations_rejects_invalid_ids_types_and_values(
+    constant_id,
+    dtype,
+    value,
+    reason_kind,
+):
+    binding = _opengl_specialization_binding(
+        "invalid",
+        constant_id,
+        dtype,
+        value,
+    )
+
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        _prepare_opengl_specializations({"invalid": binding})
+
+    assert excinfo.value.details["reasonKind"] == reason_kind
+    assert excinfo.value.details["constant"] == "invalid"
+
+
+def test_prepare_opengl_specializations_rejects_duplicate_ids():
+    bindings = {
+        "first": _opengl_specialization_binding("first", 7, "int32", 1),
+        "second": _opengl_specialization_binding("second", 7, "uint32", 2),
+    }
+
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        _prepare_opengl_specializations(bindings)
+
+    assert excinfo.value.details["reasonKind"] == "specialization-id-duplicate"
+    assert excinfo.value.details["constantId"] == 7
+    assert excinfo.value.details["constants"] == ["first", "second"]
+
+
+def test_prepare_opengl_specializations_rejects_missing_required_value():
+    binding = _opengl_specialization_binding(
+        "required_mode",
+        7,
+        "uint32",
+        None,
+        required=True,
+    )
+
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        _prepare_opengl_specializations({"required_mode": binding})
+
+    assert excinfo.value.details["reasonKind"] == "specialization-value-missing"
+    assert excinfo.value.details["constantId"] == 7
 
 
 def test_prepare_opengl_buffers_packs_storage_and_uniform_buffers():
@@ -893,6 +1399,36 @@ def test_prepare_opengl_buffers_packs_storage_and_uniform_buffers():
     assert buffers[1].payload == b"\x00" * 8
     assert buffers[1].output_name == "result"
     assert buffers[2].payload == b"\x03\x00\x00\x00"
+
+
+@pytest.mark.parametrize(
+    ("kind", "access", "reason_kind"),
+    [
+        ("constant-buffer", "write", "unsupported-output-resource"),
+        ("storage-buffer", "read", "resource-access-mismatch"),
+    ],
+)
+def test_prepare_opengl_buffers_rejects_unwritable_outputs(kind, access, reason_kind):
+    binding = NativeRuntimeBufferBinding(
+        name="out",
+        binding=RuntimeResourceBinding(
+            name="out",
+            kind=kind,
+            set=0,
+            binding=0,
+            access=access,
+        ),
+        source="expectedOutput",
+        dtype="uint32",
+        shape=(1,),
+    )
+
+    with pytest.raises(RuntimeAdapterSetupError) as excinfo:
+        _prepare_opengl_buffers({"out": binding})
+
+    assert excinfo.value.details["reasonKind"] == reason_kind
+    assert excinfo.value.details["resource"] == "out"
+    assert excinfo.value.details["binding"] == 0
 
 
 def test_opengl_compute_runtime_dispatches_and_reads_storage_buffer(tmp_path):
@@ -969,8 +1505,14 @@ def test_opengl_compute_runtime_dispatches_and_reads_storage_buffer(tmp_path):
             self.released = True
 
     context = FakeContext()
+    loaded_modules = []
+
+    def load_module(name):
+        loaded_modules.append(name)
+        return object()
+
     runtime = OpenGLComputeRuntime(
-        module_loader=lambda name: object(),
+        module_loader=load_module,
         context_factory=lambda module: context,
     )
     request = NativeRuntimeDispatchRequest(
@@ -1027,6 +1569,7 @@ def test_opengl_compute_runtime_dispatches_and_reads_storage_buffer(tmp_path):
     assert all(buffer.released for buffer in context.buffers)
     assert context.shader.released is True
     assert context.released is True
+    assert loaded_modules == ["moderngl"]
 
 
 def test_opengl_compute_runtime_releases_buffer_when_binding_fails(tmp_path):
@@ -1049,6 +1592,8 @@ def test_opengl_compute_runtime_releases_buffer_when_binding_fails(tmp_path):
             self.released = True
 
     class FakeContext:
+        version_code = 460
+
         def __init__(self):
             self.buffer_resource = FailingBuffer()
             self.shader = FakeShader()
@@ -1103,6 +1648,8 @@ def test_opengl_compute_runtime_reports_synchronization_failure(tmp_path):
             self.released = True
 
     class FakeContext:
+        version_code = 460
+
         def __init__(self):
             self.buffer_resource = FakeBuffer()
             self.shader = FakeShader()
@@ -1132,6 +1679,75 @@ def test_opengl_compute_runtime_reports_synchronization_failure(tmp_path):
         runtime.dispatch(None, None, _opengl_dispatch_request(tmp_path))
 
     assert excinfo.value.details["reasonKind"] == "synchronization-failed"
+    assert context.buffer_resource.released is True
+    assert context.shader.released is True
+    assert context.released is True
+
+
+def test_opengl_compute_runtime_rejects_short_output_readback(tmp_path):
+    class FakeBuffer:
+        def __init__(self):
+            self.released = False
+
+        def bind_to_storage_buffer(self, binding):
+            _ = binding
+
+        def read(self, size):
+            assert size == 4
+            return b"\x00\x00"
+
+        def release(self):
+            self.released = True
+
+    class FakeShader:
+        def __init__(self):
+            self.released = False
+
+        def run(self, **kwargs):
+            _ = kwargs
+
+        def release(self):
+            self.released = True
+
+    class FakeContext:
+        version_code = 460
+
+        def __init__(self):
+            self.buffer_resource = FakeBuffer()
+            self.shader = FakeShader()
+            self.released = False
+
+        def compute_shader(self, source):
+            _ = source
+            return self.shader
+
+        def buffer(self, data=None, reserve=None):
+            _ = data, reserve
+            return self.buffer_resource
+
+        def memory_barrier(self):
+            pass
+
+        def release(self):
+            self.released = True
+
+    context = FakeContext()
+    runtime = OpenGLComputeRuntime(
+        module_loader=lambda name: object(),
+        context_factory=lambda module: context,
+    )
+
+    with pytest.raises(RuntimeAdapterDispatchError) as excinfo:
+        runtime.dispatch(None, None, _opengl_dispatch_request(tmp_path))
+
+    assert excinfo.value.details == {
+        "target": "opengl",
+        "runtime": "opengl-compute-runtime",
+        "reasonKind": "readback-size-mismatch",
+        "resource": "output_values",
+        "expectedByteLength": 4,
+        "actualByteLength": 2,
+    }
     assert context.buffer_resource.released is True
     assert context.shader.released is True
     assert context.released is True
@@ -1214,6 +1830,164 @@ shader OpenGLRuntimeScale {
             "values": [3.0, -4.0, 8.0],
         }
     }
+
+
+def test_opengl_compute_runtime_specializes_generated_spirv_on_device(tmp_path):
+    if os.environ.get("CROSTL_RUN_OPENGL_SPIRV_DEVICE_TEST") != "1":
+        pytest.skip(
+            "set CROSTL_RUN_OPENGL_SPIRV_DEVICE_TEST=1 to run OpenGL SPIR-V test"
+        )
+    try:
+        __import__("moderngl")
+        __import__("OpenGL.GL")
+    except ImportError as exc:
+        pytest.fail(f"OpenGL SPIR-V device test dependency is unavailable: {exc}")
+    if shutil.which("glslangValidator") is None:
+        pytest.fail("glslangValidator is required for the OpenGL SPIR-V device test")
+
+    source_code = """
+    shader OpenGLRuntimeSpecialization {
+        constant uint selected_value @function_constant(7) = 1u;
+        RWStructuredBuffer<uint> output_values @ binding(0);
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                buffer_store(output_values, tid.x, selected_value + tid.x);
+            }
+        }
+    }
+    """
+    generated = GLSLCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+    artifact_path = tmp_path / "out" / "opengl" / "specialized.glsl"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text(generated, encoding="utf-8")
+
+    artifact_report = {
+        "kind": "crosstl-project-portability-report",
+        "project": {"root": str(tmp_path), "targets": ["opengl"]},
+        "artifacts": [
+            {
+                "source": "kernels/specialized.cgl",
+                "path": "out/opengl/specialized.glsl",
+                "target": "opengl",
+                "status": "translated",
+                "entryPoints": [
+                    {
+                        "name": "main",
+                        "stage": "compute",
+                        "workgroupSize": [1, 1, 1],
+                    }
+                ],
+                "resourceBindings": [
+                    {
+                        "name": "output_values",
+                        "kind": "storage-buffer",
+                        "set": 0,
+                        "binding": 0,
+                        "access": "read_write",
+                    }
+                ],
+                "specializationConstants": [
+                    {
+                        "name": "selected_value",
+                        "id": 7,
+                        "kind": "specialization-constant",
+                        "dtype": "uint32",
+                        "default": 1,
+                    }
+                ],
+                "dispatch": {"entryPoint": "main", "globalSize": [3, 1, 1]},
+            }
+        ],
+    }
+    manifest = {
+        "kind": "crosstl-project-runtime-test-manifest",
+        "adapters": [
+            {
+                "id": "opengl-native",
+                "executor": "opengl",
+                "adapterKind": "opengl-native-runtime",
+                "platformRequirements": {"requiredTools": []},
+            }
+        ],
+        "tests": [
+            {
+                "id": f"opengl-specialized-{value}",
+                "selector": {
+                    "source": "kernels/specialized.cgl",
+                    "target": "opengl",
+                },
+                "adapter": "opengl-native",
+                "entryPoint": "main",
+                "expectedOutputs": [
+                    {
+                        "name": "output_values",
+                        "kind": "buffer",
+                        "dtype": "uint32",
+                        "shape": [3],
+                        "values": [value, value + 1, value + 2],
+                    }
+                ],
+                "runtimeAdapter": {
+                    "specializationConstants": [
+                        {
+                            "name": "selected_value",
+                            "id": 7,
+                            "kind": "specialization-constant",
+                            "dtype": "uint32",
+                            "value": value,
+                            "valueProvenance": {
+                                "fixture": f"opengl-specialized-{value}",
+                                "selection": "explicit",
+                            },
+                        }
+                    ],
+                    "dispatch": {"globalSize": [3, 1, 1]},
+                },
+            }
+            for value in (2, 9)
+        ],
+    }
+    adapter = OpenGLRuntimeParityAdapter(
+        runtime=OpenGLComputeRuntime(context_backends=("egl",))
+    )
+
+    report = verify_runtime_test_manifest(
+        artifact_report,
+        manifest,
+        executors={"opengl": adapter},
+    )
+
+    assert report["success"] is True, json.dumps(report, indent=2)
+    assert report["summary"]["passedCount"] == 2, json.dumps(report, indent=2)
+    assert report["summary"]["skippedCount"] == 0, json.dumps(report, indent=2)
+    assert report["summary"]["unavailableCount"] == 0, json.dumps(report, indent=2)
+    assert report["summary"]["failedCount"] == 0, json.dumps(report, indent=2)
+    assert [result["status"] for result in report["results"]] == [
+        "passed",
+        "passed",
+    ], json.dumps(report, indent=2)
+    for result, value in zip(report["results"], (2, 9)):
+        details = result["executor"]["details"]
+        specialization = details["openglSpecialization"]
+        assert specialization["mode"] == "spirv-specialization"
+        assert specialization["appliedConstantCount"] == 1
+        assert specialization["appliedConstants"] == [
+            {
+                "name": "selected_value",
+                "id": 7,
+                "dtype": "uint32",
+                "value": value,
+                "valueProvenance": {
+                    "fixture": f"opengl-specialized-{value}",
+                    "selection": "explicit",
+                    "bindingSource": "value",
+                },
+                "source": "value",
+            }
+        ]
 
 
 def test_vulkan_compute_runtime_reports_missing_python_binding(tmp_path):

@@ -1887,6 +1887,126 @@ def test_runtime_parity_native_adapter_reports_unavailable_tooling(tmp_path):
     assert result["executor"]["details"]["missingTools"] == [missing_tool]
 
 
+def test_runtime_parity_native_opengl_adapter_compiles_specialization_to_spirv(
+    tmp_path,
+):
+    artifact_path = tmp_path / "out" / "opengl" / "debug" / "add.glsl"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text(
+        "#version 450\nlayout(constant_id = 0) const uint tile_size = 1u;\n"
+        "void main() {}\n",
+        encoding="utf-8",
+    )
+    calls = []
+
+    def passing_command(command, *, input_text=None):
+        assert input_text is None
+        calls.append(command)
+        output_path = Path(command[command.index("-o") + 1])
+        output_path.write_bytes(b"\x03\x02#\x07\x00\x00\x00\x00")
+        return {"returncode": 0}
+
+    runtime = FakeNativeRuntime()
+    adapter = OpenGLRuntimeParityAdapter(
+        runtime=runtime,
+        required_tools=(),
+        tool_resolver=lambda tool: f"/fake/{tool}",
+        command_runner=passing_command,
+    )
+
+    report = verify_runtime_test_manifest(
+        _artifact_report(tmp_path, [_native_runtime_artifact()]),
+        _native_runtime_manifest(),
+        executors={"opengl": adapter},
+    )
+
+    result = report["results"][0]
+    assert result["status"] == PASSED
+    assert calls[0][:7] == (
+        "/fake/glslangValidator",
+        "--target-env",
+        "opengl",
+        "-S",
+        "comp",
+        "-e",
+        "main",
+    )
+    assert calls[0][-3] == "-o"
+    assert calls[0][-1] == str(artifact_path.resolve())
+    assert runtime.prepared.module_path.suffix == ".spv"
+    details = result["executor"]["details"]
+    assert details["nativeRuntimeDispatch"]["modulePath"].endswith(".spv")
+    assert details["openglRuntimeConstants"] == {
+        "specializationConstantCount": 1,
+        "specializationConstantIds": [0],
+        "uniformConstantCount": 0,
+        "uniformConstants": [],
+    }
+    assert any(
+        step["action"] == "compile-glsl-to-opengl-spirv-for-runtime"
+        for step in details["adapterSteps"]
+    )
+
+
+def test_runtime_parity_native_opengl_adapter_preserves_uniform_source_path(
+    tmp_path,
+):
+    artifact_path = tmp_path / "out" / "opengl" / "debug" / "add.glsl"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text(
+        "#version 450\nuniform uint tile_size;\nvoid main() {}\n",
+        encoding="utf-8",
+    )
+    calls = []
+
+    def passing_command(command, *, input_text=None):
+        assert input_text is None
+        calls.append(command)
+        return {"returncode": 0}
+
+    artifact = _native_runtime_artifact(
+        specializationConstants=[
+            {
+                "name": "tile_size",
+                "kind": "uniform",
+                "dtype": "uint32",
+                "value": 2,
+            }
+        ]
+    )
+    runtime = FakeNativeRuntime()
+    adapter = OpenGLRuntimeParityAdapter(
+        runtime=runtime,
+        required_tools=(),
+        tool_resolver=lambda tool: f"/fake/{tool}",
+        command_runner=passing_command,
+    )
+
+    report = verify_runtime_test_manifest(
+        _artifact_report(tmp_path, [artifact]),
+        _native_runtime_manifest(),
+        executors={"opengl": adapter},
+    )
+
+    result = report["results"][0]
+    assert result["status"] == PASSED
+    assert calls == [
+        (
+            "/fake/glslangValidator",
+            "-S",
+            "comp",
+            str(artifact_path.resolve()),
+        )
+    ]
+    assert runtime.prepared.module_path == artifact_path.resolve()
+    assert result["executor"]["details"]["openglRuntimeConstants"] == {
+        "specializationConstantCount": 0,
+        "specializationConstantIds": [],
+        "uniformConstantCount": 1,
+        "uniformConstants": ["tile_size"],
+    }
+
+
 def test_runtime_parity_native_adapter_skips_validation_tooling_when_disabled(
     tmp_path,
 ):

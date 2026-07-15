@@ -2166,7 +2166,9 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "glslangValidator --version" in mlx_porting
     assert "moderngl==5.12.0" in mlx_porting
     assert "libegl1" in mlx_porting
+    assert "libgl1" in mlx_porting
     assert "libgl1-mesa-dri" in mlx_porting
+    assert "libopengl0" in mlx_porting
     assert "Validate OpenGL lowering contracts" in mlx_porting
     assert "opengl_lowers_expected_scalar_and_vector_conversions" in mlx_porting
     assert "opengl_preserves_metal_arithmetic_conversion_order" in mlx_porting
