@@ -4782,6 +4782,120 @@ def test_glsl_private_pointer_view_accepts_bounded_affine_loop_offset(tmp_path):
     )
 
 
+def test_glsl_private_pointer_view_accepts_correlated_unknown_loop_span(tmp_path):
+    code = """
+    shader CorrelatedPrivatePointerView {
+        void write_values(thread int* values) {
+            values[0] = 11;
+            values[1] = 13;
+        }
+
+        void write_pair(thread int* values) {
+            write_values(values);
+        }
+
+        void forward(thread int* values, int limit) {
+            for (int t = 0; t < limit; ++t) {
+                write_pair(values + t * 2);
+            }
+            for (int t = 0; t < limit; ++t) {
+                for (int r = 0; r < 2; ++r) {
+                    int observed = values[t * 2 + r];
+                }
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                int backing[8];
+                forward(backing, 4);
+                int observed = backing[0] + backing[7];
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "void write_values(inout int values[8], int values_base)" in generated
+    assert "void write_pair(inout int values[8], int values_base)" in generated
+    assert "void forward(inout int values[8], int values_base, int limit)" in generated
+    assert "write_values(values, values_base);" in generated
+    assert "write_pair(values, (values_base + int((t * 2))));" in generated
+    assert "values[(values_base + int(0))] = 11;" in generated
+    assert "values[(values_base + int(1))] = 13;" in generated
+    assert "forward(backing, 0, 4);" in generated
+    assert "values + t" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "private_pointer_correlated_unknown_loop_span"
+    )
+
+
+def test_glsl_private_pointer_view_rejects_mismatched_correlated_access():
+    code = """
+    shader MismatchedCorrelatedPrivatePointerView {
+        void write_pair(thread int* values) {
+            values[0] = 1;
+            values[1] = 2;
+        }
+
+        void forward(thread int* values, int limit) {
+            for (int t = 0; t < limit; ++t) {
+                write_pair(values + t);
+            }
+            for (int t = 0; t < limit; ++t) {
+                int observed = values[t * 2];
+            }
+        }
+
+        void dispatch(int limit) {
+            int backing[8];
+            forward(backing, limit);
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLPrivatePointerParameterError) as excinfo:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert excinfo.value.reason == "unprovable-view-offset"
+
+
+def test_glsl_private_pointer_view_rejects_correlated_span_overflow():
+    code = """
+    shader CorrelatedPrivatePointerOverflow {
+        void write_pair(thread int* values) {
+            values[0] = 1;
+            values[1] = 2;
+        }
+
+        void forward(thread int* values, int limit) {
+            for (int t = 0; t < limit; ++t) {
+                write_pair(values + t * 2);
+            }
+            for (int t = 0; t < limit; ++t) {
+                for (int r = 0; r < 2; ++r) {
+                    int observed = values[t * 2 + r];
+                }
+            }
+        }
+
+        void dispatch() {
+            int backing[1];
+            forward(backing, 1);
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLPrivatePointerParameterError) as excinfo:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert excinfo.value.reason == "view-out-of-bounds"
+    assert "requires at least 2 elements" in str(excinfo.value)
+
+
 def test_glsl_private_pointer_view_nested_affine_forwarding_composes_once(tmp_path):
     code = """
     shader NestedAffinePrivatePointerView {
