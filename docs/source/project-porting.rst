@@ -1006,6 +1006,19 @@ the selected variant override, project value, or source default and fails closed
 without emitting HLSL when a required value is missing, conflicting, or
 incompatible with the source type.
 
+The pinned MLX project-porting gate applies this contract to
+``mlx/backend/metal/kernels/rms_norm.metal`` at commit
+``4367c73b60541ddd5a266ce4644fd93d20223b6e``. Its DirectX project declares two
+named variants, selecting ``has_w=false`` by declaration name and ``"20"=true``
+by numeric ID. The gate checks report provenance and concrete materialization,
+then compiles a reflected compute entry from each generated HLSL artifact with
+DXC on Windows. Its unconfigured OpenGL project checks deferred
+``layout(constant_id = 20)`` emission and validates generated OpenGL SPIR-V on
+Linux. This proves translation and native compilation only; it does not claim
+RMSNorm numerical runtime parity or full MLX test-suite support. Numerical
+execution additionally requires the entry-point workgroup-size specialization
+contract tracked in ``CrossGL/crosstl#1750``.
+
 ``source_roots`` limits discovery to selected directories. ``include`` and
 ``exclude`` use shell-style patterns against repository-relative paths. Project
 reports include order-preserving source-root status records and status counts

@@ -1,5 +1,7 @@
+import hashlib
 import importlib.util
 import json
+import shutil
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,8 +10,12 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 HARNESS_PATH = ROOT / "demos" / "integrations" / "mlx" / "run_mlx_porting.py"
+RMS_NORM_HARNESS_PATH = (
+    ROOT / "demos" / "integrations" / "mlx" / "prove_rms_norm_specialization.py"
+)
 MLX_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "mlx-project-porting.yml"
 MLX_README_PATH = ROOT / "demos" / "integrations" / "mlx" / "README.md"
+RMS_NORM_FIXTURE_ROOT = ROOT / "tests" / "fixtures" / "project_porting" / "mlx"
 
 
 def _load_harness():
@@ -19,6 +25,34 @@ def _load_harness():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _load_rms_norm_harness():
+    spec = importlib.util.spec_from_file_location(
+        "mlx_rms_norm_specialization_proof", RMS_NORM_HARNESS_PATH
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _prepare_reduced_rms_norm_checkout(module, tmp_path, monkeypatch):
+    mlx_root = tmp_path / "mlx"
+    source_path = mlx_root / module.MLX_RMS_NORM_SOURCE
+    source_path.parent.mkdir(parents=True)
+    shutil.copyfile(
+        RMS_NORM_FIXTURE_ROOT / "rms_norm_specialization.metal", source_path
+    )
+    source_hash = hashlib.sha256(source_path.read_bytes()).hexdigest()
+    monkeypatch.setattr(module, "MLX_RMS_NORM_SHA256", source_hash)
+    work_dir = mlx_root / ".rms-norm-proof"
+    report_dir = work_dir / "reports"
+    log_dir = work_dir / "logs"
+    report_dir.mkdir(parents=True)
+    log_dir.mkdir(parents=True)
+    return mlx_root, work_dir, report_dir, log_dir
 
 
 def _full_corpus_report(module, mlx_root, work_dir, *, include_extra_failure=False):
@@ -4100,3 +4134,289 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
     assert result["scope"]["blockedFrontierIssues"] == [
         "https://github.com/CrossGL/crosstl/issues/1537"
     ]
+
+
+def test_rms_norm_contract_fixture_matches_pinned_harness_configuration():
+    module = _load_rms_norm_harness()
+    metadata = json.loads(
+        (
+            RMS_NORM_FIXTURE_ROOT / "rms_norm_specialization.fixture-metadata.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert module.MLX_COMMIT == "4367c73b60541ddd5a266ce4644fd93d20223b6e"
+    assert module.MLX_RMS_NORM_SHA256 == (
+        "5d411a2350ba7ddf84eb35f9dcac7cde0d441bd55fa1e9e1ccc61d490d428dee"
+    )
+    assert metadata["upstreamSourceReplacement"] is False
+    assert metadata["functionConstant"] == {
+        "name": module.RMS_NORM_FUNCTION_CONSTANT_NAME,
+        "id": module.RMS_NORM_FUNCTION_CONSTANT_ID,
+        "required": True,
+    }
+    assert metadata["directx"]["profile"] == module.RMS_NORM_DIRECTX_PROFILE
+    assert metadata["directx"]["variants"] == list(module.RMS_NORM_DIRECTX_VARIANTS)
+    assert metadata["opengl"] == {"deferred": True, "constantId": 20}
+    assert metadata["claims"] == {
+        "translationAndNativeCompilationOnly": True,
+        "numericalRuntimeParity": False,
+        "fullMlxTestSuite": False,
+        "runtimeBlockedBy": list(module.RMS_NORM_RUNTIME_BLOCKERS),
+    }
+    expected_gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    status = expected_gaps["rms_norm_specialization_status"]
+    assert status["source"] == module.MLX_RMS_NORM_SOURCE
+    assert status["source_sha256"] == module.MLX_RMS_NORM_SHA256
+    assert status["directx"]["native_compilation"] == ("required-on-windows-ci")
+    assert status["opengl"]["native_compilation"] == "required-on-linux-ci"
+    assert status["numerical_execution_included"] is False
+    assert status["runtime_parity_claimed"] is False
+    assert status["full_mlx_test_suite_included"] is False
+    assert status["runtime_blocked_by"] == list(module.RMS_NORM_RUNTIME_BLOCKERS)
+
+
+def test_rms_norm_checkout_verifies_revision_and_source_hash(tmp_path, monkeypatch):
+    module = _load_rms_norm_harness()
+    mlx_root, _work_dir, _report_dir, log_dir = _prepare_reduced_rms_norm_checkout(
+        module, tmp_path, monkeypatch
+    )
+    revision_stdout = log_dir / "mlx-rmsnorm-revision.stdout"
+    revision_stderr = log_dir / "mlx-rmsnorm-revision.stderr"
+    revision_stdout.write_text(module.MLX_COMMIT + "\n", encoding="utf-8")
+    revision_stderr.write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        module,
+        "_run_command",
+        lambda *args, **kwargs: {
+            "returncode": 0,
+            "stdoutPath": revision_stdout,
+            "stderrPath": revision_stderr,
+        },
+    )
+
+    identity = module._verify_mlx_checkout(mlx_root, log_dir=log_dir)
+
+    assert identity["commit"] == module.MLX_COMMIT
+    assert identity["sourceHash"] == {
+        "algorithm": "sha256",
+        "value": module.MLX_RMS_NORM_SHA256,
+    }
+
+    (mlx_root / module.MLX_RMS_NORM_SOURCE).write_text(
+        "modified source\n", encoding="utf-8"
+    )
+    with pytest.raises(module.MlxRmsNormProofError, match="SHA-256 mismatch"):
+        module._verify_mlx_checkout(mlx_root, log_dir=log_dir)
+
+
+def test_rms_norm_directx_variants_translate_through_project_api(tmp_path, monkeypatch):
+    module = _load_rms_norm_harness()
+    mlx_root, work_dir, report_dir, log_dir = _prepare_reduced_rms_norm_checkout(
+        module, tmp_path, monkeypatch
+    )
+
+    result = module._check_directx(
+        mlx_root,
+        work_dir,
+        report_dir,
+        log_dir,
+        require_toolchain=False,
+    )
+
+    assert result["status"] == "passed"
+    assert result["runtimeBlockedBy"] == list(module.RMS_NORM_RUNTIME_BLOCKERS)
+    assert result["artifactCount"] == 2
+    assert result["runtimeParityClaimed"] is False
+    assert result["numericalExecutionIncluded"] is False
+    assert result["nativeCompilation"]["status"] == "not-required"
+    variants = {variant["name"]: variant for variant in result["variants"]}
+    assert set(variants) == {
+        "has_w_false_by_name",
+        "has_w_true_by_id",
+    }
+    assert variants["has_w_false_by_name"]["selector"] == "has_w"
+    assert variants["has_w_false_by_name"]["selectorKind"] == "name"
+    assert variants["has_w_false_by_name"]["value"] is False
+    assert variants["has_w_false_by_name"]["generatedStaticConst"] == (
+        "static const bool has_w = false;"
+    )
+    assert variants["has_w_true_by_id"]["selector"] == "20"
+    assert variants["has_w_true_by_id"]["selectorKind"] == "id"
+    assert variants["has_w_true_by_id"]["value"] is True
+    assert variants["has_w_true_by_id"]["generatedStaticConst"] == (
+        "static const bool has_w = true;"
+    )
+    assert all(
+        variant["representativeEntryPoint"] == "CSMain" for variant in variants.values()
+    )
+    report = json.loads(
+        (report_dir / "rms-norm-directx-variants.json").read_text(encoding="utf-8")
+    )
+    assert report["summary"]["artifactsByVariant"] == {
+        "has_w_false_by_name": {
+            "artifactCount": 1,
+            "translatedCount": 1,
+            "failedCount": 0,
+        },
+        "has_w_true_by_id": {
+            "artifactCount": 1,
+            "translatedCount": 1,
+            "failedCount": 0,
+        },
+    }
+
+
+def test_rms_norm_opengl_translation_retains_deferred_specialization(
+    tmp_path, monkeypatch
+):
+    module = _load_rms_norm_harness()
+    mlx_root, work_dir, report_dir, log_dir = _prepare_reduced_rms_norm_checkout(
+        module, tmp_path, monkeypatch
+    )
+
+    result = module._check_opengl(
+        mlx_root,
+        work_dir,
+        report_dir,
+        log_dir,
+        require_toolchain=False,
+    )
+
+    assert result["status"] == "passed"
+    assert result["artifactCount"] == 1
+    assert result["runtimeParityClaimed"] is False
+    assert result["numericalExecutionIncluded"] is False
+    assert result["runtimeBlockedBy"] == list(module.RMS_NORM_RUNTIME_BLOCKERS)
+    assert result["nativeCompilation"]["status"] == "not-required"
+    specialization = result["specializationConstant"]
+    assert specialization["name"] == "has_w"
+    assert specialization["id"] == 20
+    assert specialization["required"] is True
+    assert specialization["deferred"] is True
+    assert specialization["valueProvenance"] == {"kind": "runtime-override-required"}
+    assert specialization["generatedContract"] == (
+        "layout(constant_id = 20) const bool has_w = false;"
+    )
+    assert specialization["specializationMaterialization"]["mode"] == "deferred"
+    report = json.loads(
+        (report_dir / "rms-norm-opengl-deferred.json").read_text(encoding="utf-8")
+    )
+    constant = report["artifacts"][0]["specializationConstants"][0]
+    assert constant["valueProvenance"] == {"kind": "runtime-override-required"}
+    assert "concreteValue" not in constant
+
+
+def test_rms_norm_native_toolchain_gates_compile_generated_artifacts(
+    tmp_path, monkeypatch
+):
+    module = _load_rms_norm_harness()
+    mlx_root = tmp_path / "mlx"
+    work_dir = mlx_root / ".proof"
+    log_dir = work_dir / "logs"
+    log_dir.mkdir(parents=True)
+    artifacts_by_variant = {}
+    for variant in module.RMS_NORM_DIRECTX_VARIANTS:
+        artifact_path = work_dir / "artifacts" / f"{variant['name']}.hlsl"
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        artifact_path.write_text("generated HLSL", encoding="utf-8")
+        artifacts_by_variant[variant["name"]] = {
+            "path": artifact_path.relative_to(mlx_root).as_posix()
+        }
+    opengl_artifact = work_dir / "artifacts" / "rms_norm.glsl"
+    opengl_artifact.write_text("generated GLSL", encoding="utf-8")
+    commands = []
+
+    def fake_run_command(name, command, *, log_dir, timeout_seconds=180):
+        command = list(command)
+        commands.append((name, command))
+        if "-Fo" in command:
+            Path(command[command.index("-Fo") + 1]).write_bytes(b"DXIL")
+        if "-o" in command:
+            Path(command[command.index("-o") + 1]).write_bytes(b"SPIR-V")
+        stdout_path = log_dir / f"{name}.stdout"
+        stderr_path = log_dir / f"{name}.stderr"
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text("", encoding="utf-8")
+        return {
+            "name": name,
+            "command": command,
+            "returncode": 0,
+            "stdoutPath": stdout_path,
+            "stderrPath": stderr_path,
+        }
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+    monkeypatch.setattr(
+        module, "_representative_directx_entry_point", lambda _path: "CSMain"
+    )
+    monkeypatch.setattr(
+        module,
+        "shutil",
+        SimpleNamespace(which=lambda name: f"/tools/{name}"),
+    )
+    monkeypatch.setattr(module, "sys", SimpleNamespace(platform="win32"))
+
+    directx = module._compile_directx_variants(
+        artifacts_by_variant,
+        mlx_root=mlx_root,
+        work_dir=work_dir,
+        log_dir=log_dir,
+        required=True,
+    )
+
+    assert directx["status"] == "compiled"
+    assert directx["compiledArtifactCount"] == 2
+    assert [run["entryPoint"] for run in directx["runs"]] == [
+        "CSMain",
+        "CSMain",
+    ]
+    dxc_commands = [
+        command
+        for name, command in commands
+        if name.startswith("compile-rmsnorm-directx")
+    ]
+    assert len(dxc_commands) == 2
+    assert all(command[command.index("-E") + 1] == "CSMain" for command in dxc_commands)
+
+    monkeypatch.setattr(module, "sys", SimpleNamespace(platform="linux"))
+    opengl = module._compile_opengl(
+        opengl_artifact,
+        mlx_root=mlx_root,
+        work_dir=work_dir,
+        log_dir=log_dir,
+        required=True,
+    )
+
+    assert opengl["status"] == "compiled-and-validated"
+    assert opengl["compiledArtifactCount"] == 1
+    glslang_command = next(
+        command for name, command in commands if name == "compile-rmsnorm-opengl"
+    )
+    assert glslang_command[1:7] == [
+        "--target-env",
+        "opengl",
+        "--target-env",
+        "spirv1.3",
+        "-S",
+        "comp",
+    ]
+    spirv_command = next(
+        command for name, command in commands if name == "validate-rmsnorm-opengl-spirv"
+    )
+    assert spirv_command[1:3] == ["--target-env", "spv1.3"]
+
+
+def test_mlx_workflow_runs_platform_native_rms_norm_specialization_proof():
+    workflow = MLX_WORKFLOW_PATH.read_text(encoding="utf-8")
+
+    assert 'MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"' in workflow
+    assert "python demos/integrations/mlx/prove_rms_norm_specialization.py" in workflow
+    assert "--require-directx-toolchain" in workflow
+    assert "--require-opengl-toolchain" in workflow
+    assert 'if [ "$RUNNER_OS" = "Windows" ]; then' in workflow
+    assert 'elif [ "$RUNNER_OS" = "Linux" ]; then' in workflow
+    assert "rms-norm-specialization" in workflow
