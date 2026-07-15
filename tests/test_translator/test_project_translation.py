@@ -45987,7 +45987,7 @@ def test_translate_project_metal_opengl_disambiguates_constant_value_members(
     ) in output
     assert "float value;" not in output
     assert "out_[0] = first_value_Args_value;" in output
-    assert "second_out[0] = (second_value_Args_value + 1.0);" in output
+    assert "second_out_[0] = (second_value_Args_value + 1.0);" in output
     assert_compute_glsl_validates_if_available(output, tmp_path)
 
 
@@ -46046,7 +46046,7 @@ def test_translate_project_metal_opengl_scopes_mlx_style_constant_value_members(
         "float(gemv_a_batch_ndim_Args_batch_ndim));"
     ) in output
     assert (
-        "gemv_b_out[0] = ((gemv_b_alpha_Args_alpha * gemv_b_beta_Args_beta) + "
+        "gemv_b_out_[0] = ((gemv_b_alpha_Args_alpha * gemv_b_beta_Args_beta) + "
         "float(gemv_b_batch_ndim_Args_batch_ndim));"
     ) in output
     assert_compute_glsl_validates_if_available(output, tmp_path)

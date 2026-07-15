@@ -2909,7 +2909,7 @@ def test_codegen_mlx_multi_entry_opengl_resource_bindings_do_not_overlap():
     assert "layout(std430, binding = 5) readonly buffer w_qBuffer" in glsl
     assert "scaled_dot_product_attention_bmask[0]" not in glsl
     assert "quantized_bmask[0]" in glsl
-    assert "quantized_out[tid]" in glsl
+    assert "quantized_out_[tid]" in glsl
     assert "quantized_x_shape[0]" in glsl
 
 
