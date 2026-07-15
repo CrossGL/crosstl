@@ -25221,6 +25221,16 @@ complex64_t crossgl_complex64_mod_assign(
 
         self.function_private_pointer_required_spans = required_spans
         self.function_private_pointer_view_calls = view_calls
+        for caller_key, calls in view_calls.items():
+            if not calls or caller_key not in pointer_parameters:
+                continue
+            function = functions_by_key[caller_key]
+            self.glsl_attach_private_pointer_correlated_view_contracts(
+                function,
+                caller_key,
+                calls,
+                self.visible_literal_int_constants(function),
+            )
         for calls in view_calls.values():
             for call in calls:
                 seen_backing_roots = {}
@@ -25342,6 +25352,8 @@ complex64_t crossgl_complex64_mod_assign(
                     for parameter_name, binding in call["bindings"].items():
                         span = callee_spans.get(parameter_name, 0)
                         if span <= 0 or binding.get("root_kind") != "parameter":
+                            continue
+                        if binding.get("correlated_access_contract") is not None:
                             continue
                         _lower, upper = (
                             self.glsl_private_pointer_binding_offset_interval(
@@ -25908,6 +25920,884 @@ complex64_t crossgl_complex64_mod_assign(
 
         visit(getattr(function, "body", []), initial_bindings, initial_intervals)
         return calls
+
+    def glsl_private_pointer_affine_form(self, expression, forms, constants):
+        value = self.literal_int_value(expression, constants)
+        if value is not None:
+            return value, ()
+        if expression is None:
+            return None
+        if isinstance(expression, str):
+            return forms.get(expression)
+        if isinstance(expression, (IdentifierNode, VariableNode)):
+            return forms.get(getattr(expression, "name", None))
+        if isinstance(expression, UnaryOpNode):
+            if expression.op in {"++", "--"}:
+                return None
+            operand = self.glsl_private_pointer_affine_form(
+                expression.operand, forms, constants
+            )
+            if operand is None:
+                return None
+            if expression.op == "+":
+                return operand
+            if expression.op == "-":
+                return self.glsl_private_pointer_scale_affine_form(operand, -1)
+            return None
+        if isinstance(expression, BinaryOpNode):
+            if expression.op in {"+", "-"}:
+                left = self.glsl_private_pointer_affine_form(
+                    expression.left, forms, constants
+                )
+                right = self.glsl_private_pointer_affine_form(
+                    expression.right, forms, constants
+                )
+                return self.glsl_private_pointer_combine_affine_forms(
+                    left,
+                    right,
+                    -1 if expression.op == "-" else 1,
+                )
+            if expression.op != "*":
+                return None
+            left_coefficient = self.literal_int_value(expression.left, constants)
+            right_coefficient = self.literal_int_value(expression.right, constants)
+            if left_coefficient is not None:
+                affine = self.glsl_private_pointer_affine_form(
+                    expression.right, forms, constants
+                )
+                return self.glsl_private_pointer_scale_affine_form(
+                    affine, left_coefficient
+                )
+            if right_coefficient is not None:
+                affine = self.glsl_private_pointer_affine_form(
+                    expression.left, forms, constants
+                )
+                return self.glsl_private_pointer_scale_affine_form(
+                    affine, right_coefficient
+                )
+            return None
+        if isinstance(expression, FunctionCallNode):
+            function_name = self.function_call_name(expression)
+            arguments = list(
+                getattr(expression, "arguments", getattr(expression, "args", [])) or []
+            )
+            if (
+                function_name
+                in {
+                    "int",
+                    "uint",
+                    "short",
+                    "ushort",
+                    "int16",
+                    "uint16",
+                    "int32_t",
+                    "uint32_t",
+                    "size_t",
+                    "ptrdiff_t",
+                }
+                and len(arguments) == 1
+            ):
+                return self.glsl_private_pointer_affine_form(
+                    arguments[0], forms, constants
+                )
+        return None
+
+    def glsl_private_pointer_combine_affine_forms(self, left, right, right_scale=1):
+        if left is None or right is None:
+            return None
+        coefficients = dict(left[1])
+        for symbol, coefficient in right[1]:
+            coefficients[symbol] = coefficients.get(symbol, 0) + (
+                right_scale * coefficient
+            )
+            if coefficients[symbol] == 0:
+                del coefficients[symbol]
+        return (
+            left[0] + right_scale * right[0],
+            tuple(sorted(coefficients.items())),
+        )
+
+    def glsl_private_pointer_scale_affine_form(self, form, coefficient):
+        if form is None:
+            return None
+        return (
+            form[0] * coefficient,
+            tuple(
+                (symbol, value * coefficient)
+                for symbol, value in form[1]
+                if value * coefficient != 0
+            ),
+        )
+
+    def glsl_private_pointer_contract_expression_key(
+        self, expression, value_keys, constants
+    ):
+        value = self.literal_int_value(expression, constants)
+        if value is not None:
+            return "literal", value
+        if expression is None:
+            return None
+        if isinstance(expression, str):
+            return value_keys.get(expression, ("name", expression))
+        if isinstance(expression, (IdentifierNode, VariableNode)):
+            name = getattr(expression, "name", None)
+            return value_keys.get(name, ("name", name))
+        if isinstance(expression, UnaryOpNode):
+            if expression.op in {"++", "--"}:
+                return None
+            operand = self.glsl_private_pointer_contract_expression_key(
+                expression.operand, value_keys, constants
+            )
+            return None if operand is None else ("unary", expression.op, operand)
+        if isinstance(expression, BinaryOpNode):
+            left = self.glsl_private_pointer_contract_expression_key(
+                expression.left, value_keys, constants
+            )
+            right = self.glsl_private_pointer_contract_expression_key(
+                expression.right, value_keys, constants
+            )
+            if left is None or right is None:
+                return None
+            return "binary", expression.op, left, right
+        if isinstance(expression, TernaryOpNode):
+            condition = self.glsl_private_pointer_contract_expression_key(
+                expression.condition, value_keys, constants
+            )
+            true_value = self.glsl_private_pointer_contract_expression_key(
+                expression.true_expr, value_keys, constants
+            )
+            false_value = self.glsl_private_pointer_contract_expression_key(
+                expression.false_expr, value_keys, constants
+            )
+            if condition is None or true_value is None or false_value is None:
+                return None
+            return "ternary", condition, true_value, false_value
+        if isinstance(expression, FunctionCallNode):
+            function_name = self.function_call_name(expression)
+            arguments = list(
+                getattr(expression, "arguments", getattr(expression, "args", [])) or []
+            )
+            if (
+                function_name
+                in {
+                    "int",
+                    "uint",
+                    "short",
+                    "ushort",
+                    "int16",
+                    "uint16",
+                    "int32_t",
+                    "uint32_t",
+                    "size_t",
+                    "ptrdiff_t",
+                }
+                and len(arguments) == 1
+            ):
+                argument = self.glsl_private_pointer_contract_expression_key(
+                    arguments[0], value_keys, constants
+                )
+                return None if argument is None else ("cast", function_name, argument)
+        return None
+
+    def glsl_private_pointer_symbolic_offset(
+        self,
+        expression,
+        pointer_roots,
+        forms,
+        constants,
+    ):
+        if isinstance(expression, str):
+            return (expression, (0, ())) if expression in pointer_roots else None
+        if isinstance(expression, (IdentifierNode, VariableNode)):
+            name = getattr(expression, "name", None)
+            return (name, (0, ())) if name in pointer_roots else None
+        if isinstance(expression, UnaryOpNode) and expression.op == "&":
+            if not isinstance(expression.operand, ArrayAccessNode):
+                return None
+            binding = self.glsl_private_pointer_symbolic_offset(
+                expression.operand.array,
+                pointer_roots,
+                forms,
+                constants,
+            )
+            delta = self.glsl_private_pointer_affine_form(
+                expression.operand.index, forms, constants
+            )
+            if binding is None or delta is None:
+                return None
+            return (
+                binding[0],
+                self.glsl_private_pointer_combine_affine_forms(binding[1], delta),
+            )
+        if not isinstance(expression, BinaryOpNode) or expression.op not in {"+", "-"}:
+            return None
+        binding = self.glsl_private_pointer_symbolic_offset(
+            expression.left,
+            pointer_roots,
+            forms,
+            constants,
+        )
+        delta_expression = expression.right
+        operator = expression.op
+        if binding is None and expression.op == "+":
+            binding = self.glsl_private_pointer_symbolic_offset(
+                expression.right,
+                pointer_roots,
+                forms,
+                constants,
+            )
+            delta_expression = expression.left
+        delta = self.glsl_private_pointer_affine_form(
+            delta_expression, forms, constants
+        )
+        if binding is None or delta is None:
+            return None
+        return (
+            binding[0],
+            self.glsl_private_pointer_combine_affine_forms(
+                binding[1], delta, -1 if operator == "-" else 1
+            ),
+        )
+
+    def glsl_private_pointer_correlated_loop_contract(
+        self,
+        node,
+        intervals,
+        value_keys,
+        constants,
+        active_loops,
+    ):
+        init = getattr(node, "init", None)
+        loop_name = getattr(init, "name", None)
+        start = intervals.get(loop_name)
+        if not loop_name or start is None or start[0] != start[1]:
+            return None
+        condition = getattr(node, "condition", None)
+        if not isinstance(condition, BinaryOpNode):
+            return None
+        left_name = self.expression_name(condition.left)
+        right_name = self.expression_name(condition.right)
+        operator = condition.op
+        if left_name == loop_name:
+            bound_expression = condition.right
+        elif right_name == loop_name:
+            bound_expression = condition.left
+            operator = {"<": ">", "<=": ">=", ">": "<", ">=": "<="}.get(operator)
+        else:
+            return None
+        update = getattr(node, "update", None)
+        if not (
+            isinstance(update, UnaryOpNode)
+            and self.expression_name(update.operand) == loop_name
+            and update.op == "++"
+            and operator in {"<", "<="}
+        ):
+            return None
+        bound_key = self.glsl_private_pointer_contract_expression_key(
+            bound_expression, value_keys, constants
+        )
+        if bound_key is None:
+            return None
+        interval_name, interval = self.glsl_private_pointer_loop_interval(
+            node, intervals, constants
+        )
+        if interval_name != loop_name:
+            interval = None
+        parent_keys = tuple(loop["key"] for loop in active_loops.values())
+        key = (loop_name, start[0], operator, bound_key, 1, parent_keys)
+        symbol = repr(("loop", key))
+        return {
+            "key": key,
+            "symbol": symbol,
+            "interval": interval,
+            "lower_bound": start[0],
+        }
+
+    def glsl_attach_private_pointer_correlated_view_contracts(
+        self,
+        function,
+        function_key,
+        calls,
+        constants,
+    ):
+        """Attach same-backing access witnesses to otherwise symbolic views."""
+
+        pointer_roots = set(
+            self.function_private_pointer_element_types.get(function_key, {})
+        )
+        full_span_roots = self.function_private_pointer_full_span_parameters.get(
+            function_key, set()
+        )
+        if not pointer_roots or not full_span_roots:
+            return
+
+        intervals = {}
+        forms = {}
+        value_keys = {}
+        for name, value in constants.items():
+            literal = self.literal_int_value(value, constants)
+            if literal is None:
+                continue
+            intervals[name] = (literal, literal)
+            forms[name] = (literal, ())
+            value_keys[name] = ("literal", literal)
+        for parameter in getattr(function, "parameters", []) or []:
+            name = getattr(parameter, "name", None)
+            if not name or name in pointer_roots:
+                continue
+            symbol = f"value:{name}"
+            forms[name] = (0, ((symbol, 1),))
+            value_keys[name] = ("value", name)
+
+        calls_by_id = {id(call["node"]): call for call in calls}
+        call_footprints = []
+        access_footprints = []
+
+        def modified_names(value):
+            names = set()
+            for child in self.walk_ast(value):
+                if isinstance(child, AssignmentNode):
+                    target = getattr(child, "target", getattr(child, "left", None))
+                    if isinstance(target, (str, IdentifierNode, VariableNode)):
+                        name = self.expression_name(target)
+                        if name:
+                            names.add(name)
+                elif isinstance(child, UnaryOpNode) and child.op in {"++", "--"}:
+                    name = self.expression_name(child.operand)
+                    if name:
+                        names.add(name)
+            return names
+
+        def set_name_value(
+            name,
+            expression,
+            operator,
+            active_forms,
+            active_value_keys,
+            active_intervals,
+            source,
+        ):
+            affine = self.glsl_private_pointer_affine_form(
+                expression, active_forms, constants
+            )
+            value_key = self.glsl_private_pointer_contract_expression_key(
+                expression, active_value_keys, constants
+            )
+            interval = self.glsl_private_pointer_interval(
+                expression, active_intervals, constants
+            )
+            if operator != "=":
+                scale = 1 if operator == "+=" else -1 if operator == "-=" else None
+                if scale is None:
+                    affine = None
+                    interval = None
+                    value_key = None
+                else:
+                    affine = self.glsl_private_pointer_combine_affine_forms(
+                        active_forms.get(name), affine, scale
+                    )
+                    current_interval = active_intervals.get(name)
+                    if current_interval is None or interval is None:
+                        interval = None
+                    elif scale > 0:
+                        interval = (
+                            current_interval[0] + interval[0],
+                            current_interval[1] + interval[1],
+                        )
+                    else:
+                        interval = (
+                            current_interval[0] - interval[1],
+                            current_interval[1] - interval[0],
+                        )
+                    current_key = active_value_keys.get(name)
+                    value_key = (
+                        None
+                        if current_key is None or value_key is None
+                        else ("binary", operator[0], current_key, value_key)
+                    )
+            if affine is None:
+                active_forms.pop(name, None)
+            else:
+                active_forms[name] = affine
+            if interval is None:
+                active_intervals.pop(name, None)
+            else:
+                active_intervals[name] = interval
+            active_value_keys[name] = (
+                value_key if value_key is not None else ("unknown", id(source), name)
+            )
+
+        def record_call(
+            node,
+            active_forms,
+            active_loops,
+            active_predicates,
+            active_pointer_roots,
+        ):
+            call = calls_by_id.get(id(node))
+            if call is None:
+                return
+            arguments = list(
+                getattr(node, "arguments", getattr(node, "args", [])) or []
+            )
+            parameter_indices = self.function_private_pointer_parameter_indices.get(
+                call["callee"], {}
+            )
+            for index, parameter_name in parameter_indices.items():
+                binding = call["bindings"].get(parameter_name, {})
+                if (
+                    binding.get("root_kind") != "parameter"
+                    or binding.get("offset_interval") is not None
+                    or binding.get("side_effecting")
+                    or binding.get("root") not in full_span_roots
+                    or parameter_name
+                    in self.function_private_pointer_full_span_parameters.get(
+                        call["callee"], set()
+                    )
+                ):
+                    continue
+                argument = arguments[index] if index < len(arguments) else None
+                symbolic = self.glsl_private_pointer_symbolic_offset(
+                    argument,
+                    active_pointer_roots,
+                    active_forms,
+                    constants,
+                )
+                if symbolic is None or symbolic[0] != binding.get("root"):
+                    continue
+                call_footprints.append(
+                    {
+                        "binding": binding,
+                        "call": call,
+                        "parameter": parameter_name,
+                        "root": symbolic[0],
+                        "form": symbolic[1],
+                        "loops": dict(active_loops),
+                        "predicates": tuple(active_predicates),
+                    }
+                )
+
+        def record_access(
+            node,
+            active_forms,
+            active_loops,
+            active_predicates,
+            active_pointer_roots,
+        ):
+            symbolic = self.glsl_private_pointer_symbolic_offset(
+                node.array,
+                active_pointer_roots,
+                active_forms,
+                constants,
+            )
+            index = self.glsl_private_pointer_affine_form(
+                node.index, active_forms, constants
+            )
+            if symbolic is None or index is None or symbolic[0] not in full_span_roots:
+                return
+            access_footprints.append(
+                {
+                    "root": symbolic[0],
+                    "form": self.glsl_private_pointer_combine_affine_forms(
+                        symbolic[1], index
+                    ),
+                    "loops": dict(active_loops),
+                    "predicates": tuple(active_predicates),
+                    "source_location": getattr(node, "source_location", None),
+                }
+            )
+
+        def visit(
+            value,
+            active_forms,
+            active_value_keys,
+            active_intervals,
+            active_loops,
+            active_predicates,
+            active_pointer_roots,
+        ):
+            if value is None or isinstance(value, (str, int, float, bool)):
+                return
+            if isinstance(value, (list, tuple)):
+                for item in value:
+                    visit(
+                        item,
+                        active_forms,
+                        active_value_keys,
+                        active_intervals,
+                        active_loops,
+                        active_predicates,
+                        active_pointer_roots,
+                    )
+                return
+            if isinstance(value, BlockNode):
+                block_forms = dict(active_forms)
+                block_value_keys = dict(active_value_keys)
+                block_intervals = dict(active_intervals)
+                block_roots = set(active_pointer_roots)
+                for statement in getattr(value, "statements", []) or []:
+                    visit(
+                        statement,
+                        block_forms,
+                        block_value_keys,
+                        block_intervals,
+                        active_loops,
+                        active_predicates,
+                        block_roots,
+                    )
+                return
+            if isinstance(value, (VariableNode, ArrayNode)):
+                initial_value = getattr(value, "initial_value", None)
+                visit(
+                    initial_value,
+                    active_forms,
+                    active_value_keys,
+                    active_intervals,
+                    active_loops,
+                    active_predicates,
+                    active_pointer_roots,
+                )
+                name = getattr(value, "name", None)
+                if name:
+                    set_name_value(
+                        name,
+                        initial_value,
+                        "=",
+                        active_forms,
+                        active_value_keys,
+                        active_intervals,
+                        value,
+                    )
+                    active_pointer_roots.discard(name)
+                return
+            if isinstance(value, AssignmentNode):
+                target = getattr(value, "target", getattr(value, "left", None))
+                assigned = getattr(value, "value", getattr(value, "right", None))
+                visit(
+                    target,
+                    active_forms,
+                    active_value_keys,
+                    active_intervals,
+                    active_loops,
+                    active_predicates,
+                    active_pointer_roots,
+                )
+                visit(
+                    assigned,
+                    active_forms,
+                    active_value_keys,
+                    active_intervals,
+                    active_loops,
+                    active_predicates,
+                    active_pointer_roots,
+                )
+                if isinstance(target, (str, IdentifierNode, VariableNode)):
+                    name = self.expression_name(target)
+                    if name:
+                        set_name_value(
+                            name,
+                            assigned,
+                            getattr(value, "operator", "="),
+                            active_forms,
+                            active_value_keys,
+                            active_intervals,
+                            value,
+                        )
+                return
+            if isinstance(value, FunctionCallNode):
+                record_call(
+                    value,
+                    active_forms,
+                    active_loops,
+                    active_predicates,
+                    active_pointer_roots,
+                )
+                for argument in (
+                    getattr(value, "arguments", getattr(value, "args", [])) or []
+                ):
+                    visit(
+                        argument,
+                        active_forms,
+                        active_value_keys,
+                        active_intervals,
+                        active_loops,
+                        active_predicates,
+                        active_pointer_roots,
+                    )
+                return
+            if isinstance(value, ArrayAccessNode):
+                record_access(
+                    value,
+                    active_forms,
+                    active_loops,
+                    active_predicates,
+                    active_pointer_roots,
+                )
+                visit(
+                    value.array,
+                    active_forms,
+                    active_value_keys,
+                    active_intervals,
+                    active_loops,
+                    active_predicates,
+                    active_pointer_roots,
+                )
+                visit(
+                    value.index,
+                    active_forms,
+                    active_value_keys,
+                    active_intervals,
+                    active_loops,
+                    active_predicates,
+                    active_pointer_roots,
+                )
+                return
+            if isinstance(value, IfNode):
+                condition = getattr(value, "condition", None)
+                visit(
+                    condition,
+                    active_forms,
+                    active_value_keys,
+                    active_intervals,
+                    active_loops,
+                    active_predicates,
+                    active_pointer_roots,
+                )
+                condition_key = self.glsl_private_pointer_contract_expression_key(
+                    condition, active_value_keys, constants
+                )
+                if condition_key is None:
+                    condition_key = ("unknown-condition", id(value))
+                visit(
+                    getattr(value, "then_branch", None),
+                    dict(active_forms),
+                    dict(active_value_keys),
+                    dict(active_intervals),
+                    active_loops,
+                    (*active_predicates, (condition_key, True)),
+                    set(active_pointer_roots),
+                )
+                visit(
+                    getattr(value, "else_branch", None),
+                    dict(active_forms),
+                    dict(active_value_keys),
+                    dict(active_intervals),
+                    active_loops,
+                    (*active_predicates, (condition_key, False)),
+                    set(active_pointer_roots),
+                )
+                for name in modified_names(value):
+                    active_forms.pop(name, None)
+                    active_intervals.pop(name, None)
+                    active_value_keys[name] = ("unknown", id(value), name)
+                return
+            if isinstance(value, ForNode):
+                loop_forms = dict(active_forms)
+                loop_value_keys = dict(active_value_keys)
+                loop_intervals = dict(active_intervals)
+                loop_roots = set(active_pointer_roots)
+                visit(
+                    getattr(value, "init", None),
+                    loop_forms,
+                    loop_value_keys,
+                    loop_intervals,
+                    active_loops,
+                    active_predicates,
+                    loop_roots,
+                )
+                loop_contract = self.glsl_private_pointer_correlated_loop_contract(
+                    value,
+                    loop_intervals,
+                    loop_value_keys,
+                    constants,
+                    active_loops,
+                )
+                loop_name = getattr(getattr(value, "init", None), "name", None)
+                nested_loops = dict(active_loops)
+                if loop_contract is not None and loop_name:
+                    symbol = loop_contract["symbol"]
+                    loop_forms[loop_name] = (0, ((symbol, 1),))
+                    loop_value_keys[loop_name] = ("loop", loop_contract["key"])
+                    nested_loops[symbol] = loop_contract
+                elif loop_name:
+                    loop_forms.pop(loop_name, None)
+                    loop_value_keys[loop_name] = ("unknown-loop", id(value))
+                    loop_intervals.pop(loop_name, None)
+                visit(
+                    getattr(value, "condition", None),
+                    loop_forms,
+                    loop_value_keys,
+                    loop_intervals,
+                    nested_loops,
+                    active_predicates,
+                    loop_roots,
+                )
+                visit(
+                    getattr(value, "body", None),
+                    loop_forms,
+                    loop_value_keys,
+                    loop_intervals,
+                    nested_loops,
+                    active_predicates,
+                    loop_roots,
+                )
+                visit(
+                    getattr(value, "update", None),
+                    loop_forms,
+                    loop_value_keys,
+                    loop_intervals,
+                    nested_loops,
+                    active_predicates,
+                    loop_roots,
+                )
+                for name in modified_names(value):
+                    active_forms.pop(name, None)
+                    active_intervals.pop(name, None)
+                    active_value_keys[name] = ("unknown", id(value), name)
+                return
+            if isinstance(value, (ForInNode, WhileNode, DoWhileNode, LoopNode)):
+                loop_forms = {
+                    name: form
+                    for name, form in active_forms.items()
+                    if name not in modified_names(value)
+                }
+                visit(
+                    getattr(value, "iterable", None),
+                    loop_forms,
+                    dict(active_value_keys),
+                    dict(active_intervals),
+                    active_loops,
+                    active_predicates,
+                    set(active_pointer_roots),
+                )
+                visit(
+                    getattr(value, "condition", None),
+                    loop_forms,
+                    dict(active_value_keys),
+                    dict(active_intervals),
+                    active_loops,
+                    active_predicates,
+                    set(active_pointer_roots),
+                )
+                visit(
+                    getattr(value, "body", None),
+                    loop_forms,
+                    dict(active_value_keys),
+                    dict(active_intervals),
+                    active_loops,
+                    active_predicates,
+                    set(active_pointer_roots),
+                )
+                return
+            if isinstance(value, UnaryOpNode):
+                visit(
+                    value.operand,
+                    active_forms,
+                    active_value_keys,
+                    active_intervals,
+                    active_loops,
+                    active_predicates,
+                    active_pointer_roots,
+                )
+                if value.op in {"++", "--"}:
+                    name = self.expression_name(value.operand)
+                    if name:
+                        active_forms.pop(name, None)
+                        active_intervals.pop(name, None)
+                        active_value_keys[name] = ("unknown", id(value), name)
+                return
+            if not hasattr(value, "__dict__"):
+                return
+            for key, child in vars(value).items():
+                if key in {
+                    "parent",
+                    "annotations",
+                    "args",
+                    "name",
+                    "left",
+                    "right",
+                    "array",
+                    "index",
+                    "if_condition",
+                    "if_body",
+                    "else_body",
+                }:
+                    continue
+                visit(
+                    child,
+                    active_forms,
+                    active_value_keys,
+                    active_intervals,
+                    active_loops,
+                    active_predicates,
+                    active_pointer_roots,
+                )
+
+        visit(
+            getattr(function, "body", []),
+            forms,
+            value_keys,
+            intervals,
+            {},
+            (),
+            pointer_roots,
+        )
+
+        for footprint in call_footprints:
+            if not self.glsl_private_pointer_offset_is_nonnegative(footprint):
+                continue
+            for access in access_footprints:
+                covered_span = self.glsl_private_pointer_access_covered_span(
+                    footprint, access
+                )
+                if covered_span is not None:
+                    footprint["binding"]["correlated_access_contract"] = {
+                        "span": covered_span,
+                        "source_location": access["source_location"],
+                    }
+                    break
+
+    def glsl_private_pointer_offset_is_nonnegative(self, footprint):
+        constant, terms = footprint["form"]
+        minimum = constant
+        for symbol, coefficient in terms:
+            loop = footprint["loops"].get(symbol)
+            if loop is None or coefficient < 0 or loop["lower_bound"] < 0:
+                return False
+            minimum += coefficient * loop["lower_bound"]
+        return minimum >= 0
+
+    def glsl_private_pointer_access_covered_span(self, footprint, access):
+        if (
+            access["root"] != footprint["root"]
+            or access["predicates"] != footprint["predicates"]
+        ):
+            return None
+        for symbol, _coefficient in footprint["form"][1]:
+            loop = footprint["loops"].get(symbol)
+            if (
+                loop is not None
+                and access["loops"].get(symbol, {}).get("key") != loop["key"]
+            ):
+                return None
+        difference = self.glsl_private_pointer_combine_affine_forms(
+            access["form"], footprint["form"], -1
+        )
+        if difference == (0, ()):
+            return 1
+        if difference is None or difference[0] != 0 or len(difference[1]) != 1:
+            return None
+        coverage_symbol, coefficient = difference[1][0]
+        coverage_loop = access["loops"].get(coverage_symbol)
+        if (
+            coefficient != 1
+            or coverage_symbol in dict(footprint["form"][1])
+            or coverage_loop is None
+            or coverage_loop["interval"] is None
+            or coverage_loop["interval"][0] != 0
+        ):
+            return None
+        return coverage_loop["interval"][1] + 1
 
     def glsl_private_pointer_expression_has_side_effects(self, expression):
         if expression is None or isinstance(expression, (str, int, float, bool)):
@@ -26709,6 +27599,8 @@ complex64_t crossgl_complex64_mod_assign(
             reason = "side-effecting-view-offset"
         elif require_exact and not isinstance(exact_offset, int):
             reason = "unprovable-view-offset"
+        elif binding.get("correlated_access_contract") is not None:
+            return None
         elif not (
             isinstance(interval, tuple)
             and len(interval) == 2
@@ -26819,6 +27711,33 @@ complex64_t crossgl_complex64_mod_assign(
                     source_location=getattr(call.get("node"), "source_location", None),
                 )
             return
+        correlated_contract = binding.get("correlated_access_contract")
+        if correlated_contract is not None:
+            covered_span = correlated_contract["span"]
+            if (
+                parameter_name
+                not in self.function_private_pointer_full_span_parameters.get(
+                    call["callee"], set()
+                )
+                and required_span <= covered_span
+                and required_span <= extent
+            ):
+                return
+            if required_span > extent:
+                display_name = self.glsl_private_pointer_display_name(call["callee"])
+                backing_name = binding.get("root") or "unknown"
+                raise OpenGLPrivatePointerParameterError(
+                    "OpenGL private pointer view "
+                    f"'{display_name}.{parameter_name}' requires at least "
+                    f"{required_span} elements, but backing array "
+                    f"'{backing_name}' has extent {extent}",
+                    function_name=display_name,
+                    parameter_name=parameter_name,
+                    reason="view-out-of-bounds",
+                    source_location=getattr(call.get("node"), "source_location", None),
+                )
+            binding = dict(binding)
+            binding.pop("correlated_access_contract", None)
         lower_offset, upper_offset = self.glsl_private_pointer_binding_offset_interval(
             call, parameter_name, binding
         )
