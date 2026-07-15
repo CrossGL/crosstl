@@ -11,6 +11,7 @@ from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
+from crosstl.translator.codegen.webgl_codegen import WebGLCodeGen
 
 HELPER_RANGE_SHADER = """
 shader RangeForInValidation {
@@ -108,6 +109,53 @@ shader GLSLPartialVectorInitializerValidation {
             bool4 boolValues = bool4(true, false, true);
             uint folded = ks.w + mixed.w + uint(signedValues.w);
             folded += uint(floatValues.w) + uint(boolValues.w);
+        }
+    }
+}
+"""
+
+
+GLSL_RESERVED_IDENTIFIER_COMPUTE_SHADER = r"""
+shader GLSLReservedIdentifierValidation {
+    cbuffer gl_Settings @binding(2) {
+        int bias__value;
+    };
+
+    int gl_read__pair(constant int[2] source__values, int __offset) {
+        return source__values[__offset] + bias__value;
+    }
+
+    compute {
+        @stage_entry
+        void main(
+            StructuredBuffer<int> values__buffer @binding(0),
+            RWStructuredBuffer<int> result__buffer @binding(1)
+        ) {
+            result__buffer[0] = gl_read__pair(values__buffer, 0);
+        }
+    }
+}
+"""
+
+
+WEBGL_RESERVED_IDENTIFIER_VERTEX_SHADER = r"""
+shader WebGLReservedIdentifierValidation {
+    float gl_helper(float __arg, float _arg) {
+        float local__value = __arg;
+        float local_value = _arg;
+        return local__value + local_value;
+    }
+
+    vertex {
+        vec4 main(
+            vec3 position__value @ POSITION,
+            vec3 position_value @ NORMAL
+        ) @ gl_Position {
+            float result__value = gl_helper(
+                position__value.x,
+                position_value.x
+            );
+            return vec4(position__value + vec3(result__value), 1.0);
         }
     }
 }
@@ -6931,6 +6979,20 @@ def run_validator(command):
     if result.returncode != 0 and "missing Metal Toolchain" in diagnostics:
         pytest.skip("macOS Metal toolchain is not installed")
     assert result.returncode == 0, f"{' '.join(command)} failed\n" f"{diagnostics}"
+    return result
+
+
+def run_glslang_validator(command):
+    result = run_validator(command)
+    diagnostics = f"{result.stdout}\n{result.stderr}".lower()
+    reserved_diagnostics = (
+        "identifiers containing consecutive underscores",
+        'identifiers starting with "gl_" are reserved',
+    )
+    assert not any(
+        diagnostic in diagnostics for diagnostic in reserved_diagnostics
+    ), diagnostics
+    return result
 
 
 def validate_spirv_shader_source(
@@ -11748,6 +11810,59 @@ def test_generated_glsl_partial_vector_initializers_validate_with_glslang_and_sp
         ]
     )
     run_validator([spirv_val, "--target-env", "spv1.3", str(output)])
+
+
+def test_generated_glsl_reserved_identifiers_validate_without_warnings(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    spirv_val = shutil.which("spirv-val")
+    if glslang is None or spirv_val is None:
+        pytest.skip("glslangValidator and spirv-val are required")
+
+    source = tmp_path / "reserved_identifiers.comp"
+    output = tmp_path / "reserved_identifiers.spv"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(GLSL_RESERVED_IDENTIFIER_COMPUTE_SHADER),
+        "compute",
+    )
+    assert "__" not in code
+    assert "crossgl_gl_read_pair_glsl_source_values_values_buffer_int_2_read" in code
+    source.write_text(code, encoding="utf-8")
+
+    run_glslang_validator(
+        [
+            glslang,
+            "-G",
+            "--target-env",
+            "opengl",
+            "--target-env",
+            "spirv1.3",
+            "-S",
+            "comp",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+    run_validator([spirv_val, "--target-env", "spv1.3", str(output)])
+
+
+def test_generated_webgl_reserved_identifiers_validate_without_warnings(tmp_path):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "reserved_identifiers.vert"
+    code = WebGLCodeGen().generate_stage(
+        crosstl.translator.parse(WEBGL_RESERVED_IDENTIFIER_VERTEX_SHADER),
+        "vertex",
+    )
+    assert "__" not in code
+    assert "float crossgl_gl_helper(float arg, float _arg)" in code
+    source.write_text(code, encoding="utf-8")
+
+    run_glslang_validator([glslang, "-S", "vert", str(source)])
 
 
 def test_generated_glsl_fragment_switch_match_case_scope_validates_with_glslang(

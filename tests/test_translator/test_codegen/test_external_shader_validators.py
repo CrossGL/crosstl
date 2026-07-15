@@ -4273,7 +4273,7 @@ def test_generated_glsl_parameter_image_atomic_specialization_validates_with_gls
     )
     assert "imageAtomicAdd(image, pixel, value)" not in code
     assert "imageAtomicAdd(counters, pixel, value)" in code
-    assert "addCounter__glsl_image_counters(ivec2(0, 1), 2u)" in code
+    assert "addCounter_glsl_image_counters(ivec2(0, 1), 2u)" in code
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator([glslang, "-S", "comp", str(shader_path)])
@@ -4292,11 +4292,11 @@ def test_generated_glsl_array_element_image_specialization_validates_with_glslan
         "compute",
     )
     assert "layout(r32ui, binding = 0) uniform uimage2D counters[2];" in code
-    assert "int queryElement__glsl_image_counters_0()" in code
+    assert "int queryElement_glsl_image_counters_0()" in code
     assert "return imageSize(counters[0]).x;" in code
-    assert "int queryElement__glsl_image_counters()" not in code
+    assert "int queryElement_glsl_image_counters()" not in code
     assert "return imageSize(counters).x;" not in code
-    assert "return queryElement__glsl_image_counters_0();" in code
+    assert "return queryElement_glsl_image_counters_0();" in code
     assert "imageStore(counters[1], ivec2(0, 0), uvec4(uint(" in code
     shader_path.write_text(code, encoding="utf-8")
 
@@ -4314,22 +4314,22 @@ def test_generated_glsl_dynamic_image_array_helper_validates_with_glslangvalidat
         "compute",
     )
     assert "layout(r32ui, binding = 0) uniform uimage2D counters[2];" in code
-    assert "int queryElement__glsl_image_counters_0()" in code
-    assert "int queryElement__glsl_image_counters_1()" in code
-    assert "int queryViaDynamic__glsl_images_counters(int layer)" in code
+    assert "int queryElement_glsl_image_counters_0()" in code
+    assert "int queryElement_glsl_image_counters_1()" in code
+    assert "int queryViaDynamic_glsl_images_counters(int layer)" in code
     assert "switch (layer)" in code
-    assert "return queryElement__glsl_image_counters_0();" in code
-    assert "return queryElement__glsl_image_counters_1();" in code
-    assert "int queryViaInitializer__glsl_images_counters(int layer)" in code
+    assert "return queryElement_glsl_image_counters_0();" in code
+    assert "return queryElement_glsl_image_counters_1();" in code
+    assert "int queryViaInitializer_glsl_images_counters(int layer)" in code
     assert "int count;\n    switch (layer)" in code
-    assert "count = queryElement__glsl_image_counters_0();" in code
-    assert "count = queryElement__glsl_image_counters_1();" in code
-    assert "int queryViaAssignment__glsl_images_counters(int layer)" in code
-    assert "void storeViaExpression__glsl_images_counters(int layer)" in code
-    assert "storeElement__glsl_image_counters_0(" in code
-    assert "storeElement__glsl_image_counters_1(" in code
-    assert "storeElement__glsl_image_counters_layer" not in code
-    assert "queryElement__glsl_image_counters_layer" not in code
+    assert "count = queryElement_glsl_image_counters_0();" in code
+    assert "count = queryElement_glsl_image_counters_1();" in code
+    assert "int queryViaAssignment_glsl_images_counters(int layer)" in code
+    assert "void storeViaExpression_glsl_images_counters(int layer)" in code
+    assert "storeElement_glsl_image_counters_0(" in code
+    assert "storeElement_glsl_image_counters_1(" in code
+    assert "storeElement_glsl_image_counters_layer" not in code
+    assert "queryElement_glsl_image_counters_layer" not in code
     assert "return imageSize(counters[layer]).x;" not in code
     assert "return queryElement(counters[layer]);" not in code
     shader_path.write_text(code, encoding="utf-8")
@@ -4356,10 +4356,10 @@ def test_generated_glsl_advanced_image_array_specialization_validates_with_glsla
         "layout(rgba16f, binding = 6) uniform imageCubeArray cubeLayerImages[2];"
         in code
     )
-    assert "return touchMS__glsl_image_msImages_1(pixel, sampleIndex, value);" in code
-    assert "return bumpMS__glsl_image_msCounters_1(pixel, sampleIndex, value);" in code
-    assert "return touchCube__glsl_image_cubeImages_1(coord, value);" in code
-    assert "return touchCubeLayer__glsl_image_cubeLayerImages_1(coord, value);" in code
+    assert "return touchMS_glsl_image_msImages_1(pixel, sampleIndex, value);" in code
+    assert "return bumpMS_glsl_image_msCounters_1(pixel, sampleIndex, value);" in code
+    assert "return touchCube_glsl_image_cubeImages_1(coord, value);" in code
+    assert "return touchCubeLayer_glsl_image_cubeLayerImages_1(coord, value);" in code
     assert "imageAtomicAdd(msCounters[1], pixel, sampleIndex, value)" in code
     shader_path.write_text(code, encoding="utf-8")
 
@@ -4386,19 +4386,19 @@ def test_generated_glsl_dynamic_advanced_image_array_helper_validates_with_glsla
         in code
     )
     assert "switch (layer)" in code
-    assert "return touchMS__glsl_image_msImages_0(pixel, sampleIndex, value);" in code
-    assert "return touchMS__glsl_image_msImages_1(pixel, sampleIndex, value);" in code
-    assert "return bumpMS__glsl_image_msCounters_0(pixel, sampleIndex, value);" in code
-    assert "return bumpMS__glsl_image_msCounters_1(pixel, sampleIndex, value);" in code
-    assert "return touchCube__glsl_image_cubeImages_0(coord, value);" in code
-    assert "return touchCube__glsl_image_cubeImages_1(coord, value);" in code
-    assert "return touchCubeLayer__glsl_image_cubeLayerImages_0(coord, value);" in code
-    assert "return touchCubeLayer__glsl_image_cubeLayerImages_1(coord, value);" in code
+    assert "return touchMS_glsl_image_msImages_0(pixel, sampleIndex, value);" in code
+    assert "return touchMS_glsl_image_msImages_1(pixel, sampleIndex, value);" in code
+    assert "return bumpMS_glsl_image_msCounters_0(pixel, sampleIndex, value);" in code
+    assert "return bumpMS_glsl_image_msCounters_1(pixel, sampleIndex, value);" in code
+    assert "return touchCube_glsl_image_cubeImages_0(coord, value);" in code
+    assert "return touchCube_glsl_image_cubeImages_1(coord, value);" in code
+    assert "return touchCubeLayer_glsl_image_cubeLayerImages_0(coord, value);" in code
+    assert "return touchCubeLayer_glsl_image_cubeLayerImages_1(coord, value);" in code
     assert "return touchMS(msImages[layer], pixel, sampleIndex, value);" not in code
     assert "return bumpMS(msCounters[layer], pixel, sampleIndex, value);" not in code
     assert "return touchCube(cubeImages[layer], coord, value);" not in code
     assert "return touchCubeLayer(cubeLayerImages[layer], coord, value);" not in code
-    assert "touchMS__glsl_image_msImages_layer" not in code
+    assert "touchMS_glsl_image_msImages_layer" not in code
     assert "imageLoad(msImages[layer], pixel, sampleIndex)" not in code
     shader_path.write_text(code, encoding="utf-8")
 

@@ -158,6 +158,199 @@ def glsl_expression_depends_on(generated_code, expression, expected_token):
     return False
 
 
+def test_glsl_reserved_identifiers_are_sanitized_consistently():
+    shader = r"""
+    shader ReservedIdentifiers {
+        struct crossgl_gl_Data { float safe; };
+        struct gl_Data { float value__part; float value_part; };
+
+        cbuffer gl_Settings @binding(0) {
+            float bias__value;
+            float bias_value;
+        };
+        RWStructuredBuffer<float> values__buffer @binding(1);
+        RWStructuredBuffer<float> values_buffer @binding(2);
+
+        float crossgl_gl_helper(float value) { return value; }
+        float gl_helper(float __arg, float _arg) {
+            float local__value = __arg;
+            float local_value = _arg;
+            gl_Data item = gl_Data(local__value, local_value);
+            return item.value__part + item.value_part;
+        }
+
+        compute {
+            void main() {
+                float result__value = gl_helper(bias__value, bias_value);
+                float result_value = crossgl_gl_helper(result__value);
+                values__buffer[0] = result_value;
+                values_buffer[0] = result__value;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "__" not in generated
+    assert not any(
+        identifier.startswith("gl_")
+        for identifier in re.findall(r"\b[A-Za-z_]\w*\b", generated)
+    )
+    assert "struct crossgl_gl_Data_2" in generated
+    assert "float value_part_2;" in generated
+    assert "uniform crossgl_gl_Settings" in generated
+    assert "float bias_value_2;" in generated
+    assert "buffer values_buffer_2Buffer" in generated
+    assert "float crossgl_gl_helper_2(float arg, float _arg)" in generated
+    assert generated.count("float crossgl_gl_helper_2(float arg, float _arg)") == 2
+    assert "crossgl_gl_Data_2 item = crossgl_gl_Data_2(" in generated
+    assert "item.value_part_2" in generated
+    assert "crossgl_gl_helper_2(bias_value_2, bias_value)" in generated
+    assert "values_buffer_2[0] = result_value;" in generated
+
+
+def test_glsl_reserved_stage_parameter_is_sanitized_in_declaration_and_wrapper():
+    shader = """
+    shader ReservedGeometryInput {
+        geometry {
+            void main(vec4 gl_input @location(0))
+                @inputtopology(point)
+                @outputtopology(point)
+                @maxvertexcount(1)
+            {
+                gl_Position = gl_input;
+                EmitVertex();
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "geometry"
+    )
+
+    assert "layout(location = 0) in vec4 crossgl_gl_input;" in generated
+    assert "gl_Position = crossgl_gl_input;" in generated
+    assert re.search(r"\bgl_input\b", generated) is None
+
+
+def test_glsl_reserved_identifier_mapping_preserves_scope_and_source_names():
+    shader = r"""
+    shader ReservedIdentifierScopes {
+        float gl_Position = 1.0;
+
+        enum gl_Result {
+            gl_Ok { value__part: float },
+            Done
+        }
+
+        struct gl_Box<T> { T value__part; }
+
+        float read(float x) {
+            float crossgl_gl_Position = 2.0;
+            gl_Result result = gl_Result::gl_Ok { value__part: x };
+            gl_Box<float> box = gl_Box<float>(result.value__part);
+            return gl_Position + crossgl_gl_Position + box.value__part;
+        }
+    }
+    """
+    ast = crosstl.translator.parse(shader)
+    codegen = GLSLCodeGen()
+
+    generated = codegen.generate(ast)
+
+    assert "uniform float crossgl_gl_Position = 1.0;" in generated
+    assert "float crossgl_gl_Position_2 = 2.0;" in generated
+    assert "struct crossgl_gl_Result" in generated
+    assert "struct crossgl_gl_Box_float" in generated
+    assert "float value_part;" in generated
+    assert "crossgl_gl_Result_gl_Ok_make(x)" in generated
+    assert "(crossgl_gl_Position + crossgl_gl_Position_2)" in generated
+    assert "__" not in generated
+    assert ast.global_variables[0].name == "gl_Position"
+    assert codegen.glsl_module_identifier_names["gl_Position"] == (
+        "crossgl_gl_Position"
+    )
+
+
+def test_glsl_builtin_interface_block_members_preserve_builtin_names():
+    shader = """
+    shader BuiltinInterfaceBlock {
+        @glsl_interface_block(out)
+        @glsl_interface_block_name(gl_PerVertex)
+        struct gl_PerVertex {
+            vec4 gl_Position @output @gl_Position;
+        };
+
+        vertex {
+            void main() {
+                gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "vertex")
+
+    assert "out gl_PerVertex {\n    vec4 gl_Position;\n};" in generated
+    assert "crossgl_gl_Position" not in generated
+
+
+def test_glsl_vertex_output_member_name_preserves_declared_builtin():
+    shader = """
+    shader DeclaredBuiltinOutput {
+        struct VertexOutput {
+            vec3 color @location(0);
+            vec4 gl_Position;
+        };
+
+        vertex {
+            VertexOutput main() {
+                VertexOutput output;
+                output.color = vec3(1.0);
+                output.gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+                return output;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "vertex")
+
+    assert "layout(location = 0) out vec3 color;" in generated
+    assert "gl_Position = vec4(0.0, 0.0, 0.0, 1.0);" in generated
+    assert "out vec4 gl_Position;" not in generated
+    assert "crossgl_gl_Position" not in generated
+
+
+def test_glsl_uninstanced_interface_members_share_module_collision_map():
+    shader = """
+    shader InterfaceMemberCollision {
+        float crossgl_gl_value = 1.0;
+
+        @glsl_interface_block(in)
+        struct gl_Block {
+            float gl_value;
+        };
+
+        vertex {
+            void main() {
+                gl_Position = vec4(gl_value + crossgl_gl_value);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "vertex")
+
+    assert "in crossgl_gl_Block {\n    float crossgl_gl_value_2;\n};" in generated
+    assert "uniform float crossgl_gl_value = 1.0;" in generated
+    assert "(crossgl_gl_value_2 + crossgl_gl_value)" in generated
+
+
 def test_glsl_unresolved_m_pi_f_uses_exact_standard_float_literal():
     literal = "3.14159265358979323846264338327950288f"
     shader = """
@@ -4990,7 +5183,7 @@ def test_opengl_fixed_array_helper_specializes_readonly_runtime_storage(tmp_path
     generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     specialized = re.search(
-        r"\bint\s+(?P<name>read2__glsl_[A-Za-z0-9_]+)\s*"
+        r"\bint\s+(?P<name>read2_glsl_[A-Za-z0-9_]+)\s*"
         r"\(uvec2 elem, int bias, int strides_offset\)\s*"
         r"\{(?P<body>.*?)^\}",
         generated,
@@ -5041,7 +5234,7 @@ def test_opengl_fixed_array_storage_specialization_resolves_compile_time_extent(
     generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     specialized_name = re.search(
-        r"\bint\s+(readBound__glsl_[A-Za-z0-9_]+)\s*\(int values_offset\)",
+        r"\bint\s+(readBound_glsl_[A-Za-z0-9_]+)\s*\(int values_offset\)",
         generated,
     )
     assert specialized_name is not None, generated
@@ -5079,7 +5272,7 @@ def test_opengl_fixed_array_helper_specializes_writable_runtime_storage(tmp_path
     generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     specialized = re.search(
-        r"\bvoid\s+(?P<name>write2__glsl_[A-Za-z0-9_]+)\s*"
+        r"\bvoid\s+(?P<name>write2_glsl_[A-Za-z0-9_]+)\s*"
         r"\(int index, int value, int values_offset\)\s*"
         r"\{(?P<body>.*?)^\}",
         generated,
@@ -5127,7 +5320,7 @@ def test_opengl_fixed_array_helper_specializes_multiple_runtime_resources(tmp_pa
     generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     specialized = re.search(
-        r"\bint\s+(?P<name>combine2__glsl_[A-Za-z0-9_]+)\s*"
+        r"\bint\s+(?P<name>combine2_glsl_[A-Za-z0-9_]+)\s*"
         r"\(int index, int bias, int left_offset, int right_offset\)\s*"
         r"\{(?P<body>.*?)^\}",
         generated,
@@ -5177,7 +5370,7 @@ def test_opengl_fixed_array_storage_specialization_reuses_clone_and_keeps_privat
     generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     definitions = re.findall(
-        r"\bint\s+(sum2__glsl_[A-Za-z0-9_]+)\s*\([^;]*\)\s*\{",
+        r"\bint\s+(sum2_glsl_[A-Za-z0-9_]+)\s*\([^;]*\)\s*\{",
         generated,
     )
     assert len(definitions) == 1, generated
@@ -26524,11 +26717,10 @@ def test_opengl_formatted_image_arrays_preserve_expression_sizes():
         in generated_code
     )
     assert (
-        "uint a = touchCounters__glsl_images_counters(ivec2(1, 2), 3);"
-        in generated_code
+        "uint a = touchCounters_glsl_images_counters(ivec2(1, 2), 3);" in generated_code
     )
     assert (
-        "vec2 b = touchPairs__glsl_images_rgPairs(ivec2(2, 3), vec2(0.5));"
+        "vec2 b = touchPairs_glsl_images_rgPairs(ivec2(2, 3), vec2(0.5));"
         in generated_code
     )
     assert (
@@ -26646,11 +26838,10 @@ def test_opengl_formatted_image_arrays_infer_named_constant_size():
         in generated_code
     )
     assert (
-        "uint a = touchCounters__glsl_images_counters(ivec2(1, 2), 3);"
-        in generated_code
+        "uint a = touchCounters_glsl_images_counters(ivec2(1, 2), 3);" in generated_code
     )
     assert (
-        "vec2 b = touchPairs__glsl_images_rgPairs(ivec2(2, 3), vec2(0.5));"
+        "vec2 b = touchPairs_glsl_images_rgPairs(ivec2(2, 3), vec2(0.5));"
         in generated_code
     )
     assert "layout(rg16f, binding = 3) uniform image2D rgPairs[];" not in generated_code
@@ -26701,8 +26892,7 @@ def test_opengl_formatted_image_arrays_ignore_shadowed_local_constant():
     assert "uint oldValue = imageLoad(images[LAYER], pixel).x;" in generated_code
     assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in generated_code
     assert (
-        "uint a = touchCounters__glsl_images_counters(ivec2(1, 2), 3);"
-        in generated_code
+        "uint a = touchCounters_glsl_images_counters(ivec2(1, 2), 3);" in generated_code
     )
     assert (
         "layout(r32ui, binding = 0) uniform uimage2D counters[4];" not in generated_code
@@ -26783,11 +26973,11 @@ def test_opengl_formatted_image_arrays_infer_transitive_helper_size():
     assert "return touchCountersDeep(images, pixel, value);" in generated_code
     assert "return touchPairsDeep(images, pixel, value);" in generated_code
     assert (
-        "uint a = touchCountersMid__glsl_images_counters(ivec2(1, 2), 3);"
+        "uint a = touchCountersMid_glsl_images_counters(ivec2(1, 2), 3);"
         in generated_code
     )
     assert (
-        "vec2 b = touchPairsMid__glsl_images_rgPairs(ivec2(2, 3), vec2(0.5));"
+        "vec2 b = touchPairsMid_glsl_images_rgPairs(ivec2(2, 3), vec2(0.5));"
         in generated_code
     )
     assert (
@@ -26852,7 +27042,7 @@ def test_opengl_formatted_image_arrays_ignore_unsupported_indices():
     assert "uint oldValue = imageLoad(images[layer], pixel).x;" in dynamic_code
     assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in dynamic_code
     assert (
-        "uint a = touchCounters__glsl_images_counters(0, ivec2(1, 2), 3);"
+        "uint a = touchCounters_glsl_images_counters(0, ivec2(1, 2), 3);"
         in dynamic_code
     )
     assert (
@@ -26872,7 +27062,7 @@ def test_opengl_formatted_image_arrays_ignore_unsupported_indices():
     assert "uint oldValue = imageLoad(images[0], pixel).x;" in negative_code
     assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in negative_code
     assert (
-        "uint a = touchCounters__glsl_images_counters(ivec2(1, 2), 3);" in negative_code
+        "uint a = touchCounters_glsl_images_counters(ivec2(1, 2), 3);" in negative_code
     )
     assert (
         "layout(r32ui, binding = 0) uniform uimage2D counters[0];" not in negative_code
@@ -26922,8 +27112,7 @@ def test_opengl_formatted_image_arrays_ignore_function_call_indices():
     assert "uint oldValue = imageLoad(images[getLayer()], pixel).x;" in generated_code
     assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in generated_code
     assert (
-        "uint a = touchCounters__glsl_images_counters(ivec2(1, 2), 3);"
-        in generated_code
+        "uint a = touchCounters_glsl_images_counters(ivec2(1, 2), 3);" in generated_code
     )
     assert (
         "layout(r32ui, binding = 0) uniform uimage2D counters[];" not in generated_code
@@ -26972,8 +27161,7 @@ def test_opengl_formatted_image_arrays_infer_local_constant_alias_size():
     assert "uint oldValue = imageLoad(images[LOCAL], pixel).x;" in generated_code
     assert "imageStore(images[0], pixel, uvec4((oldValue + value)));" in generated_code
     assert (
-        "uint a = touchCounters__glsl_images_counters(ivec2(1, 2), 3);"
-        in generated_code
+        "uint a = touchCounters_glsl_images_counters(ivec2(1, 2), 3);" in generated_code
     )
     assert (
         "layout(r32ui, binding = 0) uniform uimage2D counters[];" not in generated_code
@@ -34332,8 +34520,8 @@ def test_glsl_storage_image_access_allows_compatible_helper_calls():
     ast = crosstl.translator.parse(shader)
     generated_code = GLSLCodeGen().generate(ast)
 
-    assert "float value = readPixel__glsl_image_source(ivec2(0, 0));" in generated_code
-    assert "writePixel__glsl_image_target(ivec2(0, 0), vec4(value));" in generated_code
+    assert "float value = readPixel_glsl_image_source(ivec2(0, 0));" in generated_code
+    assert "writePixel_glsl_image_target(ivec2(0, 0), vec4(value));" in generated_code
 
 
 def test_glsl_storage_image_helper_parameter_metadata_contracts_allow_compatible_calls():
@@ -34363,12 +34551,12 @@ def test_glsl_storage_image_helper_parameter_metadata_contracts_allow_compatible
 
     assert "layout(r32ui, binding = 0) uniform uimage2D counters[1];" in generated_code
     assert "layout(rgba32f, binding = 1) uniform image2D target;" in generated_code
-    assert "int queryCounter__glsl_images_counters(ivec2 pixel)" in generated_code
-    assert "void sizeOnlyWrite__glsl_image_target()" in generated_code
+    assert "int queryCounter_glsl_images_counters(ivec2 pixel)" in generated_code
+    assert "void sizeOnlyWrite_glsl_image_target()" in generated_code
     assert (
-        "int count = queryCounter__glsl_images_counters(ivec2(0, 1));" in generated_code
+        "int count = queryCounter_glsl_images_counters(ivec2(0, 1));" in generated_code
     )
-    assert "sizeOnlyWrite__glsl_image_target();" in generated_code
+    assert "sizeOnlyWrite_glsl_image_target();" in generated_code
 
 
 def test_glsl_storage_image_helper_contracts_specialize_array_elements_transitively():
@@ -34396,14 +34584,14 @@ def test_glsl_storage_image_helper_contracts_specialize_array_elements_transitiv
     generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "layout(r32ui, binding = 0) uniform uimage2D counters[2];" in generated_code
-    assert "int queryElement__glsl_image_counters_0()" in generated_code
+    assert "int queryElement_glsl_image_counters_0()" in generated_code
     assert "return imageSize(counters[0]).x;" in generated_code
-    assert "int queryElement__glsl_image_counters()" not in generated_code
+    assert "int queryElement_glsl_image_counters()" not in generated_code
     assert "return imageSize(counters).x;" not in generated_code
-    assert "int queryViaArray__glsl_images_counters()" in generated_code
-    assert "return queryElement__glsl_image_counters_0();" in generated_code
-    assert "int directCount = queryElement__glsl_image_counters_0();" in generated_code
-    assert "int nestedCount = queryViaArray__glsl_images_counters();" in generated_code
+    assert "int queryViaArray_glsl_images_counters()" in generated_code
+    assert "return queryElement_glsl_image_counters_0();" in generated_code
+    assert "int directCount = queryElement_glsl_image_counters_0();" in generated_code
+    assert "int nestedCount = queryViaArray_glsl_images_counters();" in generated_code
 
 
 def test_glsl_storage_image_helper_dynamic_array_elements_keep_index_parameters():
@@ -34453,51 +34641,51 @@ def test_glsl_storage_image_helper_dynamic_array_elements_keep_index_parameters(
     generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "layout(r32ui, binding = 0) uniform uimage2D counters[2];" in generated_code
-    assert "int queryElement__glsl_image_counters_0()" in generated_code
+    assert "int queryElement_glsl_image_counters_0()" in generated_code
     assert "return imageSize(counters[0]).x;" in generated_code
-    assert "int queryElement__glsl_image_counters_1()" in generated_code
+    assert "int queryElement_glsl_image_counters_1()" in generated_code
     assert "return imageSize(counters[1]).x;" in generated_code
-    assert "int queryViaDynamic__glsl_images_counters(int layer)" in generated_code
+    assert "int queryViaDynamic_glsl_images_counters(int layer)" in generated_code
     assert "switch (layer)" in generated_code
-    assert "return queryElement__glsl_image_counters_0();" in generated_code
-    assert "return queryElement__glsl_image_counters_1();" in generated_code
+    assert "return queryElement_glsl_image_counters_0();" in generated_code
+    assert "return queryElement_glsl_image_counters_1();" in generated_code
     assert "default:\n        return 0;" in generated_code
     assert "return queryElement(counters[layer]);" not in generated_code
-    assert "int queryViaInitializer__glsl_images_counters(int layer)" in generated_code
+    assert "int queryViaInitializer_glsl_images_counters(int layer)" in generated_code
     assert "int count;\n    switch (layer)" in generated_code
-    assert "count = queryElement__glsl_image_counters_0();" in generated_code
-    assert "count = queryElement__glsl_image_counters_1();" in generated_code
-    assert "int queryViaAssignment__glsl_images_counters(int layer)" in generated_code
-    assert "void storeElement__glsl_image_counters_0(" in generated_code
-    assert "void storeElement__glsl_image_counters_1(" in generated_code
+    assert "count = queryElement_glsl_image_counters_0();" in generated_code
+    assert "count = queryElement_glsl_image_counters_1();" in generated_code
+    assert "int queryViaAssignment_glsl_images_counters(int layer)" in generated_code
+    assert "void storeElement_glsl_image_counters_0(" in generated_code
+    assert "void storeElement_glsl_image_counters_1(" in generated_code
     assert "imageStore(counters[0], pixel, uvec4(value));" in generated_code
     assert "imageStore(counters[1], pixel, uvec4(value));" in generated_code
-    assert "void storeViaExpression__glsl_images_counters(int layer)" in generated_code
+    assert "void storeViaExpression_glsl_images_counters(int layer)" in generated_code
     assert (
-        "storeElement__glsl_image_counters_0(ivec2(0, 0), uint(layer));"
+        "storeElement_glsl_image_counters_0(ivec2(0, 0), uint(layer));"
         in generated_code
     )
     assert (
-        "storeElement__glsl_image_counters_1(ivec2(0, 0), uint(layer));"
+        "storeElement_glsl_image_counters_1(ivec2(0, 0), uint(layer));"
         in generated_code
     )
-    assert "queryElement__glsl_image_counters_layer" not in generated_code
-    assert "storeElement__glsl_image_counters_layer" not in generated_code
+    assert "queryElement_glsl_image_counters_layer" not in generated_code
+    assert "storeElement_glsl_image_counters_layer" not in generated_code
     assert "return imageSize(counters[layer]).x;" not in generated_code
     assert "imageStore(counters[layer], pixel, uvec4(value));" not in generated_code
-    assert "int directCount = queryElement__glsl_image_counters_0();" in generated_code
+    assert "int directCount = queryElement_glsl_image_counters_0();" in generated_code
     assert (
-        "int nestedCount = queryViaDynamic__glsl_images_counters(1);" in generated_code
+        "int nestedCount = queryViaDynamic_glsl_images_counters(1);" in generated_code
     )
     assert (
-        "int initializedCount = queryViaInitializer__glsl_images_counters(0);"
+        "int initializedCount = queryViaInitializer_glsl_images_counters(0);"
         in generated_code
     )
     assert (
-        "int assignedCount = queryViaAssignment__glsl_images_counters(1);"
+        "int assignedCount = queryViaAssignment_glsl_images_counters(1);"
         in generated_code
     )
-    assert "storeViaExpression__glsl_images_counters(1);" in generated_code
+    assert "storeViaExpression_glsl_images_counters(1);" in generated_code
 
 
 def test_glsl_advanced_storage_image_helper_dynamic_array_elements_dispatch():
@@ -34574,36 +34762,36 @@ def test_glsl_advanced_storage_image_helper_dynamic_array_elements_dispatch():
         in generated_code
     )
     assert "switch (layer)" in generated_code
-    assert "vec4 touchMS__glsl_image_msImages_0(" in generated_code
-    assert "vec4 touchMS__glsl_image_msImages_1(" in generated_code
-    assert "return touchMS__glsl_image_msImages_0(pixel, sampleIndex, value);" in (
+    assert "vec4 touchMS_glsl_image_msImages_0(" in generated_code
+    assert "vec4 touchMS_glsl_image_msImages_1(" in generated_code
+    assert "return touchMS_glsl_image_msImages_0(pixel, sampleIndex, value);" in (
         generated_code
     )
-    assert "return touchMS__glsl_image_msImages_1(pixel, sampleIndex, value);" in (
+    assert "return touchMS_glsl_image_msImages_1(pixel, sampleIndex, value);" in (
         generated_code
     )
-    assert "uint bumpMS__glsl_image_msCounters_0(" in generated_code
-    assert "uint bumpMS__glsl_image_msCounters_1(" in generated_code
-    assert "return bumpMS__glsl_image_msCounters_0(pixel, sampleIndex, value);" in (
+    assert "uint bumpMS_glsl_image_msCounters_0(" in generated_code
+    assert "uint bumpMS_glsl_image_msCounters_1(" in generated_code
+    assert "return bumpMS_glsl_image_msCounters_0(pixel, sampleIndex, value);" in (
         generated_code
     )
-    assert "return bumpMS__glsl_image_msCounters_1(pixel, sampleIndex, value);" in (
+    assert "return bumpMS_glsl_image_msCounters_1(pixel, sampleIndex, value);" in (
         generated_code
     )
-    assert "return touchCube__glsl_image_cubeImages_0(coord, value);" in generated_code
-    assert "return touchCube__glsl_image_cubeImages_1(coord, value);" in generated_code
+    assert "return touchCube_glsl_image_cubeImages_0(coord, value);" in generated_code
+    assert "return touchCube_glsl_image_cubeImages_1(coord, value);" in generated_code
     assert (
-        "return touchCubeLayer__glsl_image_cubeLayerImages_0(coord, value);"
+        "return touchCubeLayer_glsl_image_cubeLayerImages_0(coord, value);"
         in generated_code
     )
     assert (
-        "return touchCubeLayer__glsl_image_cubeLayerImages_1(coord, value);"
+        "return touchCubeLayer_glsl_image_cubeLayerImages_1(coord, value);"
         in generated_code
     )
-    assert "touchMS__glsl_image_msImages_layer" not in generated_code
-    assert "bumpMS__glsl_image_msCounters_layer" not in generated_code
-    assert "touchCube__glsl_image_cubeImages_layer" not in generated_code
-    assert "touchCubeLayer__glsl_image_cubeLayerImages_layer" not in generated_code
+    assert "touchMS_glsl_image_msImages_layer" not in generated_code
+    assert "bumpMS_glsl_image_msCounters_layer" not in generated_code
+    assert "touchCube_glsl_image_cubeImages_layer" not in generated_code
+    assert "touchCubeLayer_glsl_image_cubeLayerImages_layer" not in generated_code
     assert "imageLoad(msImages[layer], pixel, sampleIndex)" not in generated_code
     assert "imageLoad(cubeImages[layer], coord)" not in generated_code
 
@@ -34649,15 +34837,15 @@ def test_glsl_multisample_storage_image_helper_array_elements_specialize_operati
     assert (
         "layout(r32ui, binding = 2) uniform uimage2DMS counters[2];" in generated_code
     )
-    assert "vec4 touch__glsl_image_images_0(" in generated_code
-    assert "vec4 touch__glsl_image_images_1(" in generated_code
+    assert "vec4 touch_glsl_image_images_0(" in generated_code
+    assert "vec4 touch_glsl_image_images_1(" in generated_code
     assert "imageLoad(images[0], pixel, sampleIndex)" in generated_code
     assert (
         "imageStore(images[1], pixel, sampleIndex, (oldValue + value));"
         in generated_code
     )
-    assert "uint bump__glsl_image_counters_0(" in generated_code
-    assert "uint bump__glsl_image_counters_1(" in generated_code
+    assert "uint bump_glsl_image_counters_0(" in generated_code
+    assert "uint bump_glsl_image_counters_1(" in generated_code
     assert (
         "return imageAtomicAdd(counters[0], pixel, sampleIndex, value);"
         in generated_code
@@ -34667,17 +34855,16 @@ def test_glsl_multisample_storage_image_helper_array_elements_specialize_operati
         in generated_code
     )
     assert (
-        "return touch__glsl_image_images_1(pixel, sampleIndex, value);"
-        in generated_code
+        "return touch_glsl_image_images_1(pixel, sampleIndex, value);" in generated_code
     )
     assert (
-        "return bump__glsl_image_counters_1(pixel, sampleIndex, value);"
+        "return bump_glsl_image_counters_1(pixel, sampleIndex, value);"
         in generated_code
     )
-    assert "vec4 directValue = touch__glsl_image_images_0(" in generated_code
-    assert "vec4 nestedValue = viaArray__glsl_targets_images(" in generated_code
-    assert "uint directCount = bump__glsl_image_counters_0(" in generated_code
-    assert "uint nestedCount = viaCounter__glsl_targets_counters(" in generated_code
+    assert "vec4 directValue = touch_glsl_image_images_0(" in generated_code
+    assert "vec4 nestedValue = viaArray_glsl_targets_images(" in generated_code
+    assert "uint directCount = bump_glsl_image_counters_0(" in generated_code
+    assert "uint nestedCount = viaCounter_glsl_targets_counters(" in generated_code
 
 
 def test_glsl_cube_storage_image_helper_array_elements_specialize_load_store():
@@ -34727,30 +34914,29 @@ def test_glsl_cube_storage_image_helper_array_elements_specialize_load_store():
         "layout(rgba16f, binding = 2) uniform imageCubeArray cubeLayerImages[2];"
         in generated_code
     )
-    assert "vec4 touchCube__glsl_image_cubeImages_0(" in generated_code
-    assert "vec4 touchCube__glsl_image_cubeImages_1(" in generated_code
+    assert "vec4 touchCube_glsl_image_cubeImages_0(" in generated_code
+    assert "vec4 touchCube_glsl_image_cubeImages_1(" in generated_code
     assert "imageLoad(cubeImages[0], coord)" in generated_code
     assert "imageStore(cubeImages[1], coord, (oldValue + value));" in generated_code
-    assert "vec4 touchCubeLayer__glsl_image_cubeLayerImages_0(" in generated_code
-    assert "vec4 touchCubeLayer__glsl_image_cubeLayerImages_1(" in generated_code
+    assert "vec4 touchCubeLayer_glsl_image_cubeLayerImages_0(" in generated_code
+    assert "vec4 touchCubeLayer_glsl_image_cubeLayerImages_1(" in generated_code
     assert "imageLoad(cubeLayerImages[0], coord)" in generated_code
     assert (
         "imageStore(cubeLayerImages[1], coord, (oldValue + value));" in generated_code
     )
-    assert "return touchCube__glsl_image_cubeImages_1(coord, value);" in generated_code
+    assert "return touchCube_glsl_image_cubeImages_1(coord, value);" in generated_code
     assert (
-        "return touchCubeLayer__glsl_image_cubeLayerImages_1(coord, value);"
+        "return touchCubeLayer_glsl_image_cubeLayerImages_1(coord, value);"
         in generated_code
     )
-    assert "vec4 directCube = touchCube__glsl_image_cubeImages_0(" in generated_code
-    assert "vec4 nestedCube = viaCube__glsl_images_cubeImages(" in generated_code
+    assert "vec4 directCube = touchCube_glsl_image_cubeImages_0(" in generated_code
+    assert "vec4 nestedCube = viaCube_glsl_images_cubeImages(" in generated_code
     assert (
-        "vec4 directLayer = touchCubeLayer__glsl_image_cubeLayerImages_0("
+        "vec4 directLayer = touchCubeLayer_glsl_image_cubeLayerImages_0("
         in generated_code
     )
     assert (
-        "vec4 nestedLayer = viaCubeLayer__glsl_images_cubeLayerImages("
-        in generated_code
+        "vec4 nestedLayer = viaCubeLayer_glsl_images_cubeLayerImages(" in generated_code
     )
 
 

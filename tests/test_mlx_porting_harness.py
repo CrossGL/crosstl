@@ -302,20 +302,20 @@ def _write_reference_accessor_report(
             layout(std430, binding = 1) buffer nested_out_block {
               vec2 nested_out_values[];
             };
-            void ReferenceAccessorOps_store__glsl_out_out_float(
+            void ReferenceAccessorOps_store_glsl_out_out_float(
                 inout float value,
                 int out_offset) {
               out_values[out_offset + 1] = value;
             }
-            void ReferenceAccessorTile_store__glsl_out_out_float(
+            void ReferenceAccessorTile_store_glsl_out_out_float(
                 ReferenceAccessorTile self,
                 int i,
                 int j,
                 int out_offset) {
-              ReferenceAccessorOps_store__glsl_out_out_float(
+              ReferenceAccessorOps_store_glsl_out_out_float(
                   self.val_frags[((i * 2) + j)], out_offset);
             }
-            void ReferenceAccessorStoreLoop__store(
+            void ReferenceAccessorStoreLoop_store(
                 ReferenceAccessorStoreLoop self,
                 inout vec2 stored,
                 int i,
@@ -329,12 +329,12 @@ def _write_reference_accessor_report(
               ReferenceAccessorTile tile;
               tile.val_frags[((1 * 2) + 1)] = 73.25;
               out_values[0] = tile.val_frags[((1 * 2) + 1)];
-              ReferenceAccessorTile_store__glsl_out_out_float(tile, 1, 1, 0);
+              ReferenceAccessorTile_store_glsl_out_out_float(tile, 1, 1, 0);
               ReferenceAccessorStoreLoop nestedStore;
               nestedStore.nestedTile.val_frags[((1 * 2) + 1)] =
                   vec2(11.5, 29.75);
               vec2 stored;
-              ReferenceAccessorStoreLoop__store(
+              ReferenceAccessorStoreLoop_store(
                   nestedStore, stored, 1, 1);
               nested_out_values[0] = stored;
             }

@@ -1098,17 +1098,21 @@ def test_codegen_struct_method_receiver_directions_reach_native_targets():
     crossgl = convert(MetalPreprocessor().preprocess(source))
     ast = parse_crossgl(crossgl)
     generated_targets = (
-        crossgl,
-        TranslatorHLSLCodeGen().generate(ast),
-        GLSLCodeGen().generate(ast),
+        (crossgl, "State__"),
+        (TranslatorHLSLCodeGen().generate(ast), "State__"),
+        (GLSLCodeGen().generate(ast), "State_"),
     )
 
     assert "int State__total(in thread State& self)" in normalize(crossgl)
 
-    for generated in generated_targets:
+    for generated, method_prefix in generated_targets:
         generated = normalize(generated)
-        mutable_signature = re.search(r"\bvoid State__mutate\s*\(([^)]*)\)", generated)
-        const_signature = re.search(r"\bint State__total\s*\(([^)]*)\)", generated)
+        mutable_signature = re.search(
+            rf"\bvoid {method_prefix}mutate\s*\(([^)]*)\)", generated
+        )
+        const_signature = re.search(
+            rf"\bint {method_prefix}total\s*\(([^)]*)\)", generated
+        )
 
         assert mutable_signature is not None
         assert "inout" in mutable_signature.group(1).split(",", 1)[0].split()
@@ -3649,7 +3653,7 @@ def test_static_template_sibling_helper_reaches_native_targets(tmp_path):
         assert "cannot lower unknown function" not in generated
         assert "load_u3cfloat_u3e" not in generated
     assert helper_name in generated_targets[0]
-    glsl_helper_name = "BlockKernel_float_4_load_float__glsl_src_src_float"
+    glsl_helper_name = "BlockKernel_float_4_load_float_glsl_src_src_float"
     assert (
         f"void {glsl_helper_name}(inout float dst[4], int src_offset);"
         in generated_targets[1]
@@ -6960,13 +6964,16 @@ def test_codegen_nested_const_reference_alias_reaches_native_targets(tmp_path):
     ast = parse_crossgl(crossgl)
     hlsl = TranslatorHLSLCodeGen().generate(ast)
     glsl = GLSLCodeGen().generate(ast)
-    for generated in (hlsl, glsl):
+    for generated, store_call in (
+        (hlsl, "StoreLoop__store"),
+        (glsl, "StoreLoop_store"),
+    ):
         assert "frag_at" not in generated
         assert "accum" not in generated
         assert "val_frags[4]" in generated
         assert "CrossGLMetalVectorIndex_vec2_set(stored," in generated
         assert "CrossGLMetalVectorIndex_vec2_get(self.Ctile.val_frags[" in generated
-        assert "StoreLoop__store(loop, stored" in generated
+        assert f"{store_call}(loop, stored" in generated
 
     dxc = shutil.which("dxc")
     glslang = shutil.which("glslangValidator")
@@ -8472,7 +8479,7 @@ def test_codegen_resource_vector_components_preserve_buffer_indexing(tmp_path):
     assert "buffer_load(buffer_load(values" not in normalized
 
     glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
-    assert f"{helper}_set_resource__glsl_data_values_uvec4" in glsl
+    assert f"{helper}_set_resource_glsl_data_values_uvec4" in glsl
     assert "values[(data_offset + int(element_index))] = value;" in glsl
     assert_opengl_compute_validates_if_available(
         glsl, tmp_path, "metal-resource-vector-components"
@@ -8922,17 +8929,27 @@ def test_mlx_materialized_collapsed_member_overloads_reach_project_targets(tmp_p
     for target, direct in direct_outputs.items():
         project = (repo / artifacts[target]["path"]).read_text(encoding="utf-8")
         scalar_type = scalar_types[target]
+        source_helpers = {half_helper, bfloat_helper}
+        source_wrappers = {half_wrapper, bfloat_wrapper}
+        if target == "directx":
+            expected_helpers = source_helpers
+            expected_wrappers = source_wrappers
+            unspecialized_helper = "FloorDivide__operator_call"
+        else:
+            expected_helpers = {name.replace("__", "_") for name in source_helpers}
+            expected_wrappers = {name.replace("__", "_") for name in source_wrappers}
+            unspecialized_helper = "FloorDivide_operator_call"
+        helper_pattern = "|".join(re.escape(name) for name in sorted(expected_helpers))
         definition_pattern = (
-            rf"{scalar_type} (FloorDivide__operator_call__metal_overload_[12])"
+            rf"{scalar_type} ({helper_pattern})"
             rf"\(inout FloorDivide self, {scalar_type} x, {scalar_type} y\) \{{"
         )
-        expected_helpers = {half_helper, bfloat_helper}
         assert set(re.findall(definition_pattern, direct)) == expected_helpers
         assert set(re.findall(definition_pattern, project)) == expected_helpers
-        for helper in (*expected_helpers, half_wrapper, bfloat_wrapper):
+        for helper in (*expected_helpers, *expected_wrappers):
             assert f"{helper}(" in direct
             assert f"{helper}(" in project
-        assert f"{scalar_type} FloorDivide__operator_call(" not in direct
+        assert f"{scalar_type} {unspecialized_helper}(" not in direct
 
     hlsl = direct_outputs["directx"]
     HLSLParser(HLSLLexer(hlsl).tokenize()).parse()
