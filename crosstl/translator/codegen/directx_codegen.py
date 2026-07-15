@@ -350,6 +350,41 @@ class DirectXUnresolvedSourceTypeError(ValueError):
         super().__init__(message)
 
 
+class DirectXTextureOffsetError(ValueError):
+    """Raised when an HLSL texture offset cannot preserve source semantics."""
+
+    project_diagnostic_code = (
+        "project.translate.directx-texture-offset-immediate-required"
+    )
+    missing_capabilities = ("directx.runtime-texture-offset-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        operation,
+        target_method,
+        blocking_expression,
+        function_name,
+        reason,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.operation = operation
+        self.target_method = target_method
+        self.blocking_expression = blocking_expression
+        self.function_name = function_name
+        self.reason = reason
+        self.source_location = source_location
+        self.operation_context = {
+            "sourceOperation": operation,
+            "targetMethod": target_method,
+            "function": function_name,
+            "blockingExpression": blocking_expression,
+            "reason": reason,
+        }
+
+
 class DirectXForInIterableError(ValueError):
     """Raised when a CrossGL for-in binding has no faithful HLSL lowering."""
 
@@ -1400,6 +1435,9 @@ class HLSLCodeGen:
         self.directx_resource_register_allocator = None
         self.literal_int_constants = {}
         self.literal_bool_constants = {}
+        self.hlsl_texture_offset_global_constants = {}
+        self.hlsl_texture_offset_parameter_constants = {}
+        self.current_hlsl_texture_offset_constants = None
         self.directx_specialization_constant_records = []
         self.directx_specialization_constant_global_ids = set()
         self.directx_specialization_constant_types = {}
@@ -2025,6 +2063,9 @@ class HLSLCodeGen:
         self.current_function_name = None
         self.current_function_return_type = None
         self.current_expression_expected_type = None
+        self.hlsl_texture_offset_global_constants = {}
+        self.hlsl_texture_offset_parameter_constants = {}
+        self.current_hlsl_texture_offset_constants = None
         self.current_hlsl_stage_output_lowering = None
         self.allow_hlsl_byteaddress_interlocked_member_expression = False
         self.local_variable_types = {}
@@ -2095,6 +2136,11 @@ class HLSLCodeGen:
                 self.literal_int_constants[record["name"]] = value
         self.literal_int_constants.update(
             self.referenced_hlsl_glsl_builtin_int_constants(ast)
+        )
+        self.hlsl_texture_offset_global_constants = (
+            self.collect_hlsl_texture_offset_global_constants(
+                getattr(ast, "constants", [])
+            )
         )
         self.literal_bool_constants = self.collect_hlsl_literal_bool_constants(
             getattr(ast, "constants", [])
@@ -3157,6 +3203,9 @@ class HLSLCodeGen:
             self.hlsl_program_has_amplification_stage(ast)
         )
 
+        self.hlsl_texture_offset_parameter_constants = (
+            self.collect_hlsl_texture_offset_parameter_constants(ast, target_stage)
+        )
         functions = getattr(ast, "functions", [])
         global_functions_by_name = {
             func.name: func
@@ -7193,6 +7242,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         }
         previous_hlsl_visible_int_constants = self.current_hlsl_visible_int_constants
         self.current_hlsl_visible_int_constants = self.hlsl_initial_int_constants(func)
+        previous_texture_offset_constants = self.current_hlsl_texture_offset_constants
+        self.current_hlsl_texture_offset_constants = (
+            self.hlsl_initial_texture_offset_constants(func)
+        )
+        for parameter_name, value in self.hlsl_texture_offset_parameter_constants.get(
+            id(func), {}
+        ).items():
+            self.current_hlsl_texture_offset_constants[parameter_name] = value
         needs_fallthrough_return = (
             return_type != "void" and not self.statement_body_terminates(body)
         )
@@ -7209,6 +7266,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         finally:
             self.current_hlsl_visible_int_constants = (
                 previous_hlsl_visible_int_constants
+            )
+            self.current_hlsl_texture_offset_constants = (
+                previous_texture_offset_constants
             )
         if needs_fallthrough_return:
             if (
@@ -11189,6 +11249,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if self.current_hlsl_visible_int_constants is None
             else dict(self.current_hlsl_visible_int_constants)
         )
+        previous_texture_offset_constants = (
+            None
+            if self.current_hlsl_texture_offset_constants is None
+            else dict(self.current_hlsl_texture_offset_constants)
+        )
 
         try:
             loop_range = self.hlsl_canonical_for_index_range(node)
@@ -11242,6 +11307,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 previous_unsupported_locals
             )
             self.current_hlsl_visible_int_constants = previous_visible_int_constants
+            self.current_hlsl_texture_offset_constants = (
+                previous_texture_offset_constants
+            )
 
     def generate_block(self, node, indent):
         indent_str = "    " * indent
@@ -11266,6 +11334,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if self.current_hlsl_visible_int_constants is None
             else dict(self.current_hlsl_visible_int_constants)
         )
+        previous_texture_offset_constants = (
+            None
+            if self.current_hlsl_texture_offset_constants is None
+            else dict(self.current_hlsl_texture_offset_constants)
+        )
         try:
             return self.generate_statement_body(body, indent)
         finally:
@@ -11278,6 +11351,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 previous_unsupported_locals
             )
             self.current_hlsl_visible_int_constants = previous_visible_int_constants
+            self.current_hlsl_texture_offset_constants = (
+                previous_texture_offset_constants
+            )
 
     def generate_for_in(self, node, indent):
         indent_str = "    " * indent
@@ -11296,6 +11372,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             None
             if self.current_hlsl_visible_int_constants is None
             else dict(self.current_hlsl_visible_int_constants)
+        )
+        previous_texture_offset_constants = (
+            None
+            if self.current_hlsl_texture_offset_constants is None
+            else dict(self.current_hlsl_texture_offset_constants)
         )
 
         try:
@@ -11417,6 +11498,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 previous_unsupported_locals
             )
             self.current_hlsl_visible_int_constants = previous_visible_int_constants
+            self.current_hlsl_texture_offset_constants = (
+                previous_texture_offset_constants
+            )
 
     def validate_hlsl_for_in_binding(self, node, pattern):
         binding_type = getattr(
@@ -12132,7 +12216,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if bitcast_call is not None:
                 return bitcast_call
 
-            texture_call = self.generate_texture_call(func_name, args)
+            texture_call = self.generate_texture_call(func_name, args, call_node=expr)
             if texture_call is not None:
                 return texture_call
 
@@ -18918,6 +19002,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             visible_constants.pop(getattr(param, "name", None), None)
         return visible_constants
 
+    def hlsl_initial_texture_offset_constants(self, func):
+        visible_constants = dict(self.hlsl_texture_offset_global_constants)
+        for param in getattr(func, "parameters", getattr(func, "params", [])) or []:
+            visible_constants.pop(getattr(param, "name", None), None)
+        return visible_constants
+
     def hlsl_update_visible_bool_constants(self, stmt, visible_bool_constants):
         if isinstance(stmt, VariableNode):
             name = getattr(stmt, "name", None)
@@ -18972,6 +19062,37 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if target_name:
             visible_int_constants.pop(target_name, None)
 
+    def hlsl_update_visible_texture_offset_constants(
+        self, stmt, visible_offset_constants
+    ):
+        if isinstance(stmt, VariableNode):
+            name = getattr(stmt, "name", None)
+            if not name:
+                return
+
+            visible_offset_constants.pop(name, None)
+            if "const" not in getattr(stmt, "qualifiers", []):
+                return
+
+            value = self.hlsl_texture_offset_constant_value(
+                getattr(stmt, "initial_value", None),
+                scalar_constants=self.hlsl_current_visible_int_constants(),
+                offset_constants=visible_offset_constants,
+            )
+            if value is not None and len(value) > 1:
+                visible_offset_constants[name] = value
+            return
+
+        assignment = self.hlsl_assignment_from_statement(stmt)
+        if assignment is None:
+            return
+
+        target_name = self.expression_name(
+            getattr(assignment, "target", getattr(assignment, "left", None))
+        )
+        if target_name:
+            visible_offset_constants.pop(target_name, None)
+
     def hlsl_current_visible_int_constants(self):
         if self.current_hlsl_visible_int_constants is not None:
             return self.current_hlsl_visible_int_constants
@@ -18981,6 +19102,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if self.current_hlsl_visible_int_constants is not None:
             self.hlsl_update_visible_int_constants(
                 stmt, self.current_hlsl_visible_int_constants
+            )
+        if self.current_hlsl_texture_offset_constants is not None:
+            self.hlsl_update_visible_texture_offset_constants(
+                stmt, self.current_hlsl_texture_offset_constants
             )
         return generated_code
 
@@ -25989,6 +26114,881 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def literal_int_value(self, expr, constants=None):
         return evaluate_literal_int_expression(expr, constants)
 
+    def hlsl_texture_offset_type_dimension(self, type_value):
+        type_name = self.type_name_string(type_value)
+        normalized = "".join(str(type_name or "").split()).lower()
+        if normalized in {
+            "char",
+            "short",
+            "int",
+            "long",
+            "int8_t",
+            "int16_t",
+            "int32_t",
+            "int64_t",
+            "uchar",
+            "ushort",
+            "uint",
+            "ulong",
+            "uint8_t",
+            "uint16_t",
+            "uint32_t",
+            "uint64_t",
+            "i8",
+            "i16",
+            "i32",
+            "u8",
+            "u16",
+            "u32",
+        }:
+            return 1
+        match = re.fullmatch(r"(?:i|u)?vec([234])(?:<(?:i|u)\d+>)?", normalized)
+        if match is None:
+            match = re.fullmatch(r"(?:int|uint)([234])", normalized)
+        return int(match.group(1)) if match is not None else None
+
+    def hlsl_texture_offset_constructor_parts(self, expr):
+        if isinstance(expr, FunctionCallNode):
+            return self.function_call_name(expr), list(
+                getattr(expr, "arguments", getattr(expr, "args", [])) or []
+            )
+        if isinstance(expr, ConstructorNode):
+            return self.type_name_string(getattr(expr, "constructor_type", None)), list(
+                getattr(expr, "arguments", []) or []
+            )
+        return None, None
+
+    def hlsl_texture_offset_constant_value(
+        self,
+        expr,
+        *,
+        scalar_constants=None,
+        offset_constants=None,
+    ):
+        scalar_constants = (
+            self.hlsl_current_visible_int_constants()
+            if scalar_constants is None
+            else scalar_constants
+        )
+        offset_constants = (
+            self.current_hlsl_texture_offset_constants or {}
+            if offset_constants is None
+            else offset_constants
+        )
+        scalar_constants = dict(scalar_constants)
+        scalar_constants.update(
+            {
+                name: value[0]
+                for name, value in offset_constants.items()
+                if len(value) == 1
+            }
+        )
+
+        if expr is None:
+            return None
+        if isinstance(expr, bool):
+            return None
+        if isinstance(expr, int):
+            return (expr,)
+        if isinstance(expr, str):
+            if expr in offset_constants:
+                return tuple(offset_constants[expr])
+            scalar = self.literal_int_value(expr, scalar_constants)
+            return (int(scalar),) if scalar is not None else None
+
+        name = getattr(expr, "name", None)
+        if isinstance(name, str):
+            if name in offset_constants:
+                return tuple(offset_constants[name])
+            if name in scalar_constants:
+                return (int(scalar_constants[name]),)
+
+        constructor_name, constructor_args = self.hlsl_texture_offset_constructor_parts(
+            expr
+        )
+        constructor_dimension = self.hlsl_texture_offset_type_dimension(
+            constructor_name
+        )
+        if constructor_dimension is not None:
+            components = []
+            for argument in constructor_args:
+                value = self.hlsl_texture_offset_constant_value(
+                    argument,
+                    scalar_constants=scalar_constants,
+                    offset_constants=offset_constants,
+                )
+                if value is None:
+                    return None
+                components.extend(value)
+            if len(components) == 1 and constructor_dimension > 1:
+                components *= constructor_dimension
+            if len(components) != constructor_dimension:
+                return None
+            return tuple(int(component) for component in components)
+
+        if isinstance(expr, CastNode):
+            dimension = self.hlsl_texture_offset_type_dimension(
+                getattr(expr, "target_type", None)
+            )
+            value = self.hlsl_texture_offset_constant_value(
+                getattr(expr, "expression", None),
+                scalar_constants=scalar_constants,
+                offset_constants=offset_constants,
+            )
+            if dimension is None or value is None:
+                return None
+            if len(value) == 1 and dimension > 1:
+                value *= dimension
+            return tuple(value) if len(value) == dimension else None
+
+        if isinstance(expr, UnaryOpNode):
+            value = self.hlsl_texture_offset_constant_value(
+                getattr(expr, "operand", None),
+                scalar_constants=scalar_constants,
+                offset_constants=offset_constants,
+            )
+            operator = getattr(expr, "operator", getattr(expr, "op", None))
+            if value is None or operator not in {"+", "-", "~"}:
+                return None
+            if operator == "+":
+                return value
+            if operator == "-":
+                return tuple(-component for component in value)
+            return tuple(~component for component in value)
+
+        if isinstance(expr, BinaryOpNode):
+            left = self.hlsl_texture_offset_constant_value(
+                getattr(expr, "left", None),
+                scalar_constants=scalar_constants,
+                offset_constants=offset_constants,
+            )
+            right = self.hlsl_texture_offset_constant_value(
+                getattr(expr, "right", None),
+                scalar_constants=scalar_constants,
+                offset_constants=offset_constants,
+            )
+            if left is None or right is None:
+                return None
+            if len(left) == 1 and len(right) > 1:
+                left *= len(right)
+            if len(right) == 1 and len(left) > 1:
+                right *= len(left)
+            if len(left) != len(right):
+                return None
+            operator = getattr(expr, "operator", getattr(expr, "op", None))
+            values = []
+            for lhs, rhs in zip(left, right):
+                value = self.hlsl_texture_offset_binary_component(lhs, operator, rhs)
+                if value is None:
+                    return None
+                values.append(value)
+            return tuple(values)
+
+        if isinstance(expr, TernaryOpNode):
+            condition = self.literal_int_value(
+                getattr(expr, "condition", None), scalar_constants
+            )
+            if condition is None:
+                return None
+            selected = (
+                getattr(expr, "true_expr", None)
+                if condition
+                else getattr(expr, "false_expr", None)
+            )
+            return self.hlsl_texture_offset_constant_value(
+                selected,
+                scalar_constants=scalar_constants,
+                offset_constants=offset_constants,
+            )
+
+        if isinstance(expr, (MemberAccessNode, SwizzleNode)):
+            components = getattr(expr, "member", None)
+            vector_expr = getattr(expr, "object_expr", None)
+            if components is None:
+                components = getattr(expr, "components", None)
+                vector_expr = getattr(expr, "vector_expr", None)
+            value = self.hlsl_texture_offset_constant_value(
+                vector_expr,
+                scalar_constants=scalar_constants,
+                offset_constants=offset_constants,
+            )
+            indices = self.hlsl_texture_offset_swizzle_indices(components)
+            if (
+                value is None
+                or indices is None
+                or any(i >= len(value) for i in indices)
+            ):
+                return None
+            return tuple(value[index] for index in indices)
+
+        scalar = self.literal_int_value(expr, scalar_constants)
+        return (int(scalar),) if scalar is not None else None
+
+    def hlsl_texture_offset_binary_component(self, left, operator, right):
+        if operator == "+":
+            return left + right
+        if operator == "-":
+            return left - right
+        if operator == "*":
+            return left * right
+        if operator == "/" and right != 0:
+            quotient = abs(left) // abs(right)
+            return -quotient if (left < 0) != (right < 0) else quotient
+        if operator == "%" and right != 0:
+            quotient = abs(left) // abs(right)
+            quotient = -quotient if (left < 0) != (right < 0) else quotient
+            return left - quotient * right
+        if operator == "<<" and right >= 0:
+            return left << right
+        if operator == ">>" and right >= 0:
+            return left >> right
+        if operator == "&":
+            return left & right
+        if operator == "|":
+            return left | right
+        if operator == "^":
+            return left ^ right
+        return None
+
+    def hlsl_texture_offset_swizzle_indices(self, components):
+        if not isinstance(components, str) or not components:
+            return None
+        groups = ("xyzw", "rgba", "stpq")
+        indices = []
+        for component in components:
+            index = next(
+                (group.find(component) for group in groups if component in group), -1
+            )
+            if index < 0:
+                return None
+            indices.append(index)
+        return tuple(indices)
+
+    def hlsl_immediate_texture_offset(
+        self,
+        func_name,
+        offset_expression,
+        texture_type,
+        target_method,
+        *,
+        call_node=None,
+    ):
+        value = self.hlsl_texture_offset_constant_value(offset_expression)
+        expected_dimension = self.resource_offset_dimension(func_name, texture_type)
+        texture_shape = self.sampled_texture_shape_type(texture_type) or "Texture"
+        qualified_method = f"{texture_shape}.{target_method}"
+        blocking_expression = self.hlsl_texture_offset_expression_label(
+            offset_expression
+        )
+        function_name = self.current_function_name or "<global>"
+        source_location = getattr(call_node, "source_location", None) or getattr(
+            offset_expression, "source_location", None
+        )
+
+        reason = None
+        detail = None
+        if value is None or (
+            expected_dimension is not None and len(value) != expected_dimension
+        ):
+            reason = "runtime-offset-requires-immediate"
+            detail = (
+                f"offset expression '{blocking_expression}' is runtime-derived, but "
+                f"HLSL {qualified_method} requires a compile-time immediate offset"
+            )
+        elif any(component < -8 or component > 7 for component in value):
+            reason = "immediate-offset-out-of-range"
+            detail = (
+                f"offset expression '{blocking_expression}' resolves to "
+                f"{self.hlsl_texture_offset_value_label(value)}, but HLSL "
+                f"{qualified_method} immediate components must be between -8 and 7"
+            )
+
+        if reason is not None:
+            raise DirectXTextureOffsetError(
+                f"DirectX texture operation '{func_name}' in function "
+                f"'{function_name}' cannot preserve source sampling semantics: "
+                f"{detail}. Use a literal or const offset in range, ensure every "
+                "reachable helper call supplies one concrete value, or target a "
+                "backend/profile with programmable texture offsets.",
+                operation=func_name,
+                target_method=qualified_method,
+                blocking_expression=blocking_expression,
+                function_name=function_name,
+                reason=reason,
+                source_location=source_location,
+            )
+
+        return self.hlsl_render_texture_offset_value(value)
+
+    def hlsl_texture_offset_expression_label(self, expression):
+        constructor_name, constructor_args = self.hlsl_texture_offset_constructor_parts(
+            expression
+        )
+        if constructor_name is not None:
+            arguments = ", ".join(
+                self.hlsl_texture_offset_expression_label(argument)
+                for argument in constructor_args
+            )
+            return f"{constructor_name}({arguments})"
+        return expression_debug_name(expression)
+
+    def hlsl_render_texture_offset_value(self, value):
+        if len(value) == 1:
+            return str(value[0])
+        return f"int{len(value)}({', '.join(str(component) for component in value)})"
+
+    def hlsl_texture_offset_value_label(self, value):
+        if len(value) == 1:
+            return str(value[0])
+        return f"({', '.join(str(component) for component in value)})"
+
+    def collect_hlsl_texture_offset_global_constants(self, constants):
+        resolved = {}
+        pending = list(constants or [])
+        changed = True
+        while changed:
+            changed = False
+            remaining = []
+            for constant in pending:
+                name = getattr(constant, "name", None)
+                dimension = self.hlsl_texture_offset_type_dimension(
+                    getattr(constant, "const_type", None)
+                )
+                if not name or dimension is None or dimension == 1:
+                    continue
+                value = self.hlsl_texture_offset_constant_value(
+                    getattr(constant, "value", None),
+                    scalar_constants=self.literal_int_constants,
+                    offset_constants=resolved,
+                )
+                if value is None:
+                    remaining.append(constant)
+                    continue
+                if len(value) == dimension:
+                    resolved[name] = value
+                    changed = True
+            pending = remaining
+        return resolved
+
+    def hlsl_texture_offset_analysis_functions(self, ast, target_stage):
+        functions = [
+            function
+            for function in getattr(ast, "functions", []) or []
+            if getattr(function, "name", None) not in self.hlsl_omitted_function_names
+            and should_emit_qualified_function(
+                target_stage, function_stage_name(function)
+            )
+        ]
+        for stage_type, stage in getattr(ast, "stages", {}).items():
+            stage_name = normalize_stage_name(stage_type)
+            if not stage_matches(target_stage, stage_name):
+                continue
+            functions.extend(getattr(stage, "local_functions", []) or [])
+            entry_point = getattr(stage, "entry_point", None)
+            if entry_point is not None:
+                functions.append(entry_point)
+        deduplicated = []
+        seen = set()
+        for function in functions:
+            if id(function) in seen or getattr(function, "body", None) is None:
+                continue
+            seen.add(id(function))
+            deduplicated.append(function)
+        return deduplicated
+
+    def hlsl_texture_offset_operation_requires_immediate(self, operation):
+        return (
+            is_texture_sample_basic_offset_operation(operation)
+            or is_texture_sample_lod_offset_operation(operation)
+            or is_texture_sample_grad_offset_operation(operation)
+            or is_projected_texture_basic_offset_operation(operation)
+            or is_projected_texture_lod_offset_operation(operation)
+            or is_projected_texture_grad_offset_operation(operation)
+            or is_texture_compare_offset_operation(operation)
+        )
+
+    def collect_hlsl_texture_offset_parameter_constants(self, ast, target_stage):
+        functions = self.hlsl_texture_offset_analysis_functions(ast, target_stage)
+        if not any(
+            self.hlsl_texture_offset_operation_requires_immediate(
+                self.function_call_name(node)
+            )
+            for function in functions
+            for node in self.walk_ast(getattr(function, "body", None))
+            if isinstance(node, FunctionCallNode)
+        ):
+            return {}
+
+        functions_by_name = {}
+        for function in functions:
+            name = getattr(function, "name", None)
+            if name:
+                functions_by_name.setdefault(name, []).append(function)
+
+        mutated_parameter_indices = self.hlsl_texture_offset_mutated_parameter_indices(
+            functions, functions_by_name
+        )
+
+        proven = {}
+        for _ in range(len(functions) + 1):
+            incoming = {id(function): [] for function in functions}
+            for caller in functions:
+                scalar_constants = self.hlsl_initial_int_constants(caller)
+                offset_constants = self.hlsl_initial_texture_offset_constants(caller)
+                for parameter_name, value in proven.get(id(caller), {}).items():
+                    offset_constants[parameter_name] = value
+                self.collect_hlsl_texture_offset_calls_from_body(
+                    getattr(caller, "body", None),
+                    functions_by_name,
+                    scalar_constants,
+                    offset_constants,
+                    incoming,
+                )
+
+            updated = {}
+            for function in functions:
+                calls = incoming[id(function)]
+                if not calls:
+                    continue
+                parameter_values = {}
+                parameters = list(
+                    getattr(function, "parameters", getattr(function, "params", []))
+                    or []
+                )
+                for index, parameter in enumerate(parameters):
+                    if index in mutated_parameter_indices[id(function)]:
+                        continue
+                    values = [arguments[index] for arguments in calls]
+                    first = values[0]
+                    if first is not None and all(
+                        value == first for value in values[1:]
+                    ):
+                        parameter_values[getattr(parameter, "name", "")] = first
+                if parameter_values:
+                    updated[id(function)] = parameter_values
+            if updated == proven:
+                break
+            proven = updated
+        return proven
+
+    def hlsl_texture_offset_call_target(self, call, functions_by_name):
+        name = self.function_call_name(call)
+        candidates = list(functions_by_name.get(name, []))
+        if not candidates and isinstance(name, str) and "::" in name:
+            candidates = list(functions_by_name.get(name.rsplit("::", 1)[-1], []))
+        if len(candidates) == 1:
+            return candidates[0]
+        if not candidates:
+            return None
+        argument_count = len(
+            getattr(call, "arguments", getattr(call, "args", [])) or []
+        )
+        arity_matches = [
+            candidate
+            for candidate in candidates
+            if len(
+                getattr(candidate, "parameters", getattr(candidate, "params", [])) or []
+            )
+            == argument_count
+        ]
+        return arity_matches[0] if len(arity_matches) == 1 else None
+
+    def hlsl_texture_offset_write_root_name(self, expression):
+        if isinstance(expression, str):
+            return expression
+        if isinstance(
+            expression, (ArrayAccessNode, MemberAccessNode, PointerAccessNode)
+        ):
+            child = getattr(
+                expression,
+                "array_expr",
+                getattr(
+                    expression,
+                    "object_expr",
+                    getattr(expression, "pointer_expr", None),
+                ),
+            )
+            return self.hlsl_texture_offset_write_root_name(child)
+        if isinstance(expression, SwizzleNode):
+            return self.hlsl_texture_offset_write_root_name(
+                getattr(expression, "vector_expr", None)
+            )
+        name = getattr(expression, "name", None)
+        if isinstance(name, str):
+            return name
+        return None
+
+    def hlsl_texture_offset_mutated_parameter_indices(
+        self, functions, functions_by_name
+    ):
+        parameter_indices = {}
+        mutated = {}
+        for function in functions:
+            parameters = list(
+                getattr(function, "parameters", getattr(function, "params", [])) or []
+            )
+            parameter_indices[id(function)] = {
+                getattr(parameter, "name", None): index
+                for index, parameter in enumerate(parameters)
+                if getattr(parameter, "name", None)
+            }
+            mutated[id(function)] = {
+                index
+                for index, parameter in enumerate(parameters)
+                if set(self.hlsl_parameter_qualifiers(parameter)) & {"out", "inout"}
+            }
+
+            for node in self.walk_ast(getattr(function, "body", None)):
+                target = None
+                if isinstance(node, AssignmentNode):
+                    target = getattr(node, "target", getattr(node, "left", None))
+                elif isinstance(node, UnaryOpNode) and getattr(
+                    node, "operator", getattr(node, "op", None)
+                ) in {"++", "--"}:
+                    target = getattr(node, "operand", None)
+                root_name = self.hlsl_texture_offset_write_root_name(target)
+                index = parameter_indices[id(function)].get(root_name)
+                if index is not None:
+                    mutated[id(function)].add(index)
+
+        changed = True
+        while changed:
+            changed = False
+            for function in functions:
+                caller_parameters = parameter_indices[id(function)]
+                for node in self.walk_ast(getattr(function, "body", None)):
+                    if not isinstance(node, FunctionCallNode):
+                        continue
+                    callee = self.hlsl_texture_offset_call_target(
+                        node, functions_by_name
+                    )
+                    if callee is None:
+                        continue
+                    arguments = list(
+                        getattr(node, "arguments", getattr(node, "args", [])) or []
+                    )
+                    callee_parameters = list(
+                        getattr(
+                            callee,
+                            "parameters",
+                            getattr(callee, "params", []),
+                        )
+                        or []
+                    )
+                    for index in mutated[id(callee)]:
+                        if index >= len(arguments) or index >= len(callee_parameters):
+                            continue
+                        if not set(
+                            self.hlsl_parameter_qualifiers(callee_parameters[index])
+                        ) & {"out", "inout"}:
+                            continue
+                        root_name = self.hlsl_texture_offset_write_root_name(
+                            arguments[index]
+                        )
+                        caller_index = caller_parameters.get(root_name)
+                        if (
+                            caller_index is not None
+                            and caller_index not in mutated[id(function)]
+                        ):
+                            mutated[id(function)].add(caller_index)
+                            changed = True
+        return mutated
+
+    def collect_hlsl_texture_offset_calls_from_expression(
+        self,
+        expression,
+        functions_by_name,
+        scalar_constants,
+        offset_constants,
+        incoming,
+    ):
+        if expression is None:
+            return
+        for node in self.walk_ast(expression):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            callee = self.hlsl_texture_offset_call_target(node, functions_by_name)
+            if callee is None:
+                continue
+            arguments = list(
+                getattr(node, "arguments", getattr(node, "args", [])) or []
+            )
+            parameters = list(
+                getattr(callee, "parameters", getattr(callee, "params", [])) or []
+            )
+            values = []
+            for index, parameter in enumerate(parameters):
+                argument = (
+                    arguments[index]
+                    if index < len(arguments)
+                    else getattr(parameter, "default_value", None)
+                )
+                values.append(
+                    self.hlsl_texture_offset_constant_value(
+                        argument,
+                        scalar_constants=scalar_constants,
+                        offset_constants=offset_constants,
+                    )
+                )
+            incoming[id(callee)].append(values)
+
+    def hlsl_update_texture_offset_analysis_constants(
+        self, statement, scalar_constants, offset_constants
+    ):
+        if isinstance(statement, VariableNode):
+            name = getattr(statement, "name", None)
+            if not name:
+                return
+            scalar_constants.pop(name, None)
+            offset_constants.pop(name, None)
+            if "const" not in getattr(statement, "qualifiers", []):
+                return
+            value = self.hlsl_texture_offset_constant_value(
+                getattr(statement, "initial_value", None),
+                scalar_constants=scalar_constants,
+                offset_constants=offset_constants,
+            )
+            if value is None:
+                return
+            if len(value) == 1:
+                scalar_constants[name] = value[0]
+            else:
+                offset_constants[name] = value
+            return
+
+        assignment = self.hlsl_assignment_from_statement(statement)
+        if assignment is None:
+            return
+        target_name = self.expression_name(
+            getattr(assignment, "target", getattr(assignment, "left", None))
+        )
+        if target_name:
+            scalar_constants.pop(target_name, None)
+            offset_constants.pop(target_name, None)
+
+    def collect_hlsl_texture_offset_calls_from_body(
+        self,
+        body,
+        functions_by_name,
+        scalar_constants,
+        offset_constants,
+        incoming,
+    ):
+        for statement in self.hlsl_statement_body_items(body):
+            if isinstance(statement, VariableNode):
+                self.collect_hlsl_texture_offset_calls_from_expression(
+                    getattr(statement, "initial_value", None),
+                    functions_by_name,
+                    scalar_constants,
+                    offset_constants,
+                    incoming,
+                )
+                self.hlsl_update_texture_offset_analysis_constants(
+                    statement, scalar_constants, offset_constants
+                )
+                continue
+
+            if isinstance(statement, BlockNode):
+                self.collect_hlsl_texture_offset_calls_from_body(
+                    statement,
+                    functions_by_name,
+                    dict(scalar_constants),
+                    dict(offset_constants),
+                    incoming,
+                )
+                continue
+
+            if isinstance(statement, IfNode):
+                self.collect_hlsl_texture_offset_calls_from_expression(
+                    getattr(statement, "condition", None),
+                    functions_by_name,
+                    scalar_constants,
+                    offset_constants,
+                    incoming,
+                )
+                for else_if_condition in (
+                    getattr(statement, "else_if_conditions", []) or []
+                ):
+                    self.collect_hlsl_texture_offset_calls_from_expression(
+                        else_if_condition,
+                        functions_by_name,
+                        scalar_constants,
+                        offset_constants,
+                        incoming,
+                    )
+                branches = [
+                    getattr(
+                        statement, "then_branch", getattr(statement, "if_body", None)
+                    ),
+                    *list(getattr(statement, "else_if_bodies", []) or []),
+                    getattr(
+                        statement, "else_branch", getattr(statement, "else_body", None)
+                    ),
+                ]
+                for branch in branches:
+                    if branch is not None:
+                        self.collect_hlsl_texture_offset_calls_from_body(
+                            branch,
+                            functions_by_name,
+                            dict(scalar_constants),
+                            dict(offset_constants),
+                            incoming,
+                        )
+                continue
+
+            if isinstance(statement, ForNode):
+                loop_scalars = dict(scalar_constants)
+                loop_offsets = dict(offset_constants)
+                initializers = getattr(statement, "init", None)
+                if not isinstance(initializers, list):
+                    initializers = [initializers] if initializers is not None else []
+                for initializer in initializers:
+                    self.collect_hlsl_texture_offset_calls_from_expression(
+                        initializer,
+                        functions_by_name,
+                        loop_scalars,
+                        loop_offsets,
+                        incoming,
+                    )
+                    self.hlsl_update_texture_offset_analysis_constants(
+                        initializer, loop_scalars, loop_offsets
+                    )
+                for expression in (
+                    getattr(statement, "condition", None),
+                    getattr(statement, "update", None),
+                ):
+                    self.collect_hlsl_texture_offset_calls_from_expression(
+                        expression,
+                        functions_by_name,
+                        loop_scalars,
+                        loop_offsets,
+                        incoming,
+                    )
+                self.collect_hlsl_texture_offset_calls_from_body(
+                    getattr(statement, "body", None),
+                    functions_by_name,
+                    loop_scalars,
+                    loop_offsets,
+                    incoming,
+                )
+                continue
+
+            if isinstance(statement, ForInNode):
+                self.collect_hlsl_texture_offset_calls_from_expression(
+                    getattr(statement, "iterable", None),
+                    functions_by_name,
+                    scalar_constants,
+                    offset_constants,
+                    incoming,
+                )
+                loop_scalars = dict(scalar_constants)
+                loop_offsets = dict(offset_constants)
+                pattern_name = self.hlsl_declaration_identifier_name(
+                    getattr(statement, "pattern", None)
+                )
+                loop_scalars.pop(pattern_name, None)
+                loop_offsets.pop(pattern_name, None)
+                self.collect_hlsl_texture_offset_calls_from_body(
+                    getattr(statement, "body", None),
+                    functions_by_name,
+                    loop_scalars,
+                    loop_offsets,
+                    incoming,
+                )
+                continue
+
+            if isinstance(statement, (WhileNode, DoWhileNode, LoopNode)):
+                self.collect_hlsl_texture_offset_calls_from_expression(
+                    getattr(statement, "condition", None),
+                    functions_by_name,
+                    scalar_constants,
+                    offset_constants,
+                    incoming,
+                )
+                self.collect_hlsl_texture_offset_calls_from_body(
+                    getattr(statement, "body", None),
+                    functions_by_name,
+                    dict(scalar_constants),
+                    dict(offset_constants),
+                    incoming,
+                )
+                continue
+
+            if isinstance(statement, SwitchNode):
+                self.collect_hlsl_texture_offset_calls_from_expression(
+                    getattr(statement, "expression", None),
+                    functions_by_name,
+                    scalar_constants,
+                    offset_constants,
+                    incoming,
+                )
+                for case in getattr(statement, "cases", []) or []:
+                    self.collect_hlsl_texture_offset_calls_from_expression(
+                        getattr(case, "value", None),
+                        functions_by_name,
+                        scalar_constants,
+                        offset_constants,
+                        incoming,
+                    )
+                    self.collect_hlsl_texture_offset_calls_from_body(
+                        getattr(case, "statements", []),
+                        functions_by_name,
+                        dict(scalar_constants),
+                        dict(offset_constants),
+                        incoming,
+                    )
+                self.collect_hlsl_texture_offset_calls_from_body(
+                    getattr(statement, "default_case", None),
+                    functions_by_name,
+                    dict(scalar_constants),
+                    dict(offset_constants),
+                    incoming,
+                )
+                continue
+
+            if isinstance(statement, MatchNode):
+                self.collect_hlsl_texture_offset_calls_from_expression(
+                    getattr(statement, "expression", None),
+                    functions_by_name,
+                    scalar_constants,
+                    offset_constants,
+                    incoming,
+                )
+                for arm in getattr(statement, "arms", []) or []:
+                    arm_scalars = dict(scalar_constants)
+                    arm_offsets = dict(offset_constants)
+                    pattern_name = self.hlsl_declaration_identifier_name(
+                        getattr(arm, "pattern", None)
+                    )
+                    arm_scalars.pop(pattern_name, None)
+                    arm_offsets.pop(pattern_name, None)
+                    self.collect_hlsl_texture_offset_calls_from_expression(
+                        getattr(arm, "guard", None),
+                        functions_by_name,
+                        arm_scalars,
+                        arm_offsets,
+                        incoming,
+                    )
+                    self.collect_hlsl_texture_offset_calls_from_body(
+                        getattr(arm, "body", None),
+                        functions_by_name,
+                        arm_scalars,
+                        arm_offsets,
+                        incoming,
+                    )
+                continue
+
+            self.collect_hlsl_texture_offset_calls_from_expression(
+                statement,
+                functions_by_name,
+                scalar_constants,
+                offset_constants,
+                incoming,
+            )
+            self.hlsl_update_texture_offset_analysis_constants(
+                statement, scalar_constants, offset_constants
+            )
+
     def initial_literal_int_constants(self, func):
         visible_constants = dict(self.literal_int_constants)
         for param in getattr(func, "parameters", []) or []:
@@ -27661,7 +28661,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def unsupported_texture_sample_offset_call(self, func_name, reason):
         return unsupported_texture_offset_call_expression("DirectX", func_name, reason)
 
-    def generate_texture_sample_offset_call(self, func_name, args):
+    def generate_texture_sample_offset_call(self, func_name, args, *, call_node=None):
         parts = self.texture_call_parts(args, func_name)
         if parts is None:
             return self.unsupported_texture_sample_offset_call(
@@ -27683,13 +28683,26 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return self.unsupported_texture_sample_offset_call(
                     func_name, count_error
                 )
-            offset = self.generate_expression(extra_args[0])
             if len(extra_args) == 2:
                 bias = self.generate_expression(extra_args[1])
+                offset = self.hlsl_immediate_texture_offset(
+                    func_name,
+                    extra_args[0],
+                    texture_type,
+                    "SampleBias",
+                    call_node=call_node,
+                )
                 return (
                     f"{texture_name}.SampleBias("
                     f"{sampler_name}, {coord}, {bias}, {offset})"
                 )
+            offset = self.hlsl_immediate_texture_offset(
+                func_name,
+                extra_args[0],
+                texture_type,
+                "Sample",
+                call_node=call_node,
+            )
             return f"{texture_name}.Sample({sampler_name}, {coord}, {offset})"
 
         if is_texture_sample_lod_offset_operation(func_name):
@@ -27701,7 +28714,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     func_name, count_error
                 )
             lod = self.generate_expression(extra_args[0])
-            offset = self.generate_expression(extra_args[1])
+            offset = self.hlsl_immediate_texture_offset(
+                func_name,
+                extra_args[1],
+                texture_type,
+                "SampleLevel",
+                call_node=call_node,
+            )
             return (
                 f"{texture_name}.SampleLevel({sampler_name}, {coord}, {lod}, {offset})"
             )
@@ -27716,7 +28735,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
             ddx = self.generate_expression(extra_args[0])
             ddy = self.generate_expression(extra_args[1])
-            offset = self.generate_expression(extra_args[2])
+            offset = self.hlsl_immediate_texture_offset(
+                func_name,
+                extra_args[2],
+                texture_type,
+                "SampleGrad",
+                call_node=call_node,
+            )
             return (
                 f"{texture_name}.SampleGrad("
                 f"{sampler_name}, {coord}, {ddx}, {ddy}, {offset})"
@@ -27777,7 +28802,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return f"float3({projected_coord}, {self.vector_component(coord, 'z')})"
         return projected_coord
 
-    def generate_texture_projected_call(self, func_name, args):
+    def generate_texture_projected_call(self, func_name, args, *, call_node=None):
         parts = self.texture_call_parts(args, func_name)
         if parts is None:
             return self.unsupported_texture_projected_call(
@@ -27821,14 +28846,26 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     func_name, texture_sample_offset_capability_error("DirectX")
                 )
             if len(extra_args) == 1:
-                offset = self.generate_expression(extra_args[0])
+                offset = self.hlsl_immediate_texture_offset(
+                    func_name,
+                    extra_args[0],
+                    texture_type,
+                    "Sample",
+                    call_node=call_node,
+                )
                 return (
                     f"{texture_name}.Sample("
                     f"{sampler_name}, {projected_coord}, {offset})"
                 )
             if len(extra_args) == 2:
-                offset = self.generate_expression(extra_args[0])
                 bias = self.generate_expression(extra_args[1])
+                offset = self.hlsl_immediate_texture_offset(
+                    func_name,
+                    extra_args[0],
+                    texture_type,
+                    "SampleBias",
+                    call_node=call_node,
+                )
                 return (
                     f"{texture_name}.SampleBias("
                     f"{sampler_name}, {projected_coord}, {bias}, {offset})"
@@ -27856,7 +28893,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     func_name, texture_sample_offset_capability_error("DirectX")
                 )
             lod = self.generate_expression(extra_args[0])
-            offset = self.generate_expression(extra_args[1])
+            offset = self.hlsl_immediate_texture_offset(
+                func_name,
+                extra_args[1],
+                texture_type,
+                "SampleLevel",
+                call_node=call_node,
+            )
             return (
                 f"{texture_name}.SampleLevel("
                 f"{sampler_name}, {projected_coord}, {lod}, {offset})"
@@ -27887,7 +28930,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
             ddx = self.generate_expression(extra_args[0])
             ddy = self.generate_expression(extra_args[1])
-            offset = self.generate_expression(extra_args[2])
+            offset = self.hlsl_immediate_texture_offset(
+                func_name,
+                extra_args[2],
+                texture_type,
+                "SampleGrad",
+                call_node=call_node,
+            )
             return (
                 f"{texture_name}.SampleGrad("
                 f"{sampler_name}, {projected_coord}, {ddx}, {ddy}, {offset})"
@@ -28004,7 +29053,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         return f"float3({projected_coord}, {self.vector_component(coord, 'z')})"
 
-    def generate_texture_compare_call(self, func_name, args):
+    def generate_texture_compare_call(self, func_name, args, *, call_node=None):
         parts = self.texture_call_parts(args, func_name)
         if parts is None:
             return self.unsupported_texture_compare_call(
@@ -28055,7 +29104,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     return self.unsupported_texture_compare_call(
                         func_name, texture_compare_offset_capability_error("DirectX")
                     )
-                offset = self.generate_expression(extra_args[1])
+                offset = self.hlsl_immediate_texture_offset(
+                    func_name,
+                    extra_args[1],
+                    texture_type,
+                    "SampleCmp",
+                    call_node=call_node,
+                )
                 return (
                     f"{texture_name}.SampleCmp("
                     f"{sampler_name}, {projected_coord}, {compare}, {offset})"
@@ -28143,7 +29198,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return self.unsupported_texture_compare_call(
                     func_name, texture_compare_offset_capability_error("DirectX")
                 )
-            offset = self.generate_expression(extra_args[1])
+            offset = self.hlsl_immediate_texture_offset(
+                func_name,
+                extra_args[1],
+                texture_type,
+                "SampleCmp",
+                call_node=call_node,
+            )
             return f"{texture_name}.SampleCmp({sampler_name}, {coord}, {compare}, {offset})"
 
         if is_texture_compare_lod_operation(func_name):
@@ -33193,7 +34254,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             f"float{expected_dimension}, got {self.type_name_string(arg_type)}"
         )
 
-    def generate_texture_call(self, func_name, args):
+    def generate_texture_call(self, func_name, args, *, call_node=None):
         if not func_name:
             return None
 
@@ -33367,7 +34428,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return storage_image_operation
 
         if is_texture_compare_operation(func_name):
-            return self.generate_texture_compare_call(func_name, args)
+            return self.generate_texture_compare_call(
+                func_name, args, call_node=call_node
+            )
 
         if is_texture_gather_compare_operation(func_name):
             return self.generate_texture_gather_compare_call(func_name, args)
@@ -33376,10 +34439,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return self.generate_texture_gather_call(func_name, args)
 
         if is_texture_sample_offset_operation(func_name):
-            return self.generate_texture_sample_offset_call(func_name, args)
+            return self.generate_texture_sample_offset_call(
+                func_name, args, call_node=call_node
+            )
 
         if is_projected_texture_operation(func_name):
-            return self.generate_texture_projected_call(func_name, args)
+            return self.generate_texture_projected_call(
+                func_name, args, call_node=call_node
+            )
 
         if is_texture_sample_operation(func_name):
             parts = self.texture_call_parts(args, func_name)
