@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 import shutil
@@ -2276,6 +2277,156 @@ def test_opengl_compute_runtime_executes_bounded_wave_shuffle_and_fill_up_on_dev
     assert report["summary"]["failedCount"] == 0, json.dumps(report, indent=2)
     result = report["results"][0]
     assert result["status"] == "passed", json.dumps(report, indent=2)
+    assert result["comparisons"] == [
+        {
+            "name": "output",
+            "kind": "buffer",
+            "status": "passed",
+            "tolerance": {"absolute": 0.0, "relative": 0.0},
+            "expected": {"dtype": "uint32", "shape": [8]},
+            "actual": {"dtype": "uint32", "shape": [8]},
+            "mismatchCount": 0,
+            "maxAbsoluteError": 0.0,
+            "maxRelativeError": 0.0,
+        }
+    ]
+
+
+def test_opengl_glsl_wave_shuffle_executes_via_vulkan_on_device(tmp_path):
+    enabled = os.environ.get("CROSTL_RUN_VULKAN_DEVICE_TEST")
+    if enabled != "1":
+        pytest.skip(
+            "set CROSTL_RUN_VULKAN_DEVICE_TEST=1 to run generated OpenGL GLSL "
+            "through Vulkan"
+        )
+    if not sys.platform.startswith("linux"):
+        pytest.fail("OpenGL GLSL Vulkan runtime proof requires Linux")
+
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.fail(
+            "glslangValidator is required for the OpenGL GLSL Vulkan runtime proof"
+        )
+    spirv_val = shutil.which("spirv-val")
+    if spirv_val is None:
+        pytest.fail("spirv-val is required for the OpenGL GLSL Vulkan runtime proof")
+    try:
+        __import__("vulkan")
+    except ImportError as exc:
+        pytest.fail(f"Vulkan runtime dependency is unavailable: {exc}")
+
+    artifact_report, manifest = _prepare_opengl_bounded_wave_shuffle_runtime_fixture(
+        tmp_path
+    )
+    opengl_artifact = artifact_report["artifacts"][0]
+    generated_glsl_path = tmp_path / opengl_artifact["path"]
+    spirv_path = tmp_path / "out" / "vulkan" / "bounded_wave_shuffle_and_fill_up.spv"
+    spirv_path.parent.mkdir(parents=True, exist_ok=True)
+
+    compile_result = subprocess.run(
+        [
+            glslang,
+            "--target-env",
+            "vulkan1.1",
+            "-S",
+            "comp",
+            "-o",
+            str(spirv_path),
+            str(generated_glsl_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert compile_result.returncode == 0, json.dumps(
+        {
+            "action": "compile-generated-opengl-glsl-for-vulkan-runtime",
+            "returncode": compile_result.returncode,
+            "stdout": compile_result.stdout,
+            "stderr": compile_result.stderr,
+        },
+        indent=2,
+    )
+
+    validation_result = subprocess.run(
+        [spirv_val, "--target-env", "vulkan1.1", str(spirv_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert validation_result.returncode == 0, json.dumps(
+        {
+            "action": "validate-generated-opengl-glsl-vulkan-spirv",
+            "returncode": validation_result.returncode,
+            "stdout": validation_result.stdout,
+            "stderr": validation_result.stderr,
+        },
+        indent=2,
+    )
+
+    execution_boundary = "generated-opengl-glsl-compiled-to-vulkan-spirv"
+    vulkan_artifact_report = copy.deepcopy(artifact_report)
+    vulkan_artifact_report["project"]["targets"] = ["vulkan"]
+    vulkan_artifact = vulkan_artifact_report["artifacts"][0]
+    vulkan_artifact["id"] = f"vulkan-execution|{opengl_artifact['id']}"
+    vulkan_artifact["path"] = spirv_path.relative_to(tmp_path).as_posix()
+    vulkan_artifact["target"] = "vulkan"
+    vulkan_artifact["metadata"] = {
+        **vulkan_artifact.get("metadata", {}),
+        "executionBoundary": execution_boundary,
+        "generatedArtifactPath": opengl_artifact["path"],
+        "generatedArtifactTarget": "opengl",
+    }
+
+    adapter_id = "opengl-glsl-via-vulkan-runtime"
+    vulkan_manifest = copy.deepcopy(manifest)
+    vulkan_manifest["adapters"] = [
+        {
+            "id": adapter_id,
+            "target": "vulkan",
+            "executor": "vulkan",
+            "adapterKind": "vulkan-native-runtime",
+            "platformRequirements": {
+                "platformClass": "linux",
+                "requiredTools": ["glslangValidator", "spirv-val"],
+            },
+            "metadata": {"executionBoundary": execution_boundary},
+        }
+    ]
+    vulkan_test = vulkan_manifest["tests"][0]
+    vulkan_test["selector"]["target"] = "vulkan"
+    vulkan_test["executor"] = "vulkan"
+    vulkan_test["adapter"] = adapter_id
+    vulkan_test["platformRequirements"] = {
+        "platformClass": "linux",
+        "requiredTools": ["glslangValidator", "spirv-val"],
+    }
+    vulkan_test["metadata"] = {
+        **vulkan_test.get("metadata", {}),
+        "executionBoundary": execution_boundary,
+    }
+
+    report = verify_runtime_test_manifest(
+        vulkan_artifact_report,
+        vulkan_manifest,
+        executors={
+            "vulkan": VulkanRuntimeParityAdapter(
+                runtime=VulkanComputeRuntime(),
+                required_tools=("spirv-val",),
+            )
+        },
+    )
+
+    failure_context = json.dumps(report, indent=2, sort_keys=True)
+    assert report["success"] is True, failure_context
+    assert report["summary"]["passedCount"] == 1, failure_context
+    assert report["summary"]["skippedCount"] == 0, failure_context
+    assert report["summary"]["unavailableCount"] == 0, failure_context
+    assert report["summary"]["failedCount"] == 0, failure_context
+    result = report["results"][0]
+    assert result["status"] == "passed", failure_context
+    runtime_adapter = report["runtimeTestPlan"]["adapters"][0]
+    assert runtime_adapter["metadata"]["executionBoundary"] == execution_boundary
     assert result["comparisons"] == [
         {
             "name": "output",

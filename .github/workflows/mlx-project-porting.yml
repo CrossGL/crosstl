@@ -225,17 +225,42 @@ jobs:
             tests/test_translator/test_native_runtime_drivers.py \
             -k "opengl_compute_runtime_specializes_generated_spirv_on_device"
 
-      - name: Prove bounded OpenGL wave shuffle numerical execution
+      - name: Prove generated OpenGL GLSL subgroup numerical execution through Vulkan
         if: runner.os == 'Linux'
         env:
-          CROSTL_RUN_OPENGL_BOUNDED_WAVE_SHUFFLE_DEVICE_TEST: "1"
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
+          CROSTL_RUN_VULKAN_DEVICE_TEST: "1"
         run: |
+          set -euo pipefail
+
+          lavapipe_icd=""
+          for icd_dir in /usr/share/vulkan/icd.d /etc/vulkan/icd.d; do
+            if [ ! -d "$icd_dir" ]; then
+              continue
+            fi
+            lavapipe_icd="$(
+              find "$icd_dir" \
+                -maxdepth 1 \
+                -type f \
+                -name 'lvp_icd*.json' \
+                -print \
+                -quit
+            )"
+            if [ -n "$lavapipe_icd" ]; then
+              break
+            fi
+          done
+          if [ -z "$lavapipe_icd" ]; then
+            echo "::error::Lavapipe Vulkan ICD manifest was not found." >&2
+            exit 1
+          fi
+          export VK_DRIVER_FILES="$lavapipe_icd"
+          export VK_ICD_FILENAMES="$lavapipe_icd"
+          echo "Lavapipe Vulkan ICD: $lavapipe_icd"
+          vulkaninfo --summary
+
           python -m pytest -q -n auto \
             tests/test_translator/test_native_runtime_drivers.py \
-            -k "opengl_compute_runtime_executes_bounded_wave_shuffle_and_fill_up_on_device"
+            -k "opengl_glsl_wave_shuffle_executes_via_vulkan_on_device"
 
       - name: Verify MLX frontier accounting
         shell: bash

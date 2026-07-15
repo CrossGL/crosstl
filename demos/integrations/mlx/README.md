@@ -377,7 +377,13 @@ Ubuntu CI installs `glslangValidator` and runs it with an OpenGL/SPIR-V 1.3
 target. It first compiles the focused scalar-conversion fixtures successfully,
 then compiles the translated `arange.metal` artifact. Shuffle-and-fill wrappers
 lower through backend-neutral subgroup semantics and preserve their explicit
-fill value for lanes below the delta.
+fill value for lanes below the delta. The hosted Mesa OpenGL software driver
+does not expose the subgroup shuffle extensions, so CI records two separate
+runtime proofs: supported OpenGL compute artifacts execute through the native
+OpenGL adapter, while the generated OpenGL GLSL subgroup fixture is compiled
+unchanged to Vulkan 1.1 SPIR-V and executes numerically on lavapipe. The latter
+proves the generated subgroup operations and expected results, but it is not a
+native OpenGL subgroup execution claim.
 The reduced DirectX/Vulkan frontier and the nine-source OpenGL artifact gate
 include `scaled_dot_product_attention.metal`. Function-local scalar
 and vector aliases now retain lexical scope and resolve across declarations,

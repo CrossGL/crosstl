@@ -139,6 +139,15 @@ def _matrix_values(workflow_text, key):
     raise AssertionError(f"matrix key not found: {key}")
 
 
+def _workflow_step_text(workflow_text, name):
+    marker = f"      - name: {name}\n"
+    start = workflow_text.find(marker)
+    if start < 0:
+        raise AssertionError(f"workflow step not found: {name}")
+    end = workflow_text.find("\n      - name: ", start + len(marker))
+    return workflow_text[start:] if end < 0 else workflow_text[start:end]
+
+
 def _assert_windows_python_policy(workflow_text, os_key="OS"):
     assert "runs-on: ${{ matrix.runner || matrix." in workflow_text
     excluded = f'python-version: "3.8"\n            {os_key}: windows-latest'
@@ -2143,6 +2152,14 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         ROOT / "demos" / "integrations" / "mlx" / "run_mlx_porting.py"
     ).read_text(encoding="utf-8")
     mlx_commit = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
+    ordinary_opengl_runtime = _workflow_step_text(
+        mlx_porting,
+        "Prove OpenGL SPIR-V specialization runtime",
+    )
+    subgroup_vulkan_runtime = _workflow_step_text(
+        mlx_porting,
+        "Prove generated OpenGL GLSL subgroup numerical execution through Vulkan",
+    )
 
     assert mlx_porting, "mlx-project-porting.yml must exist"
     assert "demos/integrations/mlx/run_mlx_porting.py" in mlx_porting
@@ -2169,6 +2186,26 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "libgl1" in mlx_porting
     assert "libgl1-mesa-dri" in mlx_porting
     assert "libopengl0" in mlx_porting
+    assert "EGL_PLATFORM: surfaceless" in ordinary_opengl_runtime
+    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in ordinary_opengl_runtime
+    assert "PYOPENGL_PLATFORM: egl" in ordinary_opengl_runtime
+    assert "opengl_compute_runtime_specializes_generated_spirv_on_device" in (
+        ordinary_opengl_runtime
+    )
+    assert 'CROSTL_RUN_VULKAN_DEVICE_TEST: "1"' in subgroup_vulkan_runtime
+    assert "-name 'lvp_icd*.json'" in subgroup_vulkan_runtime
+    assert 'export VK_DRIVER_FILES="$lavapipe_icd"' in subgroup_vulkan_runtime
+    assert 'export VK_ICD_FILENAMES="$lavapipe_icd"' in subgroup_vulkan_runtime
+    assert "vulkaninfo --summary" in subgroup_vulkan_runtime
+    assert "opengl_glsl_wave_shuffle_executes_via_vulkan_on_device" in (
+        subgroup_vulkan_runtime
+    )
+    assert "CROSTL_RUN_OPENGL_BOUNDED_WAVE_SHUFFLE_DEVICE_TEST" not in (
+        subgroup_vulkan_runtime
+    )
+    assert "EGL_PLATFORM" not in subgroup_vulkan_runtime
+    assert "LIBGL_ALWAYS_SOFTWARE" not in subgroup_vulkan_runtime
+    assert "PYOPENGL_PLATFORM" not in subgroup_vulkan_runtime
     assert "Validate OpenGL lowering contracts" in mlx_porting
     assert "opengl_lowers_expected_scalar_and_vector_conversions" in mlx_porting
     assert "opengl_preserves_metal_arithmetic_conversion_order" in mlx_porting

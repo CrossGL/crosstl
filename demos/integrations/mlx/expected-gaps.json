@@ -496,7 +496,15 @@
     "scalar_coercion_lowering": "passing",
     "native_validation_first_blocker": null,
     "native_validation_status": "validated",
-    "native_validation_blocked_by": []
+    "native_validation_blocked_by": [],
+    "subgroup_numerical_execution": {
+      "status": "validated-through-vulkan-spirv",
+      "artifact_source": "generated OpenGL GLSL",
+      "fixture": "tests/fixtures/runtime_verification/opengl/bounded_wave_shuffle_and_fill_up.cgl",
+      "compiler_target": "vulkan1.1",
+      "runtime": "lavapipe Vulkan",
+      "native_opengl_execution_claimed": false
+    }
   },
   "vulkan_gemv_toolchain_status": {
     "status": "passed",

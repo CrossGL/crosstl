@@ -123,6 +123,14 @@
           "tests/test_translator/test_native_runtime_drivers.py",
           "-k",
           "opengl_compute_runtime_executes_bounded_wave_shuffle_and_fill_up_on_device"
+        ],
+        "vulkanSpirvExecutionTestCommand": [
+          "python",
+          "-m",
+          "pytest",
+          "tests/test_translator/test_native_runtime_drivers.py",
+          "-k",
+          "opengl_glsl_wave_shuffle_executes_via_vulkan_on_device"
         ]
       }
     }
