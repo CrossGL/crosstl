@@ -741,6 +741,105 @@ class DirectXSpecializationConstantError(ValueError):
         self.conflicting_type = conflicting_type
 
 
+class _DirectXResourceRegisterAllocator(dict):
+    """Track resource allocations with merged occupancy ranges per namespace."""
+
+    def __init__(self):
+        super().__init__()
+        self._allocation_keys = set()
+        self._occupied_ranges = {}
+        self.relocation_cursors = {}
+        self.range_inspection_count = 0
+
+    def _lower_bound(self, ranges, start):
+        lower = 0
+        upper = len(ranges)
+        while lower < upper:
+            middle = (lower + upper) // 2
+            self.range_inspection_count += 1
+            if ranges[middle][0] < start:
+                lower = middle + 1
+            else:
+                upper = middle
+        return lower
+
+    def _occupied_range_conflicts(self, namespace, start, end):
+        ranges = self._occupied_ranges.get(namespace, ())
+        index = self._lower_bound(ranges, start)
+        if index:
+            self.range_inspection_count += 1
+            if ranges[index - 1][1] >= start:
+                return True
+        if index < len(ranges):
+            self.range_inspection_count += 1
+            if ranges[index][0] <= end:
+                return True
+        return False
+
+    def range_is_available(self, namespace, start, end):
+        return not self._occupied_range_conflicts(namespace, start, end)
+
+    def has_allocation(self, namespace, start, end, name):
+        return (namespace, start, end, name) in self._allocation_keys
+
+    def conflicting_allocation(self, namespace, start, end):
+        if not self._occupied_range_conflicts(namespace, start, end):
+            return None
+        for record in self.get(namespace, ()):
+            self.range_inspection_count += 1
+            if start <= record[1] and record[0] <= end:
+                return record
+        return None
+
+    def next_available(self, namespace, start, count):
+        ranges = self._occupied_ranges.get(namespace, ())
+        binding = start
+        index = self._lower_bound(ranges, binding)
+        if index:
+            self.range_inspection_count += 1
+            previous_end = ranges[index - 1][1]
+            if previous_end >= binding:
+                binding = previous_end + 1
+        while index < len(ranges):
+            self.range_inspection_count += 1
+            used_start, used_end = ranges[index]
+            if used_start > binding + count - 1:
+                break
+            binding = max(binding, used_end + 1)
+            index += 1
+        return binding
+
+    def add_allocation(self, namespace, start, end, name, provenance):
+        self.setdefault(namespace, []).append((start, end, name, provenance))
+        self._allocation_keys.add((namespace, start, end, name))
+
+        ranges = self._occupied_ranges.setdefault(namespace, [])
+        index = self._lower_bound(ranges, start)
+        merged_start = start
+        merged_end = end
+        if index:
+            self.range_inspection_count += 1
+            previous_start, previous_end = ranges[index - 1]
+            if previous_end + 1 >= merged_start:
+                merged_start = previous_start
+                merged_end = max(merged_end, previous_end)
+                index -= 1
+                del ranges[index]
+        while index < len(ranges):
+            self.range_inspection_count += 1
+            used_start, used_end = ranges[index]
+            if used_start > merged_end + 1:
+                break
+            merged_end = max(merged_end, used_end)
+            del ranges[index]
+        ranges.insert(index, (merged_start, merged_end))
+
+    def advance_relocation_cursor(self, namespace, start, count):
+        self.relocation_cursors[namespace] = max(
+            self.relocation_cursors.get(namespace, 0), start + count
+        )
+
+
 class HLSLCodeGen:
     """Emit HLSL source from the shared CrossGL translator AST."""
 
@@ -1268,6 +1367,7 @@ class HLSLCodeGen:
         self.hlsl_global_groupshared_pointer_aliases = {}
         self.hlsl_groupshared_pointer_bindings_by_declaration = {}
         self.directx_resource_register_overrides = {}
+        self.directx_resource_register_allocator = None
         self.literal_int_constants = {}
         self.literal_bool_constants = {}
         self.directx_specialization_constant_records = []
@@ -1884,6 +1984,7 @@ class HLSLCodeGen:
         self.required_hlsl_inverse_helpers = set()
         self.required_hlsl_fragment_shading_rate_helper = False
         self.directx_resource_register_overrides = {}
+        self.directx_resource_register_allocator = None
         self.directx_specialization_constant_records = []
         self.directx_specialization_constant_global_ids = set()
         self.directx_specialization_constant_types = {}
@@ -2419,7 +2520,7 @@ class HLSLCodeGen:
         sampler_registers = {}
         uav_registers = {}
         cbuffer_registers = {}
-        used_resource_registers = {}
+        used_resource_registers = self.new_directx_resource_register_allocator()
         self.reserve_explicit_global_resource_registers(
             global_vars, used_resource_registers
         )
@@ -6032,9 +6133,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "Cbuffer member name(s) conflict with DirectX global declaration(s): "
                 f"{names}"
             )
-        used_resource_registers = (
-            used_resource_registers if used_resource_registers is not None else {}
-        )
+        if used_resource_registers is None:
+            used_resource_registers = self.new_directx_resource_register_allocator()
         texture_registers = texture_registers if texture_registers is not None else {}
         cbuffer_registers = cbuffer_registers if cbuffer_registers is not None else {}
         self.reserve_explicit_cbuffer_registers(cbuffers, used_resource_registers)
@@ -25173,6 +25273,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         space = self.explicit_resource_register_space(node)
         return prefix, binding, space, resource_count, var_name
 
+    def new_directx_resource_register_allocator(self):
+        allocator = _DirectXResourceRegisterAllocator()
+        self.directx_resource_register_allocator = allocator
+        return allocator
+
     def reserve_explicit_global_resource_registers(self, global_vars, used_registers):
         self.directx_resource_register_overrides = {}
         relocatable_metadata = []
@@ -25282,6 +25387,32 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         space=None,
         provenance=None,
     ):
+        if isinstance(used_registers, _DirectXResourceRegisterAllocator):
+            count = max(count or 1, 1)
+            end = preferred + count - 1
+            namespace = (register_prefix, space)
+            if used_registers.has_allocation(namespace, preferred, end, name):
+                return preferred
+
+            if used_registers.range_is_available(namespace, preferred, end):
+                binding = preferred
+            else:
+                cursor = used_registers.relocation_cursors.get(namespace, preferred)
+                binding = used_registers.next_available(
+                    namespace, max(preferred, cursor), count
+                )
+            self.reserve_resource_register_range(
+                used_registers,
+                register_prefix,
+                binding,
+                count,
+                name,
+                space,
+                provenance=provenance,
+            )
+            used_registers.advance_relocation_cursor(namespace, binding, count)
+            return binding
+
         try:
             self.reserve_resource_register_range(
                 used_registers,
@@ -25322,6 +25453,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     ):
         count = max(count or 1, 1)
         binding = self.next_resource_register(register_cursors, space)
+        if isinstance(used_registers, _DirectXResourceRegisterAllocator):
+            return used_registers.next_available(
+                (register_prefix, space), binding, count
+            )
+
         ranges = used_registers.get((register_prefix, space), [])
         while True:
             end = binding + count - 1
@@ -25354,6 +25490,29 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         count = max(count or 1, 1)
         end = start + count - 1
         namespace = (register_prefix, space)
+        if isinstance(used_registers, _DirectXResourceRegisterAllocator):
+            if used_registers.has_allocation(namespace, start, end, name):
+                return
+            used_record = used_registers.conflicting_allocation(namespace, start, end)
+            if used_record is None:
+                used_registers.add_allocation(namespace, start, end, name, provenance)
+                return
+
+            used_start, used_end, used_name = used_record[:3]
+            used_provenance = used_record[3] if len(used_record) > 3 else None
+            self.raise_resource_register_conflict(
+                register_prefix,
+                start,
+                end,
+                name,
+                provenance,
+                space,
+                used_start,
+                used_end,
+                used_name,
+                used_provenance,
+            )
+
         ranges = used_registers.setdefault(namespace, [])
         for used_record in ranges:
             used_start, used_end, used_name = used_record[:3]
@@ -25361,23 +25520,47 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if start <= used_end and used_start <= end:
                 if used_start == start and used_end == end and used_name == name:
                     return
-                provenance_details = self.resource_binding_conflict_provenance_details(
+                self.raise_resource_register_conflict(
+                    register_prefix,
+                    start,
+                    end,
                     name,
                     provenance,
+                    space,
+                    used_start,
+                    used_end,
                     used_name,
                     used_provenance,
                 )
-                provenance_suffix = (
-                    f" ({provenance_details})" if provenance_details else ""
-                )
-                raise ValueError(
-                    f"Conflicting DirectX resource binding for '{name}': "
-                    f"{self.resource_register_range_label(register_prefix, start, end, space)} "
-                    f"overlaps '{used_name}' "
-                    f"{self.resource_register_range_label(register_prefix, used_start, used_end, space)}"
-                    f"{provenance_suffix}"
-                )
         ranges.append((start, end, name, provenance))
+
+    def raise_resource_register_conflict(
+        self,
+        register_prefix,
+        start,
+        end,
+        name,
+        provenance,
+        space,
+        used_start,
+        used_end,
+        used_name,
+        used_provenance,
+    ):
+        provenance_details = self.resource_binding_conflict_provenance_details(
+            name,
+            provenance,
+            used_name,
+            used_provenance,
+        )
+        provenance_suffix = f" ({provenance_details})" if provenance_details else ""
+        raise ValueError(
+            f"Conflicting DirectX resource binding for '{name}': "
+            f"{self.resource_register_range_label(register_prefix, start, end, space)} "
+            f"overlaps '{used_name}' "
+            f"{self.resource_register_range_label(register_prefix, used_start, used_end, space)}"
+            f"{provenance_suffix}"
+        )
 
     def resource_register_range_label(self, register_prefix, start, end, space=None):
         if start == end:
