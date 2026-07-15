@@ -8,6 +8,7 @@ import pytest
 import crosstl.translator
 from crosstl.translator.ast import (
     AttributeNode,
+    BinaryOpNode,
     BlockNode,
     CooperativeMatrixOpNode,
     CooperativeMatrixType,
@@ -36,6 +37,7 @@ from crosstl.translator.ast import (
 from crosstl.translator.codegen.GLSL_codegen import (
     GLSLCodeGen,
     OpenGLAggregateInitializerError,
+    OpenGLArithmeticConversionError,
     OpenGLAtomicFenceLoweringError,
     OpenGLBooleanCompoundAssignmentError,
     OpenGLCompileTimeGlobalError,
@@ -3527,6 +3529,9 @@ def test_glsl_mixed_width_buffer_arithmetic_uses_common_operand_types(tmp_path):
                 uint16_t narrowUnsigned = uint16_t(3u);
                 int16_t narrowSigned = int16_t(-2);
                 int promoted = narrowUnsigned + narrowSigned;
+                uint8_t byteUnsigned = uint8_t(255u);
+                int8_t byteSigned = int8_t(-1);
+                int bytePromoted = byteUnsigned + byteSigned;
             }
         }
     }
@@ -3537,9 +3542,168 @@ def test_glsl_mixed_width_buffer_arithmetic_uses_common_operand_types(tmp_path):
     assert "int64_t signedProduct = (int64_t(invocation) * signedStride);" in generated
     assert "uint64_t unsignedSum = (uint64_t(signedOffset) + wide);" in generated
     assert "int promoted = (int(narrowUnsigned) + narrowSigned);" in generated
+    assert "int bytePromoted = (int(byteUnsigned) + byteSigned);" in generated
     assert_glsl_compute_validates_if_available(
         generated, tmp_path, "mixed_width_buffer_arithmetic"
     )
+    _assert_glsl_mixed_scalar_vector_arithmetic_by_context(tmp_path)
+    _assert_glsl_mixed_compound_assignments_before_writeback(tmp_path)
+    _assert_glsl_same_type_and_floating_arithmetic(tmp_path)
+    _assert_glsl_unrepresentable_arithmetic_conversion_diagnostic()
+
+
+def _assert_glsl_mixed_scalar_vector_arithmetic_by_context(tmp_path):
+    shader = """
+    shader MixedArithmeticContexts {
+        compute {
+            [numthreads(1, 1, 1)]
+            void main(uint3 tid @ SV_DispatchThreadID) {
+                uint invocation = tid.z;
+                int64_t stride = int64_t(4);
+                int64_t scalarProduct = invocation * stride;
+                i64vec3 vectorProduct = tid * stride;
+                uint64_t wide = uint64_t(5u);
+                u64vec2 vectorSum = ivec2(-1, 2) + wide;
+                short3 narrowSigned = short3(-1, 2, 3);
+                ivec3 promotedNarrow = narrowSigned + uint16_t(2u);
+                bvec3 ordered = tid < stride;
+                u64vec2 selected = invocation > 0u
+                    ? int(-1)
+                    : u64vec2(wide);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "int64_t scalarProduct = (int64_t(invocation) * stride);" in generated
+    assert (
+        "i64vec3 vectorProduct = (i64vec3(gl_GlobalInvocationID) * stride);"
+        in generated
+    )
+    assert "u64vec2 vectorSum = (u64vec2(ivec2((-1), 2)) + wide);" in generated
+    assert (
+        "ivec3 promotedNarrow = (narrowSigned + "
+        "int(bitfieldExtract(uint(2u), 0, 16)));" in generated
+    )
+    assert (
+        "bvec3 ordered = lessThan(i64vec3(gl_GlobalInvocationID), "
+        "i64vec3(stride));" in generated
+    )
+    assert (
+        "u64vec2 selected = ((invocation > 0u) ? u64vec2(int((-1))) "
+        ": u64vec2(wide));" in generated
+    )
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "mixed_scalar_vector_arithmetic_contexts"
+    )
+
+
+def _assert_glsl_mixed_compound_assignments_before_writeback(tmp_path):
+    shader = """
+    shader MixedCompoundArithmetic {
+        compute {
+            void main() {
+                int signedValue = 7;
+                uint lane = 3u;
+                signedValue += lane;
+                signedValue -= lane * 2u;
+                signedValue *= lane;
+                int64_t wideSigned = int64_t(9);
+                wideSigned *= lane;
+                uint16_t narrow = uint16_t(65535u);
+                narrow += int16_t(2);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "signedValue = int((uint(signedValue) + lane));" in generated
+    assert "signedValue = int((uint(signedValue) - (lane * 2u)));" in generated
+    assert "signedValue = int((uint(signedValue) * lane));" in generated
+    assert "wideSigned = (wideSigned * int64_t(lane));" in generated
+    assert (
+        "narrow = bitfieldExtract(uint((int(narrow) + "
+        "bitfieldExtract(int(2), 0, 16))), 0, 16);" in generated
+    )
+    assert "+=" not in generated
+    assert "-=" not in generated
+    assert "*=" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "mixed_compound_arithmetic"
+    )
+
+
+def _assert_glsl_same_type_and_floating_arithmetic(tmp_path):
+    shader = """
+    shader OrdinaryArithmetic {
+        int addIntegers(int left, int right) {
+            return left + right;
+        }
+
+        float addFloats(float left, float right) {
+            return left + right;
+        }
+
+        vec3 scaleVector(vec3 value, float scale) {
+            return value * scale;
+        }
+
+        compute {
+            void main() {
+                int integerValue = addIntegers(1, 2);
+                float floatValue = addFloats(1.0, 2.0);
+                vec3 vectorValue = scaleVector(vec3(floatValue), 3.0);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert generated.count("return (left + right);") == 2
+    assert "return (value * scale);" in generated
+    assert "float(left)" not in generated
+    assert "float(right)" not in generated
+    assert "vec3(scale)" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "ordinary_arithmetic_regression"
+    )
+
+
+def _assert_glsl_unrepresentable_arithmetic_conversion_diagnostic():
+    shader = """
+    shader InvalidArithmeticShape {
+        ivec2 invalid() {
+            return ivec2(1) + ivec3(2);
+        }
+    }
+    """
+    ast = crosstl.translator.parse(shader)
+    source_location = {"line": 4, "column": 20}
+    codegen = GLSLCodeGen()
+    expression = next(
+        node for node in codegen.walk_ast(ast) if isinstance(node, BinaryOpNode)
+    )
+    expression.source_location = source_location
+
+    with pytest.raises(OpenGLArithmeticConversionError) as exc_info:
+        codegen.generate(ast)
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.opengl-arithmetic-conversion-invalid"
+    )
+    assert diagnostic.missing_capabilities == ("opengl.arithmetic-conversion-lowering",)
+    assert diagnostic.operator == "+"
+    assert diagnostic.operand_types == ("ivec2", "ivec3")
+    assert diagnostic.attempted_common_type == "int"
+    assert diagnostic.common_type == "int"
+    assert diagnostic.reason == "vector-width-mismatch"
+    assert diagnostic.source_location == source_location
 
 
 def test_glsl_normalizes_64_bit_subscript_indices(tmp_path):
@@ -31815,6 +31979,9 @@ def test_opengl_lowers_scalar_boolean_compound_assignments(tmp_path):
         tmp_path,
         "scalar_boolean_compound_assignments",
     )
+    _assert_opengl_power_bool_arithmetic_and_shift_assignments(tmp_path)
+    _assert_opengl_boolean_vector_arithmetic_and_shift_assignments(tmp_path)
+    _assert_opengl_boolean_arithmetic_compound_lvalue_evaluation(tmp_path)
 
 
 def test_opengl_lowers_boolean_vector_compound_assignments_componentwise(tmp_path):
@@ -31852,6 +32019,126 @@ def test_opengl_lowers_boolean_vector_compound_assignments_componentwise(tmp_pat
         generated_code,
         tmp_path,
         "vector_boolean_compound_assignments",
+    )
+
+
+def _assert_opengl_power_bool_arithmetic_and_shift_assignments(tmp_path):
+    shader = """
+    shader BooleanPowerCompoundAssignments {
+        bool powerBool(bool base, bool exp) {
+            bool result = true;
+            while (exp) {
+                if (exp & 1) {
+                    result *= base;
+                }
+                exp >>= 1;
+                base *= base;
+            }
+            return result;
+        }
+
+        compute {
+            void main() {
+                bool value = powerBool(true, false);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "if (((int(exp) & 1) != 0))" in generated_code
+    assert "result = ((int(result) * int(base)) != 0);" in generated_code
+    assert "exp = ((int(exp) >> 1) != 0);" in generated_code
+    assert "base = ((int(base) * int(base)) != 0);" in generated_code
+    assert "result *= base;" not in generated_code
+    assert "exp >>= 1;" not in generated_code
+    assert "base *= base;" not in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "boolean_power_compound_assignments",
+    )
+
+
+def _assert_opengl_boolean_vector_arithmetic_and_shift_assignments(tmp_path):
+    shader = """
+    shader BooleanVectorArithmeticCompoundAssignments {
+        bool3 updateMask(bool3 value, bool3 factor) {
+            value *= factor;
+            value >>= 1;
+            return value;
+        }
+
+        compute {
+            void main() {
+                bool3 value = updateMask(
+                    bool3(true, false, true),
+                    bool3(false, true, true)
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "value = notEqual((ivec3(value) * ivec3(factor)), ivec3(0));" in generated_code
+    )
+    assert "value = notEqual((ivec3(value) >> 1), ivec3(0));" in generated_code
+    assert "value *= factor;" not in generated_code
+    assert "value >>= 1;" not in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "boolean_vector_arithmetic_compound_assignments",
+    )
+
+
+def _assert_opengl_boolean_arithmetic_compound_lvalue_evaluation(tmp_path):
+    shader = """
+    shader BooleanArithmeticCompoundAssignmentLvalues {
+        struct Flags {
+            bool enabled;
+        };
+
+        bool nextFlag(inout uint calls) {
+            calls += 1u;
+            return true;
+        }
+
+        int nextShift(inout uint calls) {
+            calls += 1u;
+            return 1;
+        }
+
+        compute {
+            void main() {
+                uint calls = 0u;
+                Flags flags;
+                flags.enabled = true;
+                bool values[2] = {true, false};
+                flags.enabled *= nextFlag(calls);
+                values[1] >>= nextShift(calls);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert generated_code.count("nextFlag(calls)") == 1
+    assert generated_code.count("nextShift(calls)") == 1
+    assert (
+        "flags.enabled = ((int(flags.enabled) * int(nextFlag(calls))) != 0);"
+        in generated_code
+    )
+    assert "values[1] = ((int(values[1]) >> nextShift(calls)) != 0);" in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        "boolean_arithmetic_compound_assignment_lvalues",
     )
 
 
@@ -31933,22 +32220,23 @@ def test_opengl_boolean_compound_assignment_evaluates_rhs_call_once(
     )
 
 
-def test_opengl_boolean_compound_assignment_rejects_side_effecting_index():
-    shader = """
-    shader SideEffectingBooleanCompoundAssignmentIndex {
-        uint nextIndex(inout uint calls) {
+@pytest.mark.parametrize("operator", ["&=", "*=", ">>="])
+def test_opengl_boolean_compound_assignment_rejects_side_effecting_index(operator):
+    shader = f"""
+    shader SideEffectingBooleanCompoundAssignmentIndex {{
+        uint nextIndex(inout uint calls) {{
             calls += 1u;
             return 0u;
-        }
+        }}
 
-        compute {
-            void main() {
+        compute {{
+            void main() {{
                 uint calls = 0u;
-                bool values[2] = {true, false};
-                values[nextIndex(calls)] &= false;
-            }
-        }
-    }
+                bool values[2] = {{true, false}};
+                values[nextIndex(calls)] {operator} false;
+            }}
+        }}
+    }}
     """
 
     with pytest.raises(OpenGLBooleanCompoundAssignmentError) as exc_info:
@@ -31961,7 +32249,7 @@ def test_opengl_boolean_compound_assignment_rejects_side_effecting_index():
     assert diagnostic.missing_capabilities == (
         "opengl.boolean-compound-assignment-lowering",
     )
-    assert diagnostic.operator == "&="
+    assert diagnostic.operator == operator
     assert diagnostic.target_type == "bool"
     assert diagnostic.reason == "lvalue-side-effects"
 
