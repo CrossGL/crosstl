@@ -32305,7 +32305,7 @@ def test_translate_project_lowers_mlx_bfloat16_asuint_for_opengl(tmp_path):
     assert "asuint(" not in generated
 
 
-def test_translate_project_renames_metal_overloads_collapsed_by_opengl_mapping(
+def test_translate_project_transports_metal_overloads_collapsed_by_opengl_mapping(
     tmp_path,
 ):
     repo = tmp_path / "repo"
@@ -32342,9 +32342,9 @@ def test_translate_project_renames_metal_overloads_collapsed_by_opengl_mapping(
     assert payload["diagnosticCounts"]["error"] == 0
     artifact = payload["artifacts"][0]
     generated = (repo / artifact["path"]).read_text(encoding="utf-8")
-    assert "float collapsed_float(float value)" in generated
-    assert "float collapsed_bfloat16(float value)" in generated
-    assert "collapsed_float(float(index))" in generated
+    assert "float collapsed__metal_overload_1(float value)" in generated
+    assert "float collapsed__metal_overload_2(float value)" in generated
+    assert "collapsed__metal_overload_1(float(index))" in generated
     assert "float collapsed(float value)" not in generated
     assert_compute_glsl_validates_if_available(generated, tmp_path)
 

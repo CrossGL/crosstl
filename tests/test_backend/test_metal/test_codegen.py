@@ -7817,6 +7817,31 @@ def test_codegen_reserves_transported_names_and_resets_converter_state():
     assert parse_crossgl(clean_crossgl) is not None
 
 
+def test_codegen_leaves_portably_distinct_source_overloads_native():
+    source = """
+    float choose(float value) {
+      return value + 1.0f;
+    }
+
+    int choose(int value) {
+      return value - 1;
+    }
+
+    kernel void run_choose(
+        device float* values [[buffer(0)]],
+        uint index [[thread_position_in_grid]]) {
+      values[index] = choose(float(index)) + float(choose(int(index)));
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    normalized = normalize(crossgl)
+    assert "float choose(float value)" in normalized
+    assert "int choose(int value)" in normalized
+    assert "metal_overload" not in normalized
+    assert "choose(float(index)) + float(choose(int(index)))" in normalized
+
+
 def test_mlx_random_auto_local_overload_matches_direct_and_project_opengl(
     tmp_path,
 ):
@@ -8538,6 +8563,132 @@ def test_codegen_reports_user_aggregate_subscript_result_type():
     assert diagnostic.index_expression == "lane"
     assert diagnostic.reason == (
         "the user-defined aggregate subscript result type cannot be inferred"
+    )
+
+
+def test_mlx_materialized_collapsed_member_overloads_reach_project_targets(tmp_path):
+    # Reduced from MLX 4367c73b60541ddd5a266ce4644fd93d20223b6e,
+    # mlx/backend/metal/kernels/binary_ops.h and binary_two.metal.
+    source = """
+    typedef bfloat bfloat16_t;
+
+    struct FloorDivide {
+      template <typename T>
+      T operator()(T x, T y) {
+        return x / y;
+      }
+
+      template <>
+      half operator()(half x, half y) {
+        return trunc(x / y);
+      }
+
+      template <>
+      bfloat16_t operator()(bfloat16_t x, bfloat16_t y) {
+        return x - y;
+      }
+    };
+
+    kernel void exercise_collapsed_member_overloads(
+        device half* values [[buffer(0)]],
+        uint index [[thread_position_in_grid]]) {
+      FloorDivide operation;
+      half half_value = half(index + 2u);
+      bfloat16_t bfloat_value = bfloat16_t(index + 2u);
+      values[index * 4u] = operation(half_value, half(2.0h));
+      values[index * 4u + 1u] = half(operation(
+          bfloat_value, bfloat16_t(2.0h)));
+      values[index * 4u + 2u] = FloorDivide{}(half_value, half(2.0h));
+      values[index * 4u + 3u] = half(FloorDivide{}(
+          bfloat_value, bfloat16_t(2.0h)));
+    }
+    """
+    repo = tmp_path / "mlx-materialized-overloads"
+    repo.mkdir()
+    source_path = repo / "binary_two.metal"
+    source_path.write_text(source, encoding="utf-8")
+
+    intermediate = crosstl.translate(
+        str(source_path), backend="cgl", format_output=False
+    )
+    normalized_intermediate = normalize(intermediate)
+    half_helper = "FloorDivide__operator_call__metal_overload_1"
+    bfloat_helper = "FloorDivide__operator_call__metal_overload_2"
+    half_wrapper = f"{half_helper}__temporary"
+    bfloat_wrapper = f"{bfloat_helper}__temporary"
+    assert (
+        f"float16 {half_helper}(inout thread FloorDivide self, "
+        "float16 x, float16 y) { return trunc(x / y); }" in normalized_intermediate
+    )
+    assert (
+        f"bfloat16_t {bfloat_helper}(inout thread FloorDivide self, "
+        "bfloat16_t x, bfloat16_t y) { return x - y; }" in normalized_intermediate
+    )
+    assert f"return {half_helper}(self, x, y);" in normalized_intermediate
+    assert f"return {bfloat_helper}(self, x, y);" in normalized_intermediate
+    for helper in (half_helper, bfloat_helper, half_wrapper, bfloat_wrapper):
+        assert f"{helper}(" in intermediate
+    assert "FloorDivide__operator_call(inout thread FloorDivide" not in intermediate
+
+    direct_outputs = {
+        target: crosstl.translate(str(source_path), backend=target, format_output=False)
+        for target in ("directx", "opengl")
+    }
+    report = translate_project(
+        repo,
+        targets=["directx", "opengl"],
+        output_dir="out",
+    )
+    payload = report.to_json()
+    assert payload["summary"]["translatedCount"] == 2, payload
+    assert payload["summary"]["failedCount"] == 0, payload
+    artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
+
+    scalar_types = {"directx": "half", "opengl": "float"}
+    for target, direct in direct_outputs.items():
+        project = (repo / artifacts[target]["path"]).read_text(encoding="utf-8")
+        scalar_type = scalar_types[target]
+        definition_pattern = (
+            rf"{scalar_type} (FloorDivide__operator_call__metal_overload_[12])"
+            rf"\(inout FloorDivide self, {scalar_type} x, {scalar_type} y\) \{{"
+        )
+        expected_helpers = {half_helper, bfloat_helper}
+        assert set(re.findall(definition_pattern, direct)) == expected_helpers
+        assert set(re.findall(definition_pattern, project)) == expected_helpers
+        for helper in (*expected_helpers, half_wrapper, bfloat_wrapper):
+            assert f"{helper}(" in direct
+            assert f"{helper}(" in project
+        assert f"{scalar_type} FloorDivide__operator_call(" not in direct
+
+    hlsl = direct_outputs["directx"]
+    HLSLParser(HLSLLexer(hlsl).tokenize()).parse()
+    dxc = shutil.which("dxc")
+    if dxc is not None:
+        source_output = tmp_path / "materialized-collapsed-overloads.hlsl"
+        binary_output = tmp_path / "materialized-collapsed-overloads.dxil"
+        source_output.write_text(hlsl, encoding="utf-8")
+        result = subprocess.run(
+            [
+                dxc,
+                "-T",
+                "cs_6_0",
+                "-E",
+                "CSMain",
+                str(source_output),
+                "-Fo",
+                str(binary_output),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert binary_output.stat().st_size > 0
+
+    assert_opengl_compute_validates_if_available(
+        direct_outputs["opengl"],
+        tmp_path,
+        "materialized-collapsed-overloads",
     )
 
 

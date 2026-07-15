@@ -2184,8 +2184,8 @@ def _prepare_arange_opengl_check(module, tmp_path, generated):
 
 def _arange_opengl_frontier_source():
     return """
-    float log1p_float(float value) { return value; }
-    float log1p_bfloat16(float value) { return value; }
+    float log1p__metal_overload_1(float value) { return value; }
+    float log1p__metal_overload_2(float value) { return value; }
     uint crossglWaveShuffleAndFillUp(uint value, uint fill, uint delta) {
         uint shuffled = subgroupShuffleUp(value, delta);
         return gl_SubgroupInvocationID >= delta ? shuffled : fill;
@@ -2228,10 +2228,10 @@ def _arange_opengl_frontier_source():
         );
     }
     complex64_t probe(float x, float theta, float r, float z0) {
-        log1p_float(r);
+        log1p__metal_overload_1(r);
         if (x > 0.0) { return complex64_t(x, theta); }
         if (r > 0.0) {
-            return complex64_t((0.5 * log1p_float(r)), theta);
+            return complex64_t((0.5 * log1p__metal_overload_1(r)), theta);
         }
         return complex64_t(log(z0), theta);
     }

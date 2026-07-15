@@ -4794,7 +4794,25 @@ class MetalPreprocessor(HLSLPreprocessor):
             if call_suffix is None:
                 return None
             arg_open, explicit_template_arguments = call_suffix
-            method = methods_by_struct.get(qualified_struct, {}).get(member)
+            template_overloads = template_methods_by_struct.get(
+                qualified_struct, {}
+            ).get(member)
+            owner_struct = structs_by_name.get(qualified_struct)
+            method = None
+            if owner_struct is not None and explicit_template_arguments is None:
+                method = self._select_concrete_method_for_call(
+                    code,
+                    owner_struct,
+                    member,
+                    arg_open,
+                    buffer_element_types,
+                    local_variable_types,
+                    field_variable_types,
+                    field_structs_by_name,
+                    allow_template_fallback=bool(template_overloads),
+                    require_static=True,
+                    type_alias_fallback_position=type_alias_fallback_position,
+                )
             if method is not None and explicit_template_arguments is None:
                 arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
                 if arg_close is None:
@@ -4808,9 +4826,6 @@ class MetalPreprocessor(HLSLPreprocessor):
                 )
                 return arg_open, method.free_name
             # A static TEMPLATE member call `S::m(args)`: instantiate from args.
-            template_overloads = template_methods_by_struct.get(
-                qualified_struct, {}
-            ).get(member)
             if template_overloads:
                 rewrite = self._instantiate_template_member_call(
                     code,
@@ -4847,30 +4862,30 @@ class MetalPreprocessor(HLSLPreprocessor):
                 struct = structs_by_name.get(ident)
                 if struct is None or struct.data_member_names:
                     return None
-                method = methods_by_struct.get(ident, {}).get("operator()")
                 template_overloads = template_methods_by_struct.get(ident, {}).get(
                     "operator()"
                 )
+                method = self._select_concrete_method_for_call(
+                    code,
+                    struct,
+                    "operator()",
+                    temporary_arg_open,
+                    buffer_element_types,
+                    local_variable_types,
+                    field_variable_types,
+                    field_structs_by_name,
+                    allow_template_fallback=bool(template_overloads),
+                    require_static=False,
+                    type_alias_fallback_position=type_alias_fallback_position,
+                )
                 if method is not None:
-                    if (
-                        template_overloads is None
-                        or self._concrete_method_matches_call(
-                            method,
-                            code,
-                            temporary_arg_open,
-                            buffer_element_types,
-                            local_variable_types,
-                            field_variable_types,
-                            field_structs_by_name,
-                        )
-                    ):
-                        return self._build_temporary_operator_call_rewrite(
-                            code,
-                            struct,
-                            method,
-                            temporary_arg_open,
-                            instantiated_template_functions,
-                        )
+                    return self._build_temporary_operator_call_rewrite(
+                        code,
+                        struct,
+                        method,
+                        temporary_arg_open,
+                        instantiated_template_functions,
+                    )
                 if template_overloads:
                     return self._instantiate_temporary_template_operator_call(
                         code,
@@ -4949,7 +4964,24 @@ class MetalPreprocessor(HLSLPreprocessor):
                     arg_open=arg_open,
                     call_start=ident_start,
                 )
-            method = methods_by_struct.get(struct_type, {}).get(member)
+            template_overloads = template_methods_by_struct.get(struct_type, {}).get(
+                member
+            )
+            method = None
+            if owner_struct is not None and explicit_template_arguments is None:
+                method = self._select_concrete_method_for_call(
+                    code,
+                    owner_struct,
+                    member,
+                    arg_open,
+                    buffer_element_types,
+                    local_variable_types,
+                    field_variable_types,
+                    field_structs_by_name,
+                    allow_template_fallback=bool(template_overloads),
+                    require_static=False,
+                    type_alias_fallback_position=type_alias_fallback_position,
+                )
             if method is not None and explicit_template_arguments is None:
                 return self._build_instance_call_rewrite(
                     code,
@@ -4959,9 +4991,6 @@ class MetalPreprocessor(HLSLPreprocessor):
                     struct_name=structs_by_name.get(struct_type, struct_type),
                 )
             # An instance TEMPLATE member call `var.m(args)`.
-            template_overloads = template_methods_by_struct.get(struct_type, {}).get(
-                member
-            )
             if template_overloads:
                 return self._instantiate_template_member_call(
                     code,
@@ -4987,22 +5016,28 @@ class MetalPreprocessor(HLSLPreprocessor):
 
         # Functor call: `var(args)` -> `S__operator_call(var, ...)`.
         if code[j] == "(" and struct_type in operator_call_structs:
-            method = methods_by_struct.get(struct_type, {}).get("operator()")
             template_overloads = template_methods_by_struct.get(struct_type, {}).get(
                 "operator()"
             )
-            if method is not None and (
-                template_overloads is None
-                or self._concrete_method_matches_call(
-                    method,
+            owner_struct = structs_by_name.get(struct_type)
+            method = (
+                self._select_concrete_method_for_call(
                     code,
+                    owner_struct,
+                    "operator()",
                     j,
                     buffer_element_types,
                     local_variable_types,
                     field_variable_types,
                     field_structs_by_name,
+                    allow_template_fallback=bool(template_overloads),
+                    require_static=False,
+                    type_alias_fallback_position=type_alias_fallback_position,
                 )
-            ):
+                if owner_struct is not None
+                else None
+            )
+            if method is not None:
                 return self._build_instance_call_rewrite(
                     code,
                     ident,
@@ -5141,7 +5176,24 @@ class MetalPreprocessor(HLSLPreprocessor):
                         arg_open=arg_open,
                         call_start=ident_start,
                     )
-                method = methods_by_struct.get(current_struct_name, {}).get(member)
+                template_overloads = template_methods_by_struct.get(
+                    current_struct_name, {}
+                ).get(member)
+                method = None
+                if owner_struct is not None and explicit_template_arguments is None:
+                    method = self._select_concrete_method_for_call(
+                        code,
+                        owner_struct,
+                        member,
+                        arg_open,
+                        buffer_element_types,
+                        local_variable_types,
+                        field_variable_types,
+                        field_structs_by_name,
+                        allow_template_fallback=bool(template_overloads),
+                        require_static=False,
+                        type_alias_fallback_position=type_alias_fallback_position,
+                    )
                 if method is not None and explicit_template_arguments is None:
                     return self._build_instance_call_rewrite(
                         code,
@@ -5153,9 +5205,6 @@ class MetalPreprocessor(HLSLPreprocessor):
                             current_struct_name,
                         ),
                     )
-                template_overloads = template_methods_by_struct.get(
-                    current_struct_name, {}
-                ).get(member)
                 if template_overloads:
                     struct = structs_by_name.get(current_struct_name)
                     if struct is None:
@@ -5231,6 +5280,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         local_variable_types: Dict[str, List[Tuple[int, str]]],
         variable_types: Dict[str, List[Tuple[int, str]]],
         structs_by_name: Dict[str, _MetalStructDefinition],
+        type_alias_fallback_position: Optional[int] = None,
     ) -> bool:
         arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
         if arg_close is None:
@@ -5248,6 +5298,16 @@ class MetalPreprocessor(HLSLPreprocessor):
             for parameter in self._split_top_level_commas(method.parameters)
             if parameter.strip()
         ]
+        if self._source_type_alias_bindings:
+            declared_types = [
+                self._canonicalize_type_aliases_at(
+                    declared_type,
+                    self._source_type_alias_bindings,
+                    method.span[0],
+                )
+                or declared_type
+                for declared_type in declared_types
+            ]
         if len(declared_types) != len(call_arguments):
             return False
 
@@ -5269,8 +5329,136 @@ class MetalPreprocessor(HLSLPreprocessor):
             )
             if inferred is None:
                 return False
-            inferred_types.append(self._normalize_inferred_type(inferred))
+            inferred_type = self._normalize_inferred_type(inferred)
+            if self._source_type_alias_bindings:
+                inferred_type = (
+                    self._canonicalize_type_aliases_at(
+                        inferred_type,
+                        self._source_type_alias_bindings,
+                        arg_open,
+                    )
+                    or inferred_type
+                )
+                if (
+                    type_alias_fallback_position is not None
+                    and inferred_type == self._normalize_inferred_type(inferred)
+                ):
+                    inferred_type = (
+                        self._canonicalize_type_aliases_at(
+                            inferred_type,
+                            self._source_type_alias_bindings,
+                            type_alias_fallback_position,
+                        )
+                        or inferred_type
+                    )
+            inferred_types.append(inferred_type)
         return declared_types == inferred_types
+
+    def _select_concrete_method_for_call(
+        self,
+        code: str,
+        struct: _MetalStructDefinition,
+        method_name: str,
+        arg_open: int,
+        buffer_element_types: _MetalPositionedBufferTypes,
+        local_variable_types: Dict[str, List[Tuple[int, str]]],
+        variable_types: Dict[str, List[Tuple[int, str]]],
+        structs_by_name: Dict[str, _MetalStructDefinition],
+        *,
+        allow_template_fallback: bool,
+        require_static: Optional[bool] = None,
+        type_alias_fallback_position: Optional[int] = None,
+    ) -> Optional[_MetalStructMethod]:
+        candidates = [
+            method
+            for method in struct.methods
+            if method.name == method_name
+            and (require_static is None or method.is_static is require_static)
+        ]
+        if not candidates:
+            return None
+        if len(candidates) == 1:
+            candidate = candidates[0]
+            if not allow_template_fallback or self._concrete_method_matches_call(
+                candidate,
+                code,
+                arg_open,
+                buffer_element_types,
+                local_variable_types,
+                variable_types,
+                structs_by_name,
+                type_alias_fallback_position,
+            ):
+                return candidate
+            return None
+
+        matches = [
+            method
+            for method in candidates
+            if self._concrete_method_matches_call(
+                method,
+                code,
+                arg_open,
+                buffer_element_types,
+                local_variable_types,
+                variable_types,
+                structs_by_name,
+                type_alias_fallback_position,
+            )
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        if not matches and allow_template_fallback:
+            return None
+        if any(self._method_returns_lvalue_reference(method) for method in candidates):
+            # Reference-return lowering owns the fail-closed diagnostic and its
+            # lvalue-identity analysis. Preserve that path when ordinary value
+            # overload ranking cannot identify one candidate first.
+            return candidates[-1]
+
+        arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
+        raw_args = (
+            code[arg_open + 1 : arg_close].strip() if arg_close is not None else "..."
+        )
+        reason = "no exact concrete overload matches"
+        if len(matches) > 1:
+            reason = "multiple exact concrete overloads match"
+        requested_signature = f"{struct.name}::{method_name}({raw_args})"
+        raise MetalStructMethodError(
+            "Cannot lower concrete member overload "
+            f"'{struct.name}::{method_name}': {reason}. Requested call: "
+            f"{requested_signature}.",
+            struct_name=struct.name,
+            method_name=method_name,
+            requested_signature=requested_signature,
+            suggested_action=(
+                "cast each call argument to the intended source overload type"
+            ),
+            source_location=(
+                self._source_location_for_offsets(code, arg_open, arg_close + 1)
+                if arg_close is not None
+                else None
+            ),
+            reason="concrete-overload-ambiguous",
+        )
+
+    @staticmethod
+    def _concrete_method_overload_ordinal(
+        struct: _MetalStructDefinition,
+        method: _MetalStructMethod,
+    ) -> Optional[int]:
+        overloads = [
+            candidate
+            for candidate in struct.methods
+            if candidate.free_name == method.free_name
+        ]
+        if len(overloads) < 2:
+            return None
+        return next(
+            index
+            for index, candidate in enumerate(overloads, start=1)
+            if candidate is method
+        )
 
     def _temporary_functor_call_arg_open(
         self, code: str, constructor_start: int
@@ -5322,7 +5510,12 @@ class MetalPreprocessor(HLSLPreprocessor):
             arg_open,
             arg_close,
         )
-        wrapper_name = f"{method.free_name}__temporary"
+        overload_ordinal = self._concrete_method_overload_ordinal(struct, method)
+        wrapper_name = (
+            f"{method.free_name}__metal_overload_{overload_ordinal}__temporary"
+            if overload_ordinal is not None
+            else f"{method.free_name}__temporary"
+        )
         if wrapper_name not in instantiated_template_functions:
             helper_source = self._emit_free_function(struct, method)
             wrapper = self._emit_temporary_operator_wrapper(

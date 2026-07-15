@@ -2483,9 +2483,9 @@ def _check_arange_opengl(
         "OpenGL arange artifact retained a collapsed log1p target signature",
     )
     _require(
-        "float log1p_float(float" in generated
-        and "float log1p_bfloat16(float" in generated
-        and "log1p_float(r)" in generated,
+        "float log1p__metal_overload_1(float" in generated
+        and "float log1p__metal_overload_2(float" in generated
+        and "log1p__metal_overload_1(r)" in generated,
         "OpenGL arange artifact did not resolve the mapped log1p collision",
     )
     _require(
@@ -2494,7 +2494,10 @@ def _check_arange_opengl(
     )
     _require(
         "return complex64_t(x, theta);" in generated
-        and "return complex64_t((0.5 * log1p_float(r)), theta);" in generated
+        and (
+            "return complex64_t((0.5 * log1p__metal_overload_1(r)), theta);"
+            in generated
+        )
         and "return complex64_t(log(z0), theta);" in generated,
         "OpenGL arange artifact did not lower aggregate complex returns",
     )
