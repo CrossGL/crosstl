@@ -8343,6 +8343,40 @@ def test_codegen_keeps_metal_stdlib_wrappers_as_non_emitted_builtin_metadata():
     )
 
 
+@pytest.mark.parametrize("namespace", ["fast", "precise"])
+def test_codegen_canonicalizes_qualified_log10_stdlib_wrapper(namespace):
+    source = f"""
+    typedef bfloat bfloat16_t;
+
+    namespace metal {{
+    namespace {namespace} {{
+    METAL_FUNC bfloat16_t log10(bfloat16_t value) {{
+      return bfloat16_t(__metal_log10(float(value), true));
+    }}
+    }}
+    }}
+
+    kernel void wrapper_result(
+        device float* output [[buffer(0)]],
+        uint index [[thread_position_in_grid]]) {{
+      bfloat16_t value = bfloat16_t(float(index));
+      auto result = metal::{namespace}::log10(value);
+      output[index] = float(result);
+    }}
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "bfloat16 result = log10(value);" in normalize(crossgl)
+    assert "half result = log10(value);" in normalize(hlsl)
+    for generated in (crossgl, hlsl):
+        assert generated.count("log10(") == 1
+        assert "__metal_log10" not in generated
+        assert "metal::" not in generated
+        assert "<unknown>" not in generated
+
+
 def test_codegen_reports_called_unsupported_metal_stdlib_wrapper():
     source = """
     namespace metal {
