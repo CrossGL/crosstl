@@ -562,6 +562,36 @@ class DirectXMinimumPrecisionIntegerArithmeticError(ValueError):
         self.source_location = source_location
 
 
+class DirectXBooleanCompoundAssignmentError(ValueError):
+    """Raised when a boolean compound assignment has no faithful HLSL form."""
+
+    project_diagnostic_code = (
+        "project.translate.directx-boolean-compound-assignment-unrepresentable"
+    )
+    missing_capabilities = ("directx.boolean-compound-assignment-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        operator=None,
+        target_type=None,
+        right_type=None,
+        operation_type=None,
+        context=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.operator = operator
+        self.target_type = target_type
+        self.right_type = right_type
+        self.operation_type = operation_type
+        self.context = context
+        self.reason = reason
+        self.source_location = source_location
+
+
 class DirectXPrivatePointerParameterError(ValueError):
     """Raised when a private pointer cannot become a fixed HLSL array."""
 
@@ -7415,7 +7445,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
             return self.hlsl_record_generated_statement_int_constants(
                 stmt,
-                self.generate_statement_code(self.generate_assignment(stmt), indent),
+                self.generate_statement_code(
+                    self.generate_assignment(stmt, statement_context=True), indent
+                ),
             )
 
         elif isinstance(stmt, BlockNode):
@@ -7562,7 +7594,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     return self.hlsl_record_generated_statement_int_constants(
                         stmt,
                         self.generate_statement_code(
-                            self.generate_assignment(stmt.expression), indent
+                            self.generate_assignment(
+                                stmt.expression, statement_context=True
+                            ),
+                            indent,
                         ),
                     )
                 aggregate_value = (
@@ -8359,6 +8394,365 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if operation is None:
             return None
         return f"{lhs} = {operation}"
+
+    def hlsl_boolean_compound_assignment_error(
+        self,
+        node,
+        operator,
+        target_type,
+        right_type,
+        *,
+        reason,
+        detail,
+        operation_type=None,
+    ):
+        mapped_target = self.map_type(target_type) if target_type else None
+        mapped_right = self.map_type(right_type) if right_type else None
+        raise DirectXBooleanCompoundAssignmentError(
+            "DirectX cannot lower boolean compound assignment "
+            f"'{operator}': {detail}",
+            operator=operator,
+            target_type=mapped_target,
+            right_type=mapped_right,
+            operation_type=operation_type,
+            context="compound assignment",
+            reason=reason,
+            source_location=getattr(node, "source_location", None),
+        )
+
+    def hlsl_boolean_compound_type_info(self, vtype):
+        mapped_type = self.map_type(vtype) if vtype else None
+        if mapped_type == "bool" or mapped_type in {"bool2", "bool3", "bool4"}:
+            return {
+                "base_type": "int",
+                "width": 1 if mapped_type == "bool" else int(mapped_type[-1]),
+                "kind": "integer",
+                "boolean": True,
+            }
+        integer_info = self.hlsl_integer_arithmetic_type_info(vtype)
+        if integer_info is not None:
+            source_component = self.type_name_string(vtype).strip()
+            generic_vector = re.fullmatch(r"vec[234]<(.+)>", source_component)
+            suffixed_vector = re.fullmatch(r"(.+?)(?:vec)?[234]", source_component)
+            if generic_vector is not None:
+                source_component = generic_vector.group(1)
+            elif suffixed_vector is not None:
+                source_component = suffixed_vector.group(1)
+            promoted_base = (
+                "int"
+                if source_component in self.HLSL_NARROW_INTEGER_TYPE_NAMES
+                else self.hlsl_promoted_integer_arithmetic_base_type(integer_info)
+            )
+            return {
+                "base_type": promoted_base,
+                "width": integer_info["width"],
+                "kind": "integer",
+                "boolean": False,
+            }
+        if self.is_scalar_value_type(mapped_type):
+            base_type, width = mapped_type, 1
+        elif self.is_vector_value_type(mapped_type):
+            base_type = self.vector_component_type(mapped_type)
+            width = int(mapped_type[-1])
+        else:
+            return None
+        if base_type not in {
+            "double",
+            "float",
+            "half",
+            "min16float",
+            "min10float",
+        }:
+            return None
+        return {
+            "base_type": base_type,
+            "width": width,
+            "kind": "floating",
+            "boolean": False,
+        }
+
+    def hlsl_boolean_compound_temporary(self, base_name, vtype):
+        used_names = set(self.local_variable_types)
+        used_names.update(self.global_variable_types)
+        used_names.update(self.current_identifier_reserved_names)
+        used_names.update(self.current_identifier_aliases.values())
+        name = self.hlsl_unique_local_identifier(base_name, used_names)
+        self.current_identifier_reserved_names.add(name)
+        self.local_variable_types[name] = vtype
+        return name
+
+    def hlsl_stabilize_boolean_compound_lvalue(
+        self,
+        node,
+        target,
+        operator,
+        target_type,
+        right_type,
+    ):
+        def reject(reason, detail):
+            self.hlsl_boolean_compound_assignment_error(
+                node,
+                operator,
+                target_type,
+                right_type,
+                reason=reason,
+                detail=detail,
+            )
+
+        if self.hlsl_union_access_ancestor(target) is not None:
+            reject(
+                "union-writeback-unrepresentable",
+                (
+                    "the target is a reinterpreted union view whose bool writeback "
+                    "cannot preserve its storage contract"
+                ),
+            )
+        if (
+            self.glsl_buffer_block_array_access(target) is not None
+            or self.glsl_buffer_block_member_access(target) is not None
+        ):
+            reject(
+                "byte-address-writeback-unrepresentable",
+                (
+                    "the target uses ByteAddressBuffer storage and cannot expose a "
+                    "repeatable bool lvalue"
+                ),
+            )
+
+        prefix = []
+        stabilized_target = deepcopy(target)
+
+        def stabilize(expression):
+            if isinstance(expression, (IdentifierNode, VariableNode)):
+                return expression
+
+            if isinstance(expression, MemberAccessNode):
+                owner = stabilize(
+                    getattr(
+                        expression, "object_expr", getattr(expression, "object", None)
+                    )
+                )
+                expression.object_expr = owner
+                expression.object = owner
+                return expression
+
+            if isinstance(expression, SwizzleNode):
+                vector = stabilize(getattr(expression, "vector_expr", None))
+                expression.vector_expr = vector
+                return expression
+
+            if isinstance(expression, ArrayAccessNode):
+                array = stabilize(
+                    getattr(
+                        expression, "array_expr", getattr(expression, "array", None)
+                    )
+                )
+                expression.array_expr = array
+                expression.array = array
+                index = getattr(
+                    expression, "index_expr", getattr(expression, "index", None)
+                )
+                index_info = self.hlsl_boolean_compound_type_info(
+                    self.expression_result_type(index)
+                )
+                static_index = (
+                    isinstance(index, int)
+                    and not isinstance(index, bool)
+                    or isinstance(index, LiteralNode)
+                    and index_info is not None
+                    and not index_info["boolean"]
+                    and index_info["kind"] == "integer"
+                    and self.literal_int_value(index, {}) is not None
+                )
+                if static_index:
+                    return expression
+
+                if (
+                    self.hlsl_fixed_array_return_struct_metadata_for_type(
+                        self.expression_result_type(array)
+                    )
+                    is not None
+                ):
+                    reject(
+                        "dynamic-fixed-array-writeback-unrepresentable",
+                        (
+                            "a dynamically indexed fixed-array value is exposed "
+                            "through a read helper and is not an HLSL lvalue"
+                        ),
+                    )
+
+                if (
+                    index_info is None
+                    or index_info["kind"] != "integer"
+                    or index_info["width"] != 1
+                ):
+                    reject(
+                        "unresolved-index-type",
+                        (
+                            "each dynamic lvalue index must resolve to a scalar "
+                            "integer type before it can be evaluated once"
+                        ),
+                    )
+
+                promoted_index_type = index_info["base_type"]
+                rendered_index = self.generate_expression_with_expected(index, None)
+                index_name = self.hlsl_boolean_compound_temporary(
+                    "__crossgl_bool_compound_index", promoted_index_type
+                )
+                prefix.append(
+                    f"{promoted_index_type} {index_name} = "
+                    f"{promoted_index_type}({rendered_index})"
+                )
+                stable_index = IdentifierNode(
+                    index_name,
+                    source_location=getattr(index, "source_location", None),
+                )
+                expression.index_expr = stable_index
+                expression.index = stable_index
+                return expression
+
+            reject(
+                "unstable-assignment-target",
+                (
+                    "only identifier, member, swizzle, and indexed lvalues can be "
+                    "stabilized without an HLSL reference"
+                ),
+            )
+
+        return prefix, stabilize(stabilized_target)
+
+    def generate_hlsl_boolean_compound_assignment(
+        self,
+        node,
+        target,
+        value,
+        operator,
+        *,
+        target_type=None,
+        statement_context,
+    ):
+        operator = self.map_operator(operator)
+        binary_operator = {
+            "+=": "+",
+            "-=": "-",
+            "*=": "*",
+            "/=": "/",
+            "%=": "%",
+            "<<=": "<<",
+            ">>=": ">>",
+        }.get(operator)
+        target_type = target_type or self.expression_result_type(target)
+        right_type = self.expression_result_type(value)
+        target_info = self.hlsl_boolean_compound_type_info(target_type)
+        if binary_operator is None:
+            return None
+
+        def reject(reason, detail, operation_type=None):
+            self.hlsl_boolean_compound_assignment_error(
+                node,
+                operator,
+                target_type,
+                right_type,
+                reason=reason,
+                detail=detail,
+                operation_type=operation_type,
+            )
+
+        mapped_target = self.map_type(target_type) if target_type else None
+        if target_info is None or not target_info["boolean"]:
+            matrix_shape = (
+                self.hlsl_matrix_shape(mapped_target) if mapped_target else None
+            )
+            if matrix_shape is not None and matrix_shape[0] == "bool":
+                reject(
+                    "target-shape-unrepresentable",
+                    "only scalar and vector bool lvalues have a defined writeback",
+                )
+            return None
+        right_info = self.hlsl_boolean_compound_type_info(right_type)
+        if right_info is None:
+            reject(
+                "unresolved-promoted-operand-type",
+                (
+                    "the right operand must resolve to a scalar or vector arithmetic "
+                    "type before source promotion"
+                ),
+            )
+        if right_info["width"] > 1 and right_info["width"] != target_info["width"]:
+            reject(
+                "incompatible-vector-widths",
+                (
+                    f"the {target_info['width']}-component target cannot consume a "
+                    f"{right_info['width']}-component promoted right operand"
+                ),
+            )
+        if binary_operator in {"<<", ">>", "%"} and right_info["kind"] != "integer":
+            reason = (
+                "non-integral-shift-operand"
+                if binary_operator in {"<<", ">>"}
+                else "non-integral-remainder-operand"
+            )
+            reject(
+                reason,
+                f"{binary_operator} operands require integral promotion",
+            )
+
+        if binary_operator in {"<<", ">>"}:
+            operation_base = "int"
+            right_base = right_info["base_type"]
+        elif right_info["kind"] == "floating":
+            operation_base = right_base = right_info["base_type"]
+        else:
+            right_base = right_info["base_type"]
+            operation_base = (
+                right_base if right_base in {"uint64_t", "int64_t", "uint"} else "int"
+            )
+            right_base = operation_base
+
+        operation_type = operation_base + (
+            "" if target_info["width"] == 1 else str(target_info["width"])
+        )
+        right_operation_type = right_base + (
+            "" if right_info["width"] == 1 else str(right_info["width"])
+        )
+        if not statement_context:
+            reject(
+                "statement-context-required",
+                (
+                    "the promoted read, ordered right operand, and bool writeback "
+                    "require statement temporaries"
+                ),
+                operation_type,
+            )
+
+        prefix, stable_target = self.hlsl_stabilize_boolean_compound_lvalue(
+            node,
+            target,
+            operator,
+            target_type,
+            right_type,
+        )
+        lhs = self.generate_expression(stable_target)
+        rhs = self.generate_expression_with_expected(value, None)
+        lhs_name = self.hlsl_boolean_compound_temporary(
+            "__crossgl_bool_compound_lhs", operation_type
+        )
+        rhs_name = self.hlsl_boolean_compound_temporary(
+            "__crossgl_bool_compound_rhs", right_operation_type
+        )
+        operation = (
+            f"({lhs_name} {binary_operator} {rhs_name}) != "
+            f"{self.diagnostic_zero_value_for_type(operation_type)}"
+        )
+        return "\n".join(
+            [
+                *prefix,
+                f"{operation_type} {lhs_name} = {operation_type}({lhs})",
+                f"{right_operation_type} {rhs_name} = "
+                f"{right_operation_type}({rhs})",
+                f"{lhs} = ({operation})",
+            ]
+        )
 
     def hlsl_vector_swizzle(self, width):
         return {1: "x", 2: "xy", 3: "xyz", 4: "xyzw"}[width]
@@ -10518,7 +10912,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         return f"{lhs} {op} {rhs}"
 
-    def generate_assignment(self, node):
+    def generate_assignment(self, node, *, statement_context=False):
         if hasattr(node, "target") and hasattr(node, "value"):
             target = node.target
             value = node.value
@@ -10528,11 +10922,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             value = node.right
             op = getattr(node, "operator", "=")
 
+        target_type = self.expression_result_type(target)
+        boolean_compound_assignment = self.generate_hlsl_boolean_compound_assignment(
+            node,
+            target,
+            value,
+            op,
+            target_type=target_type,
+            statement_context=statement_context,
+        )
+        if boolean_compound_assignment is not None:
+            return boolean_compound_assignment
+
         union_assignment = self.generate_hlsl_union_assignment(target, value, op)
         if union_assignment is not None:
             return union_assignment
 
-        target_type = self.expression_result_type(target)
         if isinstance(value, ArrayLiteralNode) and self.hlsl_outer_array_type(
             target_type
         ):

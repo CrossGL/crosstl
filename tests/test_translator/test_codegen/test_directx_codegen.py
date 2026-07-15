@@ -47,6 +47,7 @@ from crosstl.translator.ast import (
 from crosstl.translator.codegen.directx_codegen import (
     DirectXAggregateConditionalError,
     DirectXAtomicFenceLoweringError,
+    DirectXBooleanCompoundAssignmentError,
     DirectXCompileTimeGlobalError,
     DirectXCooperativeMatrixUnsupportedError,
     DirectXForInIterableError,
@@ -1426,7 +1427,7 @@ def test_hlsl_codegen_lowers_fixed_array_value_locals_and_indexing():
     assert "CrossGLFixedArray_Record_2_read(records, (index & 1u)).value" in generated
 
 
-def test_hlsl_codegen_lowers_bool_division_and_modulo_through_uint():
+def test_hlsl_codegen_lowers_bool_arithmetic_and_compound_assignments(tmp_path):
     ast = ShaderNode(
         "BoolArithmetic",
         ExecutionModel.COMPUTE_KERNEL,
@@ -1478,6 +1479,251 @@ def test_hlsl_codegen_lowers_bool_division_and_modulo_through_uint():
     assert "return ((((x) ? 1u : 0u) % ((y) ? 1u : 0u)) != 0u);" in generated
     assert "return (x / y);" not in generated
     assert "return (x % y);" not in generated
+
+    compound_source = """
+    shader BoolCompoundArithmetic {
+        struct BoolState {
+            bool value;
+            bool2 lanes;
+        };
+
+        int nextIndex(inout int calls) {
+            int current = calls;
+            calls += 1;
+            return current;
+        }
+
+        bool nextValue(inout int calls, bool value) {
+            calls += 1;
+            return value;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<uint> output @ binding(0)) {
+                bool scalar = true;
+                bool2 lanes = bool2(true, false);
+                BoolState state;
+                state.value = true;
+                state.lanes = lanes;
+                bool values[4];
+                values[0] = true;
+                BoolState states[4];
+                states[0].value = true;
+                int index = 0;
+                int calls = 0;
+                uchar narrow = uchar(2u);
+                uint numeric = 3u;
+
+                scalar *= nextValue(calls, true);
+                scalar >>= 1;
+                state.value += numeric;
+                values[nextIndex(calls)] *= nextValue(calls, true);
+                states[index].value *= nextValue(index, true);
+                lanes <<= bool2(true, false);
+                scalar *= narrow;
+                scalar -= false;
+                scalar /= true;
+                scalar %= true;
+                scalar <<= 1;
+                numeric *= 2u;
+                numeric >>= 1u;
+
+                output[0] = uint(scalar) + uint(state.value) + uint(values[0])
+                    + uint(states[0].value) + uint(lanes.x) + numeric + uint(calls);
+            }
+        }
+    }
+    """
+    compound_generated = HLSLCodeGen().generate(
+        crosstl.translator.parse(compound_source)
+    )
+
+    assert (
+        "int __crossgl_bool_compound_lhs = int(scalar);\n"
+        "    int __crossgl_bool_compound_rhs = int(nextValue(calls, true));\n"
+        "    scalar = ((__crossgl_bool_compound_lhs * "
+        "__crossgl_bool_compound_rhs) != 0);"
+    ) in compound_generated
+    assert (
+        "int __crossgl_bool_compound_lhs_ = int(scalar);\n"
+        "    int __crossgl_bool_compound_rhs_ = int(1);\n"
+        "    scalar = ((__crossgl_bool_compound_lhs_ >> "
+        "__crossgl_bool_compound_rhs_) != 0);"
+    ) in compound_generated
+    assert (
+        "uint __crossgl_bool_compound_lhs__ = uint(state.value);\n"
+        "    uint __crossgl_bool_compound_rhs__ = uint(numeric);\n"
+        "    state.value = ((__crossgl_bool_compound_lhs__ + "
+        "__crossgl_bool_compound_rhs__) != 0u);"
+    ) in compound_generated
+    assert (
+        "int __crossgl_bool_compound_index = int(nextIndex(calls));\n"
+        "    int __crossgl_bool_compound_lhs___ = "
+        "int(values[__crossgl_bool_compound_index]);\n"
+        "    int __crossgl_bool_compound_rhs___ = int(nextValue(calls, true));\n"
+        "    values[__crossgl_bool_compound_index] = "
+        "((__crossgl_bool_compound_lhs___ * "
+        "__crossgl_bool_compound_rhs___) != 0);"
+    ) in compound_generated
+    assert (
+        "int __crossgl_bool_compound_index_ = int(index);\n"
+        "    int __crossgl_bool_compound_lhs____ = "
+        "int(states[__crossgl_bool_compound_index_].value);\n"
+        "    int __crossgl_bool_compound_rhs____ = int(nextValue(index, true));\n"
+        "    states[__crossgl_bool_compound_index_].value = "
+        "((__crossgl_bool_compound_lhs____ * "
+        "__crossgl_bool_compound_rhs____) != 0);"
+    ) in compound_generated
+    assert (
+        "int2 __crossgl_bool_compound_lhs_____ = int2(lanes);\n"
+        "    int2 __crossgl_bool_compound_rhs_____ = "
+        "int2(bool2(true, false));\n"
+        "    lanes = ((__crossgl_bool_compound_lhs_____ << "
+        "__crossgl_bool_compound_rhs_____) != int2(0, 0));"
+    ) in compound_generated
+    assert (
+        "int __crossgl_bool_compound_lhs______ = int(scalar);\n"
+        "    int __crossgl_bool_compound_rhs______ = int(narrow);\n"
+        "    scalar = ((__crossgl_bool_compound_lhs______ * "
+        "__crossgl_bool_compound_rhs______) != 0);"
+    ) in compound_generated
+    assert compound_generated.count("nextIndex(calls)") == 1
+    assert compound_generated.count("nextValue(calls, true)") == 2
+    assert compound_generated.count("nextValue(index, true)") == 1
+    for lowered_operator in ("-", "/", "%", "<<"):
+        assert re.search(
+            rf"__crossgl_bool_compound_lhs_+ {re.escape(lowered_operator)} "
+            r"__crossgl_bool_compound_rhs_+",
+            compound_generated,
+        )
+    assert "numeric *= 2u;" in compound_generated
+    assert "numeric >>= 1u;" in compound_generated
+    for invalid_bool_compound in (
+        "scalar *=",
+        "scalar -=",
+        "scalar /=",
+        "scalar %=",
+        "scalar <<=",
+        "scalar >>=",
+        "state.value +=",
+        "values[nextIndex(calls)] *=",
+        "states[index].value *=",
+        "lanes <<=",
+    ):
+        assert invalid_bool_compound not in compound_generated
+    HLSLParser(HLSLLexer(compound_generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(compound_generated, tmp_path)
+
+    metal_source = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    bool power_bool(bool base, bool exp) {
+        bool result = true;
+        while (exp) {
+            if (exp & 1) {
+                result *= base;
+            }
+            exp >>= 1;
+            base *= base;
+        }
+        return result;
+    }
+
+    kernel void compute_bool_power(
+        device uint* output [[buffer(0)]],
+        uint index [[thread_position_in_grid]]) {
+        bool base = bool(output[index]);
+        output[index] = uint(power_bool(base, true));
+    }
+    """
+    metal_path = tmp_path / "bool-arithmetic.metal"
+    metal_path.write_text(metal_source, encoding="utf-8")
+    metal_generated = crosstl.translate(
+        str(metal_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "if (exp & 1)" in metal_generated
+    assert metal_generated.count("int __crossgl_bool_compound_lhs") == 3
+    assert metal_generated.count("int __crossgl_bool_compound_rhs") == 3
+    assert "result *= base" not in metal_generated
+    assert "exp >>= 1" not in metal_generated
+    assert "base *= base" not in metal_generated
+    HLSLParser(HLSLLexer(metal_generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(metal_generated, tmp_path)
+
+    expression_codegen = HLSLCodeGen()
+    expression_codegen.local_variable_types["flag"] = "bool"
+    expression_assignment = AssignmentNode(
+        IdentifierNode("flag"),
+        LiteralNode(True, PrimitiveType("bool")),
+        "*=",
+        source_location=("bool.cgl", 8, 12),
+    )
+    with pytest.raises(DirectXBooleanCompoundAssignmentError) as exc_info:
+        expression_codegen.generate_expression(expression_assignment)
+    assert exc_info.value.project_diagnostic_code == (
+        "project.translate.directx-boolean-compound-assignment-unrepresentable"
+    )
+    assert exc_info.value.reason == "statement-context-required"
+    assert exc_info.value.operation_type == "int"
+    assert exc_info.value.source_location == ("bool.cgl", 8, 12)
+
+    matrix_codegen = HLSLCodeGen()
+    matrix_codegen.local_variable_types["mask"] = "bool2x2"
+    matrix_assignment = AssignmentNode(
+        IdentifierNode("mask"),
+        IdentifierNode("mask"),
+        "*=",
+        source_location=("bool.cgl", 10, 5),
+    )
+    with pytest.raises(DirectXBooleanCompoundAssignmentError) as exc_info:
+        matrix_codegen.generate_assignment(matrix_assignment, statement_context=True)
+    assert exc_info.value.reason == "target-shape-unrepresentable"
+    assert exc_info.value.source_location == ("bool.cgl", 10, 5)
+
+    unstable_codegen = HLSLCodeGen()
+    unstable_codegen.struct_member_types["BoolState"] = {"value": "bool"}
+    unstable_codegen.function_return_types["selectState"] = "BoolState"
+    unstable_assignment = AssignmentNode(
+        MemberAccessNode(FunctionCallNode(IdentifierNode("selectState"), []), "value"),
+        LiteralNode(True, PrimitiveType("bool")),
+        "*=",
+        source_location=("bool.cgl", 12, 9),
+    )
+    with pytest.raises(DirectXBooleanCompoundAssignmentError) as exc_info:
+        unstable_codegen.generate_assignment(
+            unstable_assignment, statement_context=True
+        )
+    assert exc_info.value.reason == "unstable-assignment-target"
+    assert exc_info.value.source_location == ("bool.cgl", 12, 9)
+
+    fixed_array_source = """
+    shader BoolCompoundFixedArray {
+        struct BoolRecord {
+            bool value;
+        };
+
+        BoolRecord[2] makeRecords() {
+            BoolRecord first;
+            BoolRecord second;
+            return {first, second};
+        }
+
+        void update(int index) {
+            BoolRecord records[2] = makeRecords();
+            records[index].value *= true;
+        }
+    }
+    """
+    with pytest.raises(DirectXBooleanCompoundAssignmentError) as exc_info:
+        HLSLCodeGen().generate(crosstl.translator.parse(fixed_array_source))
+    assert exc_info.value.reason == ("dynamic-fixed-array-writeback-unrepresentable")
 
 
 def test_hlsl_codegen_lowers_complex64_binary_operators_to_helpers():
@@ -5305,6 +5551,43 @@ def test_hlsl_metal_resource_pointer_offsets_apply_to_buffer_helpers(tmp_path):
     assert "out_[uint((out__offset + 1))] = 7u;" in generated_code
     assert "out_[uint(out__offset)] = 9u;" in generated_code
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
+def test_hlsl_boolean_resource_pointer_offsets_bypass_value_compound_lowering(
+    tmp_path,
+):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void read_bool_offset(
+        const device bool* sourceValues [[buffer(0)]],
+        device uint* resultValues [[buffer(1)]],
+        constant int64_t& stride [[buffer(2)]]) {
+      const device bool* current_in = sourceValues;
+      current_in += stride;
+      resultValues[0] = uint(*current_in);
+    }
+    """
+    shader_path = tmp_path / "bool_pointer_offset.metal"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "int64_t current_in_offset = int64_t(0);" in generated_code
+    assert "current_in_offset += int64_t(read_bool_offset_stride);" in generated_code
+    assert (
+        "resultValues[0] = uint(sourceValues[uint(current_in_offset)]);"
+        in generated_code
+    )
+    assert "current_in +=" not in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated_code, tmp_path)
 
 
 def test_hlsl_metal_resource_pointer_dereferences_lower_to_buffer_indices(tmp_path):
