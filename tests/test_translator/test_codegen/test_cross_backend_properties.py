@@ -598,7 +598,8 @@ def test_primary_graphics_resource_memory_qualifiers_are_preserved_where_support
     ast = crosstl.translator.parse(shader)
 
     hlsl = HLSLCodeGen().generate(ast)
-    glsl = GLSLCodeGen().generate(ast)
+    glsl_codegen = GLSLCodeGen()
+    glsl = glsl_codegen.generate(ast)
     metal = MetalCodeGen().generate(ast)
 
     for backend, generated in (
@@ -615,9 +616,10 @@ def test_primary_graphics_resource_memory_qualifiers_are_preserved_where_support
     assert f": {qualifier_case.attribute}" not in hlsl
     assert f"@{qualifier_case.attribute}" not in hlsl
 
+    glsl_image_name = glsl_codegen.glsl_sanitized_identifier_base(image_name)
     assert (
         "layout(r32ui, binding = 0) "
-        f"{qualifier_case.glsl_qualifier} uniform uimage2D {image_name};" in glsl
+        f"{qualifier_case.glsl_qualifier} uniform uimage2D {glsl_image_name};" in glsl
     )
 
     assert (

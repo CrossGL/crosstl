@@ -23,9 +23,13 @@
         },
         "opengl": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_reserved_identifiers_are_sanitized_consistently",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_reserved_identifier_mapping_preserves_scope_and_source_names",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_builtin_interface_block_members_preserve_builtin_names",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_reserved_identifiers_validate_without_warnings"
           ],
-          "notes": "",
+          "notes": "OpenGL target output applies deterministic, collision-free GLSL identifier remapping to user and generated symbols, including target-reserved gl_ and consecutive-underscore spellings, while preserving declared builtin interface names and source provenance, with warning-fatal glslang and SPIR-V validation coverage.",
           "status": "supported"
         }
       }
