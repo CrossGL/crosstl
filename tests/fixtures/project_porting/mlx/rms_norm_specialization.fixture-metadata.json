@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "kind": "crosstl-mlx-project-porting-contract-fixture",
+  "description": "Reduced function-constant contract used to test the pinned MLX RMSNorm project harness.",
+  "source": "rms_norm_specialization.metal",
+  "upstreamSourceReplacement": false,
+  "functionConstant": {
+    "name": "has_w",
+    "id": 20,
+    "required": true
+  },
+  "directx": {
+    "entryPoint": "vjp_rmsfloat32",
+    "profile": "cs_6_0",
+    "variants": [
+      {
+        "name": "has_w_false_by_name",
+        "selector": "has_w",
+        "selectorKind": "name",
+        "value": false
+      },
+      {
+        "name": "has_w_true_by_id",
+        "selector": "20",
+        "selectorKind": "id",
+        "value": true
+      }
+    ]
+  },
+  "opengl": {
+    "deferred": true,
+    "constantId": 20
+  },
+  "claims": {
+    "translationAndNativeCompilationOnly": true,
+    "numericalRuntimeParity": false,
+    "fullMlxTestSuite": false
+  }
+}

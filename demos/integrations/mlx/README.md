@@ -428,6 +428,26 @@ not claim numerical parity for those three full MLX kernels. For the pinned
 DirectX rope check, project
 configuration supplies IDs 1 through 3 and CrossTL materializes a concrete HLSL
 variant before DXC.
+
+The focused `tools/mlx_porting_harness.py` gate fixes the project-level
+RMSNorm specialization contract to the same upstream commit and to
+`rms_norm.metal` SHA-256
+`5d411a2350ba7ddf84eb35f9dcac7cde0d441bd55fa1e9e1ccc61d490d428dee`.
+It translates the upstream source through `crosstl.project.translate_project`.
+For DirectX, two named project variants set the required `has_w` function
+constant through both selector forms: `has_w=false` by name and `"20"=true` by
+numeric ID. The gate verifies each report's variant selector provenance,
+concrete specialization materialization, pinned source hash, and generated
+`static const bool has_w` value. Windows CI then uses DXC to compile a reflected
+compute entry from each generated HLSL artifact. The separate OpenGL project
+translation supplies no override, requires deferred runtime specialization,
+checks the generated `layout(constant_id = 20)` declaration, and compiles the
+GLSL to OpenGL SPIR-V 1.3 before `spirv-val` validation on Linux. This is
+translation and native compilation evidence only. It does not execute RMSNorm,
+establish numerical runtime parity, or claim support for the full MLX test
+suite. The translated MLX `arange.metal` Direct3D numerical proof remains a
+separate Windows CI check.
+
 `fence.metal` emits no DirectX, OpenGL, or Vulkan target artifact. The harness
 requires the target-specific structured diagnostics and the exact requested
 atomic-fence operands under #1537 instead of accepting generated barrier text as

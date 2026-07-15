@@ -160,6 +160,44 @@
     "runtime_integration_included": false,
     "runtime_parity_claimed": false
   },
+  "rms_norm_specialization_status": {
+    "status": "translation-and-native-compilation-validated",
+    "source": "mlx/backend/metal/kernels/rms_norm.metal",
+    "source_sha256": "5d411a2350ba7ddf84eb35f9dcac7cde0d441bd55fa1e9e1ccc61d490d428dee",
+    "function_constant": {
+      "name": "has_w",
+      "id": 20,
+      "required": true
+    },
+    "directx": {
+      "specialization_materialization": "concrete-crossgl-variant",
+      "variants": [
+        {
+          "name": "has_w_false_by_name",
+          "selector": "has_w",
+          "selector_kind": "name",
+          "value": false
+        },
+        {
+          "name": "has_w_true_by_id",
+          "selector": "20",
+          "selector_kind": "id",
+          "value": true
+        }
+      ],
+      "native_compilation": "required-on-windows-ci",
+      "compiled_entry_count_per_variant": 1
+    },
+    "opengl": {
+      "specialization_materialization": "deferred",
+      "constant_id": 20,
+      "native_compilation": "required-on-linux-ci",
+      "spirv_validation": "required-on-linux-ci"
+    },
+    "numerical_execution_included": false,
+    "runtime_parity_claimed": false,
+    "full_mlx_test_suite_included": false
+  },
   "pointer_reinterpretation_status": {
     "status": "partial",
     "source": "mlx/backend/metal/kernels/quantized_nax.metal",
