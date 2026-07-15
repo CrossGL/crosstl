@@ -21,6 +21,7 @@ from crosstl.backend.Metal.MetalCrossGLCodeGen import (
     MetalSizeofResolutionError,
     MetalSourceOverloadResolutionError,
     MetalStageEntryArrayResourceError,
+    MetalStandardLibraryWrapperLoweringError,
     MetalStaticConstantResolutionError,
     MetalStructMethodCallResolutionError,
     MetalTemplateArgumentResolutionError,
@@ -8263,6 +8264,220 @@ def test_codegen_preserves_materialized_bfloat_builtin_component_results(
     assert "bfloat16 result = abs(value);" in normalized
     assert "bfloat16vec4 result = abs(value);" in normalized
     assert "<unknown>" not in normalized
+
+
+def test_codegen_keeps_metal_stdlib_wrappers_as_non_emitted_builtin_metadata():
+    source = """
+    typedef bfloat bfloat16_t;
+
+    namespace metal {
+    METAL_FUNC bfloat16_t exp(bfloat16_t value) {
+      return bfloat16_t(__metal_exp(float(value)));
+    }
+
+    METAL_FUNC bfloat16_t simd_max(bfloat16_t value) {
+      return bfloat16_t(__metal_simd_max(float(value)));
+    }
+
+    namespace fast {
+    METAL_FUNC bfloat16_t exp(bfloat16_t value) {
+      return bfloat16_t(__metal_fast_math(float(value), __METAL_EXP));
+    }
+    }
+
+    namespace precise {
+    METAL_FUNC bfloat16_t exp(bfloat16_t value) {
+      return bfloat16_t(__metal_precise_math(float(value), __METAL_EXP));
+    }
+    }
+    }
+
+    kernel void wrapper_results(
+        device float* output [[buffer(0)]],
+        uint index [[thread_position_in_grid]]) {
+      bfloat16_t value = bfloat16_t(float(index));
+      auto standard_result = metal::exp(value);
+      auto fast_result = metal::fast::exp(value);
+      auto precise_result = metal::precise::exp(value);
+      auto simd_result = metal::simd_max(value);
+      output[index] = float(
+          standard_result + fast_result + precise_result + simd_result);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    shader = parse_crossgl(crossgl)
+    generated_targets = {
+        "crossgl": crossgl,
+        "directx": TranslatorHLSLCodeGen().generate(shader),
+        "opengl": GLSLCodeGen().generate(shader),
+    }
+    expected_result_types = {
+        "crossgl": "bfloat16",
+        "directx": "half",
+        "opengl": "float",
+    }
+
+    for target, generated in generated_targets.items():
+        normalized = normalize(generated)
+        result_type = expected_result_types[target]
+        for result_name in (
+            "standard_result",
+            "fast_result",
+            "precise_result",
+            "simd_result",
+        ):
+            assert f"{result_type} {result_name}" in normalized
+        assert generated.count("exp(") == 3
+        assert "simd_max" not in generated
+        assert "__metal_" not in generated
+        assert "__METAL_" not in generated
+        assert "<unknown>" not in generated
+
+    assert "bfloat16 simd_result = WaveActiveMax(value);" in normalize(crossgl)
+    assert "half simd_result = WaveActiveMax(value);" in normalize(
+        generated_targets["directx"]
+    )
+    assert "float simd_result = subgroupMax(value);" in normalize(
+        generated_targets["opengl"]
+    )
+
+
+def test_codegen_reports_called_unsupported_metal_stdlib_wrapper():
+    source = """
+    namespace metal {
+    METAL_FUNC float implementation_only(float value) {
+      return __metal_unrepresentable(value);
+    }
+    }
+
+    float use_wrapper(float value) {
+      return metal::implementation_only(value);
+    }
+    """
+
+    with pytest.raises(MetalStandardLibraryWrapperLoweringError) as exc_info:
+        convert_without_preprocessing(
+            source,
+            file_path="unsupported-stdlib-wrapper.metal",
+        )
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.metal-stdlib-wrapper-unsupported"
+    )
+    assert diagnostic.missing_capabilities == (
+        "metal.standard-library-wrapper-lowering",
+    )
+    assert diagnostic.function_name == "metal::implementation_only"
+    assert diagnostic.implementation_intrinsics == ("__metal_unrepresentable",)
+    assert diagnostic.source_location["file"] == "unsupported-stdlib-wrapper.metal"
+    assert diagnostic.source_location["line"] == 9
+
+
+def test_codegen_unused_unsupported_metal_stdlib_wrapper_does_not_poison_targets(
+    tmp_path,
+):
+    source = """
+    namespace metal {
+    METAL_FUNC float unavailable_wrapper(float value) {
+      return __metal_unavailable(value, __METAL_MODE);
+    }
+
+    METAL_FUNC float user_adjust(float value) {
+      return value + 1.0f;
+    }
+    }
+
+    using namespace metal;
+
+    kernel void use_user_function(
+        device float* output [[buffer(0)]],
+        uint index [[thread_position_in_grid]]) {
+      output[index] = user_adjust(float(index));
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    normalized_crossgl = normalize(crossgl)
+    assert "float user_adjust(float value)" in normalized_crossgl
+    assert "user_adjust(float(index))" in normalized_crossgl
+    assert "unavailable_wrapper" not in crossgl
+    assert "__metal_unavailable" not in crossgl
+    assert "__METAL_MODE" not in crossgl
+
+    shader = parse_crossgl(crossgl)
+    hlsl = TranslatorHLSLCodeGen().generate(shader)
+    glsl = GLSLCodeGen().generate(shader)
+    for generated in (hlsl, glsl):
+        assert "user_adjust" in generated
+        assert "unavailable_wrapper" not in generated
+        assert "__metal_unavailable" not in generated
+        assert "__METAL_MODE" not in generated
+
+    HLSLParser(HLSLLexer(hlsl).tokenize()).parse()
+    dxc = shutil.which("dxc")
+    if dxc is not None:
+        hlsl_path = tmp_path / "unused-metal-stdlib-wrapper.hlsl"
+        dxil_path = tmp_path / "unused-metal-stdlib-wrapper.dxil"
+        hlsl_path.write_text(hlsl, encoding="utf-8")
+        result = subprocess.run(
+            [
+                dxc,
+                "-T",
+                "cs_6_0",
+                "-E",
+                "CSMain",
+                str(hlsl_path),
+                "-Fo",
+                str(dxil_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert dxil_path.stat().st_size > 0
+    assert_opengl_compute_validates_if_available(
+        glsl,
+        tmp_path,
+        "unused-metal-stdlib-wrapper",
+    )
+
+
+def test_codegen_deduplicates_identical_materialized_stdlib_definitions():
+    source = """
+    namespace metal {
+    METAL_FUNC float fdim(float x, float y) {
+      float difference = x - y;
+      return select(difference, 0.0f, difference < 0.0f || x == y);
+    }
+
+    namespace fast {
+    METAL_FUNC float fdim(float x, float y) {
+      float difference = x - y;
+      return select(difference, 0.0f, difference < 0.0f || x == y);
+    }
+    }
+
+    namespace precise {
+    METAL_FUNC float fdim(float x, float y) {
+      float difference = x - y;
+      return select(difference, 0.0f, difference < 0.0f || x == y);
+    }
+    }
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+
+    assert normalize(crossgl).count("float fdim(float x, float y)") == 1
+    assert (
+        normalize(crossgl).count(
+            "return select(difference, 0.0f, difference < 0.0f || x == y);"
+        )
+        == 1
+    )
 
 
 def test_codegen_bfloat_builtin_results_reach_project_targets(tmp_path):

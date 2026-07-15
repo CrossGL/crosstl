@@ -106,6 +106,29 @@ class MetalBuiltinResultTypeResolutionError(ValueError):
         )
 
 
+class MetalStandardLibraryWrapperLoweringError(ValueError):
+    """Raised when a materialized Metal standard-library wrapper has no target op."""
+
+    project_diagnostic_code = "project.translate.metal-stdlib-wrapper-unsupported"
+    missing_capabilities = ("metal.standard-library-wrapper-lowering",)
+
+    def __init__(
+        self,
+        function_name,
+        implementation_intrinsics,
+        source_location=None,
+    ):
+        self.function_name = function_name
+        self.implementation_intrinsics = tuple(implementation_intrinsics)
+        self.source_location = source_location
+        intrinsic_text = ", ".join(self.implementation_intrinsics)
+        super().__init__(
+            "Cannot lower materialized Metal standard-library wrapper "
+            f"'{function_name}': no canonical operation represents "
+            f"{intrinsic_text}"
+        )
+
+
 class MetalSourceOverloadResolutionError(ValueError):
     """Raised when a Metal call cannot be bound from source argument types."""
 
@@ -2619,7 +2642,15 @@ class MetalToCrossGLConverter:
 
         ordinary_function_code = []
         deferred_template_functions = []
+        emitted_stdlib_definitions = set()
         for f in functions:
+            if self.is_materialized_metal_stdlib_wrapper(f):
+                continue
+            stdlib_definition = self.materialized_metal_stdlib_definition_key(f)
+            if stdlib_definition is not None:
+                if stdlib_definition in emitted_stdlib_definitions:
+                    continue
+                emitted_stdlib_definitions.add(stdlib_definition)
             default_bindings = self.default_value_template_bindings.get(id(f))
             if self.value_template_parameter_names(f) and default_bindings is None:
                 deferred_template_functions.append(f)
@@ -8286,6 +8317,7 @@ class MetalToCrossGLConverter:
                 expr.args,
                 getattr(expr, "source_location", None),
             )
+            self.validate_materialized_metal_stdlib_wrapper_call(expr)
             materialized_name = self.transported_metal_source_overload_name(
                 materialized_name,
                 expr.args,
@@ -9280,11 +9312,13 @@ class MetalToCrossGLConverter:
         mapped = self.metal_wave_intrinsics.get(text)
         if mapped is None:
             return None
-        binding, _function = self.resolve_metal_user_function_overload(
+        binding, function = self.resolve_metal_user_function_overload(
             text,
             args or [],
             allow_wave_lane_conversion=True,
         )
+        if binding == "user" and self.is_materialized_metal_stdlib_wrapper(function):
+            return mapped
         if binding in {"user", "unknown"}:
             return None
         return mapped
@@ -9933,6 +9967,86 @@ class MetalToCrossGLConverter:
     def metal_math_source_overload_is_stdlib_extension(function):
         namespace = str(getattr(function, "namespace", "") or "")
         return namespace == "metal" or namespace.startswith("metal::")
+
+    def materialized_metal_stdlib_wrapper_intrinsics(self, function):
+        namespace = str(getattr(function, "namespace", "") or "")
+        if namespace != "metal" and not namespace.startswith("metal::"):
+            return ()
+        declaration_qualifiers = {
+            str(qualifier)
+            for qualifier in getattr(function, "declaration_qualifiers", []) or []
+        }
+        if "METAL_FUNC" not in declaration_qualifiers:
+            return ()
+
+        intrinsics = set()
+        seen = set()
+
+        def visit(node):
+            if node is None or isinstance(node, (str, int, float, bool)):
+                return
+            if not isinstance(node, (dict, list, tuple, set)):
+                node_id = id(node)
+                if node_id in seen:
+                    return
+                seen.add(node_id)
+            if isinstance(node, FunctionCallNode):
+                call_name = str(getattr(node, "name", ""))
+                if call_name.rsplit("::", 1)[-1].startswith("__metal_"):
+                    intrinsics.add(call_name)
+            for child in self.iter_ast_children(node):
+                visit(child)
+
+        visit(getattr(function, "body", None))
+        return tuple(sorted(intrinsics))
+
+    def is_materialized_metal_stdlib_wrapper(self, function):
+        return bool(self.materialized_metal_stdlib_wrapper_intrinsics(function))
+
+    @staticmethod
+    def materialized_metal_stdlib_definition_key(function):
+        namespace = str(getattr(function, "namespace", "") or "")
+        if namespace != "metal" and not namespace.startswith("metal::"):
+            return None
+        declaration_qualifiers = {
+            str(qualifier)
+            for qualifier in getattr(function, "declaration_qualifiers", []) or []
+        }
+        if "METAL_FUNC" not in declaration_qualifiers:
+            return None
+        parameters = tuple(
+            (
+                str(getattr(parameter, "vtype", "")),
+                str(getattr(parameter, "name", "")),
+            )
+            for parameter in getattr(function, "params", []) or []
+        )
+        return (
+            str(getattr(function, "name", "")),
+            str(getattr(function, "return_type", "")),
+            parameters,
+            repr(getattr(function, "body", None)),
+        )
+
+    def validate_materialized_metal_stdlib_wrapper_call(self, expression):
+        selected = self.selected_metal_callable(expression)
+        intrinsics = self.materialized_metal_stdlib_wrapper_intrinsics(selected)
+        if not intrinsics:
+            return
+
+        name = str(getattr(expression, "name", ""))
+        unscoped_name = name.rsplit("::", 1)[-1]
+        if (
+            unscoped_name in self.metal_math_intrinsics
+            or unscoped_name in self.metal_bit_intrinsics
+            or unscoped_name in self.metal_wave_intrinsics
+        ):
+            return
+        raise MetalStandardLibraryWrapperLoweringError(
+            name,
+            intrinsics,
+            getattr(expression, "source_location", None),
+        )
 
     def resolve_metal_math_builtin_name(self, name, arguments):
         text = str(name)
