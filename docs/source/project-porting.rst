@@ -25,8 +25,8 @@ Use the project pipeline as an audit-first migration workflow:
    diagnostics before writing translated artifacts.
 2. Add or refine ``crosstl.toml`` so repository-relative source roots,
    include/exclude patterns, source overrides, include directories, defines,
-   named variants, output directory, targets, and optional external corpus
-   manifest are explicit.
+   named variants, optional entry-point selections, output directory, targets,
+   and optional external corpus manifest are explicit.
 3. Run ``translate-project`` into a separate output directory and keep the
    generated portability report with the translated artifacts.
 4. Run ``validate-project`` on the generated report. Use the JSON output for
@@ -105,6 +105,10 @@ Use these report fields to decide the next action:
    * - ``artifactMatrix``
      - Confirm the expected unit, target, and named-variant artifact plan before
        translation, then identify missing or extra artifacts after translation.
+   * - ``project.entryPointSelections`` and ``artifacts[].entryPoint``
+     - Confirm that a requested materialized source entry was packaged under its
+       deterministic entry path and identify the reflected target entry and
+       stage.
    * - ``validation``
      - Check current source hashes and byte sizes, generated artifact hashes
        and byte sizes, source maps, source remaps, optional toolchain
@@ -178,6 +182,7 @@ error diagnostics.
 ``--validate`` records artifact existence, source and generated hash checks,
 source-map and source-remap status, and configured toolchain availability
 without invoking external compiler tools.
+
 Embedded toolchain availability records name the configured validation hook
 tools for each target; paths and availability remain environment-specific.
 ``--run-toolchains`` implies artifact validation and records any available
@@ -191,6 +196,36 @@ builtins, defaulting to compute for generic ``.glsl`` outputs.
 Vulkan smoke checks validate binary ``.spv`` artifacts with ``spirv-val`` and
 assemble textual ``.spvasm`` artifacts with ``spirv-as -o`` pointed at the
 platform null device.
+
+Entry-Scoped OpenGL Artifacts
+-----------------------------
+
+Repositories can request a standalone artifact for one materialized source
+entry by adding a repository-relative selector table to ``crosstl.toml``:
+
+.. code-block:: toml
+
+   [project]
+   include = ["kernels/arange.metal"]
+   include_dirs = ["."]
+   targets = ["opengl"]
+   output_dir = "crosstl-out"
+
+   [project.entry_points]
+   "kernels/arange.metal" = "arangeuint32"
+
+For OpenGL compute output, the selected source entry is emitted as target entry
+``main``. A source such as ``kernels/arange.metal`` produces
+``crosstl-out/opengl/kernels/arange/arangeuint32.glsl``. The portability report
+records the source entry, target entry, and reflected stage on the artifact;
+embedded validation records carry the same identity. Runtime artifact manifests
+then reflect only the selected stage interface from that standalone output.
+
+Selection is exact after source materialization. Missing or ambiguous entries
+fail with structured diagnostics and no target file. Targets that do not yet
+implement standalone entry generation also fail explicitly instead of pruning
+an aggregate artifact. When ``project.entry_points`` is absent, project
+translation keeps the existing aggregate output path and behavior.
 
 Project scan, report, and translation commands also accept repeatable
 ``--source-root``, ``--include-dir``, ``--define``, and ``--source-override``

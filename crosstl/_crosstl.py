@@ -45,6 +45,17 @@ STDOUT_OUTPUT_PATH = "-"
 CLI_PROG = "crosstl"
 
 
+class EntryPointSelectionUnsupportedError(ValueError):
+    """Raised when a target cannot emit an independently loadable entry."""
+
+    project_diagnostic_code = "project.translate.entry-point-target-unsupported"
+    missing_capabilities = ("artifact.entry-point-selection",)
+
+    def __init__(self, message, *, entry_point=None):
+        super().__init__(message)
+        self.entry_point = entry_point
+
+
 def _non_negative_int(value):
     try:
         parsed = int(value)
@@ -104,6 +115,7 @@ def translate(
     include_paths: Optional[Sequence[str]] = None,
     defines: Optional[Mapping[str, str]] = None,
     source_options: Optional[Mapping[str, Any]] = None,
+    entry_point: Optional[str] = None,
 ) -> str:
     """Translate a shader file to another language.
 
@@ -120,6 +132,8 @@ def translate(
             Defaults to None.
         source_options (Mapping[str, object], optional): Source parser-specific
             lexer options. Defaults to None.
+        entry_point (str, optional): Emit one independently loadable source entry
+            when the target backend supports entry-scoped generation.
 
     Returns:
         str: The translated shader code
@@ -154,6 +168,14 @@ def translate(
         )
 
     shader_code = _read_shader_source(file_path, source_spec.name)
+
+    if entry_point is not None and normalized_backend in {"cgl", "crossgl"}:
+        selected_entry_point = _validated_entry_point(entry_point)
+        raise EntryPointSelectionUnsupportedError(
+            "Entry-scoped artifact generation is not supported for the CrossGL "
+            "intermediate target",
+            entry_point=selected_entry_point,
+        )
 
     if source_spec.name == "metal" and normalized_backend not in {
         "cgl",
@@ -190,7 +212,7 @@ def translate(
             codegen = get_codegen(requested_backend)
             lower_default_arguments(ast)
             validate_pointer_reinterpretation_target(ast, normalized_backend)
-            generated_code = codegen.generate(ast)
+            generated_code = _generate_target_code(codegen, ast, entry_point)
     else:
         if normalized_backend in ["cgl", "crossgl"]:
             if not source_spec.reverse_codegen_factory:
@@ -238,7 +260,7 @@ def translate(
             codegen = get_codegen(requested_backend)
             lower_default_arguments(cgl_ast)
             validate_pointer_reinterpretation_target(cgl_ast, normalized_backend)
-            generated_code = codegen.generate(cgl_ast)
+            generated_code = _generate_target_code(codegen, cgl_ast, entry_point)
 
     if (
         format_output
@@ -254,6 +276,26 @@ def translate(
             file.write(generated_code)
 
     return generated_code
+
+
+def _generate_target_code(codegen, ast, entry_point):
+    if entry_point is None:
+        return codegen.generate(ast)
+    entry_point = _validated_entry_point(entry_point)
+    generate_entry = getattr(codegen, "generate_entry", None)
+    if not callable(generate_entry):
+        raise EntryPointSelectionUnsupportedError(
+            "Entry-scoped artifact generation is not supported for the requested "
+            "target backend",
+            entry_point=entry_point,
+        )
+    return generate_entry(ast, entry_point)
+
+
+def _validated_entry_point(entry_point):
+    if not isinstance(entry_point, str) or not entry_point.strip():
+        raise ValueError("entry_point must be a non-empty string")
+    return entry_point.strip()
 
 
 def _derive_single_file_output(input_path, backend):

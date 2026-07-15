@@ -381,6 +381,40 @@ SIMPLE_CROSSL = textwrap.dedent("""
     }
     """).strip()
 
+ENTRY_SCOPED_COMPUTE_CROSSL = textwrap.dedent("""
+    shader EntryScopedCompute {
+        uint selected_helper(uint value) {
+            return value + 1u;
+        }
+
+        uint unrelated_helper(uint value) {
+            return value * 9u;
+        }
+
+        compute first {
+            void main(
+                constant uint& start @buffer(0),
+                constant uint& step @buffer(1),
+                RWStructuredBuffer<uint> out_ @buffer(2),
+                uint index @gl_GlobalInvocationID
+            ) {
+                out_[index] = unrelated_helper(start + index * step);
+            }
+        }
+
+        compute second {
+            void main(
+                constant uint& start @buffer(0),
+                constant uint& step @buffer(1),
+                RWStructuredBuffer<uint> out_ @buffer(2),
+                uint index @gl_GlobalInvocationID
+            ) {
+                out_[index] = selected_helper(start + index * step);
+            }
+        }
+    }
+    """).strip()
+
 DIRECTX_GRAPHICS_CROSSL = textwrap.dedent("""
     shader ProjectDirectXGraphics {
         struct VSInput {
@@ -832,6 +866,259 @@ def test_translate_project_accepts_path_like_output_dir(tmp_path):
     assert payload["project"]["outputDir"] == str((repo / "translated").resolve())
     assert payload["summary"]["translatedCount"] == 1
     assert (repo / "translated" / "cgl" / "simple.cgl").exists()
+
+
+def test_translate_project_emits_entry_scoped_opengl_artifact_and_reflection(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "multi.cgl").write_text(
+        ENTRY_SCOPED_COMPUTE_CROSSL,
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            include = ["multi.cgl"]
+            targets = ["opengl"]
+            output_dir = "out"
+
+            [project.entry_points]
+            "multi.cgl" = "second"
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    config = load_project_config(repo)
+    report = translate_project(config, format_output=False, validate=True)
+    payload = report.to_json()
+    artifact = payload["artifacts"][0]
+    artifact_path = repo / artifact["path"]
+    generated = artifact_path.read_text(encoding="utf-8")
+
+    assert config.entry_points == {"multi.cgl": "second"}
+    assert payload["project"]["entryPointSelections"] == {"multi.cgl": "second"}
+    assert payload["project"]["entryPointSelectionCount"] == 1
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["artifactMatrix"]["complete"] is True
+    assert artifact["path"] == "out/opengl/multi/second.glsl"
+    assert artifact["entryPoint"] == {
+        "source": "second",
+        "target": "main",
+        "stage": "compute",
+    }
+    assert artifact["provenance"]["pipeline"] == "entry-scoped-translate"
+    assert artifact["sourceMap"]["generated"]["file"] == artifact["path"]
+    assert artifact["sourceRemap"]["generatedFile"] == artifact["path"]
+    assert payload["validation"]["artifacts"][0]["entryPoint"] == artifact["entryPoint"]
+    assert generated.count("void main()") == 1
+    assert "void compute_main" not in generated
+    assert "selected_helper" in generated
+    assert "unrelated_helper" not in generated
+    assert "first_Args" not in generated
+    assert_compute_glsl_validates_if_available(generated, tmp_path)
+
+    report_path = repo / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert validation["success"] is True
+    manifest = build_runtime_artifact_manifest(report_path)
+    runtime_artifact = manifest["artifacts"][0]
+    assert runtime_artifact["entryPoints"] == [
+        {
+            "name": "main",
+            "stage": "compute",
+            "executionConfig": {
+                "local_size_x": 1,
+                "local_size_y": 1,
+                "local_size_z": 1,
+            },
+        }
+    ]
+    assert runtime_artifact["hostInterface"]["resourceCount"] == 3
+    assert {
+        resource["binding"] for resource in runtime_artifact["resourceBindings"]
+    } == {0, 1, 2}
+
+
+@pytest.mark.parametrize(
+    "entry_points",
+    (
+        pytest.param(
+            {"multi.cgl": "second", "*.cgl": "first"},
+            id="exact-selector-first",
+        ),
+        pytest.param(
+            {"*.cgl": "first", "multi.cgl": "second"},
+            id="glob-selector-first",
+        ),
+    ),
+)
+def test_translate_project_entry_selection_prefers_exact_path_over_glob(
+    tmp_path,
+    entry_points,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "multi.cgl").write_text(
+        ENTRY_SCOPED_COMPUTE_CROSSL,
+        encoding="utf-8",
+    )
+    config = project_api.ProjectConfig(
+        root=repo,
+        include_patterns=("multi.cgl",),
+        targets=("opengl",),
+        output_dir="out",
+        entry_points=entry_points,
+    )
+
+    report = translate_project(config, format_output=False)
+    payload = report.to_json()
+    artifact = payload["artifacts"][0]
+
+    assert artifact["path"] == "out/opengl/multi/second.glsl"
+    assert artifact["entryPoint"]["source"] == "second"
+    report_path = repo / "report.json"
+    report.write_json(report_path)
+    assert validate_project_report(report_path)["success"] is True
+
+
+def test_translate_project_keeps_aggregate_opengl_output_without_entry_selection(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "multi.cgl").write_text(
+        ENTRY_SCOPED_COMPUTE_CROSSL,
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+    artifact = payload["artifacts"][0]
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+
+    assert artifact["path"] == "out/opengl/multi.glsl"
+    assert "entryPoint" not in artifact
+    assert artifact["provenance"]["pipeline"] == "single-file-translate"
+    assert "void main()" in generated
+    assert "void compute_main()" in generated
+    assert "selected_helper" in generated
+    assert "unrelated_helper" in generated
+
+
+def test_translate_project_reports_missing_selected_opengl_entry(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "multi.cgl").write_text(
+        ENTRY_SCOPED_COMPUTE_CROSSL,
+        encoding="utf-8",
+    )
+    config = project_api.ProjectConfig(
+        root=repo,
+        include_patterns=("multi.cgl",),
+        targets=("opengl",),
+        output_dir="out",
+        entry_points={"multi.cgl": "missing"},
+    )
+
+    payload = translate_project(config, format_output=False).to_json()
+    artifact = payload["artifacts"][0]
+
+    assert artifact["status"] == "failed"
+    assert artifact["entryPoint"] == {"source": "missing", "target": "main"}
+    assert artifact["path"] == "out/opengl/multi/missing.glsl"
+    assert not (repo / artifact["path"]).exists()
+    diagnostic = next(
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == "project.translate.opengl-entry-point-unavailable"
+    )
+    assert diagnostic["severity"] == "error"
+    assert diagnostic["missingCapabilities"] == ["artifact.entry-point-selection"]
+
+
+@pytest.mark.parametrize(
+    "target",
+    (
+        "cuda",
+        "directx",
+        "hip",
+        "metal",
+        "mojo",
+        "rust",
+        "slang",
+        "vulkan",
+        "wgsl",
+    ),
+)
+def test_translate_project_reports_entry_selection_for_unsupported_target(
+    tmp_path, target
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "multi.cgl").write_text(
+        ENTRY_SCOPED_COMPUTE_CROSSL,
+        encoding="utf-8",
+    )
+    config = project_api.ProjectConfig(
+        root=repo,
+        include_patterns=("multi.cgl",),
+        targets=(target,),
+        output_dir="out",
+        entry_points={"multi.cgl": "second"},
+    )
+
+    payload = translate_project(config, format_output=False).to_json()
+    artifact = payload["artifacts"][0]
+
+    assert artifact["status"] == "failed"
+    assert artifact["path"].startswith(f"out/{target}/multi/second")
+    assert artifact["entryPoint"] == {"source": "second", "target": "second"}
+    diagnostic = next(
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == "project.translate.entry-point-target-unsupported"
+    )
+    assert diagnostic["missingCapabilities"] == ["artifact.entry-point-selection"]
+
+
+def test_validate_project_report_requires_configured_entry_point_metadata(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "multi.cgl").write_text(
+        ENTRY_SCOPED_COMPUTE_CROSSL,
+        encoding="utf-8",
+    )
+    config = project_api.ProjectConfig(
+        root=repo,
+        include_patterns=("multi.cgl",),
+        targets=("opengl",),
+        output_dir="out",
+        entry_points={"multi.cgl": "second"},
+    )
+    payload = translate_project(config, format_output=False, validate=True).to_json()
+    payload["artifacts"][0].pop("entryPoint")
+    payload["validation"]["artifacts"][0].pop("entryPoint")
+    for run in payload["validation"].get("toolchainRuns", []):
+        run.pop("entryPoint", None)
+    report_path = repo / "out" / "missing-entry-point-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = validation["diagnostics"][0]
+    assert diagnostic["code"] == "project.validate.invalid-report"
+    assert (
+        "artifacts[0].entryPoint must be recorded when the source matches "
+        "project.entryPointSelections"
+    ) in diagnostic["message"]
 
 
 def test_translate_project_glslang_spec_constant_vertex_to_directx(tmp_path):
@@ -19620,6 +19907,7 @@ def test_translate_project_emits_closed_portability_report_schema(tmp_path):
         "templateMaterialization",
         "specializationConstants",
         "specializationMaterialization",
+        "entryPoint",
     }
     assert artifact["requiredCapabilities"] == []
     assert set(artifact["sourceHash"]) == project_pipeline.REPORT_HASH_FIELDS

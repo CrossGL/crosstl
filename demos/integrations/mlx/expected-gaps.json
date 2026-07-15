@@ -515,11 +515,17 @@
         "arangefloat32"
       ]
     },
+    "native_opengl_execution": {
+      "required_on_linux_ci": true,
+      "source_entry_point": "arangeuint32",
+      "target_entry_point": "main",
+      "expected_output": [300, 317, 334, 351]
+    },
     "target_specializations": {
       "directx": "uint8 via CSMain",
-      "opengl": "uint8 via main",
+      "opengl": "entry-scoped uint32 via main",
       "vulkan": "uint32, int32, and float32 via named entry points",
-      "per_entry_packaging_tracked_by": "https://github.com/CrossGL/crosstl/issues/1523"
+      "remaining_entry_packaging_scope_tracked_by": "https://github.com/CrossGL/crosstl/issues/1523"
     }
   },
   "full_corpus_scout": {

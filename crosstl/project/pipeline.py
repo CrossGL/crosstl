@@ -1263,6 +1263,8 @@ REPORT_PROJECT_FIELDS = frozenset(
         "outputDir",
         "sourceOverrides",
         "sourceOverrideCount",
+        "entryPointSelections",
+        "entryPointSelectionCount",
         "sourceOptions",
         "sourceOptionCount",
         "includeDirs",
@@ -1506,6 +1508,7 @@ REPORT_ARTIFACT_FIELDS = frozenset(
         "specializationMaterialization",
         "templateMaterialization",
         "requiredCapabilities",
+        "entryPoint",
     )
 )
 WEBGL_PROJECT_STAGE_LABEL_BY_GLSLANG = {
@@ -1536,6 +1539,7 @@ REPORT_ARTIFACT_INCLUDE_DEPENDENCY_PROCESSING_FIELDS = frozenset(
 )
 REPORT_HASH_FIELDS = frozenset(("algorithm", "value"))
 REPORT_ARTIFACT_PROVENANCE_FIELDS = frozenset(("pipeline", "intermediate"))
+REPORT_ARTIFACT_ENTRY_POINT_FIELDS = frozenset(("source", "target", "stage"))
 REPORT_ARTIFACT_SOURCE_REMAP_FIELDS = frozenset(
     (
         "schemaVersion",
@@ -1698,6 +1702,7 @@ VALIDATION_ARTIFACT_FIELDS = frozenset(
         "generatedSizeStatus",
         "sourceMapStatus",
         "sourceRemapStatus",
+        "entryPoint",
     )
 )
 VALIDATION_SUMMARY_FIELDS = frozenset(
@@ -1727,6 +1732,7 @@ VALIDATION_TOOLCHAIN_RUN_FIELDS = frozenset(
         "status",
         "stdout",
         "stderr",
+        "entryPoint",
     )
 )
 VALIDATION_TOOLCHAIN_RUN_CHECK_KINDS = frozenset(("artifact", "tool-availability"))
@@ -1760,7 +1766,10 @@ COMPILER_SOURCE_REMAP_PAYLOAD_FIELDS = frozenset(
 COMPILER_SOURCE_REMAP_MAPPING_FIELDS = frozenset(("generated", "original"))
 COMPILER_SOURCE_REMAP_SPAN_FIELDS = frozenset(SOURCE_MAP_SPAN_FIELDS)
 REPORT_GENERATOR_PIPELINE = "project-porting"
-REPORT_ARTIFACT_PROVENANCE_PIPELINES = ("single-file-translate",)
+REPORT_ARTIFACT_PROVENANCE_PIPELINES = (
+    "single-file-translate",
+    "entry-scoped-translate",
+)
 REPORT_ARTIFACT_PROVENANCE_INTERMEDIATES = ("crossgl",)
 REPORT_MIGRATION_SCOPE = "shader-kernel-translation"
 REPORT_MIGRATION_NON_GOALS = (
@@ -6956,6 +6965,7 @@ class ProjectConfig:
     targets: Sequence[str] | str = ()
     output_dir: str | os.PathLike[str] = DEFAULT_OUTPUT_DIR
     source_overrides: Mapping[str, str] = field(default_factory=dict)
+    entry_points: Mapping[str, str] = field(default_factory=dict)
     include_dirs: Sequence[str] | str = ()
     defines: Mapping[str, str] = field(default_factory=dict)
     source_options: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
@@ -7024,6 +7034,18 @@ class ProjectConfig:
                 _as_non_empty_str_mapping(
                     self.source_overrides,
                     field_name="ProjectConfig.source_overrides",
+                )
+            ),
+        )
+        if not isinstance(self.entry_points, Mapping):
+            raise ValueError("ProjectConfig.entry_points must be a mapping")
+        object.__setattr__(
+            self,
+            "entry_points",
+            _normalize_project_relative_path_mapping(
+                _as_non_empty_str_mapping(
+                    self.entry_points,
+                    field_name="ProjectConfig.entry_points",
                 )
             ),
         )
@@ -7567,6 +7589,21 @@ def _scan_pattern_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]:
                 missing_capabilities=["source.override"],
             )
         )
+    for pattern in config.entry_points:
+        if _is_repository_relative_glob(pattern):
+            continue
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code="project.config.entry-point-pattern-outside-project",
+                message=(
+                    f"Configured entry-point selection pattern '{pattern}' is not "
+                    "repository-relative."
+                ),
+                location=location,
+                missing_capabilities=["artifact.entry-point-selection"],
+            )
+        )
     if config.source_overrides:
         register_default_sources()
         discover_backend_plugins()
@@ -7765,6 +7802,8 @@ class ProjectPortabilityReport:
                 "outputDir": str(self.config.output_path),
                 "sourceOverrides": dict(sorted(self.config.source_overrides.items())),
                 "sourceOverrideCount": len(self.config.source_overrides),
+                "entryPointSelections": dict(sorted(self.config.entry_points.items())),
+                "entryPointSelectionCount": len(self.config.entry_points),
                 "sourceOptions": {
                     name: dict(sorted(options.items()))
                     for name, options in sorted(self.config.source_options.items())
@@ -7936,6 +7975,10 @@ def load_project_config(
         project.get("source_options"),
         field_name="crosstl.toml [project.source_options]",
     )
+    entry_points = _as_non_empty_str_mapping(
+        project.get("entry_points"),
+        field_name="crosstl.toml [project.entry_points]",
+    )
     variants = project.get("variants", {})
     if not isinstance(variants, Mapping):
         raise ValueError("crosstl.toml [project.variants] must be a table")
@@ -7978,6 +8021,7 @@ def load_project_config(
         targets=_as_str_list(project.get("targets"), field_name="project.targets"),
         output_dir=_normalize_project_relative_path(output_dir or DEFAULT_OUTPUT_DIR),
         source_overrides=_normalize_project_relative_path_mapping(sources),
+        entry_points=_normalize_project_relative_path_mapping(entry_points),
         include_dirs=_normalize_project_relative_paths(
             _as_str_list(project.get("include_dirs"), field_name="project.include_dirs")
         ),
@@ -7999,6 +8043,43 @@ def _override_for_path(relative_path: str, config: ProjectConfig) -> str | None:
         if fnmatch.fnmatch(relative_path, _normalize_project_relative_path(pattern)):
             return backend
     return None
+
+
+def _entry_point_selector_priority(pattern: str, relative_path: str) -> tuple:
+    normalized = _normalize_project_relative_path(pattern)
+    wildcard_count = sum(normalized.count(character) for character in "*?[")
+    return (
+        normalized == relative_path,
+        -wildcard_count,
+        len(normalized),
+        normalized,
+    )
+
+
+def _entry_point_from_mapping(
+    relative_path: str,
+    entry_points: Mapping[str, str],
+) -> str | None:
+    normalized_path = _normalize_project_relative_path(relative_path)
+    matches = [
+        (pattern, entry_point)
+        for pattern, entry_point in entry_points.items()
+        if fnmatch.fnmatch(
+            normalized_path,
+            _normalize_project_relative_path(pattern),
+        )
+    ]
+    if not matches:
+        return None
+    _pattern, entry_point = max(
+        matches,
+        key=lambda item: _entry_point_selector_priority(item[0], normalized_path),
+    )
+    return entry_point
+
+
+def _entry_point_for_path(relative_path: str, config: ProjectConfig) -> str | None:
+    return _entry_point_from_mapping(relative_path, config.entry_points)
 
 
 def _iter_scan_candidates(config: ProjectConfig) -> list[Path]:
@@ -8061,6 +8142,29 @@ def _config_with_expanded_native_directive_variants(
         config,
         variants={**dict(config.variants), **new_variants},
     )
+
+
+def _entry_point_selection_diagnostics(
+    config: ProjectConfig,
+    units: Sequence[ProjectTranslationUnit],
+) -> list[ProjectDiagnostic]:
+    unit_paths = [unit.relative_path for unit in units]
+    return [
+        ProjectDiagnostic(
+            severity="error",
+            code="project.config.entry-point-pattern-unmatched",
+            message=(
+                f"Configured entry-point selection pattern '{pattern}' does not "
+                "match a discovered translation unit."
+            ),
+            location=_config_location(config),
+            missing_capabilities=["artifact.entry-point-selection"],
+            details={"pattern": pattern, "entryPoint": entry_point},
+        )
+        for pattern, entry_point in config.entry_points.items()
+        if _is_repository_relative_glob(pattern)
+        and not any(fnmatch.fnmatch(path, pattern) for path in unit_paths)
+    ]
 
 
 def scan_project(
@@ -8184,6 +8288,7 @@ def scan_project(
     diagnostics.extend(
         _external_corpus_source_backend_mismatch_diagnostics(scan_config, units)
     )
+    diagnostics.extend(_entry_point_selection_diagnostics(scan_config, units))
     if not units:
         diagnostics.append(
             ProjectDiagnostic(
@@ -8210,6 +8315,7 @@ def _artifact_path(
     variant: str | None = None,
     *,
     preserve_source_suffix: bool = False,
+    entry_point: str | None = None,
 ) -> Path:
     base = config.output_path / target
     if variant is not None:
@@ -8218,6 +8324,7 @@ def _artifact_path(
         unit.relative_path,
         target,
         preserve_source_suffix=preserve_source_suffix,
+        entry_point=entry_point,
     )
 
 
@@ -8226,9 +8333,19 @@ def _artifact_relative_path(
     target: str,
     *,
     preserve_source_suffix: bool = False,
+    entry_point: str | None = None,
 ) -> Path:
     extension = _artifact_target_extension(target)
     relative = PurePosixPath(source.replace("\\", "/"))
+    if entry_point is not None:
+        entry_segment = _variant_output_segment(entry_point)
+        if preserve_source_suffix:
+            entry_base = relative
+        elif relative.suffix:
+            entry_base = relative.with_suffix("")
+        else:
+            entry_base = PurePosixPath(f"{relative.as_posix()}.entries")
+        return Path((entry_base / f"{entry_segment}{extension}").as_posix())
     if preserve_source_suffix:
         if relative.suffix:
             return Path(f"{relative.as_posix()}{extension}")
@@ -19155,6 +19272,7 @@ def translate_project(
             targets=config.targets,
             output_dir=output_dir,
             source_overrides=config.source_overrides,
+            entry_points=config.entry_points,
             include_dirs=config.include_dirs,
             defines=config.defines,
             source_options=config.source_options,
@@ -19191,6 +19309,7 @@ def translate_project(
     preserve_source_suffix = _artifact_source_suffix_pairs(scan.units, selected_targets)
 
     for unit in scan.units:
+        selected_entry_point = _entry_point_for_path(unit.relative_path, config)
         required_capabilities = _required_capabilities_for_unit(unit)
         source_supports_defines = _source_frontend_supports_lexer_keyword(
             unit.source_backend, "defines"
@@ -19232,6 +19351,7 @@ def translate_project(
                     variant,
                     preserve_source_suffix=(unit.relative_path, target)
                     in preserve_source_suffix,
+                    entry_point=selected_entry_point,
                 )
                 artifact = {
                     "source": unit.relative_path,
@@ -19260,7 +19380,11 @@ def translate_project(
                     "sourceHash": dict(unit.source_hash),
                     "sourceSizeBytes": unit.source_size_bytes,
                     "provenance": {
-                        "pipeline": "single-file-translate",
+                        "pipeline": (
+                            "entry-scoped-translate"
+                            if selected_entry_point is not None
+                            else "single-file-translate"
+                        ),
                         "intermediate": (
                             "crossgl"
                             if unit.source_backend not in {"cgl", "crossgl"}
@@ -19270,6 +19394,13 @@ def translate_project(
                     },
                     "requiredCapabilities": list(required_capabilities),
                 }
+                if selected_entry_point is not None:
+                    artifact["entryPoint"] = {
+                        "source": selected_entry_point,
+                        "target": (
+                            "main" if target == "opengl" else selected_entry_point
+                        ),
+                    }
                 if variant is not None:
                     artifact["variant"] = variant
                 if output_dir_blocked:
@@ -19443,6 +19574,8 @@ def translate_project(
                         "include_paths": include_paths,
                         "defines": translation_defines,
                     }
+                    if selected_entry_point is not None:
+                        translate_kwargs["entry_point"] = selected_entry_point
                     if translation_source_options:
                         translate_kwargs["source_options"] = translation_source_options
                     generated_source = translate(
@@ -19469,6 +19602,23 @@ def translate_project(
                         _remove_artifact_output_files(output_path)
                         artifact_records = [artifact]
                     else:
+                        if selected_entry_point is not None:
+                            reflected = reflect_target_host_interface(
+                                output_path,
+                                target=target,
+                            )
+                            reflected_entries = reflected.get("entryPoints", [])
+                            if len(reflected_entries) != 1:
+                                raise ValueError(
+                                    "Entry-scoped target artifact must expose exactly "
+                                    "one reflected entry point"
+                                )
+                            reflected_entry = reflected_entries[0]
+                            artifact["entryPoint"] = {
+                                "source": selected_entry_point,
+                                "target": reflected_entry.get("name"),
+                                "stage": reflected_entry.get("stage"),
+                            }
                         artifact["generatedHash"] = _source_hash(output_path)
                         artifact["generatedSizeBytes"] = output_path.stat().st_size
                         artifact["sourceMap"] = _artifact_source_map(
@@ -21024,6 +21174,8 @@ def _validate_artifacts(
             artifact_check["sourceBackend"] = artifact["sourceBackend"]
         if artifact.get("stage") is not None:
             artifact_check["stage"] = artifact["stage"]
+        if isinstance(artifact.get("entryPoint"), Mapping):
+            artifact_check["entryPoint"] = dict(artifact["entryPoint"])
         artifact_checks.append(artifact_check)
 
     for toolchain in toolchains:
@@ -33368,6 +33520,8 @@ def _inspection_failed_artifact(artifact: Mapping[str, Any]) -> dict[str, Any]:
         failed["sourceBackend"] = artifact.get("sourceBackend")
     if "variant" in artifact:
         failed["variant"] = artifact.get("variant")
+    if isinstance(artifact.get("entryPoint"), Mapping):
+        failed["entryPoint"] = dict(artifact["entryPoint"])
     if "error" in artifact:
         failed["error"] = artifact.get("error")
     for field_name in (
@@ -34215,11 +34369,14 @@ def _project_config_for_scan_validation(
         return None
 
     source_overrides = project.get("sourceOverrides")
+    entry_point_selections = project.get("entryPointSelections", {})
     defines = project.get("defines")
     source_options = project.get("sourceOptions", {})
     if not _valid_non_empty_string_mapping(
         source_overrides
     ) or not _valid_string_mapping(defines):
+        return None
+    if not _valid_non_empty_string_mapping(entry_point_selections):
         return None
     if not _valid_source_options_mapping(source_options):
         return None
@@ -34276,6 +34433,7 @@ def _project_config_for_scan_validation(
         targets=tuple(targets),
         output_dir=_normalize_project_relative_path(output_dir),
         source_overrides=_normalize_project_relative_path_mapping(source_overrides),
+        entry_points=_normalize_project_relative_path_mapping(entry_point_selections),
         include_dirs=tuple(_normalize_project_relative_paths(include_dirs)),
         defines=dict(defines),
         source_options={
@@ -34451,6 +34609,65 @@ ArtifactIdentity = Tuple[str, str, str, Optional[str]]
 DeclaredArtifact = Tuple[int, Mapping[str, Any]]
 
 
+def _artifact_entry_point_source(record: Mapping[str, Any]) -> str | None:
+    entry_point = record.get("entryPoint")
+    if not isinstance(entry_point, Mapping):
+        return None
+    source = entry_point.get("source")
+    return str(source) if _is_non_empty_string(source) else None
+
+
+def _configured_entry_point_for_artifact(
+    record: Mapping[str, Any],
+    project: Mapping[str, Any] | None,
+) -> str | None:
+    source_path = record.get("source")
+    selections = (
+        project.get("entryPointSelections") if isinstance(project, Mapping) else None
+    )
+    if not _is_non_empty_string(source_path) or not isinstance(selections, Mapping):
+        return None
+    valid_selections = {
+        str(pattern): str(value)
+        for pattern, value in selections.items()
+        if _is_non_empty_string(pattern) and _is_non_empty_string(value)
+    }
+    return _entry_point_from_mapping(str(source_path), valid_selections)
+
+
+def _artifact_entry_point_contract_reasons(
+    prefix: str,
+    record: Mapping[str, Any],
+    *,
+    project: Mapping[str, Any] | None,
+) -> list[str]:
+    entry_point = record.get("entryPoint")
+    configured = _configured_entry_point_for_artifact(record, project)
+    if entry_point is None:
+        if configured is not None:
+            return [
+                f"{prefix}.entryPoint must be recorded when the source matches "
+                "project.entryPointSelections"
+            ]
+        return []
+    if not isinstance(entry_point, Mapping):
+        return [f"{prefix}.entryPoint must be an object"]
+    reasons = _unsupported_mapping_field_reasons(
+        f"{prefix}.entryPoint", entry_point, REPORT_ARTIFACT_ENTRY_POINT_FIELDS
+    )
+    for field_name in ("source", "target"):
+        if not _is_non_empty_string(entry_point.get(field_name)):
+            reasons.append(f"{prefix}.entryPoint.{field_name} must be a string")
+    if "stage" in entry_point and not _is_non_empty_string(entry_point.get("stage")):
+        reasons.append(f"{prefix}.entryPoint.stage must be a string")
+
+    if configured is not None and entry_point.get("source") != configured:
+        reasons.append(
+            f"{prefix}.entryPoint.source must match project.entryPointSelections"
+        )
+    return reasons
+
+
 def _artifact_identity(record: Mapping[str, Any]) -> ArtifactIdentity | None:
     source = record.get("source")
     target = record.get("target")
@@ -34481,6 +34698,7 @@ def _expected_artifact_identity(
     *,
     preserve_source_suffix: bool = False,
     stage: str | None = None,
+    entry_point: str | None = None,
 ) -> ArtifactIdentity | None:
     normalized_target = _normalized_targets([target])[0]
     output_base = project_output_path / normalized_target
@@ -34490,6 +34708,7 @@ def _expected_artifact_identity(
         source,
         normalized_target,
         preserve_source_suffix=preserve_source_suffix,
+        entry_point=entry_point,
     )
     if normalized_target == "webgl" and stage in WEBGL_PROJECT_GLSLANG_STAGE_BY_LABEL:
         expected_relative = _webgl_stage_relative_path(expected_relative, stage)
@@ -34532,6 +34751,28 @@ def _webgl_expected_stages_from_artifacts(
     )
 
 
+def _expected_entry_points_from_artifacts(
+    artifacts: Sequence[Mapping[str, Any]],
+    source: str,
+    target: str,
+    variant: str | None,
+) -> tuple[str | None, ...]:
+    entry_points = {
+        entry_point
+        for artifact in artifacts
+        if isinstance(artifact, Mapping)
+        and artifact.get("source") == source
+        and _is_non_empty_string(artifact.get("target"))
+        and _normalized_targets([str(artifact["target"])])[0] == target
+        and _artifact_variant_identity(artifact) == variant
+        for entry_point in (_artifact_entry_point_source(artifact),)
+        if entry_point is not None
+    }
+    if not entry_points:
+        return (None,)
+    return tuple(sorted(entry_points))
+
+
 def _expected_artifact_identities(
     root_path: Path,
     project_output_path: Path,
@@ -34553,21 +34794,25 @@ def _expected_artifact_identities(
             continue
         for target in _normalized_targets(targets):
             for variant in variants:
-                for stage in _webgl_expected_stages_from_artifacts(
+                for entry_point in _expected_entry_points_from_artifacts(
                     artifacts, source, target, variant
                 ):
-                    identity = _expected_artifact_identity(
-                        root_path,
-                        project_output_path,
-                        source,
-                        target,
-                        variant,
-                        preserve_source_suffix=(source, target)
-                        in preserve_source_suffix,
-                        stage=stage,
-                    )
-                    if identity is not None:
-                        expected_identities.add(identity)
+                    for stage in _webgl_expected_stages_from_artifacts(
+                        artifacts, source, target, variant
+                    ):
+                        identity = _expected_artifact_identity(
+                            root_path,
+                            project_output_path,
+                            source,
+                            target,
+                            variant,
+                            preserve_source_suffix=(source, target)
+                            in preserve_source_suffix,
+                            stage=stage,
+                            entry_point=entry_point,
+                        )
+                        if identity is not None:
+                            expected_identities.add(identity)
     return expected_identities
 
 
@@ -37392,6 +37637,33 @@ def _project_metadata_contract_reasons(
                 f"({_value_mismatch_context(source_override_count, len(source_overrides))})"
             )
 
+    entry_point_selections = project.get("entryPointSelections")
+    entry_point_selections_are_mapping = isinstance(entry_point_selections, Mapping)
+    if _optional_project_field(
+        project, "entryPointSelections", required=require_full_metadata
+    ):
+        reasons.extend(
+            _non_empty_string_mapping_contract_reasons(
+                "project.entryPointSelections", entry_point_selections
+            )
+        )
+    if _optional_project_field(
+        project, "entryPointSelectionCount", required=require_full_metadata
+    ):
+        count = project.get("entryPointSelectionCount")
+        if not _is_non_negative_int(count):
+            reasons.append(
+                "project.entryPointSelectionCount must be a non-negative integer"
+            )
+        elif entry_point_selections_are_mapping and count != len(
+            entry_point_selections
+        ):
+            reasons.append(
+                "project.entryPointSelectionCount must match "
+                "project.entryPointSelections "
+                f"({_value_mismatch_context(count, len(entry_point_selections))})"
+            )
+
     source_options = project.get("sourceOptions")
     source_options_is_mapping = isinstance(source_options, Mapping)
     if _optional_project_field(
@@ -37802,6 +38074,9 @@ def _validation_artifact_contract_reasons(
                 require_registered=True,
             )
         )
+    reasons.extend(
+        _artifact_entry_point_contract_reasons(prefix, artifact, project=None)
+    )
     identity = _artifact_identity(artifact)
     if (
         identity is not None
@@ -37831,6 +38106,24 @@ def _validation_artifact_contract_reasons(
         reasons.append(
             f"{prefix}.sourceBackend must match "
             f"report.artifacts[{referenced_artifact[0]}].sourceBackend"
+        )
+    if (
+        "entryPoint" not in artifact
+        and referenced_artifact is not None
+        and isinstance(referenced_artifact[1].get("entryPoint"), Mapping)
+    ):
+        reasons.append(
+            f"{prefix}.entryPoint must be recorded when "
+            f"report.artifacts[{referenced_artifact[0]}].entryPoint is recorded"
+        )
+    if (
+        "entryPoint" in artifact
+        and referenced_artifact is not None
+        and artifact.get("entryPoint") != referenced_artifact[1].get("entryPoint")
+    ):
+        reasons.append(
+            f"{prefix}.entryPoint must match "
+            f"report.artifacts[{referenced_artifact[0]}].entryPoint"
         )
     source_hash_status = artifact.get("sourceHashStatus")
     if require_status_fields and "sourceHashStatus" not in artifact:
@@ -38095,6 +38388,7 @@ def _toolchain_run_contract_reasons(
                 require_registered=True,
             )
         )
+    reasons.extend(_artifact_entry_point_contract_reasons(prefix, run, project=None))
     identity = _artifact_identity(run)
     if (
         identity is not None
@@ -38124,6 +38418,24 @@ def _toolchain_run_contract_reasons(
         reasons.append(
             f"{prefix}.sourceBackend must match "
             f"report.artifacts[{referenced_artifact[0]}].sourceBackend"
+        )
+    if (
+        "entryPoint" not in run
+        and referenced_artifact is not None
+        and isinstance(referenced_artifact[1].get("entryPoint"), Mapping)
+    ):
+        reasons.append(
+            f"{prefix}.entryPoint must be recorded when "
+            f"report.artifacts[{referenced_artifact[0]}].entryPoint is recorded"
+        )
+    if (
+        "entryPoint" in run
+        and referenced_artifact is not None
+        and run.get("entryPoint") != referenced_artifact[1].get("entryPoint")
+    ):
+        reasons.append(
+            f"{prefix}.entryPoint must match "
+            f"report.artifacts[{referenced_artifact[0]}].entryPoint"
         )
     if (
         referenced_artifact is not None
@@ -40328,6 +40640,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                         normalized_target,
                         preserve_source_suffix=(source, normalized_target)
                         in preserve_source_suffix,
+                        entry_point=_artifact_entry_point_source(artifact),
                     )
                     if normalized_target == "webgl" and _is_non_empty_string(
                         artifact.get("stage")
@@ -40369,6 +40682,13 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                 reasons.append(
                     f"artifacts[{index}].status must be translated or failed"
                 )
+            reasons.extend(
+                _artifact_entry_point_contract_reasons(
+                    f"artifacts[{index}]",
+                    artifact,
+                    project=project if isinstance(project, Mapping) else None,
+                )
+            )
             if "error" in artifact or (has_summary and status == "failed"):
                 if not _is_non_empty_string(artifact.get("error")):
                     reasons.append(f"artifacts[{index}].error must be a string")
@@ -40825,6 +41145,8 @@ def _run_toolchain_smoke(
                     run["stage"] = artifact["stage"]
                 if artifact.get("variant") is not None:
                     run["variant"] = artifact["variant"]
+                if isinstance(artifact.get("entryPoint"), Mapping):
+                    run["entryPoint"] = dict(artifact["entryPoint"])
                 runs.append(run)
                 if returncode != 0:
                     break

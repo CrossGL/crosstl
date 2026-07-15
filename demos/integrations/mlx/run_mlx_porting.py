@@ -231,7 +231,7 @@ RUNTIME_READINESS_ENTRY_POINTS = {
 }
 RUNTIME_READINESS_DEFAULT_VARIANTS = {
     "directx": "uint8",
-    "opengl": "uint8",
+    "opengl": "uint32",
     "vulkan": "uint32",
 }
 ARANGE_RUNTIME_VARIANTS = {
@@ -643,6 +643,7 @@ def _write_project_config(
     specialization_constants: Mapping[str, bool | int | float] | None = None,
     metal_source_options: Mapping[str, int] | None = None,
     metal_target_options: Mapping[str, Mapping[str, int]] | None = None,
+    entry_points: Mapping[str, str] | None = None,
 ) -> None:
     include_values = [include] if isinstance(include, str) else list(include)
     include_list = ", ".join(json.dumps(value) for value in include_values)
@@ -659,6 +660,11 @@ def _write_project_config(
         '"**/*.metal" = "metal"',
         "",
     ]
+    if entry_points:
+        lines.append("[project.entry_points]")
+        for source, entry_point in entry_points.items():
+            lines.append(f"{json.dumps(source)} = {json.dumps(entry_point)}")
+        lines.append("")
     if specialization_constants:
         lines.append("[project.specialization_constants]")
         for selector, value in specialization_constants.items():
@@ -2322,83 +2328,6 @@ def _translate_directx_vulkan_frontier(
     }
 
 
-def _require_arange_opengl_scalar_coercions(generated: str) -> None:
-    boolean_wrappers = (
-        (
-            "simd_shuffle_down(bool, uint)",
-            r"\bbool\s+simd_shuffle_down\s*\(\s*bool\s+data\s*,\s*uint\s+delta\s*\)\s*\{(?P<body>.*?)\}",
-            "subgroupShuffleDown(uint(data),delta)",
-        ),
-        (
-            "simd_shuffle_up(bool, uint)",
-            r"\bbool\s+simd_shuffle_up\s*\(\s*bool\s+data\s*,\s*uint\s+delta\s*\)\s*\{(?P<body>.*?)\}",
-            "subgroupShuffleUp(uint(data),delta)",
-        ),
-        (
-            "simd_shuffle_and_fill_up(bool, bool, uint)",
-            r"\bbool\s+simd_shuffle_and_fill_up\s*\(\s*bool\s+data\s*,\s*bool\s+filling\s*,\s*uint\s+delta\s*\)\s*\{(?P<body>.*?)\}",
-            "crossglWaveShuffleAndFillUp(uint(data),uint(filling),delta)",
-        ),
-        (
-            "simd_shuffle(bool, uint)",
-            r"\bbool\s+simd_shuffle\s*\(\s*bool\s+data\s*,\s*uint\s+lane\s*\)\s*\{(?P<body>.*?)\}",
-            "subgroupShuffle(uint(data),lane)",
-        ),
-    )
-    for signature, pattern, call in boolean_wrappers:
-        match = re.search(pattern, generated, flags=re.DOTALL)
-        _require(
-            match is not None,
-            f"OpenGL arange artifact is missing {signature}",
-        )
-        body = re.sub(r"\s+", "", match.group("body"))
-        return_pattern = rf"return\(*{re.escape(call)}!=(?:0u|uint\(0\))\)*;"
-        _require(
-            re.search(return_pattern, body) is not None,
-            (
-                "OpenGL arange artifact did not preserve the numeric-to-boolean "
-                f"scalar coercion in {signature}"
-            ),
-        )
-
-    signed_assignments = {
-        "int8": (
-            "arangeint8_out",
-            r"bitfieldExtract\(int\(.*uint\(arangeint8_start_Args_start\).*index\*uint\(arangeint8_step_Args_step\).*\),0,8\)",
-        ),
-        "int16": (
-            "arangeint16_out",
-            r"bitfieldExtract\(int\(.*uint\(arangeint16_start_Args_start\).*index\*uint\(arangeint16_step_Args_step\).*\),0,16\)",
-        ),
-        "int32": (
-            "arangeint32_out",
-            r"int\(.*uint\(arangeint32_start_Args_start\).*index\*uint\(arangeint32_step_Args_step\).*\)",
-        ),
-        "int64": (
-            "arangeint64_out",
-            r"\(*arangeint64_start_Args_start\+\(int64_t\(index\)\*arangeint64_step_Args_step\)\)*",
-        ),
-    }
-    for source_type, (output_name, expression_pattern) in signed_assignments.items():
-        assignment = re.search(
-            rf"\b{output_name}\s*\[\s*index\s*\]\s*=\s*(?P<expression>.*?);",
-            generated,
-            flags=re.DOTALL,
-        )
-        _require(
-            assignment is not None,
-            f"OpenGL arange artifact is missing the signed {source_type} assignment",
-        )
-        expression = re.sub(r"\s+", "", assignment.group("expression"))
-        _require(
-            re.fullmatch(expression_pattern, expression) is not None,
-            (
-                "OpenGL arange artifact did not preserve the signed "
-                f"{source_type} arange scalar coercion"
-            ),
-        )
-
-
 def _check_arange_opengl(
     mlx_root: Path,
     work_dir: Path,
@@ -2414,6 +2343,7 @@ def _check_arange_opengl(
         include=MLX_ARANGE_SOURCE,
         targets=("opengl",),
         output_dir=_relpath(work_dir / "out-arange-opengl", mlx_root),
+        entry_points={MLX_ARANGE_SOURCE: "arangeuint32"},
     )
     result = _run_command(
         "translate-arange-opengl",
@@ -2479,33 +2409,37 @@ def _check_arange_opengl(
         "OpenGL arange artifact retained a Metal system preprocessor line",
     )
     _require(
-        "float log1p(float" not in generated,
-        "OpenGL arange artifact retained a collapsed log1p target signature",
+        artifact.get("entryPoint")
+        == {"source": "arangeuint32", "target": "main", "stage": "compute"},
+        "OpenGL arange artifact did not record the selected compute entry",
     )
     _require(
-        "float log1p__metal_overload_1(float" in generated
-        and "float log1p__metal_overload_2(float" in generated
-        and "log1p__metal_overload_1(r)" in generated,
-        "OpenGL arange artifact did not resolve the mapped log1p collision",
+        generated.count("void main()") == 1 and "compute_main" not in generated,
+        "OpenGL arange artifact is not independently loadable through one main entry",
+    )
+    resource_bindings = re.findall(
+        r"layout\s*\(\s*std(?:140|430)\s*,\s*binding\s*=\s*(\d+)\s*\)\s*"
+        r"(?:uniform|buffer)\b",
+        generated,
     )
     _require(
-        "return {" not in generated,
-        "OpenGL arange artifact retained an untyped aggregate return",
+        sorted(int(binding) for binding in resource_bindings) == [0, 1, 2],
+        "OpenGL arange artifact must expose only start, step, and output resources",
+    )
+    normalized_source = re.sub(r"\s+", "", generated)
+    _require(
+        "out_[index]=(start+(index*step));" in normalized_source,
+        "OpenGL arange artifact did not preserve uint32 arange data flow",
     )
     _require(
-        "return complex64_t(x, theta);" in generated
-        and (
-            "return complex64_t((0.5 * log1p__metal_overload_1(r)), theta);"
-            in generated
-        )
-        and "return complex64_t(log(z0), theta);" in generated,
-        "OpenGL arange artifact did not lower aggregate complex returns",
+        "arangeuint8" not in generated and "arangefloat" not in generated,
+        "OpenGL arange artifact retained unrelated materialized entries",
     )
-    _require_arange_opengl_scalar_coercions(generated)
     _require(
-        "subgroupShuffleUp(value, delta);" in generated
-        and "return gl_SubgroupInvocationID >= delta ? shuffled : fill;" in generated,
-        "OpenGL arange artifact did not preserve shuffle-and-fill lane semantics",
+        "log1p__metal_overload_" not in generated
+        and "subgroupShuffle" not in generated
+        and "complex64_t probe(" not in generated,
+        "OpenGL arange artifact retained unrelated helper dependencies",
     )
     native_validation = _validate_arange_opengl(
         mlx_root,
@@ -2520,10 +2454,11 @@ def _check_arange_opengl(
         "source": MLX_ARANGE_SOURCE,
         "target": "opengl",
         "metalIncludesFiltered": True,
-        "mappedOverloadCollisionResolved": True,
-        "aggregateInitializerLowered": True,
-        "scalarCoercionLowered": True,
-        "shuffleAndFillLowered": True,
+        "selectedEntryPoint": "arangeuint32",
+        "targetEntryPoint": "main",
+        "interfaceResourceCount": 3,
+        "standaloneArtifact": True,
+        "arangeDataFlowPreserved": True,
         **native_validation,
         "trackedIssues": list(OPENGL_ARANGE_VALIDATION_TRACKED_ISSUES),
     }
@@ -3540,14 +3475,15 @@ def _runtime_report_results_for_target(
     return results
 
 
-def _require_vulkan_native_runtime_results(
+def _require_native_runtime_results(
     runtime_report: Mapping[str, Any],
+    target: str,
 ) -> None:
-    vulkan_results = _runtime_report_results_for_target(runtime_report, "vulkan")
+    target_results = _runtime_report_results_for_target(runtime_report, target)
     _require(
-        bool(vulkan_results)
-        and all(result.get("status") == "passed" for result in vulkan_results),
-        "Vulkan native runtime execution was required for every MLX arange fixture",
+        bool(target_results)
+        and all(result.get("status") == "passed" for result in target_results),
+        f"{target} native runtime execution was required for every MLX arange fixture",
     )
 
 
@@ -3637,7 +3573,7 @@ def _execute_native_runtime_fixtures_for_report(
     name: str,
     runtime_artifact_manifest_path: Path,
     targets: Sequence[str],
-    require_vulkan_native_runtime: bool,
+    required_native_runtime_targets: Sequence[str] = (),
 ) -> dict[str, Any]:
     metadata_path = report_dir / f"{name}.native-runtime-execution-metadata.json"
     manifest_path = report_dir / f"{name}.native-runtime-execution-manifest.json"
@@ -3684,8 +3620,8 @@ def _execute_native_runtime_fixtures_for_report(
     passed_count = int(summary.get("passedCount", 0))
     unavailable_count = int(summary.get("unavailableCount", 0))
     skipped_count = int(summary.get("skippedCount", 0))
-    if require_vulkan_native_runtime:
-        _require_vulkan_native_runtime_results(runtime_report)
+    for target in required_native_runtime_targets:
+        _require_native_runtime_results(runtime_report, target)
     status = "passed"
     if failed_count:
         status = "blocked-by-tracked-issues"
@@ -3716,7 +3652,7 @@ def _plan_runtime_readiness_for_report(
     name: str,
     artifact_report: Path,
     targets: Sequence[str],
-    require_vulkan_native_runtime: bool,
+    required_native_runtime_targets: Sequence[str] = (),
 ) -> dict[str, Any]:
     _require(
         artifact_report.is_file(),
@@ -3757,7 +3693,7 @@ def _plan_runtime_readiness_for_report(
         name=name,
         runtime_artifact_manifest_path=runtime_artifact_manifest_path,
         targets=targets,
-        require_vulkan_native_runtime=require_vulkan_native_runtime,
+        required_native_runtime_targets=required_native_runtime_targets,
     )
 
     runtime_artifact_diagnostics_by_code = _diagnostics_by_code(
@@ -3845,6 +3781,7 @@ def _plan_reduced_runtime_readiness(
     report_dir: Path,
     *,
     require_vulkan_native_runtime: bool,
+    require_opengl_native_runtime: bool,
 ) -> dict[str, Any]:
     reports = [
         _plan_runtime_readiness_for_report(
@@ -3853,7 +3790,9 @@ def _plan_reduced_runtime_readiness(
             name="directx-vulkan-runtime-readiness",
             artifact_report=report_dir / "directx-vulkan-frontier.json",
             targets=("directx", "vulkan"),
-            require_vulkan_native_runtime=require_vulkan_native_runtime,
+            required_native_runtime_targets=(
+                ("vulkan",) if require_vulkan_native_runtime else ()
+            ),
         ),
         _plan_runtime_readiness_for_report(
             mlx_root=mlx_root,
@@ -3861,7 +3800,9 @@ def _plan_reduced_runtime_readiness(
             name="opengl-runtime-readiness",
             artifact_report=report_dir / "arange-opengl.json",
             targets=("opengl",),
-            require_vulkan_native_runtime=False,
+            required_native_runtime_targets=(
+                ("opengl",) if require_opengl_native_runtime else ()
+            ),
         ),
     ]
     status = (
@@ -4198,6 +4139,9 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
     require_opengl_gemv_toolchain = bool(
         getattr(args, "require_opengl_gemv_toolchain", False)
     )
+    require_opengl_native_runtime = bool(
+        getattr(args, "require_opengl_native_runtime", False)
+    )
     require_vulkan_gemv_toolchain = bool(
         getattr(args, "require_vulkan_gemv_toolchain", False)
     )
@@ -4208,6 +4152,10 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
     _require(
         not require_opengl_gemv_toolchain or args.mode == REDUCED_FRONTIER_MODE,
         "--require-opengl-gemv-toolchain is only valid in reduced-frontier mode",
+    )
+    _require(
+        not require_opengl_native_runtime or args.mode == REDUCED_FRONTIER_MODE,
+        "--require-opengl-native-runtime is only valid in reduced-frontier mode",
     )
     _require(
         not require_vulkan_gemv_toolchain or args.mode == REDUCED_FRONTIER_MODE,
@@ -4327,6 +4275,7 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
                 mlx_root,
                 report_dir,
                 require_vulkan_native_runtime=args.require_vulkan_native_runtime,
+                require_opengl_native_runtime=require_opengl_native_runtime,
             )
         )
     elif args.mode == FULL_CORPUS_MODE:
@@ -4386,6 +4335,7 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             ),
             "openglFrontierToolchainRequired": require_opengl_frontier_toolchain,
             "openglGemvToolchainRequired": require_opengl_gemv_toolchain,
+            "openglNativeRuntimeRequired": require_opengl_native_runtime,
             "vulkanGemvToolchainRequired": require_vulkan_gemv_toolchain,
             "runtimeParityClaimed": False,
         },
@@ -4445,6 +4395,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--require-vulkan-native-runtime",
         action="store_true",
         help="Fail unless the MLX-generated Vulkan arange fixture executes natively.",
+    )
+    parser.add_argument(
+        "--require-opengl-native-runtime",
+        action="store_true",
+        help=(
+            "Fail unless the selected MLX OpenGL arangeuint32 artifact executes "
+            "natively and passes exact output comparison."
+        ),
     )
     parser.add_argument(
         "--require-opengl-frontier-toolchain",

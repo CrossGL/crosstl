@@ -84,9 +84,12 @@ The current harness verifies:
   frontier when SPIR-V tools are available. Vulkan atomic-fence feature work is
   deferred; the separate `fence.metal` contract check prevents generated
   barriers from being mistaken for semantic support;
-- OpenGL artifact generation for `arange.metal`, including deterministic
-  separation of the source `float` and `bfloat16_t` helper declarations after
-  both map to GLSL `float` and source-typed call rewriting coverage;
+- entry-scoped OpenGL packaging for the materialized `arangeuint32` compute
+  entry from `arange.metal`. Project configuration selects the source entry,
+  emits it at the deterministic `arange/arangeuint32.glsl` path as OpenGL
+  `main`, and records the source-to-target entry identity in the portability
+  report. The standalone artifact exposes only the `start`, `step`, and `out`
+  resources and preserves the source arithmetic without an MLX source rewrite;
 - OpenGL artifact generation for the clean eight-source `arg_reduce.metal`,
   `binary_two.metal`, `logsumexp.metal`, `rms_norm.metal`, `rope.metal`,
   `scaled_dot_product_attention.metal`, `softmax.metal`, and `ternary.metal`
@@ -114,6 +117,10 @@ The current harness verifies:
 - on Linux CI, native Vulkan execution and readback for the generated MLX
   `arange.metal` unsigned 32-bit, signed 32-bit, and floating-point entry points
   through the optional Vulkan compute runtime and Mesa Vulkan software driver.
+- on Linux CI, native OpenGL 4.3 execution and readback for the selected
+  `arangeuint32` artifact through ModernGL and Mesa EGL. Four invocations use
+  `start = 300` and `step = 17`; the required zero-tolerance comparison is
+  `[300, 317, 334, 351]`.
 
 Pull requests run the 12-source pinned reduced scope: 11 clean frontier sources
 and the explicitly blocked `fence.metal` contract source. They also run the
@@ -158,11 +165,12 @@ reference-accessor fixture is not included in those runtime manifests; its
 scope ends at generated-source inspection and native compiler validation. The
 reduced arange fixtures select the translated artifact by source and target,
 then select `CSMain`, `main`, or `arangeuint32` independently for DirectX,
-OpenGL, or Vulkan dispatch. The aggregate DirectX and OpenGL artifacts currently
-expose their first `uint8` specialization through `CSMain` and `main`; per-entry
-target packaging remains tracked in CrossGL/crosstl#1523. Vulkan execution
-selects `arangeuint32`, `arangeint32`, and `arangefloat32` explicitly, and its
-unsigned fixture uses values above the 8-bit range to detect entry-point drift.
+OpenGL, or Vulkan dispatch. OpenGL project translation packages source entry
+`arangeuint32` as a standalone `main` artifact with an entry-scoped reflected
+interface; its unsigned fixture uses values above the 8-bit range to detect
+entry drift. DirectX still exercises the aggregate artifact's first `uint8`
+entry. Vulkan execution selects `arangeuint32`, `arangeint32`, and
+`arangefloat32` explicitly and uses the same wide unsigned probe.
 Plans report remaining non-blocking platform, layout, and entry-point ownership
 warnings. The reduced fixture execution
 report exercises the project runner and adapter contract with reference
@@ -207,18 +215,19 @@ python demos/integrations/mlx/run_mlx_porting.py \
   --summary /tmp/mlx/.crosstl-mlx-porting/full-corpus-summary.json
 ```
 
-On Linux, install SPIR-V tools and the Vulkan runtime dependencies to require
-OpenGL compilation and validation for the reference-accessor fixture as well as
-Vulkan validation and native execution of the generated MLX `arange` artifact:
+On Linux, install the OpenGL, SPIR-V, and Vulkan runtime dependencies to require
+OpenGL compilation and native execution as well as Vulkan validation and native
+execution of the generated MLX `arange` artifacts:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y glslang-tools libvulkan1 mesa-vulkan-drivers spirv-tools vulkan-tools
-python -m pip install vulkan==1.3.275.1
+sudo apt-get install -y glslang-tools libegl1 libgl1-mesa-dri libglx-mesa0 mesa-vulkan-drivers spirv-tools vulkan-tools
+python -m pip install moderngl==5.12.0 vulkan==1.3.275.1
 python demos/integrations/mlx/run_mlx_porting.py \
   --mlx-root /tmp/mlx \
   --require-opengl-frontier-toolchain \
   --require-opengl-gemv-toolchain \
+  --require-opengl-native-runtime \
   --require-vulkan-gemv-toolchain \
   --require-vulkan-toolchain \
   --require-vulkan-native-runtime

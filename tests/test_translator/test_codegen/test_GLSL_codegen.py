@@ -41,6 +41,7 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLCompileTimeGlobalError,
     OpenGLCompoundAssignmentError,
     OpenGLCooperativeMatrixError,
+    OpenGLEntryPointSelectionError,
     OpenGLFixedArrayResourceError,
     OpenGLForInIterableError,
     OpenGLGlobalInitializerError,
@@ -35270,6 +35271,79 @@ def test_glsl_subgroup_ops_combined_with_texture_gather():
     assert "linearSampler" not in generated
     assert "WaveActiveSum" not in generated
     assert "WaveGetLaneCount" not in generated
+
+
+ENTRY_SCOPED_COMPUTE_SOURCE = """
+shader EntryScopedCompute {
+    uint selected_helper(uint value) {
+        return value + 1u;
+    }
+
+    uint unrelated_helper(uint value) {
+        return value * 9u;
+    }
+
+    compute first {
+        void main(
+            constant uint& start @buffer(0),
+            constant uint& step @buffer(1),
+            RWStructuredBuffer<uint> out_ @buffer(2),
+            uint index @gl_GlobalInvocationID
+        ) {
+            out_[index] = unrelated_helper(start + index * step);
+        }
+    }
+
+    compute second {
+        void main(
+            constant uint& start @buffer(0),
+            constant uint& step @buffer(1),
+            RWStructuredBuffer<uint> out_ @buffer(2),
+            uint index @gl_GlobalInvocationID
+        ) {
+            out_[index] = selected_helper(start + index * step);
+        }
+    }
+}
+"""
+
+
+def test_opengl_entry_scoped_generation_keeps_only_selected_interface_and_helpers(
+    tmp_path,
+):
+    ast = parse_code(tokenize_code(ENTRY_SCOPED_COMPUTE_SOURCE))
+
+    generated = GLSLCodeGen().generate_entry(ast, "second")
+
+    assert generated.count("void main()") == 1
+    assert "void compute_main" not in generated
+    assert "selected_helper" in generated
+    assert "unrelated_helper" not in generated
+    assert "first_Args" not in generated
+    assert "second_start_Args" in generated
+    assert "second_step_Args" in generated
+    assert generated.count("buffer out_Buffer") == 1
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "entry-scoped-compute",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_opengl_entry_scoped_generation_reports_available_entries():
+    ast = parse_code(tokenize_code(ENTRY_SCOPED_COMPUTE_SOURCE))
+
+    with pytest.raises(
+        OpenGLEntryPointSelectionError,
+        match="source entry point 'missing' was not found",
+    ) as error:
+        GLSLCodeGen().generate_entry(ast, "missing")
+
+    assert error.value.reason == "not-found"
+    assert error.value.entry_point == "missing"
+    assert error.value.available_entry_points == ("first", "second")
 
 
 if __name__ == "__main__":

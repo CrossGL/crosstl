@@ -7190,6 +7190,97 @@
       }
     },
     {
+      "id": "project.entry_scoped_artifacts",
+      "category": "project",
+      "name": "Entry-scoped project artifacts",
+      "description": "Select one materialized source entry and emit an independently loadable artifact with deterministic identity, path, provenance, and reflected interface metadata.",
+      "support": {
+        "directx": {
+          "status": "validated_rejection",
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "Project configuration selects one materialized compute entry, emits a standalone GLSL main artifact at a deterministic entry path, retains only the selected stage interface and reachable helpers, records source-to-target entry identity in report and validation records, preserves provenance and source maps, and exposes an entry-scoped reflected runtime interface. Aggregate output remains unchanged when no entry is selected. The pinned MLX arangeuint32 proof compiles and executes through Mesa OpenGL with exact uint32 readback on Linux CI.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_entry_scoped_generation_keeps_only_selected_interface_and_helpers",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_entry_scoped_generation_reports_available_entries",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_emits_entry_scoped_opengl_artifact_and_reflection",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_keeps_aggregate_opengl_output_without_entry_selection",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_missing_selected_opengl_entry",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_requires_configured_entry_point_metadata",
+            "tests/test_mlx_porting_harness.py::def test_arange_opengl_check_confirms_native_validation"
+          ]
+        },
+        "metal": {
+          "status": "validated_rejection",
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
+          ]
+        },
+        "vulkan": {
+          "status": "validated_rejection",
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
+          ]
+        },
+        "cuda": {
+          "status": "validated_rejection",
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
+          ]
+        },
+        "hip": {
+          "status": "validated_rejection",
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
+          ]
+        },
+        "mojo": {
+          "status": "validated_rejection",
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
+          ]
+        },
+        "rust": {
+          "status": "validated_rejection",
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
+          ]
+        },
+        "slang": {
+          "status": "validated_rejection",
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
+          ]
+        },
+        "webgl": {
+          "status": "validated_rejection",
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. WebGL2 does not support compute artifacts.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_non_webgl_stages"
+          ]
+        },
+        "wgsl": {
+          "status": "validated_rejection",
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
+          ]
+        }
+      }
+    },
+    {
       "id": "project.validation_hooks",
       "category": "project",
       "name": "Optional validation hooks",
