@@ -33,7 +33,7 @@ from crosstl.backend.Metal.preprocessor import (
     MetalPreprocessor,
     MetalTemplateSpecializationError,
 )
-from crosstl.project import translate_project
+from crosstl.project import reflect_target_host_interface, translate_project
 from crosstl.translator.ast import ArrayAccessNode as CrossGLArrayAccessNode
 from crosstl.translator.ast import AssignmentNode as CrossGLAssignmentNode
 from crosstl.translator.ast import BinaryOpNode as CrossGLBinaryOpNode
@@ -124,6 +124,24 @@ def assert_opengl_compute_validates_if_available(glsl, tmp_path, stem):
             text=True,
         )
         assert result.returncode == 0, result.stdout + result.stderr
+
+
+def resolve_directx_numthreads_entry(source_path):
+    interface = reflect_target_host_interface(source_path, target="directx")
+    assert interface is not None
+    entries = []
+    for entry in interface.get("entryPoints", []):
+        execution_config = entry.get("executionConfig")
+        if (
+            entry.get("stage") == "compute"
+            and isinstance(execution_config, dict)
+            and "numthreads" in execution_config
+        ):
+            entries.append(entry)
+    assert len(entries) == 1, interface
+    entry_name = entries[0].get("name")
+    assert isinstance(entry_name, str) and entry_name, interface
+    return entry_name
 
 
 def find_crossgl_function(shader, name):
@@ -8450,7 +8468,8 @@ def test_mlx_collapsed_float16_overloads_match_direct_and_project_hlsl(tmp_path)
     assert payload["summary"]["translatedCount"] == 1, payload
     assert payload["summary"]["failedCount"] == 0, payload
     artifact = payload["artifacts"][0]
-    project = (repo / artifact["path"]).read_text(encoding="utf-8")
+    project_path = repo / artifact["path"]
+    project = project_path.read_text(encoding="utf-8")
 
     definition_pattern = (
         r"half (Divide__operator_call_[A-Za-z0-9_]+)"
@@ -8466,18 +8485,23 @@ def test_mlx_collapsed_float16_overloads_match_direct_and_project_hlsl(tmp_path)
     assert "half Divide__operator_call(inout Divide self, half x, half y)" not in direct
 
     HLSLParser(HLSLLexer(direct).tokenize()).parse()
+    source_output = tmp_path / "mlx-collapsed-overloads.hlsl"
+    source_output.write_text(direct, encoding="utf-8")
+    direct_entry_point = resolve_directx_numthreads_entry(source_output)
+    project_entry_point = resolve_directx_numthreads_entry(project_path)
+    assert direct_entry_point == project_entry_point
+    assert direct_entry_point != "exercise_collapsed_overloads"
+
     dxc = shutil.which("dxc")
     if dxc is not None:
-        source_output = tmp_path / "mlx-collapsed-overloads.hlsl"
         binary_output = tmp_path / "mlx-collapsed-overloads.dxil"
-        source_output.write_text(direct, encoding="utf-8")
         result = subprocess.run(
             [
                 dxc,
                 "-T",
                 "cs_6_0",
                 "-E",
-                "exercise_collapsed_overloads",
+                direct_entry_point,
                 str(source_output),
                 "-Fo",
                 str(binary_output),
