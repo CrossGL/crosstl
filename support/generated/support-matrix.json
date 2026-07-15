@@ -123,7 +123,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1292
+        "test_count": 1293
       },
       "translator_codegen": {
         "exists": true,
@@ -248,7 +248,7 @@
           "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1443
+        "test_count": 1445
       },
       "translator_codegen": {
         "exists": true,
@@ -619,7 +619,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 1500
+        "test_count": 1503
       },
       "translator_codegen": {
         "exists": true,
