@@ -22,7 +22,7 @@
         "path": "crosstl/backend/DirectX"
       },
       "signals": {
-        "unsupported_marker_count": 343,
+        "unsupported_marker_count": 347,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/directx_codegen.py",
@@ -123,7 +123,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1265
+        "test_count": 1273
       },
       "translator_codegen": {
         "exists": true,
@@ -5596,9 +5596,14 @@
         },
         "directx": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_while_switch_and_void_return_emit_c_style_syntax"
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_while_switch_and_void_return_emit_c_style_syntax",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_for_in_fixed_arrays_materialize_once_and_preserve_element_types",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_for_in_reduced_side_effecting_subarray_selector_is_evaluated_once",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_for_in_unknown_or_user_defined_iterables_are_structured_diagnostics",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_for_in_mutable_reference_binding_is_structured_diagnostic",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_fixed_array_for_in_validates_with_dxc"
           ],
-          "notes": "",
+          "notes": "DirectX control-flow lowering preserves integer-bound counted loops and lowers fixed-array for-in iteration by source element value across scalar, vector, struct, and nested-array elements. Fixed-array container expressions are materialized once, immutable binding qualifiers are preserved, and mutable-reference, unknown-extent, unresolved, and user-defined iterable contracts produce structured diagnostics. Official DXC validation covers the generated compute shader.",
           "status": "supported"
         },
         "hip": {

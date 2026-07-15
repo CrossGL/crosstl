@@ -237,6 +237,54 @@ shader HLSLWaveIntrinsicsValidation {
 """
 
 
+HLSL_FIXED_ARRAY_FOR_IN_COMPUTE_SHADER = """
+shader HLSLFixedArrayForInValidation {
+    struct Pair {
+        uint first;
+        uint second;
+    };
+
+    int selectRow(inout uint calls) {
+        calls += 1u;
+        return int(calls & 1u);
+    }
+
+    compute {
+        void main() {
+            uint calls = 0u;
+            uint[2] scalars = {1u, 2u};
+            uvec2[2] vectors = {uvec2(3u, 4u), uvec2(5u, 6u)};
+            Pair[2] pairs = {{7u, 8u}, {9u, 10u}};
+            uint[2][4] rotations = {
+                {13u, 15u, 26u, 6u},
+                {17u, 29u, 16u, 24u}
+            };
+            uint total = 0u;
+            for scalar in scalars {
+                total += scalar;
+            }
+            for vectorValue in vectors {
+                total += vectorValue.x;
+            }
+            for pairValue in pairs {
+                total += pairValue.first;
+            }
+            for rowValue in rotations {
+                total += rowValue[0];
+                break;
+            }
+            for rotation in rotations[selectRow(calls)] {
+                if (rotation == 29u) {
+                    continue;
+                }
+                total += rotation;
+            }
+        }
+    }
+}
+"""
+
+
 FRAGMENT_STRUCT_INPUT_SHADER = """
 shader FragmentStructInputValidation {
     struct VSOutput {
@@ -12799,6 +12847,29 @@ def test_generated_hlsl_compute_stage_validates_with_dxc(tmp_path):
     code = HLSLCodeGen().generate_stage(
         crosstl.translator.parse(COMPUTE_STAGE_SHADER), "compute"
     )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_fixed_array_for_in_validates_with_dxc(tmp_path):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "fixed_array_for_in.hlsl"
+    output = tmp_path / "fixed_array_for_in.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(HLSL_FIXED_ARRAY_FOR_IN_COMPUTE_SHADER),
+        "compute",
+    )
+    assert code.count("rotations[selectRow(calls)]") == 1
+    assert "uint rotation_crossgl_iterable[4]" in code
+    assert "uint2 vectorValue = vectorValue_crossgl_iterable[" in code
+    assert "Pair pairValue = pairValue_crossgl_iterable[" in code
+    assert "uint rowValue[4] = rowValue_crossgl_iterable[" in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(
