@@ -17224,6 +17224,9 @@ def test_glsl_wave_shuffle_and_fill_up_lowers_scalar_vector_and_bool(tmp_path):
                 int delta = 2;
                 vec3 vectorResult = WaveShuffleAndFillUp(
                     vectorValue, vectorFill, delta);
+                int modulo = 8;
+                float segmentedResult = WaveShuffleAndFillUp(
+                    scalarValue, scalarFill, delta, modulo);
 
                 bool boolValue = true;
                 bool boolFill = false;
@@ -17236,33 +17239,75 @@ def test_glsl_wave_shuffle_and_fill_up_lowers_scalar_vector_and_bool(tmp_path):
     generated = generate_code(parse_code(tokenize_code(code)))
 
     assert generated.count("#extension GL_KHR_shader_subgroup_basic : require") == 1
+    assert generated.count("#extension GL_KHR_shader_subgroup_shuffle : require") == 1
     assert (
-        generated.count("#extension GL_KHR_shader_subgroup_shuffle_relative : require")
-        == 1
+        "#extension GL_KHR_shader_subgroup_shuffle_relative : require" not in generated
     )
-    assert "#extension GL_KHR_shader_subgroup_shuffle : require" not in generated
     for signature in (
-        "float crossglWaveShuffleAndFillUp(float value, float fill, uint delta)",
-        "vec3 crossglWaveShuffleAndFillUp(vec3 value, vec3 fill, uint delta)",
-        "bool crossglWaveShuffleAndFillUp(bool value, bool fill, uint delta)",
+        "float crossglWaveShuffleAndFillUp(float value, float fill, uint delta, "
+        "uint modulo)",
+        "vec3 crossglWaveShuffleAndFillUp(vec3 value, vec3 fill, uint delta, "
+        "uint modulo)",
+        "bool crossglWaveShuffleAndFillUp(bool value, bool fill, uint delta, "
+        "uint modulo)",
     ):
         assert signature in generated
-    assert generated.count("subgroupShuffleUp(value, delta);") == len(
-        GLSLCodeGen.GLSL_WAVE_HELPER_VALUE_TYPES
-    )
-    assert generated.count(
-        "return gl_SubgroupInvocationID >= delta ? shuffled : fill;"
-    ) == len(GLSLCodeGen.GLSL_WAVE_HELPER_VALUE_TYPES)
+    helper_count = len(GLSLCodeGen.GLSL_WAVE_HELPER_VALUE_TYPES)
+    for semantic_formula in (
+        "uint lane = gl_SubgroupInvocationID;",
+        "uint segmentLane = lane % modulo;",
+        "uint segmentBase = lane - segmentLane;",
+        "bool useValue = segmentLane >= delta;",
+        "uint valueSourceLane = useValue ? (lane - delta) : lane;",
+        (
+            "uint fillSourceLane = useValue\n"
+            "        ? lane\n"
+            "        : (segmentBase + modulo + segmentLane - delta);"
+        ),
+        "subgroupShuffle(value, valueSourceLane);",
+        "subgroupShuffle(fill, fillSourceLane);",
+        "return useValue ? shuffledValue : shuffledFill;",
+    ):
+        assert generated.count(semantic_formula) == helper_count
+    assert "subgroupShuffleUp" not in generated
     for call in (
         "float scalarResult = crossglWaveShuffleAndFillUp("
-        "scalarValue, scalarFill, 1u);",
+        "scalarValue, scalarFill, 1u, gl_SubgroupSize);",
         "vec3 vectorResult = crossglWaveShuffleAndFillUp("
-        "vectorValue, vectorFill, uint(delta));",
-        "bool boolResult = crossglWaveShuffleAndFillUp(" "boolValue, boolFill, 1u);",
+        "vectorValue, vectorFill, uint(delta), gl_SubgroupSize);",
+        "float segmentedResult = crossglWaveShuffleAndFillUp("
+        "scalarValue, scalarFill, uint(delta), uint(modulo));",
+        "bool boolResult = crossglWaveShuffleAndFillUp("
+        "boolValue, boolFill, 1u, gl_SubgroupSize);",
     ):
         assert call in generated
     assert not re.search(r"(?<!crossgl)WaveShuffleAndFillUp\(", generated)
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "wave_shuffle_and_fill_up_overloads",
+        spirv_target="spirv1.3",
+    )
 
+
+def test_glsl_wave_shuffle_and_fill_up_validates_with_glslang(tmp_path):
+    code = """
+    shader GLSLWaveShuffleAndFillUpValidation {
+        compute {
+            void main() {
+                uint lane = WaveGetLaneIndex();
+                uint value = lane + 1u;
+                uint fill = lane + 100u;
+                uint fullSubgroup = WaveShuffleAndFillUp(value, fill, 1u);
+                uint segmented = WaveShuffleAndFillUp(value, fill, 2u, 8u);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "crossglWaveShuffleAndFillUp(value, fill, 1u, gl_SubgroupSize)" in generated
+    assert "crossglWaveShuffleAndFillUp(value, fill, 2u, 8u)" in generated
     assert_glsl_compute_validates_if_available(
         generated,
         tmp_path,
@@ -17284,8 +17329,12 @@ def test_glsl_wave_shuffle_and_fill_up_diagnostics_are_deterministic():
                 mat2 matrixValue = mat2(1.0);
                 float floatDelta = 1.0;
                 vec2 vectorDelta = vec2(1.0);
+                float floatModulo = 8.0;
+                uvec2 vectorModulo = uvec2(8u);
 
                 float badArity = WaveShuffleAndFillUp(scalarValue, scalarFill);
+                float badHighArity = WaveShuffleAndFillUp(
+                    scalarValue, scalarFill, 1u, 8u, 16u);
                 mat2 badValue = WaveShuffleAndFillUp(
                     matrixValue, matrixValue, 1u);
                 vec2 badFill = WaveShuffleAndFillUp(
@@ -17298,6 +17347,10 @@ def test_glsl_wave_shuffle_and_fill_up_diagnostics_are_deterministic():
                     scalarValue, scalarFill, floatDelta);
                 vec2 badDeltaShape = WaveShuffleAndFillUp(
                     vectorValue, vec2(0.0), vectorDelta);
+                float badModulo = WaveShuffleAndFillUp(
+                    scalarValue, scalarFill, 1u, floatModulo);
+                float badModuloShape = WaveShuffleAndFillUp(
+                    scalarValue, scalarFill, 1u, vectorModulo);
             }
         }
     }
@@ -17305,7 +17358,8 @@ def test_glsl_wave_shuffle_and_fill_up_diagnostics_are_deterministic():
     generated = generate_code(parse_code(tokenize_code(code)))
 
     expected_diagnostics = (
-        "WaveShuffleAndFillUp expects 3 arguments, got 2",
+        "WaveShuffleAndFillUp expects 3 or 4 arguments, got 2",
+        "WaveShuffleAndFillUp expects 3 or 4 arguments, got 5",
         (
             "WaveShuffleAndFillUp requires a scalar or vector value argument: "
             "matrixValue has type mat2"
@@ -17330,6 +17384,14 @@ def test_glsl_wave_shuffle_and_fill_up_diagnostics_are_deterministic():
         (
             "WaveShuffleAndFillUp requires a scalar integer delta argument: "
             "vectorDelta has type vec2"
+        ),
+        (
+            "WaveShuffleAndFillUp requires a scalar integer modulo argument: "
+            "floatModulo has type float"
+        ),
+        (
+            "WaveShuffleAndFillUp requires a scalar integer modulo argument: "
+            "vectorModulo has type uvec2"
         ),
     )
     for diagnostic in expected_diagnostics:

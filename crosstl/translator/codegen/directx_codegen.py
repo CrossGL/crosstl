@@ -1184,6 +1184,9 @@ class HLSLCodeGen:
         "QuadAny": 1,
         "QuadAll": 1,
     }
+    HLSL_WAVE_INTRINSIC_ALTERNATE_ARITIES = {
+        "WaveShuffleAndFillUp": (3, 4),
+    }
     HLSL_WAVE_BOOL_ARGUMENT_INTRINSICS = {
         "WaveActiveAllTrue",
         "WaveActiveAnyTrue",
@@ -3472,9 +3475,16 @@ class HLSLCodeGen:
             helper_name = self.hlsl_wave_shuffle_and_fill_up_helper_name(value_type)
             code += (
                 f"{value_type} {helper_name}("
-                f"{value_type} value, {value_type} fill, uint delta) {{\n"
+                f"{value_type} value, {value_type} fill, uint delta, "
+                "uint modulo) {\n"
                 "    uint lane = WaveGetLaneIndex();\n"
-                "    uint sourceLane = (lane >= delta) ? (lane - delta) : 0u;\n"
+                "    uint segmentLane = lane % modulo;\n"
+                "    uint segmentBase = lane - segmentLane;\n"
+                "    bool useValue = segmentLane >= delta;\n"
+                "    uint valueSourceLane = useValue ? (lane - delta) : lane;\n"
+                "    uint fillSourceLane = useValue\n"
+                "        ? lane\n"
+                "        : (segmentBase + modulo + segmentLane - delta);\n"
             )
 
             if self.hlsl_result_component_type(value_type) == "bool":
@@ -3484,6 +3494,7 @@ class HLSLCodeGen:
                 )
                 if component_count == 1:
                     payload = "value ? 1u : 0u"
+                    fill_payload = "fill ? 1u : 0u"
                     zero = "0u"
                 else:
                     fields = "xyzw"[:component_count]
@@ -3492,20 +3503,32 @@ class HLSLCodeGen:
                         + ", ".join(f"value.{field} ? 1u : 0u" for field in fields)
                         + ")"
                     )
+                    fill_payload = (
+                        f"{payload_type}("
+                        + ", ".join(f"fill.{field} ? 1u : 0u" for field in fields)
+                        + ")"
+                    )
                     zero = f"{payload_type}({', '.join(['0u'] * component_count)})"
                 code += (
                     f"    {payload_type} payload = {payload};\n"
+                    f"    {payload_type} fillPayload = {fill_payload};\n"
                     f"    {payload_type} shuffledBits = "
-                    "WaveReadLaneAt(payload, sourceLane);\n"
+                    "WaveReadLaneAt(payload, valueSourceLane);\n"
+                    f"    {payload_type} shuffledFillBits = "
+                    "WaveReadLaneAt(fillPayload, fillSourceLane);\n"
                     f"    {value_type} shuffled = (shuffledBits != {zero});\n"
+                    f"    {value_type} shuffledFill = "
+                    f"(shuffledFillBits != {zero});\n"
                 )
             else:
                 code += (
                     f"    {value_type} shuffled = "
-                    "WaveReadLaneAt(value, sourceLane);\n"
+                    "WaveReadLaneAt(value, valueSourceLane);\n"
+                    f"    {value_type} shuffledFill = "
+                    "WaveReadLaneAt(fill, fillSourceLane);\n"
                 )
 
-            code += "    return (lane >= delta) ? shuffled : fill;\n}\n\n"
+            code += "    return useValue ? shuffled : shuffledFill;\n}\n\n"
 
         return code
 
@@ -13765,7 +13788,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         value = self.generate_expression_with_expected(args[0], mapped_value_type)
         fill = self.generate_expression_with_expected(args[1], mapped_value_type)
         delta = self.generate_expression_with_expected(args[2], "uint")
-        result = f"{helper_name}({value}, {fill}, {delta})"
+        modulo = (
+            self.generate_expression_with_expected(args[3], "uint")
+            if len(args) == 4
+            else "WaveGetLaneCount()"
+        )
+        result = f"{helper_name}({value}, {fill}, {delta}, {modulo})"
         return self.hlsl_wave_shuffle_result_conversion(operation, args, result)
 
     def generate_hlsl_wave_intrinsic_call(self, operation, args):
@@ -13775,10 +13803,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.validate_directx_wave_intrinsic_profile(operation)
 
         actual_args = len(args)
-        if actual_args != expected_args:
+        accepted_arities = self.HLSL_WAVE_INTRINSIC_ALTERNATE_ARITIES.get(
+            operation, (expected_args,)
+        )
+        if actual_args not in accepted_arities:
+            expected = " or ".join(str(arity) for arity in accepted_arities)
             raise ValueError(
                 f"DirectX wave intrinsic '{operation}' requires "
-                f"{expected_args} argument(s), got {actual_args}"
+                f"{expected} argument(s), got {actual_args}"
             )
 
         if operation in self.HLSL_WAVE_BITWISE_VALUE_INTRINSICS:
@@ -14046,6 +14078,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
 
         self.validate_hlsl_wave_scalar_int_uint_argument(operation, args[2], "delta")
+        if len(args) == 4:
+            self.validate_hlsl_wave_scalar_int_uint_argument(
+                operation, args[3], "modulo"
+            )
 
     def validate_hlsl_wave_intrinsic_arguments(self, operation, args):
         if operation in self.HLSL_WAVE_BOOL_ARGUMENT_INTRINSICS:

@@ -2204,6 +2204,7 @@ def test_hlsl_codegen_lowers_canonical_shuffle_and_fill_up_wave_op(tmp_path):
         compute {
             void main() {
                 uint scalarResult = WaveShuffleAndFillUp(4u, 7u, 1u);
+                uint segmentedResult = WaveShuffleAndFillUp(9u, 13u, 2u, 8u);
                 uvec2 vectorResult = WaveShuffleAndFillUp(
                     uvec2(1u, 2u), uvec2(3u, 4u), 2u);
                 bool boolResult = WaveShuffleAndFillUp(true, false, 1u);
@@ -2217,22 +2218,36 @@ def test_hlsl_codegen_lowers_canonical_shuffle_and_fill_up_wave_op(tmp_path):
 
     assert (
         "uint __crossgl_wave_shuffle_and_fill_up_uint("
-        "uint value, uint fill, uint delta)" in generated
+        "uint value, uint fill, uint delta, uint modulo)" in generated
     )
     assert (
         "uint2 __crossgl_wave_shuffle_and_fill_up_uint2("
-        "uint2 value, uint2 fill, uint delta)" in generated
+        "uint2 value, uint2 fill, uint delta, uint modulo)" in generated
     )
     assert (
         "bool __crossgl_wave_shuffle_and_fill_up_bool("
-        "bool value, bool fill, uint delta)" in generated
+        "bool value, bool fill, uint delta, uint modulo)" in generated
     )
-    assert "uint sourceLane = (lane >= delta) ? (lane - delta) : 0u;" in generated
-    assert "WaveReadLaneAt(value, sourceLane)" in generated
-    assert "return (lane >= delta) ? shuffled : fill;" in generated
+    assert "uint segmentLane = lane % modulo;" in generated
+    assert "uint segmentBase = lane - segmentLane;" in generated
+    assert "bool useValue = segmentLane >= delta;" in generated
+    assert "uint valueSourceLane = useValue ? (lane - delta) : lane;" in generated
+    assert (
+        "uint fillSourceLane = useValue\n"
+        "        ? lane\n"
+        "        : (segmentBase + modulo + segmentLane - delta);" in generated
+    )
+    assert "WaveReadLaneAt(value, valueSourceLane)" in generated
+    assert "WaveReadLaneAt(fill, fillSourceLane)" in generated
+    assert "return useValue ? shuffled : shuffledFill;" in generated
+    assert (
+        "__crossgl_wave_shuffle_and_fill_up_uint("
+        "4u, 7u, 1u, WaveGetLaneCount())" in generated
+    )
+    assert "__crossgl_wave_shuffle_and_fill_up_uint(9u, 13u, 2u, 8u)" in generated
     assert (
         "return ((__crossgl_wave_shuffle_and_fill_up_uint("
-        "value, fill, delta)) != 0);" in generated
+        "value, fill, delta, WaveGetLaneCount())) != 0);" in generated
     )
     assert "WaveShuffleAndFillUp" not in generated
 
@@ -2264,8 +2279,13 @@ def test_hlsl_codegen_lowers_canonical_shuffle_and_fill_up_wave_op(tmp_path):
     (
         (
             "WaveShuffleAndFillUp(1u, 0u)",
-            "DirectX wave intrinsic 'WaveShuffleAndFillUp' requires 3 argument(s), "
-            "got 2",
+            "DirectX wave intrinsic 'WaveShuffleAndFillUp' requires 3 or 4 "
+            "argument(s), got 2",
+        ),
+        (
+            "WaveShuffleAndFillUp(1u, 0u, 1u, 8u, 16u)",
+            "DirectX wave intrinsic 'WaveShuffleAndFillUp' requires 3 or 4 "
+            "argument(s), got 5",
         ),
         (
             "WaveShuffleAndFillUp(1u, 0.0, 1u)",
@@ -2281,6 +2301,16 @@ def test_hlsl_codegen_lowers_canonical_shuffle_and_fill_up_wave_op(tmp_path):
             "WaveShuffleAndFillUp(uvec2(1u), uvec3(0u), 1u)",
             "DirectX wave intrinsic 'WaveShuffleAndFillUp' value and fill arguments "
             "must have matching types, got uint2 and uint3",
+        ),
+        (
+            "WaveShuffleAndFillUp(1u, 0u, 1u, 8.0)",
+            "DirectX wave intrinsic 'WaveShuffleAndFillUp' modulo argument must be "
+            "scalar int or uint, got float",
+        ),
+        (
+            "WaveShuffleAndFillUp(1u, 0u, 1u, uvec2(8u))",
+            "DirectX wave intrinsic 'WaveShuffleAndFillUp' modulo argument must be "
+            "scalar int or uint, got uint2",
         ),
     ),
 )

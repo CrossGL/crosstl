@@ -1425,6 +1425,9 @@ class GLSLCodeGen:
         "WaveMultiPrefixBitOr": 2,
         "WaveMultiPrefixBitXor": 2,
     }
+    GLSL_WAVE_INTRINSIC_ALTERNATE_ARITIES = {
+        "WaveShuffleAndFillUp": (3, 4),
+    }
     GLSL_WAVE_DIRECT_MAPPINGS = {
         "WaveActiveSum": "subgroupAdd",
         "WaveActiveProduct": "subgroupMul",
@@ -1588,9 +1591,7 @@ class GLSLCodeGen:
             "#extension GL_KHR_shader_subgroup_shuffle_relative : require"
         ),
         "WaveShuffleUp": "#extension GL_KHR_shader_subgroup_shuffle_relative : require",
-        "WaveShuffleAndFillUp": (
-            "#extension GL_KHR_shader_subgroup_shuffle_relative : require"
-        ),
+        "WaveShuffleAndFillUp": "#extension GL_KHR_shader_subgroup_shuffle : require",
         "WaveShuffleXor": "#extension GL_KHR_shader_subgroup_shuffle : require",
         "WaveReadLaneFirst": "#extension GL_KHR_shader_subgroup_ballot : require",
         "QuadReadAcrossX": "#extension GL_KHR_shader_subgroup_quad : require",
@@ -3012,9 +3013,21 @@ class GLSLCodeGen:
         for value_type in self.GLSL_WAVE_HELPER_VALUE_TYPES:
             code += (
                 f"{value_type} crossglWaveShuffleAndFillUp("
-                f"{value_type} value, {value_type} fill, uint delta) {{\n"
-                f"    {value_type} shuffled = subgroupShuffleUp(value, delta);\n"
-                "    return gl_SubgroupInvocationID >= delta ? shuffled : fill;\n"
+                f"{value_type} value, {value_type} fill, uint delta, "
+                "uint modulo) {\n"
+                "    uint lane = gl_SubgroupInvocationID;\n"
+                "    uint segmentLane = lane % modulo;\n"
+                "    uint segmentBase = lane - segmentLane;\n"
+                "    bool useValue = segmentLane >= delta;\n"
+                "    uint valueSourceLane = useValue ? (lane - delta) : lane;\n"
+                "    uint fillSourceLane = useValue\n"
+                "        ? lane\n"
+                "        : (segmentBase + modulo + segmentLane - delta);\n"
+                f"    {value_type} shuffledValue = "
+                "subgroupShuffle(value, valueSourceLane);\n"
+                f"    {value_type} shuffledFill = "
+                "subgroupShuffle(fill, fillSourceLane);\n"
+                "    return useValue ? shuffledValue : shuffledFill;\n"
                 "}\n\n"
             )
         return code
@@ -20396,10 +20409,14 @@ complex64_t crossgl_complex64_mod_assign(
             )
 
         actual_arity = len(arguments)
-        if actual_arity != expected_arity:
+        accepted_arities = self.GLSL_WAVE_INTRINSIC_ALTERNATE_ARITIES.get(
+            operation, (expected_arity,)
+        )
+        if actual_arity not in accepted_arities:
+            expected = " or ".join(str(arity) for arity in accepted_arities)
             return self.glsl_wave_diagnostic_expression(
                 diagnostic_operation,
-                f"expects {expected_arity} arguments, got {actual_arity}",
+                f"expects {expected} arguments, got {actual_arity}",
             )
 
         floating_bitwise = self.glsl_floating_bitwise_wave_operation(
@@ -20434,11 +20451,22 @@ complex64_t crossgl_complex64_mod_assign(
             value_type = self.expression_result_type(arguments[0])
             value = self.generate_expression_with_expected(arguments[0], value_type)
             fill = self.generate_expression_with_expected(arguments[1], value_type)
-            delta_type = self.expression_result_type(arguments[2])
-            delta = self.generate_expression_with_expected(arguments[2], None)
-            if delta_type is None or self.map_type(delta_type) != "uint":
-                delta = f"uint({delta})"
-            return f"crossglWaveShuffleAndFillUp({value}, {fill}, {delta})"
+            unsigned_arguments = []
+            for argument in arguments[2:]:
+                argument_type = self.expression_result_type(argument)
+                generated_argument = self.generate_expression_with_expected(
+                    argument, None
+                )
+                if argument_type is None or self.map_type(argument_type) != "uint":
+                    generated_argument = f"uint({generated_argument})"
+                unsigned_arguments.append(generated_argument)
+            delta = unsigned_arguments[0]
+            modulo = (
+                unsigned_arguments[1]
+                if len(unsigned_arguments) == 2
+                else "gl_SubgroupSize"
+            )
+            return f"crossglWaveShuffleAndFillUp({value}, {fill}, {delta}, {modulo})"
         if operation in self.GLSL_WAVE_MULTI_PREFIX_OPERATIONS:
             value = self.generate_expression(arguments[0])
             mask = self.generate_expression(arguments[1])
@@ -20627,14 +20655,20 @@ complex64_t crossgl_complex64_mod_assign(
                 ),
             )
 
-        return self.glsl_wave_validate_argument_type(
-            operation,
-            args[2],
-            "a scalar integer",
-            "delta",
-            {"int", "uint"},
-            allow_vectors=False,
-        )
+        for index, argument_label in ((2, "delta"), (3, "modulo")):
+            if index >= len(args):
+                break
+            diagnostic = self.glsl_wave_validate_argument_type(
+                operation,
+                args[index],
+                "a scalar integer",
+                argument_label,
+                {"int", "uint"},
+                allow_vectors=False,
+            )
+            if diagnostic is not None:
+                return diagnostic
+        return None
 
     def glsl_wave_validate_argument_kind(
         self, operation, arg, requirement, argument_label, allowed_kinds

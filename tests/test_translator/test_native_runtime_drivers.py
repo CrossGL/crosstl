@@ -903,6 +903,83 @@ def test_directx_compute_runtime_executes_mlx_file_scope_lookup_on_device(tmp_pa
     ]
 
 
+def test_directx_compute_runtime_executes_bounded_wave_shuffle_and_fill_up_on_device(
+    tmp_path,
+):
+    if os.environ.get("CROSTL_RUN_DIRECTX_BOUNDED_WAVE_SHUFFLE_DEVICE_TEST") != "1":
+        pytest.skip(
+            "set CROSTL_RUN_DIRECTX_BOUNDED_WAVE_SHUFFLE_DEVICE_TEST=1 to run "
+            "the bounded Direct3D wave shuffle test"
+        )
+    if not sys.platform.startswith("win32"):
+        pytest.fail("Bounded Direct3D wave shuffle runtime proof requires Windows")
+    if shutil.which("dxc") is None:
+        pytest.fail("DXC is required for the bounded Direct3D wave shuffle proof")
+    try:
+        __import__("compushady")
+    except ImportError as exc:
+        pytest.fail(f"Direct3D wave shuffle runtime dependency is unavailable: {exc}")
+
+    fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / "directx"
+    source_path = fixture_dir / "bounded_wave_shuffle_and_fill_up.cgl"
+    artifact_report = json.loads(
+        (fixture_dir / "bounded_wave_shuffle_and_fill_up.artifacts.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    generated = translate(
+        str(source_path),
+        backend="directx",
+        format_output=False,
+    )
+    assert "[numthreads(8, 1, 1)]" in generated
+    assert "__crossgl_wave_shuffle_and_fill_up_uint(value, fill, 1u, 2u)" in generated
+    assert "WaveReadLaneAt(value, valueSourceLane)" in generated
+    assert "WaveReadLaneAt(fill, fillSourceLane)" in generated
+    assert "return useValue ? shuffled : shuffledFill;" in generated
+    assert "WaveShuffleAndFillUp" not in generated
+
+    artifact_report["project"]["root"] = str(tmp_path)
+    artifact_path = tmp_path / artifact_report["artifacts"][0]["path"]
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text(generated, encoding="utf-8")
+    manifest = build_runtime_test_manifest(
+        artifact_report,
+        fixture_dir / "bounded_wave_shuffle_and_fill_up.fixture-metadata.json",
+        project_root=tmp_path,
+    )
+    assert manifest["success"] is True, json.dumps(manifest, indent=2)
+
+    report = verify_runtime_test_manifest(
+        artifact_report,
+        manifest,
+        executors={
+            "directx": DirectXRuntimeParityAdapter(runtime=DirectXComputeRuntime())
+        },
+    )
+
+    assert report["success"] is True, json.dumps(report, indent=2)
+    assert report["summary"]["passedCount"] == 1, json.dumps(report, indent=2)
+    assert report["summary"]["skippedCount"] == 0, json.dumps(report, indent=2)
+    assert report["summary"]["unavailableCount"] == 0, json.dumps(report, indent=2)
+    assert report["summary"]["failedCount"] == 0, json.dumps(report, indent=2)
+    result = report["results"][0]
+    assert result["status"] == "passed", json.dumps(report, indent=2)
+    assert result["comparisons"] == [
+        {
+            "name": "output",
+            "kind": "buffer",
+            "status": "passed",
+            "tolerance": {"absolute": 0.0, "relative": 0.0},
+            "expected": {"dtype": "uint32", "shape": [8]},
+            "actual": {"dtype": "uint32", "shape": [8]},
+            "mismatchCount": 0,
+            "maxAbsoluteError": 0.0,
+            "maxRelativeError": 0.0,
+        }
+    ]
+
+
 def test_directx_compute_runtime_executes_translated_pinned_mlx_arange_on_device():
     if os.environ.get("CROSTL_RUN_DIRECTX_MLX_ARANGE_DEVICE_TEST") != "1":
         pytest.skip(
@@ -2064,6 +2141,148 @@ def test_opengl_compute_runtime_rejects_short_output_readback(tmp_path):
 
 def test_opengl_compute_runtime_is_exported_from_project_api():
     assert project_api.OpenGLComputeRuntime is OpenGLComputeRuntime
+
+
+def _prepare_opengl_bounded_wave_shuffle_runtime_fixture(tmp_path):
+    fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / "opengl"
+    source_path = fixture_dir / "bounded_wave_shuffle_and_fill_up.cgl"
+    artifact_report = json.loads(
+        (fixture_dir / "bounded_wave_shuffle_and_fill_up.artifacts.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    generated = translate(
+        str(source_path),
+        backend="opengl",
+        format_output=False,
+    )
+
+    assert (
+        "layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;" in generated
+    )
+    assert "#extension GL_KHR_shader_subgroup_basic : require" in generated
+    assert "#extension GL_KHR_shader_subgroup_shuffle : require" in generated
+    assert (
+        "uint crossglWaveShuffleAndFillUp(uint value, uint fill, uint delta, "
+        "uint modulo)" in generated
+    )
+    assert "uint segmentLane = lane % modulo;" in generated
+    assert "uint segmentBase = lane - segmentLane;" in generated
+    assert "uint valueSourceLane = useValue ? (lane - delta) : lane;" in generated
+    assert "subgroupShuffle(fill, fillSourceLane)" in generated
+    assert "return useValue ? shuffledValue : shuffledFill;" in generated
+    assert (
+        "uint result = crossglWaveShuffleAndFillUp(value, fill, 1u, 2u);" in generated
+    )
+    assert "uint result = WaveShuffleAndFillUp(" not in generated
+
+    artifact_report["project"]["root"] = str(tmp_path)
+    artifact_path = tmp_path / artifact_report["artifacts"][0]["path"]
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text(generated, encoding="utf-8")
+    manifest = build_runtime_test_manifest(
+        artifact_report,
+        fixture_dir / "bounded_wave_shuffle_and_fill_up.fixture-metadata.json",
+        project_root=tmp_path,
+    )
+    assert manifest["success"] is True, json.dumps(manifest, indent=2)
+
+    plan = plan_runtime_test_manifest(
+        artifact_report,
+        manifest,
+        project_root=tmp_path,
+    )
+    assert plan["success"] is True, json.dumps(plan, indent=2)
+    assert plan["summary"]["plannedCount"] == 1, json.dumps(plan, indent=2)
+    case = plan["testCases"][0]
+    assert case["status"] == "planned", json.dumps(plan, indent=2)
+    assert case["runtimeExecution"]["dispatch"] == {
+        "entryPoint": "main",
+        "workgroupSize": [8, 1, 1],
+        "workgroupCount": [1, 1, 1],
+        "globalSize": [8, 1, 1],
+        "metadata": {
+            "stage": "compute",
+            "source": "fixture",
+            "status": "available",
+        },
+    }
+    reflected_bindings = [
+        item
+        for item in case["runtimeExecution"]["resourceBindings"]
+        if "id" in item["binding"]
+    ]
+    assert [
+        (
+            item["binding"]["name"],
+            item["binding"]["binding"],
+            item["source"],
+        )
+        for item in reflected_bindings
+    ] == [
+        ("values", 0, "input"),
+        ("fills", 1, "input"),
+        ("output", 2, "expectedOutput"),
+    ]
+    return artifact_report, manifest
+
+
+def test_opengl_bounded_wave_shuffle_and_fill_up_translation_and_manifest_plan(
+    tmp_path,
+):
+    _prepare_opengl_bounded_wave_shuffle_runtime_fixture(tmp_path)
+
+
+def test_opengl_compute_runtime_executes_bounded_wave_shuffle_and_fill_up_on_device(
+    tmp_path,
+):
+    if os.environ.get("CROSTL_RUN_OPENGL_BOUNDED_WAVE_SHUFFLE_DEVICE_TEST") != "1":
+        pytest.skip(
+            "set CROSTL_RUN_OPENGL_BOUNDED_WAVE_SHUFFLE_DEVICE_TEST=1 to run "
+            "the bounded OpenGL wave shuffle test"
+        )
+    if not sys.platform.startswith("linux"):
+        pytest.fail("Bounded OpenGL wave shuffle runtime proof requires Linux")
+    if shutil.which("glslangValidator") is None:
+        pytest.fail("glslangValidator is required for the OpenGL wave shuffle proof")
+    try:
+        __import__("moderngl")
+    except ImportError as exc:
+        pytest.fail(f"OpenGL wave shuffle runtime dependency is unavailable: {exc}")
+
+    artifact_report, manifest = _prepare_opengl_bounded_wave_shuffle_runtime_fixture(
+        tmp_path
+    )
+    report = verify_runtime_test_manifest(
+        artifact_report,
+        manifest,
+        executors={
+            "opengl": OpenGLRuntimeParityAdapter(
+                runtime=OpenGLComputeRuntime(context_backends=("egl",))
+            )
+        },
+    )
+
+    assert report["success"] is True, json.dumps(report, indent=2)
+    assert report["summary"]["passedCount"] == 1, json.dumps(report, indent=2)
+    assert report["summary"]["skippedCount"] == 0, json.dumps(report, indent=2)
+    assert report["summary"]["unavailableCount"] == 0, json.dumps(report, indent=2)
+    assert report["summary"]["failedCount"] == 0, json.dumps(report, indent=2)
+    result = report["results"][0]
+    assert result["status"] == "passed", json.dumps(report, indent=2)
+    assert result["comparisons"] == [
+        {
+            "name": "output",
+            "kind": "buffer",
+            "status": "passed",
+            "tolerance": {"absolute": 0.0, "relative": 0.0},
+            "expected": {"dtype": "uint32", "shape": [8]},
+            "actual": {"dtype": "uint32", "shape": [8]},
+            "mismatchCount": 0,
+            "maxAbsoluteError": 0.0,
+            "maxRelativeError": 0.0,
+        }
+    ]
 
 
 def test_opengl_compute_runtime_executes_vector_scale_on_device(tmp_path):
