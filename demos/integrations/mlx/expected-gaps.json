@@ -506,6 +506,32 @@
       "native_opengl_execution_claimed": false
     }
   },
+  "compile_time_bitcast_status": {
+    "status": "partial",
+    "source": "mlx/backend/metal/kernels/unary.metal",
+    "supported_contract": "exact pure 32-bit scalar and same-width vector bitcasts from literals or proven compile-time constants",
+    "tracked_by": "https://github.com/CrossGL/crosstl/issues/1772",
+    "directx": {
+      "translation_status": "translated",
+      "entry_point_count": 877,
+      "native_compilation_status": "blocked",
+      "blocked_by": [
+        "https://github.com/CrossGL/crosstl/issues/1776",
+        "https://github.com/CrossGL/crosstl/issues/1777",
+        "https://github.com/CrossGL/crosstl/issues/1778",
+        "https://github.com/CrossGL/crosstl/issues/1536",
+        "https://github.com/CrossGL/crosstl/issues/1546"
+      ]
+    },
+    "opengl": {
+      "translation_status": "blocked-after-constant-bitcast-lowering",
+      "blocked_by": [
+        "https://github.com/CrossGL/crosstl/issues/1511"
+      ]
+    },
+    "runtime_integration_included": false,
+    "runtime_parity_claimed": false
+  },
   "vulkan_gemv_toolchain_status": {
     "status": "passed",
     "source": "mlx/backend/metal/kernels/gemv.metal",

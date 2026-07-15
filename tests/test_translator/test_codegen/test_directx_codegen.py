@@ -545,6 +545,118 @@ def test_hlsl_specialization_and_file_scope_constants_preserve_contracts(tmp_pat
     assert_directx_compute_validates_if_available(generated, tmp_path)
 
 
+def test_hlsl_compile_time_bitcasts_preserve_ieee_payloads_and_compile(tmp_path):
+    source = """
+    shader CompileTimeBitcasts {
+        constant float positiveInfinity = asfloat(2139095040u);
+        constant float negativeInfinity = asfloat(4286578688u);
+        constant float nanPayload = asfloat(2143363909u);
+        constant float negativeZero = asfloat(2147483648u);
+        constant float finitePayload = asfloat(1065353217u);
+        constant vec2 vectorPayload = as_type<vec2>(uvec2(1u, 2147483649u));
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<uint> output @binding(0)) {
+                output[0] = asuint(positiveInfinity);
+                output[1] = asuint(negativeInfinity);
+                output[2] = asuint(nanPayload);
+                output[3] = asuint(negativeZero);
+                output[4] = asuint(finitePayload);
+                output[5] = asuint(vectorPayload.x);
+                output[6] = asuint(vectorPayload.y);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert "static const float positiveInfinity = asfloat(2139095040u);" in generated
+    assert "static const float negativeInfinity = asfloat(4286578688u);" in generated
+    assert "static const float nanPayload = asfloat(2143363909u);" in generated
+    assert "static const float negativeZero = asfloat(2147483648u);" in generated
+    assert "static const float finitePayload = asfloat(1065353217u);" in generated
+    assert (
+        "static const float2 vectorPayload = "
+        "asfloat(uint2(1u, 2147483649u));" in generated
+    )
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_compile_time_bitcast_rejects_mismatched_shape():
+    source = """
+    shader InvalidCompileTimeBitcast {
+        constant vec2 invalidPayload = as_type<vec2>(1u);
+    }
+    """
+
+    with pytest.raises(DirectXCompileTimeGlobalError) as exc_info:
+        HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == "bitcast-shape-unsupported"
+    assert diagnostic.operation == "as_type<vec2>"
+    assert diagnostic.operand_type == "uint"
+    assert diagnostic.result_type == "float2"
+
+
+def test_hlsl_compile_time_bitcast_rejects_runtime_operand_with_metadata():
+    source = """
+    shader RuntimeCompileTimeBitcast {
+        uint runtimeBits;
+        constant float invalidPayload = asfloat(runtimeBits);
+    }
+    """
+
+    with pytest.raises(DirectXCompileTimeGlobalError) as exc_info:
+        HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == "bitcast-operand-runtime-value"
+    assert diagnostic.detail == "runtimeBits"
+    assert diagnostic.operation == "asfloat"
+    assert diagnostic.operand_type == "uint"
+    assert diagnostic.result_type == "float"
+
+
+@pytest.mark.parametrize(
+    ("function_name", "function_declaration", "constant_declaration"),
+    [
+        (
+            "asfloat",
+            "float asfloat(uint value) { return float(value); }",
+            "constant float invalidPayload = asfloat(1u);",
+        ),
+        (
+            "asuint",
+            "uint asuint(float value) { return uint(value); }",
+            "constant uint invalidPayload = asuint(1.0);",
+        ),
+    ],
+)
+def test_hlsl_compile_time_global_preserves_user_defined_bitcast_names(
+    function_name, function_declaration, constant_declaration
+):
+    source = f"""
+    shader UserCompileTimeBitcast {{
+        {function_declaration}
+        {constant_declaration}
+    }}
+    """
+
+    with pytest.raises(DirectXCompileTimeGlobalError) as exc_info:
+        HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == "function-call"
+    assert diagnostic.detail == function_name
+    assert diagnostic.operation is None
+    assert diagnostic.operand_type is None
+    assert diagnostic.result_type is None
+
+
 def test_hlsl_omits_unreferenced_empty_compile_time_values_and_rejects_uses():
     source = """
     shader EmptyCompileTimeValue {

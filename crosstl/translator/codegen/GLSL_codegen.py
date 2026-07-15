@@ -816,6 +816,9 @@ class OpenGLCompileTimeGlobalError(ValueError):
         variable_name=None,
         expression_kind=None,
         detail=None,
+        operation=None,
+        operand_type=None,
+        result_type=None,
         reason=None,
         source_location=None,
     ):
@@ -823,6 +826,9 @@ class OpenGLCompileTimeGlobalError(ValueError):
         self.variable_name = variable_name
         self.expression_kind = expression_kind
         self.detail = detail
+        self.operation = operation
+        self.operand_type = operand_type
+        self.result_type = result_type
         self.reason = reason
         self.source_location = source_location
 
@@ -1794,6 +1800,9 @@ class GLSLCodeGen:
         self.glsl_type_identifier_names = {}
         self.glsl_generic_enum_constructor_names = {}
         self.glsl_compile_time_global_node_ids = set()
+        self.glsl_compile_time_bitcast_substitution_node_ids = set()
+        self.glsl_compile_time_bitcast_substitutions = {}
+        self.glsl_active_compile_time_bitcast_substitutions = set()
         self.glsl_runtime_global_initializer_node_ids = set()
         self.glsl_stage_runtime_global_initializers = {}
         self.global_type_aliases = {}
@@ -3724,6 +3733,9 @@ class GLSLCodeGen:
         self.glsl_type_identifier_names = {}
         self.glsl_generic_enum_constructor_names = {}
         self.glsl_compile_time_global_node_ids = set()
+        self.glsl_compile_time_bitcast_substitution_node_ids = set()
+        self.glsl_compile_time_bitcast_substitutions = {}
+        self.glsl_active_compile_time_bitcast_substitutions = set()
         self.glsl_runtime_global_initializer_node_ids = set()
         self.glsl_stage_runtime_global_initializers = {}
         self.function_sampler_parameter_indices = (
@@ -14420,6 +14432,126 @@ class GLSLCodeGen:
             return "const "
         return "uniform "
 
+    def opengl_compile_time_global_error(
+        self,
+        node,
+        expression,
+        *,
+        reason,
+        detail=None,
+        operation=None,
+        operand_type=None,
+        result_type=None,
+    ):
+        name = self.resource_node_name(node, "<unnamed>")
+        description = reason.replace("-", " ")
+        if detail:
+            description += f" '{detail}'"
+        raise OpenGLCompileTimeGlobalError(
+            f"OpenGL compile-time global '{name}' cannot use {description}",
+            variable_name=name,
+            expression_kind=(
+                expression.__class__.__name__ if expression is not None else None
+            ),
+            detail=detail,
+            operation=operation,
+            operand_type=operand_type,
+            result_type=result_type,
+            reason=reason,
+            source_location=getattr(expression, "source_location", None)
+            or getattr(node, "source_location", None),
+        )
+
+    def glsl_compile_time_bitcast_contract(self, node, expression):
+        function_name = self.function_call_name(expression)
+        if function_name in self.function_return_types:
+            return None
+
+        native_aliases = {
+            "floatBitsToInt": "asint",
+            "floatBitsToUint": "asuint",
+            "intBitsToFloat": "asfloat",
+            "uintBitsToFloat": "asfloat",
+        }
+        canonical_name = native_aliases.get(function_name, function_name)
+        explicit_target = self.metal_as_type_target(function_name)
+        if (
+            canonical_name not in self.GLSL_BITCAST_FUNCTIONS
+            and explicit_target is None
+        ):
+            return None
+
+        arguments = list(
+            getattr(expression, "arguments", getattr(expression, "args", [])) or []
+        )
+        if len(arguments) != 1:
+            self.opengl_compile_time_global_error(
+                node,
+                expression,
+                reason="bitcast-arity",
+                detail=f"{function_name} expects exactly one operand",
+                operation=function_name,
+            )
+
+        operand = arguments[0]
+        operand_type = self.map_type(self.expression_result_type(operand))
+        if explicit_target is None:
+            result_type = self.glsl_bitcast_result_type(canonical_name, operand)
+            native_target = self.glsl_bitcast_target(canonical_name, operand)
+            if native_target is None:
+                result_type = self.map_type(result_type)
+                self.opengl_compile_time_global_error(
+                    node,
+                    expression,
+                    reason="bitcast-type-unresolved",
+                    detail=(
+                        f"{function_name} cannot resolve an exact bitcast from "
+                        f"'{operand_type}' to '{result_type}'"
+                    ),
+                    operation=function_name,
+                    operand_type=operand_type,
+                    result_type=result_type,
+                )
+        else:
+            result_type = self.map_type(explicit_target)
+
+        operand_info = self.glsl_numeric_bitcast_shape(operand_type)
+        result_info = self.glsl_numeric_bitcast_shape(result_type)
+        if operand_info is None or result_info is None:
+            self.opengl_compile_time_global_error(
+                node,
+                expression,
+                reason="bitcast-type-unresolved",
+                detail=(
+                    f"{function_name} cannot resolve an exact bitcast from "
+                    f"'{operand_type}' to '{result_type}'"
+                ),
+                operation=function_name,
+                operand_type=operand_type,
+                result_type=result_type,
+            )
+
+        try:
+            self.generate_glsl_explicit_bitcast(
+                operand_info["type"], result_info["type"], "value"
+            )
+        except ValueError as exc:
+            self.opengl_compile_time_global_error(
+                node,
+                expression,
+                reason="bitcast-shape-unsupported",
+                detail=str(exc),
+                operation=function_name,
+                operand_type=operand_info["type"],
+                result_type=result_info["type"],
+            )
+        return {
+            "operation": function_name,
+            "operand": operand,
+            "operand_type": operand_info["type"],
+            "result_type": result_info["type"],
+        }
+
     def prepare_glsl_compile_time_globals(self, ast, global_vars):
         specialization_dependent_names = set(self.glsl_specialization_constant_names)
         known_constant_names = {
@@ -14459,7 +14591,7 @@ class GLSLCodeGen:
                     reason="unsupported-value-type",
                     source_location=getattr(node, "source_location", None),
                 )
-            specialization_dependent = (
+            specialization_dependent, bitcast_dependent = (
                 self.validate_glsl_compile_time_global_expression(
                     node,
                     getattr(node, "initial_value", None),
@@ -14468,10 +14600,23 @@ class GLSLCodeGen:
                     specialization_dependent_names,
                 )
             )
+            if specialization_dependent and bitcast_dependent:
+                self.opengl_compile_time_global_error(
+                    node,
+                    getattr(node, "initial_value", None),
+                    reason="specialization-bitcast-expression",
+                    detail="bitcast depends on an unresolved specialization value",
+                )
             self.glsl_compile_time_global_node_ids.add(id(node))
             known_constant_names.add(name)
             if specialization_dependent:
                 specialization_dependent_names.add(name)
+            if bitcast_dependent:
+                self.glsl_compile_time_bitcast_substitution_node_ids.add(id(node))
+                self.glsl_compile_time_bitcast_substitutions[name] = (
+                    getattr(node, "initial_value", None),
+                    self.resource_node_type(node),
+                )
 
             literal_int_value = self.glsl_compile_time_global_integer_value(
                 node,
@@ -14666,31 +14811,25 @@ class GLSLCodeGen:
         specialization_dependent_names,
     ):
         def reject(reason, current, detail=None):
-            name = self.resource_node_name(node, "<unnamed>")
-            description = reason.replace("-", " ")
-            if detail:
-                description += f" '{detail}'"
-            raise OpenGLCompileTimeGlobalError(
-                f"OpenGL compile-time global '{name}' cannot use {description}",
-                variable_name=name,
-                expression_kind=(
-                    current.__class__.__name__ if current is not None else None
-                ),
-                detail=detail,
+            self.opengl_compile_time_global_error(
+                node,
+                current,
                 reason=reason,
-                source_location=getattr(current, "source_location", None)
-                or getattr(node, "source_location", None),
+                detail=detail,
             )
 
         def validate(current):
             if isinstance(current, LiteralNode):
-                return False
+                return False, False
             if isinstance(current, (IdentifierNode, VariableNode)):
                 name = getattr(current, "name", None)
                 if name in known_constant_names:
-                    return name in specialization_dependent_names
+                    return (
+                        name in specialization_dependent_names,
+                        name in self.glsl_compile_time_bitcast_substitutions,
+                    )
                 if name and render_standard_math_constant(name, "opengl") is not None:
-                    return False
+                    return False, False
                 reason = (
                     "forward-reference" if name in candidate_names else "runtime-value"
                 )
@@ -14700,7 +14839,10 @@ class GLSLCodeGen:
                     validate(element)
                     for element in getattr(current, "elements", []) or []
                 ]
-                return any(dependencies)
+                return (
+                    any(item[0] for item in dependencies),
+                    any(item[1] for item in dependencies),
+                )
             if isinstance(current, MemberAccessNode):
                 return validate(current.object)
             if isinstance(current, SwizzleNode):
@@ -14708,22 +14850,29 @@ class GLSLCodeGen:
             if isinstance(current, ArrayAccessNode):
                 array_dependency = validate(current.array)
                 index_dependency = validate(current.index)
-                if index_dependency:
+                if index_dependency[0]:
                     reject("specialization-array-index", current)
-                return array_dependency
+                return (
+                    array_dependency[0],
+                    array_dependency[1] or index_dependency[1],
+                )
             if isinstance(current, BinaryOpNode):
-                return any((validate(current.left), validate(current.right)))
+                left = validate(current.left)
+                right = validate(current.right)
+                return left[0] or right[0], left[1] or right[1]
             if isinstance(current, UnaryOpNode):
                 if self.map_operator(current.op) in {"++", "--"}:
                     reject("mutation", current)
                 return validate(current.operand)
             if isinstance(current, TernaryOpNode):
-                return any(
-                    (
-                        validate(current.condition),
-                        validate(current.true_expr),
-                        validate(current.false_expr),
-                    )
+                dependencies = (
+                    validate(current.condition),
+                    validate(current.true_expr),
+                    validate(current.false_expr),
+                )
+                return (
+                    any(item[0] for item in dependencies),
+                    any(item[1] for item in dependencies),
                 )
             if isinstance(current, CastNode):
                 return validate(current.expression)
@@ -14731,13 +14880,47 @@ class GLSLCodeGen:
                 function_name = self.function_call_name(current)
                 if function_name in self.function_return_types:
                     reject("function-call", current, function_name)
+                bitcast = self.glsl_compile_time_bitcast_contract(node, current)
+                if bitcast is not None:
+                    try:
+                        specialization_dependent, _bitcast_dependent = validate(
+                            bitcast["operand"]
+                        )
+                    except OpenGLCompileTimeGlobalError as error:
+                        if error.reason not in {
+                            "forward-reference",
+                            "function-call",
+                            "runtime-value",
+                        }:
+                            raise
+                        self.opengl_compile_time_global_error(
+                            node,
+                            current,
+                            reason=f"bitcast-operand-{error.reason}",
+                            detail=error.detail,
+                            operation=bitcast["operation"],
+                            operand_type=bitcast["operand_type"],
+                            result_type=bitcast["result_type"],
+                        )
+                    if specialization_dependent:
+                        self.opengl_compile_time_global_error(
+                            node,
+                            current,
+                            reason="specialization-bitcast",
+                            detail=function_name,
+                            operation=function_name,
+                            operand_type=bitcast["operand_type"],
+                            result_type=bitcast["result_type"],
+                        )
+                    return False, True
                 arguments = (
                     getattr(current, "arguments", getattr(current, "args", [])) or []
                 )
                 dependencies = [validate(argument) for argument in arguments]
-                specialization_dependent = any(dependencies)
+                specialization_dependent = any(item[0] for item in dependencies)
+                bitcast_dependent = any(item[1] for item in dependencies)
                 if self.glsl_constructor_type(function_name) is not None:
-                    return specialization_dependent
+                    return specialization_dependent, bitcast_dependent
                 if function_name not in {
                     "abs",
                     "acos",
@@ -14769,7 +14952,7 @@ class GLSLCodeGen:
                     reject("function-call", current, function_name)
                 if specialization_dependent:
                     reject("specialization-function-call", current, function_name)
-                return False
+                return False, bitcast_dependent
             if isinstance(current, ConstructorNode):
                 dependencies = [
                     validate(argument)
@@ -14777,7 +14960,10 @@ class GLSLCodeGen:
                         getattr(current, "arguments", []) or []
                     ) + list((getattr(current, "named_arguments", {}) or {}).values())
                 ]
-                return any(dependencies)
+                return (
+                    any(item[0] for item in dependencies),
+                    any(item[1] for item in dependencies),
+                )
             reject("unsupported-expression", current)
 
         return validate(expression)
@@ -15127,6 +15313,8 @@ class GLSLCodeGen:
         if builtin_output is not None:
             self.current_identifier_aliases[name] = builtin_output
             return ""
+        if id(node) in self.glsl_compile_time_bitcast_substitution_node_ids:
+            return ""
 
         runtime_initializer = id(node) in self.glsl_runtime_global_initializer_node_ids
         qualifier = "" if runtime_initializer else self.global_variable_qualifier(node)
@@ -15164,6 +15352,27 @@ class GLSLCodeGen:
             mapped_type,
         )
         return f"{layout}{qualifier}{declaration}{initializer};\n"
+
+    def glsl_compile_time_bitcast_substitution_expression(self, name):
+        substitution = self.glsl_compile_time_bitcast_substitutions.get(name)
+        if substitution is None or name in self.local_variable_types:
+            return None
+        if name in self.glsl_active_compile_time_bitcast_substitutions:
+            raise OpenGLCompileTimeGlobalError(
+                f"OpenGL compile-time bitcast substitution for '{name}' is cyclic",
+                variable_name=name,
+                expression_kind="IdentifierNode",
+                detail=name,
+                reason="bitcast-substitution-cycle",
+            )
+
+        expression, expected_type = substitution
+        self.glsl_active_compile_time_bitcast_substitutions.add(name)
+        try:
+            rendered = self.generate_expression_with_expected(expression, expected_type)
+        finally:
+            self.glsl_active_compile_time_bitcast_substitutions.remove(name)
+        return f"({rendered})"
 
     def generate_stage_local_interface_variable_declaration(self, node):
         builtin_name = self.glsl_builtin_stage_interface_name(node)
@@ -19208,6 +19417,11 @@ complex64_t crossgl_complex64_mod_assign(
                     return self.glsl_enum_value_expression(expr.name)
                 if expr.name in self.current_identifier_aliases:
                     return self.current_identifier_aliases[expr.name]
+                substitution = self.glsl_compile_time_bitcast_substitution_expression(
+                    expr.name
+                )
+                if substitution is not None:
+                    return substitution
                 return self.generate_glsl_identifier_expression(expr.name)
             else:
                 return str(expr)
@@ -19224,6 +19438,11 @@ complex64_t crossgl_complex64_mod_assign(
                 return self.glsl_enum_value_expression(expr.name)
             if expr.name in self.current_identifier_aliases:
                 return self.current_identifier_aliases[expr.name]
+            substitution = self.glsl_compile_time_bitcast_substitution_expression(
+                expr.name
+            )
+            if substitution is not None:
+                return substitution
             return self.generate_glsl_identifier_expression(expr.name)
         elif isinstance(expr, ArrayLiteralNode):
             return self.generate_glsl_aggregate_initializer(expr)

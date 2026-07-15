@@ -368,6 +368,16 @@ provenance through nested FFT helper parameters. CrossGL/crosstl#1672 tracks
 owner-dependent `constexpr` helper calls in quantized struct static members.
 CrossGL/crosstl#1491 tracks remaining qualified-static-constant materialization
 outside the compiler-validated DirectX frontier.
+Exact 32-bit compile-time bitcasts are retained for scalar and vector constants,
+including infinities, NaN payloads, signed zero, and ordinary finite values. In
+HLSL they remain native `asfloat` initializers; in GLSL, where bitcast calls are
+not valid constant initializers, the immutable declaration is substituted at
+its uses with the exact bitcast expression. This advances pinned `unary.metal`
+to a complete 877-entry DirectX artifact and moves its OpenGL failure to the
+complex-arithmetic contract tracked by CrossGL/crosstl#1511. The DirectX
+artifact is not yet DXC-clean; CrossGL/crosstl#1776, CrossGL/crosstl#1777,
+CrossGL/crosstl#1778, CrossGL/crosstl#1536, and CrossGL/crosstl#1546 track the
+independent native-compilation failures.
 Built-in overloads are resolved alongside user-defined wrappers by source
 signature.
 Before native validation, the harness verifies

@@ -479,6 +479,9 @@ class DirectXCompileTimeGlobalError(ValueError):
         variable_name=None,
         expression_kind=None,
         detail=None,
+        operation=None,
+        operand_type=None,
+        result_type=None,
         reason=None,
         source_location=None,
     ):
@@ -486,6 +489,9 @@ class DirectXCompileTimeGlobalError(ValueError):
         self.variable_name = variable_name
         self.expression_kind = expression_kind
         self.detail = detail
+        self.operation = operation
+        self.operand_type = operand_type
+        self.result_type = result_type
         self.reason = reason
         self.source_location = source_location
 
@@ -5596,6 +5602,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         *,
         reason,
         detail=None,
+        operation=None,
+        operand_type=None,
+        result_type=None,
     ):
         name = getattr(node, "name", getattr(node, "variable_name", "<unnamed>"))
         explanation = detail or reason.replace("-", " ")
@@ -5609,6 +5618,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 expression.__class__.__name__ if expression is not None else None
             ),
             detail=detail,
+            operation=operation,
+            operand_type=operand_type,
+            result_type=result_type,
             reason=reason,
             source_location=source_location,
         )
@@ -5805,6 +5817,80 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return mapped_type
         return None
 
+    def directx_compile_time_bitcast_contract(self, node, expression):
+        function_name = self.function_call_name(expression)
+        if function_name in self.function_return_types:
+            return None
+
+        arguments = list(
+            getattr(expression, "arguments", getattr(expression, "args", [])) or []
+        )
+        explicit_target = self.hlsl_metal_as_type_target_type(function_name)
+        is_bitcast = (
+            function_name in self.HLSL_BITCAST_FUNCTION_TARGETS
+            or explicit_target is not None
+        )
+        if not is_bitcast:
+            return None
+        if len(arguments) != 1:
+            self.directx_compile_time_global_error(
+                node,
+                expression,
+                reason="bitcast-arity",
+                detail=f"{function_name} expects exactly one operand",
+                operation=function_name,
+            )
+
+        operand = arguments[0]
+        operand_type = self.map_type(self.expression_result_type(operand))
+        result_type = explicit_target
+        if result_type is None:
+            result_type = self.hlsl_bitcast_result_type(function_name, arguments)
+        result_type = self.map_type(result_type)
+        operand_info = self.hlsl_explicit_bitcast_type_info(operand_type)
+        result_info = self.hlsl_explicit_bitcast_type_info(result_type)
+        if operand_info is None or result_info is None:
+            self.directx_compile_time_global_error(
+                node,
+                expression,
+                reason="bitcast-type-unresolved",
+                detail=(
+                    f"{function_name} cannot resolve an exact bitcast from "
+                    f"'{operand_type}' to '{result_type}'"
+                ),
+                operation=function_name,
+                operand_type=operand_type,
+                result_type=result_type,
+            )
+
+        identity = operand_info["type"] == result_info["type"]
+        native_shape = (
+            operand_info["component_width"] == 32
+            and result_info["component_width"] == 32
+            and operand_info["lanes"] == result_info["lanes"]
+            and operand_info["width"] == result_info["width"]
+        )
+        if not identity and not native_shape:
+            self.directx_compile_time_global_error(
+                node,
+                expression,
+                reason="bitcast-shape-unsupported",
+                detail=(
+                    f"{function_name} cannot preserve the {operand_info['width']}-bit "
+                    f"'{operand_info['type']}' payload as '{result_info['type']}' "
+                    "in an HLSL constant initializer"
+                ),
+                operation=function_name,
+                operand_type=operand_info["type"],
+                result_type=result_info["type"],
+            )
+        return {
+            "operation": function_name,
+            "operand": operand,
+            "operand_type": operand_info["type"],
+            "result_type": result_info["type"],
+        }
+
     def validate_directx_compile_time_global_expression(
         self,
         node,
@@ -5891,6 +5977,27 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return
             if isinstance(current, FunctionCallNode):
                 function_name = self.function_call_name(current)
+                bitcast = self.directx_compile_time_bitcast_contract(node, current)
+                if bitcast is not None:
+                    try:
+                        validate(bitcast["operand"])
+                    except DirectXCompileTimeGlobalError as error:
+                        if error.reason not in {
+                            "forward-reference",
+                            "function-call",
+                            "runtime-value",
+                        }:
+                            raise
+                        self.directx_compile_time_global_error(
+                            node,
+                            current,
+                            reason=f"bitcast-operand-{error.reason}",
+                            detail=error.detail,
+                            operation=bitcast["operation"],
+                            operand_type=bitcast["operand_type"],
+                            result_type=bitcast["result_type"],
+                        )
+                    return
                 if self.directx_compile_time_constructor_type(function_name) is None:
                     reject("function-call", current, function_name)
                 for argument in (

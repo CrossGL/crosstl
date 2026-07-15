@@ -10535,6 +10535,131 @@ def test_glsl_compile_time_global_values_emit_const_and_validate(tmp_path):
     )
 
 
+def test_glsl_compile_time_bitcasts_preserve_ieee_payloads_and_validate(tmp_path):
+    code = """
+    shader CompileTimeBitcasts {
+        constant float positiveInfinity = asfloat(2139095040u);
+        constant float negativeInfinity = asfloat(4286578688u);
+        constant float nanPayload = asfloat(2143363909u);
+        constant float negativeZero = asfloat(2147483648u);
+        constant float finitePayload = asfloat(1065353217u);
+        constant vec2 vectorPayload = as_type<vec2>(uvec2(1u, 2147483649u));
+
+        compute {
+            void main(RWStructuredBuffer<uint> output @binding(0)) {
+                output[0] = asuint(positiveInfinity);
+                output[1] = asuint(negativeInfinity);
+                output[2] = asuint(nanPayload);
+                output[3] = asuint(negativeZero);
+                output[4] = asuint(finitePayload);
+                output[5] = asuint(vectorPayload.x);
+                output[6] = asuint(vectorPayload.y);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    for name in (
+        "positiveInfinity",
+        "negativeInfinity",
+        "nanPayload",
+        "negativeZero",
+        "finitePayload",
+        "vectorPayload",
+    ):
+        assert not re.search(rf"\bconst\s+\w+\s+{name}\b", generated)
+    for payload in (
+        "2139095040u",
+        "4286578688u",
+        "2143363909u",
+        "2147483648u",
+        "1065353217u",
+    ):
+        assert f"uintBitsToFloat({payload})" in generated
+    assert "uintBitsToFloat(uvec2(1u, 2147483649u))" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "compile_time_bitcasts",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+def test_glsl_compile_time_bitcast_rejects_mismatched_shape():
+    code = """
+    shader InvalidCompileTimeBitcast {
+        constant vec2 invalidPayload = as_type<vec2>(1u);
+    }
+    """
+
+    with pytest.raises(OpenGLCompileTimeGlobalError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == "bitcast-shape-unsupported"
+    assert diagnostic.operation == "as_type<vec2>"
+    assert diagnostic.operand_type == "uint"
+    assert diagnostic.result_type == "vec2"
+
+
+def test_glsl_compile_time_bitcast_rejects_runtime_operand_with_metadata():
+    code = """
+    shader RuntimeCompileTimeBitcast {
+        uint runtimeBits;
+        constant float invalidPayload = asfloat(runtimeBits);
+    }
+    """
+
+    with pytest.raises(OpenGLCompileTimeGlobalError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == "bitcast-operand-runtime-value"
+    assert diagnostic.detail == "runtimeBits"
+    assert diagnostic.operation == "asfloat"
+    assert diagnostic.operand_type == "uint"
+    assert diagnostic.result_type == "float"
+
+
+@pytest.mark.parametrize(
+    ("function_name", "function_declaration", "constant_declaration"),
+    [
+        (
+            "asfloat",
+            "float asfloat(uint value) { return float(value); }",
+            "constant float invalidPayload = asfloat(1u);",
+        ),
+        (
+            "asuint",
+            "uint asuint(float value) { return uint(value); }",
+            "constant uint invalidPayload = asuint(1.0);",
+        ),
+    ],
+)
+def test_glsl_compile_time_global_preserves_user_defined_bitcast_names(
+    function_name, function_declaration, constant_declaration
+):
+    code = f"""
+    shader UserCompileTimeBitcast {{
+        {function_declaration}
+        {constant_declaration}
+    }}
+    """
+
+    with pytest.raises(OpenGLCompileTimeGlobalError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == "function-call"
+    assert diagnostic.detail == function_name
+    assert diagnostic.operation is None
+    assert diagnostic.operand_type is None
+    assert diagnostic.result_type is None
+
+
 def test_glsl_constant_address_space_runtime_resources_remain_uniforms():
     code = """
     shader ConstantAddressSpaceResources {
