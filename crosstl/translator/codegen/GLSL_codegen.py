@@ -15723,6 +15723,91 @@ complex64_t crossgl_complex64_mod_assign(
             rendered_columns.append(f"{column_type}({', '.join(rendered_values)})")
         return f"{mapped_type}({', '.join(rendered_columns)})"
 
+    def glsl_vector_initializer_component_count(self, expression):
+        type_info = self.glsl_value_type_info(self.expression_result_type(expression))
+        if type_info is not None:
+            return type_info["width"]
+        return self.expression_component_count(expression)
+
+    def generate_glsl_vector_aggregate_initializer(self, expr, mapped_type):
+        if not self.is_vector_value_type(mapped_type):
+            return None
+        if self.glsl_is_zero_aggregate_initializer(expr):
+            return self.glsl_value_initialized_expression(expr, mapped_type)
+
+        width = self.value_component_count(mapped_type)
+        component_type = self.vector_component_type(mapped_type)
+        if not width or width <= 1 or component_type is None:
+            return None
+
+        rendered = []
+        provided_components = 0
+        for element in list(getattr(expr, "elements", []) or []):
+            component_count = self.glsl_vector_initializer_component_count(element)
+            if component_count is None:
+                self.glsl_aggregate_error(
+                    expr,
+                    expected_type=mapped_type,
+                    reason="vector-element-type-unresolved",
+                    detail="a vector aggregate element has no known component width",
+                )
+            if provided_components + component_count > width:
+                self.glsl_aggregate_error(
+                    expr,
+                    expected_type=mapped_type,
+                    reason="element-count-mismatch",
+                    expected_element_count=width,
+                )
+            rendered.append(
+                self.generate_expression_with_expected(
+                    element,
+                    component_type if component_count == 1 else None,
+                )
+            )
+            provided_components += component_count
+
+        rendered.extend(
+            self.glsl_value_initialized_expression(expr, component_type)
+            for _index in range(provided_components, width)
+        )
+        return f"{mapped_type}({', '.join(rendered)})"
+
+    def generate_glsl_partial_vector_constructor(
+        self, expr, constructor, source_constructor
+    ):
+        arguments = list(getattr(expr, "arguments", getattr(expr, "args", [])) or [])
+        if not self.is_vector_value_type(constructor) or len(arguments) <= 1:
+            return None
+
+        component_counts = [
+            self.glsl_vector_initializer_component_count(argument)
+            for argument in arguments
+        ]
+        if any(component_count is None for component_count in component_counts):
+            return None
+
+        width = self.value_component_count(constructor)
+        provided_components = sum(component_counts)
+        if not width or provided_components >= width:
+            return None
+
+        component_type = self.vector_component_type(constructor)
+        if component_type is None:
+            return None
+        rendered = [
+            self.generate_expression_with_expected(
+                argument,
+                component_type if component_count == 1 else None,
+            )
+            for argument, component_count in zip(arguments, component_counts)
+        ]
+        rendered.extend(
+            self.zero_value_expression(component_type)
+            for _index in range(provided_components, width)
+        )
+        generated = f"{constructor}({', '.join(rendered)})"
+        return self.glsl_apply_narrow_integer_contract(generated, source_constructor)
+
     def glsl_aggregate_initializer_contract(self, expr, expected_type):
         expected_type = self.type_name_string(expected_type)
         if not expected_type:
@@ -15825,6 +15910,12 @@ complex64_t crossgl_complex64_mod_assign(
                 expr
             ) and self.glsl_is_value_initializable_aggregate_type(mapped_type):
                 return self.glsl_value_initialized_expression(expr, mapped_type)
+            vector_initializer = self.generate_glsl_vector_aggregate_initializer(
+                expr,
+                mapped_type,
+            )
+            if vector_initializer is not None:
+                return vector_initializer
             matrix_initializer = self.generate_glsl_matrix_aggregate_initializer(
                 expr,
                 mapped_type,
@@ -18304,6 +18395,15 @@ complex64_t crossgl_complex64_mod_assign(
 
             constructor = self.glsl_constructor_type(func_name)
             if constructor:
+                partial_vector_constructor = (
+                    self.generate_glsl_partial_vector_constructor(
+                        expr,
+                        constructor,
+                        original_func_name,
+                    )
+                )
+                if partial_vector_constructor is not None:
+                    return partial_vector_constructor
                 converted_constructor = self.glsl_struct_constructor_conversion(
                     expr,
                     constructor,

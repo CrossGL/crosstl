@@ -1313,9 +1313,11 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_generic_struct_concrete_constructor_and_member_access",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_zero_fills_partial_aggregate_initializers",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_zero_fills_partial_vector_initializers_without_repeating_values",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_partial_vector_initializers_validate_with_glslang_and_spirv_val",
             "tests/test_translator/test_native_runtime_drivers.py::def test_runtime_parity_glsl_partial_aggregate_executes_on_vulkan"
           ],
-          "notes": "OpenGL lowers struct declarations, member access, initialization, and return values. Contextual braced initializers preserve trailing value initialization recursively through nested structs and fixed arrays, with generated-code validation and native compute runtime coverage.",
+          "notes": "OpenGL lowers struct declarations, member access, initialization, and return values. Contextual braced initializers preserve trailing value initialization recursively through nested structs, fixed arrays, and vectors; Metal-materialized partial vector constructors count supplied scalar and vector components and append type-correct zeros without repeating expression evaluation. Generated-code validation and native compute runtime coverage exercise the lowering.",
           "status": "supported"
         }
       }

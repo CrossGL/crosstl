@@ -84,6 +84,36 @@ shader GLSLFixedArrayForInValidation {
 """
 
 
+GLSL_PARTIAL_VECTOR_INITIALIZER_COMPUTE_SHADER = """
+shader GLSLPartialVectorInitializerValidation {
+    uint supplied(uint value) {
+        return value;
+    }
+
+    uint2 suppliedPair(uint value) {
+        return uint2(value, value + 1u);
+    }
+
+    compute {
+        void main() {
+            uint2 key = uint2(1u, 2u);
+            uint4 ks = uint4(
+                key.x,
+                key.y,
+                key.x ^ key.y ^ 0x1BD11BDA
+            );
+            uint4 mixed = uint4(suppliedPair(4u), supplied(6u));
+            int4 signedValues = int4(1, 2, 3);
+            float4 floatValues = float4(1.0, 2.0, 3.0);
+            bool4 boolValues = bool4(true, false, true);
+            uint folded = ks.w + mixed.w + uint(signedValues.w);
+            folded += uint(floatValues.w) + uint(boolValues.w);
+        }
+    }
+}
+"""
+
+
 METAL_FUNCTION_CONSTANT_FRAGMENT_SHADER = """
 shader MetalFunctionConstantValidation {
     bool useFast @function_constant(0) = true;
@@ -11656,6 +11686,42 @@ def test_generated_glsl_fixed_array_for_in_validates_with_glslang_and_spirv_val(
 
     run_validator([glslang, "-V", "-S", "comp", str(source), "-o", str(output)])
     run_validator([spirv_val, str(output)])
+
+
+def test_generated_glsl_partial_vector_initializers_validate_with_glslang_and_spirv_val(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    spirv_val = shutil.which("spirv-val")
+    if glslang is None or spirv_val is None:
+        pytest.skip("glslangValidator and spirv-val are required")
+
+    source = tmp_path / "partial_vector_initializers.comp"
+    output = tmp_path / "partial_vector_initializers.spv"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(GLSL_PARTIAL_VECTOR_INITIALIZER_COMPUTE_SHADER),
+        "compute",
+    )
+    assert "uvec4 ks = uvec4(key.x, key.y, ((key.x ^ key.y) ^ 466688986), 0u);" in code
+    assert "uvec4 mixed = uvec4(suppliedPair(4u), supplied(6u), 0u);" in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            glslang,
+            "-G",
+            "--target-env",
+            "opengl",
+            "--target-env",
+            "spirv1.3",
+            "-S",
+            "comp",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+    run_validator([spirv_val, "--target-env", "spv1.3", str(output)])
 
 
 def test_generated_glsl_fragment_switch_match_case_scope_validates_with_glslang(
