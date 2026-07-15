@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from hypothesis import HealthCheck, given, settings
+from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 
 import crosstl.translator
@@ -576,6 +576,7 @@ def test_comparison_sampler_array_is_an_explicit_sampler_resource():
 
 
 @settings(max_examples=20, deadline=None)
+@example(suffix="a_", qualifier_case=RESOURCE_MEMORY_QUALIFIER_CASES[0])
 @given(
     suffix=IDENTIFIER_SUFFIXES,
     qualifier_case=st.sampled_from(RESOURCE_MEMORY_QUALIFIER_CASES),
