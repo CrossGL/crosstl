@@ -15,6 +15,7 @@ from ..ast import (
     BinaryOpNode,
     BlockNode,
     BreakNode,
+    CastNode,
     ConstructorNode,
     ContinueNode,
     CooperativeMatrixOpNode,
@@ -45,6 +46,7 @@ from ..ast import (
     StructMemberNode,
     StructNode,
     SwitchNode,
+    SwizzleNode,
     TernaryOpNode,
     UnaryOpNode,
     VariableNode,
@@ -712,6 +714,30 @@ class OpenGLGlobalInitializerError(ValueError):
         self.variable_name = variable_name
         self.dependencies = tuple(sorted(dependencies or ()))
         self.cycle = tuple(cycle or ())
+        self.reason = reason
+        self.source_location = source_location
+
+
+class OpenGLCompileTimeGlobalError(ValueError):
+    """Raised when immutable global data has no GLSL constant expression."""
+
+    project_diagnostic_code = "project.translate.opengl-compile-time-global-invalid"
+    missing_capabilities = ("opengl.compile-time-global-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        variable_name=None,
+        expression_kind=None,
+        detail=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.variable_name = variable_name
+        self.expression_kind = expression_kind
+        self.detail = detail
         self.reason = reason
         self.source_location = source_location
 
@@ -1644,6 +1670,7 @@ class GLSLCodeGen:
         self.glsl_interface_block_names_by_qualifier = {}
         self.global_variable_types = {}
         self.glsl_global_identifier_names = set()
+        self.glsl_compile_time_global_node_ids = set()
         self.glsl_runtime_global_initializer_node_ids = set()
         self.glsl_stage_runtime_global_initializers = {}
         self.global_type_aliases = {}
@@ -3271,6 +3298,7 @@ class GLSLCodeGen:
         self.glsl_global_identifier_names = self.collect_glsl_global_identifier_names(
             ast, target_stage
         )
+        self.glsl_compile_time_global_node_ids = set()
         self.glsl_runtime_global_initializer_node_ids = set()
         self.glsl_stage_runtime_global_initializers = {}
         self.function_sampler_parameter_indices = (
@@ -3714,6 +3742,7 @@ class GLSLCodeGen:
             + stage_local_interface_vars
             + stage_resource_params
         )
+        self.prepare_glsl_compile_time_globals(ast, global_vars)
         self.glsl_buffer_block_struct_names = (
             self.collect_glsl_buffer_block_struct_names(resource_declaration_nodes)
         )
@@ -13348,15 +13377,409 @@ class GLSLCodeGen:
 
     def global_variable_qualifier(self, node):
         qualifier_prefix = self.glsl_variable_qualifier_prefix(node)
+        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
+        runtime_storage_qualifiers = {
+            "buffer",
+            "device",
+            "global",
+            "groupshared",
+            "in",
+            "inout",
+            "input",
+            "out",
+            "output",
+            "shared",
+            "storage",
+            "threadgroup",
+            "uniform",
+            "workgroup",
+        }
+        is_compile_time = (
+            "const" in qualifiers or id(node) in self.glsl_compile_time_global_node_ids
+        ) and not qualifiers & runtime_storage_qualifiers
         if qualifier_prefix:
+            storage_qualifiers = {
+                "in",
+                "out",
+                "shared",
+                "taskPayloadSharedEXT",
+                "rayPayloadEXT",
+                "rayPayloadInEXT",
+                "hitAttributeEXT",
+                "callableDataEXT",
+                "callableDataInEXT",
+            }
+            if is_compile_time and not (
+                set(qualifier_prefix.split()) & storage_qualifiers
+            ):
+                return f"const {qualifier_prefix} "
             return f"{qualifier_prefix} "
 
-        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
         if qualifiers & {"shared", "groupshared", "workgroup", "threadgroup"}:
             return "shared "
-        if "const" in qualifiers:
+        if is_compile_time:
             return "const "
         return "uniform "
+
+    def prepare_glsl_compile_time_globals(self, ast, global_vars):
+        specialization_dependent_names = set(self.glsl_specialization_constant_names)
+        known_constant_names = {
+            self.glsl_specialization_constant_name(node)
+            for node in getattr(ast, "constants", []) or []
+            if self.glsl_specialization_constant_name(node)
+        }
+        known_constant_names.update(self.glsl_specialization_constant_names)
+        known_constant_names.update(getattr(self, "enum_variant_constants", {}))
+        known_constant_names.update(GLSL_BUILTIN_INT_LIMITS)
+        known_constant_names.add("gl_WorkGroupSize")
+        self.collect_glsl_specialization_dependent_constants(
+            getattr(ast, "constants", []) or [], specialization_dependent_names
+        )
+        candidate_names = {
+            self.resource_node_name(node)
+            for node in global_vars or []
+            if self.is_glsl_compile_time_global_candidate(node)
+        }
+        candidate_names.discard(None)
+        literal_int_constants = dict(self.literal_int_constants)
+
+        for node in global_vars or []:
+            if not self.is_glsl_compile_time_global_candidate(node):
+                continue
+            name = self.resource_node_name(node, "<unnamed>")
+            if not self.is_glsl_compile_time_value_type(
+                self.resource_node_type(node), int_constants=literal_int_constants
+            ):
+                type_name = self.type_name_string(self.resource_node_type(node))
+                raise OpenGLCompileTimeGlobalError(
+                    f"OpenGL compile-time global '{name}' cannot use value type "
+                    f"'{type_name}'",
+                    variable_name=name,
+                    expression_kind=self.resource_node_type(node).__class__.__name__,
+                    detail=type_name,
+                    reason="unsupported-value-type",
+                    source_location=getattr(node, "source_location", None),
+                )
+            specialization_dependent = (
+                self.validate_glsl_compile_time_global_expression(
+                    node,
+                    getattr(node, "initial_value", None),
+                    known_constant_names,
+                    candidate_names,
+                    specialization_dependent_names,
+                )
+            )
+            self.glsl_compile_time_global_node_ids.add(id(node))
+            known_constant_names.add(name)
+            if specialization_dependent:
+                specialization_dependent_names.add(name)
+
+            literal_int_value = self.glsl_compile_time_global_integer_value(
+                node,
+                literal_int_constants,
+            )
+            if literal_int_value is not None:
+                literal_int_constants[name] = literal_int_value
+                self.literal_int_constants[name] = literal_int_value
+                self.current_compile_time_int_constants[name] = literal_int_value
+
+    def collect_glsl_specialization_dependent_constants(self, constants, dependent):
+        pending = list(constants or [])
+        changed = True
+        while changed:
+            changed = False
+            remaining = []
+            for node in pending:
+                name = self.glsl_specialization_constant_name(node)
+                if not name or name in dependent:
+                    continue
+                value = self.glsl_specialization_constant_value(node)
+                references = {
+                    expression.name
+                    for expression in self.walk_ast(value)
+                    if isinstance(expression, IdentifierNode)
+                }
+                if references & dependent:
+                    dependent.add(name)
+                    changed = True
+                else:
+                    remaining.append(node)
+            pending = remaining
+
+    def glsl_compile_time_global_integer_value(self, node, constants):
+        mapped_type = self.map_type(self.resource_node_type(node))
+        if mapped_type not in {"int", "uint", "int64_t", "uint64_t"}:
+            return None
+        return evaluate_literal_int_expression(
+            getattr(node, "initial_value", None), constants
+        )
+
+    def is_glsl_compile_time_global_candidate(self, node):
+        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
+        if "constant" not in qualifiers:
+            return False
+        if getattr(node, "initial_value", None) is None:
+            return False
+        if getattr(node, "resource_qualifiers", None):
+            return False
+        if qualifiers & {
+            "buffer",
+            "device",
+            "function",
+            "global",
+            "groupshared",
+            "in",
+            "inout",
+            "input",
+            "local",
+            "out",
+            "output",
+            "private",
+            "readonly",
+            "readwrite",
+            "restrict",
+            "shared",
+            "storage",
+            "thread",
+            "threadgroup",
+            "threadgroup_imageblock",
+            "uniform",
+            "volatile",
+            "workgroup",
+            "writeonly",
+        }:
+            return False
+        if any(
+            self.is_resource_binding_attribute(attr)
+            or self.is_resource_memory_attribute(attr)
+            or str(getattr(attr, "name", "")).lower() in {"access", "uav"}
+            for attr in getattr(node, "attributes", []) or []
+        ):
+            return False
+        if self.glsl_variable_layout_prefix(node).strip():
+            return False
+        return not self.is_glsl_compile_time_resource_type(
+            self.resource_node_type(node)
+        )
+
+    def is_glsl_compile_time_resource_type(self, vtype, seen=None):
+        if isinstance(vtype, (PointerType, ReferenceType)):
+            return True
+        if isinstance(vtype, ArrayType):
+            return self.is_glsl_compile_time_resource_type(vtype.element_type, seen)
+
+        type_name = self.type_name_string(vtype)
+        if not type_name:
+            return False
+        base_type, _array_suffix = split_array_type_suffix(type_name)
+        resolved_type = self.resolve_glsl_type_alias(base_type.strip())
+        if resolved_type.rstrip().endswith(("*", "&")):
+            return True
+        if self.is_structured_buffer_type(
+            resolved_type
+        ) or self.is_constant_buffer_type(resolved_type):
+            return True
+
+        mapped_type = self.map_type(resolved_type)
+        if self.is_opaque_resource_type(mapped_type) or self.is_ray_query_type_name(
+            mapped_type
+        ):
+            return True
+
+        seen = set(seen or ())
+        if mapped_type in seen:
+            return False
+        struct = self.structs_by_name.get(mapped_type)
+        if struct is None:
+            return False
+        seen.add(mapped_type)
+        return any(
+            self.is_glsl_compile_time_resource_type(member.member_type, seen)
+            for member in getattr(struct, "members", []) or []
+        )
+
+    def is_glsl_compile_time_value_type(self, vtype, seen=None, *, int_constants=None):
+        if isinstance(vtype, (PointerType, ReferenceType)):
+            return False
+        if isinstance(vtype, ArrayType):
+            size = evaluate_literal_int_expression(
+                getattr(vtype, "size", None),
+                self.literal_int_constants if int_constants is None else int_constants,
+            )
+            return (
+                size is not None
+                and size > 0
+                and self.is_glsl_compile_time_value_type(
+                    vtype.element_type,
+                    seen,
+                    int_constants=int_constants,
+                )
+            )
+
+        type_name = self.type_name_string(vtype)
+        if not type_name or "[]" in type_name.replace(" ", ""):
+            return False
+        base_type = self.resource_base_type(vtype)
+        if self.is_structured_buffer_type(base_type) or self.is_constant_buffer_type(
+            base_type
+        ):
+            return False
+        mapped_resource_type = self.map_resource_type_with_format(base_type)
+        if self.is_opaque_resource_type(mapped_resource_type):
+            return False
+        if self.type_contains_opaque_resource(vtype):
+            return False
+
+        mapped_type = self.map_type(base_type)
+        if self.is_opaque_resource_type(mapped_type) or self.is_ray_query_type_name(
+            mapped_type
+        ):
+            return False
+        seen = set(seen or ())
+        if mapped_type in seen:
+            return True
+        struct = self.structs_by_name.get(mapped_type)
+        if struct is None:
+            return (
+                self.is_scalar_value_type(mapped_type)
+                or self.is_vector_value_type(mapped_type)
+                or self.glsl_matrix_dimensions(mapped_type) is not None
+                or mapped_type == "int"
+            )
+        seen.add(mapped_type)
+        return all(
+            self.is_glsl_compile_time_value_type(
+                member.member_type,
+                seen,
+                int_constants=int_constants,
+            )
+            for member in getattr(struct, "members", []) or []
+        )
+
+    def validate_glsl_compile_time_global_expression(
+        self,
+        node,
+        expression,
+        known_constant_names,
+        candidate_names,
+        specialization_dependent_names,
+    ):
+        def reject(reason, current, detail=None):
+            name = self.resource_node_name(node, "<unnamed>")
+            description = reason.replace("-", " ")
+            if detail:
+                description += f" '{detail}'"
+            raise OpenGLCompileTimeGlobalError(
+                f"OpenGL compile-time global '{name}' cannot use {description}",
+                variable_name=name,
+                expression_kind=(
+                    current.__class__.__name__ if current is not None else None
+                ),
+                detail=detail,
+                reason=reason,
+                source_location=getattr(current, "source_location", None)
+                or getattr(node, "source_location", None),
+            )
+
+        def validate(current):
+            if isinstance(current, LiteralNode):
+                return False
+            if isinstance(current, (IdentifierNode, VariableNode)):
+                name = getattr(current, "name", None)
+                if name in known_constant_names:
+                    return name in specialization_dependent_names
+                if name and render_standard_math_constant(name, "opengl") is not None:
+                    return False
+                reason = (
+                    "forward-reference" if name in candidate_names else "runtime-value"
+                )
+                reject(reason, current, name)
+            if isinstance(current, ArrayLiteralNode):
+                dependencies = [
+                    validate(element)
+                    for element in getattr(current, "elements", []) or []
+                ]
+                return any(dependencies)
+            if isinstance(current, MemberAccessNode):
+                return validate(current.object)
+            if isinstance(current, SwizzleNode):
+                return validate(current.vector_expr)
+            if isinstance(current, ArrayAccessNode):
+                array_dependency = validate(current.array)
+                index_dependency = validate(current.index)
+                if index_dependency:
+                    reject("specialization-array-index", current)
+                return array_dependency
+            if isinstance(current, BinaryOpNode):
+                return any((validate(current.left), validate(current.right)))
+            if isinstance(current, UnaryOpNode):
+                if self.map_operator(current.op) in {"++", "--"}:
+                    reject("mutation", current)
+                return validate(current.operand)
+            if isinstance(current, TernaryOpNode):
+                return any(
+                    (
+                        validate(current.condition),
+                        validate(current.true_expr),
+                        validate(current.false_expr),
+                    )
+                )
+            if isinstance(current, CastNode):
+                return validate(current.expression)
+            if isinstance(current, FunctionCallNode):
+                function_name = self.function_call_name(current)
+                if function_name in self.function_return_types:
+                    reject("function-call", current, function_name)
+                arguments = (
+                    getattr(current, "arguments", getattr(current, "args", [])) or []
+                )
+                dependencies = [validate(argument) for argument in arguments]
+                specialization_dependent = any(dependencies)
+                if self.glsl_constructor_type(function_name) is not None:
+                    return specialization_dependent
+                if function_name not in {
+                    "abs",
+                    "acos",
+                    "asin",
+                    "ceil",
+                    "clamp",
+                    "cos",
+                    "degrees",
+                    "dot",
+                    "exp",
+                    "exp2",
+                    "floor",
+                    "inversesqrt",
+                    "length",
+                    "log",
+                    "log2",
+                    "max",
+                    "min",
+                    "mod",
+                    "normalize",
+                    "pow",
+                    "radians",
+                    "round",
+                    "sign",
+                    "sin",
+                    "sqrt",
+                    "trunc",
+                }:
+                    reject("function-call", current, function_name)
+                if specialization_dependent:
+                    reject("specialization-function-call", current, function_name)
+                return False
+            if isinstance(current, ConstructorNode):
+                dependencies = [
+                    validate(argument)
+                    for argument in list(
+                        getattr(current, "arguments", []) or []
+                    ) + list((getattr(current, "named_arguments", {}) or {}).values())
+                ]
+                return any(dependencies)
+            reject("unsupported-expression", current)
+
+        return validate(expression)
 
     def glsl_empty_struct_type_name(self, vtype):
         type_name = self.type_name_string(vtype)
