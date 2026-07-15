@@ -3349,7 +3349,10 @@ def _runtime_test_plan_case(
     execution_plan = prepare_runtime_execution(request)
     diagnostics = list(execution_plan.diagnostics)
     missing = _missing_platform_requirements(test_case.platform_requirements)
-    if missing["tools"] or missing["environment"]:
+    if _runtime_diagnostics_have_errors(diagnostics):
+        status = RUNTIME_FAILED
+        failure_phase = "runtime-setup"
+    elif missing["tools"] or missing["environment"]:
         diagnostics.append(
             _runtime_test_platform_skip_diagnostic(
                 test_case,
@@ -3359,9 +3362,6 @@ def _runtime_test_plan_case(
         )
         status = SKIPPED
         failure_phase = "platform-requirements"
-    elif _runtime_diagnostics_have_errors(diagnostics):
-        status = RUNTIME_FAILED
-        failure_phase = "runtime-setup"
     else:
         status = "planned"
         failure_phase = None
@@ -4791,17 +4791,45 @@ def _runtime_adapter_contract_with_diagnostics(
     fixture: RuntimeFixture, artifact: Mapping[str, Any]
 ) -> tuple[RuntimeAdapterContract, tuple[Mapping[str, Any], ...]]:
     artifact_contract = _runtime_adapter_contract_from_artifact(artifact)
+    explicit_contract = fixture.adapter_contract
+    contract_mode = _runtime_artifact_contract_mode(explicit_contract)
+    if contract_mode not in {"merge", "replace"}:
+        selection_contract = (
+            artifact_contract
+            if explicit_contract is None
+            else _merge_runtime_adapter_contract(artifact_contract, explicit_contract)
+        )
+        diagnostic = _runtime_execution_diagnostic(
+            "error",
+            "project.runtime-verification.artifact-contract-mode-invalid",
+            "Runtime fixture artifact contract mode must be merge or replace.",
+            artifact,
+            fixture=fixture.id,
+            reasonKind="artifact-contract-mode-invalid",
+            artifactContractMode=contract_mode,
+            supportedArtifactContractModes=["merge", "replace"],
+        )
+        return selection_contract, (diagnostic,)
+
+    replace_artifact_contract = (
+        contract_mode == "replace" and explicit_contract is not None
+    )
     selection_contract = (
-        artifact_contract
-        if fixture.adapter_contract is None
-        else _merge_runtime_adapter_contract(
-            artifact_contract, fixture.adapter_contract
+        explicit_contract
+        if replace_artifact_contract
+        else (
+            artifact_contract
+            if explicit_contract is None
+            else _merge_runtime_adapter_contract(artifact_contract, explicit_contract)
         )
     )
     selected_entry_point, selection_source = _runtime_selected_entry_point(
         fixture, selection_contract
     )
-    candidates = tuple(entry.name for entry in artifact_contract.entry_points)
+    candidate_contract = (
+        selection_contract if replace_artifact_contract else artifact_contract
+    )
+    candidates = tuple(entry.name for entry in candidate_contract.entry_points)
     if selected_entry_point is None:
         if len(candidates) <= 1:
             return selection_contract, ()
@@ -4842,7 +4870,7 @@ def _runtime_adapter_contract_with_diagnostics(
         return selection_contract, (diagnostic,)
 
     scoped_artifact, diagnostics = _scope_runtime_adapter_contract(
-        artifact_contract,
+        candidate_contract,
         fixture=fixture,
         artifact=artifact,
         selected_entry_point=selected_entry_point,
@@ -4850,7 +4878,7 @@ def _runtime_adapter_contract_with_diagnostics(
     )
     contract = (
         scoped_artifact
-        if fixture.adapter_contract is None
+        if explicit_contract is None or replace_artifact_contract
         else _merge_runtime_adapter_contract(scoped_artifact, fixture.adapter_contract)
     )
     return (
@@ -4861,6 +4889,17 @@ def _runtime_adapter_contract_with_diagnostics(
         ),
         diagnostics,
     )
+
+
+def _runtime_artifact_contract_mode(
+    contract: RuntimeAdapterContract | None,
+) -> str:
+    if contract is None:
+        return "merge"
+    value = contract.metadata.get("artifactContractMode", "merge")
+    if not isinstance(value, str):
+        return str(value)
+    return value.strip().lower()
 
 
 def _runtime_selected_entry_point(
