@@ -8,6 +8,7 @@ from crosstl.backend.DirectX.DirectxParser import HLSLParser
 from crosstl.translator.ast import ArrayLiteralNode, ArrayType, ShaderStage
 from crosstl.translator.codegen.directx_codegen import (
     DirectXAggregateInitializerError,
+    DirectXTextureOffsetError,
 )
 from crosstl.translator.codegen.directx_codegen import (
     HLSLCodeGen as TranslatorHLSLCodeGen,
@@ -4383,13 +4384,13 @@ def test_codegen_texture_sample_offsets_roundtrip_through_translator_codegen():
     assert ".SampleLevel(" not in crossgl
     assert ".SampleGrad(" not in crossgl
 
-    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
-    assert "tex.Sample(samp, uv, offset)" in hlsl
-    assert "tex.SampleLevel(samp, uv, lod, offset)" in hlsl
-    assert "tex.SampleGrad(samp, uv, ddx, ddy, offset)" in hlsl
-    assert "textureOffset(" not in hlsl
-    assert "textureLodOffset(" not in hlsl
-    assert "textureGradOffset(" not in hlsl
+    with pytest.raises(DirectXTextureOffsetError) as error:
+        TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert error.value.operation == "textureOffset"
+    assert error.value.target_method == "Texture2D.Sample"
+    assert error.value.blocking_expression == "offset"
+    assert error.value.reason == "runtime-offset-requires-immediate"
 
 
 def test_codegen_texture_compare_and_gather_offsets_roundtrip_through_translator_codegen():
@@ -4432,14 +4433,13 @@ def test_codegen_texture_compare_and_gather_offsets_roundtrip_through_translator
     assert "textureGather(colorMap, linearSampler, uv, offset" not in crossgl
     assert ".GatherCmp(" not in crossgl
 
-    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
-    assert "shadowMap.SampleCmp(compareSampler, uv, depth, offset)" in hlsl
-    assert "colorMap.GatherRed(linearSampler, uv, offset)" in hlsl
-    assert "colorMap.Gather(linearSampler, uv, offset)" in hlsl
-    assert "shadowMap.GatherCmp(compareSampler, uv, depth, offset)" in hlsl
-    assert "textureCompareOffset(" not in hlsl
-    assert "textureGatherOffset(" not in hlsl
-    assert "textureGatherCompareOffset(" not in hlsl
+    with pytest.raises(DirectXTextureOffsetError) as error:
+        TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert error.value.operation == "textureCompareOffset"
+    assert error.value.target_method == "Texture2D.SampleCmp"
+    assert error.value.blocking_expression == "offset"
+    assert error.value.reason == "runtime-offset-requires-immediate"
 
 
 def test_codegen_texture_gather_compare_red_imports_to_helpers():
@@ -4686,14 +4686,13 @@ def test_codegen_texture_compare_bias_member_imports_as_compare_with_diagnostics
 
     parse_crossgl(crossgl)
 
-    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    with pytest.raises(DirectXTextureOffsetError) as error:
+        TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
 
-    assert "shadowMap.SampleCmp(compareSampler, uv, depth)" in hlsl
-    assert "shadowArray.SampleCmp(compareSampler, uvLayer, depth, offset)" in hlsl
-    assert "cubeShadow.SampleCmp(compareSampler, direction, depth)" in hlsl
-    assert ".SampleCmpBias(" not in hlsl
-    assert "bias, offset" not in hlsl
-    assert "0.0, status" not in hlsl
+    assert error.value.operation == "textureCompareOffset"
+    assert error.value.target_method == "Texture2DArray.SampleCmp"
+    assert error.value.blocking_expression == "offset"
+    assert error.value.reason == "runtime-offset-requires-immediate"
 
 
 def test_codegen_texture_status_and_clamp_overloads_import_as_valid_crossgl():
@@ -4782,20 +4781,13 @@ def test_codegen_texture_status_and_clamp_overloads_import_as_valid_crossgl():
     assert ".Sample(" not in crossgl
     assert ".Gather" not in crossgl
 
-    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
-    assert "colorMap.Sample(linearSampler, uv, offset)" in hlsl
-    assert "colorMap.SampleBias(linearSampler, uv, bias, offset)" in hlsl
-    assert "colorMap.SampleLevel(linearSampler, uv, lod, offset)" in hlsl
-    assert "colorMap.SampleGrad(linearSampler, uv, ddx, ddy, offset)" in hlsl
-    assert "shadowMap.SampleCmp(compareSampler, uv, depth, offset)" in hlsl
-    assert "colorMap.Gather(linearSampler, uv, offset)" in hlsl
-    assert "colorMap.GatherRed(linearSampler, uv, offset)" in hlsl
-    assert (
-        "colorMap.GatherRed(linearSampler, uv, offset, offset, offset, offset)" in hlsl
-    )
-    assert "shadowMap.GatherCmp(compareSampler, uv, depth, offset)" in hlsl
-    assert "0.0, status" not in hlsl
-    assert "offset, status" not in hlsl
+    with pytest.raises(DirectXTextureOffsetError) as error:
+        TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert error.value.operation == "textureOffset"
+    assert error.value.target_method == "Texture2D.Sample"
+    assert error.value.blocking_expression == "offset"
+    assert error.value.reason == "runtime-offset-requires-immediate"
 
 
 def test_codegen_cube_texture_status_overloads_do_not_become_offset_calls():

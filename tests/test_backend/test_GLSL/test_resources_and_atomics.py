@@ -6,7 +6,10 @@ import pytest
 from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 from crosstl.backend.GLSL.OpenglParser import GLSLParser
-from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
+from crosstl.translator.codegen.directx_codegen import (
+    DirectXTextureOffsetError,
+    HLSLCodeGen,
+)
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
@@ -15749,74 +15752,16 @@ def test_codegen_mixed_ssbo_unsupported_sampling_offsets_are_typed_diagnostics()
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
+    with pytest.raises(DirectXTextureOffsetError) as error:
+        HLSLCodeGen().generate(shader_ast)
+
+    assert error.value.operation == "textureLodOffset"
+    assert error.value.target_method == "Texture2D.SampleLevel"
+    assert error.value.blocking_expression == "offsetBlock.offset"
+    assert error.value.reason == "runtime-offset-requires-immediate"
+
     metal = MetalCodeGen().generate(shader_ast)
     glsl = GLSLCodeGen().generate(shader_ast)
-
-    assert (
-        "float4 lodDirect = textures[0].SampleLevel(samplers[0], float2(0.0, 0.0) "
-        "/* unsupported HLSL GLSL buffer block access offsetBlock: no target-side "
-        "fallback declaration emitted */, 2.0, int2(0, 0) /* unsupported HLSL GLSL "
-        "buffer block access offsetBlock: no target-side fallback declaration "
-        "emitted */);" in hlsl
-    )
-    assert (
-        "float4 lodCall = textures[0].SampleLevel(samplers[0], float2(0.0, 0.0) "
-        "/* unsupported HLSL GLSL buffer block function call readUv: target "
-        "function omitted */, 2.0, int2(0, 0) /* unsupported HLSL GLSL buffer block "
-        "function call readOffset: target function omitted */);" in hlsl
-    )
-    assert (
-        "float4 gradDirect = textures[0].SampleGrad(samplers[0], float2(0.0, 0.0) "
-        "/* unsupported HLSL GLSL buffer block access offsetBlock: no target-side "
-        "fallback declaration emitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL "
-        "buffer block access offsetBlock: no target-side fallback declaration "
-        "emitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL buffer block access "
-        "offsetBlock: no target-side fallback declaration emitted */, int2(0, 0) "
-        "/* unsupported HLSL GLSL buffer block access offsetBlock: no target-side "
-        "fallback declaration emitted */);" in hlsl
-    )
-    assert (
-        "float4 gradCall = textures[0].SampleGrad(samplers[0], float2(0.0, 0.0) "
-        "/* unsupported HLSL GLSL buffer block function call readUv: target "
-        "function omitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL buffer block "
-        "function call readUv: target function omitted */, float2(0.0, 0.0) "
-        "/* unsupported HLSL GLSL buffer block access offsetBlock: no target-side "
-        "fallback declaration emitted */, int2(0, 0) /* unsupported HLSL GLSL "
-        "buffer block function call readOffset: target function omitted */);" in hlsl
-    )
-    assert (
-        "float4 gatheredDirect = textures[0].Gather(samplers[0], float2(0.0, 0.0) "
-        "/* unsupported HLSL GLSL buffer block access offsetBlock: no target-side "
-        "fallback declaration emitted */, int2(0, 0) /* unsupported HLSL GLSL "
-        "buffer block access offsetBlock: no target-side fallback declaration "
-        "emitted */);" in hlsl
-    )
-    assert (
-        "float4 gatheredCall = textures[0].Gather(samplers[0], float2(0.0, 0.0) "
-        "/* unsupported HLSL GLSL buffer block function call readUv: target "
-        "function omitted */, int2(0, 0) /* unsupported HLSL GLSL buffer block "
-        "function call readOffset: target function omitted */);" in hlsl
-    )
-    assert (
-        "float4 fetchedDirect = textures[0].Load(int3((int2(0, 0) /* unsupported "
-        "HLSL GLSL buffer block access offsetBlock: no target-side fallback "
-        "declaration emitted */ + int2(0, 0) /* unsupported HLSL GLSL buffer block "
-        "access offsetBlock: no target-side fallback declaration emitted */), 0));"
-        in hlsl
-    )
-    assert (
-        "float4 fetchedCall = textures[0].Load(int3((int2(0, 0) /* unsupported "
-        "HLSL GLSL buffer block function call readPixel: target function omitted */ "
-        "+ int2(0, 0) /* unsupported HLSL GLSL buffer block function call readOffset: "
-        "target function omitted */), 0));" in hlsl
-    )
-    assert "SampleLevel(samplers[0], 0 /* unsupported HLSL GLSL buffer" not in hlsl
-    assert "SampleGrad(samplers[0], 0 /* unsupported HLSL GLSL buffer" not in hlsl
-    assert "Gather(samplers[0], 0 /* unsupported HLSL GLSL buffer" not in hlsl
-    assert ", 0 /* unsupported HLSL GLSL buffer block access offsetBlock" not in hlsl
-    assert "offsetBlock.uv" not in hlsl
-    assert "offsetBlock.offset" not in hlsl
 
     assert (
         "float4 lodDirect = textures[0].sample(samplers[0], float2(0) "
@@ -15978,51 +15923,16 @@ def test_codegen_mixed_ssbo_unsupported_projected_compare_calls_infer_types():
     shader_ast = parse_crossgl(crossgl)
     assert shader_ast is not None
 
-    hlsl = HLSLCodeGen().generate(shader_ast)
+    with pytest.raises(DirectXTextureOffsetError) as error:
+        HLSLCodeGen().generate(shader_ast)
+
+    assert error.value.operation == "textureProjOffset"
+    assert error.value.target_method == "Texture2D.Sample"
+    assert error.value.blocking_expression == "shadowBlock.offset"
+    assert error.value.reason == "runtime-offset-requires-immediate"
+
     metal = MetalCodeGen().generate(shader_ast)
     glsl = GLSLCodeGen().generate(shader_ast)
-
-    assert (
-        "float4 projectedCall = colorMap.SampleGrad(linearSampler, (float3(0.0, 0.0, 0.0) "
-        "/* unsupported HLSL GLSL buffer block function call readUvq: target "
-        "function omitted */).xy / (float3(0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer "
-        "block function call readUvq: target function omitted */).z, float2(0.0, 0.0) "
-        "/* unsupported HLSL GLSL buffer block access shadowBlock: no target-side "
-        "fallback declaration emitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL "
-        "buffer block access shadowBlock: no target-side fallback declaration "
-        "emitted */, int2(0, 0) /* unsupported HLSL GLSL buffer block function call "
-        "readOffset: target function omitted */);" in hlsl
-    )
-    assert (
-        "float compareCall = shadowMap.SampleCmpGrad(compareSampler, float2(0.0, 0.0) "
-        "/* unsupported HLSL GLSL buffer block function call readUv: target "
-        "function omitted */, 0 /* unsupported HLSL GLSL buffer block function "
-        "call readDepth: target function omitted */, float2(0.0, 0.0) /* unsupported "
-        "HLSL GLSL buffer block access shadowBlock: no target-side fallback "
-        "declaration emitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL buffer block "
-        "access shadowBlock: no target-side fallback declaration emitted */, "
-        "int2(0, 0) /* unsupported HLSL GLSL buffer block function call readOffset: "
-        "target function omitted */);" in hlsl
-    )
-    assert (
-        "float compareProjCall = shadowMap.SampleCmpGrad(compareSampler, "
-        "(float3(0.0, 0.0, 0.0) /* unsupported HLSL GLSL buffer block function call readUvq: "
-        "target function omitted */).xy / (float3(0.0, 0.0, 0.0) /* unsupported HLSL GLSL "
-        "buffer block function call readUvq: target function omitted */).z, 0 "
-        "/* unsupported HLSL GLSL buffer block function call readDepth: target "
-        "function omitted */, float2(0.0, 0.0) /* unsupported HLSL GLSL buffer block "
-        "access shadowBlock: no target-side fallback declaration emitted */, "
-        "float2(0.0, 0.0) /* unsupported HLSL GLSL buffer block access shadowBlock: "
-        "no target-side fallback declaration emitted */, int2(0, 0) /* unsupported "
-        "HLSL GLSL buffer block function call readOffset: target function omitted */);"
-        in hlsl
-    )
-    assert "unsupported DirectX projected texture: textureProjGradOffset" not in hlsl
-    assert (
-        "unsupported DirectX texture compare: textureCompareProjGradOffset" not in hlsl
-    )
-    assert "shadowBlock.uvq" not in hlsl
-    assert "shadowBlock.offset" not in hlsl
 
     assert (
         "float4 projectedCall = colorMap.sample(linearSampler, (float3(0) "

@@ -248,7 +248,7 @@ shader ExternalValidatorTextureResources {
         vec4 main(FSInput input) @ gl_FragColor {
             int lod = 0;
             ivec2 pixel = ivec2(input.uv * 16.0);
-            ivec2 offset = ivec2(1, -1);
+            const ivec2 offset = ivec2(1, -1);
             int component = int(input.uv.x);
             vec4 base = texture(colorMap, linearSampler, input.uv);
             vec4 biased = texture(colorMap, linearSampler, input.uv, 0.25);
@@ -311,7 +311,7 @@ shader ExternalValidatorShadowTextures {
 
     fragment {
         vec4 main(FSInput input) @ gl_FragColor {
-            ivec2 offset = ivec2(1, 0);
+            const ivec2 offset = ivec2(1, 0);
             float base = textureCompare(
                 shadowMap,
                 compareSampler,
@@ -2344,7 +2344,7 @@ def test_generated_hlsl_texture_resource_intrinsics_compile_with_dxc(tmp_path):
         "colorMap.SampleBias(linearSampler, input.uv, 0.25)",
         "colorMap.SampleLevel(linearSampler, input.uv, lod)",
         "colorMap.SampleGrad(linearSampler, input.uv, input.ddxValue, input.ddyValue)",
-        "colorMap.Sample(linearSampler, input.uv, offset)",
+        "colorMap.Sample(linearSampler, input.uv, int2(1, -1))",
         "colorMap.Load(int3(pixel, lod))",
         "colorMap.Load(int3((pixel + offset), lod))",
         "component == 0 ? colorMap.GatherRed(linearSampler, input.uv)",
@@ -2400,14 +2400,14 @@ def test_generated_hlsl_shadow_texture_intrinsics_compile_with_dxc(tmp_path):
         ),
         "tex.SampleCmp(cmp, uv, depth)",
         "shadowMap.SampleCmp(compareSampler, input.uv, input.depth)",
-        "shadowMap.SampleCmp(compareSampler, input.uv, input.depth, offset)",
+        "shadowMap.SampleCmp(compareSampler, input.uv, input.depth, int2(1, 0))",
         (
             "shadowMap.SampleCmp(compareSampler, "
             "input.projected.xy / input.projected.z, input.depth)"
         ),
         (
             "shadowMap.SampleCmp(compareSampler, "
-            "input.projected.xy / input.projected.z, input.depth, offset)"
+            "input.projected.xy / input.projected.z, input.depth, int2(1, 0))"
         ),
         "shadowMap.GatherCmp(compareSampler, input.uv, input.depth)",
         "shadowMap.GatherCmp(compareSampler, input.uv, input.depth, offset)",
