@@ -368,6 +368,7 @@ def _assert_no_source_sampler_leaks_to_glsl(glsl, suffix):
 
 
 @settings(max_examples=20, deadline=None)
+@example(suffix="a__", arrayed=False, helper=False)
 @given(
     suffix=IDENTIFIER_SUFFIXES,
     arrayed=st.booleans(),
@@ -380,7 +381,8 @@ def test_primary_graphics_texture_sampling_contracts_are_preserved(
     ast = crosstl.translator.parse(shader)
 
     hlsl = HLSLCodeGen().generate_stage(ast, "fragment")
-    glsl = GLSLCodeGen().generate_stage(ast, "fragment")
+    glsl_codegen = GLSLCodeGen()
+    glsl = glsl_codegen.generate_stage(ast, "fragment")
     metal = MetalCodeGen().generate_stage(ast, "fragment")
 
     for backend, generated in (
@@ -395,7 +397,8 @@ def test_primary_graphics_texture_sampling_contracts_are_preserved(
     assert not re.search(r"\btexture\s*\(", hlsl)
 
     assert re.search(r"\btexture\s*\(", glsl)
-    assert f"sampler2D tex_{suffix}" in glsl
+    glsl_texture_name = glsl_codegen.glsl_module_identifier_names[f"tex_{suffix}"]
+    assert f"sampler2D {glsl_texture_name}" in glsl
     _assert_no_source_sampler_leaks_to_glsl(glsl, suffix)
 
     assert ".sample(" in metal
@@ -469,6 +472,7 @@ def _shadow_texture_sampling_shader(suffix, arrayed, helper):
 
 
 @settings(max_examples=20, deadline=None)
+@example(suffix="a__", arrayed=False, helper=False)
 @given(
     suffix=IDENTIFIER_SUFFIXES,
     arrayed=st.booleans(),
@@ -481,7 +485,8 @@ def test_primary_graphics_shadow_texture_sampler_contracts_are_preserved(
     ast = crosstl.translator.parse(shader)
 
     hlsl = HLSLCodeGen().generate_stage(ast, "fragment")
-    glsl = GLSLCodeGen().generate_stage(ast, "fragment")
+    glsl_codegen = GLSLCodeGen()
+    glsl = glsl_codegen.generate_stage(ast, "fragment")
     metal = MetalCodeGen().generate_stage(ast, "fragment")
 
     for backend, generated in (
@@ -495,7 +500,8 @@ def test_primary_graphics_shadow_texture_sampler_contracts_are_preserved(
     assert ".SampleCmp(" in hlsl
     assert not re.search(r"\btextureCompare\s*\(", hlsl)
 
-    assert f"sampler2DShadow shadow_{suffix}" in glsl
+    glsl_shadow_name = glsl_codegen.glsl_module_identifier_names[f"shadow_{suffix}"]
+    assert f"sampler2DShadow {glsl_shadow_name}" in glsl
     assert f"cmp_{suffix}" not in glsl
     assert re.search(r"\btexture\s*\(", glsl)
 
@@ -631,6 +637,7 @@ def test_primary_graphics_resource_memory_qualifiers_are_preserved_where_support
 
 
 @settings(max_examples=20, deadline=None)
+@example(suffix="a__", buffer_case=STRUCTURED_BUFFER_CASES[0])
 @given(
     suffix=IDENTIFIER_SUFFIXES,
     buffer_case=st.sampled_from(STRUCTURED_BUFFER_CASES),
@@ -659,7 +666,8 @@ def test_primary_graphics_structured_buffer_access_contracts_are_preserved(
     ast = crosstl.translator.parse(shader)
 
     hlsl = HLSLCodeGen().generate(ast)
-    glsl = GLSLCodeGen().generate(ast)
+    glsl_codegen = GLSLCodeGen()
+    glsl = glsl_codegen.generate(ast)
     metal = MetalCodeGen().generate(ast)
 
     for backend, generated in (
@@ -684,20 +692,22 @@ def test_primary_graphics_structured_buffer_access_contracts_are_preserved(
     assert "buffer_store" not in hlsl
     assert "buffer_dimensions" not in hlsl
 
+    glsl_source_name = glsl_codegen.glsl_module_identifier_names[source_name]
+    glsl_target_name = glsl_codegen.glsl_module_identifier_names[target_name]
     assert (
-        f"layout(std430, binding = 1) readonly buffer {source_name}Buffer "
-        f"{{ {buffer_case.glsl_type} {source_name}[]; }};" in glsl
+        f"layout(std430, binding = 1) readonly buffer {glsl_source_name}Buffer "
+        f"{{ {buffer_case.glsl_type} {glsl_source_name}[]; }};" in glsl
     )
     assert (
-        f"layout(std430, binding = 2) buffer {target_name}Buffer "
-        f"{{ {buffer_case.glsl_type} {target_name}[]; }};" in glsl
+        f"layout(std430, binding = 2) buffer {glsl_target_name}Buffer "
+        f"{{ {buffer_case.glsl_type} {glsl_target_name}[]; }};" in glsl
     )
     assert (
-        f"{buffer_case.glsl_type} value = {source_name}[gl_GlobalInvocationID.x];"
-        in glsl
+        f"{buffer_case.glsl_type} value = "
+        f"{glsl_source_name}[gl_GlobalInvocationID.x];" in glsl
     )
-    assert f"len = {target_name}.length();" in glsl
-    assert f"{target_name}[gl_GlobalInvocationID.x] = value;" in glsl
+    assert f"len = {glsl_target_name}.length();" in glsl
+    assert f"{glsl_target_name}[gl_GlobalInvocationID.x] = value;" in glsl
 
     assert f"const device {buffer_case.metal_type}* {source_name}" in metal
     assert f"device {buffer_case.metal_type}* {target_name}" in metal
