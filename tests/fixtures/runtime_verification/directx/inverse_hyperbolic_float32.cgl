@@ -1,0 +1,47 @@
+shader DirectXInverseHyperbolicRuntime {
+    StructuredBuffer<uint> acosh_input_bits @ binding(0);
+    StructuredBuffer<uint> asinh_input_bits @ binding(1);
+    StructuredBuffer<uint> atanh_input_bits @ binding(2);
+    RWStructuredBuffer<uint> acosh_output_bits @ binding(0);
+    RWStructuredBuffer<uint> asinh_output_bits @ binding(1);
+    RWStructuredBuffer<uint> atanh_output_bits @ binding(2);
+
+    uint canonical_float_bits(float value) {
+        if (isnan(value)) {
+            return 2143289344u;
+        }
+        return asuint(value);
+    }
+
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+        void main(uint3 tid @ gl_GlobalInvocationID) {
+            uint index = tid.x;
+            float acosh_result = acosh(
+                asfloat(buffer_load(acosh_input_bits, index))
+            );
+            float asinh_result = asinh(
+                asfloat(buffer_load(asinh_input_bits, index))
+            );
+            float atanh_result = atanh(
+                asfloat(buffer_load(atanh_input_bits, index))
+            );
+            buffer_store(
+                acosh_output_bits,
+                index,
+                canonical_float_bits(acosh_result)
+            );
+            buffer_store(
+                asinh_output_bits,
+                index,
+                canonical_float_bits(asinh_result)
+            );
+            buffer_store(
+                atanh_output_bits,
+                index,
+                canonical_float_bits(atanh_result)
+            );
+        }
+    }
+}

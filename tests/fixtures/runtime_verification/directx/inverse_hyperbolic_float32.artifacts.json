@@ -1,0 +1,111 @@
+{
+  "kind": "crosstl-runtime-artifact-manifest",
+  "project": {
+    "root": ".",
+    "targets": [
+      "directx"
+    ]
+  },
+  "artifacts": [
+    {
+      "id": "directx|tests/fixtures/runtime_verification/directx/inverse_hyperbolic_float32.cgl|float32-domain-boundaries",
+      "source": "tests/fixtures/runtime_verification/directx/inverse_hyperbolic_float32.cgl",
+      "path": "out/directx/inverse_hyperbolic_float32.hlsl",
+      "target": "directx",
+      "sourceBackend": "cgl",
+      "stage": "compute",
+      "variant": "float32-domain-boundaries",
+      "status": "translated",
+      "entryPoints": [
+        {
+          "name": "CSMain",
+          "stage": "compute",
+          "executionConfig": {
+            "numthreads": [
+              1,
+              1,
+              1
+            ]
+          },
+          "workgroupSize": [
+            1,
+            1,
+            1
+          ]
+        }
+      ],
+      "resourceBindings": [
+        {
+          "id": "buffer|0|acosh_input_bits",
+          "name": "acosh_input_bits",
+          "kind": "buffer",
+          "type": "StructuredBuffer<uint>",
+          "set": 0,
+          "binding": 0,
+          "access": "read"
+        },
+        {
+          "id": "buffer|1|asinh_input_bits",
+          "name": "asinh_input_bits",
+          "kind": "buffer",
+          "type": "StructuredBuffer<uint>",
+          "set": 0,
+          "binding": 1,
+          "access": "read"
+        },
+        {
+          "id": "buffer|2|atanh_input_bits",
+          "name": "atanh_input_bits",
+          "kind": "buffer",
+          "type": "StructuredBuffer<uint>",
+          "set": 0,
+          "binding": 2,
+          "access": "read"
+        },
+        {
+          "id": "buffer|0|acosh_output_bits",
+          "name": "acosh_output_bits",
+          "kind": "buffer",
+          "type": "RWStructuredBuffer<uint>",
+          "set": 0,
+          "binding": 0,
+          "access": "write"
+        },
+        {
+          "id": "buffer|1|asinh_output_bits",
+          "name": "asinh_output_bits",
+          "kind": "buffer",
+          "type": "RWStructuredBuffer<uint>",
+          "set": 0,
+          "binding": 1,
+          "access": "write"
+        },
+        {
+          "id": "buffer|2|atanh_output_bits",
+          "name": "atanh_output_bits",
+          "kind": "buffer",
+          "type": "RWStructuredBuffer<uint>",
+          "set": 0,
+          "binding": 2,
+          "access": "write"
+        }
+      ],
+      "dispatch": {
+        "status": "available",
+        "workgroups": [
+          {
+            "entryPoint": "CSMain",
+            "stage": "compute",
+            "workgroupSize": [
+              1,
+              1,
+              1
+            ],
+            "source": "fixture"
+          }
+        ],
+        "diagnostics": []
+      }
+    }
+  ]
+}

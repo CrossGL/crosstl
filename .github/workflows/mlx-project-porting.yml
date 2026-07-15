@@ -212,6 +212,12 @@ jobs:
           CROSTL_RUN_DIRECTX_COPYSIGN_DEVICE_TEST: "1"
         run: python -m pytest -q -n auto tests/test_translator/test_native_runtime_drivers.py -k "directx_compute_runtime_executes_copysign_bit_patterns_on_device"
 
+      - name: Prove Direct3D inverse-hyperbolic numerical execution
+        if: runner.os == 'Windows'
+        env:
+          CROSTL_RUN_DIRECTX_INVERSE_HYPERBOLIC_DEVICE_TEST: "1"
+        run: python -m pytest -q -n auto tests/test_translator/test_native_runtime_drivers.py -k "directx_compute_runtime_executes_inverse_hyperbolic_numerics_on_device"
+
       - name: Prove translated MLX arange Direct3D numerical execution
         if: runner.os == 'Windows'
         env:

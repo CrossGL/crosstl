@@ -2160,6 +2160,10 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         mlx_porting,
         "Prove exact Direct3D copysign bit preservation",
     )
+    directx_inverse_hyperbolic_runtime = _workflow_step_text(
+        mlx_porting,
+        "Prove Direct3D inverse-hyperbolic numerical execution",
+    )
     opengl_copysign_runtime = _workflow_step_text(
         mlx_porting,
         "Prove exact OpenGL copysign bit preservation",
@@ -2204,6 +2208,16 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert 'CROSTL_RUN_DIRECTX_COPYSIGN_DEVICE_TEST: "1"' in (directx_copysign_runtime)
     assert "directx_compute_runtime_executes_copysign_bit_patterns_on_device" in (
         directx_copysign_runtime
+    )
+    assert "if: runner.os == 'Windows'" in directx_inverse_hyperbolic_runtime
+    assert (
+        'CROSTL_RUN_DIRECTX_INVERSE_HYPERBOLIC_DEVICE_TEST: "1"'
+        in directx_inverse_hyperbolic_runtime
+    )
+    assert "python -m pytest -q -n auto" in directx_inverse_hyperbolic_runtime
+    assert (
+        "directx_compute_runtime_executes_inverse_hyperbolic_numerics_on_device"
+        in directx_inverse_hyperbolic_runtime
     )
     assert "if: runner.os == 'Linux'" in opengl_copysign_runtime
     assert 'CROSTL_RUN_OPENGL_COPYSIGN_DEVICE_TEST: "1"' in opengl_copysign_runtime
