@@ -580,6 +580,7 @@ def test_reference_accessor_fixture_translates_through_public_project_surface(
             "self.nestedTile.val_frags["
         )
         assert nested_const_alias["storageLvalue"].endswith("][k]")
+        assert nested_const_alias["componentReadLowering"] == "lane-helper"
         assert nested_const_alias["aliasEliminated"] is True
         assert nested_const_alias["accessorCallEliminated"] is True
         assert nested_const_alias["readFromOriginalStorage"] is True
@@ -738,6 +739,7 @@ def test_reference_accessor_check_records_structured_proof_and_native_validation
         assert nested_const_alias["storageLvalue"] == (
             "self.nestedTile.val_frags[((i*2)+j)][k]"
         )
+        assert nested_const_alias["componentReadLowering"] == "direct-index"
         assert nested_const_alias["outerReceiver"] == "self"
         assert nested_const_alias["tileMember"] == "nestedTile"
         assert nested_const_alias["fragmentType"] == "float2"

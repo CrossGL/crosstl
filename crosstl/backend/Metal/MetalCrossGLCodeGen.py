@@ -294,6 +294,37 @@ class MetalWideVectorLoweringError(ValueError):
         )
 
 
+class MetalIndexedComponentTypeResolutionError(ValueError):
+    """Raised when an indexed Metal component has no provable source type."""
+
+    project_diagnostic_code = (
+        "project.translate.metal-indexed-component-type-unresolved"
+    )
+    missing_capabilities = ("metal.indexed-component-type-inference",)
+
+    def __init__(
+        self,
+        base_type,
+        access_kind,
+        reason,
+        source_location=None,
+        index_expression=None,
+    ):
+        self.base_type = base_type
+        self.access_kind = access_kind
+        self.reason = reason
+        self.source_location = source_location
+        self.index_expression = index_expression
+        type_name = base_type or "<unknown>"
+        index_detail = (
+            f" at index '{index_expression}'" if index_expression is not None else ""
+        )
+        super().__init__(
+            "Cannot resolve Metal indexed component type for "
+            f"'{type_name}' ({access_kind}){index_detail}: {reason}"
+        )
+
+
 class MetalStageEntryArrayResourceError(ValueError):
     """Raised when a Metal entry array has no faithful resource contract."""
 
@@ -562,9 +593,13 @@ class MetalToCrossGLConverter:
         "uint64_t": ("integer", False, 64),
         "uint64": ("integer", False, 64),
         "size_t": ("integer", False, 64),
+        "ptrdiff_t": ("integer", True, 64),
         "half": ("floating", True, 16),
         "xhalf": ("floating", True, 16),
         "float16": ("floating", True, 16),
+        "bfloat": ("floating", True, 16),
+        "bfloat16_t": ("floating", True, 16),
+        "bfloat16": ("floating", True, 16),
         "float": ("floating", True, 32),
         "double": ("floating", True, 64),
     }
@@ -986,6 +1021,11 @@ class MetalToCrossGLConverter:
         self.current_function_specialization = None
         self.current_function_materialization_bindings = {}
         self.materialized_constexpr_expression_contexts = []
+        self.metal_enum_arithmetic_types = {}
+        self.metal_enum_member_types = {}
+        self.small_vector_index_types = {}
+        self.small_vector_index_operations = set()
+        self.small_vector_resource_index_operations = {}
         self.wide_vector_types = {}
         self.wide_vector_binary_helpers = set()
         self.wide_vector_compound_helpers = set()
@@ -2004,7 +2044,15 @@ class MetalToCrossGLConverter:
             )
 
     def generate(self, ast):
-        wide_vector_marker = "    // __crossgl_metal_wide_vector_support__\n"
+        wide_vector_support_marker = "    // __crossgl_metal_wide_vector_support__\n"
+        small_vector_index_support_marker = (
+            "    // __crossgl_metal_small_vector_index_support__\n"
+        )
+        self.small_vector_index_types = {}
+        self.small_vector_index_operations = set()
+        self.small_vector_resource_index_operations = {}
+        self.metal_enum_arithmetic_types = {}
+        self.metal_enum_member_types = {}
         self.wide_vector_types = {}
         self.wide_vector_binary_helpers = set()
         self.wide_vector_compound_helpers = set()
@@ -2061,7 +2109,7 @@ class MetalToCrossGLConverter:
             code += "\n"
         code += "shader main {\n"
         code += "\n"
-        code += wide_vector_marker
+        code += wide_vector_support_marker
         self.constant_struct_name = []
 
         # Get constants - support both 'constant' and 'constants' attributes
@@ -2093,6 +2141,9 @@ class MetalToCrossGLConverter:
             if isinstance(alias, TypeAliasNode) and getattr(alias, "name", None)
         )
         enums = getattr(ast, "enums", []) or []
+        for enum in enums:
+            if isinstance(enum, EnumNode):
+                self.register_metal_enum_arithmetic_contract(enum)
         emitted_typedefs = [
             declaration
             for alias in typedefs
@@ -2179,6 +2230,8 @@ class MetalToCrossGLConverter:
                     )
                     code += f"        {decl};\n"
                 code += "    }\n\n"
+
+        code += small_vector_index_support_marker
 
         globals_list = [
             glob
@@ -2313,8 +2366,13 @@ class MetalToCrossGLConverter:
 
         code += "}\n"
         code = code.replace(
-            wide_vector_marker,
+            wide_vector_support_marker,
             self.generate_wide_vector_support_code(indent=1),
+            1,
+        )
+        code = code.replace(
+            small_vector_index_support_marker,
+            self.generate_small_vector_index_support_code(indent=1),
             1,
         )
         return code
@@ -4688,6 +4746,10 @@ class MetalToCrossGLConverter:
         previous_type_alias_qualifiers = dict(self.type_alias_qualifiers)
         previous_local_type_alias_names = set(self.local_type_alias_names)
         previous_local_struct_type_aliases = dict(self.local_struct_type_aliases)
+        previous_metal_enum_arithmetic_types = self.metal_enum_arithmetic_types
+        self.metal_enum_arithmetic_types = dict(previous_metal_enum_arithmetic_types)
+        previous_metal_enum_member_types = self.metal_enum_member_types
+        self.metal_enum_member_types = dict(previous_metal_enum_member_types)
         previous_storage_texture_names = self.current_storage_texture_names
         self.current_storage_texture_names = set(self.global_storage_texture_names)
         previous_structured_buffer_names = self.current_structured_buffer_names
@@ -4793,6 +4855,8 @@ class MetalToCrossGLConverter:
             self.type_alias_qualifiers = previous_type_alias_qualifiers
             self.local_type_alias_names = previous_local_type_alias_names
             self.local_struct_type_aliases = previous_local_struct_type_aliases
+            self.metal_enum_arithmetic_types = previous_metal_enum_arithmetic_types
+            self.metal_enum_member_types = previous_metal_enum_member_types
             self.current_storage_texture_names = previous_storage_texture_names
             self.current_structured_buffer_names = previous_structured_buffer_names
             self.current_stage_entry_resource_parameter_ids = (
@@ -5061,13 +5125,10 @@ class MetalToCrossGLConverter:
                             )
                         )
                         try:
-                            if (
-                                self.wide_vector_type_info(
-                                    self.current_function_return_type,
-                                    getattr(stmt, "source_location", None),
-                                )
-                                is not None
-                            ):
+                            if self.wide_vector_type_info(
+                                self.current_function_return_type,
+                                getattr(stmt, "source_location", None),
+                            ) is not None or isinstance(stmt.value, ArrayAccessNode):
                                 value = self.generate_initializer_value(
                                     stmt.value,
                                     is_main,
@@ -5364,8 +5425,21 @@ class MetalToCrossGLConverter:
             return original
         return f"{generic_base}<{', '.join(resolved_args)}>{suffix}"
 
+    def register_metal_enum_arithmetic_contract(self, enum):
+        if getattr(enum, "is_scoped", False):
+            return
+        arithmetic_type = getattr(enum, "underlying_type", None) or "int"
+        enum_name = getattr(enum, "name", None)
+        if enum_name:
+            self.metal_enum_arithmetic_types[self.normalized_metal_type(enum_name)] = (
+                arithmetic_type
+            )
+        for member_name, _member_value in getattr(enum, "members", []) or []:
+            self.metal_enum_member_types[str(member_name)] = arithmetic_type
+
     def generate_local_enum(self, enum, indent, is_main):
         enum_name = enum.name or "MetalAnonymousEnum"
+        self.register_metal_enum_arithmetic_contract(enum)
         code = f"enum {enum_name} {{\n"
         for member_name, member_value in enum.members:
             code += "    " * (indent + 1) + member_name
@@ -5472,15 +5546,108 @@ class MetalToCrossGLConverter:
         code += "\n"
         return code
 
+    def generate_small_vector_component_read(self, expression, info, is_main=False):
+        vector = self.generate_postfix_operand(expression.array, is_main)
+        index = self.generate_expression(expression.index, is_main)
+        helper = self.small_vector_index_helper_name(info, "get")
+        return f"{helper}({vector}, {index})"
+
+    def generate_small_vector_component_assignment(
+        self,
+        target,
+        info,
+        rendered_value,
+        operator,
+        *,
+        right_type,
+        computation_type=None,
+        is_main=False,
+    ):
+        operation = (
+            "set"
+            if operator == "="
+            else self.small_vector_index_operation_name(operator)
+        )
+        if operation is None:
+            raise MetalIndexedComponentTypeResolutionError(
+                info["vector_type"],
+                "vector-component-assignment",
+                f"operator '{operator}' has no scalar component lowering",
+                getattr(target, "source_location", None),
+                self.metal_index_expression_text(target.index),
+            )
+
+        resource_operation = self.generate_small_vector_resource_component_operation(
+            target,
+            info,
+            operation,
+            rendered_value,
+            right_type=right_type,
+            computation_type=computation_type,
+            is_main=is_main,
+        )
+        if resource_operation is not None:
+            return resource_operation
+
+        vector = self.generate_postfix_operand(target.array, is_main)
+        index = self.generate_expression(target.index, is_main)
+        helper = self.small_vector_index_helper_name(
+            info,
+            operation,
+            right_type=right_type,
+            computation_type=computation_type,
+        )
+        return f"{helper}({vector}, {index}, {rendered_value})"
+
+    def generate_small_vector_component_update(
+        self, target, operator, *, postfix, is_main=False
+    ):
+        if self.metal_cooperative_matrix_element_access(target) is not None:
+            return None
+        info = self.small_vector_index_info(target, require_type=True)
+        if info is None:
+            return None
+        update = self.small_vector_index_operation_name(operator)
+        if update is None:
+            return None
+        operation = f"{'post' if postfix else 'pre'}_{update}"
+        computation_type = self.small_vector_update_computation_type(info, target)
+        resource_operation = self.generate_small_vector_resource_component_operation(
+            target,
+            info,
+            operation,
+            computation_type=computation_type,
+            is_main=is_main,
+        )
+        if resource_operation is not None:
+            return resource_operation
+        vector = self.generate_postfix_operand(target.array, is_main)
+        index = self.generate_expression(target.index, is_main)
+        helper = self.small_vector_index_helper_name(
+            info, operation, computation_type=computation_type
+        )
+        return f"{helper}({vector}, {index})"
+
     def generate_assignment(self, node, is_main):
-        if self.is_structured_buffer_element_access(node.left):
+        component_info = (
+            None
+            if self.metal_cooperative_matrix_element_access(node.left) is not None
+            else self.small_vector_index_info(node.left, require_type=True)
+        )
+        if component_info is None and self.is_structured_buffer_element_access(
+            node.left
+        ):
             structured_store = self.generate_structured_buffer_store(
                 node.left, node.right, node.operator, is_main
             )
             if structured_store is not None:
                 return structured_store
         lhs_info = self.wide_vector_expression_info(node.left)
-        lhs = self.generate_expression(node.left, is_main)
+        lhs = (
+            None
+            if component_info is not None
+            else self.generate_expression(node.left, is_main)
+        )
         pushed_context = bool(
             self.is_supported_constexpr_local_declaration(node)
             and self.push_materialized_constexpr_expression_context(
@@ -5493,9 +5660,13 @@ class MetalToCrossGLConverter:
                 node.right,
                 is_main,
                 (
-                    getattr(node.left, "vtype", None)
-                    if isinstance(node.left, VariableNode)
-                    else None
+                    component_info["element_type"]
+                    if component_info is not None
+                    else (
+                        getattr(node.left, "vtype", None)
+                        if isinstance(node.left, VariableNode)
+                        else None
+                    )
                 ),
                 (
                     self.variable_has_array_initializer_shape(node.left)
@@ -5507,6 +5678,25 @@ class MetalToCrossGLConverter:
             if pushed_context:
                 self.materialized_constexpr_expression_contexts.pop()
         op = node.operator
+        if component_info is not None:
+            if op == "=":
+                right_type = component_info["element_type"]
+                computation_type = None
+            else:
+                right_type, computation_type = (
+                    self.small_vector_compound_operation_types(
+                        component_info, op, node.right, node.left
+                    )
+                )
+            return self.generate_small_vector_component_assignment(
+                node.left,
+                component_info,
+                rhs,
+                op,
+                right_type=right_type,
+                computation_type=computation_type,
+                is_main=is_main,
+            )
         if lhs_info is not None and op != "=":
             binary_operator = op[:-1] if op.endswith("=") else None
             if self.wide_vector_binary_operation_name(binary_operator) is None:
@@ -5548,6 +5738,13 @@ class MetalToCrossGLConverter:
     def generate_initializer_value(
         self, expr, is_main=False, expected_type=None, expected_array=False
     ):
+        if (
+            expected_type
+            and not self.is_plain_metal_auto_type(expected_type)
+            and isinstance(expr, ArrayAccessNode)
+            and self.metal_cooperative_matrix_element_access(expr) is None
+        ):
+            self.expression_metal_type(expr)
         if isinstance(expr, InitializerListNode):
             return self.generate_initializer_list(
                 expr, is_main, expected_type, expected_array
@@ -5890,6 +6087,11 @@ class MetalToCrossGLConverter:
                 matrix_text = self.generate_expression(matrix, is_main)
                 index_text = self.generate_expression(element_index, is_main)
                 return f"cooperative_matrix_element({matrix_text}, {index_text})"
+            component_info = self.small_vector_index_info(expr)
+            if component_info is not None:
+                return self.generate_small_vector_component_read(
+                    expr, component_info, is_main
+                )
             if (
                 not self.suppress_structured_buffer_index_lowering
                 and self.is_structured_buffer_element_access(expr)
@@ -5902,6 +6104,12 @@ class MetalToCrossGLConverter:
                 return f"{array}.lanes[{index}]"
             return f"{array}[{index}]"
         elif isinstance(expr, UnaryOpNode):
+            if expr.op in {"++", "--"} and isinstance(expr.operand, ArrayAccessNode):
+                component_update = self.generate_small_vector_component_update(
+                    expr.operand, expr.op, postfix=False, is_main=is_main
+                )
+                if component_update is not None:
+                    return component_update
             if expr.op == "-" and self.is_metal_cooperative_matrix_expression(
                 expr.operand
             ):
@@ -5921,6 +6129,14 @@ class MetalToCrossGLConverter:
                 operand = self.generate_without_structured_buffer_index_lowering(
                     expr.operand, is_main
                 )
+            elif expr.op == "&" and isinstance(expr.operand, ArrayAccessNode):
+                component_info = self.small_vector_index_info(expr.operand)
+                if component_info is not None:
+                    array = self.generate_postfix_operand(expr.operand.array, is_main)
+                    index = self.generate_expression(expr.operand.index, is_main)
+                    operand = f"{array}[{index}]"
+                else:
+                    operand = self.generate_expression(expr.operand, is_main)
             else:
                 operand = self.generate_expression(expr.operand, is_main)
             if expr.op == "post...":
@@ -5929,6 +6145,12 @@ class MetalToCrossGLConverter:
                 operand = f"({operand})"
             return f"({expr.op}{operand})"
         elif isinstance(expr, PostfixOpNode):
+            if expr.op in {"++", "--"} and isinstance(expr.operand, ArrayAccessNode):
+                component_update = self.generate_small_vector_component_update(
+                    expr.operand, expr.op, postfix=True, is_main=is_main
+                )
+                if component_update is not None:
+                    return component_update
             wide_vector = self.wide_vector_expression_info(expr.operand)
             if wide_vector is not None:
                 raise MetalWideVectorLoweringError(
@@ -7309,6 +7531,12 @@ class MetalToCrossGLConverter:
             element_type, size = vector_type
             return f"{self.map_generic_vector_type(element_type, size)}{suffix}"
 
+        named_vector_type = self.metal_vector_component_parts(base)
+        if named_vector_type is not None:
+            element_type, width, _width_text = named_vector_type
+            if width is not None and 1 < width <= 4:
+                return f"{self.map_generic_vector_type(element_type, width)}{suffix}"
+
         # Normalize Metal resource access qualifiers without dropping dimensions or
         # other non-resource generic arguments, e.g. matrix<bfloat, 4, 4>.
         if "<" in base and base.endswith(">"):
@@ -7922,6 +8150,523 @@ class MetalToCrossGLConverter:
             info, f"{operation_name}_assign_{right_kind}"
         )
 
+    def small_vector_index_info(self, expression, *, require_type=False):
+        if not isinstance(expression, ArrayAccessNode):
+            return None
+        # Opaque tables and special aggregate accessors must remain renderable in
+        # contexts that do not require a result type. Auto/type-required paths go
+        # through expression_metal_type() and emit the structured diagnostic.
+        try:
+            base_type = self.expression_metal_type(expression.array)
+        except MetalIndexedComponentTypeResolutionError:
+            if require_type:
+                raise
+            return None
+        if base_type is None:
+            if require_type:
+                self.metal_indexed_type_selection(expression)
+            return None
+        selection = self.metal_indexed_type_selection(expression)
+        if selection["kind"] == "aggregate" and require_type:
+            raise MetalIndexedComponentTypeResolutionError(
+                selection["base_type"],
+                "aggregate-subscript",
+                "the user-defined aggregate subscript result type cannot be inferred",
+                getattr(expression, "source_location", None),
+                self.metal_index_expression_text(expression.index),
+            )
+        if selection["kind"] != "vector":
+            return None
+
+        width = selection["width"]
+        if width is None:
+            raise MetalIndexedComponentTypeResolutionError(
+                selection["base_type"],
+                "vector-subscript",
+                f"the vector width '{selection['width_text']}' is not concrete",
+                getattr(expression, "source_location", None),
+                self.metal_index_expression_text(expression.index),
+            )
+        if width > 4:
+            return None
+        if width < 2:
+            raise MetalIndexedComponentTypeResolutionError(
+                selection["base_type"],
+                "vector-subscript",
+                f"the vector width {width} is outside the supported range 2..4",
+                getattr(expression, "source_location", None),
+                self.metal_index_expression_text(expression.index),
+            )
+
+        mapped_vector = self.map_generic_vector_type(selection["element_type"], width)
+        mapped_element = self.map_type(selection["element_type"])
+        key = (mapped_vector, mapped_element, width)
+        info = self.small_vector_index_types.get(key)
+        if info is not None:
+            return info
+
+        mapped_name = re.sub(r"[^A-Za-z0-9_]", "_", mapped_vector).strip("_")
+        base_prefix = f"CrossGLMetalVectorIndex_{mapped_name}"
+        prefix = base_prefix
+        suffix = 1
+        operation_names = {
+            "get",
+            "set",
+            "add_assign",
+            "sub_assign",
+            "mul_assign",
+            "div_assign",
+            "mod_assign",
+            "bit_and_assign",
+            "bit_or_assign",
+            "bit_xor_assign",
+            "shift_left_assign",
+            "shift_right_assign",
+            "pre_increment",
+            "pre_decrement",
+            "post_increment",
+            "post_decrement",
+        }
+        while True:
+            generated_names = {
+                f"{prefix}_{operation_name}" for operation_name in operation_names
+            } | {
+                f"{prefix}_{operation_name}_value" for operation_name in operation_names
+            }
+            if not generated_names.intersection(
+                self.user_function_names | self.wide_vector_reserved_names
+            ):
+                break
+            prefix = f"{base_prefix}_{suffix}"
+            suffix += 1
+        self.wide_vector_reserved_names.update(generated_names)
+        info = {
+            "key": key,
+            "vector_type": mapped_vector,
+            "element_type": mapped_element,
+            "source_element_type": selection["element_type"],
+            "width": width,
+            "prefix": prefix,
+        }
+        self.small_vector_index_types[key] = info
+        return info
+
+    def small_vector_index_operation_name(self, operator):
+        return {
+            "+=": "add_assign",
+            "-=": "sub_assign",
+            "*=": "mul_assign",
+            "/=": "div_assign",
+            "%=": "mod_assign",
+            "&=": "bit_and_assign",
+            "|=": "bit_or_assign",
+            "^=": "bit_xor_assign",
+            "<<=": "shift_left_assign",
+            ">>=": "shift_right_assign",
+            "++": "increment",
+            "--": "decrement",
+        }.get(operator)
+
+    def small_vector_index_compound_operator(self, operation):
+        return {
+            "add_assign": "+",
+            "sub_assign": "-",
+            "mul_assign": "*",
+            "div_assign": "/",
+            "mod_assign": "%",
+            "bit_and_assign": "&",
+            "bit_or_assign": "|",
+            "bit_xor_assign": "^",
+            "shift_left_assign": "<<",
+            "shift_right_assign": ">>",
+        }.get(operation)
+
+    def small_vector_compound_operation_types(self, info, operator, right, target):
+        operation = self.small_vector_index_operation_name(operator)
+        binary_operator = self.small_vector_index_compound_operator(operation)
+        right_source_type = self.expression_metal_type(right)
+        if right_source_type is None:
+            raise MetalIndexedComponentTypeResolutionError(
+                info["vector_type"],
+                "vector-component-assignment",
+                "the compound right operand type could not be inferred",
+                getattr(target, "source_location", None),
+                self.metal_index_expression_text(target.index),
+            )
+        computation_source_type = self.metal_scalar_binary_result_type(
+            binary_operator,
+            info["source_element_type"],
+            right_source_type,
+        )
+        if computation_source_type is None:
+            raise MetalIndexedComponentTypeResolutionError(
+                info["vector_type"],
+                "vector-component-assignment",
+                f"operator '{operator}' has no provable scalar conversion contract",
+                getattr(target, "source_location", None),
+                self.metal_index_expression_text(target.index),
+            )
+
+        right_parameter_source_type = computation_source_type
+        if binary_operator in {"<<", ">>"}:
+            right_type_info = self.metal_scalar_arithmetic_type_info(right_source_type)
+            if right_type_info is None or right_type_info[0] != "integer":
+                raise MetalIndexedComponentTypeResolutionError(
+                    info["vector_type"],
+                    "vector-component-assignment",
+                    "the shift count does not have an integral source type",
+                    getattr(target, "source_location", None),
+                    self.metal_index_expression_text(target.index),
+                )
+            right_parameter_source_type = self.promoted_metal_integer_type(
+                right_type_info
+            )[0]
+        return (
+            self.map_type(right_parameter_source_type),
+            self.map_type(computation_source_type),
+        )
+
+    def small_vector_update_computation_type(self, info, target):
+        computation_source_type = self.metal_scalar_binary_result_type(
+            "+", info["source_element_type"], "int"
+        )
+        if computation_source_type is None:
+            raise MetalIndexedComponentTypeResolutionError(
+                info["vector_type"],
+                "vector-component-update",
+                "the component type has no provable increment/decrement contract",
+                getattr(target, "source_location", None),
+                self.metal_index_expression_text(target.index),
+            )
+        return self.map_type(computation_source_type)
+
+    def small_vector_index_helper_name(
+        self,
+        info,
+        operation,
+        *,
+        right_type=None,
+        computation_type=None,
+    ):
+        self.small_vector_index_operations.add(
+            (info["key"], operation, right_type, computation_type)
+        )
+        return f"{info['prefix']}_{operation}"
+
+    def small_vector_index_operation_has_right(self, operation):
+        return operation not in {
+            "get",
+            "pre_increment",
+            "pre_decrement",
+            "post_increment",
+            "post_decrement",
+        }
+
+    def small_vector_index_branch_statement(
+        self, info, operation, member, computation_type=None
+    ):
+        element_type = info["element_type"]
+        selected = f"value.{member}"
+        if operation == "get":
+            return f"return {selected};"
+        if operation == "set":
+            return f"{selected} = selected; return selected;"
+
+        compound_operator = self.small_vector_index_compound_operator(operation)
+        if compound_operator is not None:
+            return (
+                f"{element_type} original = {selected}; "
+                f"{computation_type} computed = "
+                f"{computation_type}(original) {compound_operator} right; "
+                f"{element_type} updated = computed; "
+                f"{selected} = updated; return updated;"
+            )
+
+        update_operator = "+" if operation.endswith("increment") else "-"
+        update = (
+            f"{element_type} original = {selected}; "
+            f"{computation_type} computed = {computation_type}(original) "
+            f"{update_operator} {computation_type}(1); "
+            f"{element_type} updated = computed; {selected} = updated; "
+        )
+        if operation.startswith("pre_"):
+            return f"{update}return updated;"
+        return f"{update}return original;"
+
+    def structured_buffer_access_path(self, expression):
+        if self.is_direct_structured_buffer_element_access(expression):
+            return expression, []
+        if isinstance(expression, MemberAccessNode):
+            parent = self.structured_buffer_access_path(expression.object)
+            if parent is None:
+                return None
+            root, path = parent
+            return root, [*path, ("member", str(expression.member))]
+        if isinstance(expression, ArrayAccessNode):
+            parent = self.structured_buffer_access_path(expression.array)
+            if parent is None:
+                return None
+            root, path = parent
+            return root, [*path, ("index", expression.index)]
+        return None
+
+    def small_vector_resource_index_parameter_type(self, expression, target):
+        source_type = self.expression_metal_type(expression)
+        type_info = self.metal_scalar_arithmetic_type_info(source_type)
+        if type_info is None or type_info[0] != "integer":
+            raise MetalIndexedComponentTypeResolutionError(
+                self.expression_metal_type(target.array),
+                "resource-vector-component",
+                "a resource aggregate index does not have an integral source type",
+                getattr(target, "source_location", None),
+                self.metal_index_expression_text(expression),
+            )
+        return self.map_type(self.promoted_metal_integer_type(type_info)[0])
+
+    def small_vector_resource_component_access(self, target):
+        access_path = self.structured_buffer_access_path(target.array)
+        if access_path is None:
+            return None
+        root, path = access_path
+        container_source_type = self.expression_metal_type(root)
+        container_type = self.map_type(container_source_type)
+        if not container_type or any(char in str(container_type) for char in "[]*&"):
+            raise MetalIndexedComponentTypeResolutionError(
+                container_source_type,
+                "resource-vector-component",
+                "the resource element type cannot be materialized as a local value",
+                getattr(target, "source_location", None),
+                self.metal_index_expression_text(target.index),
+            )
+
+        root_index_type = self.small_vector_resource_index_parameter_type(
+            root.index, target
+        )
+        descriptor_path = []
+        path_index_expressions = []
+        for kind, value in path:
+            if kind == "member":
+                descriptor_path.append((kind, value))
+                continue
+            index_type = self.small_vector_resource_index_parameter_type(value, target)
+            descriptor_path.append((kind, index_type))
+            path_index_expressions.append(value)
+        return {
+            "root": root,
+            "container_type": container_type,
+            "root_index_type": root_index_type,
+            "path": tuple(descriptor_path),
+            "path_index_expressions": path_index_expressions,
+        }
+
+    def register_small_vector_resource_index_operation(
+        self,
+        info,
+        operation,
+        access,
+        *,
+        right_type=None,
+        computation_type=None,
+    ):
+        self.small_vector_index_helper_name(
+            info,
+            operation,
+            right_type=right_type,
+            computation_type=computation_type,
+        )
+        key = (
+            info["key"],
+            operation,
+            right_type,
+            computation_type,
+            access["container_type"],
+            access["root_index_type"],
+            access["path"],
+        )
+        existing = self.small_vector_resource_index_operations.get(key)
+        if existing is not None:
+            return existing
+
+        path_name = "_".join(
+            "index" if kind == "index" else self.sanitize_identifier(value)
+            for kind, value in access["path"]
+        )
+        base_name = f"{info['prefix']}_{operation}_resource"
+        if path_name:
+            base_name = f"{base_name}_{path_name}"
+        helper_name = base_name
+        suffix = 1
+        while helper_name in self.wide_vector_reserved_names:
+            helper_name = f"{base_name}_{suffix}"
+            suffix += 1
+        self.wide_vector_reserved_names.add(helper_name)
+        descriptor = {
+            "name": helper_name,
+            "info_key": info["key"],
+            "operation": operation,
+            "right_type": right_type,
+            "computation_type": computation_type,
+            "container_type": access["container_type"],
+            "root_index_type": access["root_index_type"],
+            "path": access["path"],
+        }
+        self.small_vector_resource_index_operations[key] = descriptor
+        return descriptor
+
+    def generate_small_vector_resource_component_operation(
+        self,
+        target,
+        info,
+        operation,
+        rendered_value=None,
+        *,
+        right_type=None,
+        computation_type=None,
+        is_main=False,
+    ):
+        access = self.small_vector_resource_component_access(target)
+        if access is None:
+            return None
+        descriptor = self.register_small_vector_resource_index_operation(
+            info,
+            operation,
+            access,
+            right_type=right_type,
+            computation_type=computation_type,
+        )
+        root = access["root"]
+        arguments = [
+            self.generate_without_structured_buffer_index_lowering(root.array, is_main),
+            self.generate_expression(root.index, is_main),
+        ]
+        arguments.extend(
+            self.generate_expression(index, is_main)
+            for index in access["path_index_expressions"]
+        )
+        arguments.append(self.generate_expression(target.index, is_main))
+        if rendered_value is not None:
+            arguments.append(rendered_value)
+        return f"{descriptor['name']}({', '.join(arguments)})"
+
+    def generate_small_vector_index_support_code(self, indent=0):
+        if not (
+            self.small_vector_index_operations
+            or self.small_vector_resource_index_operations
+        ):
+            return ""
+
+        pad = "    " * indent
+        body_pad = "    " * (indent + 1)
+        branch_pad = "    " * (indent + 2)
+        code = f"{pad}// Metal small-vector component indexing\n"
+        operation_order = {
+            "get": 0,
+            "set": 1,
+            "add_assign": 2,
+            "sub_assign": 3,
+            "mul_assign": 4,
+            "div_assign": 5,
+            "mod_assign": 6,
+            "bit_and_assign": 7,
+            "bit_or_assign": 8,
+            "bit_xor_assign": 9,
+            "shift_left_assign": 10,
+            "shift_right_assign": 11,
+            "pre_increment": 12,
+            "pre_decrement": 13,
+            "post_increment": 14,
+            "post_decrement": 15,
+        }
+        operations = sorted(
+            self.small_vector_index_operations,
+            key=lambda item: (
+                self.small_vector_index_types[item[0]]["prefix"],
+                operation_order[item[1]],
+                item[2] or "",
+                item[3] or "",
+            ),
+        )
+        for key, operation, right_type, computation_type in operations:
+            info = self.small_vector_index_types[key]
+            vector_type = info["vector_type"]
+            element_type = info["element_type"]
+            helper_name = f"{info['prefix']}_{operation}"
+            has_right = self.small_vector_index_operation_has_right(operation)
+            right_name = "selected" if operation == "set" else "right"
+            right_parameter = f", {right_type} {right_name}" if has_right else ""
+
+            result_type = element_type
+            value_parameter = (
+                f"{vector_type} value"
+                if operation == "get"
+                else f"inout {vector_type} value"
+            )
+            code += (
+                f"{pad}{result_type} {helper_name}"
+                f"({value_parameter}, uint lane{right_parameter}) {{\n"
+            )
+            members = "xyzw"[: info["width"]]
+            for lane, member in enumerate(members):
+                condition = "if" if lane == 0 else "else if"
+                if lane == len(members) - 1:
+                    condition = "else"
+                    code += f"{body_pad}{condition} {{\n"
+                else:
+                    code += f"{body_pad}{condition} (lane == {lane}u) {{\n"
+                statement = self.small_vector_index_branch_statement(
+                    info, operation, member, computation_type
+                )
+                code += f"{branch_pad}{statement}\n"
+                code += f"{body_pad}}}\n"
+            code += f"{pad}}}\n\n"
+
+        for descriptor in sorted(
+            self.small_vector_resource_index_operations.values(),
+            key=lambda item: item["name"],
+        ):
+            info = self.small_vector_index_types[descriptor["info_key"]]
+            operation = descriptor["operation"]
+            has_right = self.small_vector_index_operation_has_right(operation)
+            right_name = "selected" if operation == "set" else "right"
+            parameters = [
+                f"device {descriptor['container_type']}* data",
+                f"{descriptor['root_index_type']} element_index",
+            ]
+            value_path = "value"
+            path_index = 0
+            for kind, value in descriptor["path"]:
+                if kind == "member":
+                    value_path += f".{value}"
+                    continue
+                parameter_name = f"path_index_{path_index}"
+                path_index += 1
+                parameters.append(f"{value} {parameter_name}")
+                value_path += f"[{parameter_name}]"
+            parameters.append("uint lane")
+            if has_right:
+                parameters.append(f"{descriptor['right_type']} {right_name}")
+
+            code += (
+                f"{pad}{info['element_type']} {descriptor['name']}"
+                f"({', '.join(parameters)}) {{\n"
+            )
+            code += (
+                f"{body_pad}{descriptor['container_type']} value = "
+                "buffer_load(data, element_index);\n"
+            )
+            call_arguments = [value_path, "lane"]
+            if has_right:
+                call_arguments.append(right_name)
+            code += (
+                f"{body_pad}{info['element_type']} result = "
+                f"{info['prefix']}_{operation}"
+                f"({', '.join(call_arguments)});\n"
+            )
+            code += f"{body_pad}buffer_store(data, element_index, value);\n"
+            code += f"{body_pad}return result;\n"
+            code += f"{pad}}}\n\n"
+        return code
+
     def generate_wide_vector_support_code(self, indent=0):
         if not self.wide_vector_types:
             return ""
@@ -8096,7 +8841,10 @@ class MetalToCrossGLConverter:
         )
 
     def wide_vector_expression_info(self, expression):
-        expression_type = self.expression_metal_type(expression)
+        try:
+            expression_type = self.expression_metal_type(expression)
+        except MetalIndexedComponentTypeResolutionError:
+            return None
         if self.metal_pointer_pointee_type_once(expression_type) is not None:
             return None
         return self.wide_vector_type_info(
@@ -8358,6 +9106,14 @@ class MetalToCrossGLConverter:
             )
         if self.inferable_metal_auto_value_type(inferred_type):
             return inferred_type
+        if self.metal_matrix_type_parts(inferred_type) is not None:
+            return inferred_type
+        if self.metal_array_type_parts(inferred_type) is not None:
+            return inferred_type
+        if self.split_outer_metal_declarator_array_type(inferred_type) is not None:
+            return inferred_type
+        if self.normalized_metal_type(inferred_type) in self.struct_member_types:
+            return inferred_type
         return declared_type
 
     def metal_type_contains_wide_vector(self, metal_type, seen_structs=None):
@@ -8438,6 +9194,8 @@ class MetalToCrossGLConverter:
             "double": "dvec",
             "int": "ivec",
             "uint": "uvec",
+            "int64": "i64vec",
+            "uint64": "u64vec",
             "int16": "i16vec",
             "uint16": "u16vec",
             "int8": "i8vec",
@@ -8600,27 +9358,208 @@ class MetalToCrossGLConverter:
             return self.expression_base_name(expr.object)
         return None
 
-    def metal_small_vector_type_parts(self, metal_type):
+    def metal_vector_component_parts(self, metal_type):
         candidate = self.metal_source_overload_value_type(metal_type)
         if candidate is None or candidate.endswith("*"):
             return None
+        candidate = self.substitute_template_value_text(candidate)
+
         generic_parts = self.metal_vector_type_parts(candidate)
         if generic_parts is not None:
             element_type, size = generic_parts
-            width = self.concrete_generic_vector_width(size)
-            if width is not None and 1 < width <= 4:
-                return self.resolve_type_alias(element_type), width
-            return None
+            return (
+                self.resolve_type_alias(element_type),
+                self.concrete_generic_vector_width(size),
+                str(size).strip(),
+            )
 
         match = re.fullmatch(
-            r"(bool|char|uchar|short|ushort|int|uint|long|ulong|half|float)([234])",
+            r"(?:(?:packed|simd|vector)_)?"
+            r"(bool|bfloat|xhalf|half|float|double|char|uchar|short|ushort|"
+            r"int|uint|long|ulong)([234])",
             self.normalized_metal_type(candidate),
         )
         if match is None:
             return None
-        return match.group(1), int(match.group(2))
+        return match.group(1), int(match.group(2)), match.group(2)
+
+    def metal_small_vector_type_parts(self, metal_type):
+        parts = self.metal_vector_component_parts(metal_type)
+        if parts is None:
+            return None
+        element_type, width, _width_text = parts
+        if width is None or not 1 < width <= 4:
+            return None
+        return element_type, width
+
+    def metal_matrix_type_parts(self, metal_type):
+        candidate = self.metal_source_overload_value_type(metal_type)
+        if candidate is None or candidate.endswith("*"):
+            return None
+        candidate = self.substitute_template_value_text(candidate)
+        base_name, generic_args = self.generic_type_parts(candidate)
+        if base_name and base_name.rsplit("::", 1)[-1] == "matrix":
+            if len(generic_args) != 3:
+                return None
+            element_type, columns, rows = generic_args
+            return (
+                self.resolve_type_alias(element_type),
+                self.concrete_generic_vector_width(columns),
+                self.concrete_generic_vector_width(rows),
+                str(columns).strip(),
+                str(rows).strip(),
+            )
+
+        match = re.fullmatch(
+            r"(?:(?:simd|matrix)_)?(bfloat|xhalf|half|float|double)" r"([234])x([234])",
+            self.normalized_metal_type(candidate),
+        )
+        if match is None:
+            return None
+        return (
+            match.group(1),
+            int(match.group(2)),
+            int(match.group(3)),
+            match.group(2),
+            match.group(3),
+        )
+
+    def metal_index_expression_text(self, expression):
+        if isinstance(expression, (str, int, float, bool)):
+            return str(expression)
+        name = getattr(expression, "name", None)
+        if name:
+            return str(name)
+        value = getattr(expression, "value", None)
+        if value is not None:
+            return str(value)
+        return None
+
+    def metal_indexed_type_selection(self, expr):
+        base_type = self.expression_metal_type(expr.array)
+        source_location = getattr(expr, "source_location", None)
+        index_expression = self.metal_index_expression_text(expr.index)
+        if base_type is None:
+            raise MetalIndexedComponentTypeResolutionError(
+                None,
+                "subscript",
+                "the indexed base expression type could not be inferred",
+                source_location,
+                index_expression,
+            )
+
+        resolved_type = self.metal_source_overload_value_type(base_type)
+        if resolved_type is None:
+            raise MetalIndexedComponentTypeResolutionError(
+                base_type,
+                "subscript",
+                "the indexed base does not have a concrete value type",
+                source_location,
+                index_expression,
+            )
+
+        declarator_element_type = self.split_outer_metal_declarator_array_type(
+            resolved_type
+        )
+        if declarator_element_type is not None:
+            return {
+                "kind": "array",
+                "base_type": resolved_type,
+                "selected_type": declarator_element_type,
+            }
+
+        pointer_element_type = self.metal_pointer_pointee_type_once(resolved_type)
+        if pointer_element_type is not None:
+            return {
+                "kind": "pointer",
+                "base_type": resolved_type,
+                "selected_type": pointer_element_type,
+            }
+
+        array_parts = self.metal_array_type_parts(resolved_type)
+        if array_parts is not None:
+            return {
+                "kind": "array",
+                "base_type": resolved_type,
+                "selected_type": array_parts[0],
+            }
+
+        vector_parts = self.metal_vector_component_parts(resolved_type)
+        if vector_parts is not None:
+            element_type, width, width_text = vector_parts
+            if not element_type:
+                raise MetalIndexedComponentTypeResolutionError(
+                    resolved_type,
+                    "vector-subscript",
+                    "the vector element type is empty",
+                    source_location,
+                    index_expression,
+                )
+            return {
+                "kind": "vector",
+                "base_type": resolved_type,
+                "selected_type": element_type,
+                "element_type": element_type,
+                "width": width,
+                "width_text": width_text,
+            }
+
+        matrix_parts = self.metal_matrix_type_parts(resolved_type)
+        if matrix_parts is not None:
+            element_type, columns, rows, columns_text, rows_text = matrix_parts
+            if rows is None:
+                raise MetalIndexedComponentTypeResolutionError(
+                    resolved_type,
+                    "matrix-subscript",
+                    f"the matrix row count '{rows_text}' is not concrete",
+                    source_location,
+                    index_expression,
+                )
+            return {
+                "kind": "matrix",
+                "base_type": resolved_type,
+                "selected_type": self.metal_vector_type_from_element(
+                    element_type, rows
+                ),
+                "element_type": element_type,
+                "columns": columns,
+                "columns_text": columns_text,
+                "rows": rows,
+                "rows_text": rows_text,
+            }
+
+        base_name, generic_args = self.generic_type_parts(resolved_type)
+        generic_name = base_name.rsplit("::", 1)[-1] if base_name else None
+        if generic_name in {"vec", "vector", "matrix"}:
+            raise MetalIndexedComponentTypeResolutionError(
+                resolved_type,
+                f"{generic_name}-subscript",
+                "the aggregate template arguments do not prove a component type",
+                source_location,
+                index_expression,
+            )
+
+        if self.metal_scalar_arithmetic_type_info(resolved_type) is not None:
+            raise MetalIndexedComponentTypeResolutionError(
+                resolved_type,
+                "subscript",
+                "a scalar value has no indexed component",
+                source_location,
+                index_expression,
+            )
+
+        # Resource tables and user aggregates can define their own subscript
+        # contract. Preserve those expressions unless a known aggregate layer is
+        # available to consume here.
+        return {
+            "kind": "aggregate",
+            "base_type": resolved_type,
+            "selected_type": None,
+        }
 
     def metal_vector_type_from_element(self, element_type, width):
+        if self.map_type(self.resolve_type_alias(element_type)) == "bfloat16":
+            return f"bfloat{width}"
         info = self.metal_scalar_arithmetic_type_info(element_type)
         if info is None:
             return f"vec<{element_type}, {width}>"
@@ -8635,7 +9574,19 @@ class MetalToCrossGLConverter:
             base = {8: "uchar", 16: "ushort", 32: "uint", 64: "ulong"}.get(bits)
         return f"{base}{width}" if base is not None else f"vec<{element_type}, {width}>"
 
-    def metal_small_vector_member_type(self, vector_type, member):
+    def metal_small_vector_member_type(self, vector_type, member, source_location=None):
+        component_parts = self.metal_vector_component_parts(vector_type)
+        if component_parts is None:
+            return None
+        element_type, width, width_text = component_parts
+        if width is None:
+            raise MetalIndexedComponentTypeResolutionError(
+                vector_type,
+                "swizzle",
+                f"the vector width '{width_text}' is not concrete",
+                source_location,
+                str(member),
+            )
         vector_parts = self.metal_small_vector_type_parts(vector_type)
         if vector_parts is None:
             return None
@@ -8651,18 +9602,37 @@ class MetalToCrossGLConverter:
             "w": 3,
             "a": 3,
         }
-        if not selector or any(
-            component_indices.get(component, width) >= width for component in selector
-        ):
-            return None
-        if len(selector) == 1:
+        if re.fullmatch(r"s[0-9a-fA-F]+", selector):
+            indices = [int(component, 16) for component in selector[1:]]
+        else:
+            indices = [
+                component_indices.get(component, width) for component in selector
+            ]
+        if not indices or any(index >= width for index in indices):
+            raise MetalIndexedComponentTypeResolutionError(
+                vector_type,
+                "swizzle",
+                f"selector '{selector}' is outside the {width}-component vector",
+                source_location,
+                selector,
+            )
+        if len(indices) == 1:
             return element_type
-        if len(selector) <= 4:
-            return self.metal_vector_type_from_element(element_type, len(selector))
-        return None
+        if len(indices) <= 4:
+            return self.metal_vector_type_from_element(element_type, len(indices))
+        raise MetalIndexedComponentTypeResolutionError(
+            vector_type,
+            "swizzle",
+            f"selector '{selector}' has more than four components",
+            source_location,
+            selector,
+        )
 
     def metal_scalar_arithmetic_type_info(self, metal_type):
         type_name = self.normalized_metal_type(self.resolve_type_alias(metal_type))
+        enum_type = self.metal_enum_arithmetic_types.get(type_name)
+        if enum_type is not None:
+            return self.metal_scalar_arithmetic_type_info(enum_type)
         return self.metal_scalar_arithmetic_types.get(type_name)
 
     def metal_literal_string_type(self, value):
@@ -8841,7 +9811,10 @@ class MetalToCrossGLConverter:
             if literal_type is not None:
                 return literal_type
             return self.current_variable_types.get(
-                expr, self.global_variable_types.get(expr)
+                expr,
+                self.global_variable_types.get(
+                    expr, self.metal_enum_member_types.get(expr)
+                ),
             )
         if isinstance(expr, VariableNode):
             name = getattr(expr, "name", None)
@@ -8856,27 +9829,23 @@ class MetalToCrossGLConverter:
                         return inferred_type
                 return self.metal_declaration_expression_type(expr)
             return self.current_variable_types.get(
-                name, self.global_variable_types.get(name)
+                name,
+                self.global_variable_types.get(
+                    name, self.metal_enum_member_types.get(name)
+                ),
             )
         if isinstance(expr, ArrayAccessNode):
-            array_type = self.expression_metal_type(expr.array)
-            declarator_element_type = self.split_outer_metal_declarator_array_type(
-                array_type
-            )
-            if declarator_element_type is not None:
-                return declarator_element_type
-            pointer_element_type = self.metal_pointer_pointee_type_once(array_type)
-            if pointer_element_type is not None:
-                return pointer_element_type
-            array_parts = self.metal_array_type_parts(array_type)
-            if array_parts:
-                return array_parts[0]
-            wide_vector = self.wide_vector_type_info(
-                array_type, getattr(expr, "source_location", None)
-            )
-            if wide_vector is not None:
-                return wide_vector["element_type"]
-            return array_type
+            selection = self.metal_indexed_type_selection(expr)
+            if selection["kind"] == "aggregate":
+                raise MetalIndexedComponentTypeResolutionError(
+                    selection["base_type"],
+                    "aggregate-subscript",
+                    "the user-defined aggregate subscript result type cannot be "
+                    "inferred",
+                    getattr(expr, "source_location", None),
+                    self.metal_index_expression_text(expr.index),
+                )
+            return selection["selected_type"]
         if isinstance(expr, MemberAccessNode):
             object_type = self.expression_metal_type(expr.object)
             if object_type is None:
@@ -8890,17 +9859,41 @@ class MetalToCrossGLConverter:
                 )
                 return wide_vector["element_type"] if lane is not None else None
             vector_member_type = self.metal_small_vector_member_type(
-                object_type, expr.member
+                object_type,
+                expr.member,
+                getattr(expr, "source_location", None),
             )
             if vector_member_type is not None:
                 return vector_member_type
-            object_type = self.normalized_metal_type(object_type)
+            object_type = self.normalized_metal_type(
+                self.resolve_type_alias(object_type)
+            )
             member_types = self.struct_member_types.get(object_type)
             if not member_types:
                 return None
             return member_types.get(str(expr.member))
+        if isinstance(expr, AssignmentNode):
+            return self.expression_metal_type(expr.left)
         if isinstance(expr, BinaryOpNode):
             return self.metal_binary_expression_type(expr)
+        if isinstance(expr, TernaryOpNode):
+            true_type = self.expression_metal_type(expr.true_expr)
+            false_type = self.expression_metal_type(expr.false_expr)
+            if true_type is None:
+                return false_type
+            if false_type is None:
+                return true_type
+            true_descriptor = self.metal_source_overload_type_descriptor(true_type)
+            false_descriptor = self.metal_source_overload_type_descriptor(false_type)
+            if true_descriptor == false_descriptor:
+                return true_type
+            return None
+        if isinstance(expr, PostfixOpNode):
+            return self.expression_metal_type(expr.operand)
+        if isinstance(expr, UnaryOpNode):
+            if expr.op == "!":
+                return "bool"
+            return self.expression_metal_type(expr.operand)
         if isinstance(expr, CastNode):
             return self.resolve_type_alias(expr.target_type)
         if isinstance(expr, VectorConstructorNode):
@@ -8919,6 +9912,15 @@ class MetalToCrossGLConverter:
             selected_callable = self.selected_metal_callable(expr)
             if selected_callable is not None:
                 return self.selected_metal_callable_return_type(selected_callable)
+            arity_candidates = [
+                candidate
+                for candidate in self.user_function_overloads_by_name.get(
+                    str(expr.name), []
+                )
+                if len(getattr(candidate, "params", []) or []) == len(expr.args)
+            ]
+            if len(arity_candidates) == 1:
+                return getattr(arity_candidates[0], "return_type", None)
             unscoped_name = str(expr.name).rsplit("::", 1)[-1]
             if (
                 unscoped_name in self.metal_wave_intrinsics
@@ -9122,9 +10124,20 @@ class MetalToCrossGLConverter:
         )
 
     def is_structured_buffer_element_access(self, expr):
-        return isinstance(
-            expr, ArrayAccessNode
-        ) and self.is_structured_buffer_expression(expr.array)
+        return self.is_direct_structured_buffer_element_access(expr)
+
+    def is_direct_structured_buffer_element_access(self, expr):
+        if not isinstance(expr, ArrayAccessNode):
+            return False
+        if not isinstance(expr.array, VariableNode):
+            return False
+        if not self.is_structured_buffer_expression(expr.array):
+            return False
+        base_type = self.expression_metal_type(expr.array)
+        return bool(
+            self.metal_pointer_pointee_type_once(base_type) is not None
+            or self.split_outer_metal_declarator_array_type(base_type) is not None
+        )
 
     def generate_without_structured_buffer_index_lowering(self, expr, is_main=False):
         previous = self.suppress_structured_buffer_index_lowering

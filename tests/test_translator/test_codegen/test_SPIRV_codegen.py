@@ -28809,13 +28809,31 @@ class TestVulkanSPIRVCodeGen:
             spv_code,
         )
         assert u64_vector is not None
-        function_u64_ptr = spirv_pointer_type(spv_code, u64_type.group(1), "Function")
-        out_var = spirv_named_variable(spv_code, "out_", storage_class="Function")
-        assert re.search(
-            rf"%\d+ = OpAccessChain {re.escape(function_u64_ptr)} "
-            rf"{re.escape(out_var)} %\d+",
+        component_helper_type = re.search(
+            rf"(%\d+) = OpTypeFunction {re.escape(u64_type.group(1))} "
+            rf"{re.escape(u64_vector.group(1))} %\d+\b",
             spv_code,
         )
+        assert component_helper_type is not None
+        component_helper = re.search(
+            rf"(%\d+) = OpFunction {re.escape(u64_type.group(1))} None "
+            rf"{re.escape(component_helper_type.group(1))}\b",
+            spv_code,
+        )
+        assert component_helper is not None
+        out_var = spirv_named_variable(spv_code, "out_", storage_class="Function")
+        out_values = re.findall(
+            rf"(%\d+) = OpLoad {re.escape(u64_vector.group(1))} "
+            rf"{re.escape(out_var)}\b",
+            spv_code,
+        )
+        component_calls = re.findall(
+            rf"%\d+ = OpFunctionCall {re.escape(u64_type.group(1))} "
+            rf"{re.escape(component_helper.group(1))} (%\d+) %\d+\b",
+            spv_code,
+        )
+        assert component_calls == out_values
+        assert len(component_calls) == 2
         assert "Unknown type u64vec2" not in spv_code
         assert "WARNING" not in spv_code
         assert_spirv_stores_use_matching_value_types(spv_code)

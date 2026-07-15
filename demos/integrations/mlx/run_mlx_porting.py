@@ -1510,8 +1510,21 @@ def _reference_accessor_nested_const_alias_evidence(
         r"\[[^\]\n;]+\]\s*\[\s*k\s*\])\s*;",
         store_body,
     )
+    lane = r"(?:uint\s*\(\s*k\s*\)|k)"
+    helper_read = None
+    if direct_read is None:
+        helper_read = re.search(
+            r"\bCrossGLMetalVectorIndex_[A-Za-z0-9_]+_set\s*\(\s*stored\s*,\s*"
+            rf"{lane}\s*,\s*"
+            r"\bCrossGLMetalVectorIndex_[A-Za-z0-9_]+_get\s*\(\s*"
+            r"(?P<storage>self\s*\.\s*nestedTile\s*\.\s*val_frags\s*"
+            r"\[[^\]\n;]+\])\s*,\s*"
+            rf"{lane}\s*\)\s*\)",
+            store_body,
+        )
+    storage_read = direct_read or helper_read
     _require(
-        direct_read is not None,
+        storage_read is not None,
         f"{target_name} nested const reference alias was not eliminated to "
         "self.nestedTile.val_frags storage indexed by k",
     )
@@ -1525,11 +1538,18 @@ def _reference_accessor_nested_const_alias_evidence(
         "nested const store path",
     )
 
+    storage_lvalue = storage_read.group("storage")
+    component_read_lowering = "direct-index"
+    if helper_read is not None:
+        storage_lvalue = f"{storage_lvalue}[k]"
+        component_read_lowering = "lane-helper"
+
     return {
         "status": "verified-original-nested-storage-const-alias-read",
         "storageMember": "val_frags",
         "storagePath": "self.nestedTile.val_frags",
-        "storageLvalue": re.sub(r"\s+", "", direct_read.group("storage")),
+        "storageLvalue": re.sub(r"\s+", "", storage_lvalue),
+        "componentReadLowering": component_read_lowering,
         "outerReceiver": "self",
         "tileMember": "nestedTile",
         "fragmentType": "float2",
