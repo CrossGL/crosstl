@@ -279,6 +279,58 @@ def test_runtime_variant_registry_is_deterministic_and_exact(tmp_path):
     )
 
 
+@pytest.mark.parametrize(
+    ("mutation", "expected_reason"),
+    [
+        ("payload", "registryHash does not match its variants"),
+        ("identity", "identity does not match its canonical key"),
+        ("nested-schema", "cannot reconstruct its canonical identity"),
+    ],
+)
+def test_runtime_variant_lookup_rejects_modified_registries(
+    tmp_path, mutation, expected_reason
+):
+    registry = build_runtime_variant_registry(
+        _write_runtime_package(tmp_path / "package")
+    )
+    record = _registry_record(registry, target="directx", variant="f32-n4")
+    key = record["key"]
+    modified = copy.deepcopy(registry)
+
+    if mutation == "payload":
+        modified["variants"][key]["artifact"]["path"] = "artifacts/other.hlsl"
+    elif mutation == "identity":
+        modified["variants"][key]["arguments"]["values"]["N"] = 64
+        modified["registryHash"] = project_pipeline._runtime_variant_payload_hash(
+            {
+                "schemaVersion": modified["schemaVersion"],
+                "keySchema": modified["keySchema"],
+                "variants": modified["variants"],
+            }
+        )
+    else:
+        modified["variants"][key]["arguments"]["types"] = []
+        modified["registryHash"] = project_pipeline._runtime_variant_payload_hash(
+            {
+                "schemaVersion": modified["schemaVersion"],
+                "keySchema": modified["keySchema"],
+                "variants": modified["variants"],
+            }
+        )
+
+    lookup = lookup_runtime_variant(modified, key)
+
+    assert lookup["success"] is False
+    assert lookup["status"] == "invalid"
+    assert lookup["record"] is None
+    assert lookup["availableKeys"] == []
+    assert lookup["diagnostics"][0]["code"] == (
+        "project.runtime-variant-registry.lookup-registry-invalid"
+    )
+    reasons = lookup["diagnostics"][0]["details"]["reasons"]
+    assert any(expected_reason in reason for reason in reasons)
+
+
 def test_runtime_variant_registry_accepts_loader_manifest(tmp_path):
     package_path = _write_runtime_package(tmp_path / "package")
     package = json.loads(package_path.read_text(encoding="utf-8"))

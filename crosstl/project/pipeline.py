@@ -29094,6 +29094,116 @@ def _runtime_variant_registry_target(
     }
 
 
+def _runtime_variant_lookup_registry_contract_reasons(
+    registry: Mapping[str, Any],
+) -> list[str]:
+    reasons = _unsupported_mapping_field_reasons(
+        "runtime variant registry",
+        registry,
+        RUNTIME_VARIANT_REGISTRY_FIELDS,
+    )
+    missing = sorted(RUNTIME_VARIANT_REGISTRY_FIELDS - set(registry))
+    if missing:
+        reasons.append(
+            "runtime variant registry is missing fields: " + ", ".join(missing)
+        )
+
+    key_schema = registry.get("keySchema")
+    expected_key_schema = _runtime_variant_key_schema()
+    if key_schema != expected_key_schema:
+        reasons.append("runtime variant registry.keySchema is not canonical")
+
+    variants = registry.get("variants")
+    if not isinstance(variants, Mapping):
+        reasons.append("runtime variant registry.variants must be an object")
+        return sorted(set(reasons))
+
+    expected_hash = _runtime_variant_payload_hash(
+        {
+            "schemaVersion": REPORT_SCHEMA_VERSION,
+            "keySchema": expected_key_schema,
+            "variants": variants,
+        }
+    )
+    if registry.get("registryHash") != expected_hash:
+        reasons.append(
+            "runtime variant registry.registryHash does not match its variants"
+        )
+
+    for key, record in variants.items():
+        prefix = f"runtime variant registry.variants[{key!r}]"
+        try:
+            decode_runtime_variant_key(key)
+        except ValueError as exc:
+            reasons.append(f"{prefix} uses an invalid canonical key: {exc}")
+            continue
+        if not isinstance(record, Mapping):
+            reasons.append(f"{prefix} must be an object")
+            continue
+        reasons.extend(
+            _unsupported_mapping_field_reasons(
+                prefix,
+                record,
+                RUNTIME_VARIANT_REGISTRY_RECORD_FIELDS,
+            )
+        )
+        missing_record_fields = sorted(
+            RUNTIME_VARIANT_REGISTRY_RECORD_FIELDS - set(record)
+        )
+        if missing_record_fields:
+            reasons.append(
+                f"{prefix} is missing fields: " + ", ".join(missing_record_fields)
+            )
+        if record.get("key") != key:
+            reasons.append(f"{prefix}.key must match its registry key")
+
+        status = record.get("status")
+        if status not in {"ready", "blocked", "stale"}:
+            reasons.append(f"{prefix}.status must be ready, blocked, or stale")
+        lookup = record.get("lookup")
+        if not isinstance(lookup, Mapping):
+            reasons.append(f"{prefix}.lookup must be an object")
+        elif lookup.get("eligible") is not (status == "ready"):
+            reasons.append(f"{prefix}.lookup.eligible must match record readiness")
+
+        source = record.get("source")
+        target = record.get("target")
+        arguments = record.get("arguments")
+        defines = record.get("defines")
+        constants = record.get("specializationConstants")
+        if not all(
+            isinstance(value, Mapping) for value in (source, target, arguments, defines)
+        ) or not isinstance(constants, list):
+            reasons.append(f"{prefix} cannot reconstruct its canonical identity")
+            continue
+        type_arguments = arguments.get("types")
+        value_arguments = arguments.get("values")
+        if (
+            not isinstance(type_arguments, Mapping)
+            or not isinstance(value_arguments, Mapping)
+            or not all(isinstance(constant, Mapping) for constant in constants)
+        ):
+            reasons.append(f"{prefix} cannot reconstruct its canonical identity")
+            continue
+        try:
+            expected_key = encode_runtime_variant_key(
+                source.get("unit"),
+                source.get("entry"),
+                target.get("backend"),
+                target_profile=target.get("profile"),
+                type_arguments=type_arguments,
+                value_arguments=value_arguments,
+                specialization_constants=constants,
+                defines=defines,
+            )
+        except (TypeError, ValueError) as exc:
+            reasons.append(f"{prefix} has an invalid canonical identity: {exc}")
+            continue
+        if expected_key != key:
+            reasons.append(f"{prefix} identity does not match its canonical key")
+    return sorted(set(reasons))
+
+
 def build_runtime_variant_registry(
     manifest_path: str | os.PathLike[str],
 ) -> dict[str, Any]:
@@ -29323,19 +29433,29 @@ def lookup_runtime_variant(
         variants = {}
         requested_key = key if isinstance(key, str) else ""
     else:
-        registry_variants = registry.get("variants")
-        variants = registry_variants if isinstance(registry_variants, Mapping) else {}
         requested_key = key if isinstance(key, str) else ""
-        try:
-            decode_runtime_variant_key(requested_key)
-        except ValueError as exc:
+        registry_reasons = _runtime_variant_lookup_registry_contract_reasons(registry)
+        if registry_reasons:
             diagnostics.append(
                 _runtime_variant_diagnostic(
-                    "project.runtime-variant-registry.lookup-key-invalid",
-                    str(exc),
-                    details={"requestedKey": requested_key},
+                    "project.runtime-variant-registry.lookup-registry-invalid",
+                    "Runtime variant lookup rejected an invalid or modified registry.",
+                    details={"reasons": registry_reasons},
                 )
             )
+            variants = {}
+        else:
+            variants = registry["variants"]
+            try:
+                decode_runtime_variant_key(requested_key)
+            except ValueError as exc:
+                diagnostics.append(
+                    _runtime_variant_diagnostic(
+                        "project.runtime-variant-registry.lookup-key-invalid",
+                        str(exc),
+                        details={"requestedKey": requested_key},
+                    )
+                )
     record = variants.get(requested_key) if not diagnostics else None
     available_keys = sorted(str(candidate) for candidate in variants)
     if record is None and not diagnostics:
