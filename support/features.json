@@ -10624,6 +10624,157 @@
       }
     },
     {
+      "id": "project.runtime_variant_registry",
+      "category": "project",
+      "name": "Runtime variant registry",
+      "description": "Emit deterministic exact-lookup runtime variant registries from ready runtime packages or loader manifests.",
+      "support": {
+        "directx": {
+          "status": "supported",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "evidence": [
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_loader_blockers",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_malformed_inputs_and_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_cli_json_and_text"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "evidence": [
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_loader_blockers",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_malformed_inputs_and_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_cli_json_and_text"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "evidence": [
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_loader_blockers",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_malformed_inputs_and_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_cli_json_and_text"
+          ]
+        },
+        "vulkan": {
+          "status": "supported",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "evidence": [
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_loader_blockers",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_malformed_inputs_and_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_cli_json_and_text"
+          ]
+        },
+        "cuda": {
+          "status": "supported",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "evidence": [
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_loader_blockers",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_malformed_inputs_and_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_cli_json_and_text"
+          ]
+        },
+        "hip": {
+          "status": "supported",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "evidence": [
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_loader_blockers",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_malformed_inputs_and_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_cli_json_and_text"
+          ]
+        },
+        "mojo": {
+          "status": "supported",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "evidence": [
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_loader_blockers",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_malformed_inputs_and_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_cli_json_and_text"
+          ]
+        },
+        "rust": {
+          "status": "supported",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "evidence": [
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_loader_blockers",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_malformed_inputs_and_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_cli_json_and_text"
+          ]
+        },
+        "slang": {
+          "status": "supported",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "evidence": [
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_loader_blockers",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_malformed_inputs_and_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_cli_json_and_text"
+          ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "evidence": [
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_loader_blockers",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_malformed_inputs_and_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_cli_json_and_text"
+          ]
+        },
+        "wgsl": {
+          "status": "supported",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "evidence": [
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_loader_blockers",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_malformed_inputs_and_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_cli_json_and_text"
+          ]
+        }
+      }
+    },
+    {
       "id": "project.runtime_host_loader_scaffolds",
       "category": "project",
       "name": "Runtime host loader scaffolds",
