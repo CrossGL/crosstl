@@ -408,6 +408,9 @@ class MetalParser:
         self.known_value_template_parameters = set()
         self.declaration_context_stack = []
         self.namespace_aliases = {}
+        self.namespace_scope_stack = []
+        self.using_namespace_directives = []
+        self.last_struct_type_aliases = []
 
     def skip_comments(self):
         while self.pos < len(self.tokens) and self.current_token[0] in [
@@ -507,6 +510,29 @@ class MetalParser:
         if self.declaration_context_stack:
             self.declaration_context_stack.pop()
 
+    def current_namespace(self):
+        return "::".join(
+            component
+            for scope in self.namespace_scope_stack
+            for component in scope
+            if component
+        )
+
+    def annotate_declaration_scope(self, node):
+        if node is None:
+            return node
+        namespace = self.current_namespace()
+        node.namespace = namespace
+        name = getattr(node, "name", None)
+        if name:
+            node.qualified_name = f"{namespace}::{name}" if namespace else name
+        return node
+
+    def close_namespace_scope(self):
+        self.eat("RBRACE")
+        if self.namespace_scope_stack:
+            self.namespace_scope_stack.pop()
+
     def peek(self, offset=1):
         idx = self.pos + offset
         if idx < len(self.tokens):
@@ -561,6 +587,8 @@ class MetalParser:
                     functions.append(declaration)
                 elif isinstance(declaration, StructNode):
                     structs.append(declaration)
+                elif isinstance(declaration, TypeAliasNode):
+                    typedefs.append(declaration)
             elif self.current_token[0] == "STRUCT":
                 if self.is_function_definition():
                     function = self.parse_function()
@@ -612,6 +640,7 @@ class MetalParser:
                 elif isinstance(typedef, EnumNode):
                     enums.append(typedef)
                 elif typedef is not None:
+                    self.annotate_declaration_scope(typedef)
                     typedefs.append(typedef)
             elif self.current_token[0] == "STATIC_ASSERT":
                 global_variables.append(self.parse_static_assert())
@@ -658,6 +687,8 @@ class MetalParser:
                     self.add_global_declaration(
                         global_variables, self.parse_global_variable()
                     )
+            elif self.current_token[0] == "RBRACE" and self.namespace_scope_stack:
+                self.close_namespace_scope()
             else:
                 self.eat(self.current_token[0])
 
@@ -674,9 +705,20 @@ class MetalParser:
         shader.template_specialization_limit_source = (
             self.template_specialization_limit_source
         )
+        shader.using_namespace_directives = list(self.using_namespace_directives)
+        shader.namespace_aliases = dict(self.namespace_aliases)
         return shader
 
     def add_global_declaration(self, global_variables, declaration):
+        declarations = declaration if isinstance(declaration, list) else [declaration]
+        for item in declarations:
+            scoped_item = (
+                item.left
+                if isinstance(item, AssignmentNode)
+                and isinstance(item.left, VariableNode)
+                else item
+            )
+            self.annotate_declaration_scope(scoped_item)
         if isinstance(declaration, list):
             global_variables.extend(declaration)
         else:
@@ -773,6 +815,12 @@ class MetalParser:
             return
         if self.current_token[0] == "LBRACE":
             self.eat("LBRACE")
+            components = tuple(
+                component
+                for component in str(namespace_name or "").split("::")
+                if component
+            )
+            self.namespace_scope_stack.append(components)
         elif self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
 
@@ -787,6 +835,21 @@ class MetalParser:
         return (
             self.current_token[0] == "IDENTIFIER"
             and self.current_token[1] == "template"
+        )
+
+    def is_template_alias_declaration_start(self):
+        if not self.is_template_declaration_start():
+            return False
+        angle_start = self.pos + 1
+        if (
+            angle_start >= len(self.tokens)
+            or self.tokens[angle_start][0] != "LESS_THAN"
+        ):
+            return False
+        declaration_start = self.skip_template_argument_list_at(angle_start)
+        return (
+            declaration_start < len(self.tokens)
+            and self.tokens[declaration_start][0] == "USING"
         )
 
     def is_union_declaration_start(self):
@@ -864,7 +927,7 @@ class MetalParser:
         template_type_names = {
             name
             for kind, name in template_parameters
-            if kind in {"typename", "class"} and name
+            if kind in {"typename", "class", "typename...", "class..."} and name
         }
         template_value_names = {
             name for kind, name in template_parameters if kind == "value" and name
@@ -895,6 +958,22 @@ class MetalParser:
                     if not getattr(struct, "source_location", None):
                         struct.source_location = template_location
                 return struct
+
+            if self.current_token[0] == "USING":
+                alias = self.parse_using_statement()
+                if isinstance(alias, TypeAliasNode):
+                    alias.generics = [
+                        name for _kind, name in template_parameters if name
+                    ]
+                    alias.template_parameters = template_parameters
+                    alias.template_parameter_defaults = template_parameter_defaults
+                    alias.is_template_alias = True
+                    template_location = self.source_span_from_tokens(
+                        start_token, self.tokens[self.pos - 1]
+                    )
+                    alias.template_source_location = template_location
+                    alias.source_location = template_location
+                return alias
 
             if not self.is_function_definition():
                 function_template_name = self.template_function_declaration_name_at(
@@ -1543,9 +1622,21 @@ class MetalParser:
         self.eat("USING")
         if self.current_token[0] == "NAMESPACE":
             self.eat("NAMESPACE")
+            target_name = None
             if self.current_token[0] in {"IDENTIFIER", "METAL"}:
-                self.parse_scoped_identifier()
+                target_name = self.parse_scoped_identifier()
             self.eat("SEMICOLON")
+            if target_name:
+                self.using_namespace_directives.append(
+                    {
+                        "namespace": self.current_namespace(),
+                        "target": target_name,
+                        "source_location": self.source_span_from_tokens(
+                            start_token, self.tokens[self.pos - 1]
+                        ),
+                        "declaration_context": self.current_declaration_context(),
+                    }
+                )
             return None
         if self.is_using_declaration_start():
             self.parse_using_declaration()
@@ -1561,25 +1652,29 @@ class MetalParser:
             parameters = self.parse_callable_alias_parameters()
             self.eat("SEMICOLON")
             self.register_known_type(alias_name)
-            return CallableTypeAliasNode(
+            return self.annotate_declaration_scope(
+                CallableTypeAliasNode(
+                    alias_type,
+                    alias_name,
+                    parameters,
+                    indirection=indirection,
+                    qualifiers=qualifiers,
+                    source_location=self.source_span_from_tokens(
+                        start_token, self.tokens[self.pos - 1]
+                    ),
+                )
+            )
+        self.eat("SEMICOLON")
+        self.register_known_type(alias_name)
+        return self.annotate_declaration_scope(
+            TypeAliasNode(
                 alias_type,
                 alias_name,
-                parameters,
-                indirection=indirection,
                 qualifiers=qualifiers,
                 source_location=self.source_span_from_tokens(
                     start_token, self.tokens[self.pos - 1]
                 ),
             )
-        self.eat("SEMICOLON")
-        self.register_known_type(alias_name)
-        return TypeAliasNode(
-            alias_type,
-            alias_name,
-            qualifiers=qualifiers,
-            source_location=self.source_span_from_tokens(
-                start_token, self.tokens[self.pos - 1]
-            ),
         )
 
     def is_using_declaration_start(self):
@@ -1604,9 +1699,10 @@ class MetalParser:
         self.eat("SEMICOLON")
 
         self.register_known_type(alias_name)
-        union_node = StructNode(alias_name, members)
+        union_node = self.annotate_declaration_scope(StructNode(alias_name, members))
         union_node.aggregate_kind = "union"
         union_node.using_alias = True
+        union_node.type_aliases = list(self.last_struct_type_aliases)
         return union_node
 
     def parse_enum(self):
@@ -2496,6 +2592,7 @@ class MetalParser:
         return array_sizes
 
     def parse_struct(self, pre_alignas=None):
+        start_token = self.current_token
         alignas_specs = (
             list(pre_alignas)
             if pre_alignas is not None
@@ -2525,18 +2622,26 @@ class MetalParser:
 
         members = self.parse_struct_members()
 
-        struct_node = StructNode(name, members)
+        struct_node = self.annotate_declaration_scope(StructNode(name, members))
         struct_node.attributes = struct_attributes
         struct_node.alignas = alignas_specs
         struct_node.base_types = base_types
+        struct_node.type_aliases = list(self.last_struct_type_aliases)
+        for alias in struct_node.type_aliases:
+            alias.owner_name = name
+            alias.owner_qualified_name = struct_node.qualified_name
         self.eat("RBRACE")
         struct_node.trailing_declarations = self.parse_trailing_aggregate_declarations(
             name
+        )
+        struct_node.declaration_source_location = self.source_span_from_tokens(
+            start_token, self.tokens[self.pos - 1]
         )
         self.pop_declaration_context()
         return struct_node
 
     def parse_class(self, pre_alignas=None):
+        start_token = self.current_token
         alignas_specs = (
             list(pre_alignas)
             if pre_alignas is not None
@@ -2566,14 +2671,21 @@ class MetalParser:
 
         members = self.parse_struct_members()
 
-        class_node = StructNode(name, members)
+        class_node = self.annotate_declaration_scope(StructNode(name, members))
         class_node.attributes = class_attributes
         class_node.alignas = alignas_specs
         class_node.base_types = base_types
         class_node.aggregate_kind = "class"
+        class_node.type_aliases = list(self.last_struct_type_aliases)
+        for alias in class_node.type_aliases:
+            alias.owner_name = name
+            alias.owner_qualified_name = class_node.qualified_name
         self.eat("RBRACE")
         class_node.trailing_declarations = self.parse_trailing_aggregate_declarations(
             name
+        )
+        class_node.declaration_source_location = self.source_span_from_tokens(
+            start_token, self.tokens[self.pos - 1]
         )
         self.pop_declaration_context()
         return class_node
@@ -2615,6 +2727,7 @@ class MetalParser:
         return bases
 
     def parse_union(self):
+        start_token = self.current_token
         self.skip_gnu_extension_prefix_tokens()
         self.eat("IDENTIFIER")
         name = self.current_token[1] if self.is_current_name_token() else None
@@ -2631,11 +2744,18 @@ class MetalParser:
 
         members = self.parse_struct_members()
 
-        union_node = StructNode(name, members)
+        union_node = self.annotate_declaration_scope(StructNode(name, members))
         union_node.aggregate_kind = "union"
+        union_node.type_aliases = list(self.last_struct_type_aliases)
+        for alias in union_node.type_aliases:
+            alias.owner_name = name
+            alias.owner_qualified_name = union_node.qualified_name
         self.eat("RBRACE")
         union_node.trailing_declarations = self.parse_trailing_aggregate_declarations(
             name
+        )
+        union_node.declaration_source_location = self.source_span_from_tokens(
+            start_token, self.tokens[self.pos - 1]
         )
         self.pop_declaration_context()
         return union_node
@@ -2678,6 +2798,7 @@ class MetalParser:
 
     def parse_struct_members(self):
         members = []
+        type_aliases = []
         while self.current_token[0] != "RBRACE":
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
@@ -2701,12 +2822,22 @@ class MetalParser:
                 members.append(self.parse_static_assert())
                 continue
             if self.current_token[0] == "USING":
-                self.parse_using_statement()
+                alias = self.parse_using_statement()
+                if isinstance(alias, TypeAliasNode):
+                    type_aliases.append(alias)
                 continue
             if self.current_token[0] == "TYPEDEF":
-                self.parse_typedef()
+                alias = self.parse_typedef()
+                if isinstance(alias, TypeAliasNode):
+                    self.annotate_declaration_scope(alias)
+                    type_aliases.append(alias)
                 continue
             if self.is_template_declaration_start():
+                if self.is_template_alias_declaration_start():
+                    alias = self.parse_template_declaration()
+                    if isinstance(alias, TypeAliasNode):
+                        type_aliases.append(alias)
+                    continue
                 self.skip_template_declaration()
                 continue
             member_alignas = self.parse_alignas_specifiers()
@@ -2757,6 +2888,7 @@ class MetalParser:
                 )
                 continue
             self.eat("SEMICOLON")
+        self.last_struct_type_aliases = type_aliases
         return members
 
     def parse_remaining_struct_member_declarations(
@@ -2961,6 +3093,7 @@ class MetalParser:
         return ConstantBufferNode(name, members)
 
     def parse_function(self):
+        start_token = self.current_token
         attributes = self.parse_attributes()
 
         qualifier = None
@@ -3035,7 +3168,11 @@ class MetalParser:
             attributes=attributes,
             qualifier=qualifier,  # Also store as single qualifier for backward compatibility
         )
+        self.annotate_declaration_scope(function)
         function.declaration_qualifiers = list(return_qualifiers)
+        function.declaration_source_location = self.source_span_from_tokens(
+            start_token, self.tokens[self.pos - 1]
+        )
         self.pop_declaration_context()
         return function
 
