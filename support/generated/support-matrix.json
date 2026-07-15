@@ -242,12 +242,13 @@
       "target_profiles": [],
       "tests": {
         "paths": [
+          "tests/test_translator/test_arithmetic_conversions.py",
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_translator/test_codegen/test_GLSL_storage_pointer_codegen.py",
           "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1427
+        "test_count": 1439
       },
       "translator_codegen": {
         "exists": true,
@@ -371,9 +372,10 @@
       "target_profiles": [],
       "tests": {
         "paths": [
+          "tests/test_translator/test_arithmetic_conversions.py",
           "tests/test_translator/test_codegen/test_webgl_codegen.py"
         ],
-        "test_count": 45
+        "test_count": 57
       },
       "translator_codegen": {
         "exists": true,
