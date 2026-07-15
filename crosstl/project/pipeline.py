@@ -17580,6 +17580,39 @@ def _opengl_complex_arithmetic_failure_details(
     return dict(sorted(details.items()))
 
 
+def _compile_time_global_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) not in {
+        "project.translate.directx-compile-time-global-invalid",
+        "project.translate.opengl-compile-time-global-invalid",
+    }:
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    compile_time_global = {}
+    fields = {
+        "variable": getattr(exc, "variable_name", None),
+        "expressionKind": getattr(exc, "expression_kind", None),
+        "reason": getattr(exc, "reason", None),
+        "detail": getattr(exc, "detail", None),
+        "operation": getattr(exc, "operation", None),
+        "operandType": getattr(exc, "operand_type", None),
+        "resultType": getattr(exc, "result_type", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            compile_time_global[name] = value
+    if compile_time_global:
+        details["compileTimeGlobal"] = dict(sorted(compile_time_global.items()))
+    return dict(sorted(details.items()))
+
+
 def _boolean_ordered_intrinsic_failure_details(
     exc: Exception,
     unit: ProjectTranslationUnit,
@@ -18208,6 +18241,7 @@ def _translation_failure_details(
         **_opengl_aggregate_initializer_failure_details(exc, unit, artifact_path),
         **_opengl_scalar_conversion_failure_details(exc, unit, artifact_path),
         **_opengl_complex_arithmetic_failure_details(exc, unit, artifact_path),
+        **_compile_time_global_failure_details(exc, unit, artifact_path),
         **_boolean_ordered_intrinsic_failure_details(exc, unit, artifact_path),
         **_opengl_struct_construction_failure_details(exc, unit, artifact_path),
         **_opengl_fixed_array_resource_failure_details(exc, unit, artifact_path),

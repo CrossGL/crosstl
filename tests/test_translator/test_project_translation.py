@@ -9334,6 +9334,134 @@ def test_translate_project_reports_directx_trailing_zero_builtin_contract(tmp_pa
     assert not (repo / artifact["path"]).exists()
 
 
+@pytest.mark.parametrize(
+    ("target", "diagnostic_code", "missing_capability", "artifact_path"),
+    [
+        (
+            "directx",
+            "project.translate.directx-compile-time-global-invalid",
+            "directx.compile-time-global-initializer",
+            "translated/directx/runtime_bitcast.hlsl",
+        ),
+        (
+            "opengl",
+            "project.translate.opengl-compile-time-global-invalid",
+            "opengl.compile-time-global-lowering",
+            "translated/opengl/runtime_bitcast.glsl",
+        ),
+    ],
+)
+def test_translate_project_reports_compile_time_global_bitcast_contract(
+    tmp_path,
+    target,
+    diagnostic_code,
+    missing_capability,
+    artifact_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "runtime_bitcast.cgl").write_text(
+        textwrap.dedent("""
+            shader RuntimeCompileTimeBitcast {
+                uint runtimeBits;
+                constant float invalidPayload = asfloat(runtimeBits);
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=[target],
+        output_dir="translated",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {diagnostic_code: 1}
+    assert payload["summary"]["missingCapabilityCounts"] == {missing_capability: 1}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == diagnostic_code
+    assert diagnostic["target"] == target
+    assert diagnostic["sourceBackend"] == "cgl"
+    assert diagnostic["location"]["file"] == "runtime_bitcast.cgl"
+    assert diagnostic["missingCapabilities"] == [missing_capability]
+    assert diagnostic["details"] == {
+        "compileTimeGlobal": {
+            "detail": "runtimeBits",
+            "expressionKind": "FunctionCallNode",
+            "operandType": "uint",
+            "operation": "asfloat",
+            "reason": "bitcast-operand-runtime-value",
+            "resultType": "float",
+            "variable": "invalidPayload",
+        },
+        "sourcePath": "runtime_bitcast.cgl",
+        "targetArtifact": artifact_path,
+    }
+    artifact = payload["artifacts"][0]
+    assert artifact["source"] == "runtime_bitcast.cgl"
+    assert artifact["sourceBackend"] == "cgl"
+    assert artifact["target"] == target
+    assert artifact["path"] == artifact_path
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+
+
+@pytest.mark.parametrize(
+    ("target", "diagnostic_code"),
+    [
+        (
+            "directx",
+            "project.translate.directx-compile-time-global-invalid",
+        ),
+        (
+            "opengl",
+            "project.translate.opengl-compile-time-global-invalid",
+        ),
+    ],
+)
+def test_translate_project_reports_non_bitcast_compile_time_global_contract(
+    tmp_path,
+    target,
+    diagnostic_code,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "runtime_call.cgl").write_text(
+        textwrap.dedent("""
+            shader RuntimeCompileTimeCall {
+                float buildValue() {
+                    return 2.0;
+                }
+
+                constant float invalidValue = buildValue();
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=[target],
+        output_dir="translated",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["diagnosticsByCode"] == {diagnostic_code: 1}
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["details"]["compileTimeGlobal"] == {
+        "detail": "buildValue",
+        "expressionKind": "FunctionCallNode",
+        "reason": "function-call",
+        "variable": "invalidValue",
+    }
+    assert "operation" not in diagnostic["details"]["compileTimeGlobal"]
+    assert "operandType" not in diagnostic["details"]["compileTimeGlobal"]
+    assert "resultType" not in diagnostic["details"]["compileTimeGlobal"]
+
+
 def test_translate_project_reports_unsupported_opengl_index_type(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
