@@ -1274,6 +1274,7 @@ class HLSLCodeGen:
         self.directx_specialization_constant_global_ids = set()
         self.directx_specialization_constant_types = {}
         self.directx_compile_time_global_node_ids = set()
+        self.directx_omitted_compile_time_global_node_ids = set()
         self.standard_math_constant_shadow_names = set()
         self.current_identifier_aliases = {}
         self.current_identifier_reserved_names = set()
@@ -1887,6 +1888,7 @@ class HLSLCodeGen:
         self.directx_specialization_constant_global_ids = set()
         self.directx_specialization_constant_types = {}
         self.directx_compile_time_global_node_ids = set()
+        self.directx_omitted_compile_time_global_node_ids = set()
         self.current_identifier_aliases = {}
         self.current_identifier_reserved_names = set()
         self.current_function_name = None
@@ -2470,6 +2472,9 @@ class HLSLCodeGen:
                 var_name = node.variable_name
             else:
                 var_name = f"var{i}"
+
+            if id(node) in self.directx_omitted_compile_time_global_node_ids:
+                continue
 
             if self.hlsl_should_omit_metal_global_declaration(var_name, vtype):
                 continue
@@ -5670,6 +5675,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def prepare_directx_compile_time_globals(self, ast, global_vars):
         self.directx_compile_time_global_node_ids = set()
+        self.directx_omitted_compile_time_global_node_ids = set()
         candidates = [
             node
             for node in global_vars or []
@@ -5691,6 +5697,23 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         for node in candidates:
             vtype = getattr(node, "var_type", getattr(node, "vtype", None))
+            name = getattr(node, "name", getattr(node, "variable_name", None))
+            struct_fields = self.hlsl_struct_constructor_fields(self.map_type(vtype))
+            if struct_fields == []:
+                self.validate_directx_compile_time_global_expression(
+                    node,
+                    getattr(node, "initial_value", None),
+                    known_constant_names,
+                    candidate_names,
+                )
+                referenced = any(
+                    isinstance(candidate, IdentifierNode) and candidate.name == name
+                    for candidate in self.walk_ast(ast)
+                )
+                if name and not referenced:
+                    self.directx_omitted_compile_time_global_node_ids.add(id(node))
+                    known_constant_names.add(name)
+                    continue
             self.validate_directx_compile_time_global_type(node, vtype)
             self.validate_directx_compile_time_global_expression(
                 node,
@@ -5699,7 +5722,6 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 candidate_names,
             )
             self.directx_compile_time_global_node_ids.add(id(node))
-            name = getattr(node, "name", getattr(node, "variable_name", None))
             if name:
                 known_constant_names.add(name)
 

@@ -485,6 +485,37 @@ def test_hlsl_specialization_and_file_scope_constants_preserve_contracts(tmp_pat
     assert_directx_compute_validates_if_available(generated, tmp_path)
 
 
+def test_hlsl_omits_unreferenced_empty_compile_time_values_and_rejects_uses():
+    source = """
+    shader EmptyCompileTimeValue {
+        struct Logger {
+        };
+
+        constant Logger logger = Logger("scope", "category");
+
+        compute {
+            void main() {
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert "Logger logger" not in generated
+
+    referenced_source = source.replace(
+        "void main() {\n            }",
+        "void main() {\n                Logger value = logger;\n            }",
+    )
+    with pytest.raises(DirectXCompileTimeGlobalError) as exc_info:
+        HLSLCodeGen().generate(crosstl.translator.parse(referenced_source))
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == "unrepresentable-value-type"
+    assert diagnostic.detail == "empty struct type 'Logger'"
+
+
 def test_hlsl_metal_function_constant_defaults_use_compile_time_constants(tmp_path):
     source = """
     #include <metal_stdlib>
