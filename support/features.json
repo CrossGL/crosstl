@@ -4182,8 +4182,13 @@
         },
         "opengl": {
           "status": "supported",
+          "notes": "GLSL control-flow lowering includes fixed-array for-in iteration by source element value across scalar, vector, struct, and nested-array elements. Container expressions are evaluated once, source element types and immutable binding qualifiers are preserved, mutable-reference and unresolved iterable contracts are structured diagnostics, WebGL reuses the same lowering, and glslang/spirv-val validation covers the generated compute shader.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_while_switch_and_void_return_emit_c_style_syntax"
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_while_switch_and_void_return_emit_c_style_syntax",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_for_in_fixed_arrays_bind_source_element_types_and_evaluate_once",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_for_in_unknown_or_user_defined_iterables_are_structured_diagnostics",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_for_in_mutable_reference_binding_is_structured_diagnostic",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_fixed_array_for_in_validates_with_glslang_and_spirv_val"
           ]
         },
         "metal": {
@@ -4234,9 +4239,10 @@
         },
         "webgl": {
           "status": "supported",
-          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path, including the shared fixed-array for-in element-binding and explicit unsupported-iterable contract, and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_reuses_fixed_array_for_in_contract"
           ]
         },
         "wgsl": {
