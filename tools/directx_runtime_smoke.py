@@ -57,6 +57,60 @@ kernel void union_storage(device uint* output [[buffer(0)]]) {
 """
 UNION_EXPECTED_VALUES = [1, 8, 0x0C0B0A09, 0x08070605]
 
+BOOLEAN_ORDER_SOURCE = """\
+shader BooleanOrderRuntime {
+    RWStructuredBuffer<uint> output;
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void computeMain() @ stage_entry {
+            output[0] = min(false, false) ? 1u : 0u;
+            output[1] = min(false, true) ? 1u : 0u;
+            output[2] = min(true, false) ? 1u : 0u;
+            output[3] = min(true, true) ? 1u : 0u;
+            output[4] = max(false, false) ? 1u : 0u;
+            output[5] = max(false, true) ? 1u : 0u;
+            output[6] = max(true, false) ? 1u : 0u;
+            output[7] = max(true, true) ? 1u : 0u;
+
+            bvec4 minimum = min(
+                bvec4(false, false, true, true),
+                bvec4(false, true, false, true)
+            );
+            bvec4 maximum = max(
+                bvec4(false, false, true, true),
+                bvec4(false, true, false, true)
+            );
+            output[8] = minimum.x ? 1u : 0u;
+            output[9] = minimum.y ? 1u : 0u;
+            output[10] = minimum.z ? 1u : 0u;
+            output[11] = minimum.w ? 1u : 0u;
+            output[12] = maximum.x ? 1u : 0u;
+            output[13] = maximum.y ? 1u : 0u;
+            output[14] = maximum.z ? 1u : 0u;
+            output[15] = maximum.w ? 1u : 0u;
+        }
+    }
+}
+"""
+BOOLEAN_ORDER_EXPECTED_VALUES = [
+    0,
+    0,
+    0,
+    1,
+    0,
+    1,
+    1,
+    1,
+    0,
+    0,
+    0,
+    1,
+    0,
+    1,
+    1,
+    1,
+]
+
 
 @dataclass(frozen=True)
 class RuntimeSmokeCase:
@@ -93,7 +147,18 @@ UNION_CASE = RuntimeSmokeCase(
     expected_values=tuple(UNION_EXPECTED_VALUES),
     workgroup_count=(1, 1, 1),
 )
-SMOKE_CASES = (BASIC_CASE, UNION_CASE)
+BOOLEAN_ORDER_CASE = RuntimeSmokeCase(
+    id="boolean-order-smoke",
+    source_name="boolean-order-smoke.cgl",
+    source=BOOLEAN_ORDER_SOURCE,
+    source_backend=None,
+    buffer_name="output",
+    buffer_type="RWStructuredBuffer<uint>",
+    dtype="uint32",
+    expected_values=tuple(BOOLEAN_ORDER_EXPECTED_VALUES),
+    workgroup_count=(1, 1, 1),
+)
+SMOKE_CASES = (BASIC_CASE, UNION_CASE, BOOLEAN_ORDER_CASE)
 
 
 def _write_summary(status: str, detail: str) -> None:

@@ -14,6 +14,7 @@ from .GLSL_codegen import (
     GLSLCodeGen,
     OpenGLArithmeticConversionError,
     OpenGLBooleanCompoundAssignmentError,
+    OpenGLBooleanOrderedIntrinsicError,
     OpenGLStructConstructionError,
 )
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
@@ -35,6 +36,15 @@ class WebGLBooleanCompoundAssignmentError(OpenGLBooleanCompoundAssignmentError):
     missing_capabilities = ("webgl.boolean-compound-assignment-lowering",)
 
 
+class WebGLBooleanOrderedIntrinsicError(OpenGLBooleanOrderedIntrinsicError):
+    """Raised when boolean min/max operands have no faithful GLSL ES lowering."""
+
+    project_diagnostic_code = (
+        "project.translate.webgl-boolean-ordered-intrinsic-unrepresentable"
+    )
+    missing_capabilities = ("webgl.boolean-ordered-intrinsic-lowering",)
+
+
 class WebGLStructConstructionError(OpenGLStructConstructionError):
     """Raised when a source structure conversion has no faithful GLSL ES form."""
 
@@ -48,6 +58,7 @@ class WebGLCodeGen(GLSLCodeGen):
     GLSL_TARGET_DISPLAY_NAME = "WebGL"
     GLSL_ARITHMETIC_CONVERSION_ERROR = WebGLArithmeticConversionError
     GLSL_BOOLEAN_COMPOUND_ASSIGNMENT_ERROR = WebGLBooleanCompoundAssignmentError
+    GLSL_BOOLEAN_ORDERED_INTRINSIC_ERROR = WebGLBooleanOrderedIntrinsicError
     GLSL_STRUCT_CONSTRUCTION_ERROR = WebGLStructConstructionError
     GLSL_SUPPORTED_ARITHMETIC_INTEGER_WIDTHS = frozenset({32})
     GLSL_SUPPORTED_ARITHMETIC_FLOATING_WIDTHS = frozenset({32})

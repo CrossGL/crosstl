@@ -48,6 +48,7 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXAggregateConditionalError,
     DirectXAtomicFenceLoweringError,
     DirectXBooleanCompoundAssignmentError,
+    DirectXBooleanOrderedIntrinsicError,
     DirectXCompileTimeGlobalError,
     DirectXCooperativeMatrixUnsupportedError,
     DirectXForInIterableError,
@@ -40723,6 +40724,103 @@ def test_hlsl_aggregate_conditional_reports_unsupported_nested_call_argument():
     assert diagnostic.target == "HLSL"
     assert diagnostic.context == "expression"
     assert diagnostic.reason == "statement-context-required"
+
+
+def test_hlsl_boolean_min_max_preserve_ordered_semantics(tmp_path):
+    shader = """
+    shader BooleanMinMax {
+        compute {
+            bool scalarMin(bool left, bool right) {
+                return min(left, right);
+            }
+
+            bool scalarMax(bool left, bool right) {
+                return max(left, right);
+            }
+
+            bvec3 vectorMin(bvec3 left, bvec3 right) {
+                return min(left, right);
+            }
+
+            bvec3 vectorMax(bvec3 left, bvec3 right) {
+                return max(left, right);
+            }
+
+            float numericMin(float left, float right) {
+                return min(left, right);
+            }
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "return ((left) && (right));" in generated
+    assert "return ((left) || (right));" in generated
+    assert "return and(left, right);" in generated
+    assert "return or(left, right);" in generated
+    assert "return min(left, right);" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_boolean_min_max_respect_user_defined_functions():
+    shader = """
+    shader BooleanMinShadow {
+        compute {
+            bool min(bool left, bool right) {
+                return left;
+            }
+
+            bool callMin(bool left, bool right) {
+                return min(left, right);
+            }
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "bool min(bool left, bool right)" in generated
+    assert "return min(left, right);" in generated
+    assert "return ((left) && (right));" not in generated
+
+
+def test_hlsl_boolean_min_max_reports_unrepresentable_operand_shapes():
+    shader = """
+    shader BooleanMinMismatch {
+        compute {
+            bvec2 invalidMin(bvec2 left, bvec3 right) {
+                return min(left, right);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(DirectXBooleanOrderedIntrinsicError) as exc_info:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    assert exc_info.value.project_diagnostic_code == (
+        "project.translate.directx-boolean-ordered-intrinsic-unrepresentable"
+    )
+    assert exc_info.value.operation == "min"
+    assert exc_info.value.operand_types == ("bool2", "bool3")
+    assert exc_info.value.reason == "operand-type-mismatch"
+
+    expression_codegen = HLSLCodeGen()
+    expression_codegen.local_variable_types.update({"left": "bool2", "right": "bool3"})
+    call = FunctionCallNode(
+        IdentifierNode("min"),
+        [IdentifierNode("left"), IdentifierNode("right")],
+        source_location=("boolean-order.cgl", 7, 16),
+    )
+    with pytest.raises(DirectXBooleanOrderedIntrinsicError) as located_exc_info:
+        expression_codegen.generate_expression(call)
+    assert located_exc_info.value.source_location == (
+        "boolean-order.cgl",
+        7,
+        16,
+    )
 
 
 if __name__ == "__main__":

@@ -101,6 +101,7 @@ from .array_utils import (
     parse_array_type,
     split_array_type_suffix,
 )
+from .boolean_intrinsics import is_boolean_type, ordered_boolean_minmax_width
 from .constant_ordering import partition_constants_by_struct_dependency
 from .enum_utils import (
     collect_enum_struct_variant_fields,
@@ -502,6 +503,30 @@ class OpenGLBooleanCompoundAssignmentError(ValueError):
         self.operator = operator
         self.target = target
         self.target_type = target_type
+        self.reason = reason
+        self.source_location = source_location
+
+
+class OpenGLBooleanOrderedIntrinsicError(ValueError):
+    """Raised when boolean min/max operands have no faithful GLSL lowering."""
+
+    project_diagnostic_code = (
+        "project.translate.opengl-boolean-ordered-intrinsic-unrepresentable"
+    )
+    missing_capabilities = ("opengl.boolean-ordered-intrinsic-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        operation=None,
+        operand_types=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.operation = operation
+        self.operand_types = tuple(operand_types or ())
         self.reason = reason
         self.source_location = source_location
 
@@ -927,6 +952,7 @@ class GLSLCodeGen:
     GLSL_TARGET_DISPLAY_NAME = "OpenGL"
     GLSL_ARITHMETIC_CONVERSION_ERROR = OpenGLArithmeticConversionError
     GLSL_BOOLEAN_COMPOUND_ASSIGNMENT_ERROR = OpenGLBooleanCompoundAssignmentError
+    GLSL_BOOLEAN_ORDERED_INTRINSIC_ERROR = OpenGLBooleanOrderedIntrinsicError
     GLSL_STRUCT_CONSTRUCTION_ERROR = OpenGLStructConstructionError
     GLSL_SUPPORTED_ARITHMETIC_INTEGER_WIDTHS = frozenset({32, 64})
     GLSL_SUPPORTED_ARITHMETIC_FLOATING_WIDTHS = frozenset({32, 64})
@@ -1874,6 +1900,7 @@ class GLSLCodeGen:
         self.local_variable_types = {}
         self.local_variable_source_types = {}
         self.required_glsl_complex64_helpers = set()
+        self.required_glsl_boolean_order_helpers = set()
         self.current_structured_buffer_array_parameters = {}
         self.current_structured_buffer_counter_parameters = {}
         self.struct_member_types = {}
@@ -3836,6 +3863,7 @@ class GLSLCodeGen:
         self.local_variable_types = {}
         self.local_variable_source_types = {}
         self.required_glsl_complex64_helpers = set()
+        self.required_glsl_boolean_order_helpers = set()
         self.current_structured_buffer_array_parameters = {}
         self.current_structured_buffer_counter_parameters = {}
         self.current_structured_buffer_access_parameters = {}
@@ -4704,7 +4732,7 @@ class GLSLCodeGen:
             self.prepare_glsl_resource_function_specializations(ast)
         finally:
             self.enforce_concrete_glsl_types = previous_enforce_concrete_glsl_types
-        complex_helper_insertion_index = len(code)
+        generated_helper_insertion_index = len(code)
         functions = getattr(ast, "functions", [])
         deferred_top_level_helpers_by_stage = (
             self.collect_stage_deferred_top_level_helpers(ast, functions, target_stage)
@@ -4945,12 +4973,15 @@ class GLSLCodeGen:
                     stage_code = f"// {stage_name.title()} Shader\n" + stage_code
                     code += self.wrap_stage_guard(stage_code, stage_name)
 
-        complex_helpers = self.generate_glsl_complex64_helpers()
-        if complex_helpers:
+        generated_helpers = (
+            self.generate_glsl_boolean_order_helpers()
+            + self.generate_glsl_complex64_helpers()
+        )
+        if generated_helpers:
             code = (
-                code[:complex_helper_insertion_index]
-                + complex_helpers
-                + code[complex_helper_insertion_index:]
+                code[:generated_helper_insertion_index]
+                + generated_helpers
+                + code[generated_helper_insertion_index:]
             )
         self.validate_glsl_function_call_graph()
         code = self.ensure_glsl_version_supports_generated_layouts(code)
@@ -15434,6 +15465,72 @@ class GLSLCodeGen:
             )
         return None
 
+    def glsl_ordered_boolean_minmax_call(
+        self,
+        func_name,
+        args,
+        *,
+        source_location=None,
+    ):
+        if func_name in self.function_return_types:
+            return None
+        argument_types = [
+            self.map_type(self.expression_result_type(argument)) for argument in args
+        ]
+        width = ordered_boolean_minmax_width(func_name, argument_types)
+        if width is None:
+            if func_name in {"min", "max"} and any(
+                is_boolean_type(type_name) for type_name in argument_types
+            ):
+                reason = (
+                    "invalid-arity"
+                    if len(args) != 2
+                    else (
+                        "operand-type-unresolved"
+                        if any(not type_name for type_name in argument_types)
+                        else "operand-type-mismatch"
+                    )
+                )
+                raise self.GLSL_BOOLEAN_ORDERED_INTRINSIC_ERROR(
+                    f"{self.GLSL_TARGET_DISPLAY_NAME} codegen cannot preserve "
+                    "ordered boolean "
+                    f"'{func_name}' for operand types {argument_types}",
+                    operation=func_name,
+                    operand_types=argument_types,
+                    reason=reason,
+                    source_location=source_location,
+                )
+            return None
+
+        left, right = (self.generate_expression(argument) for argument in args)
+        if width == 1:
+            operator = "&&" if func_name == "min" else "||"
+            return f"(({left}) {operator} ({right}))"
+
+        helper_name = self.glsl_generated_module_identifier(
+            ("ordered-boolean", func_name, width),
+            f"crossgl_bool_{func_name}_bvec{width}",
+        )
+        self.required_glsl_boolean_order_helpers.add((helper_name, func_name, width))
+        return f"{helper_name}({left}, {right})"
+
+    def generate_glsl_boolean_order_helpers(self):
+        helpers = []
+        components = "xyzw"
+        for helper_name, operation, width in sorted(
+            getattr(self, "required_glsl_boolean_order_helpers", set())
+        ):
+            operator = "&&" if operation == "min" else "||"
+            values = ", ".join(
+                f"left.{component} {operator} right.{component}"
+                for component in components[:width]
+            )
+            helpers.append(
+                f"bvec{width} {helper_name}(bvec{width} left, bvec{width} right) "
+                f"{{\n    return bvec{width}({values});\n}}\n"
+            )
+        return ("\n".join(helpers) + "\n") if helpers else ""
+
     def generate_glsl_complex64_helpers(self):
         if not getattr(self, "required_glsl_complex64_helpers", set()):
             return ""
@@ -17281,6 +17378,12 @@ complex64_t crossgl_complex64_mod_assign(
             if numeric_result_type:
                 return numeric_result_type
             if func_name in {"normalize", "reflect"} and args:
+                return self.expression_result_type(args[0])
+            if (
+                func_name in {"max", "min"}
+                and args
+                and func_name not in self.function_return_types
+            ):
                 return self.expression_result_type(args[0])
             if func_name == "dot" and args:
                 return (
@@ -19292,6 +19395,14 @@ complex64_t crossgl_complex64_mod_assign(
             )
             if reciprocal_call is not None:
                 return reciprocal_call
+
+            boolean_order_call = self.glsl_ordered_boolean_minmax_call(
+                original_func_name,
+                expr.args,
+                source_location=getattr(expr, "source_location", None),
+            )
+            if boolean_order_call is not None:
+                return boolean_order_call
 
             bitcast_call = self.generate_bitcast_call(original_func_name, expr.args)
             if bitcast_call is not None:

@@ -17580,6 +17580,37 @@ def _opengl_complex_arithmetic_failure_details(
     return dict(sorted(details.items()))
 
 
+def _boolean_ordered_intrinsic_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) not in {
+        "project.translate.directx-boolean-ordered-intrinsic-unrepresentable",
+        "project.translate.opengl-boolean-ordered-intrinsic-unrepresentable",
+        "project.translate.webgl-boolean-ordered-intrinsic-unrepresentable",
+    }:
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    intrinsic = {}
+    operation = getattr(exc, "operation", None)
+    operand_types = getattr(exc, "operand_types", None)
+    reason = getattr(exc, "reason", None)
+    if _is_non_empty_string(operation):
+        intrinsic["operation"] = operation
+    if operand_types:
+        intrinsic["operandTypes"] = [str(value) for value in operand_types]
+    if _is_non_empty_string(reason):
+        intrinsic["reason"] = reason
+    if intrinsic:
+        details["booleanOrderedIntrinsic"] = dict(sorted(intrinsic.items()))
+    return dict(sorted(details.items()))
+
+
 def _opengl_struct_construction_failure_details(
     exc: Exception,
     unit: ProjectTranslationUnit,
@@ -18145,6 +18176,7 @@ def _translation_failure_details(
         **_opengl_aggregate_initializer_failure_details(exc, unit, artifact_path),
         **_opengl_scalar_conversion_failure_details(exc, unit, artifact_path),
         **_opengl_complex_arithmetic_failure_details(exc, unit, artifact_path),
+        **_boolean_ordered_intrinsic_failure_details(exc, unit, artifact_path),
         **_opengl_struct_construction_failure_details(exc, unit, artifact_path),
         **_opengl_fixed_array_resource_failure_details(exc, unit, artifact_path),
         **_opengl_resource_memory_qualifier_failure_details(exc, unit, artifact_path),
