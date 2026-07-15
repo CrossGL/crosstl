@@ -2193,9 +2193,15 @@ def _prepare_opengl_bounded_wave_shuffle_runtime_fixture(tmp_path):
         project_root=tmp_path,
     )
     assert plan["success"] is True, json.dumps(plan, indent=2)
-    assert plan["summary"]["plannedCount"] == 1, json.dumps(plan, indent=2)
     case = plan["testCases"][0]
-    assert case["status"] == "planned", json.dumps(plan, indent=2)
+    if shutil.which("glslangValidator") is None:
+        assert plan["summary"]["skippedCount"] == 1, json.dumps(plan, indent=2)
+        assert case["status"] == "skipped", json.dumps(plan, indent=2)
+        assert case["failurePhase"] == "platform-requirements"
+        assert case["diagnostics"][-1]["missingTools"] == ["glslangValidator"]
+    else:
+        assert plan["summary"]["plannedCount"] == 1, json.dumps(plan, indent=2)
+        assert case["status"] == "planned", json.dumps(plan, indent=2)
     assert case["runtimeExecution"]["dispatch"] == {
         "entryPoint": "main",
         "workgroupSize": [8, 1, 1],
