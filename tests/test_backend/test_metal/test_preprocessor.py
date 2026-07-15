@@ -6,6 +6,7 @@ from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
 from crosstl.backend.Metal.preprocessor import (
     MetalPreprocessor,
+    MetalStatelessGlobalElisionError,
     MetalStructMethodError,
     MetalTemplateSpecializationError,
 )
@@ -7715,3 +7716,235 @@ def test_sfinae_simd_reduce_full_pipeline_to_hlsl():
     assert "op.simd_reduce(" not in hlsl
     assert re.search(r"(?<![\w_])simd_reduce\s*\(", hlsl) is None
     assert "WaveActiveSum" in hlsl
+
+
+def test_preprocessor_elides_stateless_compile_time_global_calls():
+    source = """
+    struct Logger {
+      constexpr Logger(constant char*, constant char*) constant {}
+
+      template <typename... Args>
+      void log_debug(constant char*, Args...) const {
+        trap();
+      }
+
+      template <typename... Args>
+      void log_debug(constant char*, Args...) const constant {}
+    };
+
+    constant Logger logger("subsystem", "kernel");
+
+    int bump(device int* output) {
+      output[0] += 1;
+      return output[0];
+    }
+
+    kernel void compute(device int* output [[buffer(0)]]) {
+      logger.log_debug("value=%d", bump(output));
+      logger.log_debug("plain=%d", output[0]);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(source)
+
+    assert "constant Logger logger" not in output
+    assert "logger.log_debug" not in output
+    assert "bump(output);" in output
+    assert output.count("bump(output)") == 1
+    assert len(re.findall(r"(?m)^\s*output\[0\];$", output)) == 1
+    assert "trap();" not in output
+
+
+def test_preprocessor_elided_call_evaluates_multiple_arguments_once():
+    source = """
+    struct Logger {
+      constexpr Logger() constant {}
+
+      template <typename... Args>
+      void log_debug(constant char*, Args...) const constant {}
+    };
+
+    constant Logger logger;
+
+    int bump(device int* output) {
+      output[0] += 1;
+      return output[0];
+    }
+
+    kernel void compute(device int* output [[buffer(0)]]) {
+      if (output[0] > 0)
+        logger.log_debug("values=%d,%d", bump(output), bump(output));
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(source)
+
+    assert "logger" not in output
+    assert output.count("bump(output);") == 2
+    assert re.search(
+        r"if\s*\(output\[0\]\s*>\s*0\)\s*\{\s*"
+        r"bump\(output\);\s*bump\(output\);\s*\}",
+        output,
+    )
+
+
+def test_preprocessor_does_not_elide_function_declaration_as_global():
+    source = """
+    struct Logger {
+      constexpr Logger(constant char*) constant {}
+    };
+
+    constant Logger make_logger(constant char*);
+    """
+
+    output = MetalPreprocessor().preprocess(source)
+
+    assert "constant Logger make_logger(constant char*);" in output
+
+
+def test_preprocessor_elides_calls_between_extern_declaration_and_definition():
+    source = """
+    struct Logger {
+      constexpr Logger() constant {}
+      void log_debug(constant char*) const constant {}
+    };
+
+    extern constant Logger logger;
+
+    kernel void compute(device int* output [[buffer(0)]]) {
+      logger.log_debug("message");
+      output[0] = 1;
+    }
+
+    constant Logger logger{};
+    """
+
+    output = MetalPreprocessor().preprocess(source)
+
+    assert "extern constant Logger logger" not in output
+    assert "constant Logger logger" not in output
+    assert "logger.log_debug" not in output
+    assert "output[0] = 1;" in output
+
+
+@pytest.mark.parametrize("member", ["int state;", "uint state : 1;"])
+def test_preprocessor_preserves_stateful_compile_time_globals(member):
+    source = f"""
+    struct Logger {{
+      {member}
+      constexpr Logger() constant {{}}
+    }};
+
+    constant Logger logger;
+    kernel void compute() {{}}
+    """
+
+    output = MetalPreprocessor().preprocess(source)
+
+    assert "constant Logger logger;" in output
+    assert member in output
+
+
+@pytest.mark.parametrize(
+    ("source", "reason", "effect"),
+    [
+        (
+            """
+            struct Logger {
+              constexpr Logger() constant { trap(); }
+            };
+            constant Logger logger;
+            kernel void compute() {}
+            """,
+            "constructor-has-effects",
+            "trap-or-termination",
+        ),
+        (
+            """
+            struct Logger {
+              constexpr Logger() constant {}
+              void log_debug(constant char*) const constant;
+            };
+            constant Logger logger;
+            kernel void compute() { logger.log_debug("message"); }
+            """,
+            "method-body-unresolved",
+            None,
+        ),
+        (
+            """
+            struct Logger {
+              constexpr Logger() constant {}
+            };
+            constant Logger logger;
+            kernel void compute() { constant Logger* observed = &logger; }
+            """,
+            "identity-observed",
+            "object-identity",
+        ),
+        (
+            """
+            struct Logger {
+              constexpr Logger() constant {}
+              void log_debug(constant char*) const constant { printf("real"); }
+            };
+            constant Logger logger;
+            kernel void compute() { logger.log_debug("message"); }
+            """,
+            "method-has-effects",
+            "function-call",
+        ),
+        (
+            """
+            struct Logger {
+              constexpr Logger() constant {}
+              ~Logger() { trap(); }
+            };
+            constant Logger logger;
+            kernel void compute() {}
+            """,
+            "destructor-has-effects",
+            "trap-or-termination",
+        ),
+        (
+            """
+            struct Logger {
+              constexpr Logger() constant {}
+              int value() const constant { return 1; }
+            };
+            constant Logger logger;
+            kernel void compute() { logger.value(); }
+            """,
+            "method-returns-value",
+            "returned-value",
+        ),
+        (
+            """
+            constant char* category();
+            struct Logger {
+              constexpr Logger(constant char*) constant {}
+            };
+            constant Logger logger(category());
+            kernel void compute() {}
+            """,
+            "initializer-effect-unproven",
+            "initializer-evaluation",
+        ),
+    ],
+)
+def test_preprocessor_stateless_global_proof_fails_closed(source, reason, effect):
+    with pytest.raises(MetalStatelessGlobalElisionError) as exc_info:
+        MetalPreprocessor().preprocess(source)
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.metal-stateless-global-unsafe"
+    )
+    assert diagnostic.missing_capabilities == ("metal.stateless-global-elision",)
+    assert diagnostic.global_name == "logger"
+    assert diagnostic.type_name == "Logger"
+    assert diagnostic.reason == reason
+    assert diagnostic.effect == effect
+    assert diagnostic.source_location["line"] > 0
+    assert diagnostic.source_location["column"] > 0
+    assert diagnostic.source_location["length"] > 0

@@ -94,6 +94,36 @@ class MetalStructMethodError(ValueError):
             self.missing_capabilities = missing_capabilities
 
 
+class MetalStatelessGlobalElisionError(ValueError):
+    """A compile-time object that cannot be erased without changing behavior."""
+
+    project_diagnostic_code = "project.translate.metal-stateless-global-unsafe"
+    missing_capabilities = ("metal.stateless-global-elision",)
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        global_name: str,
+        type_name: str,
+        reason: str,
+        source_location: object,
+        method_name: Optional[str] = None,
+        blocking_use: Optional[str] = None,
+        effect: Optional[str] = None,
+        suggested_action: Optional[str] = None,
+    ):
+        super().__init__(message)
+        self.global_name = global_name
+        self.type_name = type_name
+        self.reason = reason
+        self.source_location = source_location
+        self.method_name = method_name
+        self.blocking_use = blocking_use
+        self.effect = effect
+        self.suggested_action = suggested_action
+
+
 class MetalTemplateSpecializationError(ValueError):
     project_diagnostic_code = "project.translate.metal-template-specialization"
     missing_capabilities = ("template.specialization",)
@@ -253,6 +283,7 @@ class _MetalStructMethod:
     body: str
     span: Tuple[int, int]
     is_const: bool = False
+    receiver_address_spaces: Tuple[str, ...] = ()
     # Template member methods carry their template parameter names; an empty list
     # marks an ordinary (non-template) member function. The raw `RetType` /
     # `parameters` text still contains the template parameter identifiers; they
@@ -330,6 +361,20 @@ class _MetalConstructor:
     params_text: str = ""
     init_text: str = ""
     param_types: List[str] = field(default_factory=list)
+    is_constexpr: bool = False
+    receiver_address_spaces: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class _MetalCompileTimeGlobal:
+    name: str
+    type_name: str
+    namespace: str
+    arguments: Tuple[str, ...]
+    span: Tuple[int, int]
+    name_span: Tuple[int, int]
+    receiver_address_space: str
+    prior_declaration_spans: Tuple[Tuple[int, int], ...] = ()
 
 
 @dataclass
@@ -358,6 +403,8 @@ class _MetalStructDefinition:
     # available without a second parse.
     data_members: List[_MetalDataMember] = field(default_factory=list)
     constructors: List[_MetalConstructor] = field(default_factory=list)
+    base_clause: str = ""
+    member_prototype_names: Set[str] = field(default_factory=set)
     # Struct-scoped `using` / `typedef` aliases. These remain in the data-only
     # struct, but lowered method bodies need the same lexical type context when
     # resolving qualified calls and concrete return/parameter types.
@@ -508,6 +555,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         self._configure_integral_constant_contracts(processed)
         processed = self._materialize_project_template_instantiations(processed)
         processed = self._materialize_explicit_template_struct_instantiations(processed)
+        processed = self._elide_stateless_compile_time_globals(processed)
         processed = self._lower_struct_member_functions(processed)
         processed = self._materialize_explicit_template_function_calls(processed)
         return processed.replace(PRESERVED_INCLUDE_SENTINEL, "#include ")
@@ -1010,6 +1058,906 @@ class MetalPreprocessor(HLSLPreprocessor):
             declarations.append((match.group("name").split("::")[-1], span))
         return declarations
 
+    def _elide_stateless_compile_time_globals(self, code: str) -> str:
+        """Erase compile-time objects only after proving all observable effects.
+
+        This runs before generic member lowering because empty variadic methods
+        otherwise lose their bodies before overload selection. Any uncertain
+        layout, lifetime operation, receiver use, or method body raises a
+        source-located diagnostic instead of producing a dangling target call.
+        """
+        structs = self._find_concrete_struct_definitions(code)
+        if not structs:
+            return code
+        globals_ = self._find_compile_time_struct_globals(code, structs)
+        if not globals_:
+            return code
+
+        structs_by_name = {struct.qualified_name: struct for struct in structs}
+        namespace_spans = self._find_namespace_spans(code)
+        declaration_spans = [
+            span
+            for global_ in globals_
+            for span in (global_.span, *global_.prior_declaration_spans)
+        ]
+        global_names = {global_.name for global_ in globals_}
+        replacements: List[Tuple[int, int, str]] = []
+        for global_ in globals_:
+            struct = structs_by_name[global_.type_name]
+            if not self._stateless_global_layout_is_proven_empty(code, struct):
+                continue
+            self._prove_stateless_global_constructor(
+                code, global_, struct, global_names
+            )
+            self._prove_stateless_global_destructor(code, global_, struct)
+            replacements.extend(
+                self._stateless_global_call_replacements(
+                    code,
+                    global_,
+                    struct,
+                    namespace_spans,
+                    declaration_spans,
+                    global_names,
+                )
+            )
+            replacements.extend(
+                (start, end, "") for start, end in global_.prior_declaration_spans
+            )
+            replacements.append((global_.span[0], global_.span[1], ""))
+        return self._apply_text_replacements(code, replacements)
+
+    def _find_compile_time_struct_globals(
+        self,
+        code: str,
+        structs: List[_MetalStructDefinition],
+    ) -> List[_MetalCompileTimeGlobal]:
+        spellings = {
+            spelling
+            for struct in structs
+            for spelling in (struct.name, struct.qualified_name)
+        }
+        if not spellings:
+            return []
+        type_pattern = "|".join(
+            self._qualified_type_pattern(spelling)
+            for spelling in sorted(spellings, key=len, reverse=True)
+        )
+        declaration_pattern = re.compile(
+            r"(?<![A-Za-z0-9_])"
+            r"(?P<qualifiers>(?:(?:static|inline|constexpr|const|constant|"
+            r"extern|typedef|thread_local|volatile)\s+)+)"
+            rf"(?P<type>(?:::)?(?:{type_pattern}))\s+"
+            r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
+        )
+        ignored_spans = self._find_comment_and_literal_spans(code)
+        masked_code = self._mask_comments_and_literals(code)
+        lexical_scopes = self._find_lexical_brace_scopes(code)
+        namespace_spans = self._find_namespace_spans(code)
+        namespace_scopes = {(start, end) for start, end, _name in namespace_spans}
+        structs_by_qualified = {struct.qualified_name: struct for struct in structs}
+        globals_: List[_MetalCompileTimeGlobal] = []
+
+        for match in declaration_pattern.finditer(code):
+            if self._containing_span(match.start(), ignored_spans) is not None:
+                continue
+            line_start = masked_code.rfind("\n", 0, match.start()) + 1
+            line_prefix = masked_code[line_start : match.start()]
+            if line_prefix.strip():
+                previous = match.start() - 1
+                while previous >= line_start and masked_code[previous].isspace():
+                    previous -= 1
+                if previous >= line_start and masked_code[previous] not in ";{}":
+                    continue
+            scope = self._innermost_lexical_scope(
+                lexical_scopes, match.start(), len(code)
+            )
+            if scope != (0, len(code)) and scope not in namespace_scopes:
+                continue
+            qualifiers = set(IDENTIFIER_RE.findall(match.group("qualifiers")))
+            if not ({"constant", "constexpr"} & qualifiers):
+                continue
+            if qualifiers & {"extern", "typedef", "thread_local", "volatile"}:
+                continue
+            namespace = self._namespace_at(namespace_spans, match.start())
+            source_type = re.sub(r"\s*::\s*", "::", match.group("type"))
+            if source_type.startswith("::"):
+                source_type = source_type[2:]
+            struct = structs_by_qualified.get(source_type)
+            if struct is None:
+                candidates = [
+                    candidate
+                    for candidate in structs
+                    if candidate.name == source_type
+                    and self._struct_namespace(candidate) == namespace
+                ]
+                if len(candidates) != 1:
+                    self._raise_stateless_global_error(
+                        code,
+                        global_name=match.group("name"),
+                        type_name=source_type,
+                        reason="ambiguous-type",
+                        start=match.start("type"),
+                        end=match.end("type"),
+                        blocking_use=match.group("type"),
+                    )
+                struct = candidates[0]
+
+            parsed = self._parse_compile_time_global_initializer(
+                code,
+                match.end("name"),
+                {source_type, struct.name, struct.qualified_name},
+            )
+            if parsed is None:
+                continue
+            arguments, declaration_end = parsed
+            prior_declaration_spans = self._find_prior_compile_time_global_declarations(
+                code,
+                before=match.start(),
+                name=match.group("name"),
+                expected_type_names={
+                    source_type,
+                    struct.name,
+                    struct.qualified_name,
+                },
+                namespace=namespace,
+                lexical_scopes=lexical_scopes,
+                namespace_scopes=namespace_scopes,
+                namespace_spans=namespace_spans,
+            )
+            globals_.append(
+                _MetalCompileTimeGlobal(
+                    name=match.group("name"),
+                    type_name=struct.qualified_name,
+                    namespace=namespace,
+                    arguments=tuple(arguments),
+                    span=(match.start(), declaration_end),
+                    name_span=(match.start("name"), match.end("name")),
+                    receiver_address_space="constant",
+                    prior_declaration_spans=tuple(prior_declaration_spans),
+                )
+            )
+        return globals_
+
+    def _find_prior_compile_time_global_declarations(
+        self,
+        code: str,
+        *,
+        before: int,
+        name: str,
+        expected_type_names: Set[str],
+        namespace: str,
+        lexical_scopes: List[Tuple[int, int]],
+        namespace_scopes: Set[Tuple[int, int]],
+        namespace_spans: List[Tuple[int, int, str]],
+    ) -> List[Tuple[int, int]]:
+        type_pattern = "|".join(
+            self._qualified_type_pattern(spelling)
+            for spelling in sorted(expected_type_names, key=len, reverse=True)
+        )
+        pattern = re.compile(
+            r"(?<![A-Za-z0-9_])"
+            r"(?P<qualifiers>(?:(?:static|inline|constexpr|const|constant|"
+            r"extern|typedef|thread_local|volatile)\s+)+)"
+            rf"(?P<type>(?:::)?(?:{type_pattern}))\s+"
+            rf"{re.escape(name)}\s*;"
+        )
+        masked = self._mask_comments_and_literals(code)
+        declarations: List[Tuple[int, int]] = []
+        for match in pattern.finditer(masked, 0, before):
+            qualifiers = set(IDENTIFIER_RE.findall(match.group("qualifiers")))
+            if "extern" not in qualifiers or not (
+                {"constant", "constexpr"} & qualifiers
+            ):
+                continue
+            scope = self._innermost_lexical_scope(
+                lexical_scopes, match.start(), len(code)
+            )
+            if scope != (0, len(code)) and scope not in namespace_scopes:
+                continue
+            declaration_namespace = self._namespace_at(namespace_spans, match.start())
+            if declaration_namespace != namespace:
+                continue
+            source_type = re.sub(r"\s*::\s*", "::", match.group("type"))
+            if source_type.startswith("::"):
+                source_type = source_type[2:]
+            if source_type not in expected_type_names:
+                continue
+            declarations.append(match.span())
+        return declarations
+
+    @staticmethod
+    def _qualified_type_pattern(type_name: str) -> str:
+        return r"\s*::\s*".join(re.escape(part) for part in type_name.split("::"))
+
+    @staticmethod
+    def _struct_namespace(struct: _MetalStructDefinition) -> str:
+        if "::" not in struct.qualified_name:
+            return ""
+        return struct.qualified_name.rsplit("::", 1)[0]
+
+    def _parse_compile_time_global_initializer(
+        self, code: str, name_end: int, expected_type_names: Set[str]
+    ) -> Optional[Tuple[List[str], int]]:
+        cursor = self._skip_cpp_trivia(code, name_end)
+        if cursor >= len(code):
+            return None
+        if code[cursor] == ";":
+            return [], cursor + 1
+        if code[cursor] in "({":
+            opener = code[cursor]
+            closer = ")" if opener == "(" else "}"
+            end = self._find_matching_delimiter(code, cursor, opener, closer)
+            if end is None:
+                return None
+            after = self._skip_cpp_trivia(code, end + 1)
+            if after >= len(code) or code[after] != ";":
+                return None
+            text = code[cursor + 1 : end]
+            # `Type value();` is a function declaration, not an object.
+            if opener == "(" and (
+                not text.strip()
+                or self._looks_like_function_parameter_declarations(text)
+            ):
+                return None
+            return self._split_initializer_arguments(text), after + 1
+        if code[cursor] != "=":
+            return None
+        declaration_end = self._statement_end(code, cursor)
+        if declaration_end is None:
+            return None
+        initializer = code[cursor + 1 : declaration_end - 1].strip()
+        if initializer.startswith("{"):
+            end = self._find_matching_delimiter(initializer, 0, "{", "}")
+            if end == len(initializer) - 1:
+                return (
+                    self._split_initializer_arguments(initializer[1:end]),
+                    declaration_end,
+                )
+        constructor = re.match(
+            r"(?P<type>(?:::)?[A-Za-z_][A-Za-z0-9_]*"
+            r"(?:\s*::\s*[A-Za-z_]\w*)*)\s*(?P<open>[({])",
+            initializer,
+        )
+        if constructor is None:
+            return None
+        constructor_type = re.sub(r"\s*::\s*", "::", constructor.group("type"))
+        if constructor_type.startswith("::"):
+            constructor_type = constructor_type[2:]
+        if constructor_type not in expected_type_names:
+            return None
+        opener = constructor.group("open")
+        open_index = constructor.end() - 1
+        closer = ")" if opener == "(" else "}"
+        end = self._find_matching_delimiter(initializer, open_index, opener, closer)
+        if end != len(initializer) - 1:
+            return None
+        return (
+            self._split_initializer_arguments(initializer[open_index + 1 : end]),
+            declaration_end,
+        )
+
+    def _split_initializer_arguments(self, text: str) -> List[str]:
+        return [
+            argument.strip()
+            for argument in self._split_top_level_commas(text)
+            if argument.strip()
+        ]
+
+    def _looks_like_function_parameter_declarations(self, text: str) -> bool:
+        parameters = self._split_top_level_commas(text)
+        if not parameters:
+            return True
+        for parameter in parameters:
+            declarator, _default = self._split_top_level_assignment(parameter)
+            declarator = declarator.strip()
+            if not declarator or declarator in {"true", "false", "nullptr"}:
+                return False
+            if any(character in declarator for character in "\"'(){}"):
+                return False
+            if re.search(r"[+\-/%|^!?=]", declarator):
+                return False
+            if IDENTIFIER_RE.search(declarator) is None:
+                return False
+        return True
+
+    def _stateless_global_layout_is_proven_empty(
+        self,
+        code: str,
+        struct: _MetalStructDefinition,
+    ) -> bool:
+        if struct.base_clause or struct.data_members:
+            return False
+        body = code[struct.body_span[0] : struct.body_span[1]]
+        return self._first_unproven_struct_state_declaration(body) is None
+
+    def _first_unproven_struct_state_declaration(self, body: str) -> Optional[str]:
+        i = 0
+        while i < len(body):
+            i = self._skip_cpp_trivia(body, i)
+            if i >= len(body):
+                return None
+            access = re.match(r"(?:public|private|protected)\s*:", body[i:])
+            if access is not None:
+                i += access.end()
+                continue
+
+            declaration_start = i
+            if re.match(r"template\s*<", body[i:]):
+                angle_start = body.find("<", i)
+                angle_end = self._find_matching_template_param_angle(body, angle_start)
+                if angle_end is None:
+                    return body[declaration_start:].strip()
+                i = angle_end + 1
+
+            brace = self._find_next_top_level_char(body, i, "{")
+            semicolon = self._find_next_top_level_char(body, i, ";")
+            if brace is not None and (semicolon is None or brace < semicolon):
+                header = body[i:brace]
+                brace_end = self._find_matching_brace(body, brace)
+                if brace_end is None:
+                    return body[declaration_start:].strip()
+                if not self._stateless_member_header_is_function(header):
+                    end = self._statement_end(body, declaration_start) or brace_end
+                    return body[declaration_start:end].strip()
+                i = brace_end
+                trailing = self._skip_cpp_trivia(body, i)
+                if trailing < len(body) and body[trailing] == ";":
+                    i = trailing + 1
+                continue
+            if semicolon is None:
+                trailing = body[declaration_start:].strip()
+                return trailing or None
+            declaration = body[i:semicolon].strip()
+            if not declaration:
+                i = semicolon + 1
+                continue
+            if self._declaration_is_type_alias(declaration):
+                i = semicolon + 1
+                continue
+            if re.match(r"static_assert\s*\(", declaration):
+                i = semicolon + 1
+                continue
+            if self._stateless_member_declaration_is_function(declaration):
+                i = semicolon + 1
+                continue
+            return body[declaration_start : semicolon + 1].strip()
+        return None
+
+    def _stateless_member_header_is_function(self, header: str) -> bool:
+        if re.search(r"\bvirtual\b", header):
+            return False
+        paren_start = self._function_parameter_start(header)
+        if paren_start is None:
+            return False
+        prefix = header[:paren_start]
+        if "=" in prefix or re.search(r"\[[^\]]*\]\s*$", prefix):
+            return False
+        return bool(
+            re.search(
+                r"(?:~\s*)?[A-Za-z_][A-Za-z0-9_]*\s*$|"
+                r"\boperator(?:\s*\(\s*\)|\s*[^\s]+)\s*$",
+                prefix,
+            )
+        )
+
+    def _stateless_member_declaration_is_function(self, declaration: str) -> bool:
+        if re.search(r"\bvirtual\b", declaration):
+            return False
+        if re.search(r"\(\s*[*&]", declaration):
+            return False
+        declarator, default = self._split_top_level_assignment(declaration)
+        if default is not None and default.strip() not in {"default", "delete"}:
+            return False
+        return self._declaration_is_method_prototype(declarator)
+
+    def _prove_stateless_global_constructor(
+        self,
+        code: str,
+        global_: _MetalCompileTimeGlobal,
+        struct: _MetalStructDefinition,
+        global_names: Set[str],
+    ) -> None:
+        for argument in global_.arguments:
+            referenced_globals = (
+                set(IDENTIFIER_RE.findall(self._mask_comments_and_literals(argument)))
+                & global_names
+            )
+            if referenced_globals:
+                self._raise_stateless_global_error(
+                    code,
+                    global_=global_,
+                    reason="initializer-observes-global-identity",
+                    start=global_.name_span[0],
+                    end=global_.span[1],
+                    blocking_use=", ".join(sorted(referenced_globals)),
+                    effect="object-identity",
+                )
+            if not self._stateless_initializer_argument_is_proven_constant(argument):
+                self._raise_stateless_global_error(
+                    code,
+                    global_=global_,
+                    reason="initializer-effect-unproven",
+                    start=global_.name_span[0],
+                    end=global_.span[1],
+                    blocking_use=argument,
+                    effect="initializer-evaluation",
+                )
+
+        if struct.name in struct.member_prototype_names:
+            self._raise_stateless_global_error(
+                code,
+                global_=global_,
+                reason="constructor-body-unresolved",
+                start=global_.name_span[0],
+                end=global_.span[1],
+                blocking_use=struct.name,
+            )
+
+        matching = [
+            constructor
+            for constructor in struct.constructors
+            if self._callable_accepts_argument_count(
+                constructor.params_text, len(global_.arguments)
+            )
+            and global_.receiver_address_space in constructor.receiver_address_spaces
+        ]
+        if not matching:
+            has_declared_constructor = bool(struct.constructors) or (
+                struct.name in struct.member_prototype_names
+            )
+            if not global_.arguments and not has_declared_constructor:
+                return
+            self._raise_stateless_global_error(
+                code,
+                global_=global_,
+                reason="constructor-unresolved",
+                start=global_.name_span[0],
+                end=global_.span[1],
+                blocking_use=f"{struct.qualified_name}({', '.join(global_.arguments)})",
+            )
+        for constructor in matching:
+            if not constructor.is_constexpr:
+                self._raise_stateless_global_error(
+                    code,
+                    global_=global_,
+                    reason="constructor-not-constexpr",
+                    start=(
+                        constructor.span[0]
+                        if constructor.span
+                        else global_.name_span[0]
+                    ),
+                    end=(
+                        constructor.span[1]
+                        if constructor.span
+                        else global_.name_span[1]
+                    ),
+                    blocking_use=constructor.prefix.rstrip("("),
+                )
+            if constructor.init_text.strip():
+                self._raise_stateless_global_error(
+                    code,
+                    global_=global_,
+                    reason="constructor-initializer-not-empty",
+                    start=(
+                        constructor.span[0]
+                        if constructor.span
+                        else global_.name_span[0]
+                    ),
+                    end=(
+                        constructor.span[1]
+                        if constructor.span
+                        else global_.name_span[1]
+                    ),
+                    blocking_use=constructor.init_text,
+                    effect="object-state",
+                )
+            effect = self._stateless_body_effect(constructor.body, allow_return=False)
+            if effect is not None:
+                self._raise_stateless_global_error(
+                    code,
+                    global_=global_,
+                    reason="constructor-has-effects",
+                    start=(
+                        constructor.span[0]
+                        if constructor.span
+                        else global_.name_span[0]
+                    ),
+                    end=(
+                        constructor.span[1]
+                        if constructor.span
+                        else global_.name_span[1]
+                    ),
+                    blocking_use=constructor.body.strip(),
+                    effect=effect,
+                )
+
+    def _prove_stateless_global_destructor(
+        self,
+        code: str,
+        global_: _MetalCompileTimeGlobal,
+        struct: _MetalStructDefinition,
+    ) -> None:
+        body_start, body_end = struct.body_span
+        body = code[body_start:body_end]
+        masked = self._mask_comments_and_literals(body)
+        scopes = self._find_lexical_brace_scopes(body)
+        pattern = re.compile(rf"~\s*{re.escape(struct.name)}\s*\(")
+        for match in pattern.finditer(masked):
+            if self._innermost_lexical_scope(scopes, match.start(), len(body)) != (
+                0,
+                len(body),
+            ):
+                continue
+            open_paren = masked.find("(", match.start(), match.end())
+            close_paren = self._find_matching_delimiter(body, open_paren, "(", ")")
+            if close_paren is None:
+                self._raise_stateless_global_error(
+                    code,
+                    global_=global_,
+                    reason="destructor-unresolved",
+                    start=body_start + match.start(),
+                    end=body_start + match.end(),
+                )
+            cursor = self._skip_cpp_trivia(body, close_paren + 1)
+            while True:
+                qualifier = IDENTIFIER_RE.match(body, cursor)
+                if qualifier is None or qualifier.group(0) not in {
+                    "const",
+                    "constant",
+                    "device",
+                    "thread",
+                    "threadgroup",
+                    "noexcept",
+                }:
+                    break
+                cursor = self._skip_cpp_trivia(body, qualifier.end())
+            if cursor < len(body) and body[cursor] == "{":
+                close_brace = self._find_matching_delimiter(body, cursor, "{", "}")
+                if close_brace is None:
+                    effect = "unresolved-body"
+                    close_brace = cursor
+                else:
+                    effect = self._stateless_body_effect(
+                        body[cursor + 1 : close_brace], allow_return=False
+                    )
+                if effect is None:
+                    continue
+                end = close_brace + 1
+            else:
+                declaration_end = body.find(";", cursor)
+                if declaration_end == -1:
+                    declaration_end = cursor
+                suffix = body[cursor:declaration_end].strip()
+                if re.fullmatch(r"=\s*default", suffix):
+                    continue
+                effect = "deleted-body" if "delete" in suffix else "unresolved-body"
+                end = declaration_end + 1
+            self._raise_stateless_global_error(
+                code,
+                global_=global_,
+                reason="destructor-has-effects",
+                start=body_start + match.start(),
+                end=body_start + end,
+                blocking_use=body[match.start() : end].strip(),
+                effect=effect,
+            )
+
+    def _stateless_global_call_replacements(
+        self,
+        code: str,
+        global_: _MetalCompileTimeGlobal,
+        struct: _MetalStructDefinition,
+        namespace_spans: List[Tuple[int, int, str]],
+        declaration_spans: List[Tuple[int, int]],
+        global_names: Set[str],
+    ) -> List[Tuple[int, int, str]]:
+        masked = self._mask_comments_and_literals(code)
+        replacements: List[Tuple[int, int, str]] = []
+        position = min(
+            (end for _start, end in global_.prior_declaration_spans),
+            default=global_.span[1],
+        )
+        pattern = re.compile(rf"\b{re.escape(global_.name)}\b")
+        while True:
+            match = pattern.search(masked, position)
+            if match is None:
+                break
+            position = match.end()
+            if self._containing_span(match.start(), declaration_spans) is not None:
+                continue
+            receiver_start = self._stateless_global_receiver_start(
+                code, match.start(), global_, namespace_spans
+            )
+            if receiver_start is None:
+                continue
+            call = self._parse_stateless_receiver_call(code, match.end())
+            if call is None:
+                self._raise_stateless_global_error(
+                    code,
+                    global_=global_,
+                    reason="identity-observed",
+                    start=receiver_start,
+                    end=match.end(),
+                    blocking_use=code[receiver_start : match.end()],
+                    effect="object-identity",
+                )
+            method_name, arguments, call_end, is_statement = call
+            if not is_statement:
+                self._raise_stateless_global_error(
+                    code,
+                    global_=global_,
+                    reason="call-result-observed",
+                    start=receiver_start,
+                    end=call_end,
+                    method_name=method_name,
+                    blocking_use=code[receiver_start:call_end],
+                    effect="returned-value",
+                )
+            if method_name in struct.member_prototype_names:
+                self._raise_stateless_global_error(
+                    code,
+                    global_=global_,
+                    reason="method-body-unresolved",
+                    start=receiver_start,
+                    end=call_end,
+                    method_name=method_name,
+                    blocking_use=code[receiver_start:call_end],
+                )
+            candidates = [
+                method
+                for method in [*struct.methods, *struct.template_methods]
+                if method.name == method_name
+                and not method.is_static
+                and method.is_const
+                and global_.receiver_address_space in method.receiver_address_spaces
+                and self._callable_accepts_argument_count(
+                    method.parameters, len(arguments)
+                )
+            ]
+            if not candidates:
+                self._raise_stateless_global_error(
+                    code,
+                    global_=global_,
+                    reason="method-overload-unresolved",
+                    start=receiver_start,
+                    end=call_end,
+                    method_name=method_name,
+                    blocking_use=code[receiver_start:call_end],
+                )
+            for method in candidates:
+                if self._normalize_inferred_type(method.return_type) != "void":
+                    self._raise_stateless_global_error(
+                        code,
+                        global_=global_,
+                        reason="method-returns-value",
+                        start=receiver_start,
+                        end=call_end,
+                        method_name=method_name,
+                        blocking_use=method.return_type,
+                        effect="returned-value",
+                    )
+                effect = self._stateless_body_effect(method.body, allow_return=True)
+                if effect is not None:
+                    self._raise_stateless_global_error(
+                        code,
+                        global_=global_,
+                        reason="method-has-effects",
+                        start=receiver_start,
+                        end=call_end,
+                        method_name=method_name,
+                        blocking_use=method.body.strip(),
+                        effect=effect,
+                    )
+            for argument in arguments:
+                referenced_globals = (
+                    set(
+                        IDENTIFIER_RE.findall(
+                            self._mask_comments_and_literals(argument)
+                        )
+                    )
+                    & global_names
+                )
+                if referenced_globals:
+                    self._raise_stateless_global_error(
+                        code,
+                        global_=global_,
+                        reason="identity-observed",
+                        start=receiver_start,
+                        end=call_end,
+                        method_name=method_name,
+                        blocking_use=", ".join(sorted(referenced_globals)),
+                        effect="object-identity",
+                    )
+            evaluated = [
+                argument
+                for argument in arguments
+                if self._stateless_argument_requires_evaluation(argument)
+            ]
+            replacement = self._render_elided_call_arguments(evaluated)
+            replacements.append((receiver_start, call_end, replacement))
+            position = call_end
+        return replacements
+
+    def _stateless_global_receiver_start(
+        self,
+        code: str,
+        name_start: int,
+        global_: _MetalCompileTimeGlobal,
+        namespace_spans: List[Tuple[int, int, str]],
+    ) -> Optional[int]:
+        line_start = code.rfind("\n", 0, name_start) + 1
+        prefix = code[line_start:name_start]
+        qualified = re.search(
+            r"(?P<qualification>(?:::)?(?:[A-Za-z_]\w*\s*::\s*)+)$", prefix
+        )
+        if qualified is not None:
+            qualification = re.sub(
+                r"\s*::\s*", "::", qualified.group("qualification")
+            ).strip(":")
+            if qualification != global_.namespace:
+                return None
+            return line_start + qualified.start("qualification")
+        previous = name_start - 1
+        while previous >= 0 and code[previous].isspace():
+            previous -= 1
+        if previous >= 0 and code[previous] == ".":
+            return None
+        if previous >= 1 and code[previous - 1 : previous + 1] == "->":
+            return None
+        namespace = self._namespace_at(namespace_spans, name_start)
+        if global_.namespace and not (
+            namespace == global_.namespace
+            or namespace.startswith(global_.namespace + "::")
+        ):
+            return None
+        return name_start
+
+    def _parse_stateless_receiver_call(
+        self, code: str, name_end: int
+    ) -> Optional[Tuple[str, List[str], int, bool]]:
+        cursor = self._skip_cpp_trivia(code, name_end)
+        if cursor >= len(code) or code[cursor] != ".":
+            return None
+        cursor = self._skip_cpp_trivia(code, cursor + 1)
+        method = IDENTIFIER_RE.match(code, cursor)
+        if method is None:
+            return None
+        method_name = method.group(0)
+        cursor = self._skip_cpp_trivia(code, method.end())
+        if cursor < len(code) and code[cursor] == "<":
+            angle_end = self._find_matching_angle(code, cursor)
+            if angle_end is None:
+                return None
+            cursor = self._skip_cpp_trivia(code, angle_end + 1)
+        if cursor >= len(code) or code[cursor] != "(":
+            return None
+        close_paren = self._find_matching_delimiter(code, cursor, "(", ")")
+        if close_paren is None:
+            return None
+        arguments = self._split_initializer_arguments(code[cursor + 1 : close_paren])
+        call_end = self._skip_cpp_trivia(code, close_paren + 1)
+        is_statement = call_end < len(code) and code[call_end] == ";"
+        return (
+            method_name,
+            arguments,
+            call_end + 1 if is_statement else close_paren + 1,
+            is_statement,
+        )
+
+    def _callable_accepts_argument_count(self, parameters: str, count: int) -> bool:
+        parts = [
+            part.strip()
+            for part in self._split_top_level_commas(parameters)
+            if part.strip() and part.strip() != "void"
+        ]
+        variadic = any("..." in part for part in parts)
+        fixed = [part for part in parts if "..." not in part]
+        required = sum(
+            1
+            for parameter in fixed
+            if self._split_top_level_assignment(parameter)[1] is None
+        )
+        return required <= count and (variadic or count <= len(fixed))
+
+    def _stateless_initializer_argument_is_proven_constant(self, argument: str) -> bool:
+        masked = self._mask_comments_and_literals(argument)
+        if re.search(r"\+\+|--|\b(?:new|delete|throw|asm)\b", masked):
+            return False
+        if re.search(
+            r"(?:<<|>>|[+\-*/%&|^])=|(?<![=!<>+\-*/%&|^])=(?!=)",
+            masked,
+        ):
+            return False
+        if re.search(r"\b[A-Za-z_]\w*\s*(?:<[^;{}()]*>)?\s*\(", masked):
+            return False
+        return not bool(re.search(r"\[|\]|->|\.", masked))
+
+    def _stateless_body_effect(self, body: str, *, allow_return: bool) -> Optional[str]:
+        masked = self._mask_comments_and_literals(body).strip()
+        if not masked:
+            return None
+        if allow_return and re.fullmatch(r"(?:return\s*;\s*)+", masked):
+            return None
+        if re.search(r"\b(?:atomic\w*|barrier|threadgroup_barrier)\b", masked):
+            return "atomic-or-synchronization"
+        if re.search(r"\b(?:trap|abort|assert|discard_fragment)\b", masked):
+            return "trap-or-termination"
+        if re.search(
+            r"\+\+|--|(?:<<|>>|[+\-*/%&|^])=|" r"(?<![=!<>+\-*/%&|^])=(?!=)",
+            masked,
+        ):
+            return "write"
+        if re.search(r"\breturn\s+[^;]", masked):
+            return "returned-value"
+        if re.search(r"\b[A-Za-z_]\w*\s*(?:<[^;{}()]*>)?\s*\(", masked):
+            return "function-call"
+        return "unproven-statement"
+
+    def _stateless_argument_requires_evaluation(self, argument: str) -> bool:
+        text = argument.strip()
+        while text.startswith("(") and text.endswith(")"):
+            close = self._find_matching_delimiter(text, 0, "(", ")")
+            if close != len(text) - 1:
+                break
+            text = text[1:-1].strip()
+        literal = METAL_STRING_EXPRESSION_PATTERN
+        scalar = (
+            r"(?:true|false|nullptr|[-+]?(?:0[xX][0-9A-Fa-f]+|"
+            r"(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)"
+            r"[uUlLfFhH]*)"
+        )
+        return re.fullmatch(rf"(?:{literal}|{scalar})", text) is None
+
+    @staticmethod
+    def _render_elided_call_arguments(arguments: List[str]) -> str:
+        if not arguments:
+            return ";"
+        if len(arguments) == 1:
+            return f"{arguments[0].strip()};"
+        statements = "\n".join(f"  {argument.strip()};" for argument in arguments)
+        return f"{{\n{statements}\n}}"
+
+    def _raise_stateless_global_error(
+        self,
+        code: str,
+        *,
+        reason: str,
+        start: int,
+        end: int,
+        global_: Optional[_MetalCompileTimeGlobal] = None,
+        global_name: Optional[str] = None,
+        type_name: Optional[str] = None,
+        method_name: Optional[str] = None,
+        blocking_use: Optional[str] = None,
+        effect: Optional[str] = None,
+    ) -> None:
+        resolved_name = (
+            global_.name if global_ is not None else global_name or "<unknown>"
+        )
+        resolved_type = (
+            global_.type_name if global_ is not None else type_name or "<unknown>"
+        )
+        if blocking_use is not None:
+            blocking_use = re.sub(r"\s+", " ", blocking_use).strip()
+            if len(blocking_use) > 240:
+                blocking_use = blocking_use[:237].rstrip() + "..."
+        raise MetalStatelessGlobalElisionError(
+            f"Cannot safely elide compile-time global '{resolved_name}' of type "
+            f"'{resolved_type}': {reason.replace('-', ' ')}.",
+            global_name=resolved_name,
+            type_name=resolved_type,
+            reason=reason,
+            source_location=self._source_location_for_offsets(code, start, end),
+            method_name=method_name,
+            blocking_use=blocking_use,
+            effect=effect,
+            suggested_action=(
+                "Keep the object state and effects target-representable, or make the "
+                "selected constructor, destructor, and constant receiver methods "
+                "empty with unobserved object identity."
+            ),
+        )
+
     def _lower_struct_member_functions(self, code: str) -> str:
         # CrossGL structs are data-only, so the Metal frontend has historically
         # dropped struct member functions while keeping the now-dangling
@@ -1265,6 +2213,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                 if parent is not None and parent.qualified_name
                 else f"{namespace}::{name}" if namespace else name
             )
+            member_prototype_names: Set[str] = set()
             (
                 data_member_names,
                 data_member_types,
@@ -1272,7 +2221,12 @@ class MetalPreprocessor(HLSLPreprocessor):
                 template_methods,
                 ordered_members,
                 constructors,
-            ) = self._split_struct_body(name, body, body_start + 1)
+            ) = self._split_struct_body(
+                name,
+                body,
+                body_start + 1,
+                member_prototype_names=member_prototype_names,
+            )
             definitions.append(
                 _MetalStructDefinition(
                     name=name,
@@ -1287,6 +2241,8 @@ class MetalPreprocessor(HLSLPreprocessor):
                     data_member_types=data_member_types,
                     data_members=ordered_members,
                     constructors=constructors,
+                    base_clause=stripped_between,
+                    member_prototype_names=member_prototype_names,
                     type_aliases=self._collect_struct_scope_type_aliases(body),
                     type_alias_templates=self._collect_struct_scope_type_alias_templates(
                         body
@@ -2155,7 +3111,11 @@ class MetalPreprocessor(HLSLPreprocessor):
         return self._apply_text_replacements(body, replacements)
 
     def _split_struct_body(
-        self, struct_name: str, body: str, body_offset: int
+        self,
+        struct_name: str,
+        body: str,
+        body_offset: int,
+        member_prototype_names: Optional[Set[str]] = None,
     ) -> Tuple[
         Set[str],
         Dict[str, str],
@@ -2178,6 +3138,8 @@ class MetalPreprocessor(HLSLPreprocessor):
         # scalar-replacement path (declaration order and ctor mapping matter).
         ordered_members: List[_MetalDataMember] = []
         constructors: List[_MetalConstructor] = []
+        if member_prototype_names is None:
+            member_prototype_names = set()
         i = 0
         n = len(body)
         while i < n:
@@ -2235,6 +3197,11 @@ class MetalPreprocessor(HLSLPreprocessor):
                                 methods.append(template_method)
                     i = method_body_end if method_body_end is not None else n
                 elif semicolon is not None:
+                    prototype_name = self._struct_member_prototype_name(
+                        body[i:semicolon]
+                    )
+                    if prototype_name is not None:
+                        member_prototype_names.add(prototype_name)
                     i = semicolon + 1
                 else:
                     break
@@ -2304,9 +3271,11 @@ class MetalPreprocessor(HLSLPreprocessor):
             # PROTOTYPE (declarator + params + ;) with no body — those have no
             # definition to lower, so record any data member name otherwise.
             declaration = body[i:semicolon]
-            if not self._declaration_is_method_prototype(
-                declaration
-            ) and not self._declaration_is_type_alias(declaration):
+            if self._declaration_is_method_prototype(declaration):
+                prototype_name = self._struct_member_prototype_name(declaration)
+                if prototype_name is not None:
+                    member_prototype_names.add(prototype_name)
+            elif not self._declaration_is_type_alias(declaration):
                 self._record_data_member(
                     declaration,
                     data_member_names,
@@ -2435,7 +3404,10 @@ class MetalPreprocessor(HLSLPreprocessor):
         if paren_end is None:
             return None
         before = header[:paren_start].rstrip()
+        is_constexpr = bool(re.search(r"\b(?:constexpr|C10_METAL_CONSTEXPR)\b", before))
         name_region = self._strip_function_qualifier_macros(before)
+        name_region = re.sub(r"\b(?:constexpr|explicit|inline)\b", " ", name_region)
+        name_region = re.sub(r"\s+", " ", name_region).strip()
         # A genuine constructor declarator is a single identifier: no return type
         # tokens, no `~` destructor, no `operator`.
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name_region or ""):
@@ -2449,9 +3421,12 @@ class MetalPreprocessor(HLSLPreprocessor):
         between = header[paren_end + 1 :].strip()
         init_text = ""
         init_map: Dict[str, str] = {}
-        if between.startswith(":"):
-            init_text = between[1:].strip()
+        colon = self._find_next_top_level_char(between, 0, ":")
+        receiver_text = between if colon is None else between[:colon]
+        if colon is not None:
+            init_text = between[colon + 1 :].strip()
             init_map = self._parse_constructor_init_list(init_text)
+        receiver_address_spaces = self._receiver_address_spaces(receiver_text)
         constructor_body = body[brace + 1 : brace_end - 1]
         # `prefix` is everything up to and including `(` (leading macros + the
         # constructor name), so the pointer-member promotion path can rebuild the
@@ -2466,6 +3441,8 @@ class MetalPreprocessor(HLSLPreprocessor):
             params_text=params_text,
             init_text=init_text,
             param_types=param_types,
+            is_constexpr=is_constexpr,
+            receiver_address_spaces=receiver_address_spaces,
         )
 
     def _parameter_declared_types(self, params_text: str) -> List[str]:
@@ -3095,7 +4072,9 @@ class MetalPreprocessor(HLSLPreprocessor):
         return_type = self._strip_function_qualifier_macros(return_type)
         if not return_type:
             return None
-        is_const = bool(re.search(r"\bconst\b", header[paren_end + 1 :]))
+        receiver_qualifiers = header[paren_end + 1 :]
+        is_const = bool(re.search(r"\bconst\b", receiver_qualifiers))
+        receiver_address_spaces = self._receiver_address_spaces(receiver_qualifiers)
 
         method_body_end = self._find_matching_brace(body, brace)
         if method_body_end is None:
@@ -3117,6 +4096,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             body=method_body,
             span=(decl_start, method_body_end),
             is_const=is_const,
+            receiver_address_spaces=receiver_address_spaces,
         )
 
     def _strip_function_qualifier_macros(self, prefix: str) -> str:
@@ -3164,6 +4144,34 @@ class MetalPreprocessor(HLSLPreprocessor):
         if re.search(r"\boperator\s*\(\s*\)\s*$", before):
             return True
         return re.search(r"[A-Za-z_][A-Za-z0-9_]*\s*$", before) is not None
+
+    def _struct_member_prototype_name(self, declaration: str) -> Optional[str]:
+        text = declaration.strip()
+        if text.startswith("template"):
+            angle_start = text.find("<")
+            angle_end = self._find_matching_template_param_angle(text, angle_start)
+            if angle_end is None:
+                return None
+            text = text[angle_end + 1 :].strip()
+        declarator, _default = self._split_top_level_assignment(text)
+        paren_start = self._function_parameter_start(declarator)
+        if paren_start is None:
+            return None
+        before = declarator[:paren_start].rstrip()
+        destructor = re.search(r"~\s*([A-Za-z_][A-Za-z0-9_]*)\s*$", before)
+        if destructor is not None:
+            return f"~{destructor.group(1)}"
+        operator_call = re.search(r"\boperator\s*\(\s*\)\s*$", before)
+        if operator_call is not None:
+            return "operator()"
+        match = re.search(r"([A-Za-z_][A-Za-z0-9_]*)\s*$", before)
+        return match.group(1) if match is not None else None
+
+    @staticmethod
+    def _receiver_address_spaces(text: str) -> Tuple[str, ...]:
+        address_spaces = ("constant", "device", "thread", "threadgroup")
+        words = set(IDENTIFIER_RE.findall(text))
+        return tuple(space for space in address_spaces if space in words)
 
     @staticmethod
     def _declaration_is_type_alias(declaration: str) -> bool:

@@ -10957,3 +10957,141 @@ def test_codegen_removes_alias_template_syntax_from_project_targets(tmp_path):
             capture_output=True,
             text=True,
         )
+
+
+def test_stateless_compile_time_global_reaches_native_targets(tmp_path):
+    # Reduced from MLX 4367c73b60541ddd5a266ce4644fd93d20223b6e,
+    # mlx/backend/metal/kernels/metal_3_0/binary.metal.
+    source = """
+    struct Logger {
+      constexpr Logger(constant char*, constant char*) constant {}
+
+      template <typename... Args>
+      void log_debug(constant char*, Args...) const {}
+
+      template <typename... Args>
+      void log_debug(constant char*, Args...) const constant {}
+    };
+
+    constant Logger logger("mlx", "binary_ops");
+
+    int bump(device int* output) {
+      output[0] += 1;
+      return output[0];
+    }
+
+    kernel void compute(device int* output [[buffer(0)]]) {
+      logger.log_debug("value=%d", bump(output));
+      logger.log_debug("plain=%d", output[0]);
+    }
+    """
+    source_path = tmp_path / "stateless-global.metal"
+    source_path.write_text(source, encoding="utf-8")
+
+    targets = {
+        target: crosstl.translate(str(source_path), backend=target, format_output=False)
+        for target in ("directx", "opengl")
+    }
+    report = translate_project(
+        tmp_path, targets=["directx", "opengl"], output_dir="out"
+    ).to_json()
+
+    assert report["summary"]["translatedCount"] == 2, report
+    assert report["summary"]["failedCount"] == 0, report
+    for generated in targets.values():
+        assert "logger" not in generated
+        assert "log_debug" not in generated
+        assert (
+            len(re.findall(r"(?m)^\s*bump(?:_[A-Za-z0-9_]+)?\([^;]*\);\s*$", generated))
+            == 1
+        )
+
+    HLSLParser(HLSLLexer(targets["directx"]).tokenize()).parse()
+    dxc = shutil.which("dxc")
+    if dxc is not None:
+        hlsl_path = tmp_path / "stateless-global.hlsl"
+        hlsl_path.write_text(targets["directx"], encoding="utf-8")
+        result = subprocess.run(
+            [dxc, "-T", "cs_6_0", "-E", "CSMain", str(hlsl_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    assert_opengl_compute_validates_if_available(
+        targets["opengl"], tmp_path, "stateless-global"
+    )
+
+
+def test_project_reports_unsafe_stateless_global_blocker(tmp_path):
+    source = """
+    struct Logger {
+      constexpr Logger() constant {}
+      void log_debug(constant char*) const constant { printf("real log"); }
+    };
+
+    constant Logger logger;
+
+    kernel void compute() {
+      logger.log_debug("message");
+    }
+    """
+    (tmp_path / "unsafe-stateless-global.metal").write_text(source, encoding="utf-8")
+
+    payload = translate_project(
+        tmp_path, targets=["directx"], output_dir="out"
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0, payload
+    assert payload["summary"]["failedCount"] == 1, payload
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-stateless-global-unsafe": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "metal.stateless-global-elision": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["location"]["line"] == 10
+    assert diagnostic["location"]["column"] == 7
+    assert diagnostic["details"]["statelessGlobal"]["globalName"] == "logger"
+    assert diagnostic["details"]["statelessGlobal"]["typeName"] == "Logger"
+    assert diagnostic["details"]["statelessGlobal"]["methodName"] == "log_debug"
+    assert diagnostic["details"]["statelessGlobal"]["reason"] == ("method-has-effects")
+    assert diagnostic["details"]["statelessGlobal"]["effect"] == "function-call"
+
+
+def test_stateful_compile_time_global_reaches_existing_directx_lowering(tmp_path):
+    source = """
+    struct Config {
+      int value;
+    };
+
+    constant Config config = {7};
+
+    kernel void compute(device int* output [[buffer(0)]]) {
+      output[0] = config.value;
+    }
+    """
+    source_path = tmp_path / "stateful-global.metal"
+    source_path.write_text(source, encoding="utf-8")
+
+    generated = crosstl.translate(
+        str(source_path), backend="directx", format_output=False
+    )
+
+    assert "static const Config config = {7};" in generated
+    assert "output[0] = config.value;" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+
+    dxc = shutil.which("dxc")
+    if dxc is not None:
+        hlsl_path = tmp_path / "stateful-global.hlsl"
+        hlsl_path.write_text(generated, encoding="utf-8")
+        result = subprocess.run(
+            [dxc, "-T", "cs_6_0", "-E", "CSMain", str(hlsl_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
