@@ -47,6 +47,7 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXAtomicFenceLoweringError,
     DirectXCooperativeMatrixUnsupportedError,
     DirectXMappedOverloadError,
+    DirectXMinimumPrecisionIntegerArithmeticError,
     DirectXPrivatePointerParameterError,
     DirectXResourcePointerArrayError,
     DirectXResourcePointerParameterError,
@@ -1259,6 +1260,21 @@ def test_hlsl_codegen_lowers_complex64_binary_operators_to_helpers():
                 ),
             ),
             FunctionNode(
+                "short_divide_complex",
+                complex_type,
+                [
+                    ParameterNode("x", PrimitiveType("short")),
+                    ParameterNode("y", complex_type),
+                ],
+                BlockNode(
+                    [
+                        ReturnNode(
+                            BinaryOpNode(IdentifierNode("x"), "/", IdentifierNode("y"))
+                        )
+                    ]
+                ),
+            ),
+            FunctionNode(
                 "greater_complex",
                 PrimitiveType("bool"),
                 [
@@ -1308,10 +1324,11 @@ def test_hlsl_codegen_lowers_complex64_binary_operators_to_helpers():
     assert "return __crossgl_complex64_add(x, y);" in generated
     assert "return __crossgl_complex64_div(x, y);" in generated
     assert "return __crossgl_complex64_mod(x, y);" in generated
-    assert (
-        "return __crossgl_complex64_div(__crossgl_complex64_make(x, 0.0), y);"
-        in generated
+    real_divide = (
+        "return __crossgl_complex64_div(" "__crossgl_complex64_make(x, 0.0), y);"
     )
+    assert generated.count(real_divide) == 2
+    assert "complex64_t short_divide_complex(min16int x, complex64_t y)" in generated
     assert "return __crossgl_complex64_greater(x, y);" in generated
     assert "return __crossgl_complex64_negate(x);" in generated
     assert "return __crossgl_complex64_make(asfloat(0x7fc00000), 0.0);" in generated
@@ -3712,6 +3729,304 @@ def test_hlsl_fixed_width_scalar_aliases_map_to_valid_hlsl_scalars():
         "ulong ",
     ):
         assert invalid_token not in generated_code
+
+
+def test_hlsl_minimum_precision_integer_division_and_remainder_widen_operands():
+    shader = """
+    shader MinimumPrecisionIntegerArithmetic {
+        short signedDivide(short lhs, short rhs) {
+            return lhs / rhs;
+        }
+
+        short signedRemainder(short lhs, short rhs) {
+            return lhs % rhs;
+        }
+
+        ushort unsignedDivide(ushort lhs, ushort rhs) {
+            return lhs / rhs;
+        }
+
+        ushort unsignedRemainder(ushort lhs, ushort rhs) {
+            return lhs % rhs;
+        }
+
+        int promotedRemainder(short lhs, short rhs) {
+            return lhs % rhs;
+        }
+
+        int inferredQuotient(short lhs, short rhs) {
+            auto quotient = lhs / rhs;
+            return quotient;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "return min16int((int(lhs) / int(rhs)));" in generated_code
+    assert "return min16int((int(lhs) % int(rhs)));" in generated_code
+    assert "return min16uint((uint(lhs) / uint(rhs)));" in generated_code
+    assert "return min16uint((uint(lhs) % uint(rhs)));" in generated_code
+    assert "int promotedRemainder(min16int lhs, min16int rhs)" in generated_code
+    assert "return (int(lhs) % int(rhs));" in generated_code
+    assert "int quotient = (int(lhs) / int(rhs));" in generated_code
+
+
+def test_hlsl_minimum_precision_integer_vector_and_nested_operations():
+    shader = """
+    shader MinimumPrecisionIntegerVectorArithmetic {
+        short2 dividePair(short2 lhs, short2 rhs) {
+            return lhs / rhs;
+        }
+
+        ushort3 remainderTriple(ushort3 lhs, ushort3 rhs) {
+            return lhs % rhs;
+        }
+
+        short2 dividePairByScalar(short2 lhs, short rhs) {
+            return lhs / rhs;
+        }
+
+        short2 constructPair(short lhs, short rhs) {
+            return short2(lhs / rhs, lhs % rhs);
+        }
+
+        int nested(short lhs, short rhs) {
+            return (lhs / rhs) * 2 + (lhs % rhs);
+        }
+
+        short nestedNarrow(short lhs, short rhs) {
+            return (lhs / rhs) + 1;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "return min16int2((int2(lhs) / int2(rhs)));" in generated_code
+    assert "return min16uint3((uint3(lhs) % uint3(rhs)));" in generated_code
+    assert "return min16int2((int2(lhs) / int(rhs)));" in generated_code
+    assert (
+        "return min16int2((int(lhs) / int(rhs)), (int(lhs) % int(rhs)));"
+        in generated_code
+    )
+    assert "((int(lhs) / int(rhs)) * 2)" in generated_code
+    assert "(int(lhs) % int(rhs))" in generated_code
+    assert "min16int((int(lhs) / int(rhs)))" not in generated_code
+    assert "return min16int(((int(lhs) / int(rhs)) + 1));" in generated_code
+
+
+def test_hlsl_minimum_precision_integer_compound_assignments_preserve_evaluation():
+    shader = """
+    shader MinimumPrecisionIntegerCompoundArithmetic {
+        short nextDivisor(short value) {
+            return value;
+        }
+
+        short divideCalls(short lhs, short rhs) {
+            return nextDivisor(lhs) / nextDivisor(rhs);
+        }
+
+        void update(
+            short signedValue,
+            short signedDivisor,
+            ushort unsignedValue,
+            ushort unsignedDivisor
+        ) {
+            signedValue /= nextDivisor(signedDivisor);
+            signedValue %= signedDivisor;
+            unsignedValue /= unsignedDivisor;
+            unsignedValue %= unsignedDivisor;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "signedValue = min16int((int(signedValue) / "
+        "int(nextDivisor(signedDivisor))));" in generated_code
+    )
+    assert (
+        "signedValue = min16int((int(signedValue) % int(signedDivisor)));"
+        in generated_code
+    )
+    assert (
+        "unsignedValue = min16uint((uint(unsignedValue) / "
+        "uint(unsignedDivisor)));" in generated_code
+    )
+    assert (
+        "unsignedValue = min16uint((uint(unsignedValue) % "
+        "uint(unsignedDivisor)));" in generated_code
+    )
+    assert generated_code.count("nextDivisor(signedDivisor)") == 1
+    assert generated_code.count("nextDivisor(lhs)") == 1
+    assert generated_code.count("nextDivisor(rhs)") == 1
+    assert "signedValue /=" not in generated_code
+    assert "signedValue %=" not in generated_code
+
+
+def test_hlsl_minimum_precision_integer_lowering_leaves_legal_operations_unchanged():
+    shader = """
+    shader MinimumPrecisionIntegerNoOpCases {
+        int signedDivide(int lhs, int rhs) {
+            return lhs / rhs;
+        }
+
+        uint unsignedRemainder(uint lhs, uint rhs) {
+            return lhs % rhs;
+        }
+
+        float floatingDivide(short lhs, float rhs) {
+            return lhs / rhs;
+        }
+
+        short signedAdd(short lhs, short rhs) {
+            return lhs + rhs;
+        }
+
+        void signedCompound(int lhs, int rhs) {
+            lhs /= rhs;
+            lhs %= rhs;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "return (lhs / rhs);" in generated_code
+    assert "return (lhs % rhs);" in generated_code
+    assert "float floatingDivide(min16int lhs, float rhs)" in generated_code
+    assert "return (lhs + rhs);" in generated_code
+    assert "lhs /= rhs;" in generated_code
+    assert "lhs %= rhs;" in generated_code
+    assert "int(lhs)" not in generated_code
+    assert "uint(lhs)" not in generated_code
+
+
+def test_hlsl_minimum_precision_integer_compute_validates_if_available(tmp_path):
+    shader = """
+    shader MinimumPrecisionIntegerNativeCompute {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<int> output @ binding(0)) {
+                short signedValue = short(-123);
+                short signedDivisor = short(7);
+                ushort unsignedValue = ushort(65000u);
+                ushort unsignedDivisor = ushort(31u);
+                short2 signedPair = short2(-123, 456);
+                short2 pairDivisor = short2(7, 11);
+
+                signedValue /= signedDivisor;
+                signedValue %= signedDivisor;
+                unsignedValue /= unsignedDivisor;
+                unsignedValue %= unsignedDivisor;
+                signedPair = signedPair / pairDivisor;
+
+                output[0] = signedValue / signedDivisor;
+                output[1] = signedValue % signedDivisor;
+                output[2] = unsignedValue / unsignedDivisor;
+                output[3] = unsignedValue % unsignedDivisor;
+                output[4] = signedPair.x;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "signedValue = min16int((int(signedValue) / int(signedDivisor)));" in (
+        generated_code
+    )
+    assert "signedPair = min16int2((int2(signedPair) / int2(pairDivisor)));" in (
+        generated_code
+    )
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated_code, tmp_path)
+
+
+def test_hlsl_minimum_precision_integer_vector_width_mismatch_is_diagnostic():
+    shader = """
+    shader MinimumPrecisionIntegerWidthMismatch {
+        short2 divide(short2 lhs, short3 rhs) {
+            return lhs / rhs;
+        }
+    }
+    """
+
+    with pytest.raises(
+        DirectXMinimumPrecisionIntegerArithmeticError,
+        match="vector widths 2 and 3",
+    ) as exc_info:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    assert exc_info.value.project_diagnostic_code == (
+        "project.translate.directx-minimum-precision-integer-arithmetic-unsupported"
+    )
+    assert exc_info.value.operator == "/"
+    assert exc_info.value.left_type == "min16int2"
+    assert exc_info.value.right_type == "min16int3"
+    assert exc_info.value.context == "binary expression"
+    assert exc_info.value.reason == "incompatible-vector-widths"
+
+
+def test_hlsl_minimum_precision_compound_side_effecting_target_is_diagnostic():
+    shader = """
+    shader MinimumPrecisionIntegerCompoundTarget {
+        short values[4];
+
+        int nextIndex() {
+            return 0;
+        }
+
+        void update(short divisor) {
+            values[nextIndex()] /= divisor;
+        }
+    }
+    """
+
+    with pytest.raises(
+        DirectXMinimumPrecisionIntegerArithmeticError,
+        match="assignment target would need to be evaluated more than once",
+    ) as exc_info:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    assert exc_info.value.operator == "/"
+    assert exc_info.value.left_type == "min16int"
+    assert exc_info.value.right_type == "min16int"
+    assert exc_info.value.context == "compound assignment"
+    assert exc_info.value.reason == "side-effecting-assignment-target"
+
+
+def test_hlsl_minimum_precision_compound_rejects_rhs_that_can_change_target():
+    shader = """
+    shader MinimumPrecisionIntegerCompoundRhsTarget {
+        short values[4];
+
+        short advanceIndex(inout int index, short divisor) {
+            index += 1;
+            return divisor;
+        }
+
+        void update(int index, short divisor) {
+            values[index] /= advanceIndex(index, divisor);
+        }
+    }
+    """
+
+    with pytest.raises(
+        DirectXMinimumPrecisionIntegerArithmeticError,
+        match="right operand may change the storage selected",
+    ) as exc_info:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    assert exc_info.value.operator == "/"
+    assert exc_info.value.left_type == "min16int"
+    assert exc_info.value.right_type == "min16int"
+    assert exc_info.value.expected_type == "min16int"
+    assert exc_info.value.context == "compound assignment"
+    assert exc_info.value.reason == "rhs-may-change-assignment-target"
 
 
 def test_hlsl_fixed_width_scalar_array_aliases_map_in_aggregate_declarations():

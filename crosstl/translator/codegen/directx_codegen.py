@@ -454,6 +454,36 @@ class DirectXMappedOverloadError(ValueError):
         self.source_location = source_location
 
 
+class DirectXMinimumPrecisionIntegerArithmeticError(ValueError):
+    """Raised when minimum-precision integer arithmetic cannot be lowered."""
+
+    project_diagnostic_code = (
+        "project.translate.directx-minimum-precision-integer-arithmetic-unsupported"
+    )
+    missing_capabilities = ("directx.minimum-precision-integer-arithmetic-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        operator=None,
+        left_type=None,
+        right_type=None,
+        expected_type=None,
+        context=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.operator = operator
+        self.left_type = left_type
+        self.right_type = right_type
+        self.expected_type = expected_type
+        self.context = context
+        self.reason = reason
+        self.source_location = source_location
+
+
 class DirectXPrivatePointerParameterError(ValueError):
     """Raised when a private pointer cannot become a fixed HLSL array."""
 
@@ -670,6 +700,18 @@ class HLSLCodeGen:
             "min16int",
             "min16uint",
         }
+    )
+    HLSL_MINIMUM_PRECISION_INTEGER_BASE_TYPES = frozenset(
+        {"min12int", "min16int", "min16uint"}
+    )
+    HLSL_INTEGER_ARITHMETIC_BASE_TYPES = (
+        "uint64_t",
+        "int64_t",
+        "min16uint",
+        "min16int",
+        "min12int",
+        "uint",
+        "int",
     )
     HLSL_PATCH_CONTROL_POINT_LIMIT = 32
     METAL_ONLY_SYSTEM_INCLUDES = frozenset(
@@ -6380,6 +6422,23 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if expected == "complex64_t" and self.is_scalar_value_type(source):
             self.required_hlsl_complex64_helpers.add("__crossgl_complex64_make")
             return f"__crossgl_complex64_make({rendered}, 0.0)"
+        expected_integer = self.hlsl_integer_arithmetic_type_info(expected)
+        source_integer = self.hlsl_integer_arithmetic_type_info(source)
+        if (
+            expected_integer is not None
+            and expected_integer["minimum_precision"]
+            and source_integer is not None
+            and expected_integer["width"] == source_integer["width"]
+        ):
+            signed_source_bases = {"int", "int64_t", "uint64_t"}
+            unsigned_source_bases = {"uint", "uint64_t"}
+            valid_source_bases = (
+                unsigned_source_bases
+                if expected_integer["base_type"] == "min16uint"
+                else signed_source_bases
+            )
+            if source_integer["base_type"] in valid_source_bases:
+                return f"{expected}({rendered})"
         signed_narrowing = {
             ("int", "int64_t"),
             ("int", "uint64_t"),
@@ -6547,6 +6606,312 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             or right_is_matrix
             and left_is_vector
         )
+
+    def hlsl_integer_arithmetic_type_info(self, vtype):
+        type_name = self.type_name_string(vtype)
+        if not type_name:
+            return None
+        mapped_type = self.map_type(type_name)
+        for base_type in self.HLSL_INTEGER_ARITHMETIC_BASE_TYPES:
+            if mapped_type == base_type:
+                width = 1
+            elif mapped_type in {f"{base_type}2", f"{base_type}3", f"{base_type}4"}:
+                width = int(mapped_type[-1])
+            else:
+                continue
+            return {
+                "mapped_type": mapped_type,
+                "base_type": base_type,
+                "width": width,
+                "minimum_precision": (
+                    base_type in self.HLSL_MINIMUM_PRECISION_INTEGER_BASE_TYPES
+                ),
+            }
+        return None
+
+    def hlsl_floating_arithmetic_type(self, vtype):
+        type_name = self.type_name_string(vtype)
+        if not type_name:
+            return False
+        mapped_type = self.map_type(type_name)
+        component_type = (
+            self.vector_component_type(mapped_type)
+            if self.is_vector_value_type(mapped_type)
+            else mapped_type
+        )
+        return component_type in {
+            "double",
+            "float",
+            "half",
+            "min10float",
+            "min16float",
+        }
+
+    def hlsl_minimum_precision_integer_arithmetic_error(
+        self,
+        node,
+        operator,
+        left_type,
+        right_type,
+        *,
+        expected_type=None,
+        context,
+        reason,
+        detail,
+    ):
+        mapped_left = self.map_type(left_type) if left_type else None
+        mapped_right = self.map_type(right_type) if right_type else None
+        mapped_expected = self.map_type(expected_type) if expected_type else None
+        raise DirectXMinimumPrecisionIntegerArithmeticError(
+            "DirectX cannot lower minimum-precision integer "
+            f"'{operator}' in {context}: {detail}",
+            operator=operator,
+            left_type=mapped_left,
+            right_type=mapped_right,
+            expected_type=mapped_expected,
+            context=context,
+            reason=reason,
+            source_location=getattr(node, "source_location", None),
+        )
+
+    def hlsl_promoted_integer_arithmetic_base_type(self, type_info):
+        if type_info["minimum_precision"]:
+            return "int"
+        return type_info["base_type"]
+
+    def hlsl_common_integer_arithmetic_base_type(self, left_info, right_info):
+        if (
+            left_info["base_type"] == "min16uint"
+            and right_info["base_type"] == "min16uint"
+        ):
+            return "uint"
+        left_base = self.hlsl_promoted_integer_arithmetic_base_type(left_info)
+        right_base = self.hlsl_promoted_integer_arithmetic_base_type(right_info)
+        if left_base == right_base:
+            return left_base
+        if "uint64_t" in {left_base, right_base}:
+            return "uint64_t"
+        if "int64_t" in {left_base, right_base}:
+            return "int64_t"
+        if "uint" in {left_base, right_base}:
+            return "uint"
+        return "int"
+
+    def hlsl_minimum_precision_integer_operation_contract(
+        self,
+        node,
+        operator,
+        left_type,
+        right_type,
+        *,
+        context,
+    ):
+        left_info = self.hlsl_integer_arithmetic_type_info(left_type)
+        right_info = self.hlsl_integer_arithmetic_type_info(right_type)
+        has_minimum_precision_operand = any(
+            info is not None and info["minimum_precision"]
+            for info in (left_info, right_info)
+        )
+        if not has_minimum_precision_operand:
+            return None
+        if self.hlsl_floating_arithmetic_type(
+            left_type
+        ) or self.hlsl_floating_arithmetic_type(right_type):
+            return None
+        if left_info is None or right_info is None:
+            self.hlsl_minimum_precision_integer_arithmetic_error(
+                node,
+                operator,
+                left_type,
+                right_type,
+                context=context,
+                reason="unresolved-integer-operation-type",
+                detail=(
+                    "both operand types must resolve to scalar or vector integer "
+                    "types before signedness-preserving widening"
+                ),
+            )
+        left_width = left_info["width"]
+        right_width = right_info["width"]
+        if left_width > 1 and right_width > 1 and left_width != right_width:
+            self.hlsl_minimum_precision_integer_arithmetic_error(
+                node,
+                operator,
+                left_type,
+                right_type,
+                context=context,
+                reason="incompatible-vector-widths",
+                detail=(
+                    f"vector widths {left_width} and {right_width} cannot be "
+                    "combined without changing the source operation"
+                ),
+            )
+        return {
+            "left": left_info,
+            "right": right_info,
+            "base_type": self.hlsl_common_integer_arithmetic_base_type(
+                left_info, right_info
+            ),
+            "result_width": max(left_width, right_width),
+        }
+
+    def hlsl_widened_integer_operand(self, rendered, type_info, base_type):
+        width = type_info["width"]
+        operation_type = base_type if width == 1 else f"{base_type}{width}"
+        if type_info["mapped_type"] == operation_type:
+            return rendered
+        return f"{operation_type}({rendered})"
+
+    def hlsl_minimum_precision_integer_operation_expression(
+        self,
+        node,
+        operator,
+        left,
+        right,
+        left_type,
+        right_type,
+        *,
+        expected_type=None,
+        context,
+    ):
+        if operator not in {"/", "%"}:
+            return None
+        contract = self.hlsl_minimum_precision_integer_operation_contract(
+            node,
+            operator,
+            left_type,
+            right_type,
+            context=context,
+        )
+        if contract is None:
+            return None
+
+        left = self.hlsl_widened_integer_operand(
+            left, contract["left"], contract["base_type"]
+        )
+        right = self.hlsl_widened_integer_operand(
+            right, contract["right"], contract["base_type"]
+        )
+        rendered = f"({left} {operator} {right})"
+
+        expected_info = self.hlsl_integer_arithmetic_type_info(expected_type)
+        if expected_info is None or not expected_info["minimum_precision"]:
+            return rendered
+        if expected_info["width"] != contract["result_width"]:
+            self.hlsl_minimum_precision_integer_arithmetic_error(
+                node,
+                operator,
+                left_type,
+                right_type,
+                expected_type=expected_type,
+                context=context,
+                reason="incompatible-result-width",
+                detail=(
+                    f"the operation produces {contract['result_width']} component(s), "
+                    f"but the required result has {expected_info['width']}"
+                ),
+            )
+        return f"{expected_info['mapped_type']}({rendered})"
+
+    def hlsl_minimum_precision_integer_binary_expression(
+        self, expr, left, right, operator
+    ):
+        return self.hlsl_minimum_precision_integer_operation_expression(
+            expr,
+            operator,
+            left,
+            right,
+            self.expression_result_type(getattr(expr, "left", None)),
+            self.expression_result_type(getattr(expr, "right", None)),
+            context="binary expression",
+        )
+
+    def hlsl_minimum_precision_compound_target_is_stable(self, target):
+        if self.hlsl_repeatable_array_assignment_target(target):
+            return True
+        if not isinstance(target, ArrayAccessNode):
+            return False
+
+        index = getattr(target, "index", None)
+        index_is_literal = isinstance(index, (int, float)) or (
+            hasattr(index, "__class__") and "Literal" in str(index.__class__)
+        )
+        return (
+            index_is_literal
+            and self.hlsl_minimum_precision_compound_target_is_stable(
+                getattr(target, "array", None)
+            )
+        )
+
+    def generate_hlsl_minimum_precision_integer_compound_assignment(
+        self,
+        node,
+        target,
+        value,
+        operator,
+        *,
+        lhs=None,
+        target_type=None,
+    ):
+        operator = self.map_operator(operator)
+        binary_operator = {"/=": "/", "%=": "%"}.get(operator)
+        if binary_operator is None:
+            return None
+
+        target_type = target_type or self.expression_result_type(target)
+        target_info = self.hlsl_integer_arithmetic_type_info(target_type)
+        if target_info is None or not target_info["minimum_precision"]:
+            return None
+        value_type = self.expression_result_type(value)
+        if self.hlsl_floating_arithmetic_type(value_type):
+            return None
+        if self.hlsl_expression_has_observable_side_effects(target):
+            self.hlsl_minimum_precision_integer_arithmetic_error(
+                node,
+                binary_operator,
+                target_type,
+                value_type,
+                expected_type=target_type,
+                context="compound assignment",
+                reason="side-effecting-assignment-target",
+                detail=(
+                    "the assignment target would need to be evaluated more than "
+                    "once; materialize its index or pointer before the assignment"
+                ),
+            )
+        if self.hlsl_expression_has_observable_side_effects(
+            value
+        ) and not self.hlsl_minimum_precision_compound_target_is_stable(target):
+            self.hlsl_minimum_precision_integer_arithmetic_error(
+                node,
+                binary_operator,
+                target_type,
+                value_type,
+                expected_type=target_type,
+                context="compound assignment",
+                reason="rhs-may-change-assignment-target",
+                detail=(
+                    "the side-effecting right operand may change the storage "
+                    "selected by the repeated assignment target; materialize its "
+                    "index or pointer before the assignment"
+                ),
+            )
+
+        lhs = lhs or self.generate_expression(target)
+        rhs = self.generate_expression_with_expected(value, None)
+        operation = self.hlsl_minimum_precision_integer_operation_expression(
+            node,
+            binary_operator,
+            lhs,
+            rhs,
+            target_type,
+            value_type,
+            expected_type=target_type,
+            context="compound assignment",
+        )
+        if operation is None:
+            return None
+        return f"{lhs} = {operation}"
 
     def hlsl_vector_swizzle(self, width):
         return {1: "x", 2: "xy", 3: "xyz", 4: "xyzw"}[width]
@@ -6733,6 +7098,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 right_type
             ):
                 return "complex64_t"
+            mapped_operator = self.map_operator(operator)
+            if mapped_operator in {"/", "%"}:
+                integer_contract = (
+                    self.hlsl_minimum_precision_integer_operation_contract(
+                        expr,
+                        mapped_operator,
+                        left_type,
+                        right_type,
+                        context="binary expression",
+                    )
+                )
+                if integer_contract is not None:
+                    width = integer_contract["result_width"]
+                    suffix = "" if width == 1 else str(width)
+                    return f"{integer_contract['base_type']}{suffix}"
             if self.is_vector_value_type(left_type):
                 return left_type
             if self.is_vector_value_type(right_type):
@@ -8674,6 +9054,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if lhs is None:
             return None
         binding = self.hlsl_resource_pointer_binding(target.operand)
+        compound_assignment = (
+            self.generate_hlsl_minimum_precision_integer_compound_assignment(
+                target,
+                target,
+                value,
+                op,
+                lhs=lhs,
+                target_type=binding.get("element_type") if binding else None,
+            )
+        )
+        if compound_assignment is not None:
+            return compound_assignment
         rhs = self.generate_expression_with_expected(
             value, binding.get("element_type") if binding else None
         )
@@ -8732,6 +9124,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 target.array, target.index, require_write=True
             )
             binding = self.hlsl_resource_pointer_binding(target.array)
+            compound_assignment = (
+                self.generate_hlsl_minimum_precision_integer_compound_assignment(
+                    node,
+                    target,
+                    value,
+                    op,
+                    lhs=lhs,
+                    target_type=binding.get("element_type") if binding else None,
+                )
+            )
+            if compound_assignment is not None:
+                return compound_assignment
             rhs = self.generate_expression_with_expected(
                 value, binding.get("element_type") if binding else None
             )
@@ -8757,6 +9161,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             lift_statements, rhs = lifted_value
             lhs = self.generate_expression(target)
             return "\n".join([*lift_statements, f"{lhs} {op} {rhs}"])
+
+        compound_assignment = (
+            self.generate_hlsl_minimum_precision_integer_compound_assignment(
+                node,
+                target,
+                value,
+                op,
+                target_type=target_type,
+            )
+        )
+        if compound_assignment is not None:
+            return compound_assignment
 
         lhs = self.generate_expression(target)
         rhs = self.generate_expression_with_expected(
@@ -9471,6 +9887,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if bool_arithmetic is not None:
                 return bool_arithmetic
+            minimum_precision_integer = (
+                self.hlsl_minimum_precision_integer_binary_expression(
+                    expr,
+                    left,
+                    right,
+                    mapped_op,
+                )
+            )
+            if minimum_precision_integer is not None:
+                return minimum_precision_integer
             return f"({left} {mapped_op} {right})"
         elif isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr)
