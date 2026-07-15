@@ -135,6 +135,63 @@ def test_hlsl_unknown_math_identifier_is_preserved(node):
     assert HLSLCodeGen().generate_expression(node) == node.name
 
 
+def test_hlsl_rint_lowers_to_dxil_nearest_even(tmp_path):
+    source = """
+    shader NearestEvenRint {
+        StructuredBuffer<vec4> input_values @ binding(0);
+        RWStructuredBuffer<vec4> output_values @ binding(1);
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                vec4 halfway = vec4(0.5, 1.5, -0.5, -1.5);
+                float negative_halfway = -0.5;
+                output_values[0] = rint(input_values[0] + halfway)
+                    + vec4(rint(input_values[0].x + negative_halfway));
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert generated.count("round(") == 2
+    assert "rint(" not in generated
+    assert "float4 halfway = float4(0.5, 1.5, -0.5, -1.5);" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        return
+    source_path = tmp_path / "nearest_even_rint.hlsl"
+    output_path = tmp_path / "nearest_even_rint.dxil"
+    listing_path = tmp_path / "nearest_even_rint.ll"
+    source_path.write_text(generated, encoding="utf-8")
+    result = subprocess.run(
+        [
+            dxc,
+            "-T",
+            "cs_6_0",
+            "-E",
+            "CSMain",
+            "-Od",
+            str(source_path),
+            "-Fo",
+            str(output_path),
+            "-Fc",
+            str(listing_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Round_ne(value)" in listing_path.read_text(encoding="utf-8")
+
+
 @pytest.mark.parametrize(
     ("source", "declaration"),
     [

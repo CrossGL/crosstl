@@ -1808,6 +1808,7 @@ class HLSLCodeGen:
             "inversesqrt": "rsqrt",
             "intBitsToFloat": "asfloat",
             "mix": "lerp",
+            "rint": "round",
             "uintBitsToFloat": "asfloat",
         }
 
@@ -9233,7 +9234,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
             if (
                 func_name
-                in {"frac", "fract", "inverseSqrt", "inversesqrt", "rsqrt", "mod"}
+                in {
+                    "frac",
+                    "fract",
+                    "inverseSqrt",
+                    "inversesqrt",
+                    "mod",
+                    "rint",
+                    "rsqrt",
+                }
                 and args
                 and func_name not in getattr(self, "function_return_types", {})
             ):

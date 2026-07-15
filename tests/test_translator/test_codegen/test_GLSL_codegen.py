@@ -161,6 +161,41 @@ def glsl_expression_depends_on(generated_code, expression, expected_token):
     return False
 
 
+def test_glsl_rint_lowers_to_round_even(tmp_path):
+    source = """
+    shader NearestEvenRint {
+        StructuredBuffer<vec4> input_values @ binding(0);
+        RWStructuredBuffer<vec4> output_values @ binding(1);
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                vec4 halfway = vec4(0.5, 1.5, -0.5, -1.5);
+                float negative_halfway = -0.5;
+                output_values[0] = rint(input_values[0] + halfway)
+                    + vec4(rint(input_values[0].x + negative_halfway));
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(source), "compute"
+    )
+
+    assert generated.count("roundEven(") == 2
+    assert re.search(r"\b(?:rint|round)\(", generated) is None
+    assert "vec4 halfway = vec4(0.5, 1.5, (-0.5), (-1.5));" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "nearest_even_rint",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
 def test_glsl_reserved_identifiers_are_sanitized_consistently():
     shader = r"""
     shader ReservedIdentifiers {

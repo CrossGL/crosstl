@@ -2372,6 +2372,7 @@ class GLSLCodeGen:
             "fwidth_fine": "fwidthFine",
             "fwidth_coarse": "fwidthCoarse",
             "rsqrt": "inversesqrt",
+            "rint": "roundEven",
             "sincos": "sin_cos",  # Custom function needed
             "log2": "log2",
             "exp2": "exp2",

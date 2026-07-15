@@ -8377,6 +8377,66 @@ def test_codegen_canonicalizes_qualified_log10_stdlib_wrapper(namespace):
         assert "<unknown>" not in generated
 
 
+@pytest.mark.parametrize("namespace", ["fast", "precise"])
+def test_codegen_canonicalizes_qualified_rint_stdlib_wrapper(namespace):
+    source = f"""
+    typedef bfloat bfloat16_t;
+
+    namespace metal {{
+    namespace {namespace} {{
+    METAL_FUNC bfloat16_t rint(bfloat16_t value) {{
+      return bfloat16_t(__metal_rint(float(value), true));
+    }}
+    }}
+    }}
+
+    float4 rounded_values(float4 values, bfloat16_t value) {{
+      auto wrapper_result = metal::{namespace}::rint(value);
+      float4 vector_result = metal::{namespace}::rint(values);
+      return vector_result + float4(float(wrapper_result));
+    }}
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    ast = parse_crossgl(crossgl)
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+    glsl = GLSLCodeGen().generate(ast)
+
+    assert "bfloat16 wrapper_result = rint(value);" in normalize(crossgl)
+    assert "vec4 vector_result = rint(values);" in normalize(crossgl)
+    assert "half wrapper_result = round(value);" in normalize(hlsl)
+    assert "float4 vector_result = round(values);" in normalize(hlsl)
+    assert "float wrapper_result = roundEven(value);" in normalize(glsl)
+    assert "vec4 vector_result = roundEven(values);" in normalize(glsl)
+    for generated in (crossgl, hlsl, glsl):
+        assert "__metal_rint" not in generated
+        assert "metal::" not in generated
+        assert "<unknown>" not in generated
+
+
+def test_codegen_preserves_user_defined_rint_overload():
+    source = """
+    float rint(float value) {
+      return value + 0.25f;
+    }
+
+    float rounded_value(float value) {
+      return rint(value);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    ast = parse_crossgl(crossgl)
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+    glsl = GLSLCodeGen().generate(ast)
+
+    for generated in (crossgl, hlsl, glsl):
+        assert "float rint(float value)" in generated
+        assert "return rint(value);" in generated
+    assert "round(value)" not in hlsl
+    assert "roundEven(value)" not in glsl
+
+
 def test_codegen_reports_called_unsupported_metal_stdlib_wrapper():
     source = """
     namespace metal {
