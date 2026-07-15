@@ -12,6 +12,7 @@ from crosstl.translator.ast import BinaryOpNode
 from crosstl.translator.codegen.webgl_codegen import (
     WebGLArithmeticConversionError,
     WebGLBooleanCompoundAssignmentError,
+    WebGLBooleanOrderedIntrinsicError,
     WebGLCodeGen,
     WebGLStructConstructionError,
 )
@@ -1437,3 +1438,66 @@ def test_webgl_codegen_rejects_non_webgl_stage_targets(stage):
         match=rf"WebGL target does not support shader stage\(s\): {stage}",
     ):
         WebGLCodeGen().generate_program(ast, target_stage=stage)
+
+
+def test_webgl_boolean_vector_min_max_validate_without_integer_mix_extension(
+    tmp_path,
+):
+    shader = """
+    shader BooleanMinMax {
+        fragment {
+            bvec3 vectorMin(bvec3 left, bvec3 right) {
+                return min(left, right);
+            }
+
+            bvec3 vectorMax(bvec3 left, bvec3 right) {
+                return max(left, right);
+            }
+
+            vec4 main() @ gl_FragColor {
+                bvec3 minimum = vectorMin(
+                    bvec3(true, false, true),
+                    bvec3(true, true, false)
+                );
+                bvec3 maximum = vectorMax(
+                    bvec3(false, false, true),
+                    bvec3(false, true, false)
+                );
+                return vec4(minimum.x, maximum.y, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "#extension GL_EXT_shader_integer_mix" not in generated
+    assert "return bvec3(left.x && right.x" in generated
+    assert "return bvec3(left.x || right.x" in generated
+    assert_webgl_stage_validates_if_available(generated, tmp_path, "boolean-min-max")
+
+
+def test_webgl_boolean_min_max_reports_unrepresentable_operand_shapes():
+    shader = """
+    shader BooleanMinMismatch {
+        fragment {
+            bvec2 invalidMin(bvec2 left, bvec3 right) {
+                return min(left, right);
+            }
+
+            vec4 main() @ gl_FragColor {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(WebGLBooleanOrderedIntrinsicError) as exc_info:
+        WebGLCodeGen().generate(parse_shader(shader))
+
+    assert exc_info.value.project_diagnostic_code == (
+        "project.translate.webgl-boolean-ordered-intrinsic-unrepresentable"
+    )
+    assert exc_info.value.operation == "min"
+    assert exc_info.value.operand_types == ("bvec2", "bvec3")
+    assert exc_info.value.reason == "operand-type-mismatch"

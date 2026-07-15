@@ -81,6 +81,7 @@ from .array_utils import (
     parse_array_type,
     split_array_type_suffix,
 )
+from .boolean_intrinsics import is_boolean_type, ordered_boolean_minmax_width
 from .constant_ordering import partition_constants_by_struct_dependency
 from .enum_utils import (
     build_generic_enum_specialization,
@@ -623,6 +624,30 @@ class DirectXBooleanCompoundAssignmentError(ValueError):
         self.right_type = right_type
         self.operation_type = operation_type
         self.context = context
+        self.reason = reason
+        self.source_location = source_location
+
+
+class DirectXBooleanOrderedIntrinsicError(ValueError):
+    """Raised when boolean min/max operands have no faithful HLSL lowering."""
+
+    project_diagnostic_code = (
+        "project.translate.directx-boolean-ordered-intrinsic-unrepresentable"
+    )
+    missing_capabilities = ("directx.boolean-ordered-intrinsic-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        operation=None,
+        operand_types=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.operation = operation
+        self.operand_types = tuple(operand_types or ())
         self.reason = reason
         self.source_location = source_location
 
@@ -9197,7 +9222,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             } and func_name not in getattr(self, "function_return_types", {}):
                 return "float"
             if (
-                func_name in {"clamp", "lerp", "mix"}
+                func_name in {"clamp", "lerp", "max", "min", "mix"}
                 and args
                 and func_name not in getattr(self, "function_return_types", {})
             ):
@@ -12682,6 +12707,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def hlsl_builtin_function_call(self, func_name, args, *, source_location=None):
         if not func_name or func_name in getattr(self, "function_return_types", {}):
             return None
+        boolean_order_call = self.hlsl_ordered_boolean_minmax_call(
+            func_name,
+            args,
+            source_location=source_location,
+        )
+        if boolean_order_call is not None:
+            return boolean_order_call
         trailing_zero_call = self.generate_hlsl_trailing_zero_call(
             func_name,
             args,
@@ -12725,6 +12757,47 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         left = self.generate_expression(args[0])
         right = self.generate_expression(args[1])
         return f"(({left}) - (({right}) * floor(({left}) / ({right}))))"
+
+    def hlsl_ordered_boolean_minmax_call(
+        self,
+        func_name,
+        args,
+        *,
+        source_location=None,
+    ):
+        argument_types = [
+            self.map_type(self.expression_result_type(argument)) for argument in args
+        ]
+        width = ordered_boolean_minmax_width(func_name, argument_types)
+        if width is None:
+            if func_name in {"min", "max"} and any(
+                is_boolean_type(type_name) for type_name in argument_types
+            ):
+                reason = (
+                    "invalid-arity"
+                    if len(args) != 2
+                    else (
+                        "operand-type-unresolved"
+                        if any(not type_name for type_name in argument_types)
+                        else "operand-type-mismatch"
+                    )
+                )
+                raise DirectXBooleanOrderedIntrinsicError(
+                    "DirectX codegen cannot preserve ordered boolean "
+                    f"'{func_name}' for operand types {argument_types}",
+                    operation=func_name,
+                    operand_types=argument_types,
+                    reason=reason,
+                    source_location=source_location,
+                )
+            return None
+
+        left, right = (self.generate_expression(argument) for argument in args)
+        operation = "and" if func_name == "min" else "or"
+        if width == 1:
+            operator = "&&" if func_name == "min" else "||"
+            return f"(({left}) {operator} ({right}))"
+        return f"{operation}({left}, {right})"
 
     def hlsl_trailing_zero_builtin_is_shadowed(self, func_name):
         return (

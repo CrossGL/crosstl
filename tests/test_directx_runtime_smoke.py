@@ -127,6 +127,56 @@ def test_directx_runtime_smoke_builds_union_storage_dispatch(tmp_path, monkeypat
     ]
 
 
+def test_directx_runtime_smoke_builds_boolean_order_dispatch(tmp_path, monkeypatch):
+    module = _load_smoke_module()
+
+    def passing_dxc(command, **kwargs):
+        _ = kwargs
+        output_path = Path(command[command.index("-Fo") + 1])
+        output_path.write_bytes(b"DXBC-boolean-order-smoke")
+        return type("Result", (), {"returncode": 0, "stderr": "", "stdout": ""})()
+
+    monkeypatch.setattr(module.subprocess, "run", passing_dxc)
+
+    hlsl_path, dxil_path = module._translate_and_compile(
+        tmp_path,
+        "dxc",
+        module.BOOLEAN_ORDER_CASE,
+    )
+    request = module._dispatch_request(
+        hlsl_path,
+        dxil_path,
+        module.BOOLEAN_ORDER_CASE,
+    )
+    generated = hlsl_path.read_text(encoding="utf-8")
+
+    assert "min(false, false)" not in generated
+    assert "max(true, true)" not in generated
+    assert "bool4 minimum = and(" in generated
+    assert "bool4 maximum = or(" in generated
+    assert request.loaded_artifact == b"DXBC-boolean-order-smoke"
+    assert request.buffers["output"].dtype == "uint32"
+    assert request.buffers["output"].shape == (16,)
+    assert list(module.BOOLEAN_ORDER_CASE.expected_values) == [
+        0,
+        0,
+        0,
+        1,
+        0,
+        1,
+        1,
+        1,
+        0,
+        0,
+        0,
+        1,
+        0,
+        1,
+        1,
+        1,
+    ]
+
+
 def test_directx_runtime_smoke_fails_closed_for_dxc_errors(tmp_path, monkeypatch):
     module = _load_smoke_module()
 

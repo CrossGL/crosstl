@@ -7345,8 +7345,7 @@ def test_translate_project_lowers_hlsl_texture_sampling_pair_to_graphics_targets
         encoding="utf-8",
     )
 
-    report = translate_project(load_project_config(repo))
-    payload = report.to_json()
+    payload = translate_project(load_project_config(repo)).to_json()
 
     cgl = (repo / "translated" / "cgl" / "gpu" / "hello_texture.cgl").read_text(
         encoding="utf-8"
@@ -8432,6 +8431,73 @@ def test_translate_project_reports_ambiguous_opengl_mapped_overload(tmp_path):
         "sourcePath": "shaders/mapped_overload.cgl",
         "targetArtifact": "translated/opengl/shaders/mapped_overload.glsl",
     }
+
+
+def test_translate_project_reports_unrepresentable_boolean_min_shapes(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "boolean_order.cgl").write_text(
+        textwrap.dedent("""
+            shader BooleanMinMismatch {
+                compute {
+                    bvec2 invalidMin(bvec2 left, bvec3 right) {
+                        return min(left, right);
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["directx", "opengl"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 2
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.directx-boolean-ordered-intrinsic-unrepresentable": 1,
+        "project.translate.opengl-boolean-ordered-intrinsic-unrepresentable": 1,
+    }
+    diagnostics = {
+        diagnostic["target"]: diagnostic for diagnostic in payload["diagnostics"]
+    }
+    for target, mapped_types in (
+        ("directx", ["bool2", "bool3"]),
+        ("opengl", ["bvec2", "bvec3"]),
+    ):
+        diagnostic = diagnostics[target]
+        assert diagnostic["missingCapabilities"] == [
+            f"{target}.boolean-ordered-intrinsic-lowering"
+        ]
+        assert diagnostic["details"] == {
+            "booleanOrderedIntrinsic": {
+                "operandTypes": mapped_types,
+                "operation": "min",
+                "reason": "operand-type-mismatch",
+            },
+            "sourcePath": "shaders/boolean_order.cgl",
+            "targetArtifact": (
+                f"translated/{target}/shaders/boolean_order."
+                f"{'hlsl' if target == 'directx' else 'glsl'}"
+            ),
+        }
+
+    report_path = repo / "translated" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert {diagnostic["code"] for diagnostic in validation["diagnostics"]}.isdisjoint(
+        {"project.validate.invalid-report"}
+    )
 
 
 def test_translate_project_reports_excess_opengl_aggregate_elements(tmp_path):
