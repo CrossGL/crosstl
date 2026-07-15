@@ -41,6 +41,7 @@ TOOLS = [
                 "plan-runtime-adapters",
                 "materialize-runtime-adapters",
                 "runtime-loader-manifest",
+                "runtime-variant-registry",
                 "scaffold-host-loaders",
                 "inspect-host-loader-scaffolds",
                 "plan-host-loader-consumption",
@@ -220,6 +221,14 @@ TOOLS = [
         ),
         (
             ("runtime-loader-manifest",),
+            (
+                "usage:",
+                "--format",
+                "--output",
+            ),
+        ),
+        (
+            ("runtime-variant-registry",),
             (
                 "usage:",
                 "--format",

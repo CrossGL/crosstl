@@ -702,6 +702,46 @@ diagnostics and runtime-reference review actions forward, and it remains a
 metadata contract only: it does not rewrite host application code, execute
 device code, generate runtime framework code, or install target SDKs.
 
+Build a deterministic runtime variant registry from either a ready runtime
+package or loader manifest:
+
+.. code-block:: bash
+
+   crosstl runtime-variant-registry \
+     crosstl-runtime-package/runtime-loader-manifest.json \
+     --output runtime-variant-registry.json
+
+Runtime variant registries emit a schema-v1
+``crosstl-runtime-variant-registry`` JSON document. Each ``variants`` entry is
+indexed by a canonical ``crosstl-rvk1:`` key: URL-safe base64 without padding
+over canonical JSON containing the source unit and source entry, target and
+target profile, type and value template arguments, specialization constant
+IDs and values, and defines. Key fields are sorted before encoding, registry
+records and target summaries are ordered by key, and ``registryHash`` covers
+the key schema and records. Equivalent input records therefore produce the
+same registry regardless of package or loader record order.
+
+Each registry record preserves source and target names separately and maps the
+exact key to the target artifact path, format, hash and byte size, target entry
+point, binding resources and ordinary constants, pipeline specialization
+constants, and translation and source provenance. Inputs use closed package
+and loader field sets. Malformed schemas fail before records are emitted;
+duplicate keys and keys with conflicting artifacts or metadata are diagnosed
+and rejected. Package inspection hash or size failures remain explicit
+``stale`` records, and loader blockers remain ``blocked`` records. Both are
+listed as available exact keys but have ``lookup.eligible`` set to false.
+
+The public ``build_runtime_variant_registry`` API builds the document,
+``encode_runtime_variant_key`` and ``decode_runtime_variant_key`` expose the
+key contract, and ``lookup_runtime_variant`` performs exact lookup with the
+available keys included in not-found diagnostics. Lookup validates the closed
+registry schema, ``registryHash``, canonical key-to-record identity, and record
+eligibility before returning a ready artifact. Modified or malformed registry
+records fail as invalid rather than participating in selection. This slice has
+no implicit defaults or best-match behavior. Target compilation, deferred
+compilation, host runtime dispatch, and device execution remain host-runtime
+work for later slices; the registry does not simulate them.
+
 Build deterministic host loader scaffold metadata from a runtime loader
 manifest:
 
