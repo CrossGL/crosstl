@@ -135,6 +135,7 @@ class _OpenGLSPIRVUnavailable(RuntimeError):
 
 
 _OPENGL_SPIRV_HEADER_BYTE_LENGTH = 5 * 4
+_DIRECTX_MAX_PADDED_DESCRIPTOR_COUNT = 4096
 
 
 class _OpenGLSPIRVComputeShader:
@@ -212,8 +213,9 @@ class DirectXComputeRuntime:
 
     ``compushady`` is imported lazily and receives the DXIL emitted by the
     native DirectX parity adapter. Its descriptor-list API represents
-    contiguous CBV, SRV, and UAV registers in space zero; unsupported layouts
-    are rejected before resource creation.
+    contiguous CBV, SRV, and UAV registers in space zero. Sparse reflected
+    layouts are padded with internal zeroed descriptors before resource
+    creation; duplicate bindings and nonzero register spaces are rejected.
     """
 
     name = "directx-compute-runtime"
@@ -387,6 +389,7 @@ class DirectXComputeRuntime:
             *_prepare_directx_buffers(request.buffers),
             *_prepare_directx_constants(request.constants),
         )
+        prepared = _complete_directx_register_layout(prepared)
         prepared = _validate_directx_register_layout(prepared)
         workgroup_count = _workgroup_count(request, target="DirectX")
 
@@ -2174,6 +2177,48 @@ def _validate_directx_register_layout(
             )
         result.extend(resources)
     return tuple(result)
+
+
+def _complete_directx_register_layout(
+    prepared: Sequence[_PreparedDirectXBuffer],
+) -> tuple[_PreparedDirectXBuffer, ...]:
+    completed = list(prepared)
+    for namespace in ("cbv", "srv", "uav"):
+        resources = [item for item in prepared if item.namespace == namespace]
+        indices = [item.binding_index for item in resources]
+        if len(indices) != len(set(indices)):
+            continue
+        max_binding = max(indices, default=-1)
+        descriptor_count = max_binding + 1
+        if descriptor_count > _DIRECTX_MAX_PADDED_DESCRIPTOR_COUNT:
+            raise _directx_setup_error(
+                "DirectX sparse register layout exceeds the descriptor padding limit.",
+                "descriptor-padding-limit-exceeded",
+                namespace=namespace,
+                bindings=sorted(indices),
+                requiredDescriptorCount=descriptor_count,
+                maxDescriptorCount=_DIRECTX_MAX_PADDED_DESCRIPTOR_COUNT,
+            )
+        bound_indices = set(indices)
+        for binding_index in range(max_binding):
+            if binding_index in bound_indices:
+                continue
+            allocation_size = 256 if namespace == "cbv" else 4
+            completed.append(
+                _PreparedDirectXBuffer(
+                    name=f"__crosstl_descriptor_gap_{namespace}{binding_index}",
+                    namespace=namespace,
+                    binding_index=binding_index,
+                    dtype="uint32",
+                    shape=(1,),
+                    source="descriptor-gap",
+                    output_name=None,
+                    payload=b"\x00" * 4,
+                    allocation_size=allocation_size,
+                    stride=0 if namespace == "cbv" else 4,
+                )
+            )
+    return tuple(completed)
 
 
 def _directx_resource_namespace(
