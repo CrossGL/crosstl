@@ -30554,6 +30554,63 @@ def test_opengl_zero_fills_partial_aggregate_initializers(tmp_path):
     )
 
 
+def test_opengl_zero_fills_partial_vector_initializers_without_repeating_values():
+    shader = """
+    shader PartialVectorInitializers {
+        uint supplied(uint value) {
+            return value;
+        }
+
+        uint2 suppliedPair(uint value) {
+            return uint2(value, value + 1u);
+        }
+
+        void makeVectors(uint2 key) {
+            uint4 ks = {key.x, key.y, key.x ^ key.y ^ 0x1BD11BDA};
+            uint4 materializedKs = uint4(
+                key.x,
+                key.y,
+                key.x ^ key.y ^ 0x1BD11BDA
+            );
+            uint4 mixed = {suppliedPair(4u), supplied(6u)};
+            int4 signedValues = int4(1, 2, 3);
+            float4 floatValues = float4(1.0, 2.0, 3.0);
+            bool4 boolValues = bool4(true, false, true);
+            uint4 complete = uint4(suppliedPair(8u), suppliedPair(10u));
+            uint4 splat = uint4(supplied(12u));
+        }
+
+        compute {
+            void main() {
+                makeVectors(uint2(1u, 2u));
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    expected_key = "uvec4(key.x, key.y, ((key.x ^ key.y) ^ 466688986), 0u)"
+    assert f"uvec4 ks = {expected_key};" in generated_code
+    assert f"uvec4 materializedKs = {expected_key};" in generated_code
+    assert "uvec4 mixed = uvec4(suppliedPair(4u), supplied(6u), 0u);" in generated_code
+    assert "ivec4 signedValues = ivec4(1, 2, 3, 0);" in generated_code
+    assert "vec4 floatValues = vec4(1.0, 2.0, 3.0, 0.0);" in generated_code
+    assert "bvec4 boolValues = bvec4(true, false, true, false);" in generated_code
+    assert (
+        "uvec4 complete = uvec4(suppliedPair(8u), suppliedPair(10u));" in generated_code
+    )
+    assert "uvec4 splat = uvec4(supplied(12u));" in generated_code
+    for call in (
+        "suppliedPair(4u)",
+        "supplied(6u)",
+        "suppliedPair(8u)",
+        "suppliedPair(10u)",
+        "supplied(12u)",
+    ):
+        assert generated_code.count(call) == 1
+
+
 def test_opengl_resolves_scoped_local_constants_for_array_aggregates(tmp_path):
     shader = """
     shader ScopedArrayAggregates {
@@ -31092,6 +31149,25 @@ def test_opengl_aggregate_initializer_reports_excess_fixed_array_elements():
     assert diagnostic.expected_type == "float[2]"
     assert diagnostic.element_count == 3
     assert diagnostic.expected_element_count == 2
+    assert diagnostic.reason == "element-count-mismatch"
+
+
+def test_opengl_vector_aggregate_reports_excess_supplied_components():
+    shader = """
+    shader InvalidVectorAggregateShape {
+        void makeValue() {
+            uint4 value = {uint3(1u, 2u, 3u), uint2(4u, 5u)};
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLAggregateInitializerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.expected_type == "uvec4"
+    assert diagnostic.element_count == 2
+    assert diagnostic.expected_element_count == 4
     assert diagnostic.reason == "element-count-mismatch"
 
 
