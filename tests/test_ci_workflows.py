@@ -2156,6 +2156,14 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         mlx_porting,
         "Prove OpenGL SPIR-V specialization runtime",
     )
+    directx_copysign_runtime = _workflow_step_text(
+        mlx_porting,
+        "Prove exact Direct3D copysign bit preservation",
+    )
+    opengl_copysign_runtime = _workflow_step_text(
+        mlx_porting,
+        "Prove exact OpenGL copysign bit preservation",
+    )
     subgroup_vulkan_runtime = _workflow_step_text(
         mlx_porting,
         "Prove generated OpenGL GLSL subgroup numerical execution through Vulkan",
@@ -2191,6 +2199,19 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "PYOPENGL_PLATFORM: egl" in ordinary_opengl_runtime
     assert "opengl_compute_runtime_specializes_generated_spirv_on_device" in (
         ordinary_opengl_runtime
+    )
+    assert "if: runner.os == 'Windows'" in directx_copysign_runtime
+    assert 'CROSTL_RUN_DIRECTX_COPYSIGN_DEVICE_TEST: "1"' in (directx_copysign_runtime)
+    assert "directx_compute_runtime_executes_copysign_bit_patterns_on_device" in (
+        directx_copysign_runtime
+    )
+    assert "if: runner.os == 'Linux'" in opengl_copysign_runtime
+    assert 'CROSTL_RUN_OPENGL_COPYSIGN_DEVICE_TEST: "1"' in opengl_copysign_runtime
+    assert "EGL_PLATFORM: surfaceless" in opengl_copysign_runtime
+    assert 'LIBGL_ALWAYS_SOFTWARE: "1"' in opengl_copysign_runtime
+    assert "PYOPENGL_PLATFORM: egl" in opengl_copysign_runtime
+    assert "opengl_compute_runtime_executes_copysign_bit_patterns_on_device" in (
+        opengl_copysign_runtime
     )
     assert 'CROSTL_RUN_VULKAN_DEVICE_TEST: "1"' in subgroup_vulkan_runtime
     assert "-name 'lvp_icd*.json'" in subgroup_vulkan_runtime

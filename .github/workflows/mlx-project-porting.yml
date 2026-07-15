@@ -206,6 +206,12 @@ jobs:
           CROSTL_RUN_DIRECTX_BOUNDED_WAVE_SHUFFLE_DEVICE_TEST: "1"
         run: python -m pytest -q -n auto tests/test_translator/test_native_runtime_drivers.py -k "directx_compute_runtime_executes_bounded_wave_shuffle_and_fill_up_on_device"
 
+      - name: Prove exact Direct3D copysign bit preservation
+        if: runner.os == 'Windows'
+        env:
+          CROSTL_RUN_DIRECTX_COPYSIGN_DEVICE_TEST: "1"
+        run: python -m pytest -q -n auto tests/test_translator/test_native_runtime_drivers.py -k "directx_compute_runtime_executes_copysign_bit_patterns_on_device"
+
       - name: Prove translated MLX arange Direct3D numerical execution
         if: runner.os == 'Windows'
         env:
@@ -224,6 +230,18 @@ jobs:
           python -m pytest -q -n auto \
             tests/test_translator/test_native_runtime_drivers.py \
             -k "opengl_compute_runtime_specializes_generated_spirv_on_device"
+
+      - name: Prove exact OpenGL copysign bit preservation
+        if: runner.os == 'Linux'
+        env:
+          CROSTL_RUN_OPENGL_COPYSIGN_DEVICE_TEST: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          python -m pytest -q -n auto \
+            tests/test_translator/test_native_runtime_drivers.py \
+            -k "opengl_compute_runtime_executes_copysign_bit_patterns_on_device"
 
       - name: Prove generated OpenGL GLSL subgroup numerical execution through Vulkan
         if: runner.os == 'Linux'

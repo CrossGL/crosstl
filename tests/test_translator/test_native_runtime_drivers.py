@@ -58,6 +58,145 @@ from crosstl.translator.parser import Parser
 
 ROOT = Path(__file__).resolve().parents[2]
 
+_COPYSIGN_MAGNITUDE_BITS = (
+    0x00000000,
+    0x80000000,
+    0x7F800000,
+    0xFF800000,
+    0x7FC12345,
+    0xFFC54321,
+    0x3F800001,
+    0xBF123456,
+)
+_COPYSIGN_SIGN_BITS = (
+    0x80000000,
+    0x00000000,
+    0x80000000,
+    0x00000000,
+    0x80000000,
+    0x00000000,
+    0x80000000,
+    0x00000000,
+)
+_COPYSIGN_OUTPUT_BITS = tuple(
+    (magnitude & 0x7FFFFFFF) | (sign_source & 0x80000000)
+    for magnitude, sign_source in zip(_COPYSIGN_MAGNITUDE_BITS, _COPYSIGN_SIGN_BITS)
+)
+
+
+def _prepare_copysign_runtime_fixture(tmp_path: Path, target: str):
+    fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / target
+    source_path = fixture_dir / "copysign_bit_patterns.cgl"
+    artifact_report = json.loads(
+        (fixture_dir / "copysign_bit_patterns.artifacts.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    generated = translate(
+        str(source_path),
+        backend=target,
+        format_output=False,
+    )
+
+    assert "copysign(" not in generated
+    assert "0x7fffffffu" in generated
+    assert "0x80000000u" in generated
+    if target == "directx":
+        assert "[numthreads(1, 1, 1)]" in generated
+        assert "asfloat(((asuint(magnitude) & 0x7fffffffu)" in generated
+        assert "(asuint(sign_source) & 0x80000000u)" in generated
+    else:
+        assert target == "opengl"
+        assert (
+            "layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;"
+            in generated
+        )
+        assert (
+            "uintBitsToFloat(((floatBitsToUint(magnitude) & 0x7fffffffu)" in generated
+        )
+        assert "(floatBitsToUint(sign_source) & 0x80000000u)" in generated
+
+    artifact_report["project"]["root"] = str(tmp_path)
+    artifact_path = tmp_path / artifact_report["artifacts"][0]["path"]
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text(generated, encoding="utf-8")
+    manifest = build_runtime_test_manifest(
+        artifact_report,
+        fixture_dir / "copysign_bit_patterns.fixture-metadata.json",
+        project_root=tmp_path,
+    )
+    assert manifest["success"] is True, json.dumps(manifest, indent=2)
+    inputs = {item["name"]: item for item in manifest["tests"][0]["inputs"]}
+    assert inputs["magnitude_bits"]["values"] == list(_COPYSIGN_MAGNITUDE_BITS)
+    assert inputs["sign_bits"]["values"] == list(_COPYSIGN_SIGN_BITS)
+    expected_output = manifest["tests"][0]["expectedOutputs"][0]
+    assert expected_output["dtype"] == "uint32"
+    assert expected_output["shape"] == [8]
+    assert expected_output["values"] == list(_COPYSIGN_OUTPUT_BITS)
+
+    plan = plan_runtime_test_manifest(
+        artifact_report,
+        manifest,
+        project_root=tmp_path,
+    )
+    assert plan["success"] is True, json.dumps(plan, indent=2)
+    case = plan["testCases"][0]
+    entry_point = "CSMain" if target == "directx" else "main"
+    assert case["runtimeExecution"]["dispatch"] == {
+        "entryPoint": entry_point,
+        "workgroupSize": [1, 1, 1],
+        "workgroupCount": [8, 1, 1],
+        "globalSize": [8, 1, 1],
+        "metadata": {
+            "stage": "compute",
+            "source": "fixture",
+            "status": "available",
+        },
+    }
+    assert [
+        (
+            item["binding"]["name"],
+            item["binding"]["binding"],
+            item["source"],
+        )
+        for item in case["runtimeExecution"]["resourceBindings"]
+        if "id" in item["binding"]
+    ] == [
+        ("magnitude_bits", 0, "input"),
+        ("sign_bits", 1, "input"),
+        ("output_bits", 0 if target == "directx" else 2, "expectedOutput"),
+    ]
+    return artifact_report, manifest
+
+
+def _assert_copysign_runtime_report(report):
+    failure_context = json.dumps(report, indent=2, sort_keys=True)
+    assert report["success"] is True, failure_context
+    assert report["summary"]["passedCount"] == 1, failure_context
+    assert report["summary"]["skippedCount"] == 0, failure_context
+    assert report["summary"]["unavailableCount"] == 0, failure_context
+    assert report["summary"]["failedCount"] == 0, failure_context
+    result = report["results"][0]
+    assert result["status"] == "passed", failure_context
+    assert result["comparisons"] == [
+        {
+            "name": "output_bits",
+            "kind": "buffer",
+            "status": "passed",
+            "tolerance": {"absolute": 0.0, "relative": 0.0},
+            "expected": {"dtype": "uint32", "shape": [8]},
+            "actual": {"dtype": "uint32", "shape": [8]},
+            "mismatchCount": 0,
+            "maxAbsoluteError": 0.0,
+            "maxRelativeError": 0.0,
+        }
+    ]
+
+
+@pytest.mark.parametrize("target", ("directx", "opengl"))
+def test_copysign_bit_patterns_translation_and_manifest_plan(tmp_path, target):
+    _prepare_copysign_runtime_fixture(tmp_path, target)
+
 
 def _runtime_request(tmp_path: Path) -> RuntimeExecutionRequest:
     return RuntimeExecutionRequest(
@@ -979,6 +1118,33 @@ def test_directx_compute_runtime_executes_bounded_wave_shuffle_and_fill_up_on_de
             "maxRelativeError": 0.0,
         }
     ]
+
+
+def test_directx_compute_runtime_executes_copysign_bit_patterns_on_device(tmp_path):
+    if os.environ.get("CROSTL_RUN_DIRECTX_COPYSIGN_DEVICE_TEST") != "1":
+        pytest.skip(
+            "set CROSTL_RUN_DIRECTX_COPYSIGN_DEVICE_TEST=1 to run the exact "
+            "Direct3D copysign test"
+        )
+    if not sys.platform.startswith("win32"):
+        pytest.fail("Exact Direct3D copysign runtime proof requires Windows")
+    if shutil.which("dxc") is None:
+        pytest.fail("DXC is required for the exact Direct3D copysign proof")
+    try:
+        __import__("compushady")
+    except ImportError as exc:
+        pytest.fail(f"Direct3D copysign runtime dependency is unavailable: {exc}")
+
+    artifact_report, manifest = _prepare_copysign_runtime_fixture(tmp_path, "directx")
+    report = verify_runtime_test_manifest(
+        artifact_report,
+        manifest,
+        executors={
+            "directx": DirectXRuntimeParityAdapter(runtime=DirectXComputeRuntime())
+        },
+    )
+
+    _assert_copysign_runtime_report(report)
 
 
 def test_directx_compute_runtime_executes_translated_pinned_mlx_arange_on_device():
@@ -2290,6 +2456,35 @@ def test_opengl_compute_runtime_executes_bounded_wave_shuffle_and_fill_up_on_dev
             "maxRelativeError": 0.0,
         }
     ]
+
+
+def test_opengl_compute_runtime_executes_copysign_bit_patterns_on_device(tmp_path):
+    if os.environ.get("CROSTL_RUN_OPENGL_COPYSIGN_DEVICE_TEST") != "1":
+        pytest.skip(
+            "set CROSTL_RUN_OPENGL_COPYSIGN_DEVICE_TEST=1 to run the exact "
+            "OpenGL copysign test"
+        )
+    if not sys.platform.startswith("linux"):
+        pytest.fail("Exact OpenGL copysign runtime proof requires Linux")
+    if shutil.which("glslangValidator") is None:
+        pytest.fail("glslangValidator is required for the exact OpenGL copysign proof")
+    try:
+        __import__("moderngl")
+    except ImportError as exc:
+        pytest.fail(f"OpenGL copysign runtime dependency is unavailable: {exc}")
+
+    artifact_report, manifest = _prepare_copysign_runtime_fixture(tmp_path, "opengl")
+    report = verify_runtime_test_manifest(
+        artifact_report,
+        manifest,
+        executors={
+            "opengl": OpenGLRuntimeParityAdapter(
+                runtime=OpenGLComputeRuntime(context_backends=("egl",))
+            )
+        },
+    )
+
+    _assert_copysign_runtime_report(report)
 
 
 def test_opengl_glsl_wave_shuffle_executes_via_vulkan_on_device(tmp_path):
