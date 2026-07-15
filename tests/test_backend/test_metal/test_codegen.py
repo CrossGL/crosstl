@@ -7602,6 +7602,59 @@ def test_codegen_auto_aggregate_uses_selected_overload_return_identity():
     assert "Record record = select_value(4.0f);" in normalized
 
 
+def test_codegen_auto_pointer_arithmetic_preserves_device_pointer_type():
+    source = """
+    float read_offset(const device float* input, uint offset) {
+      const auto cursor = input + offset;
+      const auto nested = 1u + cursor;
+      return nested[0];
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    normalized = normalize(crossgl)
+
+    assert "const device float* cursor = input + offset;" in normalized
+    assert "const device float* nested = 1u + cursor;" in normalized
+    assert "return nested[0];" in normalized
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_auto_pointer_arithmetic_preserves_writable_pointer_type():
+    source = """
+    void write_offset(device float* output, uint offset, float value) {
+      auto cursor = output + offset;
+      cursor += 1u;
+      cursor[0] = value;
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    normalized = normalize(crossgl)
+
+    assert "device float* cursor = output + offset;" in normalized
+    assert "cursor += 1u;" in normalized
+    assert "cursor[0] = value;" in normalized
+    assert "const device float* cursor" not in normalized
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_auto_pointer_arithmetic_preserves_threadgroup_address_space():
+    source = """
+    float read_threadgroup(threadgroup float* values, uint offset) {
+      auto cursor = values - offset;
+      return cursor[0];
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    normalized = normalize(crossgl)
+
+    assert "threadgroup float* cursor = values - offset;" in normalized
+    assert "return cursor[0];" in normalized
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_reports_ambiguous_selected_auto_return_type(tmp_path):
     source = """
     auto ambiguous_result(bool use_integer) {
