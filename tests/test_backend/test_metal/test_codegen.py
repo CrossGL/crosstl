@@ -9,6 +9,7 @@ import crosstl
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
 from crosstl.backend.Metal.MetalCrossGLCodeGen import (
+    MetalAddressProvenanceError,
     MetalAtomicFenceLoweringError,
     MetalAutoTypeInferenceError,
     MetalBuiltinOverloadResolutionError,
@@ -7677,6 +7678,181 @@ def test_codegen_auto_pointer_dereference_infers_pointee_type():
     assert "float* first" not in normalized
     assert "float* second" not in normalized
     assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_auto_pointer_from_index_preserves_device_provenance():
+    source = """
+    float read_indexed(const device float* values, uint index, uint offset) {
+      auto cursor = &values[index];
+      const auto nested = cursor + offset;
+      return nested[0];
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    normalized = normalize(crossgl)
+
+    assert "const device float* cursor = (&values[index]);" in normalized
+    assert "const device float* nested = cursor + offset;" in normalized
+    assert "return nested[0];" in normalized
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_auto_pointer_from_index_preserves_writable_storage():
+    source = """
+    void write_indexed(device float* values, uint index, float value) {
+      auto cursor = &values[index];
+      cursor[1] = value;
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    normalized = normalize(crossgl)
+
+    assert "device float* cursor = (&values[index]);" in normalized
+    assert "cursor[1] = value;" in normalized
+    assert "const device float* cursor" not in normalized
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_auto_pointer_from_nested_local_index_preserves_allocation():
+    source = """
+    void address_local(uint row, uint column) {
+      threadgroup volatile float shared_values[4][8];
+      int private_values[4][8];
+      auto shared_cursor = &shared_values[row][column];
+      auto private_cursor = &private_values[row][column];
+      shared_cursor[0] = private_cursor[0];
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    normalized = normalize(crossgl)
+
+    assert (
+        "volatile threadgroup float* shared_cursor = "
+        "(&shared_values[row][column]);" in normalized
+    )
+    assert "thread int* private_cursor = (&private_values[row][column]);" in normalized
+    assert "shared_cursor[0] = private_cursor[0];" in normalized
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_auto_pointer_from_index_evaluates_offset_once():
+    source = """
+    uint next_index(thread uint& index) {
+      return index++;
+    }
+
+    float read_once(const device float* values, thread uint& index) {
+      auto cursor = &values[next_index(index)];
+      return cursor[0];
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    declaration = next(line for line in crossgl.splitlines() if "cursor =" in line)
+
+    assert declaration.count("next_index(index)") == 1
+    assert "const device float* cursor = (&values[next_index(index)]);" in normalize(
+        declaration
+    )
+    assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_auto_pointer_from_index_reaches_portable_target_offsets(tmp_path):
+    source = """
+    kernel void indexed_alias(
+        const device float* values [[buffer(0)]],
+        device float* results [[buffer(1)]],
+        uint gid [[thread_position_in_grid]]) {
+      auto cursor = &values[gid];
+      results[gid] = cursor[1];
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "int64_t cursor_offset = int64_t(gid);" in hlsl
+    assert "results[gid] = values[uint((cursor_offset + 1))];" in hlsl
+    assert "int cursor_offset = int(gid);" in glsl
+    assert "results[gid] = values[(cursor_offset + 1)];" in glsl
+
+    dxc = shutil.which("dxc")
+    if dxc is not None:
+        hlsl_path = tmp_path / "metal-indexed-address.hlsl"
+        hlsl_path.write_text(hlsl, encoding="utf-8")
+        result = subprocess.run(
+            [dxc, "-T", "cs_6_0", "-E", "CSMain", str(hlsl_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    assert_opengl_compute_validates_if_available(
+        glsl, tmp_path, "metal-indexed-address"
+    )
+
+
+@pytest.mark.parametrize(
+    ("initializer", "operand_kind"),
+    [
+        ("&make_value()[index]", "vector subscript"),
+        ("&value.xy", "vector swizzle"),
+    ],
+)
+def test_codegen_rejects_auto_pointer_without_addressable_storage(
+    initializer, operand_kind
+):
+    source = f"""
+    float4 make_value() {{
+      return float4(1.0f);
+    }}
+
+    void invalid_address(float4 value, uint index) {{
+      auto pointer = {initializer};
+    }}
+    """
+
+    with pytest.raises(MetalAddressProvenanceError) as exc_info:
+        convert_without_preprocessing(source)
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.metal-address-provenance-unresolved"
+    )
+    assert diagnostic.missing_capabilities == ("metal.address-provenance-inference",)
+    assert diagnostic.operand_kind == operand_kind
+
+
+def test_project_reports_unresolved_metal_address_provenance(tmp_path):
+    source = """
+    float4 make_value() {
+      return float4(1.0f);
+    }
+
+    kernel void invalid_address(
+        device float* output [[buffer(0)]],
+        uint index [[thread_position_in_grid]]) {
+      auto pointer = &make_value()[index];
+      output[index] = pointer[0];
+    }
+    """
+    (tmp_path / "invalid_address.metal").write_text(source, encoding="utf-8")
+
+    payload = translate_project(tmp_path, targets=["cgl"], output_dir="out").to_json()
+
+    assert payload["summary"]["translatedCount"] == 0, payload
+    assert payload["summary"]["failedCount"] == 1, payload
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-address-provenance-unresolved": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "metal.address-provenance-inference": 1
+    }
 
 
 def test_codegen_reports_ambiguous_selected_auto_return_type(tmp_path):

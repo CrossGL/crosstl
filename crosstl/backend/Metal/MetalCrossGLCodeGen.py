@@ -126,6 +126,30 @@ class MetalAutoTypeInferenceError(ValueError):
         )
 
 
+class MetalAddressProvenanceError(ValueError):
+    """Raised when an address expression has no provable storage provenance."""
+
+    project_diagnostic_code = "project.translate.metal-address-provenance-unresolved"
+    missing_capabilities = ("metal.address-provenance-inference",)
+
+    def __init__(
+        self,
+        operand_kind,
+        reason,
+        source_location=None,
+        base_type=None,
+    ):
+        self.operand_kind = operand_kind
+        self.reason = reason
+        self.source_location = source_location
+        self.base_type = base_type
+        type_detail = f" with base type '{base_type}'" if base_type else ""
+        super().__init__(
+            f"Cannot infer Metal address provenance for {operand_kind}{type_detail}: "
+            f"{reason}"
+        )
+
+
 class MetalStructMethodCallResolutionError(ValueError):
     """Raised when a lowered sibling method call cannot be rebound safely."""
 
@@ -4483,7 +4507,7 @@ class MetalToCrossGLConverter:
         return qualifiers
 
     def declaration_has_resource_storage(self, var):
-        resolved_type = self.resolve_type_alias(getattr(var, "vtype", None))
+        resolved_type = self.resolve_type_alias(self.effective_metal_variable_type(var))
         return bool(
             self.pointer_element_type(resolved_type)
             or self.reference_element_type(resolved_type)
@@ -4591,7 +4615,8 @@ class MetalToCrossGLConverter:
         const_device_pointer = bool(
             "const" in qualifiers
             and "device" in qualifiers
-            and self.pointer_element_type(getattr(var, "vtype", None)) is not None
+            and self.pointer_element_type(self.effective_metal_variable_type(var))
+            is not None
         )
         const_str = (
             "const "
@@ -10030,7 +10055,217 @@ class MetalToCrossGLConverter:
             pointer_source = self.metal_pointer_arithmetic_source(expr)
             if pointer_source is not None:
                 return self.expression_metal_type_qualifiers(pointer_source[0])
+        if isinstance(expr, ArrayAccessNode):
+            return self.expression_metal_type_qualifiers(expr.array)
+        if isinstance(expr, MemberAccessNode):
+            return self.expression_metal_type_qualifiers(expr.object)
+        if isinstance(expr, UnaryOpNode):
+            if expr.op == "&":
+                provenance = self.metal_address_provenance(expr)
+                return provenance[1]
+            if expr.op == "*":
+                return self.expression_metal_type_qualifiers(expr.operand)
         return ()
+
+    def metal_address_provenance(self, expression):
+        if not isinstance(expression, UnaryOpNode) or expression.op != "&":
+            return None
+
+        operand = expression.operand
+        source_location = getattr(expression, "source_location", None) or getattr(
+            operand, "source_location", None
+        )
+        operand_type = self.expression_metal_type(operand)
+
+        if isinstance(operand, ArrayAccessNode):
+            selection = self.metal_indexed_type_selection(operand)
+            if selection["kind"] not in {"array", "pointer"}:
+                raise MetalAddressProvenanceError(
+                    f"{selection['kind']} subscript",
+                    "the selected component is not independently addressable storage",
+                    source_location,
+                    selection["base_type"],
+                )
+            qualifiers = self.metal_addressable_storage_qualifiers(operand.array)
+            if qualifiers is None:
+                raise MetalAddressProvenanceError(
+                    "indexed expression",
+                    "the indexed base is not rooted in tracked storage",
+                    source_location,
+                    selection["base_type"],
+                )
+            return self.metal_address_pointer_provenance(
+                selection["selected_type"], qualifiers, source_location, "subscript"
+            )
+
+        if isinstance(operand, MemberAccessNode):
+            object_type = self.expression_metal_type(operand.object)
+            if self.metal_vector_component_parts(object_type) is not None:
+                raise MetalAddressProvenanceError(
+                    "vector swizzle",
+                    "Metal vector components do not provide portable addressable storage",
+                    source_location,
+                    object_type,
+                )
+            if self.metal_matrix_type_parts(object_type) is not None:
+                raise MetalAddressProvenanceError(
+                    "matrix component",
+                    "Metal matrix components do not provide portable addressable storage",
+                    source_location,
+                    object_type,
+                )
+            qualifiers = self.metal_addressable_storage_qualifiers(operand.object)
+            if operand_type is None or qualifiers is None:
+                raise MetalAddressProvenanceError(
+                    "member expression",
+                    "the member is not rooted in tracked aggregate storage",
+                    source_location,
+                    object_type,
+                )
+            return self.metal_address_pointer_provenance(
+                operand_type, qualifiers, source_location, "member expression"
+            )
+
+        if isinstance(operand, (str, VariableNode)):
+            qualifiers = self.metal_addressable_storage_qualifiers(operand)
+            if operand_type is None or qualifiers is None:
+                raise MetalAddressProvenanceError(
+                    "identifier",
+                    "the identifier does not name tracked storage",
+                    source_location,
+                    operand_type,
+                )
+            return self.metal_address_pointer_provenance(
+                operand_type, qualifiers, source_location, "identifier"
+            )
+
+        if isinstance(operand, UnaryOpNode) and operand.op == "*":
+            pointer_type = self.expression_metal_type(operand.operand)
+            if self.metal_pointer_pointee_type_once(pointer_type) is None:
+                raise MetalAddressProvenanceError(
+                    "dereference",
+                    "the dereferenced expression does not have a pointer type",
+                    source_location,
+                    pointer_type,
+                )
+            qualifiers = self.metal_addressable_storage_qualifiers(operand.operand)
+            if qualifiers is None:
+                raise MetalAddressProvenanceError(
+                    "dereference",
+                    "the pointer is not rooted in tracked storage",
+                    source_location,
+                    pointer_type,
+                )
+            return pointer_type, qualifiers
+
+        raise MetalAddressProvenanceError(
+            "temporary expression",
+            "only stored lvalues can initialize an inferred pointer",
+            source_location,
+            operand_type,
+        )
+
+    def metal_address_pointer_provenance(
+        self, selected_type, qualifiers, source_location, operand_kind
+    ):
+        value_type = self.metal_source_overload_value_type(selected_type)
+        if value_type is None:
+            raise MetalAddressProvenanceError(
+                operand_kind,
+                "the addressed value type is not concrete",
+                source_location,
+                selected_type,
+            )
+        if (
+            self.metal_pointer_pointee_type_once(value_type) is not None
+            or self.split_outer_metal_declarator_array_type(value_type) is not None
+            or self.metal_array_type_parts(value_type) is not None
+        ):
+            raise MetalAddressProvenanceError(
+                operand_kind,
+                "pointer-to-pointer and pointer-to-array aliases are not portable",
+                source_location,
+                value_type,
+            )
+        if self.is_metal_resource_type(value_type):
+            raise MetalAddressProvenanceError(
+                operand_kind,
+                "resource objects cannot be represented as storage pointers",
+                source_location,
+                value_type,
+            )
+        return f"{value_type}*", self.normalized_metal_address_qualifiers(
+            qualifiers, source_location, value_type
+        )
+
+    def normalized_metal_address_qualifiers(
+        self, qualifiers, source_location=None, base_type=None
+    ):
+        qualifier_set = set(qualifiers or ())
+        address_spaces = qualifier_set & self.metal_source_overload_address_spaces
+        if len(address_spaces) > 1:
+            raise MetalAddressProvenanceError(
+                "storage expression",
+                "the source has conflicting Metal address spaces",
+                source_location,
+                base_type,
+            )
+        if not address_spaces:
+            qualifier_set.add("thread")
+        return tuple(
+            qualifier
+            for qualifier in self.metal_source_overload_type_qualifiers
+            if qualifier in qualifier_set
+        )
+
+    def metal_addressable_storage_qualifiers(self, expression):
+        if isinstance(expression, (str, VariableNode)):
+            name = expression if isinstance(expression, str) else expression.name
+            metal_type = self.expression_metal_type(expression)
+            if metal_type is None or not name:
+                return None
+            if (
+                name not in self.current_variable_types
+                and name not in self.global_variable_types
+                and not getattr(expression, "vtype", None)
+            ):
+                return None
+            return self.normalized_metal_address_qualifiers(
+                self.expression_metal_type_qualifiers(expression),
+                getattr(expression, "source_location", None),
+                metal_type,
+            )
+
+        if isinstance(expression, ArrayAccessNode):
+            selection = self.metal_indexed_type_selection(expression)
+            if selection["kind"] not in {"array", "pointer"}:
+                return None
+            return self.metal_addressable_storage_qualifiers(expression.array)
+
+        if isinstance(expression, MemberAccessNode):
+            object_type = self.expression_metal_type(expression.object)
+            if (
+                self.metal_vector_component_parts(object_type) is not None
+                or self.metal_matrix_type_parts(object_type) is not None
+            ):
+                return None
+            return self.metal_addressable_storage_qualifiers(expression.object)
+
+        if isinstance(expression, BinaryOpNode):
+            pointer_source = self.metal_pointer_arithmetic_source(expression)
+            if pointer_source is None:
+                return None
+            return self.metal_addressable_storage_qualifiers(pointer_source[0])
+
+        if isinstance(expression, UnaryOpNode):
+            if expression.op == "&":
+                provenance = self.metal_address_provenance(expression)
+                return provenance[1]
+            if expression.op == "*":
+                pointer_type = self.expression_metal_type(expression.operand)
+                if self.metal_pointer_pointee_type_once(pointer_type) is not None:
+                    return self.metal_addressable_storage_qualifiers(expression.operand)
+        return None
 
     def expression_metal_type(self, expr):
         if expr is None:
@@ -10128,6 +10363,9 @@ class MetalToCrossGLConverter:
         if isinstance(expr, UnaryOpNode):
             if expr.op == "!":
                 return "bool"
+            if expr.op == "&":
+                provenance = self.metal_address_provenance(expr)
+                return provenance[0]
             if expr.op == "*":
                 return self.metal_pointer_pointee_type_once(
                     self.expression_metal_type(expr.operand)
