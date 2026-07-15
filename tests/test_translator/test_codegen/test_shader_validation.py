@@ -7,7 +7,10 @@ from pathlib import Path
 import pytest
 
 import crosstl.translator
-from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
+from crosstl.translator.codegen.directx_codegen import (
+    DirectXTextureOffsetError,
+    HLSLCodeGen,
+)
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
@@ -5812,6 +5815,11 @@ shader ShadowGatherCompareOffsetValidation {
     }
 }
 """
+
+
+STATIC_SHADOW_GATHER_COMPARE_OFFSET_FRAGMENT_SHADER = (
+    SHADOW_GATHER_COMPARE_OFFSET_FRAGMENT_SHADER.replace("input.offset", "ivec2(1, -1)")
+)
 
 
 SHADOW_COMPARE_LOD_GRAD_FRAGMENT_SHADER = """
@@ -13044,17 +13052,32 @@ def test_generated_hlsl_fragment_texture_projection_validates_with_dxc(
     )
 
 
-def test_generated_hlsl_fragment_shadow_gather_compare_offset_validates_with_dxc(
+def test_generated_hlsl_fragment_shadow_gather_compare_runtime_offset_fails_closed():
+    with pytest.raises(DirectXTextureOffsetError) as error:
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(SHADOW_GATHER_COMPARE_OFFSET_FRAGMENT_SHADER),
+            "fragment",
+        )
+
+    diagnostic = error.value
+    assert diagnostic.operation == "textureCompareOffset"
+    assert diagnostic.target_method == "Texture2D.SampleCmp"
+    assert diagnostic.blocking_expression == "offset"
+    assert diagnostic.function_name == "gatherShadow"
+    assert diagnostic.reason == "runtime-offset-requires-immediate"
+
+
+def test_generated_hlsl_fragment_static_shadow_gather_compare_offset_validates_with_dxc(
     tmp_path,
 ):
     dxc = shutil.which("dxc")
     if dxc is None:
         pytest.skip("dxc is not installed")
 
-    source = tmp_path / "fragment_shadow_gather_compare_offset.hlsl"
-    output = tmp_path / "fragment_shadow_gather_compare_offset.dxil"
+    source = tmp_path / "fragment_static_shadow_gather_compare_offset.hlsl"
+    output = tmp_path / "fragment_static_shadow_gather_compare_offset.dxil"
     code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(SHADOW_GATHER_COMPARE_OFFSET_FRAGMENT_SHADER),
+        crosstl.translator.parse(STATIC_SHADOW_GATHER_COMPARE_OFFSET_FRAGMENT_SHADER),
         "fragment",
     )
     source.write_text(code, encoding="utf-8")

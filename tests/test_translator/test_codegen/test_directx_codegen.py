@@ -58,6 +58,7 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXResourcePointerParameterError,
     DirectXSemanticArraySizeError,
     DirectXSpecializationConstantError,
+    DirectXTextureOffsetError,
     DirectXTrailingZeroBuiltinError,
     DirectXUnionLayoutError,
     DirectXUnresolvedSourceTypeError,
@@ -22980,7 +22981,7 @@ def test_directx_texture_bias_variants_use_sample_bias():
                     colorMap,
                     linearSampler,
                     input.uv,
-                    input.offset,
+                    ivec2(1, -1),
                     input.bias
                 );
                 return biased + offsetBiased;
@@ -22993,7 +22994,7 @@ def test_directx_texture_bias_variants_use_sample_bias():
 
     assert "colorMap.SampleBias(linearSampler, input.uv, input.bias)" in generated_code
     assert (
-        "colorMap.SampleBias(linearSampler, input.uv, input.bias, input.offset)"
+        "colorMap.SampleBias(linearSampler, input.uv, input.bias, int2(1, -1))"
         in generated_code
     )
     assert "colorMap.Sample(linearSampler, input.uv, input.bias)" not in generated_code
@@ -28102,7 +28103,7 @@ def test_directx_texture_sample_offset_variants_use_sample_offsets():
                     input.lod,
                     input.ddx,
                     input.ddy,
-                    input.offset
+                    ivec2(1, -1)
                 ) + offsetOps(
                     colorMap,
                     layerMap,
@@ -28112,7 +28113,7 @@ def test_directx_texture_sample_offset_variants_use_sample_offsets():
                     input.lod,
                     input.ddx,
                     input.ddy,
-                    input.offset
+                    ivec2(1, -1)
                 );
             }
         }
@@ -28131,43 +28132,225 @@ def test_directx_texture_sample_offset_variants_use_sample_offsets():
         "float4 implicitOffsetOps(Texture2D tex, SamplerState texSampler, float2 uv, float lod, float2 ddx, float2 ddy, int2 offset)"
         in generated_code
     )
-    assert "float4 plain = tex.Sample(texSampler, uv, offset);" in generated_code
+    assert "float4 plain = tex.Sample(texSampler, uv, int2(1, -1));" in generated_code
     assert (
-        "float4 lodSample = tex.SampleLevel(texSampler, uv, lod, offset);"
+        "float4 lodSample = tex.SampleLevel(texSampler, uv, lod, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float4 gradSample = tex.SampleGrad(texSampler, uv, ddx, ddy, offset);"
+        "float4 gradSample = tex.SampleGrad(texSampler, uv, ddx, ddy, int2(1, -1));"
         in generated_code
     )
     assert (
         "float4 offsetOps(Texture2D tex, Texture2DArray layers, SamplerState s, float2 uv, float3 uvLayer, float lod, float2 ddx, float2 ddy, int2 offset)"
         in generated_code
     )
-    assert "float4 plain = tex.Sample(s, uv, offset);" in generated_code
-    assert "float4 lodSample = tex.SampleLevel(s, uv, lod, offset);" in generated_code
+    assert "float4 plain = tex.Sample(s, uv, int2(1, -1));" in generated_code
     assert (
-        "float4 gradSample = tex.SampleGrad(s, uv, ddx, ddy, offset);" in generated_code
+        "float4 lodSample = tex.SampleLevel(s, uv, lod, int2(1, -1));" in generated_code
     )
     assert (
-        "float4 arrayLod = layers.SampleLevel(s, uvLayer, lod, offset);"
+        "float4 gradSample = tex.SampleGrad(s, uv, ddx, ddy, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float4 arrayGrad = layers.SampleGrad(s, uvLayer, ddx, ddy, offset);"
+        "float4 arrayLod = layers.SampleLevel(s, uvLayer, lod, int2(1, -1));"
         in generated_code
     )
     assert (
-        "implicitOffsetOps(colorMap, colorMapSampler, input.uv, input.lod, input.ddx, input.ddy, input.offset)"
+        "float4 arrayGrad = layers.SampleGrad(s, uvLayer, ddx, ddy, int2(1, -1));"
         in generated_code
     )
     assert (
-        "offsetOps(colorMap, layerMap, linearSampler, input.uv, input.uvLayer, input.lod, input.ddx, input.ddy, input.offset)"
+        "implicitOffsetOps(colorMap, colorMapSampler, input.uv, input.lod, input.ddx, input.ddy, int2(1, -1))"
+        in generated_code
+    )
+    assert (
+        "offsetOps(colorMap, layerMap, linearSampler, input.uv, input.uvLayer, input.lod, input.ddx, input.ddy, int2(1, -1))"
         in generated_code
     )
     assert "textureOffset(" not in generated_code
     assert "textureLodOffset(" not in generated_code
     assert "textureGradOffset(" not in generated_code
+
+
+def test_directx_texture_sample_offsets_fold_local_and_helper_constants():
+    shader = """
+    shader StaticTextureOffsets {
+        const int OFFSET_X = 2;
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        vec4 sampleWithOffset(
+            sampler2D tex,
+            sampler s,
+            vec2 uv,
+            vec2 ddx,
+            vec2 ddy,
+            ivec2 propagatedOffset
+        ) {
+            const ivec2 localOffset = ivec2(OFFSET_X, -1);
+            vec4 plain = textureOffset(tex, s, uv, localOffset);
+            vec4 gradient = textureGradOffset(
+                tex,
+                s,
+                uv,
+                ddx,
+                ddy,
+                propagatedOffset
+            );
+            return plain + gradient;
+        }
+
+        fragment {
+            vec4 main(
+                vec2 uv @ TEXCOORD0,
+                vec2 ddx @ TEXCOORD1,
+                vec2 ddy @ TEXCOORD2
+            ) @ gl_FragColor {
+                return sampleWithOffset(
+                    colorMap,
+                    linearSampler,
+                    uv,
+                    ddx,
+                    ddy,
+                    ivec2(OFFSET_X, -1)
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "tex.Sample(s, uv, int2(2, -1))" in generated_code
+    assert "tex.SampleGrad(s, uv, ddx, ddy, int2(2, -1))" in generated_code
+
+
+@pytest.mark.parametrize(
+    ("resource", "fields", "expression", "operation", "target_method"),
+    [
+        (
+            "sampler1D colorMap;",
+            "float u; int offset;",
+            "textureOffset(colorMap, textureSampler, input.u, input.offset)",
+            "textureOffset",
+            "Texture1D.Sample",
+        ),
+        (
+            "sampler2DArray colorMap;",
+            "vec3 uvLayer; vec2 ddx; vec2 ddy; ivec2 offset;",
+            "textureGradOffset(colorMap, textureSampler, input.uvLayer, input.ddx, input.ddy, input.offset)",
+            "textureGradOffset",
+            "Texture2DArray.SampleGrad",
+        ),
+        (
+            "sampler2D colorMap;",
+            "vec3 uvq; float lod; ivec2 offset;",
+            "textureProjLodOffset(colorMap, textureSampler, input.uvq, input.lod, input.offset)",
+            "textureProjLodOffset",
+            "Texture2D.SampleLevel",
+        ),
+        (
+            "sampler2DShadow colorMap;",
+            "vec2 uv; float depth; ivec2 offset;",
+            "vec4(textureCompareOffset(colorMap, textureSampler, input.uv, input.depth, input.offset))",
+            "textureCompareOffset",
+            "Texture2D.SampleCmp",
+        ),
+        (
+            "sampler2DArrayShadow colorMap;",
+            "vec4 uvLayerQ; float depth; ivec2 offset;",
+            "vec4(textureCompareProjOffset(colorMap, textureSampler, input.uvLayerQ, input.depth, input.offset))",
+            "textureCompareProjOffset",
+            "Texture2DArray.SampleCmp",
+        ),
+    ],
+)
+def test_directx_runtime_texture_offsets_report_operation_context(
+    resource, fields, expression, operation, target_method
+):
+    shader = f"""
+    shader RuntimeTextureOffset {{
+        {resource}
+        sampler textureSampler;
+
+        struct FSInput {{
+            {fields}
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {expression};
+            }}
+        }}
+    }}
+    """
+    ast = crosstl.translator.parse(shader)
+    codegen = HLSLCodeGen()
+    call = next(
+        node
+        for node in codegen.walk_ast(ast)
+        if isinstance(node, FunctionCallNode)
+        and codegen.function_call_name(node) == operation
+    )
+    source_location = {"line": 11, "column": 24}
+    call.source_location = source_location
+
+    with pytest.raises(DirectXTextureOffsetError) as error:
+        codegen.generate_stage(ast, "fragment")
+
+    diagnostic = error.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.directx-texture-offset-immediate-required"
+    )
+    assert diagnostic.missing_capabilities == (
+        "directx.runtime-texture-offset-lowering",
+    )
+    assert diagnostic.operation == operation
+    assert diagnostic.target_method == target_method
+    assert diagnostic.blocking_expression == "input.offset"
+    assert diagnostic.function_name == "main"
+    assert diagnostic.reason == "runtime-offset-requires-immediate"
+    assert diagnostic.source_location == source_location
+    assert diagnostic.operation_context == {
+        "sourceOperation": operation,
+        "targetMethod": target_method,
+        "function": "main",
+        "blockingExpression": "input.offset",
+        "reason": "runtime-offset-requires-immediate",
+    }
+
+
+def test_directx_static_texture_offset_out_of_range_fails_closed():
+    shader = """
+    shader OutOfRangeTextureOffset {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureOffset(
+                    colorMap,
+                    linearSampler,
+                    uv,
+                    ivec2(8, -1)
+                );
+            }
+        }
+    }
+    """
+
+    with pytest.raises(DirectXTextureOffsetError) as error:
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "fragment")
+
+    diagnostic = error.value
+    assert diagnostic.reason == "immediate-offset-out-of-range"
+    assert diagnostic.blocking_expression == "ivec2(8, -1)"
+    assert "resolves to (8, -1)" in str(diagnostic)
+    assert "between -8 and 7" in str(diagnostic)
 
 
 def test_directx_cube_texture_sample_offsets_emit_diagnostics_without_samplers():
@@ -28335,12 +28518,12 @@ def test_directx_direct_stage_sample_offsets_and_texel_fetch_offset_use_input_me
 
         fragment {
             vec4 main(FSInput input) @ gl_FragColor {
-                vec4 plain = textureOffset(colorMap, linearSampler, input.uv, input.offset);
-                vec4 lodSample = textureLodOffset(colorMap, linearSampler, input.uv, input.lod, input.offset);
-                vec4 gradSample = textureGradOffset(colorMap, linearSampler, input.uv, input.ddx, input.ddy, input.offset);
-                vec4 arrayPlain = textureOffset(layerMap, linearSampler, input.uvLayer, input.offset);
-                vec4 arrayLod = textureLodOffset(layerMap, linearSampler, input.uvLayer, input.lod, input.offset);
-                vec4 arrayGrad = textureGradOffset(layerMap, linearSampler, input.uvLayer, input.ddx, input.ddy, input.offset);
+                vec4 plain = textureOffset(colorMap, linearSampler, input.uv, ivec2(1, -1));
+                vec4 lodSample = textureLodOffset(colorMap, linearSampler, input.uv, input.lod, ivec2(1, -1));
+                vec4 gradSample = textureGradOffset(colorMap, linearSampler, input.uv, input.ddx, input.ddy, ivec2(1, -1));
+                vec4 arrayPlain = textureOffset(layerMap, linearSampler, input.uvLayer, ivec2(1, -1));
+                vec4 arrayLod = textureLodOffset(layerMap, linearSampler, input.uvLayer, input.lod, ivec2(1, -1));
+                vec4 arrayGrad = textureGradOffset(layerMap, linearSampler, input.uvLayer, input.ddx, input.ddy, ivec2(1, -1));
                 vec4 fetched = texelFetchOffset(colorMap, input.pixel, int(input.lod), input.offset);
                 vec4 fetchedLayer = texelFetchOffset(layerMap, input.pixelLayer, int(input.lod), input.offset);
                 return plain + lodSample + gradSample + arrayPlain + arrayLod + arrayGrad + fetched + fetchedLayer;
@@ -28357,27 +28540,27 @@ def test_directx_direct_stage_sample_offsets_and_texel_fetch_offset_use_input_me
     assert "Texture2DArray layerMap : register(t1);" in generated_code
     assert "SamplerState linearSampler : register(s0);" in generated_code
     assert (
-        "float4 plain = colorMap.Sample(linearSampler, input.uv, input.offset);"
+        "float4 plain = colorMap.Sample(linearSampler, input.uv, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float4 lodSample = colorMap.SampleLevel(linearSampler, input.uv, input.lod, input.offset);"
+        "float4 lodSample = colorMap.SampleLevel(linearSampler, input.uv, input.lod, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float4 gradSample = colorMap.SampleGrad(linearSampler, input.uv, input.ddx, input.ddy, input.offset);"
+        "float4 gradSample = colorMap.SampleGrad(linearSampler, input.uv, input.ddx, input.ddy, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float4 arrayPlain = layerMap.Sample(linearSampler, input.uvLayer, input.offset);"
+        "float4 arrayPlain = layerMap.Sample(linearSampler, input.uvLayer, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float4 arrayLod = layerMap.SampleLevel(linearSampler, input.uvLayer, input.lod, input.offset);"
+        "float4 arrayLod = layerMap.SampleLevel(linearSampler, input.uvLayer, input.lod, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float4 arrayGrad = layerMap.SampleGrad(linearSampler, input.uvLayer, input.ddx, input.ddy, input.offset);"
+        "float4 arrayGrad = layerMap.SampleGrad(linearSampler, input.uvLayer, input.ddx, input.ddy, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -28459,7 +28642,7 @@ def test_directx_projected_texture_variants_use_sample_projection():
                         input.xyzq,
                         input.ddx,
                         input.ddy,
-                        input.offset
+                        ivec2(1, -1)
                     );
             }
         }
@@ -28499,11 +28682,11 @@ def test_directx_projected_texture_variants_use_sample_projection():
         in generated_code
     )
     assert (
-        "float4 projectedOffset = tex.Sample(s, uvq.xy / uvq.z, offset);"
+        "float4 projectedOffset = tex.Sample(s, uvq.xy / uvq.z, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float4 projectedOffsetBias = tex.SampleBias(s, uvq.xy / uvq.z, 0.5, offset);"
+        "float4 projectedOffsetBias = tex.SampleBias(s, uvq.xy / uvq.z, 0.5, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -28511,7 +28694,7 @@ def test_directx_projected_texture_variants_use_sample_projection():
         in generated_code
     )
     assert (
-        "float4 projectedLodOffset = tex.SampleLevel(s, uvq.xy / uvq.z, 3.0, offset);"
+        "float4 projectedLodOffset = tex.SampleLevel(s, uvq.xy / uvq.z, 3.0, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -28519,7 +28702,7 @@ def test_directx_projected_texture_variants_use_sample_projection():
         in generated_code
     )
     assert (
-        "float4 projectedGradOffset = tex.SampleGrad(s, uvq.xy / uvq.z, ddx, ddy, offset);"
+        "float4 projectedGradOffset = tex.SampleGrad(s, uvq.xy / uvq.z, ddx, ddy, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -28527,7 +28710,7 @@ def test_directx_projected_texture_variants_use_sample_projection():
         in generated_code
     )
     assert (
-        "projectedOps(colorMap, volumeMap, linearSampler, input.uvq, input.uvqw, input.xyzq, input.ddx, input.ddy, input.offset)"
+        "projectedOps(colorMap, volumeMap, linearSampler, input.uvq, input.uvqw, input.xyzq, input.ddx, input.ddy, int2(1, -1))"
         in generated_code
     )
     assert "textureProj(" not in generated_code
@@ -28557,13 +28740,13 @@ def test_directx_projected_1d_texture_variants_use_sample_projection():
             vec4 main(FSInput input) @ gl_FragColor {
                 vec4 projected = textureProj(lineMap, input.uq);
                 vec4 biased = textureProj(lineMap, linearSampler, input.uxwq, 0.5);
-                vec4 offset = textureProjOffset(lineMap, linearSampler, input.uq, input.offset);
+                vec4 offset = textureProjOffset(lineMap, linearSampler, input.uq, 1);
                 vec4 lodOffset = textureProjLodOffset(
                     lineMap,
                     linearSampler,
                     input.uq,
                     input.lod,
-                    input.offset
+                    1
                 );
                 vec4 gradOffset = textureProjGradOffset(
                     lineMap,
@@ -28571,7 +28754,7 @@ def test_directx_projected_1d_texture_variants_use_sample_projection():
                     input.uq,
                     input.ddx,
                     input.ddy,
-                    input.offset
+                    1
                 );
                 return projected + biased + offset + lodOffset + gradOffset;
             }
@@ -28595,15 +28778,15 @@ def test_directx_projected_1d_texture_variants_use_sample_projection():
         in generated_code
     )
     assert (
-        "float4 offset = lineMap.Sample(linearSampler, input.uq.x / input.uq.y, input.offset);"
+        "float4 offset = lineMap.Sample(linearSampler, input.uq.x / input.uq.y, 1);"
         in generated_code
     )
     assert (
-        "float4 lodOffset = lineMap.SampleLevel(linearSampler, input.uq.x / input.uq.y, input.lod, input.offset);"
+        "float4 lodOffset = lineMap.SampleLevel(linearSampler, input.uq.x / input.uq.y, input.lod, 1);"
         in generated_code
     )
     assert (
-        "float4 gradOffset = lineMap.SampleGrad(linearSampler, input.uq.x / input.uq.y, input.ddx, input.ddy, input.offset);"
+        "float4 gradOffset = lineMap.SampleGrad(linearSampler, input.uq.x / input.uq.y, input.ddx, input.ddy, 1);"
         in generated_code
     )
     assert "unsupported DirectX projected texture" not in generated_code
@@ -28635,11 +28818,11 @@ def test_directx_direct_projected_texture_stage_input_members():
                 vec4 projected = textureProj(colorMap, linearSampler, input.uvq);
                 vec4 projectedBias = textureProj(colorMap, linearSampler, input.uvqw, 0.25);
                 vec4 volumeProjected = textureProj(volumeMap, linearSampler, input.xyzq);
-                vec4 projectedOffset = textureProjOffset(colorMap, linearSampler, input.uvq, input.offset);
+                vec4 projectedOffset = textureProjOffset(colorMap, linearSampler, input.uvq, ivec2(1, -1));
                 vec4 projectedLod = textureProjLod(colorMap, linearSampler, input.uvq, input.lod);
-                vec4 projectedLodOffset = textureProjLodOffset(colorMap, linearSampler, input.uvq, input.lod, input.offset);
+                vec4 projectedLodOffset = textureProjLodOffset(colorMap, linearSampler, input.uvq, input.lod, ivec2(1, -1));
                 vec4 projectedGrad = textureProjGrad(colorMap, linearSampler, input.uvq, input.ddx, input.ddy);
-                vec4 projectedGradOffset = textureProjGradOffset(colorMap, linearSampler, input.uvq, input.ddx, input.ddy, input.offset);
+                vec4 projectedGradOffset = textureProjGradOffset(colorMap, linearSampler, input.uvq, input.ddx, input.ddy, ivec2(1, -1));
                 return projected
                     + projectedBias
                     + volumeProjected
@@ -28673,7 +28856,7 @@ def test_directx_direct_projected_texture_stage_input_members():
         in generated_code
     )
     assert (
-        "float4 projectedOffset = colorMap.Sample(linearSampler, input.uvq.xy / input.uvq.z, input.offset);"
+        "float4 projectedOffset = colorMap.Sample(linearSampler, input.uvq.xy / input.uvq.z, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -28681,7 +28864,7 @@ def test_directx_direct_projected_texture_stage_input_members():
         in generated_code
     )
     assert (
-        "float4 projectedLodOffset = colorMap.SampleLevel(linearSampler, input.uvq.xy / input.uvq.z, input.lod, input.offset);"
+        "float4 projectedLodOffset = colorMap.SampleLevel(linearSampler, input.uvq.xy / input.uvq.z, input.lod, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -28689,7 +28872,7 @@ def test_directx_direct_projected_texture_stage_input_members():
         in generated_code
     )
     assert (
-        "float4 projectedGradOffset = colorMap.SampleGrad(linearSampler, input.uvq.xy / input.uvq.z, input.ddx, input.ddy, input.offset);"
+        "float4 projectedGradOffset = colorMap.SampleGrad(linearSampler, input.uvq.xy / input.uvq.z, input.ddx, input.ddy, int2(1, -1));"
         in generated_code
     )
     assert "unsupported DirectX projected texture" not in generated_code
@@ -28718,11 +28901,11 @@ def test_directx_direct_projected_array_texture_stage_input_members():
         fragment {
             vec4 main(FSInput input) @ gl_FragColor {
                 vec4 projected = textureProj(layerMap, linearSampler, input.uvLayerQ);
-                vec4 projectedOffset = textureProjOffset(layerMap, linearSampler, input.uvLayerQ, input.offset);
+                vec4 projectedOffset = textureProjOffset(layerMap, linearSampler, input.uvLayerQ, ivec2(1, -1));
                 vec4 projectedLod = textureProjLod(layerMap, linearSampler, input.uvLayerQ, input.lod);
-                vec4 projectedLodOffset = textureProjLodOffset(layerMap, linearSampler, input.uvLayerQ, input.lod, input.offset);
+                vec4 projectedLodOffset = textureProjLodOffset(layerMap, linearSampler, input.uvLayerQ, input.lod, ivec2(1, -1));
                 vec4 projectedGrad = textureProjGrad(layerMap, linearSampler, input.uvLayerQ, input.ddx, input.ddy);
-                vec4 projectedGradOffset = textureProjGradOffset(layerMap, linearSampler, input.uvLayerQ, input.ddx, input.ddy, input.offset);
+                vec4 projectedGradOffset = textureProjGradOffset(layerMap, linearSampler, input.uvLayerQ, input.ddx, input.ddy, ivec2(1, -1));
                 return projected + projectedOffset + projectedLod + projectedLodOffset + projectedGrad + projectedGradOffset;
             }
         }
@@ -28741,7 +28924,7 @@ def test_directx_direct_projected_array_texture_stage_input_members():
         in generated_code
     )
     assert (
-        f"float4 projectedOffset = layerMap.Sample(linearSampler, {projected_coord}, input.offset);"
+        f"float4 projectedOffset = layerMap.Sample(linearSampler, {projected_coord}, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -28749,7 +28932,7 @@ def test_directx_direct_projected_array_texture_stage_input_members():
         in generated_code
     )
     assert (
-        f"float4 projectedLodOffset = layerMap.SampleLevel(linearSampler, {projected_coord}, input.lod, input.offset);"
+        f"float4 projectedLodOffset = layerMap.SampleLevel(linearSampler, {projected_coord}, input.lod, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -28757,7 +28940,7 @@ def test_directx_direct_projected_array_texture_stage_input_members():
         in generated_code
     )
     assert (
-        f"float4 projectedGradOffset = layerMap.SampleGrad(linearSampler, {projected_coord}, input.ddx, input.ddy, input.offset);"
+        f"float4 projectedGradOffset = layerMap.SampleGrad(linearSampler, {projected_coord}, input.ddx, input.ddy, int2(1, -1));"
         in generated_code
     )
     assert "unsupported DirectX projected texture" not in generated_code
@@ -28785,11 +28968,11 @@ def test_directx_implicit_projected_array_texture_stage_input_members_generate_s
         fragment {
             vec4 main(FSInput input) @ gl_FragColor {
                 vec4 projected = textureProj(layerMap, input.uvLayerQ);
-                vec4 projectedOffset = textureProjOffset(layerMap, input.uvLayerQ, input.offset);
+                vec4 projectedOffset = textureProjOffset(layerMap, input.uvLayerQ, ivec2(1, -1));
                 vec4 projectedLod = textureProjLod(layerMap, input.uvLayerQ, input.lod);
-                vec4 projectedLodOffset = textureProjLodOffset(layerMap, input.uvLayerQ, input.lod, input.offset);
+                vec4 projectedLodOffset = textureProjLodOffset(layerMap, input.uvLayerQ, input.lod, ivec2(1, -1));
                 vec4 projectedGrad = textureProjGrad(layerMap, input.uvLayerQ, input.ddx, input.ddy);
-                vec4 projectedGradOffset = textureProjGradOffset(layerMap, input.uvLayerQ, input.ddx, input.ddy, input.offset);
+                vec4 projectedGradOffset = textureProjGradOffset(layerMap, input.uvLayerQ, input.ddx, input.ddy, ivec2(1, -1));
                 return projected + projectedOffset + projectedLod + projectedLodOffset + projectedGrad + projectedGradOffset;
             }
         }
@@ -28808,7 +28991,7 @@ def test_directx_implicit_projected_array_texture_stage_input_members_generate_s
         in generated_code
     )
     assert (
-        f"float4 projectedOffset = layerMap.Sample(layerMapSampler, {projected_coord}, input.offset);"
+        f"float4 projectedOffset = layerMap.Sample(layerMapSampler, {projected_coord}, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -28816,7 +28999,7 @@ def test_directx_implicit_projected_array_texture_stage_input_members_generate_s
         in generated_code
     )
     assert (
-        f"float4 projectedLodOffset = layerMap.SampleLevel(layerMapSampler, {projected_coord}, input.lod, input.offset);"
+        f"float4 projectedLodOffset = layerMap.SampleLevel(layerMapSampler, {projected_coord}, input.lod, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -28824,7 +29007,7 @@ def test_directx_implicit_projected_array_texture_stage_input_members_generate_s
         in generated_code
     )
     assert (
-        f"float4 projectedGradOffset = layerMap.SampleGrad(layerMapSampler, {projected_coord}, input.ddx, input.ddy, input.offset);"
+        f"float4 projectedGradOffset = layerMap.SampleGrad(layerMapSampler, {projected_coord}, input.ddx, input.ddy, int2(1, -1));"
         in generated_code
     )
     assert "unsupported DirectX projected texture" not in generated_code
@@ -28875,7 +29058,7 @@ def test_directx_projected_array_texture_resource_arrays_forward_samplers():
                     input.lod,
                     input.ddx,
                     input.ddy,
-                    input.offset
+                    ivec2(1, -1)
                 );
             }
         }
@@ -28898,7 +29081,7 @@ def test_directx_projected_array_texture_resource_arrays_forward_samplers():
         in generated_code
     )
     assert (
-        f"float4 dynamicOffset = maps[layer].Sample(samplers[layer], {projected_coord}, offset);"
+        f"float4 dynamicOffset = maps[layer].Sample(samplers[layer], {projected_coord}, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -28906,7 +29089,7 @@ def test_directx_projected_array_texture_resource_arrays_forward_samplers():
         in generated_code
     )
     assert (
-        f"float4 dynamicLodOffset = maps[layer].SampleLevel(samplers[layer], {projected_coord}, lod, offset);"
+        f"float4 dynamicLodOffset = maps[layer].SampleLevel(samplers[layer], {projected_coord}, lod, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -28914,11 +29097,11 @@ def test_directx_projected_array_texture_resource_arrays_forward_samplers():
         in generated_code
     )
     assert (
-        f"float4 dynamicGradOffset = maps[layer].SampleGrad(samplers[layer], {projected_coord}, ddx, ddy, offset);"
+        f"float4 dynamicGradOffset = maps[layer].SampleGrad(samplers[layer], {projected_coord}, ddx, ddy, int2(1, -1));"
         in generated_code
     )
     assert (
-        "projectedLeaf(layerMaps, linearSamplers, input.layer, input.uvLayerQ, input.lod, input.ddx, input.ddy, input.offset)"
+        "projectedLeaf(layerMaps, linearSamplers, input.layer, input.uvLayerQ, input.lod, input.ddx, input.ddy, int2(1, -1))"
         in generated_code
     )
     assert "unsupported DirectX projected texture" not in generated_code
@@ -28966,7 +29149,7 @@ def test_directx_implicit_projected_array_texture_resource_arrays_thread_sampler
                     input.lod,
                     input.ddx,
                     input.ddy,
-                    input.offset
+                    ivec2(1, -1)
                 );
             }
         }
@@ -28989,7 +29172,7 @@ def test_directx_implicit_projected_array_texture_resource_arrays_thread_sampler
         in generated_code
     )
     assert (
-        f"float4 dynamicOffset = maps[layer].Sample(mapsSampler, {projected_coord}, offset);"
+        f"float4 dynamicOffset = maps[layer].Sample(mapsSampler, {projected_coord}, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -28997,7 +29180,7 @@ def test_directx_implicit_projected_array_texture_resource_arrays_thread_sampler
         in generated_code
     )
     assert (
-        f"float4 dynamicLodOffset = maps[layer].SampleLevel(mapsSampler, {projected_coord}, lod, offset);"
+        f"float4 dynamicLodOffset = maps[layer].SampleLevel(mapsSampler, {projected_coord}, lod, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -29005,11 +29188,11 @@ def test_directx_implicit_projected_array_texture_resource_arrays_thread_sampler
         in generated_code
     )
     assert (
-        f"float4 dynamicGradOffset = maps[layer].SampleGrad(mapsSampler, {projected_coord}, ddx, ddy, offset);"
+        f"float4 dynamicGradOffset = maps[layer].SampleGrad(mapsSampler, {projected_coord}, ddx, ddy, int2(1, -1));"
         in generated_code
     )
     assert (
-        "projectedLeaf(layerMaps, layerMapsSampler, input.layer, input.uvLayerQ, input.lod, input.ddx, input.ddy, input.offset)"
+        "projectedLeaf(layerMaps, layerMapsSampler, input.layer, input.uvLayerQ, input.lod, input.ddx, input.ddy, int2(1, -1))"
         in generated_code
     )
     assert "unsupported DirectX projected texture" not in generated_code
@@ -29170,7 +29353,7 @@ def test_directx_projected_shadow_compare_variants_use_sample_cmp_projection():
                     input.lod,
                     input.ddx,
                     input.ddy,
-                    input.offset
+                    ivec2(1, -1)
                 );
                 float explicitValue = projectedShadow(
                     shadowMap,
@@ -29181,7 +29364,7 @@ def test_directx_projected_shadow_compare_variants_use_sample_cmp_projection():
                     input.lod,
                     input.ddx,
                     input.ddy,
-                    input.offset
+                    ivec2(1, -1)
                 );
                 float arrayValue = projectedArrayShadow(
                     shadowArray,
@@ -29191,7 +29374,7 @@ def test_directx_projected_shadow_compare_variants_use_sample_cmp_projection():
                     input.lod,
                     input.ddx,
                     input.ddy,
-                    input.offset
+                    ivec2(1, -1)
                 );
                 return vec4(implicitValue + explicitValue + arrayValue);
             }
@@ -29239,7 +29422,7 @@ def test_directx_projected_shadow_compare_variants_use_sample_cmp_projection():
         in generated_code
     )
     assert (
-        "float offsetProjected = tex.SampleCmp(s, uvq.xy / uvq.z, depth, offset);"
+        "float offsetProjected = tex.SampleCmp(s, uvq.xy / uvq.z, depth, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -29259,11 +29442,11 @@ def test_directx_projected_shadow_compare_variants_use_sample_cmp_projection():
         in generated_code
     )
     assert (
-        "implicitProjectedShadow(shadowMap, shadowMapSampler, input.uvq, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
+        "implicitProjectedShadow(shadowMap, shadowMapSampler, input.uvq, input.depth, input.lod, input.ddx, input.ddy, int2(1, -1))"
         in generated_code
     )
     assert (
-        "projectedShadow(shadowMap, compareSampler, input.uvq, input.uvqw, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
+        "projectedShadow(shadowMap, compareSampler, input.uvq, input.uvqw, input.depth, input.lod, input.ddx, input.ddy, int2(1, -1))"
         in generated_code
     )
     assert (
@@ -29275,7 +29458,7 @@ def test_directx_projected_shadow_compare_variants_use_sample_cmp_projection():
         in generated_code
     )
     assert (
-        "float offsetProjected = tex.SampleCmp(s, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, offset);"
+        "float offsetProjected = tex.SampleCmp(s, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -29295,7 +29478,7 @@ def test_directx_projected_shadow_compare_variants_use_sample_cmp_projection():
         in generated_code
     )
     assert (
-        "projectedArrayShadow(shadowArray, compareSampler, input.uvLayerQ, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
+        "projectedArrayShadow(shadowArray, compareSampler, input.uvLayerQ, input.depth, input.lod, input.ddx, input.ddy, int2(1, -1))"
         in generated_code
     )
     assert "textureCompareProj" not in generated_code
@@ -29321,7 +29504,7 @@ def test_directx_direct_projected_shadow_compare_stage_input_members():
         fragment {
             vec4 main(FSInput input) @ gl_FragColor {
                 float planar = textureCompareProj(shadowMap, compareSampler, input.uvq, input.depth);
-                float planarOffset = textureCompareProjOffset(shadowMap, compareSampler, input.uvqw, input.depth, input.offset);
+                float planarOffset = textureCompareProjOffset(shadowMap, compareSampler, input.uvqw, input.depth, ivec2(1, -1));
                 float arrayGrad = textureCompareProjGrad(shadowArray, compareSampler, input.uvLayerQ, input.depth, input.ddx, input.ddy);
                 return vec4(planar + planarOffset + arrayGrad);
             }
@@ -29341,7 +29524,7 @@ def test_directx_direct_projected_shadow_compare_stage_input_members():
         in generated_code
     )
     assert (
-        "float planarOffset = shadowMap.SampleCmp(compareSampler, input.uvqw.xy / input.uvqw.w, input.depth, input.offset);"
+        "float planarOffset = shadowMap.SampleCmp(compareSampler, input.uvqw.xy / input.uvqw.w, input.depth, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -29422,7 +29605,7 @@ def test_directx_projected_shadow_compare_resource_arrays_forward_comparison_sam
                     input.lod,
                     input.ddx,
                     input.ddy,
-                    input.offset
+                    ivec2(1, -1)
                 );
             }
         }
@@ -29443,7 +29626,7 @@ def test_directx_projected_shadow_compare_resource_arrays_forward_comparison_sam
         in generated_code
     )
     assert (
-        "float planarOffset = shadowMaps[1].SampleCmp(shadowSamplers[1], uvq.xy / uvq.z, depth, offset);"
+        "float planarOffset = shadowMaps[1].SampleCmp(shadowSamplers[1], uvq.xy / uvq.z, depth, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -29459,7 +29642,7 @@ def test_directx_projected_shadow_compare_resource_arrays_forward_comparison_sam
         in generated_code
     )
     assert (
-        "float arrayOffset = shadowArrays[layer].SampleCmp(shadowSamplers[layer], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, offset);"
+        "float arrayOffset = shadowArrays[layer].SampleCmp(shadowSamplers[layer], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -29475,7 +29658,7 @@ def test_directx_projected_shadow_compare_resource_arrays_forward_comparison_sam
         in generated_code
     )
     assert (
-        "projectedWrapper(shadowMaps, shadowArrays, shadowSamplers, input.layer, input.uvq, input.uvLayerQ, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
+        "projectedWrapper(shadowMaps, shadowArrays, shadowSamplers, input.layer, input.uvq, input.uvLayerQ, input.depth, input.lod, input.ddx, input.ddy, int2(1, -1))"
         in generated_code
     )
     assert "textureCompareProj" not in generated_code
@@ -29547,7 +29730,7 @@ def test_directx_implicit_projected_shadow_compare_resource_arrays_thread_sample
                     input.lod,
                     input.ddx,
                     input.ddy,
-                    input.offset
+                    ivec2(1, -1)
                 );
             }
         }
@@ -29571,7 +29754,7 @@ def test_directx_implicit_projected_shadow_compare_resource_arrays_thread_sample
         in generated_code
     )
     assert (
-        "float planarOffset = shadowMaps[1].SampleCmp(shadowMapsSampler, uvq.xy / uvq.z, depth, offset);"
+        "float planarOffset = shadowMaps[1].SampleCmp(shadowMapsSampler, uvq.xy / uvq.z, depth, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -29587,7 +29770,7 @@ def test_directx_implicit_projected_shadow_compare_resource_arrays_thread_sample
         in generated_code
     )
     assert (
-        "float arrayOffset = shadowArrays[layer].SampleCmp(shadowArraysSampler, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, offset);"
+        "float arrayOffset = shadowArrays[layer].SampleCmp(shadowArraysSampler, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -29603,7 +29786,7 @@ def test_directx_implicit_projected_shadow_compare_resource_arrays_thread_sample
         in generated_code
     )
     assert (
-        "projectedWrapper(shadowMaps, shadowMapsSampler, shadowArrays, shadowArraysSampler, input.layer, input.uvq, input.uvLayerQ, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
+        "projectedWrapper(shadowMaps, shadowMapsSampler, shadowArrays, shadowArraysSampler, input.layer, input.uvq, input.uvLayerQ, input.depth, input.lod, input.ddx, input.ddy, int2(1, -1))"
         in generated_code
     )
     assert "SamplerComparisonState shadowMapsSampler[" not in generated_code
@@ -29677,7 +29860,7 @@ def test_directx_unsized_projected_shadow_compare_arrays_infer_transitive_consta
                     input.lod,
                     input.ddx,
                     input.ddy,
-                    input.offset
+                    ivec2(1, -1)
                 );
                 float singleShadow = textureCompare(afterShadow, afterSampler, input.uvq.xy, input.depth);
                 return vec4(arrayShadow + singleShadow);
@@ -29702,7 +29885,7 @@ def test_directx_unsized_projected_shadow_compare_arrays_infer_transitive_consta
         in generated_code
     )
     assert (
-        "float planarLow = shadowMaps[1].SampleCmp(shadowSamplers[1], uvq.xy / uvq.z, depth, offset);"
+        "float planarLow = shadowMaps[1].SampleCmp(shadowSamplers[1], uvq.xy / uvq.z, depth, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -29710,7 +29893,7 @@ def test_directx_unsized_projected_shadow_compare_arrays_infer_transitive_consta
         in generated_code
     )
     assert (
-        "float arrayLow = shadowArrays[3].SampleCmp(shadowSamplers[3], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, offset);"
+        "float arrayLow = shadowArrays[3].SampleCmp(shadowSamplers[3], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -29722,7 +29905,7 @@ def test_directx_unsized_projected_shadow_compare_arrays_infer_transitive_consta
         in generated_code
     )
     assert (
-        "shadowMid(shadowMaps, shadowArrays, shadowSamplers, input.uvq, input.uvLayerQ, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
+        "shadowMid(shadowMaps, shadowArrays, shadowSamplers, input.uvq, input.uvLayerQ, input.depth, input.lod, input.ddx, input.ddy, int2(1, -1))"
         in generated_code
     )
     assert (
@@ -30777,9 +30960,9 @@ def test_directx_shadow_gather_compare_offsets_use_comparison_samplers():
 
         fragment {
             vec4 main(FSInput input) @ gl_FragColor {
-                return implicitShadow(shadowMap, input.uv, input.depth, input.offset)
-                    + gatherShadow(shadowMap, compareSampler, input.uv, input.depth, input.offset)
-                    + gatherShadowArray(shadowArray, compareSampler, input.uvLayer, input.depth, input.offset)
+                return implicitShadow(shadowMap, input.uv, input.depth, ivec2(1, -1))
+                    + gatherShadow(shadowMap, compareSampler, input.uv, input.depth, ivec2(1, -1))
+                    + gatherShadowArray(shadowArray, compareSampler, input.uvLayer, input.depth, ivec2(1, -1))
                     + gatherCubeShadowArray(cubeShadowArray, compareSampler, input.cubeLayer, input.depth);
             }
         }
@@ -30801,7 +30984,7 @@ def test_directx_shadow_gather_compare_offsets_use_comparison_samplers():
     )
     assert "float4 gathered = tex.GatherCmp(texSampler, uv, depth);" in generated_code
     assert (
-        "float compared = tex.SampleCmp(texSampler, uv, depth, offset);"
+        "float compared = tex.SampleCmp(texSampler, uv, depth, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -30813,29 +30996,30 @@ def test_directx_shadow_gather_compare_offsets_use_comparison_samplers():
         "float4 offsetGathered = tex.GatherCmp(s, uv, depth, offset);" in generated_code
     )
     assert (
-        "float offsetCompared = tex.SampleCmp(s, uv, depth, offset);" in generated_code
+        "float offsetCompared = tex.SampleCmp(s, uv, depth, int2(1, -1));"
+        in generated_code
     )
     assert (
         "float4 gatherShadowArray(Texture2DArray tex, SamplerComparisonState s, float3 uvLayer, float depth, int2 offset)"
         in generated_code
     )
     assert "tex.GatherCmp(s, uvLayer, depth, offset)" in generated_code
-    assert "tex.SampleCmp(s, uvLayer, depth, offset)" in generated_code
+    assert "tex.SampleCmp(s, uvLayer, depth, int2(1, -1))" in generated_code
     assert (
         "float4 gatherCubeShadowArray(TextureCubeArray tex, SamplerComparisonState s, float4 cubeLayer, float depth)"
         in generated_code
     )
     assert "return tex.GatherCmp(s, cubeLayer, depth);" in generated_code
     assert (
-        "implicitShadow(shadowMap, shadowMapSampler, input.uv, input.depth, input.offset)"
+        "implicitShadow(shadowMap, shadowMapSampler, input.uv, input.depth, int2(1, -1))"
         in generated_code
     )
     assert (
-        "gatherShadow(shadowMap, compareSampler, input.uv, input.depth, input.offset)"
+        "gatherShadow(shadowMap, compareSampler, input.uv, input.depth, int2(1, -1))"
         in generated_code
     )
     assert (
-        "gatherShadowArray(shadowArray, compareSampler, input.uvLayer, input.depth, input.offset)"
+        "gatherShadowArray(shadowArray, compareSampler, input.uvLayer, input.depth, int2(1, -1))"
         in generated_code
     )
     assert (
@@ -30908,7 +31092,7 @@ def test_directx_1d_shadow_compare_offsets_use_hlsl_sample_cmp_offsets_from_docs
                     input.lod,
                     input.ddx,
                     input.ddy,
-                    input.offset
+                    1
                 ) + compareLineArray(
                     shadowLines,
                     compareSampler,
@@ -30917,7 +31101,7 @@ def test_directx_1d_shadow_compare_offsets_use_hlsl_sample_cmp_offsets_from_docs
                     input.lod,
                     input.ddx,
                     input.ddy,
-                    input.offset
+                    1
                 );
             }
         }
@@ -30935,7 +31119,7 @@ def test_directx_1d_shadow_compare_offsets_use_hlsl_sample_cmp_offsets_from_docs
         "float compareLine(Texture1D tex, SamplerComparisonState s, float u, float depth, float lod, float ddx, float ddy, int offset)"
         in generated_code
     )
-    assert "float basic = tex.SampleCmp(s, u, depth, offset);" in generated_code
+    assert "float basic = tex.SampleCmp(s, u, depth, 1);" in generated_code
     assert (
         "float level = tex.SampleCmpLevel(s, u, depth, lod, offset);" in generated_code
     )
@@ -30947,7 +31131,7 @@ def test_directx_1d_shadow_compare_offsets_use_hlsl_sample_cmp_offsets_from_docs
         "float compareLineArray(Texture1DArray tex, SamplerComparisonState s, float2 uLayer, float depth, float lod, float ddx, float ddy, int offset)"
         in generated_code
     )
-    assert "tex.SampleCmp(s, uLayer, depth, offset)" in generated_code
+    assert "tex.SampleCmp(s, uLayer, depth, 1)" in generated_code
     assert "tex.SampleCmpLevel(s, uLayer, depth, lod, offset)" in generated_code
     assert "tex.SampleCmpGrad(s, uLayer, depth, ddx, ddy, offset)" in generated_code
     assert "textureCompareOffset(" not in generated_code
@@ -31077,7 +31261,7 @@ def test_directx_implicit_shadow_gather_compare_offsets_cover_arrays_and_cube_ar
 
         fragment {
             vec4 main(FSInput input) @ gl_FragColor {
-                return implicitArray(shadowArray, input.uvLayer, input.depth, input.offset)
+                return implicitArray(shadowArray, input.uvLayer, input.depth, ivec2(1, -1))
                     + implicitCubeArray(cubeShadowArray, input.cubeLayer, input.depth);
             }
         }
@@ -31100,14 +31284,14 @@ def test_directx_implicit_shadow_gather_compare_offsets_cover_arrays_and_cube_ar
     )
     assert "tex.GatherCmp(texSampler, uvLayer, depth)" in generated_code
     assert "tex.GatherCmp(texSampler, uvLayer, depth, offset)" in generated_code
-    assert "tex.SampleCmp(texSampler, uvLayer, depth, offset)" in generated_code
+    assert "tex.SampleCmp(texSampler, uvLayer, depth, int2(1, -1))" in generated_code
     assert (
         "float4 implicitCubeArray(TextureCubeArray tex, SamplerComparisonState texSampler, float4 cubeLayer, float depth)"
         in generated_code
     )
     assert "return tex.GatherCmp(texSampler, cubeLayer, depth);" in generated_code
     assert (
-        "implicitArray(shadowArray, shadowArraySampler, input.uvLayer, input.depth, input.offset)"
+        "implicitArray(shadowArray, shadowArraySampler, input.uvLayer, input.depth, int2(1, -1))"
         in generated_code
     )
     assert (
@@ -38032,7 +38216,7 @@ def test_directx_texture_projection_with_offset_and_bias():
             vec4 main(FSInput input) @ gl_FragColor {
                 vec4 basic = textureProj(colorMap, linearSampler, input.uvq);
                 vec4 biased = textureProj(colorMap, linearSampler, input.uvqw, 0.5);
-                vec4 withOffset = textureProjOffset(colorMap, linearSampler, input.uvq, input.offset);
+                vec4 withOffset = textureProjOffset(colorMap, linearSampler, input.uvq, ivec2(1, -1));
                 vec4 withLod = textureProjLod(colorMap, linearSampler, input.uvq, 2.0);
                 vec4 withGrad = textureProjGrad(colorMap, linearSampler, input.uvq, input.ddx, input.ddy);
                 return basic + biased + withOffset + withLod + withGrad;
@@ -38995,7 +39179,7 @@ def test_directx_texture_proj_emits_perspective_divide_and_sample():
                     colorMap,
                     linearSampler,
                     input.projCoord,
-                    input.offset
+                    ivec2(1, -1)
                 );
                 return projected + projLod + projOffset;
             }
@@ -39016,7 +39200,7 @@ def test_directx_texture_proj_emits_perspective_divide_and_sample():
         in generated_code
     )
     assert (
-        "colorMap.Sample(linearSampler, input.projCoord.xy / input.projCoord.z, input.offset)"
+        "colorMap.Sample(linearSampler, input.projCoord.xy / input.projCoord.z, int2(1, -1))"
         in generated_code
     )
     assert "textureProj(" not in generated_code
@@ -39098,7 +39282,7 @@ def test_directx_texture_proj_grad_emits_perspective_divide_and_sample_grad():
                     input.projCoord,
                     input.ddx,
                     input.ddy,
-                    input.offset
+                    ivec2(1, -1)
                 );
                 return projGrad + projGradOffset;
             }
@@ -39115,7 +39299,7 @@ def test_directx_texture_proj_grad_emits_perspective_divide_and_sample_grad():
         in generated_code
     )
     assert (
-        "colorMap.SampleGrad(linearSampler, input.projCoord.xy / input.projCoord.z, input.ddx, input.ddy, input.offset)"
+        "colorMap.SampleGrad(linearSampler, input.projCoord.xy / input.projCoord.z, input.ddx, input.ddy, int2(1, -1))"
         in generated_code
     )
     assert "textureProjGrad(" not in generated_code
