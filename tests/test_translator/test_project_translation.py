@@ -12489,6 +12489,69 @@ def test_translate_project_opengl_validates_implicit_metal_matmul_resources(
     assert output == validator_inputs[0]
 
 
+def test_metal_fixed_array_value_locals_match_direct_and_project_directx(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source_path = repo / "fixed-array-values.metal"
+    source_path.write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            struct DivMod {
+              template <typename T>
+              metal::array<T, 2> operator()(T x, T y) {
+                return {x / y, x % y};
+              }
+            };
+
+            struct Record {
+              uint value;
+            };
+
+            metal::array<Record, 2> make_records(uint value) {
+              return {Record{value}, Record{value + 1u}};
+            }
+
+            kernel void fixed_array_values(
+                device uint* output [[buffer(0)]],
+                uint index [[thread_position_in_grid]]) {
+              bool x = index != 0u;
+              bool y = index != 1u;
+              auto flags = DivMod{}(x, y);
+              auto records = make_records(index);
+              uint selected = index & 1u;
+              output[index] = uint(flags[selected]) + records[selected].value;
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    direct = crosstl_cli.translate(
+        str(source_path), backend="directx", format_output=False
+    )
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    project = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+    assert project == direct
+    assert "bool2 flags = DivMod__operator_call__bool__temporary(x, y);" in direct
+    assert "bool flags[2] = DivMod__operator_call__bool__temporary" not in direct
+    assert "CrossGLFixedArray_Record_2 records = make_records(index);" in direct
+    assert "Record records[2] = make_records" not in direct
+    assert "flags[selected]" in direct
+    assert "CrossGLFixedArray_Record_2_read(records, selected).value" in direct
+    HLSLParser(HLSLLexer(direct).tokenize()).parse()
+    assert_directx_compute_validates_if_available(direct, tmp_path)
+
+
 @pytest.mark.parametrize("target", ["directx", "opengl"])
 def test_translate_project_matches_direct_metal_materialized_signatures(
     tmp_path,
