@@ -8445,7 +8445,7 @@ def test_codegen_unused_unsupported_metal_stdlib_wrapper_does_not_poison_targets
     )
 
 
-def test_codegen_deduplicates_identical_materialized_stdlib_definitions():
+def test_codegen_omits_body_only_materialized_stdlib_wrappers():
     source = """
     namespace metal {
     METAL_FUNC float fdim(float x, float y) {
@@ -8471,13 +8471,41 @@ def test_codegen_deduplicates_identical_materialized_stdlib_definitions():
 
     crossgl = convert_without_preprocessing(source)
 
-    assert normalize(crossgl).count("float fdim(float x, float y)") == 1
-    assert (
-        normalize(crossgl).count(
-            "return select(difference, 0.0f, difference < 0.0f || x == y);"
+    assert "fdim" not in crossgl
+    assert "select" not in crossgl
+
+
+def test_codegen_reports_called_body_only_metal_stdlib_wrapper():
+    source = """
+    namespace metal {
+    METAL_FUNC float fdim(float x, float y) {
+      float difference = x - y;
+      return select(difference, 0.0f, difference < 0.0f || x == y);
+    }
+    }
+
+    float use_wrapper(float x, float y) {
+      return metal::fdim(x, y);
+    }
+    """
+
+    with pytest.raises(MetalStandardLibraryWrapperLoweringError) as exc_info:
+        convert_without_preprocessing(
+            source,
+            file_path="body-only-stdlib-wrapper.metal",
         )
-        == 1
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.metal-stdlib-wrapper-unsupported"
     )
+    assert diagnostic.missing_capabilities == (
+        "metal.standard-library-wrapper-lowering",
+    )
+    assert diagnostic.function_name == "metal::fdim"
+    assert diagnostic.implementation_intrinsics == ("metal::fdim",)
+    assert diagnostic.source_location["file"] == "body-only-stdlib-wrapper.metal"
+    assert diagnostic.source_location["line"] == 10
 
 
 def test_codegen_bfloat_builtin_results_reach_project_targets(tmp_path):

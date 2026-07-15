@@ -710,6 +710,7 @@ class MetalToCrossGLConverter:
         "tan",
         "tanh",
     }
+    materialized_metal_stdlib_body_wrappers = {"fdim"}
     metal_math_builtin_result_rules = {
         "abs": ("same", "arithmetic", 1),
         "acos": ("same", "floating", 1),
@@ -2642,15 +2643,9 @@ class MetalToCrossGLConverter:
 
         ordinary_function_code = []
         deferred_template_functions = []
-        emitted_stdlib_definitions = set()
         for f in functions:
             if self.is_materialized_metal_stdlib_wrapper(f):
                 continue
-            stdlib_definition = self.materialized_metal_stdlib_definition_key(f)
-            if stdlib_definition is not None:
-                if stdlib_definition in emitted_stdlib_definitions:
-                    continue
-                emitted_stdlib_definitions.add(stdlib_definition)
             default_bindings = self.default_value_template_bindings.get(id(f))
             if self.value_template_parameter_names(f) and default_bindings is None:
                 deferred_template_functions.append(f)
@@ -9998,35 +9993,13 @@ class MetalToCrossGLConverter:
                 visit(child)
 
         visit(getattr(function, "body", None))
+        function_name = str(getattr(function, "name", ""))
+        if function_name in self.materialized_metal_stdlib_body_wrappers:
+            intrinsics.add(f"metal::{function_name}")
         return tuple(sorted(intrinsics))
 
     def is_materialized_metal_stdlib_wrapper(self, function):
         return bool(self.materialized_metal_stdlib_wrapper_intrinsics(function))
-
-    @staticmethod
-    def materialized_metal_stdlib_definition_key(function):
-        namespace = str(getattr(function, "namespace", "") or "")
-        if namespace != "metal" and not namespace.startswith("metal::"):
-            return None
-        declaration_qualifiers = {
-            str(qualifier)
-            for qualifier in getattr(function, "declaration_qualifiers", []) or []
-        }
-        if "METAL_FUNC" not in declaration_qualifiers:
-            return None
-        parameters = tuple(
-            (
-                str(getattr(parameter, "vtype", "")),
-                str(getattr(parameter, "name", "")),
-            )
-            for parameter in getattr(function, "params", []) or []
-        )
-        return (
-            str(getattr(function, "name", "")),
-            str(getattr(function, "return_type", "")),
-            parameters,
-            repr(getattr(function, "body", None)),
-        )
 
     def validate_materialized_metal_stdlib_wrapper_call(self, expression):
         selected = self.selected_metal_callable(expression)
