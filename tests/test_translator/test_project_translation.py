@@ -38239,6 +38239,301 @@ def test_metal_project_function_constant_values_reach_directx_codegen(tmp_path):
     HLSLParser(HLSLLexer(generated).tokenize()).parse()
 
 
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_metal_project_canonicalizes_leading_zero_function_constant_ids(
+    tmp_path, target
+):
+    (tmp_path / "function_constants.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            constant int first [[function_constant(00)]];
+            constant int second [[function_constant(01)]];
+
+            kernel void select_value(device int* output [[buffer(0)]]) {
+                output[0] = first + second;
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    config = project_pipeline.ProjectConfig(
+        root=tmp_path,
+        include_patterns=("function_constants.metal",),
+        targets=(target,),
+        specialization_constants=({"0": 2, "1": 3} if target == "directx" else {}),
+    )
+
+    report = translate_project(config)
+    payload = report.to_json()
+
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    constants = artifact["specializationConstants"]
+    assert [
+        (constant["name"], constant["id"], constant["idSpelling"])
+        for constant in constants
+    ] == [("first", 0, "00"), ("second", 1, "01")]
+    generated = (tmp_path / artifact["path"]).read_text(encoding="utf-8")
+
+    if target == "directx":
+        assert [
+            (
+                constant["valueProvenance"]["selector"],
+                constant["valueProvenance"]["selectorKind"],
+            )
+            for constant in constants
+        ] == [("0", "id"), ("1", "id")]
+        assert "static const int first = 2;" in generated
+        assert "static const int second = 3;" in generated
+        HLSLParser(HLSLLexer(generated).tokenize()).parse()
+        assert_directx_compute_validates_if_available(generated, tmp_path)
+    else:
+        assert [constant["status"] for constant in constants] == [
+            "required",
+            "required",
+        ]
+        assert "layout(constant_id = 0) const int first = 0;" in generated
+        assert "layout(constant_id = 1) const int second = 0;" in generated
+        GLSLParser(GLSLLexer(generated).tokenize()).parse()
+        if shutil.which("glslangValidator"):
+            toolchain_runs = project_pipeline._run_toolchain_smoke([artifact], tmp_path)
+            assert len(toolchain_runs) == 1
+            assert toolchain_runs[0]["status"] == "ok"
+
+    report_path = tmp_path / f"{target}-report.json"
+    report.write_json(report_path)
+    assert validate_project_report(report_path)["success"] is True
+    runtime_manifest = build_runtime_artifact_manifest(report_path)
+    runtime_constants = runtime_manifest["artifacts"][0]["specializationConstants"]
+    assert [constant["id"] for constant in runtime_constants] == [0, 1]
+    assert [constant["idSpelling"] for constant in runtime_constants] == ["00", "01"]
+
+
+def test_metal_project_canonicalizes_suffixed_function_constant_ids(tmp_path):
+    (tmp_path / "constant_math.h").write_text(
+        "inline int add_constant_ids(int left, int right) { return left + right; }\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "function_constants.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            #include "constant_math.h"
+            using namespace metal;
+
+            constant int decimal [[function_constant(10u)]];
+            constant int octal [[function_constant(011L)]];
+            constant int hexadecimal [[function_constant(0xBUL)]];
+            constant int binary [[function_constant(0b1100ULL)]];
+            constant int separated [[function_constant(1'3u)]];
+
+            kernel void select_value(device int* output [[buffer(0)]]) {
+                output[0] = add_constant_ids(
+                    decimal + octal + hexadecimal,
+                    binary + separated
+                );
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    config = project_pipeline.ProjectConfig(
+        root=tmp_path,
+        include_patterns=("function_constants.metal",),
+        targets=("directx", "opengl"),
+        specialization_constants={
+            "9": 90,
+            "10": 100,
+            "11": 110,
+            "12": 120,
+            "13": 130,
+        },
+    )
+
+    payload = translate_project(config).to_json()
+
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+    artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
+    expected_ids = [
+        ("decimal", 10, "10u"),
+        ("octal", 9, "011L"),
+        ("hexadecimal", 11, "0xBUL"),
+        ("binary", 12, "0b1100ULL"),
+        ("separated", 13, "1'3u"),
+    ]
+    for artifact in artifacts.values():
+        assert [
+            (constant["name"], constant["id"], constant["idSpelling"])
+            for constant in artifact["specializationConstants"]
+        ] == expected_ids
+        assert all(
+            constant["valueProvenance"]["selectorKind"] == "id"
+            for constant in artifact["specializationConstants"]
+        )
+
+    directx_source = (tmp_path / artifacts["directx"]["path"]).read_text(
+        encoding="utf-8"
+    )
+    assert "static const int octal = 90;" in directx_source
+    assert "static const int binary = 120;" in directx_source
+    HLSLParser(HLSLLexer(directx_source).tokenize()).parse()
+    assert_directx_compute_validates_if_available(directx_source, tmp_path)
+
+    opengl_source = (tmp_path / artifacts["opengl"]["path"]).read_text(encoding="utf-8")
+    for _name, constant_id, _spelling in expected_ids:
+        assert f"layout(constant_id = {constant_id})" in opengl_source
+    GLSLParser(GLSLLexer(opengl_source).tokenize()).parse()
+    if shutil.which("glslangValidator"):
+        toolchain_runs = project_pipeline._run_toolchain_smoke(
+            [artifacts["opengl"]], tmp_path
+        )
+        assert len(toolchain_runs) == 1
+        assert toolchain_runs[0]["status"] == "ok"
+
+
+def test_project_function_constant_duplicate_ids_use_canonical_identity(tmp_path):
+    (tmp_path / "duplicate_ids.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            constant int first [[function_constant(01)]];
+            constant int second [[function_constant(0x1u)]];
+
+            kernel void select_value(device int* output [[buffer(0)]]) {
+                output[0] = first + second;
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    config = project_pipeline.ProjectConfig(
+        root=tmp_path,
+        include_patterns=("duplicate_ids.metal",),
+        targets=("opengl",),
+    )
+
+    payload = translate_project(config).to_json()
+
+    diagnostic = next(
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"]
+        == "project.translate.specialization-constant-id-duplicate"
+    )
+    assert diagnostic["location"]["line"] == 5
+    details = diagnostic["details"]
+    assert details["id"] == 1
+    assert details["idSpelling"] == "0x1u"
+    assert details["name"] == "second"
+    assert details["previousName"] == "first"
+    assert details["previousIdSpelling"] == "01"
+    assert details["previousLocation"]["file"] == "duplicate_ids.metal"
+    assert details["previousLocation"]["line"] == 4
+    assert details["previousLocation"]["column"] > 1
+
+
+@pytest.mark.parametrize(
+    ("literal", "reason", "parsed_id"),
+    [
+        ("08", "invalid-octal-digit", None),
+        ("-1", "negative", -1),
+        ("65536u", "out-of-range", 65536),
+        ("1 + 1", "unsupported-expression", None),
+    ],
+)
+def test_project_function_constant_rejects_invalid_c_family_ids(
+    tmp_path, literal, reason, parsed_id
+):
+    (tmp_path / "invalid_id.metal").write_text(
+        textwrap.dedent(f"""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            constant int invalid [[function_constant({literal})]];
+
+            kernel void select_value(device int* output [[buffer(0)]]) {{
+                output[0] = invalid;
+            }}
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    config = project_pipeline.ProjectConfig(
+        root=tmp_path,
+        include_patterns=("invalid_id.metal",),
+        targets=("opengl",),
+    )
+
+    payload = translate_project(config).to_json()
+
+    diagnostic = next(
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == "project.translate.specialization-constant-id-invalid"
+    )
+    assert diagnostic["location"]["file"] == "invalid_id.metal"
+    assert diagnostic["location"]["line"] == 4
+    assert diagnostic["location"]["column"] > 1
+    assert diagnostic["details"]["reason"] == reason
+    assert diagnostic["details"]["idSpelling"] == literal
+    assert diagnostic["details"].get("id") == parsed_id
+    assert diagnostic["details"]["minimumId"] == 0
+    assert diagnostic["details"]["maximumId"] == 0xFFFF
+
+
+def test_project_glsl_specialization_id_uses_glsl_range(tmp_path):
+    (tmp_path / "specialized.comp").write_text(
+        textwrap.dedent("""
+            #version 450 core
+            layout(local_size_x = 1) in;
+            layout(constant_id = 2147483647) const int mode = 1;
+
+            void main() {}
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    config = project_pipeline.ProjectConfig(
+        root=tmp_path,
+        include_patterns=("specialized.comp",),
+        targets=("directx",),
+    )
+
+    payload = translate_project(config).to_json()
+
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["artifacts"][0]["specializationConstants"][0]["id"] == 0x7FFFFFFF
+
+
+def test_project_glsl_specialization_id_rejects_values_above_glsl_range(tmp_path):
+    (tmp_path / "specialized.comp").write_text(
+        textwrap.dedent("""
+            #version 450 core
+            layout(local_size_x = 1) in;
+            layout(constant_id = 2147483648u) const uint mode = 1u;
+
+            void main() {}
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    config = project_pipeline.ProjectConfig(
+        root=tmp_path,
+        include_patterns=("specialized.comp",),
+        targets=("directx",),
+    )
+
+    payload = translate_project(config).to_json()
+
+    diagnostic = next(
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == "project.translate.specialization-constant-id-invalid"
+    )
+    assert diagnostic["details"]["reason"] == "out-of-range"
+    assert diagnostic["details"]["id"] == 0x80000000
+    assert diagnostic["details"]["idSpelling"] == "2147483648u"
+    assert diagnostic["details"]["maximumId"] == 0x7FFFFFFF
+
+
 def test_metal_project_required_function_constant_defers_to_opengl(tmp_path):
     (tmp_path / "function_constant.metal").write_text(
         textwrap.dedent("""
