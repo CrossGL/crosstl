@@ -17644,6 +17644,39 @@ def _boolean_ordered_intrinsic_failure_details(
     return dict(sorted(details.items()))
 
 
+def _math_intrinsic_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) not in {
+        "project.translate.directx-copysign-unrepresentable",
+        "project.translate.opengl-copysign-unrepresentable",
+    }:
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    intrinsic = {}
+    fields = {
+        "operation": getattr(exc, "operation", None),
+        "resultType": getattr(exc, "result_type", None),
+        "targetProfile": getattr(exc, "target_profile", None),
+        "reason": getattr(exc, "reason", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            intrinsic[name] = value
+    operand_types = getattr(exc, "operand_types", None)
+    if operand_types:
+        intrinsic["operandTypes"] = [str(value) for value in operand_types]
+    if intrinsic:
+        details["mathIntrinsic"] = dict(sorted(intrinsic.items()))
+    return dict(sorted(details.items()))
+
+
 def _opengl_struct_construction_failure_details(
     exc: Exception,
     unit: ProjectTranslationUnit,
@@ -18243,6 +18276,7 @@ def _translation_failure_details(
         **_opengl_complex_arithmetic_failure_details(exc, unit, artifact_path),
         **_compile_time_global_failure_details(exc, unit, artifact_path),
         **_boolean_ordered_intrinsic_failure_details(exc, unit, artifact_path),
+        **_math_intrinsic_failure_details(exc, unit, artifact_path),
         **_opengl_struct_construction_failure_details(exc, unit, artifact_path),
         **_opengl_fixed_array_resource_failure_details(exc, unit, artifact_path),
         **_opengl_resource_memory_qualifier_failure_details(exc, unit, artifact_path),

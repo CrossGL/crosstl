@@ -8377,6 +8377,115 @@ def test_codegen_canonicalizes_qualified_log10_stdlib_wrapper(namespace):
         assert "<unknown>" not in generated
 
 
+def test_codegen_canonicalizes_qualified_copysign_scalar_and_vector_calls():
+    source = """
+    float4 copy_signs(
+        float magnitude,
+        float sign_source,
+        float4 magnitudes,
+        float4 sign_sources) {
+      auto scalar_result = metal::copysign(magnitude, sign_source);
+      auto vector_result = metal::copysign(magnitudes, sign_sources);
+      return vector_result + float4(scalar_result);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    normalized = normalize(crossgl)
+
+    assert "float scalar_result = copysign(magnitude, sign_source);" in normalized
+    assert "vec4 vector_result = copysign(magnitudes, sign_sources);" in normalized
+    assert "metal_u3a_u3acopysign" not in crossgl
+    assert "metal::copysign" not in crossgl
+    assert "<unknown>" not in crossgl
+
+
+def test_codegen_canonicalizes_qualified_copysign_stdlib_wrapper():
+    source = """
+    typedef bfloat bfloat16_t;
+
+    namespace metal {
+    METAL_FUNC bfloat16_t copysign(
+        bfloat16_t magnitude, bfloat16_t sign_source) {
+      return bfloat16_t(__metal_copysign(
+          float(magnitude), float(sign_source)));
+    }
+    }
+
+    bfloat16_t copy_sign(bfloat16_t magnitude, bfloat16_t sign_source) {
+      auto result = metal::copysign(magnitude, sign_source);
+      return result;
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    normalized = normalize(crossgl)
+
+    assert "bfloat16 result = copysign(magnitude, sign_source);" in normalized
+    assert crossgl.count("copysign(") == 1
+    assert "__metal_copysign" not in crossgl
+    assert "metal_u3a_u3acopysign" not in crossgl
+    assert "<unknown>" not in crossgl
+
+
+def test_codegen_preserves_source_defined_qualified_copysign_overload():
+    source = """
+    namespace metal {
+    float copysign(float magnitude, float sign_source) {
+      return magnitude + sign_source;
+    }
+    }
+
+    float copy_sign(float magnitude, float sign_source) {
+      return metal::copysign(magnitude, sign_source);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    normalized = normalize(crossgl)
+
+    assert "float copysign(float magnitude, float sign_source)" in normalized
+    assert "return magnitude + sign_source;" in normalized
+    assert "return copysign(magnitude, sign_source);" in normalized
+    assert crossgl.count("copysign(") == 2
+    assert "metal_u3a_u3acopysign" not in crossgl
+
+
+def test_codegen_does_not_canonicalize_unknown_copysign_namespace():
+    source = """
+    float copy_sign(float magnitude, float sign_source) {
+      return vendor::copysign(magnitude, sign_source);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    normalized = normalize(crossgl)
+
+    assert "return vendor_u3a_u3acopysign(magnitude, sign_source);" in normalized
+    assert "return copysign(magnitude, sign_source);" not in normalized
+
+
+def test_codegen_rejects_unsupported_qualified_copysign_signature():
+    source = """
+    float copy_sign(float value) {
+      return metal::copysign(value);
+    }
+    """
+
+    with pytest.raises(MetalBuiltinResultTypeResolutionError) as exc_info:
+        convert_without_preprocessing(
+            source,
+            file_path="unsupported-copysign.metal",
+        )
+
+    diagnostic = exc_info.value
+    assert diagnostic.function_name == "metal::copysign"
+    assert diagnostic.argument_types == ("float",)
+    assert diagnostic.reason == "the builtin requires 2 arguments"
+    assert diagnostic.source_location["file"] == "unsupported-copysign.metal"
+    assert diagnostic.source_location["line"] == 3
+
+
 @pytest.mark.parametrize("namespace", ["fast", "precise"])
 def test_codegen_canonicalizes_qualified_rint_stdlib_wrapper(namespace):
     source = f"""

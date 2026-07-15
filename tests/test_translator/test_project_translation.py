@@ -8500,6 +8500,73 @@ def test_translate_project_reports_unrepresentable_boolean_min_shapes(tmp_path):
     )
 
 
+def test_translate_project_reports_unrepresentable_copysign_types(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "copysign.cgl").write_text(
+        textwrap.dedent("""
+            shader UnsupportedCopySign {
+                compute {
+                    double apply(double magnitude, double sign_source) {
+                        return copysign(magnitude, sign_source);
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["directx", "opengl"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 2
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.directx-copysign-unrepresentable": 1,
+        "project.translate.opengl-copysign-unrepresentable": 1,
+    }
+    diagnostics = {
+        diagnostic["target"]: diagnostic for diagnostic in payload["diagnostics"]
+    }
+    for target, target_profile in (
+        ("directx", "default"),
+        ("opengl", "glsl-460"),
+    ):
+        diagnostic = diagnostics[target]
+        assert diagnostic["location"]["file"] == "shaders/copysign.cgl"
+        assert diagnostic["missingCapabilities"] == [f"{target}.copysign-lowering"]
+        assert diagnostic["details"] == {
+            "mathIntrinsic": {
+                "operandTypes": ["double", "double"],
+                "operation": "copysign",
+                "reason": "unsupported-operand-type",
+                "targetProfile": target_profile,
+            },
+            "sourcePath": "shaders/copysign.cgl",
+            "targetArtifact": (
+                f"translated/{target}/shaders/copysign."
+                f"{'hlsl' if target == 'directx' else 'glsl'}"
+            ),
+        }
+
+    report_path = repo / "translated" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert {diagnostic["code"] for diagnostic in validation["diagnostics"]}.isdisjoint(
+        {"project.validate.invalid-report"}
+    )
+
+
 def test_translate_project_reports_excess_opengl_aggregate_elements(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"

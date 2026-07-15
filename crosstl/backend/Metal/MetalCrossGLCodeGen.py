@@ -668,6 +668,7 @@ class MetalToCrossGLConverter:
         "atanh",
         "ceil",
         "clamp",
+        "copysign",
         "cos",
         "cosh",
         "cospi",
@@ -726,6 +727,7 @@ class MetalToCrossGLConverter:
         "atanh": ("same", "floating", 1),
         "ceil": ("same", "floating", 1),
         "clamp": ("same", "arithmetic", 3),
+        "copysign": ("same", "floating", 2),
         "cos": ("same", "floating", 1),
         "cosh": ("same", "floating", 1),
         "cospi": ("same", "floating", 1),
@@ -8317,6 +8319,8 @@ class MetalToCrossGLConverter:
                 getattr(expr, "source_location", None),
             )
             self.validate_materialized_metal_stdlib_wrapper_call(expr)
+            if self.resolve_metal_math_builtin_name(expr.name, expr.args) == "copysign":
+                self.metal_math_builtin_result_type(expr)
             materialized_name = self.transported_metal_source_overload_name(
                 materialized_name,
                 expr.args,
@@ -9160,13 +9164,18 @@ class MetalToCrossGLConverter:
     def map_function_call_name(self, name, args=None):
         match = re.fullmatch(r"(?:metal::)?as_type<(.+)>", name)
         if not match:
+            if str(name).rsplit("::", 1)[-1] == "copysign":
+                metal_math_name = self.map_metal_math_function_name(name, args)
+                if metal_math_name is not None:
+                    return metal_math_name
+                return self.sanitize_identifier(name)
             metal_type_constructor = self.map_metal_type_constructor_name(name)
             if metal_type_constructor is not None:
                 return metal_type_constructor
             metal_bit_name = self.map_metal_bit_function_name(name)
             if metal_bit_name is not None:
                 return metal_bit_name
-            metal_math_name = self.map_metal_math_function_name(name)
+            metal_math_name = self.map_metal_math_function_name(name, args)
             if metal_math_name is not None:
                 return metal_math_name
             metal_wave_name = self.map_metal_wave_function_name(name, args)
@@ -9953,13 +9962,25 @@ class MetalToCrossGLConverter:
             return mapped
         return None
 
-    def map_metal_math_function_name(self, name):
+    def map_metal_math_function_name(self, name, args=None):
         for prefix in self.metal_math_namespace_prefixes:
             if not str(name).startswith(prefix):
                 continue
             unscoped = str(name)[len(prefix) :]
-            if unscoped in self.metal_math_intrinsics:
+            if unscoped not in self.metal_math_intrinsics:
+                continue
+            if unscoped != "copysign" or args is None:
                 return unscoped
+            binding, function = self.resolve_metal_user_function_overload(
+                str(name), args
+            )
+            if binding == "user":
+                if self.is_materialized_metal_stdlib_wrapper(function):
+                    return unscoped
+                return self.function_output_name(function)
+            if binding == "unknown":
+                return None
+            return unscoped
         return None
 
     @staticmethod
@@ -10027,7 +10048,7 @@ class MetalToCrossGLConverter:
 
     def resolve_metal_math_builtin_name(self, name, arguments):
         text = str(name)
-        builtin_name = self.map_metal_math_function_name(text)
+        builtin_name = self.map_metal_math_function_name(text, arguments)
         if builtin_name is None:
             if "::" in text or text not in self.metal_math_intrinsics:
                 return None

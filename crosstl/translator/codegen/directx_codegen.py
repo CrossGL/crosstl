@@ -658,6 +658,32 @@ class DirectXBooleanOrderedIntrinsicError(ValueError):
         self.source_location = source_location
 
 
+class DirectXCopySignError(ValueError):
+    """Raised when ``copysign`` has no exact 32-bit HLSL lowering."""
+
+    project_diagnostic_code = "project.translate.directx-copysign-unrepresentable"
+    missing_capabilities = ("directx.copysign-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        operation="copysign",
+        operand_types=None,
+        result_type=None,
+        target_profile=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.operation = operation
+        self.operand_types = tuple(operand_types or ())
+        self.result_type = result_type
+        self.target_profile = target_profile
+        self.reason = reason
+        self.source_location = source_location
+
+
 class DirectXPrivatePointerParameterError(ValueError):
     """Raised when a private pointer cannot become a fixed HLSL array."""
 
@@ -9333,6 +9359,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             numeric_result_type = numeric_trait_method_result_type(self, expr)
             if numeric_result_type:
                 return numeric_result_type
+            if func_name == "copysign":
+                resolved_copysign = self.resolve_hlsl_function_overload(
+                    func_name,
+                    args,
+                    call_node=expr,
+                )
+                if resolved_copysign is not None:
+                    return self.type_name_string(
+                        getattr(resolved_copysign, "return_type", None)
+                    )
+                if args:
+                    return self.expression_result_type(args[0])
             if func_name == "inverse" and args:
                 return self.expression_result_type(args[0])
             if func_name == "transpose" and args:
@@ -12376,6 +12414,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if metal_as_type_call is not None:
                 return metal_as_type_call
 
+            copysign_call = self.generate_hlsl_copysign_call(
+                func_name,
+                args,
+                call_node=expr,
+            )
+            if copysign_call is not None:
+                return copysign_call
+
             bitcast_call = self.generate_hlsl_bitcast_call(func_name, args)
             if bitcast_call is not None:
                 return bitcast_call
@@ -13510,6 +13556,117 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if expected_type == "bool":
             return f"(({expression}) != 0)"
         return expression
+
+    def hlsl_copysign_type_info(self, type_name):
+        if type_name is None:
+            return None
+        mapped_type = self.map_type(type_name)
+        match = re.fullmatch(r"float([234]?)", mapped_type or "")
+        if match is None:
+            return None
+        lanes = int(match.group(1)) if match.group(1) else 1
+        return {"type": mapped_type, "lanes": lanes}
+
+    def hlsl_copysign_error(
+        self,
+        message,
+        *,
+        operand_types,
+        result_type=None,
+        reason,
+        source_location=None,
+    ):
+        return DirectXCopySignError(
+            message,
+            operand_types=operand_types,
+            result_type=result_type,
+            target_profile=self.target_profile or "default",
+            reason=reason,
+            source_location=source_location,
+        )
+
+    def generate_hlsl_copysign_call(
+        self,
+        func_name,
+        args,
+        *,
+        call_node=None,
+    ):
+        if func_name != "copysign":
+            return None
+
+        resolved_overload = self.resolve_hlsl_function_overload(
+            func_name,
+            args,
+            call_node=call_node,
+        )
+        if resolved_overload is not None:
+            return None
+
+        source_location = getattr(call_node, "source_location", None)
+        if len(args) != 2:
+            raise self.hlsl_copysign_error(
+                "DirectX copysign requires exactly two operands",
+                operand_types=(),
+                reason="invalid-arity",
+                source_location=source_location,
+            )
+
+        source_types = tuple(self.hlsl_source_expression_type(arg) for arg in args)
+        display_types = tuple(
+            self.type_name_string(source_type) if source_type is not None else None
+            for source_type in source_types
+        )
+        if any(source_type is None for source_type in source_types):
+            raise self.hlsl_copysign_error(
+                "DirectX copysign requires statically known operand types",
+                operand_types=display_types,
+                reason="unresolved-operand-type",
+                source_location=source_location,
+            )
+
+        operand_info = tuple(
+            self.hlsl_copysign_type_info(source_type) for source_type in source_types
+        )
+        if any(info is None for info in operand_info):
+            raise self.hlsl_copysign_error(
+                "DirectX copysign supports only 32-bit float scalar and vector "
+                f"operands, got {display_types[0]} and {display_types[1]}",
+                operand_types=display_types,
+                reason="unsupported-operand-type",
+                source_location=source_location,
+            )
+
+        magnitude_info, sign_info = operand_info
+        if magnitude_info["type"] != sign_info["type"]:
+            raise self.hlsl_copysign_error(
+                "DirectX copysign operands must have identical scalar or vector "
+                f"shapes, got {display_types[0]} and {display_types[1]}",
+                operand_types=display_types,
+                result_type=magnitude_info["type"],
+                reason="operand-shape-mismatch",
+                source_location=source_location,
+            )
+
+        value_type = magnitude_info["type"]
+        magnitude = self.generate_expression_with_expected(args[0], value_type)
+        sign_source = self.generate_expression_with_expected(args[1], value_type)
+        lanes = magnitude_info["lanes"]
+        mask_type = "uint" if lanes == 1 else f"uint{lanes}"
+        magnitude_mask = "0x7fffffffu"
+        sign_mask = "0x80000000u"
+        if lanes != 1:
+            magnitude_mask = f"{mask_type}({', '.join(['0x7fffffffu'] * lanes)})"
+            sign_mask = f"{mask_type}({', '.join(['0x80000000u'] * lanes)})"
+        return (
+            "asfloat(((asuint({magnitude}) & {magnitude_mask}) | "
+            "(asuint({sign_source}) & {sign_mask})))"
+        ).format(
+            magnitude=magnitude,
+            magnitude_mask=magnitude_mask,
+            sign_source=sign_source,
+            sign_mask=sign_mask,
+        )
 
     def hlsl_bitcast_result_type(self, func_name, args):
         if (

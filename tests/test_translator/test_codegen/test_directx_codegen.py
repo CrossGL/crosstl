@@ -51,6 +51,7 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXBooleanOrderedIntrinsicError,
     DirectXCompileTimeGlobalError,
     DirectXCooperativeMatrixUnsupportedError,
+    DirectXCopySignError,
     DirectXForInIterableError,
     DirectXMappedOverloadError,
     DirectXMinimumPrecisionIntegerArithmeticError,
@@ -190,6 +191,167 @@ def test_hlsl_rint_lowers_to_dxil_nearest_even(tmp_path):
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Round_ne(value)" in listing_path.read_text(encoding="utf-8")
+
+
+def test_hlsl_copysign_preserves_ieee_payload_bits_and_validates(tmp_path):
+    source = """
+    shader ExactCopySign {
+        RWStructuredBuffer<uvec4> output_bits @ binding(0);
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                uvec4 magnitude_bits = uvec4(
+                    0u, 2147483648u, 2139095040u, 2143363909u
+                );
+                uvec4 sign_bits = uvec4(
+                    2147483648u, 0u, 2147483648u, 2147483648u
+                );
+                vec4 magnitudes = asfloat(magnitude_bits);
+                vec4 signs = asfloat(sign_bits);
+                output_bits[0] = asuint(copysign(magnitudes, signs));
+                vec2 copied2 = copysign(magnitudes.xy, signs.xy);
+                vec3 copied3 = copysign(magnitudes.xyz, signs.xyz);
+                output_bits[1] = uvec4(
+                    asuint(copied2), asuint(copied3.x), asuint(copied3.y)
+                );
+                output_bits[2].x = asuint(copysign(magnitudes.x, signs.x));
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    vector_expression = (
+        "asfloat(((asuint(magnitudes) & uint4(0x7fffffffu, 0x7fffffffu, "
+        "0x7fffffffu, 0x7fffffffu)) | (asuint(signs) & "
+        "uint4(0x80000000u, 0x80000000u, 0x80000000u, 0x80000000u))))"
+    )
+    scalar_expression = (
+        "asfloat(((asuint(magnitudes.x) & 0x7fffffffu) | "
+        "(asuint(signs.x) & 0x80000000u)))"
+    )
+    vector2_expression = (
+        "asfloat(((asuint(magnitudes.xy) & uint2(0x7fffffffu, "
+        "0x7fffffffu)) | (asuint(signs.xy) & uint2(0x80000000u, "
+        "0x80000000u))))"
+    )
+    vector3_expression = (
+        "asfloat(((asuint(magnitudes.xyz) & uint3(0x7fffffffu, "
+        "0x7fffffffu, 0x7fffffffu)) | (asuint(signs.xyz) & "
+        "uint3(0x80000000u, 0x80000000u, 0x80000000u))))"
+    )
+    assert vector_expression in generated
+    assert vector2_expression in generated
+    assert vector3_expression in generated
+    assert scalar_expression in generated
+    assert "copysign(" not in generated
+    for payload in (
+        "2147483648u",
+        "2139095040u",
+        "2143363909u",
+    ):
+        assert payload in generated
+    assert [
+        ((value & 0x7FFFFFFF) | (sign & 0x80000000))
+        for value, sign in zip(
+            (0, 2147483648, 2139095040, 2143363909),
+            (2147483648, 0, 2147483648, 2147483648),
+        )
+    ] == [2147483648, 0, 4286578688, 4290847557]
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        return
+    source_path = tmp_path / "exact_copysign.hlsl"
+    output_path = tmp_path / "exact_copysign.dxil"
+    source_path.write_text(generated, encoding="utf-8")
+    result = subprocess.run(
+        [
+            dxc,
+            "-T",
+            "cs_6_0",
+            "-E",
+            "CSMain",
+            str(source_path),
+            "-Fo",
+            str(output_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert output_path.is_file()
+
+
+@pytest.mark.parametrize(
+    ("left_type", "right_type", "reason"),
+    [
+        ("double", "double", "unsupported-operand-type"),
+        ("vec2", "vec3", "operand-shape-mismatch"),
+    ],
+)
+def test_hlsl_copysign_rejects_unrepresentable_shapes_with_metadata(
+    left_type,
+    right_type,
+    reason,
+):
+    source = f"""
+    shader InvalidCopySign {{
+        {left_type} invalid({left_type} magnitude, {right_type} sign_source) {{
+            return copysign(magnitude, sign_source);
+        }}
+    }}
+    """
+    ast = crosstl.translator.parse(source)
+    call = next(node for node in ast.walk() if isinstance(node, FunctionCallNode))
+    source_location = {"line": 4, "column": 20}
+    call.source_location = source_location
+
+    with pytest.raises(DirectXCopySignError) as exc_info:
+        HLSLCodeGen(target_profile="dx11").generate(ast)
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.directx-copysign-unrepresentable"
+    )
+    assert diagnostic.missing_capabilities == ("directx.copysign-lowering",)
+    assert diagnostic.operation == "copysign"
+    expected_operand_types = {
+        ("double", "double"): ("double", "double"),
+        ("vec2", "vec3"): ("float2", "float3"),
+    }
+    assert diagnostic.operand_types == expected_operand_types[(left_type, right_type)]
+    assert diagnostic.target_profile == "dx11"
+    assert diagnostic.reason == reason
+    assert diagnostic.source_location == source_location
+
+
+def test_hlsl_user_defined_copysign_remains_an_ordinary_call():
+    source = """
+    shader UserCopySign {
+        float copysign(float magnitude, float sign_source) {
+            return magnitude + sign_source;
+        }
+
+        float apply(float value) {
+            return copysign(value, -1.0);
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert "float copysign(float magnitude, float sign_source)" in generated
+    assert "return copysign(value, -1.0);" in generated
+    assert "0x7fffffffu" not in generated
+    assert "0x80000000u" not in generated
 
 
 @pytest.mark.parametrize(

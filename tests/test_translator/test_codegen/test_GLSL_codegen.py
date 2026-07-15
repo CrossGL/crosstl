@@ -44,6 +44,7 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLCompileTimeGlobalError,
     OpenGLCompoundAssignmentError,
     OpenGLCooperativeMatrixError,
+    OpenGLCopySignError,
     OpenGLEntryPointSelectionError,
     OpenGLFixedArrayResourceError,
     OpenGLForInIterableError,
@@ -194,6 +195,145 @@ def test_glsl_rint_lowers_to_round_even(tmp_path):
         spirv_target="spirv1.3",
         validate_spirv=True,
     )
+
+
+def test_glsl_copysign_preserves_ieee_payload_bits_and_validates(tmp_path):
+    source = """
+    shader ExactCopySign {
+        RWStructuredBuffer<uvec4> output_bits @ binding(0);
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                uvec4 magnitude_bits = uvec4(
+                    0u, 2147483648u, 2139095040u, 2143363909u
+                );
+                uvec4 sign_bits = uvec4(
+                    2147483648u, 0u, 2147483648u, 2147483648u
+                );
+                vec4 magnitudes = asfloat(magnitude_bits);
+                vec4 signs = asfloat(sign_bits);
+                output_bits[0] = asuint(copysign(magnitudes, signs));
+                vec2 copied2 = copysign(magnitudes.xy, signs.xy);
+                vec3 copied3 = copysign(magnitudes.xyz, signs.xyz);
+                output_bits[1] = uvec4(
+                    asuint(copied2), asuint(copied3.x), asuint(copied3.y)
+                );
+                output_bits[2].x = asuint(copysign(magnitudes.x, signs.x));
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(source), "compute"
+    )
+
+    vector_expression = (
+        "uintBitsToFloat(((floatBitsToUint(magnitudes) & "
+        "uvec4(0x7fffffffu)) | (floatBitsToUint(signs) & "
+        "uvec4(0x80000000u))))"
+    )
+    scalar_expression = (
+        "uintBitsToFloat(((floatBitsToUint(magnitudes.x) & 0x7fffffffu) | "
+        "(floatBitsToUint(signs.x) & 0x80000000u)))"
+    )
+    vector2_expression = (
+        "uintBitsToFloat(((floatBitsToUint(magnitudes.xy) & "
+        "uvec2(0x7fffffffu)) | (floatBitsToUint(signs.xy) & "
+        "uvec2(0x80000000u))))"
+    )
+    vector3_expression = (
+        "uintBitsToFloat(((floatBitsToUint(magnitudes.xyz) & "
+        "uvec3(0x7fffffffu)) | (floatBitsToUint(signs.xyz) & "
+        "uvec3(0x80000000u))))"
+    )
+    assert vector_expression in generated
+    assert vector2_expression in generated
+    assert vector3_expression in generated
+    assert scalar_expression in generated
+    assert "copysign(" not in generated
+    for payload in (
+        "2147483648u",
+        "2139095040u",
+        "2143363909u",
+    ):
+        assert payload in generated
+    assert [
+        ((value & 0x7FFFFFFF) | (sign & 0x80000000))
+        for value, sign in zip(
+            (0, 2147483648, 2139095040, 2143363909),
+            (2147483648, 0, 2147483648, 2147483648),
+        )
+    ] == [2147483648, 0, 4286578688, 4290847557]
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "exact_copysign",
+        spirv_target="spirv1.3",
+        validate_spirv=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("left_type", "right_type", "reason"),
+    [
+        ("double", "double", "unsupported-operand-type"),
+        ("vec2", "vec3", "operand-shape-mismatch"),
+    ],
+)
+def test_glsl_copysign_rejects_unrepresentable_shapes_with_metadata(
+    left_type,
+    right_type,
+    reason,
+):
+    source = f"""
+    shader InvalidCopySign {{
+        {left_type} invalid({left_type} magnitude, {right_type} sign_source) {{
+            return copysign(magnitude, sign_source);
+        }}
+    }}
+    """
+    ast = crosstl.translator.parse(source)
+    call = next(node for node in ast.walk() if isinstance(node, FunctionCallNode))
+    source_location = {"line": 4, "column": 20}
+    call.source_location = source_location
+
+    with pytest.raises(OpenGLCopySignError) as exc_info:
+        GLSLCodeGen().generate(ast)
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.opengl-copysign-unrepresentable"
+    )
+    assert diagnostic.missing_capabilities == ("opengl.copysign-lowering",)
+    assert diagnostic.operation == "copysign"
+    assert diagnostic.operand_types == (left_type, right_type)
+    assert diagnostic.target_profile == "glsl-460"
+    assert diagnostic.reason == reason
+    assert diagnostic.source_location == source_location
+
+
+def test_glsl_user_defined_copysign_remains_an_ordinary_call():
+    source = """
+    shader UserCopySign {
+        float copysign(float magnitude, float sign_source) {
+            return magnitude + sign_source;
+        }
+
+        float apply(float value) {
+            return copysign(value, -1.0);
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert "float copysign(float magnitude, float sign_source)" in generated
+    assert "return copysign(value, (-1.0));" in generated
+    assert "0x7fffffffu" not in generated
+    assert "0x80000000u" not in generated
 
 
 def test_glsl_reserved_identifiers_are_sanitized_consistently():

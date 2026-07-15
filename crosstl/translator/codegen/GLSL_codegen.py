@@ -531,6 +531,32 @@ class OpenGLBooleanOrderedIntrinsicError(ValueError):
         self.source_location = source_location
 
 
+class OpenGLCopySignError(ValueError):
+    """Raised when ``copysign`` has no exact 32-bit GLSL lowering."""
+
+    project_diagnostic_code = "project.translate.opengl-copysign-unrepresentable"
+    missing_capabilities = ("opengl.copysign-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        operation="copysign",
+        operand_types=None,
+        result_type=None,
+        target_profile="glsl-460",
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.operation = operation
+        self.operand_types = tuple(operand_types or ())
+        self.result_type = result_type
+        self.target_profile = target_profile
+        self.reason = reason
+        self.source_location = source_location
+
+
 class OpenGLCompoundAssignmentError(ValueError):
     """Raised when a source compound assignment has no faithful GLSL form."""
 
@@ -17707,6 +17733,18 @@ complex64_t crossgl_complex64_mod_assign(
             numeric_result_type = numeric_trait_method_result_type(self, expr)
             if numeric_result_type:
                 return numeric_result_type
+            if func_name == "copysign":
+                resolved_copysign = self.resolve_glsl_function_overload(
+                    func_name,
+                    args,
+                    call_node=expr,
+                )
+                if resolved_copysign is not None:
+                    return self.type_name_string(
+                        getattr(resolved_copysign, "return_type", None)
+                    )
+                if args:
+                    return self.expression_result_type(args[0])
             if func_name in {"normalize", "reflect"} and args:
                 return self.expression_result_type(args[0])
             if (
@@ -19744,6 +19782,14 @@ complex64_t crossgl_complex64_mod_assign(
             if boolean_order_call is not None:
                 return boolean_order_call
 
+            copysign_call = self.generate_glsl_copysign_call(
+                original_func_name,
+                expr.args,
+                call_node=expr,
+            )
+            if copysign_call is not None:
+                return copysign_call
+
             bitcast_call = self.generate_bitcast_call(original_func_name, expr.args)
             if bitcast_call is not None:
                 return bitcast_call
@@ -20347,6 +20393,117 @@ complex64_t crossgl_complex64_mod_assign(
         ):
             return f"(1.0 / {value})"
         return None
+
+    def glsl_copysign_type_info(self, type_name):
+        if type_name is None:
+            return None
+        mapped_type = self.map_type(type_name)
+        if mapped_type == "float":
+            return {"type": mapped_type, "lanes": 1}
+        match = re.fullmatch(r"vec([234])", mapped_type or "")
+        if match is None:
+            return None
+        return {"type": mapped_type, "lanes": int(match.group(1))}
+
+    def glsl_copysign_error(
+        self,
+        message,
+        *,
+        operand_types,
+        result_type=None,
+        reason,
+        source_location=None,
+    ):
+        return OpenGLCopySignError(
+            message,
+            operand_types=operand_types,
+            result_type=result_type,
+            reason=reason,
+            source_location=source_location,
+        )
+
+    def generate_glsl_copysign_call(
+        self,
+        func_name,
+        args,
+        *,
+        call_node=None,
+    ):
+        if func_name != "copysign":
+            return None
+
+        resolved_overload = self.resolve_glsl_function_overload(
+            func_name,
+            args,
+            call_node=call_node,
+        )
+        if resolved_overload is not None:
+            return None
+
+        source_location = getattr(call_node, "source_location", None)
+        if len(args) != 2:
+            raise self.glsl_copysign_error(
+                "OpenGL copysign requires exactly two operands",
+                operand_types=(),
+                reason="invalid-arity",
+                source_location=source_location,
+            )
+
+        source_types = tuple(self.glsl_source_expression_type(arg) for arg in args)
+        display_types = tuple(
+            self.type_name_string(source_type) if source_type is not None else None
+            for source_type in source_types
+        )
+        if any(source_type is None for source_type in source_types):
+            raise self.glsl_copysign_error(
+                "OpenGL copysign requires statically known operand types",
+                operand_types=display_types,
+                reason="unresolved-operand-type",
+                source_location=source_location,
+            )
+
+        operand_info = tuple(
+            self.glsl_copysign_type_info(source_type) for source_type in source_types
+        )
+        if any(info is None for info in operand_info):
+            raise self.glsl_copysign_error(
+                "OpenGL copysign supports only 32-bit float scalar and vector "
+                f"operands, got {display_types[0]} and {display_types[1]}",
+                operand_types=display_types,
+                reason="unsupported-operand-type",
+                source_location=source_location,
+            )
+
+        magnitude_info, sign_info = operand_info
+        if magnitude_info["type"] != sign_info["type"]:
+            raise self.glsl_copysign_error(
+                "OpenGL copysign operands must have identical scalar or vector "
+                f"shapes, got {display_types[0]} and {display_types[1]}",
+                operand_types=display_types,
+                result_type=magnitude_info["type"],
+                reason="operand-shape-mismatch",
+                source_location=source_location,
+            )
+
+        value_type = magnitude_info["type"]
+        magnitude = self.generate_expression_with_expected(args[0], value_type)
+        sign_source = self.generate_expression_with_expected(args[1], value_type)
+        lanes = magnitude_info["lanes"]
+        mask_type = "uint" if lanes == 1 else f"uvec{lanes}"
+        magnitude_mask = "0x7fffffffu"
+        sign_mask = "0x80000000u"
+        if lanes != 1:
+            magnitude_mask = f"{mask_type}({magnitude_mask})"
+            sign_mask = f"{mask_type}({sign_mask})"
+        return (
+            "uintBitsToFloat(((floatBitsToUint({magnitude}) & {magnitude_mask}) | "
+            "(floatBitsToUint({sign_source}) & {sign_mask})))"
+        ).format(
+            magnitude=magnitude,
+            magnitude_mask=magnitude_mask,
+            sign_source=sign_source,
+            sign_mask=sign_mask,
+        )
 
     def generate_bitcast_call(self, func_name, args):
         if (
