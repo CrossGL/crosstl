@@ -4438,7 +4438,7 @@ class MetalToCrossGLConverter:
                 address_spaces.append(qualifier)
         return f"{' '.join(address_spaces)} " if address_spaces else ""
 
-    def effective_declaration_qualifiers(self, var):
+    def resolved_declaration_qualifiers(self, var):
         """Return direct qualifiers plus those carried by a resolved type alias."""
         qualifiers = [
             str(qualifier).lower() for qualifier in getattr(var, "qualifiers", []) or []
@@ -4458,6 +4458,16 @@ class MetalToCrossGLConverter:
             while metal_type.endswith(("*", "&")):
                 metal_type = metal_type[:-1].strip()
 
+        return list(dict.fromkeys(qualifiers))
+
+    def effective_declaration_qualifiers(self, var):
+        qualifiers = self.resolved_declaration_qualifiers(var)
+        if self.is_plain_metal_auto_type(getattr(var, "vtype", None)):
+            name = getattr(var, "name", None)
+            inferred = self.current_variable_type_qualifiers.get(
+                name, self.global_variable_type_qualifiers.get(name, ())
+            )
+            qualifiers.extend(inferred)
         return list(dict.fromkeys(qualifiers))
 
     def resource_memory_qualifiers(self, var):
@@ -5141,11 +5151,17 @@ class MetalToCrossGLConverter:
                 if isinstance(declaration, VariableNode) and getattr(
                     declaration, "vtype", None
                 ):
-                    self.current_variable_types[declaration.name] = (
-                        self.inferred_metal_declaration_type(declaration, stmt.right)
+                    inferred_type = self.inferred_metal_declaration_type(
+                        declaration, stmt.right
                     )
+                    inferred_qualifiers = (
+                        self.inferred_metal_declaration_type_qualifiers(
+                            declaration, stmt.right, inferred_type
+                        )
+                    )
+                    self.current_variable_types[declaration.name] = inferred_type
                     self.current_variable_type_qualifiers[declaration.name] = (
-                        self.metal_declaration_type_qualifiers(declaration)
+                        inferred_qualifiers
                     )
                     if id(declaration) in self.storage_texture_declaration_ids:
                         self.current_storage_texture_names.add(declaration.name)
@@ -9132,9 +9148,25 @@ class MetalToCrossGLConverter:
         return f"{metal_type}{suffix}"
 
     def metal_declaration_type_qualifiers(self, declaration):
-        qualifiers = set(self.effective_declaration_qualifiers(declaration))
+        qualifiers = set(self.resolved_declaration_qualifiers(declaration))
         if getattr(declaration, "is_const", False):
             qualifiers.add("const")
+        return tuple(
+            qualifier
+            for qualifier in self.metal_source_overload_type_qualifiers
+            if qualifier in qualifiers
+        )
+
+    def inferred_metal_declaration_type_qualifiers(
+        self, declaration, initializer=None, inferred_type=None
+    ):
+        qualifiers = set(self.metal_declaration_type_qualifiers(declaration))
+        if (
+            self.is_plain_metal_auto_type(getattr(declaration, "vtype", None))
+            and initializer is not None
+            and self.metal_pointer_pointee_type_once(inferred_type) is not None
+        ):
+            qualifiers.update(self.expression_metal_type_qualifiers(initializer))
         return tuple(
             qualifier
             for qualifier in self.metal_source_overload_type_qualifiers
@@ -9244,7 +9276,11 @@ class MetalToCrossGLConverter:
         if self.metal_array_type_parts(metal_type) is not None:
             return True
         descriptor = self.metal_source_overload_type_descriptor(metal_type)
-        if descriptor is None or descriptor[0] not in {"scalar", "vector", "object"}:
+        if descriptor is None:
+            return False
+        if descriptor[0] == "pointer":
+            return True
+        if descriptor[0] not in {"scalar", "vector", "object"}:
             return False
         if descriptor[0] == "object" and self.is_metal_resource_type(metal_type):
             return False
@@ -9910,6 +9946,16 @@ class MetalToCrossGLConverter:
 
         if left_type is None or right_type is None:
             return None
+        pointer_source = self.metal_pointer_arithmetic_source(
+            expr, left_type, right_type
+        )
+        if pointer_source is not None:
+            return pointer_source[1]
+        if (
+            self.metal_pointer_pointee_type_once(left_type) is not None
+            or self.metal_pointer_pointee_type_once(right_type) is not None
+        ):
+            return None
         left_wide = self.wide_vector_expression_info(expr.left)
         right_wide = self.wide_vector_expression_info(expr.right)
         if left_wide is not None or right_wide is not None:
@@ -9945,6 +9991,26 @@ class MetalToCrossGLConverter:
 
         return self.metal_scalar_binary_result_type(expr.op, left_type, right_type)
 
+    def metal_pointer_arithmetic_source(self, expr, left_type=None, right_type=None):
+        if not isinstance(expr, BinaryOpNode) or expr.op not in {"+", "-"}:
+            return None
+        if left_type is None:
+            left_type = self.expression_metal_type(expr.left)
+        if right_type is None:
+            right_type = self.expression_metal_type(expr.right)
+        left_pointer = self.metal_pointer_pointee_type_once(left_type)
+        right_pointer = self.metal_pointer_pointee_type_once(right_type)
+
+        if left_pointer is not None and right_pointer is None:
+            right_info = self.metal_scalar_arithmetic_type_info(right_type)
+            if right_info is not None and right_info[0] == "integer":
+                return expr.left, left_type
+        if expr.op == "+" and right_pointer is not None and left_pointer is None:
+            left_info = self.metal_scalar_arithmetic_type_info(left_type)
+            if left_info is not None and left_info[0] == "integer":
+                return expr.right, right_type
+        return None
+
     def expression_metal_type_qualifiers(self, expr):
         if isinstance(expr, str):
             return self.current_variable_type_qualifiers.get(
@@ -9960,6 +10026,10 @@ class MetalToCrossGLConverter:
             return self.current_variable_type_qualifiers.get(
                 name, self.global_variable_type_qualifiers.get(name, direct)
             )
+        if isinstance(expr, BinaryOpNode):
+            pointer_source = self.metal_pointer_arithmetic_source(expr)
+            if pointer_source is not None:
+                return self.expression_metal_type_qualifiers(pointer_source[0])
         return ()
 
     def expression_metal_type(self, expr):
@@ -10058,6 +10128,10 @@ class MetalToCrossGLConverter:
         if isinstance(expr, UnaryOpNode):
             if expr.op == "!":
                 return "bool"
+            if expr.op == "*":
+                return self.metal_pointer_pointee_type_once(
+                    self.expression_metal_type(expr.operand)
+                )
             return self.expression_metal_type(expr.operand)
         if isinstance(expr, CastNode):
             return self.resolve_type_alias(expr.target_type)
