@@ -263,12 +263,13 @@ jobs:
           opengl_frontier_count = len(opengl_frontier_sources)
           required_opengl_promotions = {
               "mlx/backend/metal/kernels/binary_two.metal",
+              "mlx/backend/metal/kernels/layer_norm.metal",
               "mlx/backend/metal/kernels/ternary.metal",
           }
           if not required_opengl_promotions <= opengl_frontier_sources:
               raise SystemExit("required OpenGL frontier promotions are missing")
-          if opengl_frontier_count != 8:
-              raise SystemExit("expected 8 OpenGL toolchain frontier sources")
+          if opengl_frontier_count != 9:
+              raise SystemExit("expected 9 OpenGL toolchain frontier sources")
           payload = json.loads(
               Path("mlx-upstream/.crosstl-mlx-porting/summary.json").read_text(
                   encoding="utf-8"

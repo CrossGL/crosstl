@@ -1340,9 +1340,9 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
         module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES
     )
     assert opengl_frontier["project_diagnostic_count"] == 0
-    assert len(module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES) == 8
-    assert opengl_frontier["glslang_compiled_artifact_count"] == 8
-    assert opengl_frontier["spirv_validated_artifact_count"] == 8
+    assert len(module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES) == 9
+    assert opengl_frontier["glslang_compiled_artifact_count"] == 9
+    assert opengl_frontier["spirv_validated_artifact_count"] == 9
     assert opengl_frontier["glslang_target_environments"] == [
         "opengl",
         "spirv1.3",
@@ -1739,6 +1739,7 @@ def test_arg_reduce_advances_into_clean_toolchain_frontiers():
     assert module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES == (
         module.MLX_ARG_REDUCE_SOURCE,
         module.MLX_BINARY_TWO_SOURCE,
+        module.MLX_LAYER_NORM_SOURCE,
         module.MLX_LOGSUMEXP_SOURCE,
         module.MLX_RMS_NORM_SOURCE,
         module.MLX_ROPE_SOURCE,
@@ -1802,6 +1803,7 @@ def test_opengl_toolchain_frontier_matches_pinned_validator_inventory():
     expected_sources = (
         module.MLX_ARG_REDUCE_SOURCE,
         module.MLX_BINARY_TWO_SOURCE,
+        module.MLX_LAYER_NORM_SOURCE,
         module.MLX_LOGSUMEXP_SOURCE,
         module.MLX_RMS_NORM_SOURCE,
         module.MLX_ROPE_SOURCE,
@@ -1811,20 +1813,21 @@ def test_opengl_toolchain_frontier_matches_pinned_validator_inventory():
     )
 
     assert module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES == expected_sources
-    assert len(expected_sources) == 8
+    assert len(expected_sources) == 9
     status = expected_gaps["opengl_frontier_status"]
     assert status["sources"] == list(expected_sources)
-    assert status["source_count"] == 8
-    assert status["artifact_count"] == 8
-    assert status["glslang_compiled_artifact_count"] == 8
-    assert status["spirv_validated_artifact_count"] == 8
+    assert status["source_count"] == 9
+    assert status["artifact_count"] == 9
+    assert status["glslang_compiled_artifact_count"] == 9
+    assert status["spirv_validated_artifact_count"] == 9
     assert status["runtime_integration_included"] is False
     assert status["runtime_parity_claimed"] is False
 
     workflow = MLX_WORKFLOW_PATH.read_text(encoding="utf-8")
     assert "MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES" in workflow
-    assert "if opengl_frontier_count != 8:" in workflow
-    assert "expected 8 OpenGL toolchain frontier sources" in workflow
+    assert '"mlx/backend/metal/kernels/layer_norm.metal"' in workflow
+    assert "if opengl_frontier_count != 9:" in workflow
+    assert "expected 9 OpenGL toolchain frontier sources" in workflow
 
 
 def test_fence_is_blocked_outside_clean_and_directx_toolchain_frontiers():
@@ -2357,9 +2360,11 @@ def test_opengl_frontier_required_toolchain_compiles_and_validates_artifacts(
         "translate-opengl-frontier",
         "validate-arg-reduce-opengl",
         "validate-arg-reduce-opengl-spirv",
-        "validate-binary-two-opengl",
-        "validate-binary-two-opengl-spirv",
-        "validate-logsumexp-opengl",
+            "validate-binary-two-opengl",
+            "validate-binary-two-opengl-spirv",
+            "validate-layer-norm-opengl",
+            "validate-layer-norm-opengl-spirv",
+            "validate-logsumexp-opengl",
         "validate-logsumexp-opengl-spirv",
         "validate-rms-norm-opengl",
         "validate-rms-norm-opengl-spirv",

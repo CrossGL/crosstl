@@ -115,6 +115,7 @@
     "sources": [
       "mlx/backend/metal/kernels/arg_reduce.metal",
       "mlx/backend/metal/kernels/binary_two.metal",
+      "mlx/backend/metal/kernels/layer_norm.metal",
       "mlx/backend/metal/kernels/logsumexp.metal",
       "mlx/backend/metal/kernels/rms_norm.metal",
       "mlx/backend/metal/kernels/rope.metal",
@@ -122,12 +123,12 @@
       "mlx/backend/metal/kernels/softmax.metal",
       "mlx/backend/metal/kernels/ternary.metal"
     ],
-    "source_count": 8,
+    "source_count": 9,
     "target": "opengl",
-    "artifact_count": 8,
+    "artifact_count": 9,
     "project_diagnostic_count": 0,
-    "glslang_compiled_artifact_count": 8,
-    "spirv_validated_artifact_count": 8,
+    "glslang_compiled_artifact_count": 9,
+    "spirv_validated_artifact_count": 9,
     "glslang_target_environments": [
       "opengl",
       "spirv1.3"

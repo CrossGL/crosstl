@@ -2202,7 +2202,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     )
     assert "reference accessor {target} native validation must be" in mlx_porting
     assert "MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES" in mlx_porting
-    assert "expected 8 OpenGL toolchain frontier sources" in mlx_porting
+    assert "expected 9 OpenGL toolchain frontier sources" in mlx_porting
     assert "OpenGL frontier accounting must cover every configured source" in (
         mlx_porting
     )
