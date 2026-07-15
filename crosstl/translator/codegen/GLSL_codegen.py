@@ -6437,12 +6437,119 @@ class GLSLCodeGen:
             clone.name,
         )
         self.glsl_function_target_names[id(clone)] = target_name
+        self.register_glsl_resource_specialization_private_pointer_metadata(
+            source_func,
+            clone,
+            target_name,
+        )
         self.register_glsl_function_target_metadata(target_name, clone)
 
         self.glsl_resource_function_specializations[key] = clone
         self.glsl_resource_function_call_names[key] = target_name
         self.glsl_resource_specialized_source_names.add(func_name)
         return clone
+
+    def register_glsl_resource_specialization_private_pointer_metadata(
+        self,
+        source_func,
+        clone,
+        target_name,
+    ):
+        source_key = self.glsl_function_declaration_name(source_func)
+        source_parameters = self.function_private_pointer_parameters.get(source_key)
+        if not source_parameters:
+            return
+
+        clone_parameters = list(
+            getattr(clone, "parameters", getattr(clone, "params", [])) or []
+        )
+        clone_private_parameters = [
+            parameter
+            for parameter in clone_parameters
+            if is_private_pointer_parameter(parameter)
+        ]
+        source_positions = {
+            parameter.name: index for index, parameter in enumerate(source_parameters)
+        }
+        clone_parameter_names = {
+            parameter.name for parameter in clone_private_parameters
+        }
+        if not clone_private_parameters or not clone_parameter_names.issubset(
+            source_positions
+        ):
+            return
+
+        def copy_parameter_map(metadata):
+            return {
+                name: value
+                for name, value in metadata.get(source_key, {}).items()
+                if name in clone_parameter_names
+            }
+
+        self.function_private_pointer_parameters[target_name] = clone_private_parameters
+        self.function_private_pointer_parameter_indices[target_name] = {
+            index: parameter.name
+            for index, parameter in enumerate(clone_parameters)
+            if is_private_pointer_parameter(parameter)
+        }
+        self.function_private_pointer_element_types[target_name] = copy_parameter_map(
+            self.function_private_pointer_element_types
+        )
+        self.function_private_pointer_base_names[target_name] = copy_parameter_map(
+            self.function_private_pointer_base_names
+        )
+        self.function_private_pointer_source_names[target_name] = (
+            self.function_private_pointer_source_names.get(
+                source_key,
+                getattr(source_func, "name", target_name),
+            )
+        )
+        self.function_private_pointer_local_arrays[target_name] = (
+            self.glsl_private_pointer_local_arrays(clone)
+        )
+        self.function_private_pointer_full_span_parameters[target_name] = {
+            name
+            for name in self.function_private_pointer_full_span_parameters.get(
+                source_key, set()
+            )
+            if name in clone_parameter_names
+        }
+        self.function_private_pointer_scalar_access_violations[target_name] = {
+            name
+            for name in self.function_private_pointer_scalar_access_violations.get(
+                source_key, set()
+            )
+            if name in clone_parameter_names
+        }
+
+        required_spans = copy_parameter_map(
+            self.function_private_pointer_required_spans
+        )
+        self.function_private_pointer_required_spans[target_name] = required_spans
+        self.glsl_collect_private_pointer_static_direct_spans(
+            clone,
+            target_name,
+            required_spans,
+        )
+
+        source_variants = self.function_private_pointer_backing_variants.get(
+            source_key, ()
+        )
+        if source_variants:
+            self.function_private_pointer_backing_variants[target_name] = tuple(
+                sorted(
+                    {
+                        tuple(
+                            variant[source_positions[parameter.name]]
+                            for parameter in clone_private_parameters
+                        )
+                        for variant in source_variants
+                    }
+                )
+            )
+        self.function_private_pointer_array_size_hints[target_name] = (
+            copy_parameter_map(self.function_private_pointer_array_size_hints)
+        )
 
     def glsl_resource_specialization_name(self, func_name, bindings):
         suffix_parts = []

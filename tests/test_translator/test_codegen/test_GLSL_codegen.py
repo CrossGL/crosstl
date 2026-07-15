@@ -2088,6 +2088,54 @@ def test_opengl_specialized_helper_local_array_stays_shared(tmp_path):
     )
 
 
+def test_opengl_resource_specialized_helper_preserves_private_pointer_extent(tmp_path):
+    shader = """
+    shader SpecializedHelperPrivatePointer {
+        void accumulate(
+            thread float* values,
+            threadgroup float* scratch,
+            uint index
+        ) {
+            values[0] += scratch[index];
+            values[2] += scratch[index];
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint lid @ gl_LocalInvocationIndex) {
+                float values[3] = {1.0, 2.0, 3.0};
+                threadgroup float scratch[8];
+                accumulate(values, scratch, lid);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    helper = re.search(
+        r"\bvoid\s+(?P<name>accumulate_glsl_[A-Za-z0-9_]+)\s*"
+        r"\(inout float values\[3\], int values_base, uint index, "
+        r"int [A-Za-z_]\w*\)\s*"
+        r"\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert helper is not None, generated
+    assert "values[(values_base + int(0))] +=" in helper.group("body")
+    assert "values[(values_base + int(2))] +=" in helper.group("body")
+    assert re.search(r"\bmain_scratch\s*\[", helper.group("body")), generated
+    assert re.search(
+        rf"\b{re.escape(helper.group('name'))}\s*"
+        r"\(values, 0, gl_LocalInvocationIndex, int\(0\)\)\s*;",
+        generated,
+    ), generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, "specialized_helper_private_pointer"
+    )
+
+
 def test_opengl_for_initializer_pointer_alias_does_not_leak(tmp_path):
     shader = """
     shader ForInitializerPointerScope {
