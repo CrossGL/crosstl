@@ -2559,7 +2559,7 @@ def test_parse_template_struct_from_mlx_arg_reduce():
     assert [member.vtype for member in struct.members] == ["uint32_t", "U"]
 
 
-def test_skip_struct_constructor_with_initializer_list_and_trailing_semicolon_from_mlx():
+def test_parse_struct_constructor_with_initializer_list_and_trailing_semicolon_from_mlx():
     code = """
     struct complex64_t {
         float real;
@@ -2572,6 +2572,16 @@ def test_skip_struct_constructor_with_initializer_list_and_trailing_semicolon_fr
 
     assert struct.name == "complex64_t"
     assert [member.name for member in struct.members] == ["real", "imag"]
+    assert len(struct.constructors) == 1
+    constructor = struct.constructors[0]
+    assert constructor.owner_name == "complex64_t"
+    assert [parameter.name for parameter in constructor.params] == ["real", "imag"]
+    assert [initializer.target for initializer in constructor.initializers] == [
+        "real",
+        "imag",
+    ]
+    assert constructor.body == []
+    assert constructor.source_location["line"] == 5
 
 
 def test_parse_function_body_pragma_from_llama_cpp():

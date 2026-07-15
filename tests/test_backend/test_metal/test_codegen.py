@@ -9381,7 +9381,8 @@ def test_codegen_inlines_local_alias_to_materialized_struct():
 
     result = convert(code)
 
-    assert "ReadWriter_float writer = ReadWriter_float(3);" in result
+    assert "ReadWriter_float writer = crosstl_ctor_ReadWriter_float_1(3);" in result
+    assert "crosstl_ctor_value.value = int(value_);" in result
     assert "read_writer_t" not in result
     assert parse_crossgl(result) is not None
 
