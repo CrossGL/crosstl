@@ -7957,6 +7957,8 @@ def test_mlx_collapsed_float16_overloads_match_direct_and_project_hlsl(tmp_path)
         )
         assert result.returncode == 0, result.stdout + result.stderr
         assert binary_output.stat().st_size > 0
+
+
 def test_mlx_random_vector_subscripts_keep_scalar_component_contract(tmp_path):
     # Reduced from MLX 4367c73b60541ddd5a266ce4644fd93d20223b6e,
     # mlx/backend/metal/kernels/random.metal::threefry2x32_hash.
