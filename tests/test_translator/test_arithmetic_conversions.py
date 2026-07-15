@@ -358,6 +358,7 @@ def test_integral_only_operators_reject_floating_operands(
     (
         "left",
         "right",
+        "operator",
         "integer_widths",
         "floating_widths",
         "reason",
@@ -367,6 +368,7 @@ def test_integral_only_operators_reject_floating_operands(
         (
             S64,
             S32,
+            "+",
             frozenset({32}),
             FLOATING_WIDTHS,
             "target-integer-width-unsupported",
@@ -375,6 +377,7 @@ def test_integral_only_operators_reject_floating_operands(
         (
             U8,
             S8,
+            "+",
             frozenset({64}),
             FLOATING_WIDTHS,
             "target-integer-width-unsupported",
@@ -383,6 +386,7 @@ def test_integral_only_operators_reject_floating_operands(
         (
             BOOL,
             BOOL,
+            "+",
             frozenset({64}),
             FLOATING_WIDTHS,
             "target-integer-width-unsupported",
@@ -391,17 +395,34 @@ def test_integral_only_operators_reject_floating_operands(
         (
             F64,
             F32,
+            "+",
             INTEGER_WIDTHS,
             frozenset({32}),
             "target-floating-width-unsupported",
             "double",
         ),
+        (
+            BOOL,
+            BOOL,
+            ">>",
+            frozenset({64}),
+            FLOATING_WIDTHS,
+            "target-integer-width-unsupported",
+            "int",
+        ),
     ],
-    ids=("integer-64", "promoted-integer-32", "bool-promotion-32", "floating-64"),
+    ids=(
+        "integer-64",
+        "promoted-integer-32",
+        "bool-promotion-32",
+        "floating-64",
+        "bool-shift-promotion-32",
+    ),
 )
 def test_unsupported_target_widths_report_the_attempted_common_type(
     left,
     right,
+    operator,
     integer_widths,
     floating_widths,
     reason,
@@ -410,7 +431,7 @@ def test_unsupported_target_widths_report_the_attempted_common_type(
     _assert_unrepresentable(
         left,
         right,
-        "+",
+        operator,
         reason,
         attempted_common_type,
         integer_widths=integer_widths,

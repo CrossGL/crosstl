@@ -356,18 +356,31 @@ def _validate_target_widths(
     attempted_common_type: str,
 ) -> None:
     for operand in operands:
-        required = _required_target_width(operand)
-        if required is None:
-            continue
-        category, bits = required
-        if category == "integer" and bits not in supported_integer_widths:
-            raise UnrepresentableArithmeticConversion(
-                "target-integer-width-unsupported", attempted_common_type
-            )
-        if category == "floating" and bits not in supported_floating_widths:
-            raise UnrepresentableArithmeticConversion(
-                "target-floating-width-unsupported", attempted_common_type
-            )
+        _validate_required_target_width(
+            _required_target_width(operand),
+            supported_integer_widths,
+            supported_floating_widths,
+            attempted_common_type,
+        )
+
+
+def _validate_required_target_width(
+    required: Optional[Tuple[str, int]],
+    supported_integer_widths: FrozenSet[int],
+    supported_floating_widths: FrozenSet[int],
+    attempted_common_type: str,
+) -> None:
+    if required is None:
+        return
+    category, bits = required
+    if category == "integer" and bits not in supported_integer_widths:
+        raise UnrepresentableArithmeticConversion(
+            "target-integer-width-unsupported", attempted_common_type
+        )
+    if category == "floating" and bits not in supported_floating_widths:
+        raise UnrepresentableArithmeticConversion(
+            "target-floating-width-unsupported", attempted_common_type
+        )
 
 
 def resolve_arithmetic_conversion(
@@ -415,6 +428,13 @@ def resolve_arithmetic_conversion(
             supported_floating_widths,
             left_target,
         )
+        for _promoted_kind, promoted_bits in (left_promoted, right_promoted):
+            _validate_required_target_width(
+                ("integer", promoted_bits),
+                supported_integer_widths,
+                supported_floating_widths,
+                left_target,
+            )
         return ArithmeticConversion(
             left_target,
             right_target,
@@ -447,6 +467,24 @@ def resolve_arithmetic_conversion(
     )
     _validate_target_widths(
         (left, right),
+        supported_integer_widths,
+        supported_floating_widths,
+        common_type,
+    )
+    common_required_width = (
+        None
+        if common_component[0] is ArithmeticScalarKind.BOOLEAN
+        else (
+            (
+                "floating"
+                if common_component[0] is ArithmeticScalarKind.FLOATING
+                else "integer"
+            ),
+            common_component[1],
+        )
+    )
+    _validate_required_target_width(
+        common_required_width,
         supported_integer_widths,
         supported_floating_widths,
         common_type,
