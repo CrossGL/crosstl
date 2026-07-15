@@ -615,6 +615,7 @@ class MetalToCrossGLConverter:
     metal_source_overload_address_spaces = frozenset(
         {"threadgroup_imageblock", "threadgroup", "thread", "device", "constant"}
     )
+    metal_source_bfloat_types = frozenset({"bfloat", "bfloat16", "bfloat16_t"})
     # Metal SIMD-group (wave) intrinsics -> canonical CrossGL Wave* ops.
     # The inverse mapping lives in crosstl/translator/codegen/metal_codegen.py,
     # and the DirectX and SPIR-V code generators already lower these canonical
@@ -6950,11 +6951,86 @@ class MetalToCrossGLConverter:
             return ("vector", width, element or ("object", element_type))
 
         normalized = self.normalized_metal_type(text)
+        if normalized in self.metal_source_bfloat_types:
+            return ("scalar", "floating", True, 16)
         scalar = self.metal_scalar_arithmetic_types.get(normalized)
         if scalar is not None:
             family, signed, bits = scalar
             return ("scalar", family, signed, bits)
         return ("object", normalized)
+
+    def metal_source_overload_type_identity(self, metal_type):
+        """Return a canonical source identity without erasing float formats."""
+        text = self.metal_source_overload_value_type(metal_type)
+        if text is None:
+            return None
+
+        indirection = 0
+        while True:
+            array_match = re.fullmatch(r"(.+?)\s*\[[^\[\]]*\]", text)
+            if array_match is None:
+                break
+            indirection += 1
+            text = array_match.group(1).strip()
+        while text.endswith("*"):
+            indirection += 1
+            text = text[:-1].strip()
+
+        if indirection:
+            pointee = self.metal_source_overload_type_identity(text)
+            return ("pointer", indirection, pointee or ("object", text))
+
+        vector_parts = self.metal_small_vector_type_parts(text)
+        if vector_parts is not None:
+            element_type, width = vector_parts
+            element = self.metal_source_overload_type_identity(element_type)
+            return ("vector", width, element or ("object", element_type))
+
+        normalized = self.normalized_metal_type(text)
+        bfloat_vector = re.fullmatch(
+            r"(?:bfloat|bfloat16|bfloat16_t)([234])", normalized
+        )
+        if bfloat_vector is not None:
+            return (
+                "vector",
+                int(bfloat_vector.group(1)),
+                ("scalar", "bfloat", True, 16),
+            )
+        if normalized in self.metal_source_bfloat_types:
+            return ("scalar", "bfloat", True, 16)
+        if normalized == "bool":
+            return ("scalar", "bool", None, 1)
+
+        descriptor = self.metal_source_overload_type_descriptor(text)
+        return descriptor or ("object", normalized)
+
+    def metal_source_overload_portable_type_identity(self, metal_type):
+        """Return the type shape shared by baseline HLSL and OpenGL ABIs."""
+        identity = self.metal_source_overload_type_identity(metal_type)
+        if identity is None:
+            return None
+        return self.metal_source_overload_portable_identity(identity)
+
+    @classmethod
+    def metal_source_overload_portable_identity(cls, identity):
+        if not identity:
+            return identity
+        if identity[0] in {"pointer", "vector"}:
+            return (
+                identity[0],
+                identity[1],
+                cls.metal_source_overload_portable_identity(identity[2]),
+            )
+        if identity[0] != "scalar":
+            return identity
+        _kind, family, signed, bits = identity
+        if family == "bool":
+            return identity
+        if family in {"floating", "bfloat"}:
+            return ("scalar", "floating", True, 32 if bits <= 32 else bits)
+        if family == "integer":
+            return ("scalar", family, signed, 32 if bits <= 32 else bits)
+        return identity
 
     def metal_source_overload_signature(self, function):
         signature = []
@@ -6966,7 +7042,21 @@ class MetalToCrossGLConverter:
 
     def metal_source_overload_parameter_identity(self, parameter):
         parameter_type = self.metal_source_overload_parameter_type(parameter)
-        descriptor = self.metal_source_overload_type_descriptor(parameter_type)
+        descriptor = self.metal_source_overload_type_identity(parameter_type)
+        descriptor = descriptor or ("unknown", parameter_type or "")
+        reference_depth = 0
+        type_without_references = str(parameter_type or "").rstrip()
+        while type_without_references.endswith("&"):
+            reference_depth += 1
+            type_without_references = type_without_references[:-1].rstrip()
+        qualifiers = self.metal_declaration_type_qualifiers(parameter)
+        if descriptor[0] != "pointer" and reference_depth == 0:
+            qualifiers = ()
+        return descriptor, reference_depth, qualifiers
+
+    def metal_source_overload_portable_parameter_identity(self, parameter):
+        parameter_type = self.metal_source_overload_parameter_type(parameter)
+        descriptor = self.metal_source_overload_portable_type_identity(parameter_type)
         descriptor = descriptor or ("unknown", parameter_type or "")
         reference_depth = 0
         type_without_references = str(parameter_type or "").rstrip()
@@ -6984,6 +7074,12 @@ class MetalToCrossGLConverter:
             for parameter in getattr(function, "params", []) or []
         )
 
+    def metal_source_overload_portable_signature(self, function):
+        return tuple(
+            self.metal_source_overload_portable_parameter_identity(parameter)
+            for parameter in getattr(function, "params", []) or []
+        )
+
     def metal_source_overload_candidate_signature(self, function):
         parameters = []
         for parameter in getattr(function, "params", []) or []:
@@ -6994,8 +7090,25 @@ class MetalToCrossGLConverter:
             parameters.append(" ".join((*qualifiers, parameter_type)))
         return f"{function.name}({', '.join(parameters)})"
 
+    def metal_source_overload_set_has_portable_collision(self, signature_groups):
+        portable_signatures = {}
+        for source_signature, declarations in signature_groups.items():
+            portable_signature = self.metal_source_overload_portable_signature(
+                declarations[0]
+            )
+            portable_signatures.setdefault(portable_signature, set()).add(
+                source_signature
+            )
+        return any(
+            len(source_signatures) > 1
+            for source_signatures in portable_signatures.values()
+        )
+
     def metal_source_overload_set_requires_transport(self, signature_groups):
         functions = [declarations[0] for declarations in signature_groups.values()]
+        if self.metal_source_overload_set_has_portable_collision(signature_groups):
+            return True
+
         by_arity = {}
         for function in functions:
             by_arity.setdefault(len(getattr(function, "params", []) or []), []).append(
@@ -7026,7 +7139,7 @@ class MetalToCrossGLConverter:
         return False
 
     def prepare_metal_source_overload_transport(self):
-        """Assign internal names only where source binding must cross a pointer ABI."""
+        """Assign internal names where portable target ABIs erase source identity."""
         self.metal_source_overload_groups = {}
         self.metal_source_overload_output_names = {}
         used_names = set(self.wide_vector_reserved_names)
@@ -7041,19 +7154,24 @@ class MetalToCrossGLConverter:
                 signature_groups.setdefault(
                     self.metal_source_overload_declaration_signature(function), []
                 ).append(function)
-            if len(signature_groups) < 2 or not (
-                self.metal_source_overload_set_requires_transport(signature_groups)
-            ):
+            if len(signature_groups) < 2:
+                continue
+            portable_collision = self.metal_source_overload_set_has_portable_collision(
+                signature_groups
+            )
+            if not self.metal_source_overload_set_requires_transport(signature_groups):
                 continue
 
             self.metal_source_overload_groups[function_name] = signature_groups
-            ordered_groups = sorted(
-                signature_groups.items(), key=lambda item: repr(item[0])
+            ordered_groups = (
+                list(signature_groups.items())
+                if portable_collision
+                else sorted(signature_groups.items(), key=lambda item: repr(item[0]))
             )
             for ordinal, (_signature, declarations) in enumerate(
                 ordered_groups, start=1
             ):
-                if ordinal == 1:
+                if ordinal == 1 and not portable_collision:
                     output_name = function_name
                 else:
                     base = (
@@ -7099,6 +7217,15 @@ class MetalToCrossGLConverter:
         expected = self.metal_source_overload_type_descriptor(parameter_type)
         if actual is None or expected is None:
             return None
+        actual_identity = self.metal_source_overload_type_identity(actual_type)
+        expected_identity = self.metal_source_overload_type_identity(parameter_type)
+        if actual_identity == expected_identity:
+            if actual[0] == "pointer":
+                pointer_rank = self.metal_source_overload_pointer_qualifier_rank(
+                    argument, parameter
+                )
+                return pointer_rank + 1 if pointer_rank is not None else None
+            return 4
         if actual == expected:
             if actual[0] == "pointer":
                 return self.metal_source_overload_pointer_qualifier_rank(

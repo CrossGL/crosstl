@@ -5354,8 +5354,62 @@ def test_preprocessor_rewrites_temporary_functor_calls_inside_template_operator(
     assert "Remainder{}(" not in output
 
 
+def test_preprocessor_preserves_concrete_overload_identity_in_temporary_wrappers():
+    code = """
+    typedef bfloat bfloat16_t;
+
+    struct FloorDivide {
+      template <typename T>
+      T operator()(T x, T y) {
+        return x / y;
+      }
+
+      template <>
+      half operator()(half x, half y) {
+        return trunc(x / y);
+      }
+
+      template <>
+      bfloat16_t operator()(bfloat16_t x, bfloat16_t y) {
+        return x - y;
+      }
+    };
+
+    kernel void run(
+        device half* values [[buffer(0)]],
+        uint index [[thread_position_in_grid]]) {
+      half half_value = half(index + 2u);
+      bfloat16_t bfloat_value = bfloat16_t(index + 2u);
+      values[index * 2u] = FloorDivide{}(half_value, half(2.0h));
+      values[index * 2u + 1u] = half(FloorDivide{}(
+          bfloat_value, bfloat16_t(2.0h)));
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    half_wrapper = "FloorDivide__operator_call__metal_overload_1__temporary"
+    bfloat_wrapper = "FloorDivide__operator_call__metal_overload_2__temporary"
+    assert f"{half_wrapper}(half_value, half(2.0h))" in output
+    assert f"{bfloat_wrapper}(bfloat_value, bfloat16_t(2.0h))" in output
+    assert (
+        f"half {half_wrapper}(half x, half y) "
+        "{ FloorDivide self; return FloorDivide__operator_call(self, x, y); }" in output
+    )
+    assert (
+        f"bfloat16_t {bfloat_wrapper}(bfloat16_t x, bfloat16_t y) "
+        "{ FloorDivide self; return FloorDivide__operator_call(self, x, y); }" in output
+    )
+    assert "FloorDivide__operator_call__half" not in output
+
+
 def test_preprocessor_selects_unsigned_integral_sfinae_overload_for_bool():
     code = """
+    struct complex64_t {
+      float real;
+      float imag;
+    };
+
     struct Remainder {
       template <typename T>
       metal::enable_if_t<metal::is_integral_v<T> & !metal::is_signed_v<T>, T>
@@ -5372,6 +5426,11 @@ def test_preprocessor_selects_unsigned_integral_sfinae_overload_for_bool():
       template <typename T>
       metal::enable_if_t<!metal::is_integral_v<T>, T> operator()(T x, T y) {
         return x;
+      }
+
+      template <>
+      complex64_t operator()(complex64_t x, complex64_t y) {
+        return x % y;
       }
     };
 
