@@ -30,6 +30,10 @@ from crosstl.project.host_reflection import (
     host_interface_record,
     reflect_target_host_interface,
 )
+from crosstl.project.integral_literals import (
+    CFamilyIntegralLiteralError,
+    parse_c_family_integral_literal,
+)
 from crosstl.translator.codegen import (
     backend_names,
     get_backend_extension,
@@ -18603,10 +18607,45 @@ def _translation_failure_location(
     )
 
 
+_SPECIALIZATION_CONSTANT_ID_MAX = 0x7FFFFFFF
+_METAL_FUNCTION_CONSTANT_ID_MAX = 0xFFFF
+
+
+def _specialization_attribute_id_max(attribute: str) -> int:
+    if attribute == "function_constant":
+        return _METAL_FUNCTION_CONSTANT_ID_MAX
+    return _SPECIALIZATION_CONSTANT_ID_MAX
+
+
+@dataclass(frozen=True)
+class _SpecializationIdValue:
+    constant_id: int | None
+    spelling: str | None
+    reason: str | None = None
+    parsed_value: int | None = None
+
+
+@dataclass(frozen=True)
+class _ProjectSpecializationAttribute:
+    name: str
+    constant_id: int | None
+    spelling: str | None
+    maximum_id: int
+    reason: str | None = None
+    parsed_value: int | None = None
+
+
+@dataclass(frozen=True)
+class _ProjectSpecializationSource:
+    location: SourceLocation
+    attributes: tuple[tuple[str, str], ...] = ()
+
+
 @dataclass(frozen=True)
 class _ProjectSpecializationDeclaration:
     name: str
     constant_id: int | None
+    id_spelling: str | None
     source_type: str
     attribute: str
     has_default: bool
@@ -18627,18 +18666,63 @@ class ProjectSpecializationError(ValueError):
         self.diagnostics = tuple(diagnostics)
 
 
-def _specialization_int_value(value: Any) -> int | None:
+def _specialization_id_value(
+    value: Any,
+    *,
+    source_spelling: str | None = None,
+    maximum_id: int = _SPECIALIZATION_CONSTANT_ID_MAX,
+) -> _SpecializationIdValue:
     value = _runtime_host_interface_json_value(value)
     if isinstance(value, bool):
-        return None
+        spelling = (
+            source_spelling.strip() if source_spelling is not None else str(value)
+        )
+        return _SpecializationIdValue(None, spelling, "invalid-literal")
     if isinstance(value, int):
-        return value
-    if isinstance(value, str):
+        spelling = (
+            source_spelling.strip() if source_spelling is not None else str(value)
+        )
+        if source_spelling is None:
+            parsed_value = value
+        else:
+            try:
+                parsed_value = parse_c_family_integral_literal(spelling)
+            except CFamilyIntegralLiteralError as exc:
+                signed_value = None
+                if exc.reason == "negative":
+                    try:
+                        signed_value = -parse_c_family_integral_literal(spelling[1:])
+                    except CFamilyIntegralLiteralError:
+                        pass
+                return _SpecializationIdValue(None, spelling, exc.reason, signed_value)
+    elif isinstance(value, str) or source_spelling is not None:
+        spelling = (
+            source_spelling.strip()
+            if source_spelling is not None
+            else str(value).strip()
+        )
         try:
-            return int(value.strip(), 0)
-        except ValueError:
-            return None
-    return None
+            parsed_value = parse_c_family_integral_literal(spelling)
+        except CFamilyIntegralLiteralError as exc:
+            signed_value = None
+            if exc.reason == "negative":
+                try:
+                    signed_value = -parse_c_family_integral_literal(spelling[1:])
+                except CFamilyIntegralLiteralError:
+                    pass
+            return _SpecializationIdValue(None, spelling, exc.reason, signed_value)
+    else:
+        return _SpecializationIdValue(None, None, "invalid-literal")
+
+    if parsed_value < 0:
+        return _SpecializationIdValue(None, spelling, "negative", parsed_value)
+    if parsed_value > maximum_id:
+        return _SpecializationIdValue(None, spelling, "out-of-range", parsed_value)
+    return _SpecializationIdValue(parsed_value, spelling, parsed_value=parsed_value)
+
+
+def _specialization_int_value(value: Any) -> int | None:
+    return _specialization_id_value(value).constant_id
 
 
 def _specialization_scalar_literal(value: Any) -> Any:
@@ -18662,8 +18746,10 @@ def _specialization_scalar_literal(value: Any) -> Any:
         return text
 
 
-def _specialization_attribute_values(node: Any) -> list[tuple[str, int | None]]:
-    values: list[tuple[str, int | None]] = []
+def _specialization_attribute_records(
+    node: Any,
+) -> list[_ProjectSpecializationAttribute]:
+    values: list[_ProjectSpecializationAttribute] = []
     for attribute in getattr(node, "attributes", []) or []:
         name = str(getattr(attribute, "name", "")).strip().lower().replace("-", "_")
         if name not in {"function_constant", "constant_id"}:
@@ -18673,8 +18759,19 @@ def _specialization_attribute_values(node: Any) -> list[tuple[str, int | None]]:
             or getattr(attribute, "args", None)
             or []
         )
+        maximum_id = _specialization_attribute_id_max(name)
+        parsed = _specialization_id_value(
+            arguments[0] if arguments else "", maximum_id=maximum_id
+        )
         values.append(
-            (name, _specialization_int_value(arguments[0]) if arguments else None)
+            _ProjectSpecializationAttribute(
+                name=name,
+                constant_id=parsed.constant_id,
+                spelling=parsed.spelling,
+                maximum_id=maximum_id,
+                reason=parsed.reason,
+                parsed_value=parsed.parsed_value,
+            )
         )
     for layout_name in ("layout", "interface_layout"):
         layout = getattr(node, layout_name, None)
@@ -18682,8 +18779,26 @@ def _specialization_attribute_values(node: Any) -> list[tuple[str, int | None]]:
             continue
         for key, value in layout.items():
             if str(key).strip().lower() == "constant_id":
-                values.append(("constant_id", _specialization_int_value(value)))
+                maximum_id = _specialization_attribute_id_max("constant_id")
+                parsed = _specialization_id_value(value, maximum_id=maximum_id)
+                values.append(
+                    _ProjectSpecializationAttribute(
+                        name="constant_id",
+                        constant_id=parsed.constant_id,
+                        spelling=parsed.spelling,
+                        maximum_id=maximum_id,
+                        reason=parsed.reason,
+                        parsed_value=parsed.parsed_value,
+                    )
+                )
     return values
+
+
+def _specialization_attribute_values(node: Any) -> list[tuple[str, int | None]]:
+    return [
+        (attribute.name, attribute.constant_id)
+        for attribute in _specialization_attribute_records(node)
+    ]
 
 
 def _specialization_ast_declaration_items(ast: Any) -> Iterator[tuple[Any, Any, bool]]:
@@ -18709,42 +18824,160 @@ def _specialization_ast_declaration_items(ast: Any) -> Iterator[tuple[Any, Any, 
                 yield item, None, False
 
 
-def _specialization_statement_location(
+def _specialization_source_attributes(
+    statement: str,
+) -> list[tuple[int, int, str, str]]:
+    attributes: list[tuple[int, int, str, str]] = []
+    attribute_pattern = re.compile(
+        r"\b(?P<name>function_constant|constant_id)\s*\(\s*"
+        r"(?P<spelling>[^)]*?)\s*\)",
+        re.IGNORECASE,
+    )
+    for match in attribute_pattern.finditer(statement):
+        attributes.append(
+            (
+                match.start(),
+                match.end(),
+                match.group("name").lower(),
+                match.group("spelling").strip(),
+            )
+        )
+
+    layout_pattern = re.compile(r"\blayout\s*\((?P<body>[^)]*)\)", re.IGNORECASE)
+    assignment_pattern = re.compile(
+        r"\bconstant_id\s*=\s*(?P<spelling>[^,]*?)(?=\s*(?:,|$))",
+        re.IGNORECASE,
+    )
+    for layout_match in layout_pattern.finditer(statement):
+        body = layout_match.group("body")
+        for assignment in assignment_pattern.finditer(body):
+            start = layout_match.start("body") + assignment.start()
+            end = layout_match.start("body") + assignment.end()
+            attributes.append(
+                (
+                    start,
+                    end,
+                    "constant_id",
+                    assignment.group("spelling").strip(),
+                )
+            )
+    return sorted(attributes, key=lambda attribute: attribute[0])
+
+
+def _specialization_statement_source(
     unit: ProjectTranslationUnit,
     source: str,
     *,
     name: str,
-    constant_id: int | None,
     used_offsets: set[int],
-) -> SourceLocation:
+) -> _ProjectSpecializationSource:
     identifier = re.compile(rf"\b{re.escape(name)}\b")
-    attribute_patterns = [
-        re.compile(
-            r"(?:function_constant|constant_id)\s*\(\s*"
-            + (re.escape(str(constant_id)) if constant_id is not None else r"[^)]*")
-            + r"\s*\)",
-            re.IGNORECASE,
-        ),
-        re.compile(
-            r"constant_id\s*=\s*"
-            + (re.escape(str(constant_id)) if constant_id is not None else r"[^,)]*")
-            + r"\b",
-            re.IGNORECASE,
-        ),
-    ]
     for statement in re.finditer(r"[^;{}]{0,4096};", source, re.DOTALL):
         if not identifier.search(statement.group(0)):
             continue
-        for pattern in attribute_patterns:
-            match = pattern.search(statement.group(0))
-            if match is None:
-                continue
-            offset = statement.start() + match.start()
-            if offset in used_offsets:
-                continue
-            used_offsets.add(offset)
-            return _source_location_at_offset(unit, source, offset, len(match.group(0)))
-    return SourceLocation(file=unit.relative_path)
+        source_attributes = _specialization_source_attributes(statement.group(0))
+        if not source_attributes:
+            continue
+        first_start, first_end, _attribute, _spelling = source_attributes[0]
+        offset = statement.start() + first_start
+        if offset in used_offsets:
+            continue
+        used_offsets.add(offset)
+        return _ProjectSpecializationSource(
+            location=_source_location_at_offset(
+                unit, source, offset, first_end - first_start
+            ),
+            attributes=tuple(
+                (attribute, spelling)
+                for _start, _end, attribute, spelling in source_attributes
+            ),
+        )
+    return _ProjectSpecializationSource(SourceLocation(file=unit.relative_path))
+
+
+def _specialization_attributes_with_source_spelling(
+    attributes: Sequence[_ProjectSpecializationAttribute],
+    source_attributes: Sequence[tuple[str, str]],
+) -> list[_ProjectSpecializationAttribute]:
+    if [attribute.name for attribute in attributes] != [
+        attribute for attribute, _spelling in source_attributes
+    ]:
+        return list(attributes)
+
+    values: list[_ProjectSpecializationAttribute] = []
+    for attribute, (_source_attribute, source_spelling) in zip(
+        attributes, source_attributes
+    ):
+        parsed = _specialization_id_value(
+            (
+                attribute.constant_id
+                if attribute.constant_id is not None
+                else attribute.spelling
+            ),
+            source_spelling=source_spelling,
+            maximum_id=attribute.maximum_id,
+        )
+        values.append(
+            _ProjectSpecializationAttribute(
+                name=attribute.name,
+                constant_id=parsed.constant_id,
+                spelling=parsed.spelling,
+                maximum_id=attribute.maximum_id,
+                reason=parsed.reason,
+                parsed_value=parsed.parsed_value,
+            )
+        )
+    return values
+
+
+def _specialization_invalid_id_message(
+    name: str,
+    *,
+    reason: str,
+    spelling: str | None,
+    parsed_value: int | None,
+    maximum_id: int,
+) -> str:
+    rendered = repr(spelling) if spelling is not None else "<missing>"
+    if reason == "negative":
+        return f"Specialization constant '{name}' id {rendered} must be non-negative."
+    if reason == "out-of-range":
+        return (
+            f"Specialization constant '{name}' id {rendered} resolves to "
+            f"{parsed_value}, exceeding the maximum supported id "
+            f"{maximum_id}."
+        )
+    if reason == "invalid-octal-digit":
+        return (
+            f"Specialization constant '{name}' id {rendered} is not valid octal; "
+            "a leading-zero id may contain only digits 0 through 7."
+        )
+    if reason == "invalid-digit-separator":
+        return (
+            f"Specialization constant '{name}' id {rendered} has an invalid digit "
+            "separator; separators must appear between digits."
+        )
+    if reason == "invalid-suffix":
+        return (
+            f"Specialization constant '{name}' id {rendered} has an unsupported "
+            "integer suffix."
+        )
+    if reason == "invalid-digit":
+        return (
+            f"Specialization constant '{name}' id {rendered} contains a digit that "
+            "is invalid for its base."
+        )
+    if reason == "unsupported-expression":
+        return (
+            f"Specialization constant '{name}' id {rendered} must be one C-family "
+            "integral literal; constant expressions are not supported."
+        )
+    if reason == "conflicting-ids":
+        return f"Specialization constant '{name}' carries conflicting numeric ids."
+    return (
+        f"Specialization constant '{name}' requires one non-negative C-family "
+        "integral literal id."
+    )
 
 
 def _project_specialization_declarations(
@@ -18756,31 +18989,80 @@ def _project_specialization_declarations(
     diagnostics: list[ProjectDiagnostic] = []
     used_offsets: set[int] = set()
     for node, default_value, has_default in _specialization_ast_declaration_items(ast):
-        attributes = _specialization_attribute_values(node)
+        attributes = _specialization_attribute_records(node)
         if not attributes:
             continue
         name = str(getattr(node, "name"))
-        ids = {constant_id for _attribute, constant_id in attributes}
-        constant_id = next(iter(ids)) if len(ids) == 1 else None
-        location = _specialization_statement_location(
+        source_context = _specialization_statement_source(
             unit,
             source,
             name=name,
-            constant_id=constant_id,
             used_offsets=used_offsets,
         )
-        if None in ids or len(ids) != 1 or constant_id is None or constant_id < 0:
+        attributes = _specialization_attributes_with_source_spelling(
+            attributes, source_context.attributes
+        )
+        canonical_ids = {
+            attribute.constant_id
+            for attribute in attributes
+            if attribute.constant_id is not None
+        }
+        invalid_attribute = next(
+            (attribute for attribute in attributes if attribute.reason is not None),
+            None,
+        )
+        valid_id = invalid_attribute is None and len(canonical_ids) == 1
+        constant_id = next(iter(canonical_ids)) if valid_id else None
+        if not valid_id:
+            reason = (
+                invalid_attribute.reason
+                if invalid_attribute is not None
+                else "conflicting-ids"
+            )
+            spelling = (
+                invalid_attribute.spelling
+                if invalid_attribute is not None
+                else attributes[0].spelling
+            )
+            parsed_value = (
+                invalid_attribute.parsed_value
+                if invalid_attribute is not None
+                else None
+            )
+            maximum_id = (
+                invalid_attribute.maximum_id
+                if invalid_attribute is not None
+                else min(attribute.maximum_id for attribute in attributes)
+            )
             diagnostics.append(
                 ProjectDiagnostic(
                     severity="error",
                     code="project.translate.specialization-constant-id-invalid",
-                    message=(
-                        f"Specialization constant '{name}' requires one non-negative "
-                        "integer id."
+                    message=_specialization_invalid_id_message(
+                        name,
+                        reason=reason,
+                        spelling=spelling,
+                        parsed_value=parsed_value,
+                        maximum_id=maximum_id,
                     ),
-                    location=location,
+                    location=source_context.location,
                     source_backend=unit.source_backend,
                     missing_capabilities=["specialization.constant.identity"],
+                    details={
+                        "name": name,
+                        "reason": reason,
+                        "id": parsed_value,
+                        "idSpelling": spelling,
+                        "idSpellings": [
+                            attribute.spelling
+                            for attribute in attributes
+                            if attribute.spelling is not None
+                        ],
+                        "canonicalIds": sorted(canonical_ids),
+                        "attributes": [attribute.name for attribute in attributes],
+                        "minimumId": 0,
+                        "maximumId": maximum_id,
+                    },
                 )
             )
         builtin_default = (
@@ -18802,15 +19084,16 @@ def _project_specialization_declarations(
             _ProjectSpecializationDeclaration(
                 name=name,
                 constant_id=constant_id,
+                id_spelling=attributes[0].spelling,
                 source_type=source_type,
-                attribute=attributes[0][0],
+                attribute=attributes[0].name,
                 has_default=has_default,
                 default_value=(
                     _specialization_scalar_literal(default_value)
                     if has_default
                     else None
                 ),
-                location=location,
+                location=source_context.location,
             )
         )
 
@@ -18835,8 +19118,10 @@ def _project_specialization_declarations(
                 missing_capabilities=["specialization.constant.identity"],
                 details={
                     "id": declaration.constant_id,
+                    "idSpelling": declaration.id_spelling,
                     "name": declaration.name,
                     "previousName": previous.name,
+                    "previousIdSpelling": previous.id_spelling,
                     "previousLocation": previous.location.to_json(),
                 },
             )
@@ -19041,6 +19326,11 @@ def _resolved_project_specialization_constants(
             "source": f"{unit.source_backend}.{declaration.attribute}",
             "sourceLocation": declaration.location.to_json(),
         }
+        if declaration.id_spelling is not None and (
+            declaration.constant_id is None
+            or declaration.id_spelling != str(declaration.constant_id)
+        ):
+            record["idSpelling"] = declaration.id_spelling
         if declaration.has_default:
             record["defaultValue"] = declaration.default_value
             record["default"] = declaration.default_value
@@ -19164,6 +19454,67 @@ def _crossgl_specialization_literal(value: Any, source_type: str) -> str:
     return str(value)
 
 
+def _canonicalize_specialization_statement_ids(statement: str, constant_id: int) -> str:
+    function_attribute = re.compile(
+        r"(?P<prefix>\b(?:function_constant|constant_id)\s*\(\s*)"
+        r"(?P<spelling>[^)]*?)(?P<suffix>\s*\))",
+        re.IGNORECASE,
+    )
+    layout_attribute = re.compile(
+        r"(?P<prefix>\bconstant_id\s*=\s*)"
+        r"(?P<spelling>[^,)]*?)(?P<suffix>\s*(?=,|\)))",
+        re.IGNORECASE,
+    )
+
+    def canonicalize(match: re.Match[str]) -> str:
+        try:
+            parsed = parse_c_family_integral_literal(match.group("spelling"))
+        except CFamilyIntegralLiteralError:
+            return match.group(0)
+        if parsed != constant_id:
+            return match.group(0)
+        return f"{match.group('prefix')}{constant_id}{match.group('suffix')}"
+
+    canonical = function_attribute.sub(canonicalize, statement)
+    return layout_attribute.sub(canonicalize, canonical)
+
+
+def _canonicalize_project_specialization_ids(
+    source: str, records: Sequence[Mapping[str, Any]]
+) -> str:
+    statements = list(re.finditer(r"[^;{}]{0,4096};", source, re.DOTALL))
+    used_statement_offsets: set[int] = set()
+    replacements: list[tuple[int, int, str]] = []
+    for record in records:
+        name = record.get("name")
+        constant_id = record.get("id")
+        if not _is_non_empty_string(name) or not (
+            isinstance(constant_id, int) and not isinstance(constant_id, bool)
+        ):
+            continue
+        identifier = re.compile(rf"\b{re.escape(str(name))}\b")
+        for statement in statements:
+            if statement.start() in used_statement_offsets:
+                continue
+            text = statement.group(0)
+            if not identifier.search(text) or not _specialization_source_attributes(
+                text
+            ):
+                continue
+            used_statement_offsets.add(statement.start())
+            canonical = _canonicalize_specialization_statement_ids(text, constant_id)
+            if canonical != text:
+                replacements.append((statement.start(), statement.end(), canonical))
+            break
+
+    canonical_source = source
+    for start, end, replacement in reversed(replacements):
+        canonical_source = (
+            canonical_source[:start] + replacement + canonical_source[end:]
+        )
+    return canonical_source
+
+
 def _materialize_crossgl_specialization_constants(
     source: str,
     records: Sequence[Mapping[str, Any]],
@@ -19247,7 +19598,7 @@ def _materialize_crossgl_specialization_constants(
             )
         attribute_pattern = (
             r"@(?:function_constant|constant_id)\s*\(\s*"
-            rf"{re.escape(str(constant_id))}\s*\)"
+            rf"{re.escape(declaration.id_spelling or str(constant_id))}\s*\)"
         )
         statement_pattern = re.compile(
             rf"^(?P<indent>[ \t]*)(?P<body>"
@@ -19585,6 +19936,7 @@ def translate_project(
                     translation_input_path = unit.path
                     translation_source_backend = unit.source_backend
                     translation_defines: Mapping[str, str] = defines
+                    translation_include_paths: Sequence[str] = include_paths
                     translation_source_options: Mapping[str, Any] = source_options
                     if template_materialization is not None:
                         template_temp_dir = tempfile.TemporaryDirectory(
@@ -19631,6 +19983,39 @@ def translate_project(
                             diagnostics=specialization_diagnostics,
                         )
                     diagnostics.extend(specialization_diagnostics)
+                    if specialization_constants:
+                        specialization_source = translation_input_path.read_text(
+                            encoding="utf-8", errors="replace"
+                        )
+                        canonical_specialization_source = (
+                            _canonicalize_project_specialization_ids(
+                                specialization_source, specialization_constants
+                            )
+                        )
+                        if canonical_specialization_source != specialization_source:
+                            source_parent = str(translation_input_path.parent)
+                            if template_temp_dir is None:
+                                template_temp_dir = tempfile.TemporaryDirectory(
+                                    prefix="crosstl-specialization-"
+                                )
+                            canonical_path = (
+                                Path(template_temp_dir.name)
+                                / f"{translation_input_path.stem}.canonical"
+                                f"{translation_input_path.suffix}"
+                            )
+                            canonical_path.write_text(
+                                canonical_specialization_source, encoding="utf-8"
+                            )
+                            translation_input_path = canonical_path
+                            translation_include_paths = tuple(
+                                dict.fromkeys(
+                                    (
+                                        source_parent,
+                                        str(unit.path.parent),
+                                        *include_paths,
+                                    )
+                                )
+                            )
                     if (
                         specialization_constants
                         and specialization_materialization is not None
@@ -19641,7 +20026,7 @@ def translate_project(
                             "backend": "cgl",
                             "format_output": False,
                             "source_backend": unit.source_backend,
-                            "include_paths": include_paths,
+                            "include_paths": translation_include_paths,
                             "defines": translation_defines,
                         }
                         if translation_source_options:
@@ -19684,7 +20069,7 @@ def translate_project(
                         "save_shader": str(output_path),
                         "format_output": format_output,
                         "source_backend": translation_source_backend,
-                        "include_paths": include_paths,
+                        "include_paths": translation_include_paths,
                         "defines": translation_defines,
                     }
                     if selected_entry_point is not None:

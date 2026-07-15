@@ -10,6 +10,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping, Sequence
 
+from crosstl.project.integral_literals import (
+    CFamilyIntegralLiteralError,
+    parse_c_family_integral_literal,
+)
+
 REFLECTION_DIAGNOSTIC_PREFIX = "project.runtime-package-inspection"
 REFLECTION_TOOL_UNAVAILABLE = (
     f"{REFLECTION_DIAGNOSTIC_PREFIX}.host-interface-reflection-tool-unavailable"
@@ -368,8 +373,8 @@ def _int_value(value: str | None) -> int | None:
     if value is None:
         return None
     try:
-        return int(value, 0)
-    except ValueError:
+        return parse_c_family_integral_literal(value)
+    except CFamilyIntegralLiteralError:
         return None
 
 
@@ -1394,6 +1399,10 @@ def _literal_value(value: Any) -> Any:
     lowered = text.lower()
     if lowered in {"true", "false"}:
         return lowered == "true"
+    try:
+        return parse_c_family_integral_literal(text)
+    except CFamilyIntegralLiteralError:
+        pass
     if lowered.endswith(("u", "f", "h")):
         text = text[:-1]
     try:

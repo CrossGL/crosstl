@@ -967,6 +967,21 @@ Configured values are checked against the declaration's scalar source type. If
 both selectors address the same declaration, their values must agree; a
 name/id conflict fails the artifact instead of choosing one silently.
 
+Source ``function_constant`` and ``constant_id`` identifiers use C-family
+integral literal rules. Decimal, leading-zero octal, hexadecimal, and binary
+forms are accepted, together with apostrophe digit separators and the standard
+``u``/``l``/``ll`` integer suffix combinations supported by the source
+frontend. IDs are normalized before duplicate checks, configuration lookup,
+reflection, or target emission. Metal ``function_constant`` indices use the
+native inclusive range ``0`` through ``65535``; GLSL ``constant_id`` values use
+``0`` through ``2147483647``. Consequently, ``1``, ``01``, and ``0x1`` all
+select the canonical configuration key ``"1"`` and collide if used by separate
+declarations. A non-canonical source form is retained as ``idSpelling`` beside
+the numeric ``id`` in artifact specialization records. Invalid digits, negative
+values, constant expressions, and values outside the applicable source range
+produce ``project.translate.specialization-constant-id-invalid`` with the source
+span, original spelling, and a structured reason.
+
 ``[project.variants.<name>.specialization_constants]`` applies after the
 project-level table and overrides the same selector for that named variant.
 Artifact ``specializationConstants`` records retain the effective value and
