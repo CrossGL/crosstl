@@ -8142,8 +8142,14 @@ def test_codegen_prefers_qualified_bfloat_builtin_overload_result():
           bfloat16_t exp(bfloat16_t value) { return value; }
         }
 
+        using namespace metal;
+
         bfloat16_t custom_exp_result(bfloat16_t value) {
           return consume(metal::exp(value));
+        }
+
+        bfloat16_t custom_unqualified_exp_result(bfloat16_t value) {
+          return consume(exp(value));
         }
         """
     reference_source = """
@@ -8171,11 +8177,233 @@ def test_codegen_prefers_qualified_bfloat_builtin_overload_result():
     fast = normalize(convert_without_preprocessing(fast_source))
     assert "return consume__metal_overload_1(exp(value));" in standard
     assert "return consume__metal_overload_2(exp__metal_overload_2(value));" in custom
+    assert (
+        custom.count("return consume__metal_overload_2(exp__metal_overload_2(value));")
+        == 2
+    )
     assert "return consume__metal_overload_1(sincos(value, cosine));" in reference
     assert "return consume__metal_overload_1(exp(value));" in fast
     assert "consume__metal_overload_2(exp(value))" not in fast
     assert "consume__metal_overload_3(exp(value))" not in standard
     assert "consume__metal_overload_3(exp(value))" not in custom
+
+
+def test_codegen_composes_precise_bfloat_extension_with_standard_float_builtin():
+    source = """
+    typedef bfloat bfloat16_t;
+
+    namespace metal {
+    namespace precise {
+      bfloat16_t sqrt(bfloat16_t value) { return value; }
+    }
+    }
+
+    struct complex64_t {
+      float real;
+      float imag;
+
+      template <typename T>
+      complex64_t(T value) : real(float(value)), imag(0.0f) {}
+    };
+
+    bfloat16_t extension_path(bfloat16_t value) {
+      auto result = metal::precise::sqrt(value);
+      return result;
+    }
+
+    complex64_t standard_path(float value) {
+      return (complex64_t)metal::precise::sqrt(value);
+    }
+    """
+
+    normalized = normalize(convert_without_preprocessing(source))
+
+    assert "bfloat16 result = sqrt(value);" in normalized
+    assert "complex64_t crosstl_ctor_complex64_t_1_float(float value)" in normalized
+    assert "return crosstl_ctor_complex64_t_1_float(sqrt(value));" in normalized
+    assert "<unknown>" not in normalized
+
+
+@pytest.mark.parametrize("builtin_name", ["metal::abs", "abs"])
+def test_codegen_preserves_materialized_bfloat_builtin_component_results(
+    builtin_name,
+):
+    source = f"""
+    typedef bfloat bfloat16_t;
+
+    namespace metal {{
+      bfloat16_t abs(bfloat16_t value) {{ return value; }}
+      bfloat4 abs(bfloat4 value) {{ return value; }}
+    }}
+
+    using namespace metal;
+
+    template <typename T>
+    struct PreserveBuiltinResult {{
+      T operator()(T value) {{
+        auto result = {builtin_name}(value);
+        return result;
+      }}
+    }};
+
+    bfloat16_t preserve_scalar(bfloat16_t value) {{
+      PreserveBuiltinResult<bfloat16_t> operation;
+      return operation(value);
+    }}
+
+    bfloat4 preserve_vector(bfloat4 value) {{
+      PreserveBuiltinResult<bfloat4> operation;
+      return operation(value);
+    }}
+    """
+
+    preprocessed = MetalPreprocessor().preprocess(source)
+    normalized = normalize(convert_without_preprocessing(preprocessed))
+
+    assert "bfloat16 result = abs(value);" in normalized
+    assert "bfloat16vec4 result = abs(value);" in normalized
+    assert "<unknown>" not in normalized
+
+
+def test_codegen_bfloat_builtin_results_reach_project_targets(tmp_path):
+    source = """
+    typedef bfloat bfloat16_t;
+
+    namespace metal {
+      bfloat16_t abs(bfloat16_t value) { return value; }
+    }
+
+    using namespace metal;
+
+    kernel void preserve_bfloat_results(
+        device float* output [[buffer(0)]],
+        uint index [[thread_position_in_grid]]) {
+      bfloat16_t scalar_value = bfloat16_t(float(index) - 2.0f);
+      auto qualified_scalar = metal::abs(scalar_value);
+      auto unqualified_scalar = abs(scalar_value);
+      output[index] = float(qualified_scalar) + float(unqualified_scalar);
+    }
+    """
+    repo = tmp_path / "bfloat-builtin-results"
+    repo.mkdir()
+    source_path = repo / "preserve.metal"
+    source_path.write_text(source, encoding="utf-8")
+
+    direct_outputs = {
+        target: crosstl.translate(
+            str(source_path),
+            backend=target,
+            format_output=False,
+        )
+        for target in ("directx", "opengl")
+    }
+    payload = translate_project(
+        repo,
+        targets=["directx", "opengl"],
+        output_dir="out",
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 2, payload
+    assert payload["summary"]["failedCount"] == 0, payload
+    artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
+    expected_types = {"directx": "half", "opengl": "float"}
+    for target, direct in direct_outputs.items():
+        project = (repo / artifacts[target]["path"]).read_text(encoding="utf-8")
+        scalar_type = expected_types[target]
+        for generated in (direct, project):
+            normalized = normalize(generated)
+            assert f"{scalar_type} qualified_scalar = abs(scalar_value);" in normalized
+            assert (
+                f"{scalar_type} unqualified_scalar = abs(scalar_value);" in normalized
+            )
+            assert "metal-builtin-result-unresolved" not in generated
+            assert "<unknown>" not in generated
+
+    HLSLParser(HLSLLexer(direct_outputs["directx"]).tokenize()).parse()
+    dxc = shutil.which("dxc")
+    if dxc is not None:
+        hlsl_path = tmp_path / "bfloat-builtin-results.hlsl"
+        dxil_path = tmp_path / "bfloat-builtin-results.dxil"
+        hlsl_path.write_text(direct_outputs["directx"], encoding="utf-8")
+        result = subprocess.run(
+            [
+                dxc,
+                "-T",
+                "cs_6_0",
+                "-E",
+                "CSMain",
+                str(hlsl_path),
+                "-Fo",
+                str(dxil_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert dxil_path.stat().st_size > 0
+    assert_opengl_compute_validates_if_available(
+        direct_outputs["opengl"],
+        tmp_path,
+        "bfloat-builtin-results",
+    )
+
+
+def test_codegen_keeps_unqualified_bfloat_math_user_shadow():
+    source = """
+    typedef bfloat bfloat16_t;
+
+    int abs(float value) {
+      return int(value) + 1;
+    }
+
+    int use_shadow(bfloat16_t value) {
+      auto result = abs(value);
+      return result;
+    }
+    """
+
+    normalized = normalize(convert_without_preprocessing(source))
+
+    assert "int abs(float value)" in normalized
+    assert "int result = abs(value);" in normalized
+    assert "bfloat16 result = abs(value);" not in normalized
+
+
+def test_codegen_reports_ambiguous_unqualified_metal_builtin_result_type():
+    source = """
+    float consume(float value) { return value; }
+    half consume(half value) { return value; }
+
+    float unresolved_builtin(int value) {
+      return consume(exp(value));
+    }
+    """
+
+    with pytest.raises(MetalBuiltinResultTypeResolutionError) as exc_info:
+        convert_without_preprocessing(
+            source,
+            file_path="unqualified-builtin-result.metal",
+        )
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.metal-builtin-result-unresolved"
+    )
+    assert diagnostic.missing_capabilities == ("metal.builtin-result-type-inference",)
+    assert diagnostic.function_name == "exp"
+    assert diagnostic.argument_types == ("int",)
+    assert diagnostic.reason == (
+        "multiple builtin signatures remain viable after type matching"
+    )
+    assert set(diagnostic.candidates) == {
+        "half exp(half)",
+        "float exp(float)",
+        "double exp(double)",
+    }
+    assert diagnostic.source_location["file"] == ("unqualified-builtin-result.metal")
+    assert diagnostic.source_location["line"] == 6
+    assert diagnostic.source_location["column"] == 25
 
 
 @pytest.mark.parametrize(

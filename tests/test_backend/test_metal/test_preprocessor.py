@@ -5,6 +5,7 @@ import pytest
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
 from crosstl.backend.Metal.preprocessor import (
+    MetalMacroExpansionError,
     MetalPreprocessor,
     MetalStatelessGlobalElisionError,
     MetalStructMethodError,
@@ -117,6 +118,35 @@ def test_preprocessor_materializes_mlx_instantiate_kernel_macros():
     assert "void arangefloat16(" in output
     assert "device half* out" in output
     assert "out[gid] = half(gid + 3);" in output
+
+
+def test_preprocessor_materializes_multiline_project_instantiation_macro():
+    code = """
+    #define instantiate_copy(name, type) \\
+        instantiate_kernel("copy_" #name, copy, type)
+
+    template <typename T>
+    [[kernel]] void copy(
+        device const T* src [[buffer(0)]],
+        device T* dst [[buffer(1)]],
+        uint gid [[thread_position_in_grid]]) {
+        dst[gid] = src[gid];
+    }
+
+    instantiate_copy(
+        float32,
+        float)
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "instantiate_copy" not in output
+    assert "instantiate_kernel" not in output
+    assert "template <typename T>" not in output
+    assert '[[host_name("copy_float32")]]' in output
+    assert "void copy_float32(" in output
+    assert "device const float* src" in output
+    assert "device float* dst" in output
 
 
 def test_preprocessor_materializes_mlx_instantiations_with_template_defaults():
@@ -997,7 +1027,7 @@ def test_preprocessor_reports_template_specialization_limit_details():
     assert "Suggested action:" in str(error)
 
 
-def test_preprocessor_preserves_incomplete_multiline_function_macro_invocation():
+def test_preprocessor_expands_multiline_function_macro_invocation():
     code = """
     #define DECLARE_TYPED(name, type) type name;
     DECLARE_TYPED(
@@ -1007,8 +1037,112 @@ def test_preprocessor_preserves_incomplete_multiline_function_macro_invocation()
 
     output = MetalPreprocessor().preprocess(code)
 
-    assert "DECLARE_TYPED(" in output
-    assert "float value" not in output
+    assert "DECLARE_TYPED(" not in output
+    assert "float value;" in output
+
+
+def test_preprocessor_preserves_ordinary_multiline_function_call():
+    code = """
+    float make_value(float value) { return value; }
+    float result = make_value(
+        1.0f);
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "float result = make_value(\n        1.0f);" in output
+
+
+def test_preprocessor_preserves_directives_inside_ordinary_multiline_call():
+    code = """
+    #define USE_FIRST 1
+    float choose(float left, float right) { return left + right; }
+    float result = choose(
+    #if USE_FIRST
+        1.0f,
+    #else
+        2.0f,
+    #endif
+        3.0f);
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "float result = choose(\n        1.0f,\n        3.0f);" in output
+    assert "2.0f" not in output
+
+
+def test_preprocessor_multiline_macro_matches_single_line_macro_semantics():
+    definitions = r"""
+    #define ADD(left, right) ((left) + (right))
+    #define JOIN(left, right) left ## right
+    #define NAME(value) #value
+    #define DECLARE(name, expression, ...) \
+        float JOIN(name, _value) = ADD(expression, __VA_ARGS__); \
+        constant char* JOIN(name, _name) = NAME(name);
+    """
+    single_line = definitions + r"""
+    DECLARE(sample, ADD(1.0f, 2.0f), 3.0f)
+    """
+    multiline = definitions + r"""
+    DECLARE(
+        sample,
+        ADD(1.0f, 2.0f),
+        3.0f)
+    """
+
+    single_output = MetalPreprocessor().preprocess(single_line)
+    multiline_output = MetalPreprocessor().preprocess(multiline)
+
+    def normalize_whitespace(text):
+        return re.sub(r"\s+", " ", text).strip()
+
+    assert normalize_whitespace(multiline_output) == normalize_whitespace(single_output)
+    assert "float sample_value" in multiline_output
+    assert 'constant char* sample_name = "sample";' in multiline_output
+
+
+def test_preprocessor_multiline_macro_ignores_argument_comment_and_literal_parens():
+    code = r"""
+    #define PASS(value) value
+    #define ADD(left, right) ((left) + (right))
+    constant char* text = PASS(
+        "literal ),( text");
+    float value = ADD(
+        PASS(1.0f /* unmatched ) and , */), // unmatched (
+        2.0f);
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert 'constant char* text = "literal ),( text";' in output
+    assert "float value = ((1.0f) + (2.0f));" in output
+    assert "PASS(" not in output
+    assert "ADD(" not in output
+
+
+def test_preprocessor_reports_unterminated_multiline_function_macro_call():
+    code = """
+    #define DECLARE_TYPED(name, type) type name;
+    DECLARE_TYPED(
+        value,
+        float
+    """
+
+    with pytest.raises(MetalMacroExpansionError) as exc_info:
+        MetalPreprocessor().preprocess(code, file_path="unterminated.metal")
+
+    error = exc_info.value
+    assert error.project_diagnostic_code == (
+        "project.translate.metal-macro-expansion-invalid"
+    )
+    assert error.missing_capabilities == ("metal.function-macro-expansion",)
+    assert error.macro_name == "DECLARE_TYPED"
+    assert error.reason == "unterminated-function-macro-invocation"
+    assert error.source_location["file"] == "unterminated.metal"
+    assert error.source_location["line"] == 3
+    assert error.source_location["column"] == 5
+    assert error.source_location["length"] == len("DECLARE_TYPED")
 
 
 def test_preprocessor_include_with_search_path(tmp_path):

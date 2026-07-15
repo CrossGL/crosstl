@@ -9930,6 +9930,37 @@ class MetalToCrossGLConverter:
         return None
 
     @staticmethod
+    def metal_math_source_overload_is_stdlib_extension(function):
+        namespace = str(getattr(function, "namespace", "") or "")
+        return namespace == "metal" or namespace.startswith("metal::")
+
+    def resolve_metal_math_builtin_name(self, name, arguments):
+        text = str(name)
+        builtin_name = self.map_metal_math_function_name(text)
+        if builtin_name is None:
+            if "::" in text or text not in self.metal_math_intrinsics:
+                return None
+            builtin_name = text
+
+        source_overloads = self.metal_user_function_overloads(text)
+        if source_overloads:
+            binding, _function = self.resolve_metal_user_function_overload(
+                text, arguments
+            )
+            if binding in {"user", "unknown"}:
+                return None
+            if "::" not in text and any(
+                not self.metal_math_source_overload_is_stdlib_extension(function)
+                for function in source_overloads
+            ):
+                return None
+        if "::" not in text and (
+            text in self.current_variable_types or text in self.global_variable_types
+        ):
+            return None
+        return builtin_name
+
+    @staticmethod
     def metal_math_builtin_namespace_mode(name):
         text = str(name)
         if text.startswith(("metal::fast::", "fast::")):
@@ -10177,7 +10208,9 @@ class MetalToCrossGLConverter:
         )
 
     def metal_math_builtin_result_type(self, expression):
-        builtin_name = self.map_metal_math_function_name(expression.name)
+        builtin_name = self.resolve_metal_math_builtin_name(
+            expression.name, expression.args
+        )
         if builtin_name is None:
             return None
         rule = self.metal_math_builtin_result_rules.get(builtin_name)

@@ -124,6 +124,28 @@ class MetalStatelessGlobalElisionError(ValueError):
         self.suggested_action = suggested_action
 
 
+class MetalMacroExpansionError(ValueError):
+    """A function-like macro invocation that cannot be expanded safely."""
+
+    project_diagnostic_code = "project.translate.metal-macro-expansion-invalid"
+    missing_capabilities = ("metal.function-macro-expansion",)
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        macro_name: str,
+        reason: str,
+        source_location: object,
+        suggested_action: Optional[str] = None,
+    ):
+        super().__init__(message)
+        self.macro_name = macro_name
+        self.reason = reason
+        self.source_location = source_location
+        self.suggested_action = suggested_action
+
+
 class MetalTemplateSpecializationError(ValueError):
     project_diagnostic_code = "project.translate.metal-template-specialization"
     missing_capabilities = ("template.specialization",)
@@ -15719,8 +15741,17 @@ class MetalPreprocessor(HLSLPreprocessor):
     ) -> str:
         if in_expression:
             text = self._expand_clang_feature_test_macros(text, file_path)
-        if not in_expression and self._has_incomplete_function_macro_call(text):
-            return text
+        if not in_expression:
+            incomplete = self._find_incomplete_function_macro_call(text)
+            if incomplete is not None:
+                macro_name, start = incomplete
+                self._raise_incomplete_function_macro_call(
+                    text,
+                    macro_name,
+                    start,
+                    line_num,
+                    file_path,
+                )
         return super()._expand_macros(
             text, line_num, in_expression, file_path, disabled_macros
         )
@@ -15795,10 +15826,26 @@ class MetalPreprocessor(HLSLPreprocessor):
 
         return any(os.path.isfile(os.path.join(base, target)) for base in search_paths)
 
-    def _join_multiline_function_macro_call(self, lines: List[str], start: int):
-        return lines[start], 1
+    def _join_multiline_function_macro_call(
+        self, lines: List[str], start: int
+    ) -> Tuple[str, int]:
+        line = lines[start]
+        consumed = 1
+        while self._find_incomplete_function_macro_call(
+            line
+        ) is not None and start + consumed < len(lines):
+            next_line = lines[start + consumed]
+            if next_line.lstrip().startswith("#"):
+                break
+            # Preserve a physical line boundary so a // comment in one argument
+            # cannot consume the remaining invocation.
+            line += "\n" + next_line.lstrip()
+            consumed += 1
+        return line, consumed
 
-    def _has_incomplete_function_macro_call(self, text: str) -> bool:
+    def _find_incomplete_function_macro_call(
+        self, text: str
+    ) -> Optional[Tuple[str, int]]:
         i = 0
         while i < len(text):
             if text[i] in "\"'":
@@ -15806,33 +15853,39 @@ class MetalPreprocessor(HLSLPreprocessor):
                 i += consumed
                 continue
             if text.startswith("//", i):
-                return False
+                newline = text.find("\n", i + 2)
+                if newline == -1:
+                    return None
+                i = newline + 1
+                continue
             if text.startswith("/*", i):
                 end = text.find("*/", i + 2)
                 if end == -1:
-                    return False
+                    return None
                 i = end + 2
                 continue
             if text[i].isalpha() or text[i] == "_":
+                ident_start = i
                 ident, consumed = self._read_identifier(text, i)
-                macro = self.macros.get(ident)
                 i += consumed
-                if macro is None or not macro.is_function_like():
+                macro = self.macros.get(ident)
+                if macro is None:
+                    continue
+                if not macro.is_function_like():
                     continue
                 j = i
                 while j < len(text) and text[j].isspace():
                     j += 1
-                if (
-                    j < len(text)
-                    and text[j] == "("
-                    and not self._call_closes_on_line(text, j)
-                ):
-                    return True
+                if j < len(text) and text[j] == "(":
+                    call_end = self._function_macro_call_end(text, j)
+                    if call_end is None:
+                        return ident, ident_start
+                    i = call_end
                 continue
             i += 1
-        return False
+        return None
 
-    def _call_closes_on_line(self, text: str, start: int) -> bool:
+    def _function_macro_call_end(self, text: str, start: int) -> Optional[int]:
         depth = 0
         i = start
         while i < len(text):
@@ -15841,11 +15894,15 @@ class MetalPreprocessor(HLSLPreprocessor):
                 i += consumed
                 continue
             if text.startswith("//", i):
-                return False
+                newline = text.find("\n", i + 2)
+                if newline == -1:
+                    return None
+                i = newline + 1
+                continue
             if text.startswith("/*", i):
                 end = text.find("*/", i + 2)
                 if end == -1:
-                    return False
+                    return None
                 i = end + 2
                 continue
             if text[i] == "(":
@@ -15853,9 +15910,88 @@ class MetalPreprocessor(HLSLPreprocessor):
             elif text[i] == ")":
                 depth -= 1
                 if depth == 0:
-                    return True
+                    return i + 1
             i += 1
-        return False
+        return None
+
+    def _parse_macro_args(self, text: str, start: int) -> Tuple[List[str], int]:
+        assert text[start] == "("
+        args: List[str] = []
+        current: List[str] = []
+        depth = 0
+        i = start
+        while i < len(text):
+            if text[i] in "\"'":
+                literal, consumed = self._read_string(text, i)
+                current.append(literal)
+                i += consumed
+                continue
+            if text.startswith("//", i):
+                newline = text.find("\n", i + 2)
+                if newline == -1:
+                    return args, 0
+                current.append(" ")
+                i = newline + 1
+                continue
+            if text.startswith("/*", i):
+                end = text.find("*/", i + 2)
+                if end == -1:
+                    return args, 0
+                current.append(" ")
+                i = end + 2
+                continue
+
+            ch = text[i]
+            if ch == "(":
+                depth += 1
+                if depth > 1:
+                    current.append(ch)
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    args.append("".join(current).strip())
+                    return args, i - start + 1
+                current.append(ch)
+            elif ch == "," and depth == 1:
+                args.append("".join(current).strip())
+                current = []
+            else:
+                current.append(ch)
+            i += 1
+        return args, 0
+
+    @staticmethod
+    def _raise_incomplete_function_macro_call(
+        text: str,
+        macro_name: str,
+        start: int,
+        line_num: int,
+        file_path: Optional[str],
+    ) -> None:
+        line_offset = text.count("\n", 0, start)
+        previous_newline = text.rfind("\n", 0, start)
+        line = line_num + line_offset
+        column = start - previous_newline
+        location = {
+            "line": line,
+            "column": column,
+            "length": len(macro_name),
+            "endLine": line,
+            "endColumn": column + len(macro_name),
+        }
+        if file_path is not None:
+            location["file"] = file_path
+        raise MetalMacroExpansionError(
+            f"Cannot expand function-like Metal macro '{macro_name}': "
+            "the invocation is not terminated before the end of its source region.",
+            macro_name=macro_name,
+            reason="unterminated-function-macro-invocation",
+            source_location=location,
+            suggested_action=(
+                "Close the invocation with balanced parentheses before the next "
+                "preprocessor directive or end of file."
+            ),
+        )
 
     def _handle_include(self, rest: str, file_path: Optional[str]) -> Optional[str]:
         included = super()._handle_include(rest, file_path)

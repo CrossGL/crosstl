@@ -3155,6 +3155,7 @@ def test_parse_dependent_enable_if_return_type_from_tinygrad_metal():
 
 def test_parse_multiline_macro_invocation_from_mlx_bf16_math_header():
     code = """
+    #define METAL_FUNC inline
     #define instantiate_metal_math_funcs(itype, otype, ctype, mfast) \\
       METAL_FUNC otype abs(itype x) { \\
         return static_cast<otype>(__metal_fabs(static_cast<ctype>(x), mfast)); \\
@@ -3174,7 +3175,13 @@ def test_parse_multiline_macro_invocation_from_mlx_bf16_math_header():
     """
     ast = parse_ok(code)
 
-    assert [func.name for func in ast.functions] == ["real_kernel"]
+    assert [func.name for func in ast.functions] == ["abs", "real_kernel"]
+    overload = ast.functions[0]
+    assert overload.namespace == "metal"
+    assert overload.return_type == "bfloat16_t"
+    assert [(param.vtype, param.name) for param in overload.params] == [
+        ("bfloat16_t", "x")
+    ]
 
 
 def test_parse_metal_mesh_scoped_type_from_public_samples():
