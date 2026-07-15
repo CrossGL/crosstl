@@ -47632,6 +47632,69 @@ def test_translate_project_metal_struct_method_diagnostic_uses_call_location(
     )
 
 
+def test_translate_project_reports_unrepresentable_metal_constructor_details(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "unsupported_constructor.metal").write_text(
+        textwrap.dedent("""
+            struct Parent { int value; };
+            struct Child : Parent {
+              Child(int value) : Parent() {}
+            };
+            kernel void compute() { Child child(1); }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+        format_output=False,
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-constructor-unrepresentable": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "metal.explicit-constructor-lowering": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == ("project.translate.metal-constructor-unrepresentable")
+    assert diagnostic["target"] == "directx"
+    assert diagnostic["sourceBackend"] == "metal"
+    assert diagnostic["location"]["file"] == "unsupported_constructor.metal"
+    assert diagnostic["location"]["line"] == 3
+    assert diagnostic["location"]["column"] == 3
+    assert diagnostic["missingCapabilities"] == ["metal.explicit-constructor-lowering"]
+    assert diagnostic["details"] == {
+        "metalConstructor": {
+            "candidates": ["Child(int)"],
+            "owner": "Child",
+            "reason": (
+                "base-class construction is not representable by a data-only "
+                "target struct"
+            ),
+        },
+        "sourcePath": "unsupported_constructor.metal",
+        "targetArtifact": "out/directx/unsupported_constructor.hlsl",
+    }
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["target"] == "directx"
+    assert not (repo / artifact["path"]).exists()
+
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert "project.validate.invalid-report" not in validation["diagnosticsByCode"]
+
+
 def test_translate_project_metal_reference_return_reports_struct_method_details(
     tmp_path,
 ):

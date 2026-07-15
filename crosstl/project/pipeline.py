@@ -18129,6 +18129,38 @@ def _metal_struct_method_call_failure_details(
     return dict(sorted(details.items()))
 
 
+def _metal_constructor_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.metal-constructor-unrepresentable"
+    ):
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    constructor = {}
+    owner = getattr(exc, "owner", None)
+    argument_types = getattr(exc, "argument_types", None)
+    candidates = getattr(exc, "candidates", None)
+    reason = getattr(exc, "reason", None)
+    if _is_non_empty_string(owner):
+        constructor["owner"] = owner
+    if argument_types:
+        constructor["argumentTypes"] = [str(value) for value in argument_types]
+    if candidates:
+        constructor["candidates"] = [str(value) for value in candidates]
+    if _is_non_empty_string(reason):
+        constructor["reason"] = reason
+    if constructor:
+        details["metalConstructor"] = dict(sorted(constructor.items()))
+    return dict(sorted(details.items()))
+
+
 def _metal_stateless_global_failure_details(
     exc: Exception,
     unit: ProjectTranslationUnit,
@@ -18193,6 +18225,7 @@ def _translation_failure_details(
         **_generic_member_call_failure_details(exc, unit, artifact_path),
         **_metal_struct_method_failure_details(exc, unit, artifact_path),
         **_metal_struct_method_call_failure_details(exc, unit, artifact_path),
+        **_metal_constructor_failure_details(exc, unit, artifact_path),
         **_metal_stateless_global_failure_details(exc, unit, artifact_path),
         **_metal_static_constant_failure_details(exc, unit, artifact_path),
         **_metal_sizeof_failure_details(exc, unit, artifact_path),

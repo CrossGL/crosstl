@@ -2056,10 +2056,11 @@ def test_metal_struct_member_templates_are_not_unresolved_free_templates():
         for template in templates
     }
 
-    # The templated constructor (name == struct name), the templated conversion
-    # operator (name == "T"), and the templated functor (name == "operator") are
-    # all member templates.
-    assert classification["complex64_t"] is True
+    # Templated constructors are retained inside their concrete owner and bypass
+    # the free-template scanner. The templated conversion operator (name == "T")
+    # and functor (name == "operator") still reach this scanner and are correctly
+    # classified as members.
+    assert "complex64_t" not in classification
     assert classification["T"] is True
     assert classification["operator"] is True
     # The genuine free kernel template is NOT a member template and stays subject
