@@ -8018,12 +8018,18 @@ def test_codegen_infers_nested_metal_builtin_results_across_targets(tmp_path):
       half half_scalar = half(index) * 0.5h;
       float3 vector_value = float3(scalar, scalar + 1.0f, scalar + 2.0f);
       bool condition = (index & 1u) != 0u;
-      output[index * 5u] = consume(metal::exp(scalar));
-      output[index * 5u + 1u] = consume(
+      output[index * 8u] = consume(metal::exp(scalar));
+      output[index * 8u + 1u] = consume(
           condition ? metal::exp(scalar) : scalar);
-      output[index * 5u + 2u] = consume(metal::exp(scalar) + scalar);
-      output[index * 5u + 3u] = consume(metal::exp(vector_value)).x;
-      output[index * 5u + 4u] = float(consume(metal::exp(half_scalar)));
+      output[index * 8u + 2u] = consume(metal::exp(scalar) + scalar);
+      output[index * 8u + 3u] = consume(metal::exp(vector_value)).x;
+      output[index * 8u + 4u] = float(consume(metal::exp(half_scalar)));
+      output[index * 8u + 5u] = consume(
+          metal::clamp(vector_value, 0.0f, 1.0f)).x;
+      output[index * 8u + 6u] = consume(
+          metal::step(0.0f, vector_value)).x;
+      output[index * 8u + 7u] = consume(
+          metal::mix(vector_value, float3(1.0f), 0.5f)).x;
     }
     """
     repo = tmp_path / "nested-builtin-results"
@@ -8038,6 +8044,12 @@ def test_codegen_infers_nested_metal_builtin_results_across_targets(tmp_path):
     assert "consume__metal_overload_1(exp(scalar) + scalar)" in normalized
     assert "consume__metal_overload_3(exp(vector_value)).x" in normalized
     assert "consume__metal_overload_2(exp(half_scalar))" in normalized
+    assert "consume__metal_overload_3(clamp(vector_value, 0.0f, 1.0f)).x" in normalized
+    assert "consume__metal_overload_3(step(0.0f, vector_value)).x" in normalized
+    assert (
+        "consume__metal_overload_3(mix(vector_value, vec3(1.0f), 0.5f)).x"
+        in normalized
+    )
     assert "consume__metal_overload_5(exp(" not in normalized
 
     direct_outputs = {
@@ -8126,13 +8138,25 @@ def test_codegen_prefers_qualified_bfloat_builtin_overload_result():
           return consume(metal::sincos(value, cosine));
         }
         """
+    fast_source = overloads + """
+        float fast_exp_result(half value) {
+          return consume(metal::fast::exp(value));
+        }
+
+        float precise_exp_result(half value) {
+          return consume(metal::precise::exp(value));
+        }
+        """
 
     standard = normalize(convert_without_preprocessing(standard_source))
     custom = normalize(convert_without_preprocessing(custom_source))
     reference = normalize(convert_without_preprocessing(reference_source))
+    fast = normalize(convert_without_preprocessing(fast_source))
     assert "return consume__metal_overload_1(exp(value));" in standard
     assert "return consume__metal_overload_2(exp__metal_overload_2(value));" in custom
     assert "return consume__metal_overload_1(sincos(value, cosine));" in reference
+    assert "return consume__metal_overload_1(exp(value));" in fast
+    assert "consume__metal_overload_2(exp(value))" not in fast
     assert "consume__metal_overload_3(exp(value))" not in standard
     assert "consume__metal_overload_3(exp(value))" not in custom
 

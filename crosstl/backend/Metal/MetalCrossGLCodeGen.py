@@ -8746,6 +8746,11 @@ class MetalToCrossGLConverter:
         if actual["identity"] == expected["identity"]:
             return 4
         if actual["width"] != expected["width"]:
+            if actual["width"] == 1 and expected["width"] != 1:
+                element_rank = self.metal_math_builtin_conversion_rank(
+                    actual["value_type"], expected["element_type"], family
+                )
+                return None if element_rank is None else max(1, element_rank - 1)
             return None
         if actual["width"] != 1:
             return None
