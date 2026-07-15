@@ -14,6 +14,7 @@ from crosstl.backend.Metal.MetalCrossGLCodeGen import (
     MetalAtomicFenceLoweringError,
     MetalAutoTypeInferenceError,
     MetalBuiltinOverloadResolutionError,
+    MetalBuiltinResultTypeResolutionError,
     MetalCallableAliasLoweringError,
     MetalCallableLoweringError,
     MetalIndexedComponentTypeResolutionError,
@@ -7995,6 +7996,207 @@ def test_codegen_preserves_resource_qualifiers_during_source_overload_binding(
     assert_opengl_compute_validates_if_available(
         glsl, tmp_path, "metal-qualified-source-overload"
     )
+
+
+def test_codegen_infers_nested_metal_builtin_results_across_targets(tmp_path):
+    source = """
+    struct complex64_t {
+      float real;
+      float imag;
+    };
+
+    float consume(float value) { return value; }
+    half consume(half value) { return value; }
+    float3 consume(float3 value) { return value; }
+    half3 consume(half3 value) { return value; }
+    complex64_t consume(complex64_t value) { return value; }
+
+    kernel void nested_builtin_results(
+        device float* output [[buffer(0)]],
+        uint index [[thread_position_in_grid]]) {
+      float scalar = float(index) * 0.5f;
+      half half_scalar = half(index) * 0.5h;
+      float3 vector_value = float3(scalar, scalar + 1.0f, scalar + 2.0f);
+      bool condition = (index & 1u) != 0u;
+      output[index * 5u] = consume(metal::exp(scalar));
+      output[index * 5u + 1u] = consume(
+          condition ? metal::exp(scalar) : scalar);
+      output[index * 5u + 2u] = consume(metal::exp(scalar) + scalar);
+      output[index * 5u + 3u] = consume(metal::exp(vector_value)).x;
+      output[index * 5u + 4u] = float(consume(metal::exp(half_scalar)));
+    }
+    """
+    repo = tmp_path / "nested-builtin-results"
+    repo.mkdir()
+    source_path = repo / "nested.metal"
+    source_path.write_text(source, encoding="utf-8")
+
+    crossgl = crosstl.translate(str(source_path), backend="cgl", format_output=False)
+    normalized = normalize(crossgl)
+    assert "consume__metal_overload_1(exp(scalar))" in normalized
+    assert "consume__metal_overload_1(condition ? exp(scalar) : scalar)" in normalized
+    assert "consume__metal_overload_1(exp(scalar) + scalar)" in normalized
+    assert "consume__metal_overload_3(exp(vector_value)).x" in normalized
+    assert "consume__metal_overload_2(exp(half_scalar))" in normalized
+    assert "consume__metal_overload_5(exp(" not in normalized
+
+    direct_outputs = {
+        target: crosstl.translate(str(source_path), backend=target, format_output=False)
+        for target in ("directx", "opengl")
+    }
+    report = translate_project(
+        repo,
+        targets=["directx", "opengl"],
+        output_dir="out",
+    )
+    payload = report.to_json()
+    assert payload["summary"]["translatedCount"] == 2, payload
+    assert payload["summary"]["failedCount"] == 0, payload
+    artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
+    for target, direct in direct_outputs.items():
+        project = (repo / artifacts[target]["path"]).read_text(encoding="utf-8")
+        for generated in (direct, project):
+            assert "<unknown>" not in generated
+            assert "metal::" not in generated
+            assert "exp(" in generated
+
+    hlsl = direct_outputs["directx"]
+    HLSLParser(HLSLLexer(hlsl).tokenize()).parse()
+    dxc = shutil.which("dxc")
+    if dxc is not None:
+        hlsl_path = tmp_path / "nested-builtin-results.hlsl"
+        binary_path = tmp_path / "nested-builtin-results.dxil"
+        hlsl_path.write_text(hlsl, encoding="utf-8")
+        result = subprocess.run(
+            [
+                dxc,
+                "-T",
+                "cs_6_0",
+                "-E",
+                "CSMain",
+                str(hlsl_path),
+                "-Fo",
+                str(binary_path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+    assert_opengl_compute_validates_if_available(
+        direct_outputs["opengl"], tmp_path, "nested-builtin-results"
+    )
+
+
+def test_codegen_prefers_qualified_bfloat_builtin_overload_result():
+    overloads = """
+    typedef bfloat bfloat16_t;
+
+    struct complex64_t {
+      float real;
+      float imag;
+    };
+
+    float consume(float value) { return value; }
+    bfloat16_t consume(bfloat16_t value) { return value; }
+    complex64_t consume(complex64_t value) { return value; }
+    """
+    standard_source = overloads + """
+        float standard_exp_result(bfloat16_t value) {
+          return consume(metal::exp(value));
+        }
+    """
+    custom_source = overloads + """
+        float exp(float value) { return value; }
+
+        namespace metal {
+          bfloat16_t exp(bfloat16_t value) { return value; }
+        }
+
+        bfloat16_t custom_exp_result(bfloat16_t value) {
+          return consume(metal::exp(value));
+        }
+        """
+    reference_source = """
+        float consume(float value) { return value; }
+        half consume(half value) { return value; }
+
+        float converted_sincos_result(half value) {
+          float cosine;
+          return consume(metal::sincos(value, cosine));
+        }
+        """
+
+    standard = normalize(convert_without_preprocessing(standard_source))
+    custom = normalize(convert_without_preprocessing(custom_source))
+    reference = normalize(convert_without_preprocessing(reference_source))
+    assert "return consume__metal_overload_1(exp(value));" in standard
+    assert "return consume__metal_overload_2(exp__metal_overload_2(value));" in custom
+    assert "return consume__metal_overload_1(sincos(value, cosine));" in reference
+    assert "consume__metal_overload_3(exp(value))" not in standard
+    assert "consume__metal_overload_3(exp(value))" not in custom
+
+
+@pytest.mark.parametrize(
+    ("parameter_type", "argument", "reason"),
+    [
+        (
+            "float",
+            "external_value(value)",
+            "one or more builtin argument types could not be inferred",
+        ),
+        (
+            "complex64_t",
+            "value",
+            "no builtin signature matches the inferred argument types",
+        ),
+        (
+            "int",
+            "value",
+            "multiple builtin signatures remain viable after type matching",
+        ),
+    ],
+)
+def test_codegen_reports_unresolved_metal_builtin_result_type(
+    parameter_type, argument, reason
+):
+    source = f"""
+    struct complex64_t {{
+      float real;
+      float imag;
+    }};
+
+    float consume(float value) {{ return value; }}
+    half consume(half value) {{ return value; }}
+    complex64_t consume(complex64_t value) {{ return value; }}
+
+    float unresolved_builtin({parameter_type} value) {{
+      return float(consume(metal::exp({argument})));
+    }}
+    """
+
+    with pytest.raises(MetalBuiltinResultTypeResolutionError) as exc_info:
+        convert_without_preprocessing(source, file_path="builtin-result.metal")
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.metal-builtin-result-unresolved"
+    )
+    assert diagnostic.missing_capabilities == ("metal.builtin-result-type-inference",)
+    assert diagnostic.function_name == "metal::exp"
+    assert diagnostic.reason == reason
+    assert len(diagnostic.candidates) <= diagnostic.maximum_candidates
+    assert diagnostic.source_location["file"] == "builtin-result.metal"
+    assert diagnostic.source_location["line"] == 12
+    assert diagnostic.source_location["column"] == 28
+    if parameter_type == "int":
+        assert set(diagnostic.candidates) == {
+            "half metal::exp(half)",
+            "float metal::exp(float)",
+            "double metal::exp(double)",
+        }
+    if "external_value" in argument:
+        assert diagnostic.argument_types == ("<unknown>",)
 
 
 def test_codegen_fails_closed_for_equally_ranked_source_numeric_overloads():
