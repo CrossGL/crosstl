@@ -99,6 +99,33 @@ class MetalSourceOverloadResolutionError(ValueError):
         )
 
 
+class MetalAutoTypeInferenceError(ValueError):
+    """Raised when a selected Metal callable has no determinate value type."""
+
+    project_diagnostic_code = "project.translate.metal-auto-type-unresolved"
+    missing_capabilities = ("metal.auto-local-type-inference",)
+
+    def __init__(
+        self,
+        variable_name,
+        callable_name,
+        return_type,
+        reason,
+        source_location=None,
+        unresolved_parameters=(),
+    ):
+        self.variable_name = variable_name
+        self.callable_name = callable_name
+        self.return_type = return_type
+        self.reason = reason
+        self.source_location = source_location
+        self.unresolved_parameters = tuple(unresolved_parameters)
+        super().__init__(
+            f"Cannot infer Metal auto local '{variable_name}' from selected "
+            f"callable '{callable_name}' returning '{return_type}': {reason}"
+        )
+
+
 class MetalStructMethodCallResolutionError(ValueError):
     """Raised when a lowered sibling method call cannot be rebound safely."""
 
@@ -4203,8 +4230,22 @@ class MetalToCrossGLConverter:
         self.current_function_materialization_bindings = {}
         self.materialized_constexpr_expression_contexts = []
 
+    def effective_metal_variable_type(self, var):
+        metal_type = getattr(var, "vtype", None)
+        if not self.is_plain_metal_auto_type(metal_type):
+            return metal_type
+        inferred_type = self.current_variable_types.get(
+            getattr(var, "name", None),
+            self.global_variable_types.get(getattr(var, "name", None)),
+        )
+        if inferred_type is None or self.is_plain_metal_auto_type(inferred_type):
+            return metal_type
+        return inferred_type
+
     def format_array_suffix(self, var, include_declarator_arrays=True):
-        array_type = self.metal_array_type_parts(getattr(var, "vtype", None))
+        array_type = self.metal_array_type_parts(
+            self.effective_metal_variable_type(var)
+        )
         suffix = f"[{self.format_array_extent(array_type[1])}]" if array_type else ""
         if not include_declarator_arrays:
             return suffix
@@ -4238,20 +4279,11 @@ class MetalToCrossGLConverter:
 
     def variable_has_array_initializer_shape(self, var):
         return bool(getattr(var, "array_sizes", None)) or bool(
-            self.metal_array_type_parts(getattr(var, "vtype", None))
+            self.metal_array_type_parts(self.effective_metal_variable_type(var))
         )
 
     def map_variable_type(self, var):
-        raw_type = getattr(var, "vtype", None)
-        if self.is_plain_metal_auto_type(raw_type):
-            inferred_type = self.current_variable_types.get(
-                getattr(var, "name", None),
-                self.global_variable_types.get(getattr(var, "name", None)),
-            )
-            if inferred_type is not None and not self.is_plain_metal_auto_type(
-                inferred_type
-            ):
-                raw_type = inferred_type
+        raw_type = self.effective_metal_variable_type(var)
         constant_buffer_type = self.constant_buffer_pointer_type(var)
         if constant_buffer_type:
             return constant_buffer_type
@@ -8200,15 +8232,131 @@ class MetalToCrossGLConverter:
     def is_plain_metal_auto_type(metal_type):
         return str(metal_type or "").strip() == "auto"
 
+    def selected_metal_callable(self, expression):
+        if not isinstance(expression, FunctionCallNode):
+            return None
+        if str(expression.name) in {"decltype", "metal::decltype"}:
+            return None
+        if re.fullmatch(r"(?:metal::)?as_type<(.+)>", str(expression.name)):
+            return None
+        if self.metal_constructor_result_type(expression.name) is not None:
+            return None
+
+        lowered_method = self.resolve_lowered_struct_method_call(expression)
+        if lowered_method is not None:
+            function, _transported = lowered_method
+            return function
+        source_overload = self.resolve_transported_metal_source_overload(
+            str(expression.name),
+            expression.args,
+            getattr(expression, "source_location", None),
+        )
+        if source_overload is not None:
+            return source_overload
+        binding, function = self.resolve_metal_user_function_overload(
+            str(expression.name), expression.args
+        )
+        return function if binding == "user" else None
+
+    def selected_metal_callable_return_type(self, function):
+        return_type = getattr(function, "return_type", None)
+        if return_type is None:
+            return None
+        return_type = self.substitute_template_type_text(return_type)
+        return self.substitute_template_value_text(return_type)
+
+    def unresolved_selected_return_parameters(self, function, return_type, arguments):
+        identifiers = set(re.findall(r"\b[A-Za-z_]\w*\b", str(return_type or "")))
+        selected_parameters = {
+            name
+            for _kind, name in getattr(function, "template_parameters", None) or []
+            if name
+        }
+        deduced_parameters = set()
+        for parameter, argument in zip(
+            getattr(function, "params", None) or [], arguments
+        ):
+            if self.expression_metal_type(argument) is None:
+                continue
+            parameter_type = self.metal_declaration_expression_type(parameter)
+            parameter_identifiers = set(
+                re.findall(r"\b[A-Za-z_]\w*\b", str(parameter_type or ""))
+            )
+            deduced_parameters.update(parameter_identifiers & selected_parameters)
+        return tuple(sorted((identifiers & selected_parameters) - deduced_parameters))
+
+    def validate_selected_auto_return_type(
+        self, declaration, initializer, function, return_type, inferred_type
+    ):
+        if inferred_type is None:
+            reason = (
+                "the selected callable return type is auto"
+                if self.is_plain_metal_auto_type(return_type)
+                else "the selected callable has no value return type"
+            )
+            raise MetalAutoTypeInferenceError(
+                declaration.name,
+                function.name,
+                return_type or "<unknown>",
+                reason,
+                getattr(declaration, "source_location", None)
+                or getattr(initializer, "source_location", None),
+            )
+        if inferred_type == "void":
+            raise MetalAutoTypeInferenceError(
+                declaration.name,
+                function.name,
+                inferred_type,
+                "a void return cannot initialize an auto local",
+                getattr(declaration, "source_location", None)
+                or getattr(initializer, "source_location", None),
+            )
+
+        unresolved = self.unresolved_selected_return_parameters(
+            function, return_type, initializer.args
+        )
+        if unresolved:
+            raise MetalAutoTypeInferenceError(
+                declaration.name,
+                function.name,
+                return_type,
+                "the selected callable return type remains dependent on "
+                + ", ".join(unresolved),
+                getattr(declaration, "source_location", None)
+                or getattr(initializer, "source_location", None),
+                unresolved,
+            )
+
+    def inferable_metal_auto_value_type(self, metal_type):
+        if self.metal_array_type_parts(metal_type) is not None:
+            return True
+        descriptor = self.metal_source_overload_type_descriptor(metal_type)
+        if descriptor is None or descriptor[0] not in {"scalar", "vector", "object"}:
+            return False
+        if descriptor[0] == "object" and self.is_metal_resource_type(metal_type):
+            return False
+        return True
+
     def inferred_metal_declaration_type(self, declaration, initializer=None):
         declared_type = self.metal_declaration_expression_type(declaration)
         if not self.is_plain_metal_auto_type(declared_type) or initializer is None:
             return declared_type
-        inferred_type = self.metal_source_overload_value_type(
-            self.expression_metal_type(initializer)
+        selected_callable = self.selected_metal_callable(initializer)
+        return_type = (
+            self.selected_metal_callable_return_type(selected_callable)
+            if selected_callable is not None
+            else self.expression_metal_type(initializer)
         )
-        descriptor = self.metal_source_overload_type_descriptor(inferred_type)
-        if descriptor is not None and descriptor[0] in {"scalar", "vector"}:
+        inferred_type = self.metal_source_overload_value_type(return_type)
+        if selected_callable is not None:
+            self.validate_selected_auto_return_type(
+                declaration,
+                initializer,
+                selected_callable,
+                return_type,
+                inferred_type,
+            )
+        if self.inferable_metal_auto_value_type(inferred_type):
             return inferred_type
         return declared_type
 
@@ -8768,24 +8916,9 @@ class MetalToCrossGLConverter:
             constructor_type = self.metal_constructor_result_type(expr.name)
             if constructor_type is not None:
                 return constructor_type
-            lowered_method = self.resolve_lowered_struct_method_call(expr)
-            if lowered_method is not None:
-                function, _transported = lowered_method
-                return getattr(function, "return_type", None)
-            source_overload = self.resolve_transported_metal_source_overload(
-                str(expr.name),
-                expr.args,
-                getattr(expr, "source_location", None),
-            )
-            if source_overload is not None:
-                return self.substitute_template_type_text(
-                    getattr(source_overload, "return_type", None)
-                )
-            binding, function = self.resolve_metal_user_function_overload(
-                str(expr.name), expr.args
-            )
-            if binding == "user":
-                return getattr(function, "return_type", None)
+            selected_callable = self.selected_metal_callable(expr)
+            if selected_callable is not None:
+                return self.selected_metal_callable_return_type(selected_callable)
             unscoped_name = str(expr.name).rsplit("::", 1)[-1]
             if (
                 unscoped_name in self.metal_wave_intrinsics

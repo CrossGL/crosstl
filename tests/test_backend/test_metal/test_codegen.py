@@ -10,6 +10,7 @@ from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
 from crosstl.backend.Metal.MetalCrossGLCodeGen import (
     MetalAtomicFenceLoweringError,
+    MetalAutoTypeInferenceError,
     MetalBuiltinOverloadResolutionError,
     MetalCallableAliasLoweringError,
     MetalCallableLoweringError,
@@ -7455,6 +7456,210 @@ def test_codegen_reports_unresolved_auto_local_resource_overload():
         "elem_to_loc_int64_t(uint3, constant const int*, "
         "constant const int64_t*, int)",
     }
+
+
+def metal_materialized_callable_array_auto_source():
+    return """
+    struct DivMod {
+      template <typename T>
+      metal::array<T, 2> operator()(T x, T y) {
+        return {x / y, x % y};
+      }
+    };
+
+    kernel void aggregate_auto(
+        device int* quotients [[buffer(0)]],
+        device int* remainders [[buffer(1)]]) {
+      auto out = DivMod{}(7, 3);
+      quotients[0] = out[0];
+      remainders[0] = out[1];
+    }
+    """
+
+
+def test_codegen_infers_materialized_callable_fixed_array_auto_local(tmp_path):
+    source_path = tmp_path / "materialized_callable_array.metal"
+    source_path.write_text(
+        metal_materialized_callable_array_auto_source(), encoding="utf-8"
+    )
+
+    direct = crosstl.translate(str(source_path), backend="cgl", format_output=False)
+    report = translate_project(tmp_path, targets=["cgl"], output_dir="out")
+    payload = report.to_json()
+    assert payload["summary"]["translatedCount"] == 1, payload
+    assert payload["summary"]["failedCount"] == 0, payload
+    project = (tmp_path / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+
+    expected_declaration = "int[2] out_ = DivMod__operator_call__int__temporary(7, 3);"
+    assert expected_declaration in normalize(direct)
+    assert expected_declaration in normalize(project)
+
+    shader = parse_crossgl(direct)
+    hlsl = TranslatorHLSLCodeGen().generate(shader)
+    assert "int out_[2] = DivMod__operator_call__int__temporary(7, 3);" in hlsl
+    assert "int out_ = DivMod__operator_call__int__temporary" not in hlsl
+
+    dxc = shutil.which("dxc")
+    if dxc is not None:
+        hlsl_path = tmp_path / "materialized_callable_array.hlsl"
+        binary_output = tmp_path / "materialized_callable_array.dxil"
+        hlsl_path.write_text(hlsl, encoding="utf-8")
+        subprocess.run(
+            [
+                dxc,
+                "-T",
+                "cs_6_0",
+                "-E",
+                "CSMain",
+                str(hlsl_path),
+                "-Fo",
+                str(binary_output),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    spirv = VulkanSPIRVCodeGen().generate(shader)
+    spirv_as = shutil.which("spirv-as")
+    spirv_val = shutil.which("spirv-val")
+    if spirv_as is not None and spirv_val is not None:
+        spirv_path = tmp_path / "materialized_callable_array.spvasm"
+        binary_path = tmp_path / "materialized_callable_array.spv"
+        spirv_path.write_text(spirv, encoding="utf-8")
+        subprocess.run(
+            [
+                spirv_as,
+                "--target-env",
+                "vulkan1.1",
+                str(spirv_path),
+                "-o",
+                str(binary_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            [spirv_val, "--target-env", "vulkan1.1", str(binary_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+
+def test_codegen_auto_aggregate_uses_selected_overload_return_identity():
+    source = """
+    using IntPair = metal::array<int, 2>;
+
+    struct Record {
+      float value;
+    };
+
+    IntPair select_value(int value) {
+      return {value, value + 1};
+    }
+
+    Record select_value(float value) {
+      return {value};
+    }
+
+    kernel void select_aggregates(device int* output [[buffer(0)]]) {
+      auto pair = select_value(4);
+      auto record = select_value(4.0f);
+      output[0] = pair[1] + int(record.value);
+    }
+    """
+
+    normalized = normalize(convert_without_preprocessing(source))
+    assert "int[2] pair = select_value(4);" in normalized
+    assert "Record record = select_value(4.0f);" in normalized
+
+
+def test_codegen_reports_ambiguous_selected_auto_return_type(tmp_path):
+    source = """
+    auto ambiguous_result(bool use_integer) {
+      if (use_integer) {
+        return 1;
+      }
+      return 1.0f;
+    }
+
+    kernel void use_ambiguous_result(device int* output [[buffer(0)]]) {
+      auto result = ambiguous_result(true);
+      output[0] = result;
+    }
+    """
+
+    with pytest.raises(MetalAutoTypeInferenceError) as exc_info:
+        convert_without_preprocessing(source)
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.metal-auto-type-unresolved"
+    )
+    assert diagnostic.missing_capabilities == ("metal.auto-local-type-inference",)
+    assert diagnostic.variable_name == "result"
+    assert diagnostic.callable_name == "ambiguous_result"
+    assert diagnostic.return_type == "auto"
+    assert diagnostic.reason == "the selected callable return type is auto"
+
+    source_path = tmp_path / "ambiguous_auto.metal"
+    source_path.write_text(source, encoding="utf-8")
+    payload = translate_project(tmp_path, targets=["cgl"], output_dir="out").to_json()
+    assert payload["summary"]["translatedCount"] == 0, payload
+    assert payload["summary"]["failedCount"] == 1, payload
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-auto-type-unresolved": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "metal.auto-local-type-inference": 1
+    }
+
+
+def test_codegen_reports_unbound_selected_template_return_type():
+    source = """
+    template <typename Result>
+    Result make_result(int value) {
+      return Result(value);
+    }
+
+    template <typename Result>
+    void use_result(device int* output) {
+      auto result = make_result(1);
+      output[0] = result;
+    }
+    """
+
+    with pytest.raises(MetalAutoTypeInferenceError) as exc_info:
+        convert_without_preprocessing(source)
+
+    diagnostic = exc_info.value
+    assert diagnostic.variable_name == "result"
+    assert diagnostic.callable_name == "make_result"
+    assert diagnostic.return_type == "Result"
+    assert diagnostic.unresolved_parameters == ("Result",)
+    assert diagnostic.reason == (
+        "the selected callable return type remains dependent on Result"
+    )
+
+
+def test_codegen_infers_selected_template_return_from_argument_type():
+    source = """
+    template <typename T>
+    T identity(T value) {
+      return value;
+    }
+
+    template <typename T>
+    void use_identity(device T* output, T value) {
+      auto result = identity(value);
+      output[0] = result;
+    }
+    """
+
+    normalized = normalize(convert_without_preprocessing(source))
+    assert "T result = identity(value);" in normalized
 
 
 def test_codegen_preserves_resource_qualifiers_during_source_overload_binding(
