@@ -734,10 +734,13 @@ listed as available exact keys but have ``lookup.eligible`` set to false.
 The public ``build_runtime_variant_registry`` API builds the document,
 ``encode_runtime_variant_key`` and ``decode_runtime_variant_key`` expose the
 key contract, and ``lookup_runtime_variant`` performs exact lookup with the
-available keys included in not-found diagnostics. This slice has no implicit
-defaults or best-match behavior. Target compilation, deferred compilation,
-host runtime dispatch, and device execution remain host-runtime work for later
-slices; the registry does not simulate them.
+available keys included in not-found diagnostics. Lookup validates the closed
+registry schema, ``registryHash``, canonical key-to-record identity, and record
+eligibility before returning a ready artifact. Modified or malformed registry
+records fail as invalid rather than participating in selection. This slice has
+no implicit defaults or best-match behavior. Target compilation, deferred
+compilation, host runtime dispatch, and device execution remain host-runtime
+work for later slices; the registry does not simulate them.
 
 Build deterministic host loader scaffold metadata from a runtime loader
 manifest:
