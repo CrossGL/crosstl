@@ -5,6 +5,17 @@ from copy import deepcopy
 from types import SimpleNamespace
 
 from ...glsl_builtins import GLSL_BUILTIN_INT_LIMITS
+from ..arithmetic_conversions import (
+    ArithmeticScalarKind,
+    ArithmeticType,
+    UnrepresentableArithmeticConversion,
+    arithmetic_type,
+    arithmetic_type_name,
+    narrow_integer_shape,
+    promoted_integer_type_name,
+    resolve_arithmetic_conversion,
+    target_arithmetic_type,
+)
 from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
@@ -440,6 +451,31 @@ class OpenGLScalarConversionError(ValueError):
         super().__init__(message)
         self.source_type = source_type
         self.target_type = target_type
+        self.reason = reason
+        self.source_location = source_location
+
+
+class OpenGLArithmeticConversionError(ValueError):
+    """Raised when source arithmetic has no faithful GLSL conversion plan."""
+
+    project_diagnostic_code = "project.translate.opengl-arithmetic-conversion-invalid"
+    missing_capabilities = ("opengl.arithmetic-conversion-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        operator=None,
+        operand_types=None,
+        attempted_common_type=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.operator = operator
+        self.operand_types = tuple(operand_types or ())
+        self.attempted_common_type = attempted_common_type
+        self.common_type = attempted_common_type
         self.reason = reason
         self.source_location = source_location
 
@@ -889,7 +925,11 @@ class GLSLCodeGen:
     """Emit GLSL source from the shared CrossGL translator AST."""
 
     GLSL_TARGET_DISPLAY_NAME = "OpenGL"
+    GLSL_ARITHMETIC_CONVERSION_ERROR = OpenGLArithmeticConversionError
+    GLSL_BOOLEAN_COMPOUND_ASSIGNMENT_ERROR = OpenGLBooleanCompoundAssignmentError
     GLSL_STRUCT_CONSTRUCTION_ERROR = OpenGLStructConstructionError
+    GLSL_SUPPORTED_ARITHMETIC_INTEGER_WIDTHS = frozenset({32, 64})
+    GLSL_SUPPORTED_ARITHMETIC_FLOATING_WIDTHS = frozenset({32, 64})
     OPENGL_DESCRIPTOR_SET_BINDING_STRIDE = 1024
     METAL_ONLY_SYSTEM_INCLUDES = frozenset(
         {
@@ -15934,55 +15974,26 @@ complex64_t crossgl_complex64_mod_assign(
         source_type = self.glsl_normalized_source_type(vtype)
         if not source_type:
             return None
-        compact = re.sub(r"\s+", "", source_type).lower()
-        scalar_types = {
-            "char": (True, 8),
-            "signedchar": (True, 8),
-            "i8": (True, 8),
-            "int8": (True, 8),
-            "int8_t": (True, 8),
-            "uchar": (False, 8),
-            "unsignedchar": (False, 8),
-            "u8": (False, 8),
-            "uint8": (False, 8),
-            "uint8_t": (False, 8),
-            "short": (True, 16),
-            "signedshort": (True, 16),
-            "i16": (True, 16),
-            "int16": (True, 16),
-            "int16_t": (True, 16),
-            "ushort": (False, 16),
-            "unsignedshort": (False, 16),
-            "u16": (False, 16),
-            "uint16": (False, 16),
-            "uint16_t": (False, 16),
-        }
-        scalar = scalar_types.get(compact)
-        if scalar is not None:
-            signed, bits = scalar
-            return {
-                "signed": signed,
-                "bits": bits,
-                "width": 1,
-                "mapped": "int" if signed else "uint",
-            }
-
-        vector_match = re.fullmatch(
-            r"(char|uchar|short|ushort|i8vec|u8vec|i16vec|u16vec)([234])",
-            compact,
-        )
-        if vector_match is None:
+        shape = narrow_integer_shape(source_type)
+        if shape is None:
             return None
-        family, width_text = vector_match.groups()
-        signed = family in {"char", "short", "i8vec", "i16vec"}
-        bits = 8 if family in {"char", "uchar", "i8vec", "u8vec"} else 16
-        width = int(width_text)
+        kind, bits, width = shape
         return {
-            "signed": signed,
+            "signed": kind is ArithmeticScalarKind.SIGNED_INTEGER,
             "bits": bits,
             "width": width,
-            "mapped": f"{'i' if signed else 'u'}vec{width}",
+            "mapped": self.map_type(source_type),
         }
+
+    def glsl_arithmetic_operand_type(self, vtype):
+        source_type = self.glsl_normalized_source_type(vtype)
+        if not source_type:
+            return None
+        try:
+            mapped_type = self.map_type(source_type)
+        except OpenGLTemplateTypeError:
+            return None
+        return arithmetic_type(source_type, mapped_type)
 
     def glsl_value_type_info(self, vtype):
         type_name = self.glsl_normalized_source_type(vtype)
@@ -15992,134 +16003,129 @@ complex64_t crossgl_complex64_mod_assign(
             mapped = self.map_type(type_name)
         except OpenGLTemplateTypeError:
             return None
+        target = target_arithmetic_type(mapped)
+        if target is None:
+            return None
         narrow = self.glsl_narrow_integer_contract(type_name)
-        scalar_components = {
-            "bool": ("bool", 1),
-            "int": ("int", 32),
-            "uint": ("uint", 32),
-            "int64_t": ("int", 64),
-            "uint64_t": ("uint", 64),
-            "float": ("float", 32),
-            "double": ("float", 64),
-        }
-        component = scalar_components.get(mapped)
-        width = 1
-        if component is None:
-            vector_match = re.fullmatch(
-                r"(bvec|ivec|uvec|i64vec|u64vec|vec|dvec)([234])", mapped
-            )
-            if vector_match is None:
-                return None
-            prefix, width_text = vector_match.groups()
-            width = int(width_text)
-            component = {
-                "bvec": ("bool", 1),
-                "ivec": ("int", 32),
-                "uvec": ("uint", 32),
-                "i64vec": ("int", 64),
-                "u64vec": ("uint", 64),
-                "vec": ("float", 32),
-                "dvec": ("float", 64),
-            }[prefix]
-        family, bits = component
+        family = {
+            ArithmeticScalarKind.BOOLEAN: "bool",
+            ArithmeticScalarKind.SIGNED_INTEGER: "int",
+            ArithmeticScalarKind.UNSIGNED_INTEGER: "uint",
+            ArithmeticScalarKind.FLOATING: "float",
+        }[target.kind]
         return {
             "source": type_name,
             "mapped": mapped,
             "family": family,
-            "bits": bits,
-            "width": width,
+            "bits": target.bits,
+            "width": target.lanes,
             "narrow": narrow,
         }
 
     def glsl_vector_type_for_component(self, component_type, width):
-        prefix = {
-            "bool": "bvec",
-            "int": "ivec",
-            "uint": "uvec",
-            "int64_t": "i64vec",
-            "uint64_t": "u64vec",
-            "float": "vec",
-            "double": "dvec",
-        }.get(component_type)
-        return f"{prefix}{width}" if prefix is not None else None
+        component = target_arithmetic_type(component_type)
+        if component is None or component.lanes != 1:
+            return None
+        return arithmetic_type_name(component.kind, component.bits, width)
+
+    def glsl_arithmetic_type_from_info(self, info, *, width=None):
+        kind = {
+            "bool": ArithmeticScalarKind.BOOLEAN,
+            "int": ArithmeticScalarKind.SIGNED_INTEGER,
+            "uint": ArithmeticScalarKind.UNSIGNED_INTEGER,
+            "float": ArithmeticScalarKind.FLOATING,
+        }.get(info["family"])
+        if kind is None:
+            return None
+        narrow = info["narrow"]
+        bits = narrow["bits"] if narrow is not None else info["bits"]
+        return ArithmeticType(
+            info["source"],
+            info["mapped"],
+            kind,
+            bits,
+            info["width"] if width is None else width,
+        )
 
     def glsl_promoted_integer_component(self, info):
-        if info["family"] == "bool" or info["narrow"] is not None:
-            return "int"
-        if info["family"] == "int":
-            return "int64_t" if info["bits"] == 64 else "int"
-        if info["family"] == "uint":
-            return "uint64_t" if info["bits"] == 64 else "uint"
-        return None
+        operand = self.glsl_arithmetic_type_from_info(info, width=1)
+        return promoted_integer_type_name(operand) if operand is not None else None
 
     def glsl_promoted_integer_type(self, info):
-        component_type = self.glsl_promoted_integer_component(info)
-        if component_type is None:
+        operand = self.glsl_arithmetic_type_from_info(info)
+        return promoted_integer_type_name(operand) if operand is not None else None
+
+    def glsl_arithmetic_conversion_plan(
+        self,
+        left_type,
+        right_type,
+        operator,
+        *,
+        source_node=None,
+        fail_closed=False,
+    ):
+        left = self.glsl_arithmetic_operand_type(left_type)
+        right = self.glsl_arithmetic_operand_type(right_type)
+        if left is None or right is None:
             return None
-        if info["width"] == 1:
-            return component_type
-        return self.glsl_vector_type_for_component(component_type, info["width"])
-
-    def glsl_common_integer_component(self, left, right):
-        left_type = self.glsl_promoted_integer_component(left)
-        right_type = self.glsl_promoted_integer_component(right)
-        if left_type is None or right_type is None:
+        try:
+            return resolve_arithmetic_conversion(
+                left,
+                right,
+                operator,
+                supported_integer_widths=(
+                    self.GLSL_SUPPORTED_ARITHMETIC_INTEGER_WIDTHS
+                ),
+                supported_floating_widths=(
+                    self.GLSL_SUPPORTED_ARITHMETIC_FLOATING_WIDTHS
+                ),
+            )
+        except UnrepresentableArithmeticConversion as error:
+            if fail_closed:
+                self.glsl_arithmetic_conversion_error(
+                    source_node,
+                    operator,
+                    left_type,
+                    right_type,
+                    error.attempted_common_type,
+                    error.reason,
+                )
             return None
-        if left_type == right_type:
-            return left_type
 
-        integer_info = {
-            "int": (True, 32),
-            "uint": (False, 32),
-            "int64_t": (True, 64),
-            "uint64_t": (False, 64),
-        }
-        left_signed, left_bits = integer_info[left_type]
-        right_signed, right_bits = integer_info[right_type]
-        if left_signed == right_signed:
-            return left_type if left_bits >= right_bits else right_type
-
-        signed_type, signed_bits = (
-            (left_type, left_bits) if left_signed else (right_type, right_bits)
+    def glsl_arithmetic_conversion_error(
+        self,
+        source_node,
+        operator,
+        left_type,
+        right_type,
+        attempted_common_type,
+        reason,
+    ):
+        operand_types = (
+            self.type_name_string(left_type) or "unknown",
+            self.type_name_string(right_type) or "unknown",
         )
-        unsigned_type, unsigned_bits = (
-            (right_type, right_bits) if left_signed else (left_type, left_bits)
+        rendered_common_type = attempted_common_type or "unavailable"
+        raise self.GLSL_ARITHMETIC_CONVERSION_ERROR(
+            f"{self.GLSL_TARGET_DISPLAY_NAME} cannot preserve arithmetic operator "
+            f"'{operator}' for source operands '{operand_types[0]}' and "
+            f"'{operand_types[1]}'; attempted common type "
+            f"'{rendered_common_type}': {reason.replace('-', ' ')}",
+            operator=operator,
+            operand_types=operand_types,
+            attempted_common_type=attempted_common_type,
+            reason=reason,
+            source_location=getattr(source_node, "source_location", None),
         )
-        if unsigned_bits >= signed_bits:
-            return unsigned_type
-        if signed_bits > unsigned_bits:
-            return signed_type
-        return "uint64_t" if signed_bits == 64 else "uint"
 
     def glsl_common_arithmetic_type(self, left_type, right_type, operator):
-        if operator not in {
-            "+",
-            "-",
-            "*",
-            "/",
-            "%",
-            "&",
-            "|",
-            "^",
-            "<<",
-            ">>",
-            "<",
-            "<=",
-            ">",
-            ">=",
-            "==",
-            "!=",
-            "?:",
-        }:
+        plan = self.glsl_arithmetic_conversion_plan(left_type, right_type, operator)
+        if plan is None:
             return None
         left = self.glsl_value_type_info(left_type)
         right = self.glsl_value_type_info(right_type)
         if left is None or right is None:
             return None
-        if operator in {"<<", ">>"}:
-            if self.glsl_promoted_integer_type(right) is None:
-                return None
-            return self.glsl_promoted_integer_type(left)
         if (
             self.glsl_source_type_signature(left["source"])
             == self.glsl_source_type_signature(right["source"])
@@ -16127,67 +16133,27 @@ complex64_t crossgl_complex64_mod_assign(
             and left["family"] != "bool"
         ):
             return left["source"]
-        if left["width"] > 1 and right["width"] > 1 and left["width"] != right["width"]:
-            return None
-        width = max(left["width"], right["width"])
+        return plan.common_type
 
-        if left["family"] == "float" or right["family"] == "float":
-            floating_width = max(
-                info["bits"] for info in (left, right) if info["family"] == "float"
-            )
-            component = "double" if floating_width == 64 else "float"
-        elif left["family"] == right["family"] == "bool" and operator in {"==", "!="}:
-            component = "bool"
-        else:
-            component = self.glsl_common_integer_component(left, right)
-        if component is None:
-            return None
-        if width == 1:
-            return component
-        return self.glsl_vector_type_for_component(component, width)
-
-    def glsl_binary_operand_conversion_types(self, left_type, right_type, operator):
-        left = self.glsl_value_type_info(left_type)
-        right = self.glsl_value_type_info(right_type)
-        if left is None or right is None:
-            return None
-        if operator in {"<<", ">>"}:
-            if (
-                left["width"] > 1
-                and right["width"] > 1
-                and left["width"] != right["width"]
-            ):
-                return None
-            left_target = self.glsl_promoted_integer_type(left)
-            right_target = self.glsl_promoted_integer_type(right)
-            if left_target is None or right_target is None:
-                return None
-            return left_target, right_target
-
-        common_type = self.glsl_common_arithmetic_type(left_type, right_type, operator)
-        common = self.glsl_value_type_info(common_type)
-        if common is None:
-            return None
-        component_type = {
-            ("bool", 1): "bool",
-            ("int", 32): "int",
-            ("uint", 32): "uint",
-            ("int", 64): "int64_t",
-            ("uint", 64): "uint64_t",
-            ("float", 32): "float",
-            ("float", 64): "double",
-        }[(common["family"], common["bits"])]
-        left_target = (
-            component_type
-            if left["width"] == 1
-            else self.glsl_vector_type_for_component(component_type, left["width"])
+    def glsl_binary_operand_conversion_types(
+        self,
+        left_type,
+        right_type,
+        operator,
+        *,
+        source_node=None,
+        fail_closed=False,
+    ):
+        plan = self.glsl_arithmetic_conversion_plan(
+            left_type,
+            right_type,
+            operator,
+            source_node=source_node,
+            fail_closed=fail_closed,
         )
-        right_target = (
-            component_type
-            if right["width"] == 1
-            else self.glsl_vector_type_for_component(component_type, right["width"])
-        )
-        return left_target, right_target
+        if plan is None:
+            return None
+        return plan.left_target_type, plan.right_target_type
 
     def glsl_unary_source_result_type(self, expression):
         operator = self.map_operator(expression.op)
@@ -17487,19 +17453,40 @@ complex64_t crossgl_complex64_mod_assign(
             return f"{vector_type}({generated})"
         return generated
 
-    def generate_vector_relational_expression(self, left_expr, operator, right_expr):
+    def generate_vector_relational_expression(
+        self, left_expr, operator, right_expr, *, source_node=None
+    ):
         function_name = self.GLSL_VECTOR_RELATIONAL_FUNCTIONS.get(operator)
         if function_name is None:
             return None
 
-        left_type = self.expression_result_type(left_expr)
-        right_type = self.expression_result_type(right_expr)
+        left_type = self.glsl_source_expression_type(left_expr)
+        right_type = self.glsl_source_expression_type(right_expr)
         vector_type = self.glsl_relational_vector_type(left_type, right_type)
         if vector_type is None:
             return None
 
-        left = self.glsl_vector_relational_operand(left_expr, left_type, vector_type)
-        right = self.glsl_vector_relational_operand(right_expr, right_type, vector_type)
+        plan = self.glsl_arithmetic_conversion_plan(
+            left_type,
+            right_type,
+            operator,
+            source_node=source_node,
+            fail_closed=True,
+        )
+        if plan is None:
+            left = self.glsl_vector_relational_operand(
+                left_expr, left_type, vector_type
+            )
+            right = self.glsl_vector_relational_operand(
+                right_expr, right_type, vector_type
+            )
+        else:
+            left = self.generate_expression_with_expected(
+                left_expr, plan.left_target_type
+            )
+            right = self.generate_expression_with_expected(
+                right_expr, plan.right_target_type
+            )
         return f"{function_name}({left}, {right})"
 
     def validate_dispatch_mesh_count_argument(self, arg, index):
@@ -18133,16 +18120,13 @@ complex64_t crossgl_complex64_mod_assign(
         self, target, value, binary_operator, expected_type, source_node
     ):
         expected = self.glsl_value_type_info(expected_type)
-        if (
-            binary_operator not in {"&", "|", "^"}
-            or expected is None
-            or expected["family"] != "bool"
-        ):
+        if binary_operator is None or expected is None or expected["family"] != "bool":
             return None
         if not self.glsl_stable_update_target(target):
             target_name = self.expression_name(target)
-            raise OpenGLBooleanCompoundAssignmentError(
-                "OpenGL cannot safely lower boolean compound assignment "
+            raise self.GLSL_BOOLEAN_COMPOUND_ASSIGNMENT_ERROR(
+                f"{self.GLSL_TARGET_DISPLAY_NAME} cannot safely lower boolean "
+                "compound assignment "
                 f"'{binary_operator}=' for a side-effecting lvalue",
                 operator=f"{binary_operator}=",
                 target=target_name,
@@ -18165,7 +18149,11 @@ complex64_t crossgl_complex64_mod_assign(
             return None
         value_type = self.glsl_source_expression_type(value)
         conversion_types = self.glsl_binary_operand_conversion_types(
-            expected_type, value_type, binary_operator
+            expected_type,
+            value_type,
+            binary_operator,
+            source_node=source_node,
+            fail_closed=True,
         )
         if conversion_types is None:
             return None
@@ -18300,8 +18288,9 @@ complex64_t crossgl_complex64_mod_assign(
             code += f"{indent_str}}}\n"
             return code
 
-        condition = self.generate_expression(
-            node.condition if hasattr(node, "condition") else node.if_condition
+        condition = self.generate_expression_with_expected(
+            node.condition if hasattr(node, "condition") else node.if_condition,
+            "bool",
         )
         code = f"{indent_str}if ({condition}) {{\n"
 
@@ -18314,7 +18303,9 @@ complex64_t crossgl_complex64_mod_assign(
             for else_if_condition, else_if_body in zip(
                 node.else_if_conditions, node.else_if_bodies
             ):
-                condition = self.generate_expression(else_if_condition)
+                condition = self.generate_expression_with_expected(
+                    else_if_condition, "bool"
+                )
                 code += f" else if ({condition}) {{\n"
                 code += self.generate_scoped_statement_body(else_if_body, indent + 1)
                 code += f"{indent_str}}}"
@@ -19055,7 +19046,7 @@ complex64_t crossgl_complex64_mod_assign(
             if option_none_comparison is not None:
                 return option_none_comparison
             vector_relational = self.generate_vector_relational_expression(
-                expr.left, op, expr.right
+                expr.left, op, expr.right, source_node=expr
             )
             if vector_relational is not None:
                 return vector_relational
@@ -19075,7 +19066,11 @@ complex64_t crossgl_complex64_mod_assign(
                     right_type,
                 )
             operand_types = self.glsl_binary_operand_conversion_types(
-                left_type, right_type, op
+                left_type,
+                right_type,
+                op,
+                source_node=expr,
+                fail_closed=True,
             )
             if operand_types is not None:
                 left_expected, right_expected = operand_types
@@ -19606,25 +19601,22 @@ complex64_t crossgl_complex64_mod_assign(
             condition = self.generate_expression(expr.condition)
             true_type = self.glsl_source_expression_type(expr.true_expr)
             false_type = self.glsl_source_expression_type(expr.false_expr)
-            if self.glsl_source_type_signature(
-                true_type
-            ) == self.glsl_source_type_signature(false_type):
-                conditional_type = true_type
-            else:
-                conditional_type = self.glsl_common_arithmetic_type(
-                    true_type,
-                    false_type,
-                    "?:",
-                )
-            if conditional_type is None:
+            plan = self.glsl_arithmetic_conversion_plan(
+                true_type,
+                false_type,
+                "?:",
+                source_node=expr,
+                fail_closed=True,
+            )
+            if plan is None:
                 true_expr = self.generate_expression(expr.true_expr)
                 false_expr = self.generate_expression(expr.false_expr)
             else:
                 true_expr = self.generate_expression_with_expected(
-                    expr.true_expr, conditional_type
+                    expr.true_expr, plan.left_target_type
                 )
                 false_expr = self.generate_expression_with_expected(
-                    expr.false_expr, conditional_type
+                    expr.false_expr, plan.right_target_type
                 )
             return f"({condition} ? {true_expr} : {false_expr})"
         else:

@@ -49,6 +49,7 @@
       "translator_codegen": "crosstl/translator/codegen/GLSL_codegen.py",
       "native_backend": "crosstl/backend/GLSL",
       "tests": [
+        "tests/test_translator/test_arithmetic_conversions.py",
         "tests/test_translator/test_codegen/test_GLSL_codegen.py",
         "tests/test_translator/test_codegen/test_GLSL_storage_pointer_codegen.py",
         "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py",
@@ -77,6 +78,7 @@
       "target_extension": ".webgl.glsl",
       "translator_codegen": "crosstl/translator/codegen/webgl_codegen.py",
       "tests": [
+        "tests/test_translator/test_arithmetic_conversions.py",
         "tests/test_translator/test_codegen/test_webgl_codegen.py"
       ],
       "docs": [

@@ -8,7 +8,10 @@ import pytest
 import crosstl
 import crosstl.translator.codegen as codegen
 from crosstl.formatter import format_shader_code
+from crosstl.translator.ast import BinaryOpNode
 from crosstl.translator.codegen.webgl_codegen import (
+    WebGLArithmeticConversionError,
+    WebGLBooleanCompoundAssignmentError,
     WebGLCodeGen,
     WebGLStructConstructionError,
 )
@@ -87,7 +90,7 @@ def test_webgl_backend_is_target_only():
     assert isinstance(codegen.get_codegen("essl"), WebGLCodeGen)
 
 
-def test_webgl_codegen_emits_glsl_es_header_and_default_precision():
+def test_webgl_codegen_emits_glsl_es_header_and_default_precision(tmp_path):
     generated = WebGLCodeGen().generate(parse_shader(WEBGL_SHADER))
 
     assert generated.startswith("#version 300 es\n")
@@ -98,6 +101,204 @@ def test_webgl_codegen_emits_glsl_es_header_and_default_precision():
     assert "precision highp int;\n" in generated
     assert "#version 450 core" not in generated
     assert "layout(location = 0) out vec4 fragColor;" in generated
+    _assert_webgl_supported_arithmetic_conversions(tmp_path)
+    _assert_webgl_unavailable_integer_width_diagnostic()
+    _assert_webgl_boolean_arithmetic_compound_assignments(tmp_path)
+    _assert_webgl_boolean_arithmetic_compound_diagnostic()
+
+
+def _assert_webgl_supported_arithmetic_conversions(tmp_path):
+    shader = r"""
+    shader WebGLArithmeticConversions {
+        int addNarrow(uint16_t left, int16_t right) {
+            return left + right;
+        }
+
+        ivec3 addNarrowVector(ushort3 left, short3 right) {
+            return left + right;
+        }
+
+        uvec3 addMixed(ivec3 left, uint right) {
+            return left + right;
+        }
+
+        bvec3 compareMixed(ivec3 left, uint right) {
+            return left < right;
+        }
+
+        uvec3 chooseMixed(bool condition, int left, uvec3 right) {
+            return condition ? left : right;
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                int narrow = addNarrow(uint16_t(3u), int16_t(-2));
+                ivec3 narrowVector = addNarrowVector(
+                    ushort3(1u),
+                    short3(-2)
+                );
+                uvec3 mixed = addMixed(ivec3(narrow), 4u);
+                bvec3 ordered = compareMixed(ivec3(narrow), 5u);
+                uvec3 selected = chooseMixed(ordered.x, narrow, mixed);
+                return vec4(selected, 1.0);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate_stage(parse_shader(shader), "fragment")
+
+    assert "return (int(left) + right);" in generated
+    assert "return (ivec3(left) + right);" in generated
+    assert "return (uvec3(left) + right);" in generated
+    assert "return lessThan(uvec3(left), uvec3(right));" in generated
+    assert "return (condition ? uvec3(left) : right);" in generated
+    assert "#extension GL_ARB_gpu_shader_int64" not in generated
+    assert_webgl_stage_validates_if_available(
+        generated, tmp_path, "arithmetic_conversions", "frag"
+    )
+
+
+def _assert_webgl_unavailable_integer_width_diagnostic():
+    shader = r"""
+    shader WebGLWideArithmetic {
+        int64_t multiply(uint left, int64_t right) {
+            return left * right;
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+    ast = parse_shader(shader)
+    source_location = {"line": 4, "column": 25}
+    codegen = WebGLCodeGen()
+    expression = next(
+        node for node in codegen.walk_ast(ast) if isinstance(node, BinaryOpNode)
+    )
+    expression.source_location = source_location
+
+    with pytest.raises(WebGLArithmeticConversionError) as exc_info:
+        codegen.generate_stage(ast, "fragment")
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.webgl-arithmetic-conversion-invalid"
+    )
+    assert diagnostic.missing_capabilities == ("webgl.arithmetic-conversion-lowering",)
+    assert diagnostic.operator == "*"
+    assert diagnostic.operand_types == ("uint", "int64_t")
+    assert diagnostic.attempted_common_type == "int64_t"
+    assert diagnostic.common_type == "int64_t"
+    assert diagnostic.reason == "target-integer-width-unsupported"
+    assert diagnostic.source_location == source_location
+
+
+def _assert_webgl_boolean_arithmetic_compound_assignments(tmp_path):
+    shader = r"""
+    shader WebGLBooleanArithmeticCompoundAssignments {
+        struct Flags {
+            bool enabled;
+        };
+
+        bool powerBool(bool base, bool exp) {
+            bool result = true;
+            while (exp) {
+                if (exp & 1) {
+                    result *= base;
+                }
+                exp >>= 1;
+                base *= base;
+            }
+            return result;
+        }
+
+        bool3 updateMask(bool3 value, bool3 factor) {
+            value *= factor;
+            value >>= 1;
+            return value;
+        }
+
+        bool nextFlag(inout uint calls) {
+            calls += 1u;
+            return true;
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                uint calls = 0u;
+                Flags flags;
+                flags.enabled = false;
+                flags.enabled *= nextFlag(calls);
+                bool value = powerBool(true, false);
+                bool3 mask = updateMask(
+                    bool3(true, false, true),
+                    bool3(false, true, true)
+                );
+                return vec4(value ? 1.0 : 0.0);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate_stage(parse_shader(shader), "fragment")
+
+    assert "if (((int(exp) & 1) != 0))" in generated
+    assert "result = ((int(result) * int(base)) != 0);" in generated
+    assert "exp = ((int(exp) >> 1) != 0);" in generated
+    assert "base = ((int(base) * int(base)) != 0);" in generated
+    assert "value = notEqual((ivec3(value) * ivec3(factor)), ivec3(0));" in generated
+    assert "value = notEqual((ivec3(value) >> 1), ivec3(0));" in generated
+    assert generated.count("nextFlag(calls)") == 1
+    assert (
+        "flags.enabled = ((int(flags.enabled) * int(nextFlag(calls))) != 0);"
+        in generated
+    )
+    assert "result *= base;" not in generated
+    assert "exp >>= 1;" not in generated
+    assert_webgl_stage_validates_if_available(
+        generated,
+        tmp_path,
+        "boolean_arithmetic_compound_assignments",
+        "frag",
+    )
+
+
+def _assert_webgl_boolean_arithmetic_compound_diagnostic():
+    shader = r"""
+    shader WebGLSideEffectingBooleanCompoundAssignmentIndex {
+        uint nextIndex(inout uint calls) {
+            calls += 1u;
+            return 0u;
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                uint calls = 0u;
+                bool values[2] = {true, false};
+                values[nextIndex(calls)] *= false;
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(WebGLBooleanCompoundAssignmentError) as exc_info:
+        WebGLCodeGen().generate_stage(parse_shader(shader), "fragment")
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.webgl-boolean-compound-assignment-invalid"
+    )
+    assert diagnostic.missing_capabilities == (
+        "webgl.boolean-compound-assignment-lowering",
+    )
+    assert diagnostic.operator == "*="
+    assert diagnostic.target_type == "bool"
+    assert diagnostic.reason == "lvalue-side-effects"
 
 
 def test_webgl_codegen_sanitizes_reserved_identifiers_and_collisions():

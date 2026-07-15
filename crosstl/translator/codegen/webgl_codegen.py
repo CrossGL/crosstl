@@ -10,8 +10,29 @@ from ..ast import (
     TernaryOpNode,
 )
 from .array_utils import format_c_style_array_declaration
-from .GLSL_codegen import GLSLCodeGen, OpenGLStructConstructionError
+from .GLSL_codegen import (
+    GLSLCodeGen,
+    OpenGLArithmeticConversionError,
+    OpenGLBooleanCompoundAssignmentError,
+    OpenGLStructConstructionError,
+)
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
+
+
+class WebGLArithmeticConversionError(OpenGLArithmeticConversionError):
+    """Raised when source arithmetic has no faithful GLSL ES conversion plan."""
+
+    project_diagnostic_code = "project.translate.webgl-arithmetic-conversion-invalid"
+    missing_capabilities = ("webgl.arithmetic-conversion-lowering",)
+
+
+class WebGLBooleanCompoundAssignmentError(OpenGLBooleanCompoundAssignmentError):
+    """Raised when a boolean compound assignment cannot be lowered safely."""
+
+    project_diagnostic_code = (
+        "project.translate.webgl-boolean-compound-assignment-invalid"
+    )
+    missing_capabilities = ("webgl.boolean-compound-assignment-lowering",)
 
 
 class WebGLStructConstructionError(OpenGLStructConstructionError):
@@ -25,7 +46,11 @@ class WebGLCodeGen(GLSLCodeGen):
     """Generate WebGL 2.0 compatible GLSL ES output from CrossGL ASTs."""
 
     GLSL_TARGET_DISPLAY_NAME = "WebGL"
+    GLSL_ARITHMETIC_CONVERSION_ERROR = WebGLArithmeticConversionError
+    GLSL_BOOLEAN_COMPOUND_ASSIGNMENT_ERROR = WebGLBooleanCompoundAssignmentError
     GLSL_STRUCT_CONSTRUCTION_ERROR = WebGLStructConstructionError
+    GLSL_SUPPORTED_ARITHMETIC_INTEGER_WIDTHS = frozenset({32})
+    GLSL_SUPPORTED_ARITHMETIC_FLOATING_WIDTHS = frozenset({32})
     BUILTIN_INTERFACE_BLOCK_NAMES = {"gl_PerVertex"}
     GLSL_RESERVED_IDENTIFIER_PREFIXES = ("gl_", "webgl_", "_webgl_")
     UNSUPPORTED_VERTEX_OUTPUT_BUILTINS = {"gl_ClipDistance", "gl_CullDistance"}
@@ -127,6 +152,20 @@ class WebGLCodeGen(GLSLCodeGen):
                 f"'{base_type}'"
             )
         return mapped_type
+
+    def glsl_apply_narrow_integer_contract(self, generated, value_type):
+        contract = self.glsl_narrow_integer_contract(value_type)
+        if contract is None:
+            return generated
+        bits = int(contract["bits"])
+        if contract["signed"]:
+            shift = 32 - bits
+            return f"(({generated} << {shift}) >> {shift})"
+
+        mask = f"{(1 << bits) - 1}u"
+        if contract["width"] > 1:
+            mask = f"{contract['mapped']}({mask})"
+        return f"({generated} & {mask})"
 
     def map_image_base_type_with_format(self, vtype, node=None):
         if self.is_storage_image_type(vtype):
