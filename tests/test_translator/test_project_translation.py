@@ -231,6 +231,25 @@ def assert_directx_compute_validates_if_available(hlsl_code, tmp_path):
         return
 
 
+def assert_materialized_aggregate_conditional_hlsl(hlsl_code):
+    helper = re.search(
+        r"Payload SelectPayload__operator_call\([^\n]*\) \{\n.*?\n\}\n",
+        hlsl_code,
+        re.DOTALL,
+    )
+    assert helper is not None
+    helper_code = helper.group(0)
+
+    assert "Payload initialized;" in helper_code
+    assert "Payload argument = consume(__crossgl_aggregate_conditional_" in helper_code
+    assert helper_code.count("if (choose(calls))") == 4
+    assert helper_code.count("make_payload(calls, left.value)") == 2
+    assert helper_code.count("make_payload(calls, right.value)") == 2
+    assert "return initialized;" in helper_code
+    assert "return argument;" in helper_code
+    assert " ? " not in helper_code
+
+
 def assert_guarded_glsl_validates_if_available(glsl_code, tmp_path):
     glslang = shutil.which("glslangValidator")
     if not glslang:
@@ -46021,6 +46040,39 @@ def test_translate_project_metal_templated_functor_header_materializes(
     report.write_json(report_path)
     validation = validate_project_report(report_path)
     assert validation["success"] is True
+
+
+def test_translate_project_materialized_metal_aggregate_conditionals_validate(
+    tmp_path,
+):
+    fixture = ROOT / "tests" / "fixtures" / "metal_aggregate_conditional"
+    repo = tmp_path / "repo"
+    shutil.copytree(fixture, repo)
+
+    report = translate_project(repo, targets=["directx"], output_dir="out")
+    payload = report.to_json()
+
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["templateMaterialization"]["specializations"] == [
+        {
+            "name": "materialized_select",
+            "materializedName": "materialized_select_payload",
+            "parameters": {"Op": "SelectPayload", "T": "Payload"},
+            "parameterSources": {
+                "Op": "source-instantiation",
+                "T": "source-instantiation",
+            },
+            "source": "source-instantiation",
+            "hostName": "materialized_select_payload",
+        }
+    ]
+
+    output = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert_materialized_aggregate_conditional_hlsl(output)
+    HLSLParser(HLSLLexer(output).tokenize()).parse()
+    assert_directx_compute_validates_if_available(output, tmp_path)
 
 
 def test_translate_project_metal_repeated_call_site_templates_share_budget_for_opengl(

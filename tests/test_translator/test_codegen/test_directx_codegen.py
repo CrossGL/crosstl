@@ -2,6 +2,7 @@ import os
 import re
 import shutil
 import subprocess
+from pathlib import Path
 from typing import List
 
 import pytest
@@ -67,6 +68,7 @@ from tests.test_backend.test_SPIRV.test_codegen import (
 )
 from tests.test_translator.test_project_translation import (
     assert_directx_compute_validates_if_available,
+    assert_materialized_aggregate_conditional_hlsl,
 )
 
 
@@ -39472,6 +39474,25 @@ def test_hlsl_aggregate_conditional_initializer_preserves_selected_branch(tmp_pa
     assert generated.count("make_left(calls)") == 1
     assert generated.count("make_right(calls)") == 1
     assert "? make_left" not in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_reverse_materialized_aggregate_conditionals_validate(tmp_path):
+    fixture = (
+        Path(__file__).resolve().parents[2] / "fixtures" / "metal_aggregate_conditional"
+    )
+    shader_path = fixture / "materialized_select.metal"
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+        include_paths=[str(fixture)],
+    )
+
+    assert_materialized_aggregate_conditional_hlsl(generated)
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
     assert_directx_compute_validates_if_available(generated, tmp_path)
 
 
