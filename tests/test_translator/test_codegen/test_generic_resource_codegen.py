@@ -136,7 +136,7 @@ def test_buffer_builtin_aliases_do_not_instantiate_same_named_generics():
     assert "buffer_store_" not in metal
 
     glsl = GLSLCodeGen().generate(ast)
-    assert "float value = input[index];" in glsl
+    assert "float value = input_[index];" in glsl
     assert "data[index] = (value * 2.0);" in glsl
     assert "buffer_load_" not in glsl
     assert "buffer_store_" not in glsl

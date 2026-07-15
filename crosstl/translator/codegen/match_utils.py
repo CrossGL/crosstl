@@ -1046,6 +1046,8 @@ def next_match_temp_variable(generator):
         return generator.next_hlsl_temp_variable("match_subject")
     if hasattr(generator, "next_metal_temp_variable"):
         return generator.next_metal_temp_variable("match_subject")
+    if hasattr(generator, "next_glsl_temp_variable"):
+        return generator.next_glsl_temp_variable("match_subject")
 
     index = getattr(generator, "match_temp_variable_index", 0)
     generator.match_temp_variable_index = index + 1

@@ -18,6 +18,7 @@ class WebGLCodeGen(GLSLCodeGen):
     """Generate WebGL 2.0 compatible GLSL ES output from CrossGL ASTs."""
 
     BUILTIN_INTERFACE_BLOCK_NAMES = {"gl_PerVertex"}
+    GLSL_RESERVED_IDENTIFIER_PREFIXES = ("gl_", "webgl_", "_webgl_")
     UNSUPPORTED_VERTEX_OUTPUT_BUILTINS = {"gl_ClipDistance", "gl_CullDistance"}
     UNSUPPORTED_STAGE_NAMES = (
         {
@@ -302,16 +303,7 @@ class WebGLCodeGen(GLSLCodeGen):
         return True
 
     def webgl_unique_dynamic_sampler_temp_name(self):
-        used_names = set(self.local_variable_types)
-        used_names.update(self.current_identifier_aliases.values())
-        used_names.update(self.current_stage_declared_names())
-        base_name = "crossgl_dynamic_sampler_value"
-        name = base_name
-        suffix = 1
-        while name in used_names:
-            suffix += 1
-            name = f"{base_name}_{suffix}"
-        return name
+        return self.glsl_synthetic_local_identifier("crossgl_dynamic_sampler_value")
 
     def webgl_render_expression_with_replacement(
         self,
