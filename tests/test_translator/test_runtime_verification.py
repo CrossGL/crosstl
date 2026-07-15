@@ -980,12 +980,26 @@ def test_plan_runtime_test_manifest_can_replace_ambiguous_artifact_contract(tmp_
 def test_plan_runtime_test_manifest_rejects_invalid_artifact_contract_mode(tmp_path):
     artifact_report = _artifact_report(tmp_path, [_translated_artifact()])
     fixture = _runtime_fixture(
-        runtimeAdapter={"metadata": {"artifactContractMode": "overlay"}}
+        adapter="unavailable-runtime",
+        runtimeAdapter={"metadata": {"artifactContractMode": "overlay"}},
     )
 
     plan = plan_runtime_test_manifest(
         artifact_report,
-        {"kind": RUNTIME_TEST_MANIFEST_KIND, "tests": [fixture]},
+        {
+            "kind": RUNTIME_TEST_MANIFEST_KIND,
+            "adapters": [
+                {
+                    "id": "unavailable-runtime",
+                    "target": "opengl",
+                    "executor": "opengl",
+                    "platformRequirements": {
+                        "requiredTools": ["crosstl-guaranteed-missing-runtime-tool"]
+                    },
+                }
+            ],
+            "tests": [fixture],
+        },
         project_root=tmp_path,
     )
 

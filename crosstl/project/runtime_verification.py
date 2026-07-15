@@ -3349,7 +3349,10 @@ def _runtime_test_plan_case(
     execution_plan = prepare_runtime_execution(request)
     diagnostics = list(execution_plan.diagnostics)
     missing = _missing_platform_requirements(test_case.platform_requirements)
-    if missing["tools"] or missing["environment"]:
+    if _runtime_diagnostics_have_errors(diagnostics):
+        status = RUNTIME_FAILED
+        failure_phase = "runtime-setup"
+    elif missing["tools"] or missing["environment"]:
         diagnostics.append(
             _runtime_test_platform_skip_diagnostic(
                 test_case,
@@ -3359,9 +3362,6 @@ def _runtime_test_plan_case(
         )
         status = SKIPPED
         failure_phase = "platform-requirements"
-    elif _runtime_diagnostics_have_errors(diagnostics):
-        status = RUNTIME_FAILED
-        failure_phase = "runtime-setup"
     else:
         status = "planned"
         failure_phase = None
