@@ -12378,6 +12378,10 @@ class GLSLCodeGen:
         extra_reserved=(),
     ):
         source_name = str(name or "")
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", source_name) and not (
+            self.glsl_identifier_requires_escape(source_name, extra_reserved)
+        ):
+            return source_name
         candidate = sanitize_type_name(source_name) or sanitize_type_name(fallback)
         candidate = candidate or "identifier"
         candidate = re.sub(r"_+", "_", candidate)

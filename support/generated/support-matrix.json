@@ -247,7 +247,7 @@
           "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1422
+        "test_count": 1424
       },
       "translator_codegen": {
         "exists": true,
@@ -373,7 +373,7 @@
         "paths": [
           "tests/test_translator/test_codegen/test_webgl_codegen.py"
         ],
-        "test_count": 42
+        "test_count": 43
       },
       "translator_codegen": {
         "exists": true,

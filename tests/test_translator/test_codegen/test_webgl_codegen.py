@@ -55,6 +55,23 @@ def parse_shader(source):
     return Parser(Lexer(source).get_tokens()).parse()
 
 
+def assert_webgl_stage_validates_if_available(generated, tmp_path, name, stage="frag"):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        return
+    output_path = tmp_path / f"{name}.{stage}.webgl.glsl"
+    output_path.write_text(generated, encoding="utf-8")
+    result = subprocess.run(
+        [glslang, "-S", stage, str(output_path)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stdout
+
+
 def test_webgl_backend_is_target_only():
     spec = codegen.get_backend("webgl2")
 
@@ -145,6 +162,44 @@ def test_webgl_codegen_sanitizes_webgl_reserved_prefixes():
     assert "crossgl_webgl_helper_2(1.0)" in generated
     assert re.search(r"\b(?:webgl_|_webgl_)[A-Za-z0-9_]*", generated) is None
     assert "__" not in generated
+
+
+@pytest.mark.parametrize(
+    ("source_name", "emitted_name"),
+    (
+        ("texture_a_", "texture_a_"),
+        ("texture_a__", "texture_a"),
+        ("texture_a___", "texture_a"),
+    ),
+)
+def test_webgl_trailing_underscore_resource_names_share_glsl_mapping(
+    tmp_path, source_name, emitted_name
+):
+    shader = f"""
+    shader WebGLTrailingUnderscore {{
+        sampler2D {source_name} @binding(0);
+
+        fragment {{
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {{
+                return texture({source_name}, uv);
+            }}
+        }}
+    }}
+    """
+
+    codegen = WebGLCodeGen()
+    generated = codegen.generate_stage(parse_shader(shader), "fragment")
+
+    assert codegen.glsl_sanitized_identifier_base(source_name) == emitted_name
+    assert codegen.glsl_module_identifier_names[source_name] == emitted_name
+    assert f"uniform sampler2D {emitted_name};" in generated
+    assert f"texture({emitted_name}, uv)" in generated
+    assert generated.count(emitted_name) == 2
+    assert_webgl_stage_validates_if_available(
+        generated,
+        tmp_path,
+        f"trailing_underscore_{len(source_name) - len(source_name.rstrip('_'))}",
+    )
 
 
 def test_webgl_codegen_reuses_fixed_array_for_in_contract():

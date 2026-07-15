@@ -212,6 +212,74 @@ def test_glsl_reserved_identifiers_are_sanitized_consistently():
     assert "values_buffer_2[0] = result_value;" in generated
 
 
+@pytest.mark.parametrize(
+    ("source_name", "emitted_name"),
+    (
+        ("image_a_", "image_a_"),
+        ("image_a__", "image_a"),
+        ("image_a___", "image_a"),
+    ),
+)
+def test_glsl_trailing_underscore_resource_names_share_one_mapping(
+    tmp_path, source_name, emitted_name
+):
+    shader = f"""
+    shader TrailingUnderscoreResource {{
+        uimage2D {source_name} @r32ui @coherent @binding(0);
+
+        compute {{
+            [numthreads(1, 1, 1)]
+            void main(uint3 tid @ gl_GlobalInvocationID) {{
+                imageStore({source_name}, ivec2(tid.xy), uvec4(1u));
+            }}
+        }}
+    }}
+    """
+
+    codegen = GLSLCodeGen()
+    generated = codegen.generate_stage(crosstl.translator.parse(shader), "compute")
+
+    assert codegen.glsl_sanitized_identifier_base(source_name) == emitted_name
+    assert codegen.glsl_module_identifier_names[source_name] == emitted_name
+    assert (
+        "layout(r32ui, binding = 0) coherent uniform uimage2D "
+        f"{emitted_name};" in generated
+    )
+    assert f"imageStore({emitted_name}," in generated
+    assert generated.count(emitted_name) == 2
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        f"trailing_underscore_{len(source_name) - len(source_name.rstrip('_'))}",
+    )
+
+
+def test_glsl_trailing_underscore_normalization_preserves_collisions():
+    shader = """
+    shader TrailingUnderscoreCollision {
+        uimage2D image_a @r32ui @writeonly @binding(0);
+        uimage2D image_a__ @r32ui @writeonly @binding(1);
+
+        compute {
+            void main() {
+                imageStore(image_a, ivec2(0), uvec4(1u));
+                imageStore(image_a__, ivec2(0), uvec4(2u));
+            }
+        }
+    }
+    """
+
+    codegen = GLSLCodeGen()
+    generated = codegen.generate_stage(crosstl.translator.parse(shader), "compute")
+
+    assert codegen.glsl_module_identifier_names["image_a"] == "image_a"
+    assert codegen.glsl_module_identifier_names["image_a__"] == "image_a_2"
+    assert "uniform uimage2D image_a;" in generated
+    assert "uniform uimage2D image_a_2;" in generated
+    assert "imageStore(image_a," in generated
+    assert "imageStore(image_a_2," in generated
+
+
 def test_glsl_reserved_stage_parameter_is_sanitized_in_declaration_and_wrapper():
     shader = """
     shader ReservedGeometryInput {
