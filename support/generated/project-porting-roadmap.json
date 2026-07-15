@@ -2217,6 +2217,97 @@
     },
     {
       "category": "project",
+      "description": "Select one materialized source entry and emit an independently loadable artifact with deterministic identity, path, provenance, and reflected interface metadata.",
+      "id": "project.entry_scoped_artifacts",
+      "name": "Entry-scoped project artifacts",
+      "support": {
+        "cuda": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
+          ],
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
+          "status": "validated_rejection"
+        },
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
+          ],
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
+          "status": "validated_rejection"
+        },
+        "hip": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
+          ],
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
+          "status": "validated_rejection"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
+          ],
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
+          "status": "validated_rejection"
+        },
+        "mojo": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
+          ],
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
+          "status": "validated_rejection"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_entry_scoped_generation_keeps_only_selected_interface_and_helpers",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_entry_scoped_generation_reports_available_entries",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_emits_entry_scoped_opengl_artifact_and_reflection",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_keeps_aggregate_opengl_output_without_entry_selection",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_missing_selected_opengl_entry",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_requires_configured_entry_point_metadata",
+            "tests/test_mlx_porting_harness.py::def test_arange_opengl_check_confirms_native_validation"
+          ],
+          "notes": "Project configuration selects one materialized compute entry, emits a standalone GLSL main artifact at a deterministic entry path, retains only the selected stage interface and reachable helpers, records source-to-target entry identity in report and validation records, preserves provenance and source maps, and exposes an entry-scoped reflected runtime interface. Aggregate output remains unchanged when no entry is selected. The pinned MLX arangeuint32 proof compiles and executes through Mesa OpenGL with exact uint32 readback on Linux CI.",
+          "status": "supported"
+        },
+        "rust": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
+          ],
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
+          "status": "validated_rejection"
+        },
+        "slang": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
+          ],
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
+          "status": "validated_rejection"
+        },
+        "vulkan": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
+          ],
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
+          "status": "validated_rejection"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_non_webgl_stages"
+          ],
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. WebGL2 does not support compute artifacts.",
+          "status": "validated_rejection"
+        },
+        "wgsl": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
+          ],
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
+          "status": "validated_rejection"
+        }
+      }
+    },
+    {
+      "category": "project",
       "description": "Validate report metadata, artifact records, failed artifacts, translated artifact existence, optional external toolchain availability, and opt-in toolchain smoke failures for project outputs.",
       "id": "project.validation_hooks",
       "name": "Optional validation hooks",
@@ -9375,7 +9466,7 @@
         "validated_rejection": 0
       }
     },
-    "feature_count": 26,
+    "feature_count": 27,
     "status_counts": {
       "cuda": {
         "diagnostic": 1,
@@ -9383,7 +9474,7 @@
         "supported": 25,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 0
+        "validated_rejection": 1
       },
       "directx": {
         "diagnostic": 1,
@@ -9391,7 +9482,7 @@
         "supported": 25,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 0
+        "validated_rejection": 1
       },
       "hip": {
         "diagnostic": 1,
@@ -9399,7 +9490,7 @@
         "supported": 25,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 0
+        "validated_rejection": 1
       },
       "metal": {
         "diagnostic": 1,
@@ -9407,7 +9498,7 @@
         "supported": 25,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 0
+        "validated_rejection": 1
       },
       "mojo": {
         "diagnostic": 1,
@@ -9415,12 +9506,12 @@
         "supported": 25,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 0
+        "validated_rejection": 1
       },
       "opengl": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 25,
+        "supported": 26,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -9431,7 +9522,7 @@
         "supported": 25,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 0
+        "validated_rejection": 1
       },
       "slang": {
         "diagnostic": 1,
@@ -9439,7 +9530,7 @@
         "supported": 25,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 0
+        "validated_rejection": 1
       },
       "vulkan": {
         "diagnostic": 1,
@@ -9447,7 +9538,7 @@
         "supported": 25,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 0
+        "validated_rejection": 1
       },
       "webgl": {
         "diagnostic": 1,
@@ -9455,7 +9546,7 @@
         "supported": 25,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 0
+        "validated_rejection": 1
       },
       "wgsl": {
         "diagnostic": 1,
@@ -9463,7 +9554,7 @@
         "supported": 25,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 0
+        "validated_rejection": 1
       }
     }
   },

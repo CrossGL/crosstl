@@ -1076,7 +1076,7 @@ def test_runtime_readiness_uses_runtime_artifact_manifest_metadata(
         name="directx-runtime-readiness",
         artifact_report=artifact_report,
         targets=("directx",),
-        require_vulkan_native_runtime=False,
+        required_native_runtime_targets=(),
     )
 
     assert build_calls == [artifact_report]
@@ -1634,13 +1634,14 @@ def test_runtime_report_target_selection_returns_every_fixture_result():
     )
 
 
-def test_required_vulkan_runtime_rejects_any_failed_numeric_variant():
+@pytest.mark.parametrize("target", ("opengl", "vulkan"))
+def test_required_native_runtime_rejects_any_failed_numeric_variant(target):
     module = _load_harness()
     runtime_report = {
         "results": [
             {
                 "status": status,
-                "fixture": {"selector": {"target": "vulkan"}},
+                "fixture": {"selector": {"target": target}},
             }
             for status in ("passed", "passed", "runtime-failed")
         ]
@@ -1650,14 +1651,14 @@ def test_required_vulkan_runtime_rejects_any_failed_numeric_variant():
         module.PortingCheckError,
         match="every MLX arange fixture",
     ):
-        module._require_vulkan_native_runtime_results(runtime_report)
+        module._require_native_runtime_results(runtime_report, target)
 
 
 @pytest.mark.parametrize(
     ("target", "entry_point", "dtype"),
     (
         ("directx", "CSMain", "uint8"),
-        ("opengl", "main", "uint8"),
+        ("opengl", "main", "uint32"),
         ("vulkan", "arangeuint32", "uint32"),
     ),
 )
@@ -2160,7 +2161,7 @@ def _prepare_arange_opengl_check(module, tmp_path, generated):
     config_dir = work_dir / "configs"
     report_dir = work_dir / "reports"
     log_dir = work_dir / "logs"
-    generated_path = work_dir / "out" / "opengl" / "arange.glsl"
+    generated_path = work_dir / "out" / "opengl" / "arange" / "arangeuint32.glsl"
     for path in (config_dir, report_dir, log_dir, generated_path.parent):
         path.mkdir(parents=True, exist_ok=True)
     generated_path.write_text(generated, encoding="utf-8")
@@ -2172,6 +2173,11 @@ def _prepare_arange_opengl_check(module, tmp_path, generated):
                 "target": "opengl",
                 "path": generated_path.relative_to(mlx_root).as_posix(),
                 "status": "translated",
+                "entryPoint": {
+                    "source": "arangeuint32",
+                    "target": "main",
+                    "stage": "compute",
+                },
             }
         ],
     }
@@ -2184,56 +2190,19 @@ def _prepare_arange_opengl_check(module, tmp_path, generated):
 
 def _arange_opengl_frontier_source():
     return """
-    float log1p__metal_overload_1(float value) { return value; }
-    float log1p__metal_overload_2(float value) { return value; }
-    uint crossglWaveShuffleAndFillUp(uint value, uint fill, uint delta) {
-        uint shuffled = subgroupShuffleUp(value, delta);
-        return gl_SubgroupInvocationID >= delta ? shuffled : fill;
-    }
+    #version 450 core
     struct complex64_t { float real; float imag; };
-    bool simd_shuffle_down(bool data, uint delta) {
-        return (subgroupShuffleDown(uint(data), delta) != 0u);
-    }
-    bool simd_shuffle_up(bool data, uint delta) {
-        return (subgroupShuffleUp(uint(data), delta) != 0u);
-    }
-    bool simd_shuffle_and_fill_up(bool data, bool filling, uint delta) {
-        return (
-            crossglWaveShuffleAndFillUp(uint(data), uint(filling), delta) != 0u
-        );
-    }
-    bool simd_shuffle(bool data, uint lane) {
-        return (subgroupShuffle(uint(data), lane) != 0u);
-    }
-    void signed_arange_coercions(uint index) {
-        arangeint8_out[index] = bitfieldExtract(
-            int((uint(arangeint8_start_Args_start) +
-                 (index * uint(arangeint8_step_Args_step)))),
-            0,
-            8
-        );
-        arangeint16_out[index] = bitfieldExtract(
-            int((uint(arangeint16_start_Args_start) +
-                 (index * uint(arangeint16_step_Args_step)))),
-            0,
-            16
-        );
-        arangeint32_out[index] = int(
-            (uint(arangeint32_start_Args_start) +
-             (index * uint(arangeint32_step_Args_step)))
-        );
-        arangeint64_out[index] = (
-            arangeint64_start_Args_start +
-            (int64_t(index) * arangeint64_step_Args_step)
-        );
-    }
-    complex64_t probe(float x, float theta, float r, float z0) {
-        log1p__metal_overload_1(r);
-        if (x > 0.0) { return complex64_t(x, theta); }
-        if (r > 0.0) {
-            return complex64_t((0.5 * log1p__metal_overload_1(r)), theta);
-        }
-        return complex64_t(log(z0), theta);
+    layout(std430, binding = 2) buffer out_Buffer { uint out_[]; };
+    layout(std140, binding = 0) uniform arangeuint32_start_Args {
+        uint start;
+    };
+    layout(std140, binding = 1) uniform arangeuint32_step_Args {
+        uint step;
+    };
+    layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+    void main() {
+        uint index = uint(gl_GlobalInvocationID.x);
+        out_[index] = (start + (index * step));
     }
     """
 
@@ -2947,9 +2916,14 @@ def test_arange_opengl_check_confirms_native_validation(
 
     result = module._check_arange_opengl(*paths, "python")
 
-    assert result["aggregateInitializerLowered"] is True
-    assert result["scalarCoercionLowered"] is True
-    assert result["shuffleAndFillLowered"] is True
+    config = (paths[2] / "arange-opengl.toml").read_text(encoding="utf-8")
+    assert "[project.entry_points]" in config
+    assert f'"{module.MLX_ARANGE_SOURCE}" = "arangeuint32"' in config
+    assert result["selectedEntryPoint"] == "arangeuint32"
+    assert result["targetEntryPoint"] == "main"
+    assert result["interfaceResourceCount"] == 3
+    assert result["standaloneArtifact"] is True
+    assert result["arangeDataFlowPreserved"] is True
     assert result["nativeValidationAttempted"] is True
     assert result["nativeValidationBlockerConfirmed"] is False
     assert result["nativeValidationStatus"] == "validated"
@@ -2997,60 +2971,19 @@ def test_arange_opengl_check_reports_unavailable_validator(
     assert result["trackedIssues"] == []
 
 
-@pytest.mark.parametrize(
-    ("resolved_marker", "invalid_marker"),
-    (
-        (
-            "subgroupShuffleDown(uint(data), delta) != 0u",
-            "subgroupShuffleDown(uint(data), delta)",
-        ),
-        (
-            "subgroupShuffleUp(uint(data), delta) != 0u",
-            "subgroupShuffleUp(uint(data), delta)",
-        ),
-        (
-            "crossglWaveShuffleAndFillUp(uint(data), uint(filling), delta) != 0u",
-            "crossglWaveShuffleAndFillUp(uint(data), uint(filling), delta)",
-        ),
-        (
-            "subgroupShuffle(uint(data), lane) != 0u",
-            "subgroupShuffle(uint(data), lane)",
-        ),
-        (
-            "uint(arangeint8_start_Args_start)",
-            "arangeint8_start_Args_start",
-        ),
-        (
-            "uint(arangeint16_start_Args_start)",
-            "arangeint16_start_Args_start",
-        ),
-        (
-            "uint(arangeint32_start_Args_start)",
-            "arangeint32_start_Args_start",
-        ),
-        ("int64_t(index)", "index"),
-    ),
-)
-def test_arange_opengl_check_requires_scalar_coercions_before_validation(
-    tmp_path,
-    monkeypatch,
-    resolved_marker,
-    invalid_marker,
-):
+def test_arange_opengl_check_requires_selected_entry_metadata(tmp_path, monkeypatch):
     module = _load_harness()
-    generated = _arange_opengl_frontier_source()
-    assert resolved_marker in generated
     paths = _prepare_arange_opengl_check(
         module,
         tmp_path,
-        generated.replace(resolved_marker, invalid_marker, 1),
+        _arange_opengl_frontier_source(),
     )
-    commands = []
+    report_path = paths[3] / "arange-opengl.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["artifacts"][0].pop("entryPoint")
+    report_path.write_text(json.dumps(report), encoding="utf-8")
 
     def fake_run_command(name, command, *, log_dir, **_kwargs):
-        commands.append(name)
-        if name == "validate-arange-opengl":
-            pytest.fail("native validation ran before scalar coercion checks passed")
         stdout_path = log_dir / f"{name}.stdout"
         stderr_path = log_dir / f"{name}.stderr"
         stdout_path.write_text("", encoding="utf-8")
@@ -3058,65 +2991,13 @@ def test_arange_opengl_check_requires_scalar_coercions_before_validation(
         return module.CommandResult(name, list(command), 0, stdout_path, stderr_path)
 
     monkeypatch.setattr(module, "_run_command", fake_run_command)
-    monkeypatch.setattr(module.shutil, "which", lambda _name: "/tools/glslangValidator")
+    monkeypatch.setattr(module.shutil, "which", lambda _name: None)
 
-    with pytest.raises(module.PortingCheckError, match="scalar coercion"):
-        module._check_arange_opengl(*paths, "python")
-
-    assert commands == ["translate-arange-opengl"]
-
-
-@pytest.mark.parametrize(
-    "diagnostic",
-    (
-        "ERROR: return type does not match the function return type",
-        "ERROR: cannot convert from uint to bool",
-        (
-            "ERROR: arange.glsl:301: 'simd_shuffle_down' : "
-            "no matching overloaded function found\n"
-            "ERROR: return type does not match the function return type"
-        ),
-    ),
-)
-def test_arange_opengl_check_rejects_native_failure_after_frontier_resolved(
-    tmp_path,
-    monkeypatch,
-    diagnostic,
-):
-    module = _load_harness()
-    paths = _prepare_arange_opengl_check(
-        module,
-        tmp_path,
-        _arange_opengl_frontier_source(),
-    )
-
-    def fake_run_command(name, command, *, log_dir, **_kwargs):
-        stdout_path = log_dir / f"{name}.stdout"
-        stderr_path = log_dir / f"{name}.stderr"
-        stdout_path.write_text(
-            diagnostic if name == "validate-arange-opengl" else "",
-            encoding="utf-8",
-        )
-        stderr_path.write_text("", encoding="utf-8")
-        return module.CommandResult(
-            name,
-            list(command),
-            2 if name == "validate-arange-opengl" else 0,
-            stdout_path,
-            stderr_path,
-        )
-
-    monkeypatch.setattr(module, "_run_command", fake_run_command)
-    monkeypatch.setattr(module.shutil, "which", lambda _name: "/tools/glslangValidator")
-
-    with pytest.raises(
-        module.PortingCheckError,
-        match="failed without a tracked validation issue",
-    ):
+    with pytest.raises(module.PortingCheckError, match="selected compute entry"):
         module._check_arange_opengl(*paths, "python")
 
 
-def test_arange_opengl_check_rejects_unrelated_overload_diagnostic(
+def test_arange_opengl_check_rejects_native_failure(
     tmp_path,
     monkeypatch,
 ):
@@ -3132,8 +3013,7 @@ def test_arange_opengl_check_rejects_unrelated_overload_diagnostic(
         stderr_path = log_dir / f"{name}.stderr"
         stdout_path.write_text(
             (
-                "ERROR: arange.glsl:301: 'unrelated_helper' : "
-                "no matching overloaded function found"
+                "ERROR: compute shader compilation failed"
                 if name == "validate-arange-opengl"
                 else ""
             ),
@@ -3158,14 +3038,15 @@ def test_arange_opengl_check_rejects_unrelated_overload_diagnostic(
         module._check_arange_opengl(*paths, "python")
 
 
-def test_arange_opengl_check_rejects_untyped_aggregate_return(
+def test_arange_opengl_check_rejects_extra_entry_resource(
     tmp_path,
     monkeypatch,
 ):
     module = _load_harness()
     generated = _arange_opengl_frontier_source().replace(
-        "return complex64_t(x, theta);",
-        "return { x, theta };",
+        "layout(local_size_x",
+        "layout(std430, binding = 4) buffer extra_Buffer { uint extra_[]; };\n"
+        "layout(local_size_x",
     )
     paths = _prepare_arange_opengl_check(module, tmp_path, generated)
 
@@ -3187,7 +3068,7 @@ def test_arange_opengl_check_rejects_untyped_aggregate_return(
 
     with pytest.raises(
         module.PortingCheckError,
-        match="retained an untyped aggregate return",
+        match="only start, step, and output resources",
     ):
         module._check_arange_opengl(*paths, "python")
 
@@ -3219,7 +3100,7 @@ def test_runtime_readiness_reports_tracked_plan_resource_blockers(
         name="opengl-runtime-readiness",
         artifact_report=artifact_report,
         targets=("opengl",),
-        require_vulkan_native_runtime=False,
+        required_native_runtime_targets=(),
     )
 
     assert result["status"] == "blocked-by-tracked-issues"
@@ -3247,6 +3128,7 @@ def test_runtime_readiness_reports_tracked_plan_resource_blockers(
 
 def test_reduced_runtime_readiness_aggregates_fixture_execution(monkeypatch):
     module = _load_harness()
+    calls = []
     reports = [
         {
             "name": "directx-vulkan-runtime-readiness",
@@ -3320,18 +3202,25 @@ def test_reduced_runtime_readiness_aggregates_fixture_execution(monkeypatch):
         },
     ]
 
+    def fake_plan_runtime_readiness(**kwargs):
+        calls.append(kwargs)
+        return reports.pop(0)
+
     monkeypatch.setattr(
         module,
         "_plan_runtime_readiness_for_report",
-        lambda **kwargs: reports.pop(0),
+        fake_plan_runtime_readiness,
     )
 
     result = module._plan_reduced_runtime_readiness(
         Path("/tmp/mlx"),
         Path("/tmp/reports"),
-        require_vulkan_native_runtime=False,
+        require_vulkan_native_runtime=True,
+        require_opengl_native_runtime=True,
     )
 
+    assert calls[0]["required_native_runtime_targets"] == ("vulkan",)
+    assert calls[1]["required_native_runtime_targets"] == ("opengl",)
     assert result["status"] == "blocked-by-tracked-issues"
     assert result["runtimeFixtureExecutionIncluded"] is True
     assert result["runtimeFixtureExecutionByStatus"] == {
@@ -4134,13 +4023,19 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
             "status": "passed",
         },
     )
+    runtime_requirements = []
+
+    def fake_runtime_readiness(*args, **kwargs):
+        runtime_requirements.append(kwargs)
+        return {
+            "name": "runtime-readiness",
+            "status": "blocked-by-tracked-issues",
+        }
+
     monkeypatch.setattr(
         module,
         "_plan_reduced_runtime_readiness",
-        lambda *args, **kwargs: {
-            "name": "runtime-readiness",
-            "status": "blocked-by-tracked-issues",
-        },
+        fake_runtime_readiness,
     )
     monkeypatch.setattr(
         module,
@@ -4157,6 +4052,7 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
             require_directx_toolchain=False,
             require_vulkan_toolchain=False,
             require_vulkan_native_runtime=False,
+            require_opengl_native_runtime=True,
             require_opengl_frontier_toolchain=True,
             require_opengl_gemv_toolchain=True,
             require_vulkan_gemv_toolchain=True,
@@ -4179,8 +4075,15 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
     ]
     assert reference_accessor_requirements == [(False, True)]
     assert opengl_frontier_requirements == [True]
+    assert runtime_requirements == [
+        {
+            "require_vulkan_native_runtime": False,
+            "require_opengl_native_runtime": True,
+        }
+    ]
     assert result["scope"]["openglFrontierToolchainRequired"] is True
     assert result["scope"]["openglGemvToolchainRequired"] is True
+    assert result["scope"]["openglNativeRuntimeRequired"] is True
     assert result["scope"]["vulkanGemvToolchainRequired"] is True
     assert result["scope"]["runtimeReadinessIncluded"] is True
     assert result["scope"]["runtimeFixtureExecutionIncluded"] is True

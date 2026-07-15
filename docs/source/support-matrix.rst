@@ -23,7 +23,7 @@ implicitly supported.
    :header: "Backend", "Target aliases", "Target profiles", "Ext", "Target generator", "Source kind", "Native frontend", "Tests", "Test count", "Unsupported markers", "Docs source"
 
    "DirectX / HLSL", "dx11, dx12, d3d11, d3d12", "directx-11, directx-12", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "native", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "1275", "347", "Microsoft Learn HLSL reference; HLSL specification project"
-   "OpenGL / GLSL", "", "", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "native", "crosstl/backend/GLSL", "tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_translator/test_codegen/test_GLSL_storage_pointer_codegen.py, tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py, tests/test_backend/test_GLSL", "1411", "249", "GLSL 4.60 specification; OpenGL registry"
+   "OpenGL / GLSL", "", "", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "native", "crosstl/backend/GLSL", "tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_translator/test_codegen/test_GLSL_storage_pointer_codegen.py, tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py, tests/test_backend/test_GLSL", "1413", "249", "GLSL 4.60 specification; OpenGL registry"
    "WebGL / GLSL ES", "webgl2, essl, glsl-es", "", ".webgl.glsl", "crosstl/translator/codegen/webgl_codegen.py", "target-only", "", "tests/test_translator/test_codegen/test_webgl_codegen.py", "40", "38", "WebGL 2.0 specification; OpenGL ES Shading Language 3.00 specification"
    "WebGPU / WGSL", "webgpu", "", ".wgsl", "crosstl/translator/codegen/wgsl_codegen.py", "target-only", "", "tests/test_translator/test_codegen/test_wgsl_codegen.py", "104", "70", "WGSL specification; WebGPU specification"
    "Metal", "", "", ".metal", "crosstl/translator/codegen/metal_codegen.py", "native", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "1432", "548", "Apple Metal resources; Metal Shading Language specification"
@@ -37,17 +37,17 @@ implicitly supported.
 .. csv-table:: Summary by backend
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "68", "0", "2", "0", "0", "0"
-   "OpenGL / GLSL", "68", "0", "2", "0", "0", "0"
-   "WebGL / GLSL ES", "38", "0", "23", "9", "0", "0"
-   "WebGPU / WGSL", "42", "0", "21", "7", "0", "0"
-   "Metal", "66", "0", "4", "0", "0", "0"
-   "Vulkan SPIR-V", "68", "0", "2", "0", "0", "0"
-   "CUDA", "62", "0", "8", "0", "0", "0"
-   "HIP", "62", "0", "8", "0", "0", "0"
-   "Mojo", "64", "0", "6", "0", "0", "0"
-   "Rust", "65", "0", "5", "0", "0", "0"
-   "Slang", "66", "0", "4", "0", "0", "0"
+   "DirectX / HLSL", "68", "0", "2", "1", "0", "0"
+   "OpenGL / GLSL", "69", "0", "2", "0", "0", "0"
+   "WebGL / GLSL ES", "38", "0", "23", "10", "0", "0"
+   "WebGPU / WGSL", "42", "0", "21", "8", "0", "0"
+   "Metal", "66", "0", "4", "1", "0", "0"
+   "Vulkan SPIR-V", "68", "0", "2", "1", "0", "0"
+   "CUDA", "62", "0", "8", "1", "0", "0"
+   "HIP", "62", "0", "8", "1", "0", "0"
+   "Mojo", "64", "0", "6", "1", "0", "0"
+   "Rust", "65", "0", "5", "1", "0", "0"
+   "Slang", "66", "0", "4", "1", "0", "0"
 
 Graphics Backend Focus
 ----------------------
@@ -58,9 +58,9 @@ scope for graphics backend completion work.
 .. csv-table:: Graphics backend status summary
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "68", "0", "2", "0", "0", "0"
-   "OpenGL / GLSL", "68", "0", "2", "0", "0", "0"
-   "Metal", "66", "0", "4", "0", "0", "0"
+   "DirectX / HLSL", "68", "0", "2", "1", "0", "0"
+   "OpenGL / GLSL", "69", "0", "2", "0", "0", "0"
+   "Metal", "66", "0", "4", "1", "0", "0"
 
 .. csv-table:: DirectX/OpenGL/Metal actionable backlog
    :header: "Backend", "Category", "Feature", "Status", "Notes"
@@ -75,17 +75,17 @@ inspection, diagnostics, validation, and corpus-coverage rows.
 .. csv-table:: Project-porting status summary
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "25", "0", "1", "0", "0", "0"
-   "OpenGL / GLSL", "25", "0", "1", "0", "0", "0"
-   "WebGL / GLSL ES", "25", "0", "1", "0", "0", "0"
-   "WebGPU / WGSL", "25", "0", "1", "0", "0", "0"
-   "Metal", "25", "0", "1", "0", "0", "0"
-   "Vulkan SPIR-V", "25", "0", "1", "0", "0", "0"
-   "CUDA", "25", "0", "1", "0", "0", "0"
-   "HIP", "25", "0", "1", "0", "0", "0"
-   "Mojo", "25", "0", "1", "0", "0", "0"
-   "Rust", "25", "0", "1", "0", "0", "0"
-   "Slang", "25", "0", "1", "0", "0", "0"
+   "DirectX / HLSL", "25", "0", "1", "1", "0", "0"
+   "OpenGL / GLSL", "26", "0", "1", "0", "0", "0"
+   "WebGL / GLSL ES", "25", "0", "1", "1", "0", "0"
+   "WebGPU / WGSL", "25", "0", "1", "1", "0", "0"
+   "Metal", "25", "0", "1", "1", "0", "0"
+   "Vulkan SPIR-V", "25", "0", "1", "1", "0", "0"
+   "CUDA", "25", "0", "1", "1", "0", "0"
+   "HIP", "25", "0", "1", "1", "0", "0"
+   "Mojo", "25", "0", "1", "1", "0", "0"
+   "Rust", "25", "0", "1", "1", "0", "0"
+   "Slang", "25", "0", "1", "1", "0", "0"
 
 .. csv-table:: Project-porting actionable backlog
    :header: "Backend", "Feature", "Status", "Current gap", "Next scope"
@@ -183,6 +183,7 @@ Each category below uses the status codes from the legend.
    "Project include resolution", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Macro and define variants", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Batch project translation", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Entry-scoped project artifacts", "R", "Y", "R", "R", "R", "R", "R", "R", "R", "R", "R"
    "Optional validation hooks", "D", "D", "D", "D", "D", "D", "D", "D", "D", "D", "D"
    "Migration action report", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Runtime integration planning", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"

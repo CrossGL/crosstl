@@ -2158,11 +2158,15 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "--require-opengl-gemv-toolchain" in mlx_porting
     assert "--require-vulkan-gemv-toolchain" in mlx_porting
     assert "--require-vulkan-native-runtime" in mlx_porting
+    assert "--require-opengl-native-runtime" in mlx_porting
     assert "Install Windows DirectX Shader Compiler" in mlx_porting
     assert "DirectXShaderCompiler/releases/download/v1.9.2602.24" in mlx_porting
     assert "dxc --version" in mlx_porting
     assert "glslang-tools" in mlx_porting
     assert "glslangValidator --version" in mlx_porting
+    assert "moderngl==5.12.0" in mlx_porting
+    assert "libegl1" in mlx_porting
+    assert "libgl1-mesa-dri" in mlx_porting
     assert "Validate OpenGL lowering contracts" in mlx_porting
     assert "opengl_lowers_expected_scalar_and_vector_conversions" in mlx_porting
     assert "opengl_preserves_metal_arithmetic_conversion_order" in mlx_porting
@@ -2204,7 +2208,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "OpenGL frontier toolchain must validate every source path" in mlx_porting
     assert "mlx/backend/metal/kernels/binary_two.metal" in mlx_porting
     assert "mesa-vulkan-drivers" in mlx_porting
-    assert "python -m pip install vulkan==1.3.275.1" in mlx_porting
+    assert "vulkan==1.3.275.1" in mlx_porting
     assert "vulkaninfo --summary" in mlx_porting
     assert "mlx-full-corpus-scout:" in mlx_porting
     assert "MLX full-corpus artifact scout" in mlx_porting
