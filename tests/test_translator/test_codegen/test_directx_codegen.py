@@ -2145,6 +2145,55 @@ def test_hlsl_codegen_lowers_canonical_relative_shuffle_wave_ops():
     assert "WaveShuffle" not in generated
 
 
+def test_hlsl_user_call_wave_arguments_are_not_probed_as_texture_calls(monkeypatch):
+    code = """
+    shader HLSLUserCallWaveArguments {
+        struct complex64_t {
+            float real;
+            float imag;
+        };
+
+        complex64_t makeComplex(float real, float imag) {
+            complex64_t value;
+            value.real = real;
+            value.imag = imag;
+            return value;
+        }
+
+        complex64_t shuffled(float real, float imag, uint delta) {
+            return makeComplex(
+                WaveShuffleDown(real, delta),
+                WaveShuffleDown(imag, delta));
+        }
+
+        compute {
+            void main() {
+                complex64_t value = shuffled(1.0, 2.0, 1u);
+            }
+        }
+    }
+    """
+    codegen = HLSLCodeGen()
+    original_validator = codegen.validate_query_lod_coordinate_argument
+
+    def reject_user_function_texture_probe(func_name, args):
+        if func_name == "makeComplex":
+            pytest.fail("ordinary user function was probed as a texture operation")
+        return original_validator(func_name, args)
+
+    monkeypatch.setattr(
+        codegen,
+        "validate_query_lod_coordinate_argument",
+        reject_user_function_texture_probe,
+    )
+
+    generated = codegen.generate(crosstl.translator.parse(code))
+
+    assert "WaveReadLaneAt(real, (WaveGetLaneIndex() + uint(delta)))" in generated
+    assert "WaveReadLaneAt(imag, (WaveGetLaneIndex() + uint(delta)))" in generated
+    assert "requires float result context, got complex64_t" not in generated
+
+
 def test_hlsl_codegen_lowers_canonical_shuffle_and_fill_up_wave_op(tmp_path):
     code = """
     shader HLSLShuffleAndFillUp {
