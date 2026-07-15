@@ -2250,6 +2250,85 @@ def _run_runtime_loader_manifest(args):
     return 0 if payload["success"] else 1
 
 
+def _format_runtime_variant_registry(payload):
+    lines = ["Runtime variant registry"]
+    for header_line in (
+        _format_payload_schema_version(payload, "Registry schema version"),
+        _format_payload_kind(payload, "Registry kind"),
+        _format_payload_hash(payload, "registryHash", "Registry hash"),
+    ):
+        if header_line:
+            lines.append(header_line)
+    lines.append(f"Status: {payload.get('status', 'failed')}")
+
+    source = payload.get("source")
+    if isinstance(source, Mapping) and isinstance(source.get("kind"), str):
+        lines.append(f"Input kind: {source['kind']}")
+    scope = payload.get("scope")
+    if isinstance(scope, str) and scope:
+        lines.append(f"Registry scope: {scope}")
+    key_schema = payload.get("keySchema")
+    if isinstance(key_schema, Mapping):
+        lines.append(
+            "Lookup: "
+            f"{key_schema.get('matching', 'exact')}; "
+            f"defaulting: {key_schema.get('defaulting', 'none')}"
+        )
+
+    summary = payload.get("summary")
+    if isinstance(summary, Mapping):
+        lines.append(
+            "Summary: "
+            f"{summary.get('targetCount', 0)} targets, "
+            f"{summary.get('variantCount', 0)} variants, "
+            f"{summary.get('readyVariantCount', 0)} ready, "
+            f"{summary.get('blockedVariantCount', 0)} blocked, "
+            f"{summary.get('staleVariantCount', 0)} stale, "
+            f"{summary.get('rejectedCandidateCount', 0)} rejected"
+        )
+
+    targets = payload.get("targets", [])
+    if targets:
+        lines.append("Runtime variant targets:")
+        for target in targets:
+            if not isinstance(target, Mapping):
+                continue
+            lines.append(
+                "- "
+                f"{target.get('target', 'unknown')}: "
+                f"{target.get('variantCount', 0)} variants, "
+                f"{target.get('readyVariantCount', 0)} ready, "
+                f"{target.get('blockedVariantCount', 0)} blocked, "
+                f"{target.get('staleVariantCount', 0)} stale"
+            )
+
+    diagnostics = payload.get("diagnostics", [])
+    if diagnostics:
+        lines.append("Diagnostics:")
+        for diagnostic in diagnostics:
+            if isinstance(diagnostic, Mapping):
+                lines.append(_format_project_diagnostic_line(diagnostic))
+    return "\n".join(lines) + "\n"
+
+
+def _run_runtime_variant_registry(args):
+    from .project import build_runtime_variant_registry
+
+    payload = build_runtime_variant_registry(args.manifest)
+    if args.format == "sarif":
+        _write_json_payload(
+            _format_project_diagnostics_sarif(
+                payload, tool_name="CrossTL runtime variant registry"
+            ),
+            args.output,
+        )
+    elif args.format == "text":
+        _write_text_payload(_format_runtime_variant_registry(payload), args.output)
+    else:
+        _write_json_payload(payload, args.output)
+    return 0 if payload["success"] else 1
+
+
 def _format_runtime_host_loader_scaffolds(payload):
     lines = [f"Runtime host loader scaffolds: {payload.get('sourceLoaderManifest')}"]
     for header_line in (
@@ -6996,6 +7075,24 @@ def _build_parser():
     )
     runtime_loader_parser.set_defaults(func=_run_runtime_loader_manifest)
 
+    runtime_variant_registry_parser = subparsers.add_parser(
+        "runtime-variant-registry",
+        help="Build an exact runtime variant registry from a package or loader manifest",
+    )
+    runtime_variant_registry_parser.add_argument(
+        "manifest", help="Ready runtime package or loader manifest JSON"
+    )
+    runtime_variant_registry_parser.add_argument(
+        "--format",
+        choices=("json", "text", "sarif"),
+        default="json",
+        help="Runtime variant registry output format",
+    )
+    runtime_variant_registry_parser.add_argument(
+        "--output", "-o", help="Write runtime variant registry; use '-' for stdout"
+    )
+    runtime_variant_registry_parser.set_defaults(func=_run_runtime_variant_registry)
+
     host_loader_scaffold_parser = subparsers.add_parser(
         "scaffold-host-loaders",
         help="Build host loader scaffold metadata from a runtime loader manifest",
@@ -7213,6 +7310,7 @@ def _use_legacy_cli(argv):
         "plan-runtime-adapters",
         "materialize-runtime-adapters",
         "runtime-loader-manifest",
+        "runtime-variant-registry",
         "scaffold-host-loaders",
         "inspect-host-loader-scaffolds",
         "plan-host-loader-consumption",
