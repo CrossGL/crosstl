@@ -10128,6 +10128,10 @@ class MetalToCrossGLConverter:
         if isinstance(expr, UnaryOpNode):
             if expr.op == "!":
                 return "bool"
+            if expr.op == "*":
+                return self.metal_pointer_pointee_type_once(
+                    self.expression_metal_type(expr.operand)
+                )
             return self.expression_metal_type(expr.operand)
         if isinstance(expr, CastNode):
             return self.resolve_type_alias(expr.target_type)

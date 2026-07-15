@@ -7655,6 +7655,30 @@ def test_codegen_auto_pointer_arithmetic_preserves_threadgroup_address_space():
     assert parse_crossgl(crossgl) is not None
 
 
+def test_codegen_auto_pointer_dereference_infers_pointee_type():
+    source = """
+    void read_offset(
+        const device float* input,
+        device float* output,
+        uint offset) {
+      const auto cursor = input + offset;
+      auto first = *cursor;
+      auto second = *(cursor + 1u);
+      output[0] = first + second;
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source)
+    normalized = normalize(crossgl)
+
+    assert "const device float* cursor = input + offset;" in normalized
+    assert "float first = (*cursor);" in normalized
+    assert "float second = (*(cursor + 1u));" in normalized
+    assert "float* first" not in normalized
+    assert "float* second" not in normalized
+    assert parse_crossgl(crossgl) is not None
+
+
 def test_codegen_reports_ambiguous_selected_auto_return_type(tmp_path):
     source = """
     auto ambiguous_result(bool use_integer) {
