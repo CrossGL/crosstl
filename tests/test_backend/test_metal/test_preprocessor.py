@@ -2,6 +2,7 @@ import re
 
 import pytest
 
+from crosstl.backend.Metal.MetalCrossGLCodeGen import MetalToCrossGLConverter
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
 from crosstl.backend.Metal.preprocessor import (
@@ -11,6 +12,10 @@ from crosstl.backend.Metal.preprocessor import (
     MetalStructMethodError,
     MetalTemplateSpecializationError,
 )
+from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
+from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
+from crosstl.translator.lexer import Lexer as CrossGLLexer
+from crosstl.translator.parser import Parser as CrossGLParser
 
 
 def token_values(code, **lexer_options):
@@ -647,6 +652,24 @@ def test_preprocessor_materializes_explicit_template_helper_calls():
     assert "device const float* src" in output
     assert "uint index" in output
     assert "return src[index] + float(7);" in output
+
+
+def test_preprocessor_does_not_treat_function_pointer_aliases_as_functor_calls():
+    code = """
+    typedef void (im2col_t)(thread float*, int);
+    typedef void (*RadixFunc)(thread float2*, thread float2*);
+    using Transform = void (*)(thread float*, int);
+
+    struct Helper {
+      int value() { return 1; }
+    };
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "typedef void (im2col_t)(thread float*, int);" in output
+    assert "typedef void (*RadixFunc)(thread float2*, thread float2*);" in output
+    assert "using Transform = void (*)(thread float*, int);" in output
 
 
 def test_preprocessor_materializes_callable_non_type_template_arguments():
@@ -5383,11 +5406,196 @@ def test_preprocessor_lowers_temporary_functor_call_with_arithmetic_and_functor_
     # no dangling `Log{}(` temporary and no un-inferred failure survive.
     assert "Log__operator_call__temporary(" in output
     assert "Log{}(" not in output
+    assert "Sqrt{}(" not in output
     assert "could not be inferred" not in output
+    assert (
+        "Log__operator_call__temporary("
+        "x + i * Sqrt__operator_call__temporary(1.0 - x * x))"
+    ) in output
+    assert output.count("Sqrt__operator_call__temporary(1.0 - x * x)") == 1
     # The complex `Sqrt`/`Log` operator() overloads were emitted as free
     # functions (the argument resolved to the concrete complex overload).
     assert "complex64_t Log__operator_call(thread Log& self, complex64_t x)" in output
     assert "complex64_t Sqrt__operator_call(thread Sqrt& self, complex64_t x)" in output
+
+
+def test_preprocessor_defers_temporaries_for_declared_out_of_line_call_operators():
+    code = """
+    struct complex64_t { float real; float imag; };
+
+    struct Sqrt {
+      complex64_t operator()(complex64_t x);
+    };
+
+    struct Log {
+      complex64_t operator()(complex64_t x);
+    };
+
+    complex64_t Sqrt::operator()(complex64_t x) { return x; }
+    complex64_t Log::operator()(complex64_t x) { return Sqrt{}(x); }
+
+    complex64_t nested(complex64_t x) {
+      return Log{}(Sqrt{}(x));
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "complex64_t operator()(complex64_t x);" in output
+    assert "return Log{}(Sqrt{}(x));" in output
+
+
+def test_nested_complex_temporary_helper_remains_a_call_in_target_outputs():
+    code = """
+    struct complex64_t { float real; float imag; };
+
+    constexpr complex64_t operator+(complex64_t a, complex64_t b) {
+      return {a.real + b.real, a.imag + b.imag};
+    }
+    constexpr complex64_t operator-(float a, complex64_t b) {
+      return {a - b.real, -b.imag};
+    }
+    constexpr complex64_t operator*(complex64_t a, complex64_t b) {
+      return {a.real * b.real - a.imag * b.imag,
+              a.real * b.imag + a.imag * b.real};
+    }
+
+    struct Sqrt {
+      complex64_t operator()(complex64_t x) { return x; }
+    };
+    struct Log {
+      complex64_t operator()(complex64_t x) { return x; }
+    };
+
+    complex64_t nested(complex64_t x) {
+      auto i = complex64_t{0.0, 1.0};
+      return Log{}(x + i * Sqrt{}(1.0 - x * x));
+    }
+    """
+
+    preprocessed = MetalPreprocessor().preprocess(code)
+    metal_tokens = MetalLexer(preprocessed, preprocess=False).tokenize()
+    metal_ast = MetalParser(metal_tokens).parse()
+    crossgl = MetalToCrossGLConverter().generate(metal_ast)
+    crossgl_ast = CrossGLParser(CrossGLLexer(crossgl).get_tokens()).parse()
+    hlsl = HLSLCodeGen().generate(crossgl_ast)
+    glsl = GLSLCodeGen().generate(crossgl_ast)
+
+    assert (
+        "Log__operator_call__temporary("
+        "x + i * Sqrt__operator_call__temporary(1.0 - x * x))"
+    ) in crossgl
+    assert (
+        "Log__operator_call__temporary(__crossgl_complex64_add("
+        "x, __crossgl_complex64_mul(i, Sqrt__operator_call__temporary("
+        "__crossgl_complex64_sub("
+    ) in hlsl
+    assert "__crossgl_complex64_make(complex64_t(" not in hlsl
+    assert "complex64_t(float(0), float(0))(" not in hlsl
+    assert "Log_operator_call_temporary" in glsl
+    assert "Sqrt_operator_call_temporary" in glsl
+    assert (
+        "return Log_operator_call_temporary(crossgl_complex64_add("
+        "x, crossgl_complex64_mul(i, Sqrt_operator_call_temporary("
+        "crossgl_complex64_sub("
+    ) in glsl
+    assert "complex64_t(float(0), float(0))(" not in glsl
+
+
+def test_preprocessor_lowers_const_template_operator_on_stateless_temporary():
+    code = """
+    struct Identity {
+      template <typename T>
+      T operator()(T value) const { return value; }
+    };
+
+    kernel void k(device float* values [[buffer(0)]]) {
+      values[0] = Identity{}(values[0]);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert (
+        "float Identity__operator_call__float("
+        "thread const Identity& self, float value)"
+    ) in output
+    assert "Identity__operator_call__float__temporary(values[0])" in output
+    assert "Identity{}(" not in output
+
+
+def test_preprocessor_rejects_stateful_temporary_without_dropping_side_effects():
+    code = """
+    int next_state();
+    int next_value();
+
+    struct AddState {
+      int state;
+      AddState(int value) : state(value) { observe(value); }
+      int operator()(int value) const { return state + value; }
+    };
+
+    kernel void k(device int* values [[buffer(0)]]) {
+      values[0] = AddState{next_state()}(next_value());
+    }
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.project_diagnostic_code == "project.translate.metal-struct-method"
+    assert error.struct_name == "AddState"
+    assert error.method_name == "operator()"
+    assert error.reason == "temporary-functor-constructor-stateful"
+    assert error.requested_signature == ("AddState{next_state()}(next_value())")
+    assert error.source_location["length"] == len(error.requested_signature)
+    assert "next_state()" in str(error)
+    assert "next_value()" in str(error)
+
+
+@pytest.mark.parametrize("functor_name", ["Op", "missing_functor"])
+def test_preprocessor_rejects_unresolved_temporary_functor_structured(functor_name):
+    code = f"""
+    kernel void k(device float* values [[buffer(0)]]) {{
+      values[0] = {functor_name}()(values[0]);
+    }}
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.project_diagnostic_code == "project.translate.metal-struct-method"
+    assert error.struct_name == functor_name
+    assert error.method_name == "operator()"
+    assert error.reason == "temporary-functor-type-unresolved"
+    assert error.requested_signature == f"{functor_name}()(values[0])"
+    assert error.source_location["length"] == len(error.requested_signature)
+
+
+def test_preprocessor_rejects_ambiguous_temporary_operator_overload_structured():
+    code = """
+    struct Convert {
+      short operator()(short value) const { return value; }
+      long operator()(long value) const { return value; }
+    };
+
+    kernel void k(device int* values [[buffer(0)]]) {
+      values[0] = Convert{}(values[0]);
+    }
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.project_diagnostic_code == "project.translate.metal-struct-method"
+    assert error.struct_name == "Convert"
+    assert error.method_name == "operator()"
+    assert error.reason == "concrete-overload-ambiguous"
+    assert error.requested_signature == "Convert::operator()(values[0])"
+    assert error.source_location["length"] == len("(values[0])")
 
 
 def test_preprocessor_skips_calls_inside_residual_template_declarations():

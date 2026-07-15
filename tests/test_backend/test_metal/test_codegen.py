@@ -18,6 +18,7 @@ from crosstl.backend.Metal.MetalCrossGLCodeGen import (
     MetalCallableAliasLoweringError,
     MetalCallableLoweringError,
     MetalIndexedComponentTypeResolutionError,
+    MetalOutOfLineCallOperatorLoweringError,
     MetalSizeofResolutionError,
     MetalSourceOverloadResolutionError,
     MetalStageEntryArrayResourceError,
@@ -1307,6 +1308,155 @@ def test_codegen_rebinds_nested_lowered_sibling_calls():
     )
     assert "Reader__post_in(self, crosstl_ptr_input, elem)" in load_body
     assert "post_in(post_in" not in load_body
+
+
+def test_codegen_binds_pinned_mlx_inverse_complex_call_operator_bodies():
+    # Reduced from MLX unary_ops.h at
+    # 4367c73b60541ddd5a266ce4644fd93d20223b6e.
+    source = """
+    struct complex64_t { float real; float imag; };
+    struct Log {};
+    struct Sqrt {};
+
+    struct ArcCos {
+      complex64_t operator()(complex64_t declared_value) const;
+    };
+    struct ArcSin {
+      complex64_t operator()(complex64_t declared_value);
+    };
+    struct ArcTan {
+      complex64_t operator()(complex64_t declared_value);
+    };
+
+    complex64_t ArcCos::operator()(complex64_t x) const {
+      auto i = complex64_t{0.0, 1.0};
+      auto y = Log__operator_call__temporary(
+          x + i * Sqrt__operator_call__temporary(1.0 - x * x));
+      return {y.imag, -y.real};
+    }
+    complex64_t ArcSin::operator()(complex64_t x) {
+      auto i = complex64_t{0.0, 1.0};
+      auto y = Log__operator_call__temporary(
+          i * x + Sqrt__operator_call__temporary(1.0 - x * x));
+      return {y.imag, -y.real};
+    }
+    complex64_t ArcTan::operator()(complex64_t x) {
+      auto i = complex64_t{0.0, 1.0};
+      auto ix = i * x;
+      return (1.0 / complex64_t{0.0, 2.0}) *
+          Log__operator_call__temporary((1.0 + ix) / (1.0 - ix));
+    }
+
+    complex64_t Log__operator_call__temporary(complex64_t x) { return x; }
+    complex64_t Sqrt__operator_call__temporary(complex64_t x) { return x; }
+
+    complex64_t ArcCos__operator_call__complex64_t(
+        thread const ArcCos& self, complex64_t scalar_value) {
+      return metal::precise::acos(scalar_value);
+    }
+    complex64_t ArcSin__operator_call__complex64_t(
+        thread ArcSin& self, complex64_t scalar_value) {
+      return metal::precise::asin(scalar_value);
+    }
+    complex64_t ArcTan__operator_call__complex64_t(
+        thread ArcTan& self, complex64_t scalar_value) {
+      return metal::precise::atan(scalar_value);
+    }
+
+    kernel void inverse_complex(
+        device complex64_t* output [[buffer(0)]], complex64_t value) {
+      ArcCos acos_op;
+      ArcSin asin_op;
+      ArcTan atan_op;
+      output[0] = ArcCos__operator_call__complex64_t(acos_op, value);
+      output[1] = ArcSin__operator_call__complex64_t(asin_op, value);
+      output[2] = ArcTan__operator_call__complex64_t(atan_op, value);
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source, "mlx-unary-inverse.metal")
+    normalized = normalize(crossgl)
+
+    acos_body = normalized.split("ArcCos__operator_call__complex64_t", 1)[1].split(
+        "}", 1
+    )[0]
+    asin_body = normalized.split("ArcSin__operator_call__complex64_t", 1)[1].split(
+        "}", 1
+    )[0]
+    atan_body = normalized.split("ArcTan__operator_call__complex64_t", 1)[1].split(
+        "}", 1
+    )[0]
+
+    assert "Log__operator_call__temporary" in acos_body
+    assert "Sqrt__operator_call__temporary(1.0 - scalar_value * scalar_value)" in (
+        acos_body
+    )
+    assert "Log__operator_call__temporary" in asin_body
+    assert "Sqrt__operator_call__temporary(1.0 - scalar_value * scalar_value)" in (
+        asin_body
+    )
+    assert "Log__operator_call__temporary" in atan_body
+    assert "acos(scalar_value)" not in crossgl
+    assert "asin(scalar_value)" not in crossgl
+    assert "atan(scalar_value)" not in crossgl
+    assert "ArcCos_u3a_u3aoperator_u28_u29" not in crossgl
+    assert "ArcSin_u3a_u3aoperator_u28_u29" not in crossgl
+    assert "ArcTan_u3a_u3aoperator_u28_u29" not in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_keeps_out_of_line_call_operator_without_materialized_helper():
+    source = """
+    struct Increment {
+      int operator()(int declared_value) const;
+    };
+
+    int Increment::operator()(int value) const {
+      return value + 1;
+    }
+    """
+
+    crossgl = convert_without_preprocessing(source, "increment.metal")
+
+    assert "Increment_u3a_u3aoperator_u28_u29" in crossgl
+    assert "return value + 1;" in crossgl
+    assert "Increment__operator_call" not in crossgl
+
+
+def test_codegen_rejects_ambiguous_out_of_line_call_operator_helpers():
+    source = """struct Increment {
+    int operator()(int value) const;
+};
+
+int Increment::operator()(int value) const {
+    return value + 1;
+}
+
+int Increment__operator_call__int(
+    thread const Increment& self, int value) {
+    return value;
+}
+int Increment__operator_call__int(
+    thread const Increment& self, int value) {
+    return value + 2;
+}
+"""
+    tokens = MetalLexer(source, preprocess=False).tokenize()
+    ast = MetalParser(tokens, file_path="ambiguous-helper.metal").parse()
+
+    with pytest.raises(MetalOutOfLineCallOperatorLoweringError) as exc_info:
+        generate_code(ast)
+
+    error = exc_info.value
+    assert error.project_diagnostic_code == (
+        "project.translate.metal-out-of-line-call-operator-unresolved"
+    )
+    assert error.owner == "Increment"
+    assert error.reason == ("multiple lowered helpers match the declaration contract")
+    assert error.source_location["file"] == "ambiguous-helper.metal"
+    assert error.source_location["line"] == 5
+    assert error.declaration_location["line"] == 2
+    assert [location["line"] for location in error.candidate_locations] == [9, 13]
 
 
 def test_codegen_fragment_early_tests_attribute_becomes_stage_layout():

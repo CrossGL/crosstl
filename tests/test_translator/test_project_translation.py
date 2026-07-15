@@ -8567,6 +8567,63 @@ def test_translate_project_reports_unrepresentable_copysign_types(tmp_path):
     )
 
 
+def test_translate_project_reports_unrepresentable_inverse_hyperbolic_type(tmp_path):
+    repo = tmp_path / "repo"
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "inverse_hyperbolic.cgl").write_text(
+        textwrap.dedent("""
+            shader UnsupportedInverseHyperbolic {
+                compute {
+                    double apply(double value) {
+                        return acosh(value);
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["shaders"]
+            targets = ["directx"]
+            output_dir = "translated"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.directx-inverse-hyperbolic-unrepresentable": 1,
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["location"]["file"] == "shaders/inverse_hyperbolic.cgl"
+    assert diagnostic["missingCapabilities"] == ["directx.inverse-hyperbolic-lowering"]
+    assert diagnostic["details"] == {
+        "mathIntrinsic": {
+            "operandType": "double",
+            "operation": "acosh",
+            "reason": "double-transcendental-contract-unavailable",
+            "resultType": "double",
+            "targetProfile": "default",
+        },
+        "sourcePath": "shaders/inverse_hyperbolic.cgl",
+        "targetArtifact": "translated/directx/shaders/inverse_hyperbolic.hlsl",
+    }
+
+    report_path = repo / "translated" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert {diagnostic["code"] for diagnostic in validation["diagnostics"]}.isdisjoint(
+        {"project.validate.invalid-report"}
+    )
+
+
 def test_translate_project_reports_excess_opengl_aggregate_elements(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"
@@ -48044,6 +48101,131 @@ def test_translate_project_metal_reference_return_reports_struct_method_details(
         "targetArtifact": "out/directx/reference_return.hlsl",
     }
     assert "templateMaterialization" not in diagnostic["details"]
+
+
+def test_translate_project_reports_metal_call_operator_association_locations(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "mismatched_operator.metal").write_text(
+        textwrap.dedent("""
+            struct Operation {
+                float operator()(float value);
+            };
+
+            int Operation::operator()(int value) {
+                return value;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+        format_output=False,
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-call-operator-association-unresolved": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["location"]["file"] == "mismatched_operator.metal"
+    assert diagnostic["location"]["line"] == 5
+    assert diagnostic["missingCapabilities"] == [
+        "metal.out-of-line-call-operator-association"
+    ]
+    details = diagnostic["details"]
+    assert details["sourcePath"] == "mismatched_operator.metal"
+    assert details["targetArtifact"] == "out/directx/mismatched_operator.hlsl"
+    call_operator = details["metalCallOperator"]
+    assert call_operator["owner"] == "Operation"
+    assert call_operator["methodName"] == "operator()"
+    assert call_operator["signature"] == "operator()(int)"
+    assert call_operator["reason"] == "no declaration matches the definition contract"
+    assert call_operator["candidates"] == ["operator()(float)"]
+    assert call_operator["definitionLocation"]["file"] == ("mismatched_operator.metal")
+    assert call_operator["definitionLocation"]["line"] == 5
+    assert [location["line"] for location in call_operator["declarationLocations"]] == [
+        2
+    ]
+
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert "project.validate.invalid-report" not in validation["diagnosticsByCode"]
+
+
+def test_translate_project_reports_ambiguous_metal_call_operator_helpers(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "ambiguous_helpers.metal").write_text(
+        textwrap.dedent("""
+            struct Increment {
+                int operator()(int value) const;
+            };
+
+            int Increment::operator()(int value) const {
+                return value + 1;
+            }
+
+            int Increment__operator_call__int(
+                thread const Increment& self, int value) {
+                return value;
+            }
+            int Increment__operator_call__int(
+                thread const Increment& self, int value) {
+                return value + 2;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="out",
+        format_output=False,
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.metal-out-of-line-call-operator-unresolved": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["location"]["file"] == "ambiguous_helpers.metal"
+    assert diagnostic["location"]["line"] == 5
+    assert diagnostic["missingCapabilities"] == [
+        "metal.out-of-line-call-operator-lowering"
+    ]
+    details = diagnostic["details"]
+    assert details["sourcePath"] == "ambiguous_helpers.metal"
+    assert details["targetArtifact"] == "out/opengl/ambiguous_helpers.glsl"
+    call_operator = details["metalCallOperator"]
+    assert call_operator["owner"] == "Increment"
+    assert call_operator["methodName"] == "operator()"
+    assert call_operator["signature"] == "operator()(int) const"
+    assert call_operator["reason"] == (
+        "multiple lowered helpers match the declaration contract"
+    )
+    assert call_operator["declarationLocations"][0]["line"] == 2
+    assert call_operator["definitionLocation"]["line"] == 5
+    assert [location["line"] for location in call_operator["candidateLocations"]] == [
+        9,
+        13,
+    ]
+
+    report_path = repo / "out" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert "project.validate.invalid-report" not in validation["diagnosticsByCode"]
 
 
 def test_translate_project_reports_unresolved_metal_struct_sibling_call(

@@ -390,6 +390,16 @@ class _MetalConstructor:
 
 
 @dataclass(frozen=True)
+class _MetalTemporaryFunctorCall:
+    """A temporary construction immediately followed by ``operator()``."""
+
+    constructor_open: int
+    constructor_close: int
+    argument_open: int
+    argument_close: int
+
+
+@dataclass(frozen=True)
 class _MetalCompileTimeGlobal:
     name: str
     type_name: str
@@ -2013,6 +2023,11 @@ class MetalPreprocessor(HLSLPreprocessor):
             skip_spans=template_declaration_spans,
         )
         structs = self._find_concrete_struct_definitions(code)
+        self._reject_unresolved_temporary_functor_calls(
+            code,
+            {struct.name: struct for struct in structs},
+            template_declaration_spans,
+        )
         if not structs:
             return code
         # Only structs that actually declare at least one member function (a
@@ -2176,6 +2191,58 @@ class MetalPreprocessor(HLSLPreprocessor):
             if not rewritten.endswith("\n"):
                 rewritten += "\n"
         return self._canonicalize_qualified_struct_alias_templates(rewritten, structs)
+
+    def _reject_unresolved_temporary_functor_calls(
+        self,
+        code: str,
+        structs_by_name: Dict[str, _MetalStructDefinition],
+        template_declaration_spans: List[Tuple[int, int]],
+    ) -> None:
+        ignored_spans = sorted(
+            self._find_comment_and_literal_spans(code) + template_declaration_spans
+        )
+        cursor = 0
+        while cursor < len(code):
+            ignored = self._containing_span(cursor, ignored_spans)
+            if ignored is not None:
+                cursor = ignored[1]
+                continue
+            if not (code[cursor].isalpha() or code[cursor] == "_"):
+                cursor += 1
+                continue
+            ident, consumed = self._read_identifier(code, cursor)
+            ident_end = cursor + consumed
+            if ident == "operator":
+                cursor = ident_end
+                continue
+            constructor_start = ident_end
+            while constructor_start < len(code) and code[constructor_start].isspace():
+                constructor_start += 1
+            temporary = self._temporary_functor_call(code, constructor_start)
+            struct = structs_by_name.get(ident)
+            if (
+                temporary is not None
+                and self._temporary_functor_is_candidate(code, cursor, temporary)
+                and (
+                    struct is None
+                    or not (
+                        struct.has_operator_call
+                        or "operator()" in struct.member_prototype_names
+                    )
+                )
+            ):
+                self._raise_temporary_functor_error(
+                    code,
+                    ident,
+                    cursor,
+                    temporary,
+                    reason="temporary-functor-type-unresolved",
+                    detail=(
+                        "the temporary type does not resolve to a concrete struct "
+                        "with operator()"
+                    ),
+                )
+            cursor = ident_end
 
     def _find_concrete_struct_definitions(
         self, code: str
@@ -4200,6 +4267,8 @@ class MetalPreprocessor(HLSLPreprocessor):
                 return None
             text = text[angle_end + 1 :].strip()
         declarator, _default = self._split_top_level_assignment(text)
+        if re.search(r"\boperator\s*\(\s*\)\s*\(", declarator):
+            return "operator()"
         paren_start = self._function_parameter_start(declarator)
         if paren_start is None:
             return None
@@ -4207,9 +4276,6 @@ class MetalPreprocessor(HLSLPreprocessor):
         destructor = re.search(r"~\s*([A-Za-z_][A-Za-z0-9_]*)\s*$", before)
         if destructor is not None:
             return f"~{destructor.group(1)}"
-        operator_call = re.search(r"\boperator\s*\(\s*\)\s*$", before)
-        if operator_call is not None:
-            return "operator()"
         match = re.search(r"([A-Za-z_][A-Za-z0-9_]*)\s*$", before)
         return match.group(1) if match is not None else None
 
@@ -5905,61 +5971,119 @@ class MetalPreprocessor(HLSLPreprocessor):
                     return rewrite
             return None
 
-        # Default-constructed temporary functor call:
+        # Temporary construction followed by `operator()`:
         # `S{}(args)` / `S()(args)` -> `S__operator_call__...__temporary(args)`.
-        # The ordinary lowered helper still takes `S self` so variable functor
-        # calls keep their established shape. The temporary wrapper constructs a
-        # local `self` without emitting an empty aggregate initializer into HLSL.
-        if ident in operator_call_structs:
-            temporary_arg_open = self._temporary_functor_call_arg_open(code, j)
-            if temporary_arg_open is not None:
-                struct = structs_by_name.get(ident)
-                if struct is None or struct.data_member_names:
-                    return None
-                template_overloads = template_methods_by_struct.get(ident, {}).get(
-                    "operator()"
+        # Nested temporaries are rewritten bottom-up and composed into the outer
+        # replacement; otherwise accepting the outer span causes the scanner to
+        # skip every temporary in its arguments. Only proven stateless default
+        # construction is lowered. Constructor state or effects require ordered
+        # lifetime materialization that this expression rewrite cannot represent,
+        # so those calls stop with a structured diagnostic instead of losing work.
+        temporary_call = self._temporary_functor_call(code, j)
+        if temporary_call is not None and self._temporary_functor_is_candidate(
+            code, ident_start, temporary_call
+        ):
+            struct = structs_by_name.get(ident)
+            if struct is None or ident not in operator_call_structs:
+                self._raise_temporary_functor_error(
+                    code,
+                    ident,
+                    ident_start,
+                    temporary_call,
+                    reason="temporary-functor-type-unresolved",
+                    detail=(
+                        "the temporary type does not resolve to a concrete struct "
+                        "with operator()"
+                    ),
                 )
-                method = self._select_concrete_method_for_call(
+            if not self._temporary_functor_is_stateless_default(
+                code, struct, temporary_call
+            ):
+                self._raise_temporary_functor_error(
+                    code,
+                    ident,
+                    ident_start,
+                    temporary_call,
+                    reason="temporary-functor-constructor-stateful",
+                    detail=(
+                        "constructor arguments, object state, or constructor effects "
+                        "cannot be sequenced safely by the stateless wrapper"
+                    ),
+                )
+
+            rewritten_arguments = self._rewrite_nested_temporary_functor_calls(
+                code,
+                temporary_call.argument_open + 1,
+                temporary_call.argument_close,
+                struct_names,
+                methods_by_struct,
+                template_methods_by_struct,
+                operator_call_structs,
+                variable_types,
+                structs_by_name,
+                buffer_element_types,
+                local_variable_types,
+                instantiated_template_functions,
+                field_variable_types,
+                field_structs_by_name,
+                local_integral_constants,
+                struct_type_aliases,
+                type_aliases,
+                type_alias_fallback_position,
+            )
+            template_overloads = template_methods_by_struct.get(ident, {}).get(
+                "operator()"
+            )
+            method = self._select_concrete_method_for_call(
+                code,
+                struct,
+                "operator()",
+                temporary_call.argument_open,
+                buffer_element_types,
+                local_variable_types,
+                field_variable_types,
+                field_structs_by_name,
+                allow_template_fallback=bool(template_overloads),
+                require_static=False,
+                type_alias_fallback_position=type_alias_fallback_position,
+            )
+            if method is not None:
+                return self._build_temporary_operator_call_rewrite(
                     code,
                     struct,
-                    "operator()",
-                    temporary_arg_open,
+                    method,
+                    temporary_call.argument_open,
+                    instantiated_template_functions,
+                    rewritten_arguments=rewritten_arguments,
+                )
+            if template_overloads:
+                return self._instantiate_temporary_template_operator_call(
+                    code,
+                    struct,
+                    template_overloads,
+                    temporary_call.argument_open,
                     buffer_element_types,
                     local_variable_types,
-                    field_variable_types,
-                    field_structs_by_name,
-                    allow_template_fallback=bool(template_overloads),
-                    require_static=False,
-                    type_alias_fallback_position=type_alias_fallback_position,
+                    instantiated_template_functions,
+                    structs_by_name=field_structs_by_name,
+                    variable_types=field_variable_types,
+                    template_methods_by_struct=template_methods_by_struct,
+                    methods_by_struct=methods_by_struct,
+                    operator_call_structs=operator_call_structs,
+                    rewrite_structs_by_name=structs_by_name,
+                    local_integral_constants=local_integral_constants,
+                    argument_type_aliases=type_aliases,
+                    argument_type_fallback_position=type_alias_fallback_position,
+                    rewritten_arguments=rewritten_arguments,
                 )
-                if method is not None:
-                    return self._build_temporary_operator_call_rewrite(
-                        code,
-                        struct,
-                        method,
-                        temporary_arg_open,
-                        instantiated_template_functions,
-                    )
-                if template_overloads:
-                    return self._instantiate_temporary_template_operator_call(
-                        code,
-                        struct,
-                        template_overloads,
-                        temporary_arg_open,
-                        buffer_element_types,
-                        local_variable_types,
-                        instantiated_template_functions,
-                        structs_by_name=field_structs_by_name,
-                        variable_types=field_variable_types,
-                        template_methods_by_struct=template_methods_by_struct,
-                        methods_by_struct=methods_by_struct,
-                        operator_call_structs=operator_call_structs,
-                        rewrite_structs_by_name=structs_by_name,
-                        local_integral_constants=local_integral_constants,
-                        argument_type_aliases=type_aliases,
-                        argument_type_fallback_position=type_alias_fallback_position,
-                    )
-                return None
+            self._raise_temporary_functor_error(
+                code,
+                ident,
+                ident_start,
+                temporary_call,
+                reason="temporary-functor-overload-unresolved",
+                detail="no concrete operator() overload matches the call arguments",
+            )
 
         # Resolve the variable's struct type from the NEAREST declaration at or
         # before this call site (deterministic; correct across sibling kernels
@@ -6514,9 +6638,9 @@ class MetalPreprocessor(HLSLPreprocessor):
             if candidate is method
         )
 
-    def _temporary_functor_call_arg_open(
+    def _temporary_functor_call(
         self, code: str, constructor_start: int
-    ) -> Optional[int]:
+    ) -> Optional[_MetalTemporaryFunctorCall]:
         if constructor_start >= len(code):
             return None
         if code[constructor_start] == "{":
@@ -6537,14 +6661,214 @@ class MetalPreprocessor(HLSLPreprocessor):
             return None
         if constructor_close is None:
             return None
-        if code[constructor_start + 1 : constructor_close].strip():
-            return None
         arg_open = constructor_close + 1
         while arg_open < len(code) and code[arg_open].isspace():
             arg_open += 1
         if arg_open >= len(code) or code[arg_open] != "(":
             return None
-        return arg_open
+        arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
+        if arg_close is None:
+            return None
+        return _MetalTemporaryFunctorCall(
+            constructor_open=constructor_start,
+            constructor_close=constructor_close,
+            argument_open=arg_open,
+            argument_close=arg_close,
+        )
+
+    def _temporary_functor_is_candidate(
+        self,
+        code: str,
+        identifier_start: int,
+        temporary: _MetalTemporaryFunctorCall,
+    ) -> bool:
+        constructor_text = code[
+            temporary.constructor_open + 1 : temporary.constructor_close
+        ].strip()
+        # Function-pointer declarations share the `Type(...)(...)` delimiter
+        # shape with a constructed callable. Exclude both named pointer
+        # declarators (`(*Fn)`) and anonymous alias declarators (`(*)`).
+        if re.fullmatch(
+            r"(?:(?:[A-Za-z_]\w*)\s*::\s*)?\*\s*" r"(?:const\s*)?(?:[A-Za-z_]\w*)?",
+            constructor_text,
+        ):
+            return False
+
+        # A direct function-type typedef has no `*`: `typedef void (Fn)(...)`.
+        # Limit this exclusion to the current declaration so an expression such
+        # as `Missing(state)(value)` remains fail-closed.
+        boundary = max(
+            code.rfind(token, 0, identifier_start) for token in (";", "{", "}")
+        )
+        declaration_prefix = self._mask_comments_and_literals(
+            code[boundary + 1 : identifier_start]
+        )
+        if re.search(r"\btypedef\b", declaration_prefix):
+            return False
+
+        # Every remaining construction-and-call shape is a candidate, including
+        # unknown types, so unresolved and stateful temporaries stay fail-closed.
+        return True
+
+    def _temporary_functor_is_stateless_default(
+        self,
+        code: str,
+        struct: _MetalStructDefinition,
+        temporary: _MetalTemporaryFunctorCall,
+    ) -> bool:
+        constructor_arguments = code[
+            temporary.constructor_open + 1 : temporary.constructor_close
+        ]
+        if constructor_arguments.strip() or struct.data_member_names:
+            return False
+        if not struct.constructors:
+            return True
+
+        viable_default_constructors: List[_MetalConstructor] = []
+        for constructor in struct.constructors:
+            parameters = [
+                parameter
+                for parameter in self._split_top_level_commas(constructor.params_text)
+                if parameter.strip()
+            ]
+            if all(
+                self._split_top_level_assignment(parameter)[1] is not None
+                for parameter in parameters
+            ):
+                viable_default_constructors.append(constructor)
+        if len(viable_default_constructors) != 1:
+            return False
+        constructor = viable_default_constructors[0]
+        return not constructor.init_text.strip() and not constructor.body.strip()
+
+    def _raise_temporary_functor_error(
+        self,
+        code: str,
+        struct_name: str,
+        call_start: int,
+        temporary: _MetalTemporaryFunctorCall,
+        *,
+        reason: str,
+        detail: str,
+    ) -> None:
+        call_end = temporary.argument_close + 1
+        requested_signature = re.sub(r"\s+", " ", code[call_start:call_end]).strip()
+        raise MetalStructMethodError(
+            f"Cannot lower temporary function object '{requested_signature}': "
+            f"{detail}.",
+            struct_name=struct_name,
+            method_name="operator()",
+            requested_signature=requested_signature,
+            suggested_action=(
+                "materialize the function object as a typed local before the call, "
+                "or provide a concrete stateless functor with a uniquely resolvable "
+                "operator() overload"
+            ),
+            source_location=self._source_location_for_offsets(
+                code, call_start, call_end
+            ),
+            reason=reason,
+        )
+
+    def _rewrite_nested_temporary_functor_calls(
+        self,
+        code: str,
+        start: int,
+        end: int,
+        struct_names: Set[str],
+        methods_by_struct: Dict[str, Dict[str, _MetalStructMethod]],
+        template_methods_by_struct: Dict[str, Dict[str, List[_MetalStructMethod]]],
+        operator_call_structs: Set[str],
+        variable_types: Dict[str, List[Tuple[int, str]]],
+        structs_by_name: Dict[str, _MetalStructDefinition],
+        buffer_element_types: _MetalPositionedBufferTypes,
+        local_variable_types: Dict[str, List[Tuple[int, str]]],
+        instantiated_template_functions: Dict[str, str],
+        field_variable_types: Dict[str, List[Tuple[int, str]]],
+        field_structs_by_name: Dict[str, _MetalStructDefinition],
+        local_integral_constants: Optional[
+            Dict[str, List[_MetalIntegralConstantBinding]]
+        ],
+        struct_type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]],
+        type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]],
+        type_alias_fallback_position: Optional[int],
+    ) -> str:
+        replacements: List[Tuple[int, int, str]] = []
+        cursor = start
+        while cursor < end:
+            if code[cursor] in "\"'":
+                _literal, consumed = self._read_string(code, cursor)
+                cursor += consumed
+                continue
+            if code.startswith("//", cursor):
+                line_end = code.find("\n", cursor)
+                cursor = end if line_end == -1 else min(end, line_end + 1)
+                continue
+            if code.startswith("/*", cursor):
+                comment_end = code.find("*/", cursor + 2)
+                cursor = end if comment_end == -1 else min(end, comment_end + 2)
+                continue
+            if not (code[cursor].isalpha() or code[cursor] == "_"):
+                cursor += 1
+                continue
+
+            ident, consumed = self._read_identifier(code, cursor)
+            ident_end = cursor + consumed
+            constructor_start = ident_end
+            while constructor_start < end and code[constructor_start].isspace():
+                constructor_start += 1
+            nested = self._temporary_functor_call(code, constructor_start)
+            if nested is None or nested.argument_close >= end:
+                cursor = ident_end
+                continue
+
+            rewrite = self._try_rewrite_call_at(
+                code,
+                cursor,
+                ident,
+                ident_end,
+                struct_names,
+                methods_by_struct,
+                template_methods_by_struct,
+                operator_call_structs,
+                variable_types,
+                structs_by_name,
+                buffer_element_types,
+                local_variable_types,
+                instantiated_template_functions,
+                field_variable_types=field_variable_types,
+                field_structs_by_name=field_structs_by_name,
+                struct_type_aliases=struct_type_aliases,
+                local_integral_constants=local_integral_constants,
+                type_aliases=type_aliases,
+                type_alias_fallback_position=type_alias_fallback_position,
+            )
+            if rewrite is None:
+                self._raise_temporary_functor_error(
+                    code,
+                    ident,
+                    cursor,
+                    nested,
+                    reason="temporary-functor-overload-unresolved",
+                    detail="the nested operator() call could not be materialized",
+                )
+            rewrite_end, replacement = rewrite
+            if rewrite_end > end:
+                cursor = ident_end
+                continue
+            replacements.append((cursor, rewrite_end, replacement))
+            cursor = rewrite_end
+
+        if not replacements:
+            return code[start:end]
+        parts: List[str] = []
+        position = start
+        for replacement_start, replacement_end, replacement in replacements:
+            parts.append(code[position:replacement_start])
+            parts.append(replacement)
+            position = replacement_end
+        parts.append(code[position:end])
+        return "".join(parts)
 
     def _build_temporary_operator_call_rewrite(
         self,
@@ -6553,6 +6877,8 @@ class MetalPreprocessor(HLSLPreprocessor):
         method: _MetalStructMethod,
         arg_open: int,
         instantiated_template_functions: Dict[str, str],
+        *,
+        rewritten_arguments: Optional[str] = None,
     ) -> Optional[Tuple[int, str]]:
         arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
         if arg_close is None:
@@ -6587,6 +6913,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             wrapper_name,
             arg_open,
             arg_close,
+            raw_arguments=rewritten_arguments,
         )
 
     def _instantiate_temporary_template_operator_call(
@@ -6611,6 +6938,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         ] = None,
         argument_type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]] = None,
         argument_type_fallback_position: Optional[int] = None,
+        rewritten_arguments: Optional[str] = None,
     ) -> Optional[Tuple[int, str]]:
         arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
         if arg_close is None:
@@ -6721,6 +7049,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             wrapper_name,
             arg_open,
             arg_close,
+            raw_arguments=rewritten_arguments,
         )
 
     def _emit_temporary_operator_wrapper(
@@ -9151,9 +9480,16 @@ class MetalPreprocessor(HLSLPreprocessor):
         free_name: str,
         arg_open: int,
         arg_close: int,
+        *,
+        raw_arguments: Optional[str] = None,
     ) -> Tuple[int, str]:
         args = self._expanded_template_member_call_arguments(
-            free_name, code[arg_open + 1 : arg_close]
+            free_name,
+            (
+                code[arg_open + 1 : arg_close]
+                if raw_arguments is None
+                else raw_arguments
+            ),
         )
         if receiver is None:
             # Static template member call: no `self` receiver.

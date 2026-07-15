@@ -239,6 +239,42 @@ class MetalStructMethodCallResolutionError(ValueError):
         )
 
 
+class MetalOutOfLineCallOperatorLoweringError(ValueError):
+    """Raised when a declared call-operator body has no unique lowered helper."""
+
+    project_diagnostic_code = (
+        "project.translate.metal-out-of-line-call-operator-unresolved"
+    )
+    missing_capabilities = ("metal.out-of-line-call-operator-lowering",)
+
+    def __init__(
+        self,
+        owner,
+        signature,
+        candidates,
+        reason,
+        *,
+        declaration_location=None,
+        definition_location=None,
+        candidate_locations=(),
+    ):
+        self.owner = owner
+        self.method_name = "operator()"
+        self.signature = signature
+        self.candidates = tuple(candidates)
+        self.reason = reason
+        self.declaration_location = declaration_location
+        self.definition_location = definition_location
+        self.candidate_locations = tuple(candidate_locations)
+        self.source_location = definition_location or declaration_location
+        candidate_text = ", ".join(self.candidates) or "<none>"
+        super().__init__(
+            "Cannot bind out-of-line Metal call operator "
+            f"'{owner}::{signature}' to a lowered helper: {reason}; "
+            f"candidates are {candidate_text}"
+        )
+
+
 class MetalConstructorContractError(ValueError):
     """Raised when an explicit Metal constructor cannot be preserved."""
 
@@ -1192,6 +1228,8 @@ class MetalToCrossGLConverter:
         self.current_variable_type_qualifiers = {}
         self.metal_source_overload_groups = {}
         self.metal_source_overload_output_names = {}
+        self.out_of_line_call_operator_replacements = {}
+        self.suppressed_out_of_line_call_operator_ids = set()
         self.storage_texture_declaration_ids = set()
         self.global_storage_texture_names = set()
         self.current_storage_texture_names = set()
@@ -2372,22 +2410,29 @@ class MetalToCrossGLConverter:
         self.local_type_alias_names = set()
         self.local_struct_type_aliases = {}
         functions = getattr(ast, "functions", []) or []
+        structs = getattr(ast, "structs", []) or getattr(ast, "struct", []) or []
         self.prepare_texture_usage(ast)
+        self.prepare_out_of_line_call_operator_bindings(functions)
+        effective_functions = [
+            function
+            for function in functions
+            if id(function) not in self.suppressed_out_of_line_call_operator_ids
+        ]
         self.wide_vector_reserved_names.update(
             self.collect_declared_identifier_names(ast)
         )
         self.user_function_names = {
             function.name
-            for function in functions
+            for function in effective_functions
             if isinstance(function, FunctionNode) and function.name
         }
         self.user_function_overloads_by_name = {}
-        for function in functions:
+        for function in effective_functions:
             if isinstance(function, FunctionNode) and function.name:
                 self.user_function_overloads_by_name.setdefault(
                     function.name, []
                 ).append(function)
-        self.prepare_value_template_materializations(ast, functions)
+        self.prepare_value_template_materializations(ast, effective_functions)
         self.prepare_alias_template_resolution(ast, typedefs)
         self.prepare_metal_source_overload_transport()
         self.prepare_metal_atomic_fence_transport_constants(ast)
@@ -2414,7 +2459,6 @@ class MetalToCrossGLConverter:
                 self.process_constant_struct(ast)
 
         # Get structs - support both 'struct' and 'structs' attributes
-        structs = getattr(ast, "structs", []) or getattr(ast, "struct", []) or []
         self.struct_name_map = self.build_struct_name_map(structs)
         self.struct_declarations = {
             struct_node.name: struct_node
@@ -2650,6 +2694,8 @@ class MetalToCrossGLConverter:
         ordinary_function_code = []
         deferred_template_functions = []
         for f in functions:
+            if id(f) in self.suppressed_out_of_line_call_operator_ids:
+                continue
             if self.is_materialized_metal_stdlib_wrapper(f):
                 continue
             default_bindings = self.default_value_template_bindings.get(id(f))
@@ -6429,6 +6475,8 @@ class MetalToCrossGLConverter:
         self.global_sampler_names = set()
         self.user_function_names = set()
         self.user_function_overloads_by_name = {}
+        self.out_of_line_call_operator_replacements = {}
+        self.suppressed_out_of_line_call_operator_ids = set()
         self.identifier_maps = [{}]
         self.used_identifier_names = [set()]
         self.storage_texture_declaration_ids = (
@@ -6966,6 +7014,14 @@ class MetalToCrossGLConverter:
         )
         previous_function_specialization_key = self.current_function_specialization_key
         previous_constructor_scope_index = self.current_constructor_scope_index
+        out_of_line_replacement = self.out_of_line_call_operator_replacements.get(
+            id(func)
+        )
+        function_body = (
+            getattr(out_of_line_replacement["definition"], "body", None)
+            if out_of_line_replacement is not None
+            else func.body
+        )
         self.current_function_name = func.name
         self.current_function_return_type = func.return_type
         self.current_function = func
@@ -7007,6 +7063,19 @@ class MetalToCrossGLConverter:
                 self.format_parameter_decl(p, index, semantic_context=semantic_context)
                 for index, p in enumerate(func.params)
             )
+            if out_of_line_replacement is not None:
+                for definition_name, helper_name in out_of_line_replacement[
+                    "parameter_aliases"
+                ]:
+                    self.current_variable_types[definition_name] = (
+                        self.current_variable_types.get(helper_name)
+                    )
+                    self.current_variable_type_qualifiers[definition_name] = (
+                        self.current_variable_type_qualifiers.get(helper_name, ())
+                    )
+                    self.identifier_maps[-1][definition_name] = self.render_identifier(
+                        helper_name
+                    )
             fn_semantic = self.map_semantic(self.function_semantic_attributes(func))
             suffix = f" {fn_semantic}" if fn_semantic else ""
             function_name = self.sanitize_identifier(
@@ -7036,7 +7105,7 @@ class MetalToCrossGLConverter:
                 else self.format_value_template_parameter_declarations(
                     func,
                     indent + 1,
-                    body=func.body,
+                    body=function_body,
                     bound_value_names=active_value_bindings,
                 )
             )
@@ -7045,7 +7114,7 @@ class MetalToCrossGLConverter:
                 f"{suffix} {{\n"
             )
             code += value_param_decls
-            code += self.generate_function_body(func.body, indent=indent + 1)
+            code += self.generate_function_body(function_body, indent=indent + 1)
             code += "    }\n\n"
         finally:
             for param, attributes in implicit_buffer_bindings:
@@ -8866,6 +8935,154 @@ class MetalToCrossGLConverter:
             if name.startswith("mem_"):
                 return {name}
         return None
+
+    def prepare_out_of_line_call_operator_bindings(self, functions):
+        """Bind preserved qualified bodies to existing lowered receiver helpers."""
+        replacements = {}
+        suppressed = set()
+        for definition in functions or []:
+            declaration = getattr(
+                definition, "out_of_line_call_operator_declaration", None
+            )
+            owner = getattr(definition, "out_of_line_call_operator_owner", None)
+            if not declaration or not owner:
+                continue
+
+            candidates = [
+                function
+                for function in functions or []
+                if function is not definition
+                and self.out_of_line_call_operator_helper_matches(
+                    definition, function, owner
+                )
+            ]
+            if not candidates:
+                # A declaration can be retained even when no reachable call caused
+                # preprocessing to materialize a receiver helper. Keep the
+                # qualified definition in that case; it remains the only body.
+                continue
+            if len(candidates) != 1:
+                raise MetalOutOfLineCallOperatorLoweringError(
+                    owner,
+                    declaration.get("signature", "operator()"),
+                    tuple(
+                        self.metal_source_overload_candidate_signature(candidate)
+                        for candidate in candidates
+                    ),
+                    "multiple lowered helpers match the declaration contract",
+                    declaration_location=declaration.get("source_location"),
+                    definition_location=getattr(
+                        definition, "declaration_source_location", None
+                    ),
+                    candidate_locations=tuple(
+                        getattr(candidate, "declaration_source_location", None)
+                        for candidate in candidates
+                    ),
+                )
+
+            helper = candidates[0]
+            existing = replacements.get(id(helper))
+            if existing is not None:
+                raise MetalOutOfLineCallOperatorLoweringError(
+                    owner,
+                    declaration.get("signature", "operator()"),
+                    (self.metal_source_overload_candidate_signature(helper),),
+                    "multiple qualified definitions target the same lowered helper",
+                    declaration_location=declaration.get("source_location"),
+                    definition_location=getattr(
+                        definition, "declaration_source_location", None
+                    ),
+                    candidate_locations=(
+                        getattr(helper, "declaration_source_location", None),
+                    ),
+                )
+
+            helper_parameters = list(getattr(helper, "params", []) or [])
+            transport_count = len(self.lowered_method_transport_parameters(helper))
+            explicit_parameters = helper_parameters[1 + transport_count :]
+            parameter_aliases = tuple(
+                (definition_parameter.name, helper_parameter.name)
+                for definition_parameter, helper_parameter in zip(
+                    getattr(definition, "params", []) or [], explicit_parameters
+                )
+                if getattr(definition_parameter, "name", None)
+                and getattr(helper_parameter, "name", None)
+            )
+            replacements[id(helper)] = {
+                "definition": definition,
+                "parameter_aliases": parameter_aliases,
+            }
+            suppressed.add(id(definition))
+
+        self.out_of_line_call_operator_replacements = replacements
+        self.suppressed_out_of_line_call_operator_ids = suppressed
+
+    def out_of_line_call_operator_helper_matches(self, definition, helper, owner):
+        if (
+            not isinstance(helper, FunctionNode)
+            or getattr(helper, "body", None) is None
+        ):
+            return False
+        params = list(getattr(helper, "params", []) or [])
+        if not params:
+            return False
+        receiver = params[0]
+        if getattr(receiver, "name", None) != "self" or not self.reference_parameter(
+            receiver
+        ):
+            return False
+
+        receiver_owner = self.normalized_metal_type(
+            self.resolve_type_alias(getattr(receiver, "vtype", None))
+        )
+        owner_name = self.normalized_metal_type(self.resolve_type_alias(owner))
+        unqualified_owner = owner_name.rsplit("::", 1)[-1]
+        if receiver_owner not in {owner_name, unqualified_owner}:
+            return False
+
+        helper_name = str(getattr(helper, "name", ""))
+        helper_prefixes = {
+            f"{owner_name}__operator_call",
+            f"{unqualified_owner}__operator_call",
+            f"{self.sanitize_identifier(owner_name)}__operator_call",
+        }
+        if not any(
+            helper_name == prefix or helper_name.startswith(f"{prefix}__")
+            for prefix in helper_prefixes
+        ):
+            return False
+
+        definition_const = "const" in {
+            str(qualifier).lower()
+            for qualifier in getattr(definition, "method_qualifiers", []) or []
+        }
+        receiver_const = self.readonly_parameter(
+            receiver, self.effective_declaration_qualifiers(receiver)
+        )
+        if definition_const != receiver_const:
+            return False
+
+        transport_count = len(self.lowered_method_transport_parameters(helper))
+        explicit_parameters = params[1 + transport_count :]
+        definition_parameters = list(getattr(definition, "params", []) or [])
+        if len(explicit_parameters) != len(definition_parameters):
+            return False
+        if tuple(
+            self.normalized_metal_parameter_type(parameter)
+            for parameter in explicit_parameters
+        ) != tuple(
+            self.normalized_metal_parameter_type(parameter)
+            for parameter in definition_parameters
+        ):
+            return False
+
+        helper_return = self.normalized_metal_type(
+            self.resolve_type_alias(getattr(helper, "return_type", None))
+        )
+        definition_return = self.normalized_metal_type(
+            self.resolve_type_alias(getattr(definition, "return_type", None))
+        )
+        return helper_return == definition_return
 
     def lowered_struct_method_context(self, function):
         """Return the concrete receiver contract for a lowered instance helper."""
