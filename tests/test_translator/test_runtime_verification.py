@@ -917,6 +917,208 @@ def test_plan_runtime_test_manifest_scopes_contract_to_fixture_entry_point(tmp_p
     assert contract["dispatch"]["entryPoint"] == "vector_add"
 
 
+def test_plan_runtime_test_manifest_can_replace_ambiguous_artifact_contract(tmp_path):
+    artifact_report = _artifact_report(
+        tmp_path,
+        [
+            _translated_artifact(
+                id="ambiguous-aggregate",
+                hostInterface={"status": "ambiguous"},
+                entryPoints=[{"name": "CSMain", "stage": "compute"}],
+                resourceBindings=[{"name": "unscoped", "kind": "buffer", "binding": 0}],
+                dispatch={"entryPoint": "CSMain", "workgroupCount": [1, 1, 1]},
+            )
+        ],
+    )
+    fixture = _runtime_fixture(
+        entryPoint="CSMain_3",
+        runtimeAdapter={
+            "entryPoints": [
+                {
+                    "name": "CSMain_3",
+                    "stage": "compute",
+                    "workgroupSize": [1, 1, 1],
+                }
+            ],
+            "resourceBindings": [
+                {
+                    "name": "lhs",
+                    "kind": "buffer",
+                    "binding": 4,
+                    "value": "lhs",
+                },
+                {
+                    "name": "out",
+                    "kind": "buffer",
+                    "binding": 2,
+                    "value": "out",
+                },
+            ],
+            "dispatch": {"entryPoint": "CSMain_3", "globalSize": [2, 1, 1]},
+            "metadata": {"artifactContractMode": "replace"},
+        },
+    )
+
+    plan = plan_runtime_test_manifest(
+        artifact_report,
+        {"kind": RUNTIME_TEST_MANIFEST_KIND, "tests": [fixture]},
+        project_root=tmp_path,
+    )
+
+    case = plan["testCases"][0]
+    assert case["status"] in {"planned", "skipped"}
+    assert [
+        binding["name"] for binding in case["runtimeAdapter"]["resourceBindings"]
+    ] == ["lhs", "out"]
+    assert case["runtimeAdapter"]["dispatch"]["entryPoint"] == "CSMain_3"
+    assert all(
+        diagnostic["code"] != "project.runtime-verification.entry-point-missing"
+        for diagnostic in case["diagnostics"]
+    )
+
+
+def test_plan_runtime_test_manifest_rejects_invalid_artifact_contract_mode(tmp_path):
+    artifact_report = _artifact_report(tmp_path, [_translated_artifact()])
+    fixture = _runtime_fixture(
+        runtimeAdapter={"metadata": {"artifactContractMode": "overlay"}}
+    )
+
+    plan = plan_runtime_test_manifest(
+        artifact_report,
+        {"kind": RUNTIME_TEST_MANIFEST_KIND, "tests": [fixture]},
+        project_root=tmp_path,
+    )
+
+    case = plan["testCases"][0]
+    diagnostic = next(
+        item
+        for item in case["diagnostics"]
+        if item["code"] == "project.runtime-verification.artifact-contract-mode-invalid"
+    )
+    assert case["status"] == RUNTIME_FAILED
+    assert diagnostic["reasonKind"] == "artifact-contract-mode-invalid"
+    assert diagnostic["artifactContractMode"] == "overlay"
+    assert diagnostic["supportedArtifactContractModes"] == ["merge", "replace"]
+
+
+def test_mlx_arange_directx_generated_manifest_plans_curated_interface(tmp_path):
+    fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / "mlx"
+    artifact_path = tmp_path / "out" / "directx" / "arange.hlsl"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text("// generated aggregate", encoding="utf-8")
+    artifact_report = {
+        "kind": "crosstl-runtime-artifact-manifest",
+        "project": {"root": str(tmp_path), "targets": ["directx"]},
+        "artifacts": [
+            {
+                "id": "mlx-arange-generated-directx",
+                "source": "mlx/backend/metal/kernels/arange.metal",
+                "path": "out/directx/arange.hlsl",
+                "target": "directx",
+                "sourceBackend": "metal",
+                "status": "translated",
+                "hostInterface": {"status": "ambiguous"},
+                "entryPoints": [
+                    {
+                        "name": "CSMain",
+                        "stage": "compute",
+                        "executionConfig": {"numthreads": [1, 1, 1]},
+                    }
+                ],
+                "resourceBindings": [
+                    {
+                        "name": "arangeuint8_start_Constants",
+                        "kind": "constant-buffer",
+                        "set": 0,
+                        "binding": 0,
+                    },
+                    {
+                        "name": "out_",
+                        "kind": "buffer",
+                        "set": 0,
+                        "binding": 2,
+                        "access": "read_write",
+                    },
+                ],
+                "parameterBlocks": [
+                    {
+                        "name": "arangeuint8_start_Constants",
+                        "kind": "constant-buffer",
+                        "set": 0,
+                        "binding": 0,
+                        "status": "layout-ready",
+                    }
+                ],
+                "dispatch": {
+                    "status": "available",
+                    "workgroups": [
+                        {
+                            "entryPoint": "CSMain",
+                            "stage": "compute",
+                            "workgroupSize": [1, 1, 1],
+                        }
+                    ],
+                },
+                "runtimeDataStatus": {
+                    "hostInterface": "ambiguous",
+                    "entryPoints": "available",
+                    "resourceBindings": "available",
+                    "parameterBlocks": "available",
+                    "dispatch": "available",
+                },
+            }
+        ],
+    }
+
+    manifest = build_runtime_test_manifest(
+        artifact_report,
+        fixture_dir / "arange_directx.fixture-metadata.json",
+        project_root=tmp_path,
+    )
+    plan = plan_runtime_test_manifest(
+        artifact_report,
+        manifest,
+        project_root=tmp_path,
+    )
+
+    assert manifest["success"] is True
+    assert manifest["tests"][0]["entryPoint"] == "CSMain_3"
+    assert manifest["tests"][0]["metadata"]["runtimeMetadata"]["status"] == (
+        "incomplete"
+    )
+    case = plan["testCases"][0]
+    assert case["status"] == "planned"
+    assert case["runtimeExecution"]["dispatch"] == {
+        "entryPoint": "CSMain_3",
+        "workgroupSize": [1, 1, 1],
+        "workgroupCount": [7, 1, 1],
+        "globalSize": [7, 1, 1],
+    }
+    bindings = case["runtimeExecution"]["resourceBindings"]
+    assert [binding["binding"]["name"] for binding in bindings] == [
+        "arangeuint32_start_Constants",
+        "arangeuint32_step_Constants",
+        "out_",
+    ]
+    assert [binding["binding"]["binding"] for binding in bindings] == [4, 5, 2]
+    assert bindings[0]["binding"]["metadata"]["parameterBlock"] == {
+        "field": "arangeuint32_start",
+        "byteOffset": 0,
+        "byteSize": 4,
+    }
+    assert bindings[1]["binding"]["metadata"]["parameterBlock"] == {
+        "field": "arangeuint32_step",
+        "byteOffset": 0,
+        "byteSize": 4,
+    }
+    assert [binding["source"] for binding in bindings] == [
+        "input",
+        "input",
+        "expectedOutput",
+    ]
+    assert all(binding["status"] == "bound" for binding in bindings)
+
+
 def test_plan_runtime_test_manifest_infers_entry_point_from_dispatch(tmp_path):
     artifact_report = _artifact_report(
         tmp_path,

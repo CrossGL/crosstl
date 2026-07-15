@@ -139,6 +139,7 @@ jobs:
           set -euo pipefail
           rm -rf mlx-upstream
           git clone --filter=blob:none --no-checkout https://github.com/ml-explore/mlx.git mlx-upstream
+          git -C mlx-upstream config core.autocrlf false
           git -C mlx-upstream sparse-checkout init --cone
           git -C mlx-upstream sparse-checkout set mlx/backend/metal/kernels
           git -C mlx-upstream checkout "$MLX_COMMIT"
@@ -176,6 +177,13 @@ jobs:
         env:
           CROSTL_RUN_DIRECTX_LOOKUP_DEVICE_TEST: "1"
         run: python -m pytest -q -n auto tests/test_translator/test_native_runtime_drivers.py -k "directx_compute_runtime_executes_mlx_file_scope_lookup_on_device"
+
+      - name: Prove translated MLX arange Direct3D numerical execution
+        if: runner.os == 'Windows'
+        env:
+          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_RUN_DIRECTX_MLX_ARANGE_DEVICE_TEST: "1"
+        run: python -m pytest -q -n auto tests/test_translator/test_native_runtime_drivers.py -k "directx_compute_runtime_executes_translated_pinned_mlx_arange_on_device"
 
       - name: Prove OpenGL SPIR-V specialization runtime
         if: runner.os == 'Linux'
