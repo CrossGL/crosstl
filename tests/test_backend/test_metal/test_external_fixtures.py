@@ -1787,8 +1787,9 @@ EXTERNAL_FIXTURES = [
         "source_path": "ggml/src/ggml-common.h included by ggml-metal.metal",
         "roundtrip": True,
         "contains": [
-            "// Metal union iq1m_scale_t represented as struct-like layout; "
-            "overlapping storage is not modeled",
+            "// Metal union iq1m_scale_t retains overlapping storage through "
+            "layout metadata",
+            "@union_layout(2, 2, little_endian, metal)",
             "struct iq1m_scale_t {",
             "struct block_q4_1 {",
             "uint8[32 / 2] qs;",

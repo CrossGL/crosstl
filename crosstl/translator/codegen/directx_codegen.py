@@ -454,6 +454,34 @@ class DirectXAggregateConditionalError(ValueError):
         self.source_location = source_location
 
 
+class DirectXUnionLayoutError(ValueError):
+    """Raised when source union storage cannot be represented faithfully in HLSL."""
+
+    project_diagnostic_code = "project.translate.directx-union-layout-unsupported"
+    missing_capabilities = ("directx.union-storage-aliasing",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        union_name=None,
+        member_name=None,
+        member_type=None,
+        size=None,
+        alignment=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.union_name = union_name
+        self.member_name = member_name
+        self.member_type = member_type
+        self.size = size
+        self.alignment = alignment
+        self.reason = reason
+        self.source_location = source_location
+
+
 class DirectXMappedOverloadError(ValueError):
     """Raised when source overload binding cannot survive HLSL type mapping."""
 
@@ -1240,6 +1268,7 @@ class HLSLCodeGen:
         self.current_hlsl_parameter_resource_types = {}
         self.struct_member_types = {}
         self.structs_by_name = {}
+        self.hlsl_union_layouts = {}
         self.hlsl_fixed_array_return_structs = {}
         self.hlsl_fixed_array_return_struct_nodes = {}
         self.hlsl_fixed_array_return_struct_metadata = {}
@@ -1840,6 +1869,7 @@ class HLSLCodeGen:
         self.local_variable_types = {}
         self.local_variable_source_types = {}
         self.global_variable_types = {}
+        self.hlsl_union_layouts = {}
         self.hlsl_struct_buffer_resource_types = {}
         self.hlsl_promoted_entry_resource_parameter_names = {}
         self.hlsl_promoted_entry_scalar_constant_members = {}
@@ -2111,6 +2141,7 @@ class HLSLCodeGen:
             structs, self.type_name_string
         )
         self.remove_hlsl_static_struct_member_types(structs)
+        self.hlsl_union_layouts = self.collect_hlsl_union_layouts(structs)
         self.refresh_hlsl_fixed_array_return_struct_member_types()
         self.struct_member_types.update(
             collect_generic_enum_specialization_member_types(
@@ -3098,6 +3129,7 @@ class HLSLCodeGen:
         code += self.generate_hlsl_trailing_zero_helpers()
         code += self.generate_hlsl_complex64_helpers()
         code += self.generate_hlsl_explicit_bitcast_helpers()
+        code += self.generate_hlsl_union_storage_helpers()
         code += self.generate_hlsl_fixed_array_return_helpers()
         code += function_declarations_code
         code += functions_code
@@ -3273,6 +3305,44 @@ uint64_t __crossgl_bitcast_uint2_to_uint64(uint2 value) {
             for helper in sorted(self.required_hlsl_explicit_bitcast_helpers)
         )
         return f"{helpers}\n" if helpers else ""
+
+    def generate_hlsl_union_storage_helpers(self):
+        needs_byte_words = any(
+            member["kind"] in {"u8x4", "u8x4_array"}
+            for layout in self.hlsl_union_layouts.values()
+            for member in layout["members"].values()
+        )
+        if not needs_byte_words:
+            return ""
+        return """
+uint4 __crossgl_union_unpack_u8x4(uint word) {
+    return uint4(
+        word & 0xffu,
+        (word >> 8u) & 0xffu,
+        (word >> 16u) & 0xffu,
+        (word >> 24u) & 0xffu
+    );
+}
+
+uint __crossgl_union_pack_u8x4(uint4 value) {
+    return (value.x & 0xffu)
+        | ((value.y & 0xffu) << 8u)
+        | ((value.z & 0xffu) << 16u)
+        | ((value.w & 0xffu) << 24u);
+}
+
+uint __crossgl_union_set_u8x4_lane(
+    inout uint word,
+    uint lane,
+    uint selected
+) {
+    uint shift = (lane & 3u) * 8u;
+    uint mask = 0xffu << shift;
+    word = (word & ~mask) | ((selected & 0xffu) << shift);
+    return selected & 0xffu;
+}
+
+"""
 
     def generate_hlsl_complex64_helpers(self):
         if not getattr(self, "required_hlsl_complex64_helpers", set()):
@@ -3535,7 +3605,11 @@ bool __crossgl_complex64_less_equal(complex64_t left, complex64_t right) {
             add_record(
                 node.name,
                 self.generate_hlsl_regular_struct_declaration(node),
-                self.struct_member_types.get(node.name, {}).values(),
+                (
+                    [self.hlsl_union_layouts[node.name]["storage_type"]]
+                    if node.name in self.hlsl_union_layouts
+                    else self.struct_member_types.get(node.name, {}).values()
+                ),
             )
 
         all_names = {record["name"] for record in records}
@@ -3583,6 +3657,10 @@ bool __crossgl_complex64_less_equal(complex64_t left, complex64_t right) {
         return code
 
     def generate_hlsl_regular_struct_declaration(self, node):
+        union_layout = self.hlsl_union_layouts.get(node.name)
+        if union_layout is not None:
+            return self.generate_hlsl_union_storage_declaration(node, union_layout)
+
         code = f"struct {node.name} {{\n"
         members = [
             member
@@ -3716,6 +3794,652 @@ bool __crossgl_complex64_less_equal(complex64_t left, complex64_t right) {
                 )
         code += "};\n"
         return code
+
+    def generate_hlsl_union_storage_declaration(self, node, layout):
+        return (
+            f"struct {node.name} {{\n"
+            f"    {layout['storage_type']} {layout['storage_field']};\n"
+            "};\n"
+        )
+
+    def hlsl_union_attribute(self, node, name):
+        for attribute in getattr(node, "attributes", []) or []:
+            if str(getattr(attribute, "name", "")).lower() == name:
+                return attribute
+        return None
+
+    def hlsl_union_layout_error(
+        self,
+        node,
+        *,
+        reason,
+        detail,
+        member=None,
+        member_type=None,
+        size=None,
+        alignment=None,
+    ):
+        union_name = getattr(node, "name", None) or "<anonymous>"
+        member_name = getattr(member, "name", None)
+        member_detail = f" member '{member_name}'" if member_name else ""
+        return DirectXUnionLayoutError(
+            f"DirectX cannot lower source union '{union_name}'{member_detail} "
+            f"to canonical HLSL storage: {detail}",
+            union_name=union_name,
+            member_name=member_name,
+            member_type=member_type,
+            size=size,
+            alignment=alignment,
+            reason=reason,
+            source_location=(
+                getattr(member, "source_location", None)
+                or getattr(node, "source_location", None)
+            ),
+        )
+
+    def hlsl_union_layout_int(self, attribute, index):
+        arguments = list(getattr(attribute, "arguments", []) or [])
+        if index >= len(arguments):
+            return None
+        return evaluate_literal_int_expression(
+            arguments[index], self.literal_int_constants
+        )
+
+    def hlsl_union_layout_name(self, attribute, index):
+        arguments = list(getattr(attribute, "arguments", []) or [])
+        if index >= len(arguments):
+            return None
+        value = self.attribute_value_to_string(arguments[index])
+        return str(value).strip().lower() if value is not None else None
+
+    def collect_hlsl_union_layouts(self, structs):
+        layouts = {}
+        for node in structs or []:
+            if not isinstance(node, StructNode):
+                continue
+            attribute = self.hlsl_union_attribute(node, "union_layout")
+            if attribute is None:
+                continue
+
+            arguments = list(getattr(attribute, "arguments", []) or [])
+            if len(arguments) != 4:
+                raise self.hlsl_union_layout_error(
+                    node,
+                    reason="layout-contract-malformed",
+                    detail="@union_layout requires size, alignment, byte order, and ABI",
+                )
+            size = self.hlsl_union_layout_int(attribute, 0)
+            alignment = self.hlsl_union_layout_int(attribute, 1)
+            byte_order = self.hlsl_union_layout_name(attribute, 2)
+            source_abi = self.hlsl_union_layout_name(attribute, 3)
+            if not size or not alignment:
+                raise self.hlsl_union_layout_error(
+                    node,
+                    reason="source-layout-unresolved",
+                    detail="the source ABI did not provide a concrete size and alignment",
+                    size=size,
+                    alignment=alignment,
+                )
+            if size not in {4, 8, 16}:
+                raise self.hlsl_union_layout_error(
+                    node,
+                    reason="storage-size-unsupported",
+                    detail=(
+                        f"{size}-byte storage is outside the supported 4/8/16-byte "
+                        "value contract"
+                    ),
+                    size=size,
+                    alignment=alignment,
+                )
+            if alignment != size:
+                raise self.hlsl_union_layout_error(
+                    node,
+                    reason="aggregate-alignment-unsupported",
+                    detail=(
+                        f"{size}-byte storage with {alignment}-byte alignment may "
+                        "change enclosing aggregate layout"
+                    ),
+                    size=size,
+                    alignment=alignment,
+                )
+            if byte_order != "little_endian":
+                raise self.hlsl_union_layout_error(
+                    node,
+                    reason="byte-order-unsupported",
+                    detail=f"byte order '{byte_order or '<missing>'}' is not supported",
+                    size=size,
+                    alignment=alignment,
+                )
+            if not source_abi:
+                raise self.hlsl_union_layout_error(
+                    node,
+                    reason="source-abi-missing",
+                    detail="the retained union contract has no source ABI",
+                    size=size,
+                    alignment=alignment,
+                )
+
+            word_count = size // 4
+            storage_type = "uint" if word_count == 1 else f"uint{word_count}"
+            member_names = {
+                getattr(member, "name", None)
+                for member in getattr(node, "members", []) or []
+                if getattr(member, "name", None)
+            }
+            storage_field = "CrossGLUnionStorage"
+            suffix = 2
+            while storage_field in member_names:
+                storage_field = f"CrossGLUnionStorage{suffix}"
+                suffix += 1
+
+            members = {}
+            for member in getattr(node, "members", []) or []:
+                if self.hlsl_static_struct_member(member):
+                    continue
+                member_name = getattr(member, "name", None)
+                if not member_name:
+                    raise self.hlsl_union_layout_error(
+                        node,
+                        reason="anonymous-member-unsupported",
+                        detail="anonymous instance members are not representable",
+                        member=member,
+                        size=size,
+                        alignment=alignment,
+                    )
+                member_attribute = self.hlsl_union_attribute(
+                    member, "union_member_layout"
+                )
+                if (
+                    member_attribute is None
+                    or len(list(getattr(member_attribute, "arguments", []) or [])) != 3
+                ):
+                    raise self.hlsl_union_layout_error(
+                        node,
+                        reason="member-layout-missing",
+                        detail="the retained member layout is missing or malformed",
+                        member=member,
+                        size=size,
+                        alignment=alignment,
+                    )
+                offset = self.hlsl_union_layout_int(member_attribute, 0)
+                member_size = self.hlsl_union_layout_int(member_attribute, 1)
+                member_alignment = self.hlsl_union_layout_int(member_attribute, 2)
+                member_type = self.struct_member_types.get(node.name, {}).get(
+                    member_name
+                )
+                if offset != 0:
+                    raise self.hlsl_union_layout_error(
+                        node,
+                        reason="member-offset-unsupported",
+                        detail=f"member offset {offset!r} does not alias byte zero",
+                        member=member,
+                        member_type=member_type,
+                        size=size,
+                        alignment=alignment,
+                    )
+                if member_size != size:
+                    raise self.hlsl_union_layout_error(
+                        node,
+                        reason="member-size-mismatch",
+                        detail=(
+                            f"member size {member_size!r} does not cover the full "
+                            f"{size}-byte canonical storage"
+                        ),
+                        member=member,
+                        member_type=member_type,
+                        size=size,
+                        alignment=alignment,
+                    )
+                if (
+                    not member_alignment
+                    or member_alignment > alignment
+                    or alignment % member_alignment != 0
+                ):
+                    raise self.hlsl_union_layout_error(
+                        node,
+                        reason="member-alignment-unsupported",
+                        detail=(
+                            f"member alignment {member_alignment!r} is incompatible "
+                            f"with aggregate alignment {alignment}"
+                        ),
+                        member=member,
+                        member_type=member_type,
+                        size=size,
+                        alignment=alignment,
+                    )
+                member_storage = self.hlsl_union_member_storage_kind(
+                    node,
+                    member,
+                    member_type,
+                    word_count,
+                    size,
+                    alignment,
+                )
+                member_storage["node"] = member
+                members[member_name] = member_storage
+
+            if not members:
+                raise self.hlsl_union_layout_error(
+                    node,
+                    reason="empty-union-unsupported",
+                    detail="the union has no instance members",
+                    size=size,
+                    alignment=alignment,
+                )
+            layouts[node.name] = {
+                "name": node.name,
+                "size": size,
+                "alignment": alignment,
+                "byte_order": byte_order,
+                "source_abi": source_abi,
+                "word_count": word_count,
+                "storage_type": storage_type,
+                "storage_field": storage_field,
+                "members": members,
+                "node": node,
+            }
+        return layouts
+
+    def hlsl_union_member_storage_kind(
+        self,
+        node,
+        member,
+        member_type,
+        word_count,
+        size,
+        alignment,
+    ):
+        type_name = str(member_type or "").strip()
+        base_type, array_suffix = split_array_type_suffix(type_name)
+        base_type = str(base_type).strip()
+        extent = None
+        if array_suffix:
+            match = re.fullmatch(r"\[([1-9][0-9]*)\]", array_suffix)
+            if match is None:
+                raise self.hlsl_union_layout_error(
+                    node,
+                    reason="member-array-shape-unsupported",
+                    detail=(
+                        f"member type '{type_name}' is not a one-dimensional "
+                        "literal fixed array"
+                    ),
+                    member=member,
+                    member_type=type_name,
+                    size=size,
+                    alignment=alignment,
+                )
+            extent = int(match.group(1))
+            if word_count == 1:
+                raise self.hlsl_union_layout_error(
+                    node,
+                    reason="single-word-array-member-unsupported",
+                    detail=(
+                        "single-word canonical storage cannot preserve dynamic "
+                        f"indexing of '{type_name}'"
+                    ),
+                    member=member,
+                    member_type=type_name,
+                    size=size,
+                    alignment=alignment,
+                )
+
+        if base_type == "u8vec4":
+            if extent is None and word_count == 1:
+                return {"kind": "u8x4", "type": type_name}
+            if extent == word_count:
+                return {
+                    "kind": "u8x4_array",
+                    "type": type_name,
+                    "extent": extent,
+                }
+            raise self.hlsl_union_layout_error(
+                node,
+                reason="member-storage-shape-mismatch",
+                detail=(
+                    f"byte-vector view '{type_name}' does not provide one u8vec4 "
+                    f"per canonical word ({word_count} required)"
+                ),
+                member=member,
+                member_type=type_name,
+                size=size,
+                alignment=alignment,
+            )
+
+        mapped_base = self.map_type(base_type)
+        scalar_match = re.fullmatch(r"(uint|int|float)([234])?", mapped_base)
+        if scalar_match is None:
+            raise self.hlsl_union_layout_error(
+                node,
+                reason="member-shape-unsupported",
+                detail=(
+                    f"member type '{type_name}' is not a supported 32-bit "
+                    "scalar/vector or u8vec4 word view"
+                ),
+                member=member,
+                member_type=type_name,
+                size=size,
+                alignment=alignment,
+            )
+        component_kind, width_text = scalar_match.groups()
+        width = int(width_text) if width_text else 1
+        if extent is not None:
+            if width != 1 or extent != word_count:
+                raise self.hlsl_union_layout_error(
+                    node,
+                    reason="member-storage-shape-mismatch",
+                    detail=(
+                        f"word-array view '{type_name}' does not provide exactly "
+                        f"{word_count} scalar words"
+                    ),
+                    member=member,
+                    member_type=type_name,
+                    size=size,
+                    alignment=alignment,
+                )
+            return {
+                "kind": f"{component_kind}32_array",
+                "type": type_name,
+                "extent": extent,
+            }
+        if width != word_count:
+            raise self.hlsl_union_layout_error(
+                node,
+                reason="member-storage-shape-mismatch",
+                detail=(
+                    f"member type '{type_name}' exposes {width} words but the "
+                    f"canonical storage contains {word_count}"
+                ),
+                member=member,
+                member_type=type_name,
+                size=size,
+                alignment=alignment,
+            )
+        return {"kind": f"{component_kind}32", "type": type_name}
+
+    def hlsl_union_layout_for_type(self, type_value):
+        type_name = self.type_name_string(type_value)
+        base_type, _array_suffix = split_array_type_suffix(str(type_name or ""))
+        base_type = str(base_type).strip()
+        while base_type.startswith(("const ", "volatile ")):
+            base_type = base_type.split(" ", 1)[1].strip()
+        base_type = base_type.rstrip("&*").strip()
+        return self.hlsl_union_layouts.get(base_type)
+
+    def hlsl_union_member_access_info(self, expression):
+        if not isinstance(expression, MemberAccessNode):
+            return None
+        object_expr = getattr(
+            expression, "object_expr", getattr(expression, "object", None)
+        )
+        layout = self.hlsl_union_layout_for_type(
+            self.expression_result_type(object_expr)
+        )
+        if layout is None:
+            return None
+        member_name = str(getattr(expression, "member", ""))
+        member = layout["members"].get(member_name)
+        if member is None:
+            return None
+        return {
+            "expression": expression,
+            "object": object_expr,
+            "layout": layout,
+            "member_name": member_name,
+            "member": member,
+        }
+
+    def hlsl_union_array_access_info(self, expression):
+        if not isinstance(expression, ArrayAccessNode):
+            return None
+        array_expr = getattr(
+            expression, "array_expr", getattr(expression, "array", None)
+        )
+        member_info = self.hlsl_union_member_access_info(array_expr)
+        if member_info is None or not member_info["member"]["kind"].endswith("_array"):
+            return None
+        return {
+            **member_info,
+            "expression": expression,
+            "member_expression": array_expr,
+            "index": getattr(
+                expression, "index_expr", getattr(expression, "index", None)
+            ),
+        }
+
+    def hlsl_union_storage_expression(self, info, index=None):
+        object_expr = self.generate_expression_with_expected(info["object"], None)
+        storage = f"{object_expr}.{info['layout']['storage_field']}"
+        if index is not None:
+            rendered_index = self.generate_expression_with_expected(index, "uint")
+            storage = f"{storage}[{rendered_index}]"
+        return storage
+
+    def hlsl_union_usage_error(self, info, expression, reason, detail):
+        layout = info["layout"]
+        return self.hlsl_union_layout_error(
+            layout["node"],
+            reason=reason,
+            detail=detail,
+            member=info["member"].get("node"),
+            member_type=info["member"].get("type"),
+            size=layout["size"],
+            alignment=layout["alignment"],
+        )
+
+    def generate_hlsl_union_member_read(self, expression):
+        info = self.hlsl_union_member_access_info(expression)
+        if info is None:
+            return None
+        kind = info["member"]["kind"]
+        if kind.endswith("_array"):
+            raise self.hlsl_union_usage_error(
+                info,
+                expression,
+                "whole-array-member-access-unsupported",
+                "HLSL cannot materialize the union's fixed-array member as a value",
+            )
+        storage = self.hlsl_union_storage_expression(info)
+        if kind == "uint32":
+            return storage
+        if kind == "int32":
+            return f"asint({storage})"
+        if kind == "float32":
+            return f"asfloat({storage})"
+        if kind == "u8x4":
+            return f"__crossgl_union_unpack_u8x4({storage})"
+        return None
+
+    def generate_hlsl_union_array_read(self, expression):
+        info = self.hlsl_union_array_access_info(expression)
+        if info is None:
+            return None
+        storage = self.hlsl_union_storage_expression(info, info["index"])
+        kind = info["member"]["kind"]
+        if kind == "uint32_array":
+            return storage
+        if kind == "int32_array":
+            return f"asint({storage})"
+        if kind == "float32_array":
+            return f"asfloat({storage})"
+        if kind == "u8x4_array":
+            return f"__crossgl_union_unpack_u8x4({storage})"
+        return None
+
+    def hlsl_union_u8_lane_target(self, expression):
+        lane = None
+        value_expr = None
+        if isinstance(expression, ArrayAccessNode):
+            value_expr = getattr(
+                expression, "array_expr", getattr(expression, "array", None)
+            )
+            lane = getattr(expression, "index_expr", getattr(expression, "index", None))
+        elif isinstance(expression, MemberAccessNode):
+            lane_name = str(getattr(expression, "member", ""))
+            lane_index = {
+                "x": 0,
+                "r": 0,
+                "y": 1,
+                "g": 1,
+                "z": 2,
+                "b": 2,
+                "w": 3,
+                "a": 3,
+            }.get(lane_name)
+            if lane_index is None:
+                return None
+            value_expr = getattr(
+                expression, "object_expr", getattr(expression, "object", None)
+            )
+            lane = f"{lane_index}u"
+        if value_expr is None:
+            return None
+
+        array_info = self.hlsl_union_array_access_info(value_expr)
+        if array_info is not None and array_info["member"]["kind"] == "u8x4_array":
+            return {
+                "info": array_info,
+                "storage": self.hlsl_union_storage_expression(
+                    array_info, array_info["index"]
+                ),
+                "lane": lane,
+            }
+        member_info = self.hlsl_union_member_access_info(value_expr)
+        if member_info is not None and member_info["member"]["kind"] == "u8x4":
+            return {
+                "info": member_info,
+                "storage": self.hlsl_union_storage_expression(member_info),
+                "lane": lane,
+            }
+        return None
+
+    def hlsl_union_access_ancestor(self, expression):
+        current = expression
+        while isinstance(current, (MemberAccessNode, ArrayAccessNode)):
+            array_info = self.hlsl_union_array_access_info(current)
+            if array_info is not None:
+                return array_info
+            member_info = self.hlsl_union_member_access_info(current)
+            if member_info is not None:
+                return member_info
+            if isinstance(current, MemberAccessNode):
+                current = getattr(
+                    current, "object_expr", getattr(current, "object", None)
+                )
+            else:
+                current = getattr(
+                    current, "array_expr", getattr(current, "array", None)
+                )
+        return None
+
+    def generate_hlsl_union_assignment(self, target, value, operator):
+        lane_target = self.hlsl_union_u8_lane_target(target)
+        if lane_target is not None:
+            if operator != "=":
+                raise self.hlsl_union_usage_error(
+                    lane_target["info"],
+                    target,
+                    "byte-lane-compound-write-unsupported",
+                    "compound byte-lane writes require an unimplemented read-modify-write contract",
+                )
+            lane = lane_target["lane"]
+            rendered_lane = (
+                lane
+                if isinstance(lane, str)
+                else self.generate_expression_with_expected(lane, "uint")
+            )
+            selected = self.generate_expression_with_expected(value, "uint")
+            return (
+                "__crossgl_union_set_u8x4_lane("
+                f"{lane_target['storage']}, {rendered_lane}, {selected})"
+            )
+
+        array_info = self.hlsl_union_array_access_info(target)
+        if array_info is not None:
+            kind = array_info["member"]["kind"]
+            storage = self.hlsl_union_storage_expression(
+                array_info, array_info["index"]
+            )
+            element_type, _suffix = split_array_type_suffix(
+                array_info["member"]["type"]
+            )
+            rendered = self.generate_expression_with_expected(value, element_type)
+            if kind == "uint32_array":
+                return f"{storage} {operator} {rendered}"
+            if operator != "=":
+                raise self.hlsl_union_usage_error(
+                    array_info,
+                    target,
+                    "interpreted-compound-write-unsupported",
+                    "compound writes through a reinterpreted array member are not supported",
+                )
+            if kind in {"int32_array", "float32_array"}:
+                rendered = f"asuint({rendered})"
+            elif kind == "u8x4_array":
+                rendered = f"__crossgl_union_pack_u8x4({rendered})"
+            return f"{storage} = {rendered}"
+
+        member_info = self.hlsl_union_member_access_info(target)
+        if member_info is not None:
+            kind = member_info["member"]["kind"]
+            if kind.endswith("_array"):
+                raise self.hlsl_union_usage_error(
+                    member_info,
+                    target,
+                    "whole-array-member-write-unsupported",
+                    "HLSL cannot assign the union's fixed-array member as a value",
+                )
+            storage = self.hlsl_union_storage_expression(member_info)
+            rendered = self.generate_expression_with_expected(
+                value, member_info["member"]["type"]
+            )
+            if kind == "uint32":
+                return f"{storage} {operator} {rendered}"
+            if operator != "=":
+                raise self.hlsl_union_usage_error(
+                    member_info,
+                    target,
+                    "interpreted-compound-write-unsupported",
+                    "compound writes through a reinterpreted member are not supported",
+                )
+            if kind in {"int32", "float32"}:
+                rendered = f"asuint({rendered})"
+            elif kind == "u8x4":
+                rendered = f"__crossgl_union_pack_u8x4({rendered})"
+            return f"{storage} = {rendered}"
+
+        ancestor = self.hlsl_union_access_ancestor(target)
+        if ancestor is not None and ancestor["member"]["kind"] not in {
+            "uint32",
+            "uint32_array",
+        }:
+            raise self.hlsl_union_usage_error(
+                ancestor,
+                target,
+                "interpreted-subcomponent-write-unsupported",
+                "this reinterpreted member subcomponent is not a canonical HLSL lvalue",
+            )
+        return None
+
+    def generate_hlsl_union_small_vector_set_call(self, function_name, arguments):
+        if (
+            function_name != "CrossGLMetalVectorIndex_u8vec4_set"
+            or len(arguments or []) != 3
+        ):
+            return None
+        value_expr, lane_expr, selected_expr = arguments
+        array_info = self.hlsl_union_array_access_info(value_expr)
+        if array_info is not None and array_info["member"]["kind"] == "u8x4_array":
+            storage = self.hlsl_union_storage_expression(
+                array_info, array_info["index"]
+            )
+        else:
+            member_info = self.hlsl_union_member_access_info(value_expr)
+            if member_info is None or member_info["member"]["kind"] != "u8x4":
+                return None
+            storage = self.hlsl_union_storage_expression(member_info)
+        lane = self.generate_expression_with_expected(lane_expr, "uint")
+        selected = self.generate_expression_with_expected(selected_expr, "uint")
+        return f"__crossgl_union_set_u8x4_lane({storage}, {lane}, {selected})"
 
     def hlsl_static_struct_member(self, member):
         """Return whether a member is compile-time metadata, not instance state."""
@@ -9130,6 +9854,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             value = node.right
             op = getattr(node, "operator", "=")
 
+        union_assignment = self.generate_hlsl_union_assignment(target, value, op)
+        if union_assignment is not None:
+            return union_assignment
+
         target_type = self.expression_result_type(target)
         if isinstance(value, ArrayLiteralNode) and self.hlsl_outer_array_type(
             target_type
@@ -10104,6 +10832,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         elif hasattr(expr, "__class__") and "UnaryOp" in str(expr.__class__):
             op = getattr(expr, "operator", getattr(expr, "op", "+"))
             mapped_op = self.map_operator(op)
+            if mapped_op in {"++", "--"}:
+                ancestor = self.hlsl_union_access_ancestor(
+                    getattr(expr, "operand", None)
+                )
+                if ancestor is not None and ancestor["member"]["kind"] not in {
+                    "uint32",
+                    "uint32_array",
+                }:
+                    raise self.hlsl_union_usage_error(
+                        ancestor,
+                        expr,
+                        "interpreted-increment-unsupported",
+                        "increment and decrement require a canonical union lvalue",
+                    )
             if mapped_op == "*" and not getattr(expr, "is_postfix", False):
                 private_pointee = self.generate_hlsl_private_pointer_view_access(
                     expr.operand, access_expression=expr
@@ -10143,6 +10885,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         elif hasattr(expr, "__class__") and "ArrayAccess" in str(expr.__class__):
             array_expr = getattr(expr, "array_expr", getattr(expr, "array", ""))
             index_expr = getattr(expr, "index_expr", getattr(expr, "index", ""))
+            union_array_read = self.generate_hlsl_union_array_read(expr)
+            if union_array_read is not None:
+                return union_array_read
             pointer_array_binding = self.hlsl_resource_pointer_array_for_access(expr)
             if pointer_array_binding is not None:
                 self.hlsl_resource_pointer_array_index(
@@ -10224,6 +10969,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if original_func_name != func_name:
                 func_name = original_func_name
                 callee = original_func_name
+
+            union_small_vector_set = self.generate_hlsl_union_small_vector_set_call(
+                func_name, args
+            )
+            if union_small_vector_set is not None:
+                return union_small_vector_set
 
             byteaddress_interlocked_call = (
                 self.generate_hlsl_byteaddress_interlocked_member_call(
@@ -10586,6 +11337,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             return f"{callee}({args_str})"
         elif hasattr(expr, "__class__") and "MemberAccess" in str(expr.__class__):
+            union_member_read = self.generate_hlsl_union_member_read(expr)
+            if union_member_read is not None:
+                return union_member_read
             struct_buffer_access = self.hlsl_struct_buffer_member_access_expression(
                 expr
             )

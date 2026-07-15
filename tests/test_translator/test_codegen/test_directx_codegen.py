@@ -57,6 +57,7 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXSemanticArraySizeError,
     DirectXSpecializationConstantError,
     DirectXTrailingZeroBuiltinError,
+    DirectXUnionLayoutError,
     DirectXUnresolvedSourceTypeError,
     DirectXWorkgroupPointerError,
     HLSLCodeGen,
@@ -257,6 +258,158 @@ def test_hlsl_standard_math_constant_metal_proxy_compute_validates(tmp_path):
     assert "M_PI_F" not in generated
     HLSLParser(HLSLLexer(generated).tokenize()).parse()
     assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_union_storage_aliases_exact_bytes_and_side_effects(tmp_path):
+    source = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    union rbits {
+        uint2 val;
+        uchar4 bytes[2];
+    };
+
+    struct Holder {
+        rbits values[2];
+    };
+
+    uint next_index(thread uint& calls) {
+        uint current = calls;
+        calls += 1u;
+        return current;
+    }
+
+    kernel void union_roundtrip(device uint* output [[buffer(0)]]) {
+        Holder holder;
+        holder.values[0].val = uint2(0x04030201u, 0u);
+        holder.values[1].val = uint2(9u, 10u);
+        uint calls = 0u;
+        output[0] = holder.values[next_index(calls)].bytes[0][0];
+        calls = 0u;
+        holder.values[next_index(calls)].bytes[1] = uchar4(5u, 6u, 7u, 8u);
+        output[1] = holder.values[0].val.y;
+        output[2] = calls;
+        calls = 0u;
+        holder.values[0].bytes[0][next_index(calls)] = 9u;
+        output[3] = holder.values[0].val.x;
+    }
+    """
+    shader_path = tmp_path / "union-roundtrip.metal"
+    shader_path.write_text(source, encoding="utf-8")
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "struct rbits {\n    uint2 CrossGLUnionStorage;\n};" in generated
+    assert "uint2 val;" not in generated
+    assert "uint4 bytes[2];" not in generated
+    assert "word & 0xffu" in generated
+    assert "(word >> 24u) & 0xffu" in generated
+    assert "((value.w & 0xffu) << 24u)" in generated
+    assert (
+        "holder.values[next_index(calls)].CrossGLUnionStorage[1] = "
+        "__crossgl_union_pack_u8x4(uint4(5u, 6u, 7u, 8u));"
+    ) in generated
+    assert generated.count("holder.values[next_index(calls)].CrossGLUnionStorage") == 2
+    assert "output[1] = holder.values[0].CrossGLUnionStorage.y;" in generated
+    assert (
+        "__crossgl_union_set_u8x4_lane("
+        "holder.values[0].CrossGLUnionStorage[0], next_index(calls), 9u);"
+    ) in generated
+
+    source_word = 0x04030201
+    assert tuple((source_word >> shift) & 0xFF for shift in (0, 8, 16, 24)) == (
+        1,
+        2,
+        3,
+        4,
+    )
+    packed_word = sum(
+        value << shift for value, shift in zip((5, 6, 7, 8), (0, 8, 16, 24))
+    )
+    assert packed_word == 0x08070605
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_union_float_uint_alias_uses_native_bitcasts(tmp_path):
+    shader_path = tmp_path / "float-word-union.metal"
+    shader_path.write_text(
+        """
+        using FloatWord = union {
+            float value;
+            uint32_t word;
+        };
+
+        uint float_word(float value) {
+            FloatWord bits;
+            bits.value = value;
+            return bits.word;
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "uint CrossGLUnionStorage;" in generated
+    assert "bits.CrossGLUnionStorage = asuint(value);" in generated
+    assert "return bits.CrossGLUnionStorage;" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+
+
+@pytest.mark.parametrize(
+    ("declaration", "reason"),
+    [
+        (
+            "union BadSize { uint2 words; uint word; };",
+            "member-size-mismatch",
+        ),
+        (
+            "struct Pair { uint2 words; }; union Nested { uint2 words; Pair pair; };",
+            "member-shape-unsupported",
+        ),
+        (
+            "union Padded { uint3 words; uchar4 bytes[4]; };",
+            "member-storage-shape-mismatch",
+        ),
+        (
+            "union WeakAlignment { uint words[2]; uchar4 bytes[2]; };",
+            "aggregate-alignment-unsupported",
+        ),
+    ],
+    ids=["size", "nested-aggregate", "vector-padding", "alignment"],
+)
+def test_hlsl_metal_union_unsupported_layouts_are_structured_diagnostics(
+    tmp_path, declaration, reason
+):
+    shader_path = tmp_path / f"union-{reason}.metal"
+    shader_path.write_text(declaration, encoding="utf-8")
+
+    with pytest.raises(DirectXUnionLayoutError) as error:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    assert error.value.project_diagnostic_code == (
+        "project.translate.directx-union-layout-unsupported"
+    )
+    assert error.value.missing_capabilities == ("directx.union-storage-aliasing",)
+    assert error.value.reason == reason
+    assert error.value.union_name
 
 
 def test_hlsl_specialization_constant_defaults_are_compile_time_constants():

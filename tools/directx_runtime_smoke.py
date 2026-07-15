@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 import crosstl
@@ -34,6 +35,65 @@ shader RuntimeSmoke {
 }
 """
 EXPECTED_VALUES = [1.0, 2.0, 3.0, 4.0]
+
+UNION_SOURCE = """\
+#include <metal_stdlib>
+using namespace metal;
+
+union PackedWords {
+    uint2 words;
+    uchar4 bytes[2];
+};
+
+kernel void union_storage(device uint* output [[buffer(0)]]) {
+    PackedWords value;
+    value.words = uint2(0x04030201u, 0x08070605u);
+    output[0] = value.bytes[0][0];
+    output[1] = value.bytes[1][3];
+    value.bytes[0] = uchar4(9u, 10u, 11u, 12u);
+    output[2] = value.words.x;
+    output[3] = value.words.y;
+}
+"""
+UNION_EXPECTED_VALUES = [1, 8, 0x0C0B0A09, 0x08070605]
+
+
+@dataclass(frozen=True)
+class RuntimeSmokeCase:
+    id: str
+    source_name: str
+    source: str
+    source_backend: str | None
+    buffer_name: str
+    buffer_type: str
+    dtype: str
+    expected_values: tuple[float | int, ...]
+    workgroup_count: tuple[int, int, int]
+
+
+BASIC_CASE = RuntimeSmokeCase(
+    id="runtime-smoke",
+    source_name="runtime-smoke.cgl",
+    source=SOURCE,
+    source_backend=None,
+    buffer_name="outputBuffer",
+    buffer_type="RWStructuredBuffer<float>",
+    dtype="float32",
+    expected_values=tuple(EXPECTED_VALUES),
+    workgroup_count=(len(EXPECTED_VALUES), 1, 1),
+)
+UNION_CASE = RuntimeSmokeCase(
+    id="union-storage-smoke",
+    source_name="union-storage-smoke.metal",
+    source=UNION_SOURCE,
+    source_backend="metal",
+    buffer_name="output",
+    buffer_type="RWStructuredBuffer<uint>",
+    dtype="uint32",
+    expected_values=tuple(UNION_EXPECTED_VALUES),
+    workgroup_count=(1, 1, 1),
+)
+SMOKE_CASES = (BASIC_CASE, UNION_CASE)
 
 
 def _write_summary(status: str, detail: str) -> None:
@@ -78,18 +138,24 @@ def _probe_runtime(runtime: DirectXComputeRuntime, work_dir: Path) -> bool:
     return False
 
 
-def _translate_and_compile(work_dir: Path, dxc: str) -> tuple[Path, Path]:
-    source_path = work_dir / "runtime-smoke.cgl"
-    hlsl_path = work_dir / "runtime-smoke.hlsl"
-    dxil_path = work_dir / "runtime-smoke.dxil"
-    source_path.write_text(SOURCE, encoding="utf-8")
+def _translate_and_compile(
+    work_dir: Path,
+    dxc: str,
+    case: RuntimeSmokeCase = BASIC_CASE,
+) -> tuple[Path, Path]:
+    source_path = work_dir / case.source_name
+    hlsl_path = work_dir / f"{case.id}.hlsl"
+    dxil_path = work_dir / f"{case.id}.dxil"
+    source_path.write_text(case.source, encoding="utf-8")
 
-    generated = crosstl.translate(
-        str(source_path),
-        backend="directx",
-        save_shader=str(hlsl_path),
-        format_output=False,
-    )
+    translate_options = {
+        "backend": "directx",
+        "save_shader": str(hlsl_path),
+        "format_output": False,
+    }
+    if case.source_backend is not None:
+        translate_options["source_backend"] = case.source_backend
+    generated = crosstl.translate(str(source_path), **translate_options)
     if not generated.strip() or not hlsl_path.is_file():
         raise RuntimeError("CrossTL DirectX translation did not emit HLSL.")
 
@@ -107,7 +173,11 @@ def _translate_and_compile(work_dir: Path, dxc: str) -> tuple[Path, Path]:
     return hlsl_path, dxil_path
 
 
-def _dispatch_request(hlsl_path: Path, dxil_path: Path) -> NativeRuntimeDispatchRequest:
+def _dispatch_request(
+    hlsl_path: Path,
+    dxil_path: Path,
+    case: RuntimeSmokeCase = BASIC_CASE,
+) -> NativeRuntimeDispatchRequest:
     return NativeRuntimeDispatchRequest(
         target="directx",
         artifact={"target": "directx", "path": str(hlsl_path)},
@@ -115,26 +185,26 @@ def _dispatch_request(hlsl_path: Path, dxil_path: Path) -> NativeRuntimeDispatch
         module_path=dxil_path,
         loaded_artifact=dxil_path.read_bytes(),
         buffers={
-            "outputBuffer": NativeRuntimeBufferBinding(
-                name="outputBuffer",
+            case.buffer_name: NativeRuntimeBufferBinding(
+                name=case.buffer_name,
                 binding=RuntimeResourceBinding(
-                    name="outputBuffer",
+                    name=case.buffer_name,
                     kind="buffer",
-                    type_name="RWStructuredBuffer<float>",
+                    type_name=case.buffer_type,
                     set=0,
                     binding=0,
                     access="read_write",
                 ),
                 source="expectedOutput",
-                dtype="float32",
-                shape=(len(EXPECTED_VALUES),),
+                dtype=case.dtype,
+                shape=(len(case.expected_values),),
                 metadata={"runtimeValueName": "result"},
             )
         },
         constants={},
         dispatch=RuntimeDispatchGeometry(
             entry_point="CSMain",
-            workgroup_count=(len(EXPECTED_VALUES), 1, 1),
+            workgroup_count=case.workgroup_count,
         ),
         entry_point="CSMain",
     )
@@ -158,21 +228,27 @@ def main() -> int:
         if not _probe_runtime(runtime, work_dir):
             return 0
 
-        hlsl_path, dxil_path = _translate_and_compile(work_dir, dxc)
-        outputs = runtime.dispatch(
-            None,
-            None,
-            _dispatch_request(hlsl_path, dxil_path),
-        )
+        value_count = 0
+        for case in SMOKE_CASES:
+            hlsl_path, dxil_path = _translate_and_compile(work_dir, dxc, case)
+            outputs = runtime.dispatch(
+                None,
+                None,
+                _dispatch_request(hlsl_path, dxil_path, case),
+            )
+            actual = outputs.get("result", {}).get("values")
+            expected = list(case.expected_values)
+            if actual != expected:
+                raise RuntimeError(
+                    f"Direct3D 12 native runtime readback mismatch for {case.id}: "
+                    f"expected {expected}, received {actual}"
+                )
+            value_count += len(actual)
 
-    actual = outputs.get("result", {}).get("values")
-    if actual != EXPECTED_VALUES:
-        raise RuntimeError(
-            "Direct3D 12 native runtime readback mismatch: "
-            f"expected {EXPECTED_VALUES}, received {actual}"
-        )
-
-    detail = f"translated, compiled, dispatched, and read back {len(actual)} values"
+    detail = (
+        f"translated, compiled, dispatched, and read back {value_count} values "
+        f"across {len(SMOKE_CASES)} cases"
+    )
     print(f"Direct3D 12 native runtime smoke passed: {detail}.")
     _write_summary("passed", detail)
     return 0
