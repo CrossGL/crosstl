@@ -19,7 +19,10 @@ on:
       - "tests/test_translator/test_codegen/test_GLSL_codegen.py"
       - "tests/test_translator/test_codegen/test_SPIRV_codegen.py"
       - "tests/test_translator/test_codegen/test_directx_codegen.py"
+      - "tests/fixtures/runtime_verification/**"
+      - "tests/test_translator/test_native_runtime_drivers.py"
       - "tests/test_translator/test_project_translation.py"
+      - "tests/test_translator/test_runtime_verification.py"
   pull_request:
     branches: [main]
     paths:
@@ -34,7 +37,10 @@ on:
       - "tests/test_translator/test_codegen/test_GLSL_codegen.py"
       - "tests/test_translator/test_codegen/test_SPIRV_codegen.py"
       - "tests/test_translator/test_codegen/test_directx_codegen.py"
+      - "tests/fixtures/runtime_verification/**"
+      - "tests/test_translator/test_native_runtime_drivers.py"
       - "tests/test_translator/test_project_translation.py"
+      - "tests/test_translator/test_runtime_verification.py"
   schedule:
     - cron: "31 4 * * 1"
   workflow_dispatch:
@@ -118,6 +124,10 @@ jobs:
           }
           $dxc.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
+      - name: Install Windows Direct3D runtime dependencies
+        if: runner.os == 'Windows'
+        run: python -m pip install -e ".[directx-runtime]" pytest-xdist
+
       - name: Install Linux runtime dependencies
         if: runner.os == 'Linux'
         run: |
@@ -160,6 +170,12 @@ jobs:
               --mlx-root mlx-upstream \
               --require-metal-toolchain
           fi
+
+      - name: Prove Direct3D immutable lookup numerical execution
+        if: runner.os == 'Windows'
+        env:
+          CROSTL_RUN_DIRECTX_LOOKUP_DEVICE_TEST: "1"
+        run: python -m pytest -q -n auto tests/test_translator/test_native_runtime_drivers.py -k "directx_compute_runtime_executes_mlx_file_scope_lookup_on_device"
 
       - name: Prove OpenGL SPIR-V specialization runtime
         if: runner.os == 'Linux'

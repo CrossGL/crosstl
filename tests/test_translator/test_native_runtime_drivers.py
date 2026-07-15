@@ -3,6 +3,7 @@ import os
 import shutil
 import struct
 import subprocess
+import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -43,12 +44,15 @@ from crosstl.project.runtime_verification import (
     RuntimeResourceBinding,
     RuntimeSpecializationConstant,
     VulkanRuntimeParityAdapter,
+    build_runtime_test_manifest,
     verify_runtime_test_manifest,
 )
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _runtime_request(tmp_path: Path) -> RuntimeExecutionRequest:
@@ -748,6 +752,79 @@ def test_directx_runtime_adapter_compiles_dxil_and_dispatches_fixture(tmp_path):
     assert result["status"] == "passed"
     assert module.computes[0].shader == b"DXBC\x00\x01"
     assert module.computes[0].dispatch_args == (2, 3, 1)
+
+
+def test_directx_compute_runtime_executes_mlx_file_scope_lookup_on_device(tmp_path):
+    if os.environ.get("CROSTL_RUN_DIRECTX_LOOKUP_DEVICE_TEST") != "1":
+        pytest.skip(
+            "set CROSTL_RUN_DIRECTX_LOOKUP_DEVICE_TEST=1 to run Direct3D lookup test"
+        )
+    if not sys.platform.startswith("win32"):
+        pytest.fail("Direct3D lookup runtime proof requires Windows")
+    if shutil.which("dxc") is None:
+        pytest.fail("DXC is required for the Direct3D lookup runtime proof")
+    try:
+        __import__("compushady")
+    except ImportError as exc:
+        pytest.fail(f"Direct3D lookup runtime dependency is unavailable: {exc}")
+
+    fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / "mlx"
+    source_path = fixture_dir / "file_scope_immutable_lookup.metal"
+    artifact_report = json.loads(
+        (fixture_dir / "file_scope_immutable_lookup.artifacts.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    generated = translate(
+        str(source_path),
+        backend="directx",
+        source_backend="metal",
+        format_output=False,
+    )
+    assert (
+        "static const uint lookup_table[2][4] = "
+        "{{3u, 5u, 7u, 11u}, {13u, 17u, 19u, 23u}};"
+    ) in generated
+
+    artifact_report["project"]["root"] = str(tmp_path)
+    artifact_path = tmp_path / artifact_report["artifacts"][0]["path"]
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text(generated, encoding="utf-8")
+    manifest = build_runtime_test_manifest(
+        artifact_report,
+        fixture_dir / "file_scope_immutable_lookup.fixture-metadata.json",
+        project_root=tmp_path,
+    )
+    assert manifest["success"] is True, json.dumps(manifest, indent=2)
+
+    report = verify_runtime_test_manifest(
+        artifact_report,
+        manifest,
+        executors={
+            "directx": DirectXRuntimeParityAdapter(runtime=DirectXComputeRuntime())
+        },
+    )
+
+    assert report["success"] is True, json.dumps(report, indent=2)
+    assert report["summary"]["passedCount"] == 1, json.dumps(report, indent=2)
+    assert report["summary"]["skippedCount"] == 0, json.dumps(report, indent=2)
+    assert report["summary"]["unavailableCount"] == 0, json.dumps(report, indent=2)
+    assert report["summary"]["failedCount"] == 0, json.dumps(report, indent=2)
+    result = report["results"][0]
+    assert result["status"] == "passed", json.dumps(report, indent=2)
+    assert result["comparisons"] == [
+        {
+            "name": "output",
+            "kind": "buffer",
+            "status": "passed",
+            "tolerance": {"absolute": 0.0, "relative": 0.0},
+            "expected": {"dtype": "uint32", "shape": [4]},
+            "actual": {"dtype": "uint32", "shape": [4]},
+            "mismatchCount": 0,
+            "maxAbsoluteError": 0.0,
+            "maxRelativeError": 0.0,
+        }
+    ]
 
 
 @pytest.mark.parametrize(

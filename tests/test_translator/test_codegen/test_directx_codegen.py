@@ -47,6 +47,7 @@ from crosstl.translator.ast import (
 from crosstl.translator.codegen.directx_codegen import (
     DirectXAggregateConditionalError,
     DirectXAtomicFenceLoweringError,
+    DirectXCompileTimeGlobalError,
     DirectXCooperativeMatrixUnsupportedError,
     DirectXForInIterableError,
     DirectXMappedOverloadError,
@@ -412,18 +413,37 @@ def test_hlsl_metal_union_unsupported_layouts_are_structured_diagnostics(
     assert error.value.union_name
 
 
-def test_hlsl_specialization_constant_defaults_are_compile_time_constants():
+def test_hlsl_specialization_and_file_scope_constants_preserve_contracts(tmp_path):
     source = """
     shader DirectXSpecializationDefaults {
+        struct LookupConfig {
+            uint base;
+            uint2 bias;
+        };
+
         const int ordinary = 9;
         const int width @constant_id(19) = 4;
         constant bool use_fast @function_constant(20) = true;
         constant int mode @constant_id(21) = 2;
         constant float scale @function_constant(22) = 0.5;
+        constant int tableRows = 2;
+        constant uint scalarValue = 3u;
+        constant uint2 laneBias = uint2(5u, 7u);
+        constant LookupConfig config = LookupConfig(11u, uint2(13u, 17u));
+        constant uint rotations[tableRows][4] = {
+            {19u, 23u, 29u, 31u},
+            {37u, 41u, 43u, 47u}
+        };
+        constant sampler2D lookupTexture @binding(2);
+        constant float runtimeScale @location(3);
 
         compute {
-            void main() {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<uint> output @ binding(0)) {
                 float value = use_fast ? scale + float(mode + width + ordinary) : 0.0;
+                output[0] = scalarValue + laneBias.y + config.base
+                    + config.bias.x + rotations[1][2] + uint(value);
             }
         }
     }
@@ -436,15 +456,64 @@ def test_hlsl_specialization_constant_defaults_are_compile_time_constants():
     assert "static const bool use_fast = true;" in generated
     assert "static const int mode = 2;" in generated
     assert "static const float scale = 0.5;" in generated
+    assert "static const int tableRows = 2;" in generated
+    assert "static const uint scalarValue = 3u;" in generated
+    assert "static const uint2 laneBias = uint2(5u, 7u);" in generated
+    assert "static const LookupConfig config = {11u, uint2(13u, 17u)};" in generated
+    assert (
+        "static const uint rotations[tableRows][4] = "
+        "{{19u, 23u, 29u, 31u}, {37u, 41u, 43u, 47u}};" in generated
+    )
     for constant_id in (19, 20, 21, 22):
         assert (
             f"DirectX specialization constant id {constant_id} fixed to its default"
             in generated
         )
+    assert "config.bias.x" in generated
+    assert "rotations[1][2]" in generated
+    assert "uint rotations[4][tableRows]" not in generated
+    assert "uint rotations[tableRows][4];" not in generated
+    assert "Texture2D lookupTexture : register(t2);" in generated
+    assert "float runtimeScale;" in generated
+    assert "static const Texture2D lookupTexture" not in generated
+    assert "static const float runtimeScale" not in generated
     assert "bool use_fast;" not in generated
     assert "int mode;" not in generated
     assert "float scale;" not in generated
     assert "$Globals" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_omits_unreferenced_empty_compile_time_values_and_rejects_uses():
+    source = """
+    shader EmptyCompileTimeValue {
+        struct Logger {
+        };
+
+        constant Logger logger = Logger("scope", "category");
+
+        compute {
+            void main() {
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert "Logger logger" not in generated
+
+    referenced_source = source.replace(
+        "void main() {\n            }",
+        "void main() {\n                Logger value = logger;\n            }",
+    )
+    with pytest.raises(DirectXCompileTimeGlobalError) as exc_info:
+        HLSLCodeGen().generate(crosstl.translator.parse(referenced_source))
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == "unrepresentable-value-type"
+    assert diagnostic.detail == "empty struct type 'Logger'"
 
 
 def test_hlsl_metal_function_constant_defaults_use_compile_time_constants(tmp_path):
@@ -481,7 +550,7 @@ def test_hlsl_metal_function_constant_defaults_use_compile_time_constants(tmp_pa
     HLSLParser(HLSLLexer(generated).tokenize()).parse()
 
 
-def test_hlsl_required_specialization_constant_fails_before_global_emission(
+def test_hlsl_invalid_compile_time_values_fail_before_global_emission(
     monkeypatch,
 ):
     source = """
@@ -523,6 +592,43 @@ def test_hlsl_required_specialization_constant_fails_before_global_emission(
     assert "has_w" in str(diagnostic)
     assert "id 20" in str(diagnostic)
     assert "no concrete/default value" in str(diagnostic)
+
+    invalid_initializers = (
+        (
+            "float runtimeScale; constant float invalidScale = runtimeScale;",
+            "runtime-value",
+            "runtimeScale",
+        ),
+        (
+            "float buildScale() { return 2.0; } "
+            "constant float invalidScale = buildScale();",
+            "function-call",
+            "buildScale",
+        ),
+    )
+    for declaration, reason, detail in invalid_initializers:
+        invalid_ast = crosstl.translator.parse(
+            f"shader InvalidCompileTimeGlobal {{ {declaration} }}"
+        )
+        invalid = next(
+            node for node in invalid_ast.global_variables if node.name == "invalidScale"
+        )
+        invalid.source_location = source_location
+
+        with pytest.raises(DirectXCompileTimeGlobalError) as exc_info:
+            HLSLCodeGen().generate(invalid_ast)
+
+        compile_time_diagnostic = exc_info.value
+        assert compile_time_diagnostic.project_diagnostic_code == (
+            "project.translate.directx-compile-time-global-invalid"
+        )
+        assert compile_time_diagnostic.missing_capabilities == (
+            "directx.compile-time-global-initializer",
+        )
+        assert compile_time_diagnostic.variable_name == "invalidScale"
+        assert compile_time_diagnostic.detail == detail
+        assert compile_time_diagnostic.reason == reason
+        assert compile_time_diagnostic.source_location == source_location
 
 
 @pytest.mark.parametrize(

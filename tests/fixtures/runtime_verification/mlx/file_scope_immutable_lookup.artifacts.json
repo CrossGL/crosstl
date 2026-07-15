@@ -1,0 +1,66 @@
+{
+  "kind": "crosstl-runtime-artifact-manifest",
+  "project": {
+    "root": ".",
+    "targets": [
+      "directx"
+    ]
+  },
+  "artifacts": [
+    {
+      "id": "directx|tests/fixtures/runtime_verification/mlx/file_scope_immutable_lookup.metal|native-lookup",
+      "source": "tests/fixtures/runtime_verification/mlx/file_scope_immutable_lookup.metal",
+      "path": "out/directx/file_scope_immutable_lookup.hlsl",
+      "target": "directx",
+      "sourceBackend": "metal",
+      "stage": "compute",
+      "variant": "native-lookup",
+      "status": "translated",
+      "entryPoints": [
+        {
+          "name": "CSMain",
+          "stage": "compute",
+          "executionConfig": {
+            "numthreads": [
+              1,
+              1,
+              1
+            ]
+          },
+          "workgroupSize": [
+            1,
+            1,
+            1
+          ]
+        }
+      ],
+      "resourceBindings": [
+        {
+          "id": "buffer|0|output",
+          "name": "output",
+          "kind": "buffer",
+          "type": "RWStructuredBuffer<uint>",
+          "set": 0,
+          "binding": 0,
+          "access": "write"
+        }
+      ],
+      "dispatch": {
+        "status": "available",
+        "workgroups": [
+          {
+            "entryPoint": "CSMain",
+            "stage": "compute",
+            "workgroupSize": [
+              1,
+              1,
+              1
+            ],
+            "source": "fixture"
+          }
+        ],
+        "diagnostics": []
+      }
+    }
+  ]
+}

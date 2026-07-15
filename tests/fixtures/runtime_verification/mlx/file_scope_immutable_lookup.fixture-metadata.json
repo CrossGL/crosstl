@@ -1,0 +1,76 @@
+{
+  "kind": "crosstl-project-runtime-fixture-metadata",
+  "metadata": {
+    "repository": "mlx",
+    "fixtureSet": "reduced-metal-kernels"
+  },
+  "fixtures": [
+    {
+      "id": "mlx-file-scope-immutable-lookup-u32",
+      "selector": {
+        "source": "tests/fixtures/runtime_verification/mlx/file_scope_immutable_lookup.metal",
+        "target": "directx",
+        "variant": "native-lookup"
+      },
+      "expectedOutputs": [
+        {
+          "name": "output",
+          "kind": "buffer",
+          "dtype": "uint32",
+          "shape": [
+            4
+          ],
+          "values": [
+            5,
+            19,
+            11,
+            13
+          ]
+        }
+      ],
+      "runtimeAdapter": {
+        "id": "mlx-file-scope-immutable-lookup-contract-v1",
+        "entryPoints": [
+          {
+            "name": "CSMain",
+            "stage": "compute",
+            "workgroupSize": [
+              1,
+              1,
+              1
+            ]
+          }
+        ],
+        "resourceBindings": [
+          {
+            "name": "output",
+            "kind": "buffer",
+            "binding": 0,
+            "access": "write",
+            "value": "output"
+          }
+        ],
+        "dispatch": {
+          "entryPoint": "CSMain",
+          "globalSize": [
+            4,
+            1,
+            1
+          ]
+        }
+      },
+      "metadata": {
+        "repository": "mlx",
+        "proof": "file-scope-immutable-lookup-value",
+        "testCommand": [
+          "python",
+          "-m",
+          "pytest",
+          "tests/test_translator/test_native_runtime_drivers.py",
+          "-k",
+          "directx_compute_runtime_executes_mlx_file_scope_lookup_on_device"
+        ]
+      }
+    }
+  ]
+}
