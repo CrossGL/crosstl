@@ -10,6 +10,7 @@ from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
 from crosstl.backend.Metal.MetalCrossGLCodeGen import (
     MetalAddressProvenanceError,
+    MetalAliasTemplateResolutionError,
     MetalAtomicFenceLoweringError,
     MetalAutoTypeInferenceError,
     MetalBuiltinOverloadResolutionError,
@@ -10482,3 +10483,252 @@ def test_codegen_honors_transitive_template_specialization_budget():
     assert diagnostic.callee_template == "leaf"
     assert diagnostic.requested_arguments == ("float", "8")
     assert diagnostic.requested_signature == "leaf<float, 8>"
+
+
+def test_codegen_materializes_ordered_variadic_alias_and_dependent_chain():
+    crossgl = convert_without_preprocessing("""
+        template <typename First, typename Second>
+        struct select_second {
+          using selected = Second;
+          using type = selected;
+        };
+
+        template <typename... Ts>
+        using second_t = typename select_second<Ts...>::type;
+
+        template <typename... Ts>
+        using chained_t = second_t<Ts...>;
+
+        template <typename T>
+        struct Box {};
+
+        template <typename... Ts>
+        struct Bundle {};
+
+        template <typename... Ts>
+        using boxed_t = Bundle<Box<Ts>...>;
+
+        template <typename... Ts>
+        struct make_void { using type = void; };
+
+        template <typename... Ts>
+        using void_t = typename make_void<Ts...>::type;
+
+        chained_t<int, float> choose(chained_t<int, float> value) {
+          return value;
+        }
+
+        boxed_t<int, float> ordered(boxed_t<int, float> value) {
+          return value;
+        }
+
+        void_t<> empty_pack() { return; }
+        """)
+
+    normalized = normalize(crossgl)
+    assert "float choose(float value)" in normalized
+    assert (
+        "Bundle<Box<int>,Box<float>> ordered(Bundle<Box<int>,Box<float>> value)"
+        in normalized
+    )
+    assert "void empty_pack()" in normalized
+    for alias_name in ("second_t", "chained_t", "boxed_t", "void_t"):
+        assert alias_name not in crossgl
+    assert "using " not in crossgl
+    assert "template <" not in crossgl
+    parse_crossgl(crossgl)
+
+
+def test_codegen_resolves_alias_templates_with_namespace_and_shadowing():
+    crossgl = convert_without_preprocessing("""
+        namespace Left {
+        template <typename... Ts>
+        using Pick = int;
+        int left(Pick<float> value) { return value; }
+        }
+
+        namespace Right {
+        template <typename... Ts>
+        using Pick = float;
+        float right(Pick<int> value) { return value; }
+        }
+
+        using namespace Right;
+        float imported(Pick<int> value) { return value; }
+        float qualified(Left::Pick<float> value) { return float(value); }
+
+        template <template <typename...> class Pick>
+        void shadowed(Pick<float> value) {}
+        """)
+
+    normalized = normalize(crossgl)
+    assert "int left(int value)" in normalized
+    assert "float right(float value)" in normalized
+    assert "float imported(float value)" in normalized
+    assert "float qualified(int value)" in normalized
+    assert "generic<Pick> void shadowed(Pick<float> value)" in normalized
+
+
+def test_codegen_reports_recursive_variadic_alias_dependency():
+    code = """
+    template <typename... Ts>
+    using Loop = Loop<Ts...>;
+    void consume(Loop<int> value) {}
+    """
+    tokens = MetalLexer(code, preprocess=False).tokenize()
+    ast = MetalParser(tokens, file_path="recursive-alias.metal").parse()
+
+    with pytest.raises(MetalAliasTemplateResolutionError) as exc_info:
+        MetalToCrossGLConverter().generate(ast)
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.metal-alias-template-unresolved"
+    )
+    assert diagnostic.alias_name == "Loop"
+    assert diagnostic.requested_signature == "Loop<int>"
+    assert diagnostic.dependency_chain == ("Loop<int>", "Loop<int>")
+    assert diagnostic.source_location["file"] == "recursive-alias.metal"
+    assert diagnostic.source_location["line"] == 2
+
+
+def test_codegen_reports_symbolic_variadic_pack_use():
+    code = """
+    template <typename... Ts>
+    struct make_void { using type = void; };
+    template <typename... Ts>
+    using void_t = typename make_void<Ts...>::type;
+    template <typename... Ts>
+    void consume(void_t<Ts...> value) {}
+    """
+    tokens = MetalLexer(code, preprocess=False).tokenize()
+    ast = MetalParser(tokens, file_path="unresolved-pack.metal").parse()
+
+    with pytest.raises(MetalAliasTemplateResolutionError) as exc_info:
+        MetalToCrossGLConverter().generate(ast)
+
+    diagnostic = exc_info.value
+    assert diagnostic.alias_name == "void_t"
+    assert diagnostic.parameter_pack == "Ts"
+    assert "unresolved pack or template parameter" in diagnostic.reason
+    assert diagnostic.source_location["file"] == "unresolved-pack.metal"
+
+
+def test_codegen_enforces_chained_alias_materialization_budget():
+    code = """
+    template <typename T>
+    using Inner = T;
+    template <typename T>
+    using Outer = Inner<T>;
+    void consume(Outer<int> value) {}
+    """
+    tokens = MetalLexer(code, preprocess=False).tokenize()
+    ast = MetalParser(
+        tokens,
+        file_path="alias-budget.metal",
+        max_template_specializations=1,
+        template_specialization_limit_source="focused alias budget",
+    ).parse()
+
+    with pytest.raises(MetalAliasTemplateResolutionError) as exc_info:
+        MetalToCrossGLConverter().generate(ast)
+
+    diagnostic = exc_info.value
+    assert diagnostic.alias_name == "Inner"
+    assert diagnostic.limit == 1
+    assert diagnostic.limit_source == "focused alias budget"
+    assert diagnostic.required_work_items == 2
+    assert diagnostic.source_location["file"] == "alias-budget.metal"
+
+
+def test_codegen_removes_alias_template_syntax_from_project_targets(tmp_path):
+    crossgl = convert_without_preprocessing("""
+        template <typename First, typename Second>
+        struct select_second {
+          using selected = Second;
+          using type = selected;
+        };
+        template <typename... Ts>
+        using second_t = typename select_second<Ts...>::type;
+        template <typename... Ts>
+        using result_t = second_t<Ts...>;
+
+        kernel void alias_pack_kernel(
+            device result_t<int, float>* values [[buffer(0)]],
+            uint gid [[thread_position_in_grid]]) {
+          values[gid] = float(gid);
+        }
+        """)
+    shader = parse_crossgl(crossgl)
+    targets = {
+        "directx": TranslatorHLSLCodeGen().generate(shader),
+        "opengl": GLSLCodeGen().generate(shader),
+        "vulkan": VulkanSPIRVCodeGen().generate(shader),
+    }
+
+    for generated in (crossgl, *targets.values()):
+        assert "template <" not in generated
+        assert "using " not in generated
+        assert "second_t" not in generated
+        assert "result_t" not in generated
+        assert "Ts..." not in generated
+    assert "RWStructuredBuffer<float> values" in targets["directx"]
+    assert "float values[]" in targets["opengl"]
+    assert "OpTypeFloat 32" in targets["vulkan"]
+
+    dxc = shutil.which("dxc")
+    if dxc is not None:
+        hlsl_path = tmp_path / "alias-pack.hlsl"
+        hlsl_path.write_text(targets["directx"], encoding="utf-8")
+        subprocess.run(
+            [dxc, "-T", "cs_6_0", "-E", "CSMain", str(hlsl_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    glslang = shutil.which("glslangValidator")
+    if glslang is not None:
+        glsl_path = tmp_path / "alias-pack.comp"
+        glsl_path.write_text(targets["opengl"], encoding="utf-8")
+        subprocess.run(
+            [
+                glslang,
+                "--target-env",
+                "opengl",
+                "-S",
+                "comp",
+                str(glsl_path),
+                "-o",
+                str(tmp_path / "alias-pack-opengl.spv"),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    spirv_as = shutil.which("spirv-as")
+    spirv_val = shutil.which("spirv-val")
+    if spirv_as is not None and spirv_val is not None:
+        spirv_path = tmp_path / "alias-pack.spvasm"
+        binary_path = tmp_path / "alias-pack.spv"
+        spirv_path.write_text(targets["vulkan"], encoding="utf-8")
+        subprocess.run(
+            [
+                spirv_as,
+                "--target-env",
+                "vulkan1.1",
+                str(spirv_path),
+                "-o",
+                str(binary_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            [spirv_val, "--target-env", "vulkan1.1", str(binary_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )

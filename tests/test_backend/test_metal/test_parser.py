@@ -2981,8 +2981,13 @@ def test_parse_template_struct_base_clause_from_mlx_type_traits():
       typedef void type;
     };
 
+    template <typename Head, typename... Tail>
+    using selected_t = typename make_void<Head, Tail...>::type;
+
     template <class T>
     struct is_static : metal::bool_constant<is_empty<remove_cv_t<T>>::value> {};
+
+    void consume(selected_t<int, float> value) {}
     }
     """
     ast = parse_ok(code)
@@ -2994,9 +2999,22 @@ def test_parse_template_struct_base_clause_from_mlx_type_traits():
     ]
     assert ast.structs[0].base_types == ["metal::bool_constant<__is_empty(T)>"]
     assert ast.structs[1].members == []
+    assert [
+        (alias.name, alias.alias_type) for alias in ast.structs[1].type_aliases
+    ] == [("type", "void")]
     assert ast.structs[2].base_types == [
         "metal::bool_constant<is_empty<remove_cv_t<T>>::value>"
     ]
+    alias = ast.typedefs[0]
+    assert alias.name == "selected_t"
+    assert alias.qualified_name == "metal::selected_t"
+    assert alias.alias_type == "make_void<Head,Tail...>::type"
+    assert alias.template_parameters == [
+        ("typename", "Head"),
+        ("typename...", "Tail"),
+    ]
+    assert alias.is_template_alias is True
+    assert ast.functions[0].namespace == "metal"
 
 
 def test_parse_variadic_function_parameter_pack_from_mlx_integral_constant():
