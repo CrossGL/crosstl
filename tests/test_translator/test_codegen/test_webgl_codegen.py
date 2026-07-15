@@ -1,3 +1,4 @@
+import re
 import shutil
 import subprocess
 from types import SimpleNamespace
@@ -77,6 +78,73 @@ def test_webgl_codegen_emits_glsl_es_header_and_default_precision():
     assert "precision highp int;\n" in generated
     assert "#version 450 core" not in generated
     assert "layout(location = 0) out vec4 fragColor;" in generated
+
+
+def test_webgl_codegen_sanitizes_reserved_identifiers_and_collisions():
+    shader = r"""
+    shader WebGLReservedIdentifiers {
+        float gl_helper(float __arg, float _arg) {
+            float local__value = __arg;
+            float local_value = _arg;
+            return local__value + local_value;
+        }
+
+        vertex {
+            vec4 main(
+                vec3 position__value @ POSITION,
+                vec3 position_value @ NORMAL
+            ) @ gl_Position {
+                float result__value = gl_helper(
+                    position__value.x,
+                    position_value.x
+                );
+                float result_value = result__value;
+                return vec4(
+                    position__value + position_value + vec3(result_value),
+                    1.0
+                );
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate_stage(parse_shader(shader), "vertex")
+
+    assert "__" not in generated
+    assert "layout(location = 0) in vec3 position_value_2;" in generated
+    assert "layout(location = 1) in vec3 position_value;" in generated
+    assert "float crossgl_gl_helper(float arg, float _arg)" in generated
+    assert generated.count("float crossgl_gl_helper(float arg, float _arg)") == 2
+    assert "crossgl_gl_helper(position_value_2.x, position_value.x)" in generated
+    assert "float local_value_2 = arg;" in generated
+
+
+def test_webgl_codegen_sanitizes_webgl_reserved_prefixes():
+    shader = r"""
+    shader WebGLReservedPrefixes {
+        float crossgl_webgl_helper(float value) { return value; }
+
+        float webgl_helper(float _webgl_arg) {
+            float webgl__value = _webgl_arg;
+            return webgl__value;
+        }
+
+        vertex {
+            vec4 main(vec3 webgl_position @ POSITION) @ gl_Position {
+                return vec4(webgl_position, webgl_helper(1.0));
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate_stage(parse_shader(shader), "vertex")
+
+    assert "layout(location = 0) in vec3 crossgl_webgl_position;" in generated
+    assert "float crossgl_webgl_helper_2(float crossgl_webgl_arg)" in generated
+    assert "float crossgl_webgl_value = crossgl_webgl_arg;" in generated
+    assert "crossgl_webgl_helper_2(1.0)" in generated
+    assert re.search(r"\b(?:webgl_|_webgl_)[A-Za-z0-9_]*", generated) is None
+    assert "__" not in generated
 
 
 def test_webgl_codegen_reuses_fixed_array_for_in_contract():

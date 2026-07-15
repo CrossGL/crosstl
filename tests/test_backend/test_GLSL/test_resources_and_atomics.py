@@ -4496,11 +4496,11 @@ def test_codegen_mixed_ssbo_resource_array_helpers_infer_fallback_arg_types():
         "readUv(arrayBlock));" in glsl
     )
     assert (
-        "uint incrementedDirect = incrementArray__glsl_images_counters("
+        "uint incrementedDirect = incrementArray_glsl_images_counters("
         "arrayBlock.layer, arrayBlock.pixel, arrayBlock.amount);" in glsl
     )
     assert (
-        "uint incrementedCall = incrementArray__glsl_images_counters("
+        "uint incrementedCall = incrementArray_glsl_images_counters("
         "readLayer(arrayBlock), readPixel(arrayBlock), readAmount(arrayBlock));" in glsl
     )
     assert "sampler sams" not in glsl
@@ -5629,13 +5629,13 @@ def test_codegen_mixed_ssbo_multisample_image_args_infer_fallback_types():
         "textureSamples(signedImage));" in glsl
     )
     assert (
-        "vec4 direct = touchImages__glsl_colorImage_msColor_layerImage_msLayers_"
+        "vec4 direct = touchImages_glsl_colorImage_msColor_layerImage_msLayers_"
         "countImage_counters_signedImage_signedLayers(msImageBlock.pixel, "
         "msImageBlock.pixelLayer, msImageBlock.sampleIndex, msImageBlock.color, "
         "msImageBlock.count, msImageBlock.signedValue);" in glsl
     )
     assert (
-        "vec4 call = touchImages__glsl_colorImage_msColor_layerImage_msLayers_"
+        "vec4 call = touchImages_glsl_colorImage_msColor_layerImage_msLayers_"
         "countImage_counters_signedImage_signedLayers(readPixel(msImageBlock), "
         "readPixelLayer(msImageBlock), readSample(msImageBlock), "
         "readColor(msImageBlock), readCount(msImageBlock), "
@@ -6227,7 +6227,7 @@ def test_codegen_cast_and_literal_swizzle_image_indices_infer_size():
     assert "vec2 readLayer(image2D images[4], ivec2 pixel)" in glsl
     assert "imageLoad(images[int((BASE + 2))], pixel).xy" in glsl
     assert "imageLoad(images[ivec2(1, 3).y], pixel).xy" in glsl
-    assert "readLayer__glsl_images_rgFloatImages(ivec2(0, 1))" in glsl
+    assert "readLayer_glsl_images_rgFloatImages(ivec2(0, 1))" in glsl
     assert "image2D rgFloatImages[]" not in glsl
     assert "image2D rgFloatImages[5]" not in glsl
 
@@ -8857,7 +8857,7 @@ def test_codegen_ternary_image_indices_in_function_args_infer_size():
         "combine(imageLoad(images[(choose ? 3 : 1)], pixel).xy, "
         "imageLoad(images[1], pixel).xy)" in glsl
     )
-    assert "readLayer__glsl_images_rgFloatImages(ivec2(0, 1), true)" in glsl
+    assert "readLayer_glsl_images_rgFloatImages(ivec2(0, 1), true)" in glsl
     assert "image2D rgFloatImages[2]" not in glsl
     assert "image2D rgFloatImages[5]" not in glsl
 

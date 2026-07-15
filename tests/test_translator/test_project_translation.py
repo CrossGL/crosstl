@@ -12263,7 +12263,7 @@ def test_translate_project_metal_defaulted_member_template_to_targets(tmp_path):
             assert "Runner__add_bias__float" in output
             assert_directx_compute_validates_if_available(output, tmp_path)
         elif artifact["target"] == "opengl":
-            assert "Runner__add_bias__float" in output
+            assert "Runner_add_bias_float" in output
             assert_compute_glsl_validates_if_available(output, tmp_path)
         else:
             assert_spirv_asm_validates_if_available(output, tmp_path)
@@ -32789,9 +32789,9 @@ def test_translate_project_transports_metal_overloads_collapsed_by_opengl_mappin
     assert payload["diagnosticCounts"]["error"] == 0
     artifact = payload["artifacts"][0]
     generated = (repo / artifact["path"]).read_text(encoding="utf-8")
-    assert "float collapsed__metal_overload_1(float value)" in generated
-    assert "float collapsed__metal_overload_2(float value)" in generated
-    assert "collapsed__metal_overload_1(float(index))" in generated
+    assert "float collapsed_metal_overload_1(float value)" in generated
+    assert "float collapsed_metal_overload_2(float value)" in generated
+    assert "collapsed_metal_overload_1(float(index))" in generated
     assert "float collapsed(float value)" not in generated
     assert_compute_glsl_validates_if_available(generated, tmp_path)
 
@@ -46477,9 +46477,9 @@ def test_translate_project_metal_templated_functor_header_materializes(
     assert payload["diagnostics"] == []
     output = (repo / artifact["path"]).read_text(encoding="utf-8")
     assert "struct AddFunctor_float" in output
-    assert "float AddFunctor_float__operator_call(" in output
+    assert "float AddFunctor_float_operator_call(" in output
     assert "AddFunctor_float op;" in output
-    assert "AddFunctor_float__operator_call(op, lhs[gid], rhs[gid])" in output
+    assert "AddFunctor_float_operator_call(op, lhs[gid], rhs[gid])" in output
     assert "AddFunctor<float>" not in output
     assert "op(lhs[gid], rhs[gid])" not in output
 
@@ -48937,7 +48937,7 @@ def test_translate_project_resolves_struct_owned_alias_template_vectors(tmp_path
     assert "float4 make_float" in outputs["directx"]
     assert "float BaseFrag__first__float" in outputs["directx"]
     assert "vec4 make_float" in outputs["opengl"]
-    assert "float BaseFrag__first__float" in outputs["opengl"]
+    assert "float BaseFrag_first_float" in outputs["opengl"]
     assert "OpTypeVector" in outputs["vulkan"]
     assert_directx_compute_validates_if_available(outputs["directx"], tmp_path)
     assert_compute_glsl_validates_if_available(outputs["opengl"], tmp_path)
@@ -51936,10 +51936,14 @@ def test_metal_nested_generic_member_calls_translate_and_validate_for_all_target
     for artifact in generated.values():
         assert ".load<" not in artifact
         assert ".template load" not in artifact
-    for target in ("directx", "opengl"):
+    expected_helpers = {
+        "directx": ("Tile__load__float_1_1_36_1", "Tile__load__float_1_2_1_36"),
+        "opengl": ("Tile_load_float_1_1_36_1", "Tile_load_float_1_2_1_36"),
+    }
+    for target, helper_names in expected_helpers.items():
         artifact = generated[target]
-        assert "Tile__load__float_1_1_36_1" in artifact
-        assert "Tile__load__float_1_2_1_36" in artifact
+        for helper_name in helper_names:
+            assert helper_name in artifact
 
     assert_directx_compute_validates_if_available(generated["directx"], tmp_path)
     assert_compute_glsl_validates_if_available(generated["opengl"], tmp_path)
@@ -51987,8 +51991,7 @@ def test_metal_addressed_template_member_pointer_translates_and_validates(
     assert "float(src[(src_offset + stride)])" in opengl
     assert "int((src_offset + index))" in opengl
     assert (
-        "ReducedMMATile_load_float__glsl_src_src_float(tile, int(gid), int(0))"
-        in opengl
+        "ReducedMMATile_load_float_glsl_src_src_float(tile, int(gid), int(0))" in opengl
     )
     assert "&(src[index])" not in opengl
 
