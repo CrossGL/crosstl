@@ -10,7 +10,9 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 HARNESS_PATH = ROOT / "demos" / "integrations" / "mlx" / "run_mlx_porting.py"
-RMS_NORM_HARNESS_PATH = ROOT / "tools" / "mlx_porting_harness.py"
+RMS_NORM_HARNESS_PATH = (
+    ROOT / "demos" / "integrations" / "mlx" / "prove_rms_norm_specialization.py"
+)
 MLX_WORKFLOW_PATH = ROOT / ".github" / "workflows" / "mlx-project-porting.yml"
 MLX_README_PATH = ROOT / "demos" / "integrations" / "mlx" / "README.md"
 RMS_NORM_FIXTURE_ROOT = ROOT / "tests" / "fixtures" / "project_porting" / "mlx"
@@ -27,7 +29,7 @@ def _load_harness():
 
 def _load_rms_norm_harness():
     spec = importlib.util.spec_from_file_location(
-        "mlx_porting_harness", RMS_NORM_HARNESS_PATH
+        "mlx_rms_norm_specialization_proof", RMS_NORM_HARNESS_PATH
     )
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
@@ -4159,6 +4161,7 @@ def test_rms_norm_contract_fixture_matches_pinned_harness_configuration():
         "translationAndNativeCompilationOnly": True,
         "numericalRuntimeParity": False,
         "fullMlxTestSuite": False,
+        "runtimeBlockedBy": list(module.RMS_NORM_RUNTIME_BLOCKERS),
     }
     expected_gaps = json.loads(
         (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
@@ -4173,6 +4176,7 @@ def test_rms_norm_contract_fixture_matches_pinned_harness_configuration():
     assert status["numerical_execution_included"] is False
     assert status["runtime_parity_claimed"] is False
     assert status["full_mlx_test_suite_included"] is False
+    assert status["runtime_blocked_by"] == list(module.RMS_NORM_RUNTIME_BLOCKERS)
 
 
 def test_rms_norm_checkout_verifies_revision_and_source_hash(tmp_path, monkeypatch):
@@ -4224,6 +4228,7 @@ def test_rms_norm_directx_variants_translate_through_project_api(tmp_path, monke
     )
 
     assert result["status"] == "passed"
+    assert result["runtimeBlockedBy"] == list(module.RMS_NORM_RUNTIME_BLOCKERS)
     assert result["artifactCount"] == 2
     assert result["runtimeParityClaimed"] is False
     assert result["numericalExecutionIncluded"] is False
@@ -4285,6 +4290,7 @@ def test_rms_norm_opengl_translation_retains_deferred_specialization(
     assert result["artifactCount"] == 1
     assert result["runtimeParityClaimed"] is False
     assert result["numericalExecutionIncluded"] is False
+    assert result["runtimeBlockedBy"] == list(module.RMS_NORM_RUNTIME_BLOCKERS)
     assert result["nativeCompilation"]["status"] == "not-required"
     specialization = result["specializationConstant"]
     assert specialization["name"] == "has_w"
@@ -4408,8 +4414,7 @@ def test_mlx_workflow_runs_platform_native_rms_norm_specialization_proof():
     workflow = MLX_WORKFLOW_PATH.read_text(encoding="utf-8")
 
     assert 'MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"' in workflow
-    assert '"tools/mlx_porting_harness.py"' in workflow
-    assert "python tools/mlx_porting_harness.py" in workflow
+    assert "python demos/integrations/mlx/prove_rms_norm_specialization.py" in workflow
     assert "--require-directx-toolchain" in workflow
     assert "--require-opengl-toolchain" in workflow
     assert 'if [ "$RUNNER_OS" = "Windows" ]; then' in workflow

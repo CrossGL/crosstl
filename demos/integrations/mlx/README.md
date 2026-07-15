@@ -429,7 +429,7 @@ DirectX rope check, project
 configuration supplies IDs 1 through 3 and CrossTL materializes a concrete HLSL
 variant before DXC.
 
-The focused `tools/mlx_porting_harness.py` gate fixes the project-level
+The focused `prove_rms_norm_specialization.py` gate fixes the project-level
 RMSNorm specialization contract to the same upstream commit and to
 `rms_norm.metal` SHA-256
 `5d411a2350ba7ddf84eb35f9dcac7cde0d441bd55fa1e9e1ccc61d490d428dee`.
@@ -445,8 +445,11 @@ checks the generated `layout(constant_id = 20)` declaration, and compiles the
 GLSL to OpenGL SPIR-V 1.3 before `spirv-val` validation on Linux. This is
 translation and native compilation evidence only. It does not execute RMSNorm,
 establish numerical runtime parity, or claim support for the full MLX test
-suite. The translated MLX `arange.metal` Direct3D numerical proof remains a
-separate Windows CI check.
+suite. Runtime parity also requires the entry-point workgroup-size
+specialization contract tracked in
+[CrossGL/crosstl#1750](https://github.com/CrossGL/crosstl/issues/1750). The
+translated MLX `arange.metal` Direct3D numerical proof remains a separate
+Windows CI check.
 
 `fence.metal` emits no DirectX, OpenGL, or Vulkan target artifact. The harness
 requires the target-specific structured diagnostics and the exact requested

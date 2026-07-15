@@ -34,6 +34,9 @@
   "claims": {
     "translationAndNativeCompilationOnly": true,
     "numericalRuntimeParity": false,
-    "fullMlxTestSuite": false
+    "fullMlxTestSuite": false,
+    "runtimeBlockedBy": [
+      "https://github.com/CrossGL/crosstl/issues/1750"
+    ]
   }
 }

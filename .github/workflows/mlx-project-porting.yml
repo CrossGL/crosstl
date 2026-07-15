@@ -24,7 +24,6 @@ on:
       - "tests/test_translator/test_native_runtime_drivers.py"
       - "tests/test_translator/test_project_translation.py"
       - "tests/test_translator/test_runtime_verification.py"
-      - "tools/mlx_porting_harness.py"
   pull_request:
     branches: [main]
     paths:
@@ -44,7 +43,6 @@ on:
       - "tests/test_translator/test_native_runtime_drivers.py"
       - "tests/test_translator/test_project_translation.py"
       - "tests/test_translator/test_runtime_verification.py"
-      - "tools/mlx_porting_harness.py"
   schedule:
     - cron: "31 4 * * 1"
   workflow_dispatch:
@@ -181,17 +179,17 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$RUNNER_OS" = "Windows" ]; then
-            python tools/mlx_porting_harness.py \
+            python demos/integrations/mlx/prove_rms_norm_specialization.py \
               --mlx-root mlx-upstream \
               --work-dir .crosstl-mlx-porting/rms-norm-specialization \
               --require-directx-toolchain
           elif [ "$RUNNER_OS" = "Linux" ]; then
-            python tools/mlx_porting_harness.py \
+            python demos/integrations/mlx/prove_rms_norm_specialization.py \
               --mlx-root mlx-upstream \
               --work-dir .crosstl-mlx-porting/rms-norm-specialization \
               --require-opengl-toolchain
           else
-            python tools/mlx_porting_harness.py \
+            python demos/integrations/mlx/prove_rms_norm_specialization.py \
               --mlx-root mlx-upstream \
               --work-dir .crosstl-mlx-porting/rms-norm-specialization
           fi

@@ -1000,7 +1000,9 @@ then compiles a reflected compute entry from each generated HLSL artifact with
 DXC on Windows. Its unconfigured OpenGL project checks deferred
 ``layout(constant_id = 20)`` emission and validates generated OpenGL SPIR-V on
 Linux. This proves translation and native compilation only; it does not claim
-RMSNorm numerical runtime parity or full MLX test-suite support.
+RMSNorm numerical runtime parity or full MLX test-suite support. Numerical
+execution additionally requires the entry-point workgroup-size specialization
+contract tracked in ``CrossGL/crosstl#1750``.
 
 ``source_roots`` limits discovery to selected directories. ``include`` and
 ``exclude`` use shell-style patterns against repository-relative paths. Project

@@ -196,7 +196,10 @@
     },
     "numerical_execution_included": false,
     "runtime_parity_claimed": false,
-    "full_mlx_test_suite_included": false
+    "full_mlx_test_suite_included": false,
+    "runtime_blocked_by": [
+      "https://github.com/CrossGL/crosstl/issues/1750"
+    ]
   },
   "pointer_reinterpretation_status": {
     "status": "partial",
@@ -652,6 +655,7 @@
     "https://github.com/CrossGL/crosstl/issues/1694",
     "https://github.com/CrossGL/crosstl/issues/1696",
     "https://github.com/CrossGL/crosstl/issues/1701",
+    "https://github.com/CrossGL/crosstl/issues/1750",
     "https://github.com/CrossGL/crosstl/issues/1312",
     "https://github.com/CrossGL/crosstl/issues/1376",
     "https://github.com/CrossGL/crosstl/issues/1676",

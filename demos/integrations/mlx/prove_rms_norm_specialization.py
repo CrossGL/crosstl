@@ -27,6 +27,7 @@ MLX_RMS_NORM_SHA256 = "5d411a2350ba7ddf84eb35f9dcac7cde0d441bd55fa1e9e1ccc61d490
 RMS_NORM_FUNCTION_CONSTANT_NAME = "has_w"
 RMS_NORM_FUNCTION_CONSTANT_ID = 20
 RMS_NORM_DIRECTX_PROFILE = "cs_6_0"
+RMS_NORM_RUNTIME_BLOCKERS = ("https://github.com/CrossGL/crosstl/issues/1750",)
 RMS_NORM_DIRECTX_VARIANTS = (
     {
         "name": "has_w_false_by_name",
@@ -596,6 +597,7 @@ def _check_directx(
         "nativeCompilation": native_compilation,
         "runtimeParityClaimed": False,
         "numericalExecutionIncluded": False,
+        "runtimeBlockedBy": list(RMS_NORM_RUNTIME_BLOCKERS),
     }
 
 
@@ -795,6 +797,7 @@ def _check_opengl(
         "nativeCompilation": native_compilation,
         "runtimeParityClaimed": False,
         "numericalExecutionIncluded": False,
+        "runtimeBlockedBy": list(RMS_NORM_RUNTIME_BLOCKERS),
     }
 
 
@@ -847,6 +850,7 @@ def run_proof(args: argparse.Namespace) -> dict[str, Any]:
             "runtimeParityClaimed": False,
             "numericalExecutionIncluded": False,
             "fullMlxTestSuiteIncluded": False,
+            "runtimeBlockedBy": list(RMS_NORM_RUNTIME_BLOCKERS),
         },
         "checks": [source_identity, directx, opengl],
         "status": "passed",
@@ -920,6 +924,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "runtimeParityClaimed": False,
                 "numericalExecutionIncluded": False,
                 "fullMlxTestSuiteIncluded": False,
+                "runtimeBlockedBy": list(RMS_NORM_RUNTIME_BLOCKERS),
             },
             "status": "failed",
             "error": str(exc),
