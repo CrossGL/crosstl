@@ -57,24 +57,27 @@ The current harness verifies:
   clean artifact generation for DirectX, OpenGL, and Vulkan. OpenGL compilation
   and both OpenGL-derived and native SPIR-V validation run in the required Linux
   toolchain gate;
-- DirectX HLSL smoke checks with official DXC v1.9.2602.24 on Windows CI for
-  the nine-source `arange.metal`, `arg_reduce.metal`, `layer_norm.metal`,
-  `logsumexp.metal`, `rms_norm.metal`, `rope.metal`,
-  `scaled_dot_product_attention.metal`, `softmax.metal`, and `ternary.metal`
-  frontier. At the pinned revision the gate compiles every generated compute
-  entry: 11, 24, 12, 6, 12, 18, 42, 10, and 212 entries respectively, for 347
-  generated compute entries in total. The pinned rope translation
-  supplies required function constant IDs through the quoted `"1"`, `"2"`, and
-  `"3"` selectors in `[project.specialization_constants]` and materializes the
-  concrete DirectX variant before compilation. Aggregate conditional lowering
+- DirectX HLSL compiler checks with official DXC v1.9.2602.24 on Windows CI for
+  the full 11-source clean frontier: `arange.metal`, `arg_reduce.metal`,
+  `binary_two.metal`, `layer_norm.metal`, `logsumexp.metal`, `random.metal`,
+  `rms_norm.metal`, `rope.metal`, `scaled_dot_product_attention.metal`,
+  `softmax.metal`, and `ternary.metal`. At the pinned revision the gate compiles
+  every generated compute entry: 11, 24, 225, 12, 6, 2, 12, 18, 42, 10, and
+  212 entries respectively, for 574 generated compute entries in total. The
+  pinned rope translation supplies required function constant IDs through the
+  quoted `"1"`, `"2"`, and `"3"` selectors in
+  `[project.specialization_constants]` and materializes the concrete DirectX
+  variant before compilation. Aggregate conditional lowering
   completed under [#1695](https://github.com/CrossGL/crosstl/issues/1695) admits
-  every pinned `ternary.metal` entry to this compiler gate. `binary_two.metal`
-  remains outside the gate under
-  [#1694](https://github.com/CrossGL/crosstl/issues/1694) and
-  [#1701](https://github.com/CrossGL/crosstl/issues/1701), while `random.metal`
-  remains outside the gate under
-  [#1696](https://github.com/CrossGL/crosstl/issues/1696), with runtime dispatch
-  metadata still tracked by
+  every pinned `ternary.metal` entry to this compiler gate. Target-ABI overload
+  identity [#1694](https://github.com/CrossGL/crosstl/issues/1694) and
+  minimum-precision arithmetic widening
+  [#1701](https://github.com/CrossGL/crosstl/issues/1701) admit all 225
+  `binary_two.metal` entries. Exact-layout DirectX union lowering
+  [#1728](https://github.com/CrossGL/crosstl/issues/1728) admits both
+  `random.metal` entries; broader union layouts remain tracked by
+  [#1696](https://github.com/CrossGL/crosstl/issues/1696), and runtime dispatch
+  metadata remains tracked by
   [#1542](https://github.com/CrossGL/crosstl/issues/1542). `fence.metal` is
   excluded because its DirectX translation intentionally fails under
   [#1537](https://github.com/CrossGL/crosstl/issues/1537) before DXC. This gate

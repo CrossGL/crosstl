@@ -40,6 +40,7 @@ MLX_GEMV_SOURCE = "mlx/backend/metal/kernels/gemv.metal"
 MLX_LAYER_NORM_SOURCE = "mlx/backend/metal/kernels/layer_norm.metal"
 MLX_LOGSUMEXP_SOURCE = "mlx/backend/metal/kernels/logsumexp.metal"
 MLX_METAL_ROUNDTRIP_SOURCE = MLX_FENCE_SOURCE
+MLX_RANDOM_SOURCE = "mlx/backend/metal/kernels/random.metal"
 MLX_RMS_NORM_SOURCE = "mlx/backend/metal/kernels/rms_norm.metal"
 MLX_ROPE_SOURCE = "mlx/backend/metal/kernels/rope.metal"
 MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE = (
@@ -70,7 +71,7 @@ MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
     MLX_BINARY_TWO_SOURCE,
     MLX_LAYER_NORM_SOURCE,
     MLX_LOGSUMEXP_SOURCE,
-    "mlx/backend/metal/kernels/random.metal",
+    MLX_RANDOM_SOURCE,
     MLX_RMS_NORM_SOURCE,
     MLX_ROPE_SOURCE,
     MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
@@ -96,14 +97,15 @@ MLX_REDUCED_FRONTIER_SOURCES = tuple(
         )
     )
 )
-# Subset of the clean frontier gated by DXC on Windows. The DirectX/Vulkan frontier
-# is still translated in full (and all Vulkan artifacts are spirv-val'd), while
-# the remaining kernels stay outside the DirectX compile gate under tracked gaps.
+# Full clean DirectX frontier gated by DXC on Windows. The separate blocked fence
+# source must fail before target emission under its atomic-fence diagnostic.
 MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES = (
     MLX_ARANGE_SOURCE,
     MLX_ARG_REDUCE_SOURCE,
+    MLX_BINARY_TWO_SOURCE,
     MLX_LAYER_NORM_SOURCE,
     MLX_LOGSUMEXP_SOURCE,
+    MLX_RANDOM_SOURCE,
     MLX_RMS_NORM_SOURCE,
     MLX_ROPE_SOURCE,
     MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
@@ -114,8 +116,10 @@ MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES = (
 MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS = {
     MLX_ARANGE_SOURCE: 11,
     MLX_ARG_REDUCE_SOURCE: 24,
+    MLX_BINARY_TWO_SOURCE: 225,
     MLX_LAYER_NORM_SOURCE: 12,
     MLX_LOGSUMEXP_SOURCE: 6,
+    MLX_RANDOM_SOURCE: 2,
     MLX_RMS_NORM_SOURCE: 12,
     MLX_ROPE_SOURCE: 18,
     MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE: 42,
@@ -284,6 +288,9 @@ FULL_CORPUS_TRACKED_ISSUES = (
     *METAL_ROUNDTRIP_SEMANTIC_TRACKED_ISSUES,
 )
 RESOLVED_FRONTIER_ISSUES = (
+    "https://github.com/CrossGL/crosstl/issues/1728",
+    "https://github.com/CrossGL/crosstl/issues/1701",
+    "https://github.com/CrossGL/crosstl/issues/1694",
     "https://github.com/CrossGL/crosstl/issues/1695",
     "https://github.com/CrossGL/crosstl/issues/1667",
     "https://github.com/CrossGL/crosstl/issues/1668",
