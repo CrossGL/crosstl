@@ -34334,6 +34334,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         feedback_call = self.generate_hlsl_feedback_write_call(func_name, args)
         if feedback_call is not None:
             return feedback_call
+        if (
+            func_name != "textureSamplePosition"
+            and func_name not in self.texture_resource_operation_names()
+        ):
+            return None
 
         self.validate_texture_call_arity(func_name, args)
         self.validate_image_resource_argument(func_name, args)

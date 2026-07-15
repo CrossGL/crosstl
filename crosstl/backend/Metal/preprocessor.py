@@ -363,6 +363,8 @@ class _MetalConstructor:
     param_types: List[str] = field(default_factory=list)
     is_constexpr: bool = False
     receiver_address_spaces: Tuple[str, ...] = ()
+    template_parameters: List[str] = field(default_factory=list)
+    template_parameter_defaults: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -3195,6 +3197,28 @@ class MetalPreprocessor(HLSLPreprocessor):
                                 template_methods.append(template_method)
                             else:
                                 methods.append(template_method)
+                        else:
+                            constructor = self._parse_struct_constructor(
+                                struct_name,
+                                body,
+                                angle_end + 1,
+                                method_body_start,
+                                method_body_end,
+                                body_offset,
+                            )
+                            if constructor is not None:
+                                parameter_text = body[angle_start + 1 : angle_end]
+                                constructor.template_parameters = (
+                                    self._template_parameter_names(parameter_text)
+                                )
+                                constructor.template_parameter_defaults = (
+                                    self._template_parameter_defaults(parameter_text)
+                                )
+                                constructor.span = (
+                                    body_offset + i,
+                                    body_offset + method_body_end,
+                                )
+                                constructors.append(constructor)
                     i = method_body_end if method_body_end is not None else n
                 elif semicolon is not None:
                     prototype_name = self._struct_member_prototype_name(
@@ -12313,6 +12337,12 @@ class MetalPreprocessor(HLSLPreprocessor):
         templates: List[_MetalTemplateFunction] = []
         namespace_spans = self._find_namespace_spans(code)
         template_type_traits = self._find_template_type_traits(code, namespace_spans)
+        constructor_template_spans = sorted(
+            constructor.span
+            for struct in self._find_concrete_struct_definitions(code)
+            for constructor in struct.constructors
+            if constructor.template_parameters and constructor.span is not None
+        )
         pos = 0
         while True:
             match = re.search(r"\btemplate\s*<", code[pos:])
@@ -12334,6 +12364,14 @@ class MetalPreprocessor(HLSLPreprocessor):
             body_end = self._find_matching_brace(code, body_start)
             if body_end is None:
                 pos = body_start + 1
+                continue
+
+            # A member-template constructor has no free-function identity. Treating
+            # it as a template function materializes ownerless declarations such as
+            # `fp8_e4m3_float16_t(float16_t)` at global scope. Keep it inside its
+            # concrete owner for the Metal parser/code generator constructor path.
+            if self._containing_span(start, constructor_template_spans) is not None:
+                pos = body_end
                 continue
 
             header = code[declaration_start:body_start]
@@ -12527,6 +12565,11 @@ class MetalPreprocessor(HLSLPreprocessor):
             template.name,
             struct_identifier,
         )
+        materialized = self._rename_materialized_struct_constructors(
+            materialized,
+            template.name,
+            struct_identifier,
+        )
         # A struct/class definition must be terminated with a semicolon; the
         # captured template source ends at the closing brace, so restore it.
         materialized = materialized.rstrip()
@@ -12553,6 +12596,11 @@ class MetalPreprocessor(HLSLPreprocessor):
             template.name,
             struct_identifier,
             strip_specialization_arguments=True,
+        )
+        materialized = self._rename_materialized_struct_constructors(
+            materialized,
+            template.name,
+            struct_identifier,
         )
         materialized = materialized.rstrip()
         if not materialized.endswith(";"):
@@ -15357,6 +15405,27 @@ class MetalPreprocessor(HLSLPreprocessor):
             + f"{match.group(1)} {new_name}"
             + source[declaration_end:]
         )
+
+    def _rename_materialized_struct_constructors(
+        self, source: str, old_name: str, new_name: str
+    ) -> str:
+        """Rename constructor declarators with a materialized template owner."""
+
+        definitions = self._find_concrete_struct_definitions(source)
+        owner = next((item for item in definitions if item.name == new_name), None)
+        if owner is None:
+            return source
+
+        replacements: List[Tuple[int, int, str]] = []
+        pattern = re.compile(rf"\b{re.escape(old_name)}\s*(?=\()")
+        for constructor in owner.constructors:
+            if constructor.span is None:
+                continue
+            start, end = constructor.span
+            match = pattern.search(source, start, end)
+            if match is not None:
+                replacements.append((match.start(), match.end(), new_name))
+        return self._apply_text_replacements(source, replacements)
 
     def _materialized_function_identifier(self, host_name: str, fallback: str) -> str:
         identifier = re.sub(r"\W", "_", host_name)
