@@ -28230,6 +28230,108 @@ def test_directx_texture_sample_offsets_fold_local_and_helper_constants():
 
 
 @pytest.mark.parametrize(
+    "mutation",
+    [
+        "offset = ivec2(2, 2);",
+        "offset.x = 2;",
+    ],
+)
+def test_directx_texture_offset_proof_rejects_mutated_parameters(mutation):
+    shader = f"""
+    shader MutatedTextureOffset {{
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        vec4 sampleOffset(vec2 uv, ivec2 offset, bool change) {{
+            if (change) {{
+                {mutation}
+            }}
+            return textureOffset(colorMap, linearSampler, uv, offset);
+        }}
+
+        fragment {{
+            vec4 main(
+                vec2 uv @ TEXCOORD0,
+                bool change @ TEXCOORD1
+            ) @ gl_FragColor {{
+                return sampleOffset(uv, ivec2(1, -1), change);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(DirectXTextureOffsetError) as error:
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "fragment")
+
+    diagnostic = error.value
+    assert diagnostic.blocking_expression == "offset"
+    assert diagnostic.function_name == "sampleOffset"
+    assert diagnostic.reason == "runtime-offset-requires-immediate"
+
+
+def test_directx_texture_offset_proof_rejects_transitively_mutated_parameters():
+    shader = """
+    shader TransitivelyMutatedTextureOffset {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        void replaceOffset(inout ivec2 offset) {
+            offset = ivec2(2, 2);
+        }
+
+        vec4 sampleOffset(vec2 uv, ivec2 offset) {
+            replaceOffset(offset);
+            return textureOffset(colorMap, linearSampler, uv, offset);
+        }
+
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return sampleOffset(uv, ivec2(1, -1));
+            }
+        }
+    }
+    """
+
+    with pytest.raises(DirectXTextureOffsetError) as error:
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "fragment")
+
+    diagnostic = error.value
+    assert diagnostic.blocking_expression == "offset"
+    assert diagnostic.function_name == "sampleOffset"
+    assert diagnostic.reason == "runtime-offset-requires-immediate"
+
+
+def test_directx_texture_offset_proof_ignores_callee_local_parameter_mutation():
+    shader = """
+    shader LocallyMutatedTextureOffset {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        void replaceLocalOffset(ivec2 offset) {
+            offset = ivec2(2, 2);
+        }
+
+        vec4 sampleOffset(vec2 uv, ivec2 offset) {
+            replaceLocalOffset(offset);
+            return textureOffset(colorMap, linearSampler, uv, offset);
+        }
+
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return sampleOffset(uv, ivec2(1, -1));
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "return colorMap.Sample(linearSampler, uv, int2(1, -1));" in generated
+
+
+@pytest.mark.parametrize(
     ("resource", "fields", "expression", "operation", "target_method"),
     [
         (

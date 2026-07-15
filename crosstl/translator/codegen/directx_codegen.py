@@ -26525,6 +26525,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if name:
                 functions_by_name.setdefault(name, []).append(function)
 
+        mutated_parameter_indices = self.hlsl_texture_offset_mutated_parameter_indices(
+            functions, functions_by_name
+        )
+
         proven = {}
         for _ in range(len(functions) + 1):
             incoming = {id(function): [] for function in functions}
@@ -26552,6 +26556,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     or []
                 )
                 for index, parameter in enumerate(parameters):
+                    if index in mutated_parameter_indices[id(function)]:
+                        continue
                     values = [arguments[index] for arguments in calls]
                     first = values[0]
                     if first is not None and all(
@@ -26586,6 +26592,107 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             == argument_count
         ]
         return arity_matches[0] if len(arity_matches) == 1 else None
+
+    def hlsl_texture_offset_write_root_name(self, expression):
+        if isinstance(expression, str):
+            return expression
+        if isinstance(
+            expression, (ArrayAccessNode, MemberAccessNode, PointerAccessNode)
+        ):
+            child = getattr(
+                expression,
+                "array_expr",
+                getattr(
+                    expression,
+                    "object_expr",
+                    getattr(expression, "pointer_expr", None),
+                ),
+            )
+            return self.hlsl_texture_offset_write_root_name(child)
+        if isinstance(expression, SwizzleNode):
+            return self.hlsl_texture_offset_write_root_name(
+                getattr(expression, "vector_expr", None)
+            )
+        name = getattr(expression, "name", None)
+        if isinstance(name, str):
+            return name
+        return None
+
+    def hlsl_texture_offset_mutated_parameter_indices(
+        self, functions, functions_by_name
+    ):
+        parameter_indices = {}
+        mutated = {}
+        for function in functions:
+            parameters = list(
+                getattr(function, "parameters", getattr(function, "params", [])) or []
+            )
+            parameter_indices[id(function)] = {
+                getattr(parameter, "name", None): index
+                for index, parameter in enumerate(parameters)
+                if getattr(parameter, "name", None)
+            }
+            mutated[id(function)] = {
+                index
+                for index, parameter in enumerate(parameters)
+                if set(self.hlsl_parameter_qualifiers(parameter)) & {"out", "inout"}
+            }
+
+            for node in self.walk_ast(getattr(function, "body", None)):
+                target = None
+                if isinstance(node, AssignmentNode):
+                    target = getattr(node, "target", getattr(node, "left", None))
+                elif isinstance(node, UnaryOpNode) and getattr(
+                    node, "operator", getattr(node, "op", None)
+                ) in {"++", "--"}:
+                    target = getattr(node, "operand", None)
+                root_name = self.hlsl_texture_offset_write_root_name(target)
+                index = parameter_indices[id(function)].get(root_name)
+                if index is not None:
+                    mutated[id(function)].add(index)
+
+        changed = True
+        while changed:
+            changed = False
+            for function in functions:
+                caller_parameters = parameter_indices[id(function)]
+                for node in self.walk_ast(getattr(function, "body", None)):
+                    if not isinstance(node, FunctionCallNode):
+                        continue
+                    callee = self.hlsl_texture_offset_call_target(
+                        node, functions_by_name
+                    )
+                    if callee is None:
+                        continue
+                    arguments = list(
+                        getattr(node, "arguments", getattr(node, "args", [])) or []
+                    )
+                    callee_parameters = list(
+                        getattr(
+                            callee,
+                            "parameters",
+                            getattr(callee, "params", []),
+                        )
+                        or []
+                    )
+                    for index in mutated[id(callee)]:
+                        if index >= len(arguments) or index >= len(callee_parameters):
+                            continue
+                        if not set(
+                            self.hlsl_parameter_qualifiers(callee_parameters[index])
+                        ) & {"out", "inout"}:
+                            continue
+                        root_name = self.hlsl_texture_offset_write_root_name(
+                            arguments[index]
+                        )
+                        caller_index = caller_parameters.get(root_name)
+                        if (
+                            caller_index is not None
+                            and caller_index not in mutated[id(function)]
+                        ):
+                            mutated[id(function)].add(caller_index)
+                            changed = True
+        return mutated
 
     def collect_hlsl_texture_offset_calls_from_expression(
         self,
