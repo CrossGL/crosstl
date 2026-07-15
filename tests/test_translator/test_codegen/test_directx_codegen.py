@@ -8571,6 +8571,94 @@ def test_directx_layout_nonuniform_descriptor_array_overlap_relocates_registers(
     assert "nonuniform(descriptor)" not in generated_code
 
 
+def test_directx_relocatable_resource_allocator_bounds_range_inspections():
+    resource_count = 512
+    integer_type = PrimitiveType("int")
+    resources = []
+    for index in range(resource_count):
+        space = 7 + index % 2
+        resources.append(
+            VariableNode(
+                f"resource_{index}",
+                ArrayType(
+                    NamedType("RWStructuredBuffer<int>"),
+                    LiteralNode(2, integer_type),
+                ),
+                attributes=[
+                    AttributeNode("buffer", [LiteralNode(0, integer_type)]),
+                    AttributeNode("space", [LiteralNode(space, integer_type)]),
+                ],
+                annotations={
+                    "directx.relocatable_binding": True,
+                    "directx.binding_provenance": (
+                        f"stage-entry parameter entry_{index}.resource"
+                    ),
+                },
+            )
+        )
+
+    codegen = HLSLCodeGen()
+    allocator = codegen.new_directx_resource_register_allocator()
+    codegen.reserve_explicit_global_resource_registers(resources, allocator)
+
+    expected_ranges = [(start, start + 1) for start in range(0, 512, 2)]
+    assert [record[:2] for record in allocator[("u", "space7")]] == expected_ranges
+    assert [record[:2] for record in allocator[("u", "space8")]] == expected_ranges
+    assert allocator.relocation_cursors == {
+        ("u", "space7"): 512,
+        ("u", "space8"): 512,
+    }
+    assert allocator[("u", "space7")][-1][2:] == (
+        "resource_510",
+        "stage-entry parameter entry_510.resource",
+    )
+    assert allocator[("u", "space8")][-1][2:] == (
+        "resource_511",
+        "stage-entry parameter entry_511.resource",
+    )
+    assert allocator.range_inspection_count <= resource_count * 10
+
+
+def test_directx_sorted_resource_allocator_preserves_conflict_provenance_order():
+    codegen = HLSLCodeGen()
+    allocator = codegen.new_directx_resource_register_allocator()
+    codegen.reserve_resource_register_range(
+        allocator,
+        "t",
+        10,
+        2,
+        "reservedFirst",
+        "space3",
+        provenance="first declaration",
+    )
+    codegen.reserve_resource_register_range(
+        allocator,
+        "t",
+        0,
+        2,
+        "reservedSecond",
+        "space3",
+        provenance="second declaration",
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        codegen.reserve_resource_register_range(
+            allocator,
+            "t",
+            1,
+            10,
+            "overlapping",
+            "space3",
+            provenance="conflicting declaration",
+        )
+
+    assert str(exc_info.value) == (
+        "Conflicting DirectX resource binding for 'overlapping': "
+        "t1-t10, space3 overlaps 'reservedFirst' t10-t11, space3 "
+        "(overlapping: conflicting declaration; reservedFirst: first declaration)"
+    )
+
+
 def test_hlsl_auto_registers_skip_later_explicit_global_bindings():
     code = """
     shader LateExplicitBindings {
