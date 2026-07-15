@@ -8047,8 +8047,7 @@ def test_codegen_infers_nested_metal_builtin_results_across_targets(tmp_path):
     assert "consume__metal_overload_3(clamp(vector_value, 0.0f, 1.0f)).x" in normalized
     assert "consume__metal_overload_3(step(0.0f, vector_value)).x" in normalized
     assert (
-        "consume__metal_overload_3(mix(vector_value, vec3(1.0f), 0.5f)).x"
-        in normalized
+        "consume__metal_overload_3(mix(vector_value, vec3(1.0f), 0.5f)).x" in normalized
     )
     assert "consume__metal_overload_5(exp(" not in normalized
 
