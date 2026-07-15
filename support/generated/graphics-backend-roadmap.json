@@ -3297,6 +3297,50 @@
     },
     {
       "category": "project",
+      "description": "Execute repository-agnostic project test-runner plans with validated, project-root-contained environment setup.",
+      "id": "project.test_runner_environment",
+      "name": "Project test-runner environment execution",
+      "support": {
+        "directx": {
+          "evidence": [
+            "tests/test_project_test_runner.py::def test_runtime_adapter_requirements_use_plan_environment",
+            "tests/test_project_test_runner.py::def test_project_test_runner_applies_environment_and_ordered_setup",
+            "tests/test_project_test_runner.py::def test_project_test_runner_reports_setup_failure_and_skips_dependent_commands",
+            "tests/test_project_test_runner.py::def test_project_test_runner_does_not_interpret_string_setup_commands_with_shell",
+            "tests/test_project_test_runner.py::def test_project_test_runner_rejects_working_directory_escape",
+            "tests/test_project_test_runner.py::def test_project_cli_round_trips_test_runner_environment"
+          ],
+          "notes": "execute-test-runner validates saved environment contracts, resolves environment and command working directories beneath an explicit project root, merges configured variables for setup and test subprocesses, executes setup argv in declaration order without an implicit shell, skips dependent commands after setup failure, and reports setup logs plus applied variable names without configured values. Required adapter tools and environment variables retain deterministic structured skips. The runner does not install dependencies or hard-code repository or backend setup.",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_project_test_runner.py::def test_runtime_adapter_requirements_use_plan_environment",
+            "tests/test_project_test_runner.py::def test_project_test_runner_applies_environment_and_ordered_setup",
+            "tests/test_project_test_runner.py::def test_project_test_runner_reports_setup_failure_and_skips_dependent_commands",
+            "tests/test_project_test_runner.py::def test_project_test_runner_does_not_interpret_string_setup_commands_with_shell",
+            "tests/test_project_test_runner.py::def test_project_test_runner_rejects_working_directory_escape",
+            "tests/test_project_test_runner.py::def test_project_cli_round_trips_test_runner_environment"
+          ],
+          "notes": "execute-test-runner validates saved environment contracts, resolves environment and command working directories beneath an explicit project root, merges configured variables for setup and test subprocesses, executes setup argv in declaration order without an implicit shell, skips dependent commands after setup failure, and reports setup logs plus applied variable names without configured values. Required adapter tools and environment variables retain deterministic structured skips. The runner does not install dependencies or hard-code repository or backend setup.",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_project_test_runner.py::def test_runtime_adapter_requirements_use_plan_environment",
+            "tests/test_project_test_runner.py::def test_project_test_runner_applies_environment_and_ordered_setup",
+            "tests/test_project_test_runner.py::def test_project_test_runner_reports_setup_failure_and_skips_dependent_commands",
+            "tests/test_project_test_runner.py::def test_project_test_runner_does_not_interpret_string_setup_commands_with_shell",
+            "tests/test_project_test_runner.py::def test_project_test_runner_rejects_working_directory_escape",
+            "tests/test_project_test_runner.py::def test_project_cli_round_trips_test_runner_environment"
+          ],
+          "notes": "execute-test-runner validates saved environment contracts, resolves environment and command working directories beneath an explicit project root, merges configured variables for setup and test subprocesses, executes setup argv in declaration order without an implicit shell, skips dependent commands after setup failure, and reports setup logs plus applied variable names without configured values. Required adapter tools and environment variables retain deterministic structured skips. The runner does not install dependencies or hard-code repository or backend setup.",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "project",
       "description": "Emit deterministic host loader scaffold metadata from runtime loader manifests without rewriting host code or executing device code.",
       "id": "project.runtime_host_loader_scaffolds",
       "name": "Runtime host loader scaffolds",
@@ -4461,12 +4505,12 @@
         "validated_rejection": 0
       }
     },
-    "feature_count": 71,
+    "feature_count": 72,
     "status_counts": {
       "directx": {
         "diagnostic": 2,
         "partial": 0,
-        "supported": 68,
+        "supported": 69,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 1
@@ -4474,7 +4518,7 @@
       "metal": {
         "diagnostic": 4,
         "partial": 0,
-        "supported": 66,
+        "supported": 67,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 1
@@ -4482,7 +4526,7 @@
       "opengl": {
         "diagnostic": 2,
         "partial": 0,
-        "supported": 69,
+        "supported": 70,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0

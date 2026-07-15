@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import time
 from collections import Counter
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -51,15 +52,28 @@ def build_project_test_runner_plan(
     artifact_payload, artifact_source = _load_json_payload(
         artifact_report, label="artifact report"
     )
-    runtime_plan = (
-        plan_runtime_test_manifest(
-            artifact_payload,
-            manifest,
-            project_root=project_root,
-        )
-        if manifest is not None
-        else _empty_runtime_plan(artifact_payload, artifact_source, project_root)
+    plan_environment = _environment_setup(
+        environment if environment is not None else {}
     )
+    if project_root is not None:
+        root_path = Path(os.fspath(project_root)).resolve()
+        _resolve_working_directory(
+            root_path,
+            root_path,
+            plan_environment["cwd"],
+            label="Test-runner environment cwd",
+        )
+    execution_environment = _execution_environment(plan_environment)
+    with _configured_process_environment(plan_environment["variables"]):
+        runtime_plan = (
+            plan_runtime_test_manifest(
+                artifact_payload,
+                manifest,
+                project_root=project_root,
+            )
+            if manifest is not None
+            else _empty_runtime_plan(artifact_payload, artifact_source, project_root)
+        )
     runtime_manifest_payload = _runtime_manifest_payload(manifest)
     if runtime_manifest_payload is not None:
         runtime_plan = _runtime_plan_with_manifest_metadata(
@@ -71,11 +85,14 @@ def build_project_test_runner_plan(
         if isinstance(target, str) and target.strip()
     }
     plan_targets = _selected_targets(artifact_payload, runtime_plan, target_filter)
-    adapters = _adapter_availability(runtime_plan.get("adapters", []))
+    adapters = _adapter_availability(
+        runtime_plan.get("adapters", []), environment=execution_environment
+    )
     commands = _plan_commands(
         test_commands or _commands_from_runtime_tests(runtime_plan),
         targets=plan_targets,
         adapter_by_id={adapter["id"]: adapter for adapter in adapters},
+        environment=execution_environment,
     )
     expected = _expected_artifact_records(expected_artifacts or (), artifact_payload)
     runtime_cases = _runtime_cases_with_provenance(runtime_plan.get("testCases", []))
@@ -96,7 +113,7 @@ def build_project_test_runner_plan(
             _handoff_package_record(path) for path in handoff_packages or ()
         ],
         "selectedTargets": plan_targets,
-        "environment": _environment_setup(environment or {}),
+        "environment": plan_environment,
         "adapters": adapters,
         "testCommands": commands,
         "runtimeTests": runtime_cases,
@@ -116,6 +133,7 @@ def inspect_project_test_runner_plan(
         raise RuntimeVerificationError(
             f"Test-runner plan kind must be {PROJECT_TEST_RUNNER_PLAN_KIND}."
         )
+    _environment_setup(plan_payload.get("environment", {}))
     command_statuses = Counter(
         command.get("status")
         for command in _record_sequence(plan_payload, "testCommands")
@@ -173,32 +191,78 @@ def execute_project_test_runner_plan(
         raise RuntimeVerificationError(
             f"Test-runner plan kind must be {PROJECT_TEST_RUNNER_PLAN_KIND}."
         )
-    root = Path(project_root or plan_payload.get("environment", {}).get("cwd") or ".")
+    plan_environment = _environment_setup(plan_payload.get("environment", {}))
+    root = _execution_project_root(plan_payload, project_root)
+    environment_cwd = _resolve_working_directory(
+        root,
+        root,
+        plan_environment["cwd"],
+        label="Test-runner environment cwd",
+    )
+    execution_environment = _execution_environment(plan_environment)
+    configured_values = tuple(plan_environment["variables"].values())
     adapter_by_id = {
         adapter["id"]: adapter for adapter in _record_sequence(plan_payload, "adapters")
     }
-    command_results = [
-        _execute_command(command, root_path=root, adapter_by_id=adapter_by_id)
-        for command in _record_sequence(plan_payload, "testCommands")
+    commands = _record_sequence(plan_payload, "testCommands")
+    command_cwds = [
+        _resolve_working_directory(
+            root,
+            environment_cwd,
+            command.get("cwd", "."),
+            label=f"Test command {command.get('id', index + 1)!r} cwd",
+        )
+        for index, command in enumerate(commands)
     ]
+    environment_setup = _execute_environment_setup(
+        plan_environment,
+        cwd=environment_cwd,
+        environment=execution_environment,
+    )
+    if environment_setup["status"] == PASSED:
+        command_results = [
+            _execute_command(
+                command,
+                project_root=root,
+                cwd_path=command_cwd,
+                environment=execution_environment,
+                configured_values=configured_values,
+                adapter_by_id=adapter_by_id,
+            )
+            for command, command_cwd in zip(commands, command_cwds)
+        ]
+    else:
+        command_results = [
+            _command_after_environment_setup_failure(
+                command,
+                adapter_by_id=adapter_by_id,
+                setup_failure=environment_setup,
+            )
+            for command in commands
+        ]
     runtime_report = None
     runtime_plan = plan_payload.get("runtimeTestPlan")
     if (
-        run_runtime_tests
+        environment_setup["status"] == PASSED
+        and run_runtime_tests
         and isinstance(runtime_plan, Mapping)
         and runtime_plan.get("kind") == RUNTIME_TEST_PLAN_KIND
     ):
-        runtime_report = _execute_runtime_plan(
-            runtime_plan,
-            plan_payload.get("runtimeTestManifest"),
-            root,
-            artifact_source=plan_payload.get("sourceArtifacts"),
-            executors=runtime_executors,
-        )
+        with _configured_process_environment(plan_environment["variables"]):
+            runtime_report = _execute_runtime_plan(
+                runtime_plan,
+                plan_payload.get("runtimeTestManifest"),
+                root,
+                artifact_source=plan_payload.get("sourceArtifacts"),
+                executors=runtime_executors,
+            )
     results = list(command_results)
     if isinstance(runtime_report, Mapping):
         results.extend(_runtime_report_results(runtime_report))
-    summary = _execution_summary(results)
+    summary = _execution_summary(
+        results,
+        environment_setup_failed=environment_setup["status"] != PASSED,
+    )
     report = {
         "schemaVersion": PROJECT_TEST_RUNNER_SCHEMA_VERSION,
         "kind": PROJECT_TEST_RUNNER_REPORT_KIND,
@@ -208,6 +272,7 @@ def execute_project_test_runner_plan(
         "sourceArtifacts": plan_payload.get("sourceArtifacts"),
         "runtimeHandoffPackages": plan_payload.get("runtimeHandoffPackages", []),
         "selectedTargets": plan_payload.get("selectedTargets", []),
+        "environmentSetup": environment_setup,
         "summary": summary,
         "results": results,
     }
@@ -247,7 +312,11 @@ def _empty_runtime_plan(
             "kind": artifact_payload.get("kind"),
         },
         "sourceManifest": None,
-        "projectRoot": str(project_root) if project_root is not None else None,
+        "projectRoot": (
+            str(Path(os.fspath(project_root)).resolve())
+            if project_root is not None
+            else None
+        ),
         "summary": {
             "testCount": 0,
             "plannedCount": 0,
@@ -337,7 +406,10 @@ def _selected_targets(
     return sorted(targets)
 
 
-def _adapter_availability(adapters: Sequence[Any]) -> list[dict[str, Any]]:
+def _adapter_availability(
+    adapters: Sequence[Any], *, environment: Mapping[str, str]
+) -> list[dict[str, Any]]:
+    process_environment = environment
     records = []
     for adapter in adapters:
         if not isinstance(adapter, Mapping):
@@ -350,19 +422,25 @@ def _adapter_availability(adapters: Sequence[Any]) -> list[dict[str, Any]]:
             for tool in requirements.get("requiredTools", [])
             if isinstance(tool, str) and tool.strip()
         ]
-        environment = [
+        required_environment = [
             str(name)
             for name in requirements.get("requiredEnvironment", [])
             if isinstance(name, str) and name.strip()
         ]
-        missing_tools = [tool for tool in tools if shutil.which(tool) is None]
-        missing_environment = [name for name in environment if not os.environ.get(name)]
+        missing_tools = [
+            tool
+            for tool in tools
+            if shutil.which(tool, path=process_environment.get("PATH")) is None
+        ]
+        missing_environment = [
+            name for name in required_environment if not process_environment.get(name)
+        ]
         record = dict(adapter)
         record["availability"] = {
             "available": not missing_tools and not missing_environment,
             "requiredTools": tools,
             "missingTools": missing_tools,
-            "requiredEnvironment": environment,
+            "requiredEnvironment": required_environment,
             "missingEnvironment": missing_environment,
         }
         records.append(record)
@@ -405,6 +483,7 @@ def _plan_commands(
     *,
     targets: Sequence[str],
     adapter_by_id: Mapping[str, Mapping[str, Any]],
+    environment: Mapping[str, str],
 ) -> list[dict[str, Any]]:
     target_set = set(targets)
     planned = []
@@ -430,10 +509,14 @@ def _plan_commands(
         availability = adapter.get("availability", {}) if adapter is not None else {}
         required = _command_requirements(command, adapter)
         missing_tools = [
-            tool for tool in required["requiredTools"] if shutil.which(tool) is None
+            tool
+            for tool in required["requiredTools"]
+            if shutil.which(tool, path=environment.get("PATH")) is None
         ]
         missing_environment = [
-            name for name in required["requiredEnvironment"] if not os.environ.get(name)
+            name
+            for name in required["requiredEnvironment"]
+            if not environment.get(name)
         ]
         missing_tools = sorted(
             set(missing_tools) | set(availability.get("missingTools", []))
@@ -627,19 +710,152 @@ def _handoff_package_record(path_value: str | os.PathLike[str]) -> dict[str, Any
     }
 
 
-def _environment_setup(environment: Mapping[str, Any]) -> dict[str, Any]:
-    cwd = environment.get("cwd", ".")
-    variables = environment.get("variables", {})
-    if not isinstance(variables, Mapping):
-        variables = {}
-    setup_commands = environment.get("setupCommands", [])
+def _environment_setup(environment: Any) -> dict[str, Any]:
+    if not isinstance(environment, Mapping):
+        raise RuntimeVerificationError("Test-runner environment must be an object.")
+
+    cwd_value = environment.get("cwd", ".")
+    if not isinstance(cwd_value, (str, os.PathLike)):
+        raise RuntimeVerificationError(
+            "Test-runner environment cwd must be a non-empty path string."
+        )
+    cwd = os.fspath(cwd_value)
+    if not cwd or "\0" in cwd:
+        raise RuntimeVerificationError(
+            "Test-runner environment cwd must be a non-empty path string."
+        )
+
+    variable_values = environment.get("variables", {})
+    if not isinstance(variable_values, Mapping):
+        raise RuntimeVerificationError(
+            "Test-runner environment variables must be an object."
+        )
+    variables: dict[str, str] = {}
+    for name, value in variable_values.items():
+        if not isinstance(name, str) or not name or "=" in name or "\0" in name:
+            raise RuntimeVerificationError(
+                "Test-runner environment variable names must be non-empty strings "
+                "without '=' or null bytes."
+            )
+        if not isinstance(value, (str, int, float, bool, os.PathLike)):
+            raise RuntimeVerificationError(
+                f"Test-runner environment variable {name!r} must have a scalar value."
+            )
+        normalized_value = (
+            os.fspath(value) if isinstance(value, os.PathLike) else str(value)
+        )
+        if "\0" in normalized_value:
+            raise RuntimeVerificationError(
+                f"Test-runner environment variable {name!r} contains a null byte."
+            )
+        variables[name] = normalized_value
+
+    setup_values = environment.get("setupCommands", [])
+    if not isinstance(setup_values, Sequence) or isinstance(setup_values, (str, bytes)):
+        raise RuntimeVerificationError(
+            "Test-runner environment setupCommands must be a list of commands."
+        )
+    setup_commands = [
+        _environment_command_parts(command, index=index)
+        for index, command in enumerate(setup_values)
+    ]
     return {
-        "cwd": str(cwd),
-        "variables": {str(key): str(value) for key, value in variables.items()},
-        "setupCommands": [
-            _command_parts(command) for command in setup_commands if command
-        ],
+        "cwd": cwd,
+        "variables": variables,
+        "setupCommands": setup_commands,
     }
+
+
+def _environment_command_parts(value: Any, *, index: int) -> list[str]:
+    if isinstance(value, (str, os.PathLike)):
+        candidates = [value]
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        candidates = list(value)
+    else:
+        raise RuntimeVerificationError(
+            f"Test-runner setup command {index + 1} must be a string or argv list."
+        )
+    if not candidates:
+        raise RuntimeVerificationError(
+            f"Test-runner setup command {index + 1} must not be empty."
+        )
+    parts = []
+    for part in candidates:
+        if not isinstance(part, (str, os.PathLike)):
+            raise RuntimeVerificationError(
+                f"Test-runner setup command {index + 1} argv values must be strings."
+            )
+        normalized = os.fspath(part)
+        if not normalized or "\0" in normalized:
+            raise RuntimeVerificationError(
+                f"Test-runner setup command {index + 1} argv values must be non-empty strings."
+            )
+        parts.append(normalized)
+    return parts
+
+
+def _execution_project_root(
+    plan: Mapping[str, Any], override: str | os.PathLike[str] | None
+) -> Path:
+    root_value: Any = override
+    if root_value is None:
+        runtime_plan = plan.get("runtimeTestPlan")
+        if isinstance(runtime_plan, Mapping):
+            root_value = runtime_plan.get("projectRoot")
+    if not isinstance(root_value, (str, os.PathLike)) or not os.fspath(root_value):
+        raise RuntimeVerificationError(
+            "Project test-runner execution requires an explicit project root."
+        )
+    root = Path(os.fspath(root_value)).resolve()
+    if not root.is_dir():
+        raise RuntimeVerificationError(
+            f"Project test-runner root is not a directory: {root}."
+        )
+    return root
+
+
+def _resolve_working_directory(
+    project_root: Path,
+    base: Path,
+    value: Any,
+    *,
+    label: str,
+) -> Path:
+    if not isinstance(value, (str, os.PathLike)):
+        raise RuntimeVerificationError(f"{label} must be a non-empty path string.")
+    path_value = os.fspath(value)
+    if not path_value or "\0" in path_value:
+        raise RuntimeVerificationError(f"{label} must be a non-empty path string.")
+    path = Path(path_value)
+    resolved = (path if path.is_absolute() else base / path).resolve()
+    try:
+        resolved.relative_to(project_root.resolve())
+    except ValueError as exc:
+        raise RuntimeVerificationError(
+            f"{label} escapes project root {project_root.resolve()}: {path_value}."
+        ) from exc
+    return resolved
+
+
+def _execution_environment(environment: Mapping[str, Any]) -> dict[str, str]:
+    merged = os.environ.copy()
+    merged.update(environment["variables"])
+    return merged
+
+
+@contextmanager
+def _configured_process_environment(variables: Mapping[str, str]):
+    missing = object()
+    previous = {name: os.environ.get(name, missing) for name in variables}
+    os.environ.update(variables)
+    try:
+        yield
+    finally:
+        for name, value in previous.items():
+            if value is missing:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
 
 def _plan_diagnostics(
@@ -686,13 +902,58 @@ def _plan_summary(
 def _execute_command(
     command: Mapping[str, Any],
     *,
-    root_path: Path,
+    project_root: Path,
+    cwd_path: Path,
+    environment: Mapping[str, str],
+    configured_values: Sequence[str],
     adapter_by_id: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any]:
     adapter_id = command.get("adapter")
     adapter = adapter_by_id.get(adapter_id) if isinstance(adapter_id, str) else None
     availability = adapter.get("availability", {}) if adapter is not None else {}
     diagnostics = list(command.get("diagnostics", []))
+    parts = _command_parts(command.get("command"))
+    skipped = _preexecution_command_skip(
+        command,
+        availability=availability,
+        diagnostics=diagnostics,
+        parts=parts,
+    )
+    if skipped is not None:
+        return skipped
+    cwd = _resolve_working_directory(
+        project_root,
+        project_root,
+        cwd_path,
+        label=f"Test command {command.get('id', command.get('name'))!r} cwd",
+    )
+    log = _run_command(
+        parts,
+        cwd=cwd,
+        environment=environment,
+        configured_values=configured_values,
+    )
+    status = PASSED if log["returncode"] == 0 else RUNTIME_FAILED
+    return {
+        "kind": "project-test-command",
+        "name": command.get("name"),
+        "fixture": command.get("fixture"),
+        "status": status,
+        "failurePhase": None if status == PASSED else "test-command",
+        "provenance": command.get("provenance", {}),
+        "logs": [log],
+        "adapterAvailability": availability,
+        "diagnostics": diagnostics,
+    }
+
+
+def _preexecution_command_skip(
+    command: Mapping[str, Any],
+    *,
+    availability: Mapping[str, Any],
+    diagnostics: Sequence[Mapping[str, Any]],
+    parts: Sequence[str],
+) -> dict[str, Any] | None:
     if command.get("status") == SKIPPED or not availability.get("available", True):
         return {
             "kind": "project-test-command",
@@ -703,57 +964,168 @@ def _execute_command(
             "provenance": command.get("provenance", {}),
             "logs": [],
             "adapterAvailability": availability,
-            "diagnostics": diagnostics,
+            "diagnostics": list(diagnostics),
         }
-    parts = _command_parts(command.get("command"))
-    if not parts:
-        return {
-            "kind": "project-test-command",
-            "name": command.get("name"),
-            "fixture": command.get("fixture"),
-            "status": SKIPPED,
-            "failurePhase": "test-command",
-            "provenance": command.get("provenance", {}),
-            "logs": [],
-            "adapterAvailability": availability,
-            "diagnostics": [
-                *diagnostics,
-                {
-                    "severity": "note",
-                    "code": "project.test-runner.command-empty",
-                    "message": (
-                        "Project test command skipped because no command was provided."
-                    ),
-                },
-            ],
-        }
-    cwd = root_path / str(command.get("cwd", "."))
-    result = subprocess.run(
-        parts,
-        cwd=str(cwd),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    status = PASSED if result.returncode == 0 else RUNTIME_FAILED
+    if parts:
+        return None
     return {
         "kind": "project-test-command",
         "name": command.get("name"),
         "fixture": command.get("fixture"),
-        "status": status,
-        "failurePhase": None if status == PASSED else "test-command",
+        "status": SKIPPED,
+        "failurePhase": "test-command",
         "provenance": command.get("provenance", {}),
-        "logs": [
-            {
-                "command": parts,
-                "returncode": result.returncode,
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-            }
-        ],
+        "logs": [],
         "adapterAvailability": availability,
-        "diagnostics": diagnostics,
+        "diagnostics": [
+            *diagnostics,
+            {
+                "severity": "note",
+                "code": "project.test-runner.command-empty",
+                "message": (
+                    "Project test command skipped because no command was provided."
+                ),
+            },
+        ],
     }
+
+
+def _command_after_environment_setup_failure(
+    command: Mapping[str, Any],
+    *,
+    adapter_by_id: Mapping[str, Mapping[str, Any]],
+    setup_failure: Mapping[str, Any],
+) -> dict[str, Any]:
+    adapter_id = command.get("adapter")
+    adapter = adapter_by_id.get(adapter_id) if isinstance(adapter_id, str) else None
+    availability = adapter.get("availability", {}) if adapter is not None else {}
+    diagnostics = list(command.get("diagnostics", []))
+    skipped = _preexecution_command_skip(
+        command,
+        availability=availability,
+        diagnostics=diagnostics,
+        parts=_command_parts(command.get("command")),
+    )
+    if skipped is not None:
+        return skipped
+    return {
+        "kind": "project-test-command",
+        "name": command.get("name"),
+        "fixture": command.get("fixture"),
+        "status": SKIPPED,
+        "failurePhase": "environment-setup",
+        "provenance": command.get("provenance", {}),
+        "logs": [],
+        "adapterAvailability": availability,
+        "diagnostics": [
+            *diagnostics,
+            {
+                "severity": "note",
+                "code": "project.test-runner.environment-setup-failed",
+                "message": (
+                    "Project test command skipped because environment setup failed."
+                ),
+                "setupCommand": setup_failure.get("command"),
+                "returncode": setup_failure.get("returncode"),
+            },
+        ],
+    }
+
+
+def _execute_environment_setup(
+    setup: Mapping[str, Any],
+    *,
+    cwd: Path,
+    environment: Mapping[str, str],
+) -> dict[str, Any]:
+    configured_values = tuple(setup["variables"].values())
+    record = {
+        "kind": "project-test-environment-setup",
+        "status": PASSED,
+        "failurePhase": None,
+        "cwd": str(cwd),
+        "appliedVariables": sorted(setup["variables"]),
+        "logs": [],
+        "diagnostics": [],
+    }
+    for parts in setup["setupCommands"]:
+        log = _run_command(
+            parts,
+            cwd=cwd,
+            environment=environment,
+            configured_values=configured_values,
+        )
+        record["logs"].append(log)
+        if log["returncode"] == 0:
+            continue
+        record.update(
+            {
+                "status": RUNTIME_FAILED,
+                "failurePhase": "environment-setup",
+                "command": log["command"],
+                "returncode": log["returncode"],
+                "stdout": log["stdout"],
+                "stderr": log["stderr"],
+                "diagnostics": [
+                    {
+                        "severity": "error",
+                        "code": "project.test-runner.environment-setup-failed",
+                        "message": "Project test-runner environment setup failed.",
+                        "command": log["command"],
+                        "returncode": log["returncode"],
+                    }
+                ],
+            }
+        )
+        break
+    return record
+
+
+def _run_command(
+    parts: Sequence[str],
+    *,
+    cwd: Path,
+    environment: Mapping[str, str],
+    configured_values: Sequence[str],
+) -> dict[str, Any]:
+    try:
+        result = subprocess.run(
+            list(parts),
+            cwd=str(cwd),
+            env=dict(environment),
+            text=True,
+            capture_output=True,
+            check=False,
+            shell=False,
+        )
+    except OSError as exc:
+        return {
+            "command": _redact_command(parts, configured_values),
+            "returncode": None,
+            "stdout": "",
+            "stderr": _redact_environment_values(str(exc), configured_values),
+        }
+    return {
+        "command": _redact_command(parts, configured_values),
+        "returncode": result.returncode,
+        "stdout": _redact_environment_values(result.stdout, configured_values),
+        "stderr": _redact_environment_values(result.stderr, configured_values),
+    }
+
+
+def _redact_command(
+    parts: Sequence[str], configured_values: Sequence[str]
+) -> list[str]:
+    return [_redact_environment_values(str(part), configured_values) for part in parts]
+
+
+def _redact_environment_values(text: str, configured_values: Sequence[str]) -> str:
+    redacted = text
+    for value in sorted(
+        {value for value in configured_values if value}, key=len, reverse=True
+    ):
+        redacted = redacted.replace(value, "<redacted>")
+    return redacted
 
 
 def _execute_runtime_plan(
@@ -850,15 +1222,20 @@ def _runtime_report_results(runtime_report: Mapping[str, Any]) -> list[dict[str,
     return results
 
 
-def _execution_summary(results: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+def _execution_summary(
+    results: Sequence[Mapping[str, Any]], *, environment_setup_failed: bool = False
+) -> dict[str, int]:
     statuses = Counter(result.get("status") for result in results)
-    failed = statuses[RUNTIME_FAILED] + statuses["comparison-failed"]
+    setup_failed_count = int(environment_setup_failed)
+    runtime_failed = statuses[RUNTIME_FAILED] + setup_failed_count
+    failed = runtime_failed + statuses["comparison-failed"]
     return {
         "resultCount": len(results),
         "passedCount": statuses[PASSED],
         "skippedCount": statuses[SKIPPED],
-        "runtimeFailedCount": statuses[RUNTIME_FAILED],
+        "runtimeFailedCount": runtime_failed,
         "comparisonFailedCount": statuses["comparison-failed"],
+        "environmentSetupFailedCount": setup_failed_count,
         "failedCount": failed,
     }
 
