@@ -121,6 +121,10 @@ The current harness verifies:
   `arangeuint32` artifact through ModernGL and Mesa EGL. Four invocations use
   `start = 300` and `step = 17`; the required zero-tolerance comparison is
   `[300, 317, 334, 351]`.
+- on Linux CI, OpenGL SPIR-V specialization through PyOpenGL and Mesa EGL for a
+  reduced generated compute artifact. The native adapter compiles the GLSL to
+  SPIR-V, applies numeric constant ID 7, and requires exact readback for two
+  independently selected unsigned values.
 
 Pull requests run the 12-source pinned reduced scope: 11 clean frontier sources
 and the explicitly blocked `fence.metal` contract source. They also run the
@@ -222,7 +226,7 @@ execution of the generated MLX `arange` artifacts:
 ```bash
 sudo apt-get update
 sudo apt-get install -y glslang-tools libegl1 libgl1-mesa-dri libglx-mesa0 mesa-vulkan-drivers spirv-tools vulkan-tools
-python -m pip install moderngl==5.12.0 vulkan==1.3.275.1
+python -m pip install moderngl==5.12.0 PyOpenGL==3.1.10 vulkan==1.3.275.1
 python demos/integrations/mlx/run_mlx_porting.py \
   --mlx-root /tmp/mlx \
   --require-opengl-frontier-toolchain \
@@ -361,11 +365,12 @@ The eight-source OpenGL/SPIR-V gate includes `rms_norm.metal`, `rope.metal`, and
 `scaled_dot_product_attention.metal`. Their Metal function constants retain
 their numeric identifiers as native GLSL specialization constants; the gate
 compiles each generated module for OpenGL/SPIR-V 1.3 and validates the resulting
-binary. It does not apply runtime specialization values, dispatch a kernel, or
-establish runtime parity. For the pinned DirectX rope check, project
+binary. The native OpenGL runtime separately verifies typed specialization,
+dispatch, and deterministic readback with a reduced generated artifact; it does
+not claim numerical parity for those three full MLX kernels. For the pinned
+DirectX rope check, project
 configuration supplies IDs 1 through 3 and CrossTL materializes a concrete HLSL
-variant before DXC. Host-side OpenGL specialization wiring remains tracked under
-[#1538](https://github.com/CrossGL/crosstl/issues/1538).
+variant before DXC.
 `fence.metal` emits no DirectX, OpenGL, or Vulkan target artifact. The harness
 requires the target-specific structured diagnostics and the exact requested
 atomic-fence operands under #1537 instead of accepting generated barrier text as
