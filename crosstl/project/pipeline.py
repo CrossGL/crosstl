@@ -16198,6 +16198,7 @@ def _project_template_materialization_for_artifact(
             preprocessor,
             preprocessed,
         )
+        preprocessed = preprocessor._elide_stateless_compile_time_globals(preprocessed)
         templates = preprocessor._find_template_functions(preprocessed)
     except Exception:  # noqa: BLE001
         if fail_closed:
@@ -16597,6 +16598,7 @@ def _project_template_materialization_for_artifact(
         materialized,
         work_budget=explicit_work_budget,
     )
+    materialized = preprocessor._elide_stateless_compile_time_globals(materialized)
     discovered_struct_specializations = (
         set(preprocessor._materialized_struct_specializations)
         - existing_struct_specializations
@@ -16864,6 +16866,7 @@ def _project_template_materialization_for_artifact(
             materialized = preprocessor._apply_text_replacements(
                 materialized, explicit_replacements
             )
+    materialized = preprocessor._elide_stateless_compile_time_globals(materialized)
     materialized = preprocessor._lower_struct_member_functions(materialized)
     # Keep alias wrappers intact while compile-time callbacks infer their
     # argument types; canonicalize only after member lowering has consumed them.
@@ -16878,6 +16881,7 @@ def _project_template_materialization_for_artifact(
                 work_budget=explicit_work_budget,
             )
         )
+        materialized = preprocessor._elide_stateless_compile_time_globals(materialized)
         materialized = preprocessor._lower_struct_member_functions(materialized)
     materialized = _inline_metal_concrete_using_template_aliases(
         preprocessor,
@@ -18093,6 +18097,38 @@ def _metal_struct_method_call_failure_details(
     return dict(sorted(details.items()))
 
 
+def _metal_stateless_global_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.metal-stateless-global-unsafe"
+    ):
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    stateless_global = {}
+    fields = {
+        "globalName": getattr(exc, "global_name", None),
+        "typeName": getattr(exc, "type_name", None),
+        "methodName": getattr(exc, "method_name", None),
+        "reason": getattr(exc, "reason", None),
+        "blockingUse": getattr(exc, "blocking_use", None),
+        "effect": getattr(exc, "effect", None),
+        "suggestedAction": getattr(exc, "suggested_action", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            stateless_global[name] = value
+    if stateless_global:
+        details["statelessGlobal"] = dict(sorted(stateless_global.items()))
+    return dict(sorted(details.items()))
+
+
 def _translation_failure_details(
     exc: Exception,
     target: str,
@@ -18124,6 +18160,7 @@ def _translation_failure_details(
         **_generic_member_call_failure_details(exc, unit, artifact_path),
         **_metal_struct_method_failure_details(exc, unit, artifact_path),
         **_metal_struct_method_call_failure_details(exc, unit, artifact_path),
+        **_metal_stateless_global_failure_details(exc, unit, artifact_path),
         **_metal_static_constant_failure_details(exc, unit, artifact_path),
         **_metal_sizeof_failure_details(exc, unit, artifact_path),
         **_metal_template_argument_failure_details(exc, unit, artifact_path),
