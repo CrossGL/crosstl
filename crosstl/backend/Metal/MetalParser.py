@@ -4839,12 +4839,14 @@ class MetalParser:
         return args
 
     def parse_call(self, callee):
+        open_token = self.current_token
         self.eat("LPAREN")
         args = []
         while self.current_token[0] != "RPAREN":
             args.append(self.parse_expression())
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
+        close_token = self.current_token
         self.eat("RPAREN")
 
         if isinstance(callee, MemberAccessNode):
@@ -4854,7 +4856,22 @@ class MetalParser:
         if isinstance(callee, VariableNode):
             if callee.name == "discard_fragment" and not args:
                 return DiscardNode()
-            return FunctionCallNode(callee.name, args)
+            node = FunctionCallNode(callee.name, args)
+            call_location = self.source_span_from_tokens(open_token, close_token)
+            callee_location = getattr(callee, "source_location", None)
+            if callee_location is not None:
+                call_location = dict(callee_location)
+                closing_location = self.source_span_from_tokens(open_token, close_token)
+                if closing_location is not None:
+                    for key in ("end_line", "end_column", "end_offset"):
+                        if key in closing_location:
+                            call_location[key] = closing_location[key]
+                    if "offset" in call_location and "end_offset" in call_location:
+                        call_location["length"] = (
+                            call_location["end_offset"] - call_location["offset"]
+                        )
+            node.source_location = call_location
+            return node
         return CallNode(callee, args)
 
     def build_texture_sample(self, texture, args):

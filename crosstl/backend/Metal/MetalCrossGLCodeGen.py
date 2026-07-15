@@ -71,6 +71,41 @@ class MetalBuiltinOverloadResolutionError(ValueError):
         )
 
 
+class MetalBuiltinResultTypeResolutionError(ValueError):
+    """Raised when a Metal builtin call has no unique source result type."""
+
+    project_diagnostic_code = "project.translate.metal-builtin-result-unresolved"
+    missing_capabilities = ("metal.builtin-result-type-inference",)
+    maximum_candidates = 8
+
+    def __init__(
+        self,
+        function_name,
+        argument_types,
+        candidates,
+        reason,
+        source_location=None,
+    ):
+        self.function_name = function_name
+        self.argument_types = tuple(argument_types)
+        all_candidates = tuple(candidates)
+        self.candidates = all_candidates[: self.maximum_candidates]
+        self.omitted_candidate_count = max(
+            0, len(all_candidates) - len(self.candidates)
+        )
+        self.reason = reason
+        self.source_location = source_location
+        signature = ", ".join(self.argument_types)
+        candidate_text = ", ".join(self.candidates) or "<none>"
+        if self.omitted_candidate_count:
+            candidate_text += f", and {self.omitted_candidate_count} more"
+        super().__init__(
+            "Cannot infer Metal builtin result type for "
+            f"{function_name}({signature}): {reason}; viable signatures are "
+            f"{candidate_text}"
+        )
+
+
 class MetalSourceOverloadResolutionError(ValueError):
     """Raised when a Metal call cannot be bound from source argument types."""
 
@@ -624,6 +659,61 @@ class MetalToCrossGLConverter:
         "step",
         "tan",
         "tanh",
+    }
+    metal_math_builtin_result_rules = {
+        "abs": ("same", "arithmetic", 1),
+        "acos": ("same", "floating", 1),
+        "acosh": ("same", "floating", 1),
+        "all": ("bool_reduction", "bool", 1),
+        "any": ("bool_reduction", "bool", 1),
+        "asin": ("same", "floating", 1),
+        "asinh": ("same", "floating", 1),
+        "atan": ("same", "floating", 1),
+        "atan2": ("same", "floating", 2),
+        "atanh": ("same", "floating", 1),
+        "ceil": ("same", "floating", 1),
+        "clamp": ("same", "arithmetic", 3),
+        "cos": ("same", "floating", 1),
+        "cosh": ("same", "floating", 1),
+        "cospi": ("same", "floating", 1),
+        "distance": ("element", "floating_vector", 2),
+        "dot": ("element", "floating_vector", 2),
+        "exp": ("same", "floating", 1),
+        "exp2": ("same", "floating", 1),
+        "fabs": ("same", "floating", 1),
+        "floor": ("same", "floating", 1),
+        "fma": ("same", "floating", 3),
+        "fmax": ("same", "floating", 2),
+        "fmin": ("same", "floating", 2),
+        "fmod": ("same", "floating", 2),
+        "fract": ("same", "floating", 1),
+        "isfinite": ("bool_shape", "floating_bfloat", 1),
+        "isinf": ("bool_shape", "floating_bfloat", 1),
+        "isnan": ("bool_shape", "floating_bfloat", 1),
+        "isnormal": ("bool_shape", "floating_bfloat", 1),
+        "isordered": ("bool_shape", "floating_bfloat", 2),
+        "isunordered": ("bool_shape", "floating_bfloat", 2),
+        "length": ("element", "floating_vector", 1),
+        "log": ("same", "floating", 1),
+        "log2": ("same", "floating", 1),
+        "max": ("same", "arithmetic", 2),
+        "min": ("same", "arithmetic", 2),
+        "mix": ("same", "floating", 3),
+        "normalize": ("same", "floating_vector", 1),
+        "pow": ("same", "floating", 2),
+        "reflect": ("same", "floating_vector", 2),
+        "rsqrt": ("same", "floating", 1),
+        "select": ("same", "select", 3),
+        "sign": ("same", "floating", 1),
+        "sin": ("same", "floating", 1),
+        "sincos": ("same", "sincos", 2),
+        "sinh": ("same", "floating", 1),
+        "sinpi": ("same", "floating", 1),
+        "smoothstep": ("same", "floating", 3),
+        "sqrt": ("same", "floating", 1),
+        "step": ("same", "floating", 2),
+        "tan": ("same", "floating", 1),
+        "tanh": ("same", "floating", 1),
     }
     metal_bit_intrinsics = {
         "popcount": "bitCount",
@@ -8189,10 +8279,29 @@ class MetalToCrossGLConverter:
             return 1
         return None
 
+    def metal_source_overload_groups_for_name(self, function_name):
+        signature_groups = self.metal_source_overload_groups.get(function_name)
+        if signature_groups or "::" not in str(function_name):
+            return signature_groups
+        unscoped_name = str(function_name).rsplit("::", 1)[-1]
+        unscoped_groups = self.metal_source_overload_groups.get(unscoped_name)
+        if not unscoped_groups:
+            return None
+        qualified_groups = {}
+        for signature, declarations in unscoped_groups.items():
+            matching = [
+                declaration
+                for declaration in declarations
+                if str(getattr(declaration, "qualified_name", "")) == str(function_name)
+            ]
+            if matching:
+                qualified_groups[signature] = matching
+        return qualified_groups or None
+
     def resolve_transported_metal_source_overload(
         self, function_name, arguments, source_location=None
     ):
-        signature_groups = self.metal_source_overload_groups.get(function_name)
+        signature_groups = self.metal_source_overload_groups_for_name(function_name)
         if not signature_groups:
             return None
 
@@ -8295,6 +8404,17 @@ class MetalToCrossGLConverter:
             return function_name
         return self.metal_source_overload_output_names[id(selected)]
 
+    def metal_user_function_overloads(self, function_name):
+        direct = list(self.user_function_overloads_by_name.get(function_name, []))
+        if direct or "::" not in str(function_name):
+            return direct
+        unscoped_name = str(function_name).rsplit("::", 1)[-1]
+        return [
+            function
+            for function in self.user_function_overloads_by_name.get(unscoped_name, [])
+            if str(getattr(function, "qualified_name", "")) == str(function_name)
+        ]
+
     def resolve_metal_user_function_overload(
         self,
         function_name,
@@ -8304,7 +8424,7 @@ class MetalToCrossGLConverter:
     ):
         candidates = [
             function
-            for function in self.user_function_overloads_by_name.get(function_name, [])
+            for function in self.metal_user_function_overloads(function_name)
             if len(getattr(function, "params", []) or []) == len(args)
         ]
         if not candidates:
@@ -8441,6 +8561,359 @@ class MetalToCrossGLConverter:
             if unscoped in self.metal_math_intrinsics:
                 return unscoped
         return None
+
+    @staticmethod
+    def metal_math_builtin_namespace_mode(name):
+        text = str(name)
+        if text.startswith(("metal::fast::", "fast::")):
+            return "fast"
+        if text.startswith(("metal::precise::", "precise::")):
+            return "precise"
+        return "default"
+
+    def metal_math_builtin_candidate_base_types(self, function_name, family):
+        mode = self.metal_math_builtin_namespace_mode(function_name)
+        if mode != "default":
+            if family in {
+                "floating",
+                "floating_vector",
+                "floating_bfloat",
+                "arithmetic",
+                "sincos",
+            }:
+                return ("float",)
+            return ()
+        if family == "bool":
+            return ("bool",)
+        if family in {"floating", "floating_vector"}:
+            return ("half", "float", "double")
+        if family == "floating_bfloat":
+            return ("bfloat", "half", "float", "double")
+        if family == "arithmetic":
+            return (
+                "half",
+                "float",
+                "double",
+                "int",
+                "uint",
+                "short",
+                "ushort",
+                "char",
+                "uchar",
+                "long",
+                "ulong",
+            )
+        if family == "select":
+            return (
+                "bool",
+                "bfloat",
+                "half",
+                "float",
+                "double",
+                "int",
+                "uint",
+                "short",
+                "ushort",
+                "char",
+                "uchar",
+                "long",
+                "ulong",
+            )
+        if family == "sincos":
+            return ("half", "float", "double")
+        return ()
+
+    def metal_math_builtin_type_info(self, metal_type):
+        value_type = self.metal_source_overload_value_type(metal_type)
+        if value_type is None:
+            return None
+        normalized_value = self.normalized_metal_type(value_type)
+        if normalized_value.startswith("packed_"):
+            return {
+                "value_type": value_type,
+                "category": "packed",
+                "width": 1,
+                "element_type": value_type,
+                "identity": self.metal_source_overload_type_identity(value_type),
+            }
+
+        vector = self.metal_vector_component_parts(value_type)
+        if vector is None:
+            element_type = value_type
+            width = 1
+            identity = self.metal_source_overload_type_identity(value_type)
+        else:
+            element_type, width, _width_text = vector
+            if width is None:
+                return None
+            identity = (
+                "vector",
+                width,
+                self.metal_source_overload_type_identity(element_type),
+            )
+        normalized_element = self.normalized_metal_type(
+            self.resolve_type_alias(element_type)
+        )
+        if normalized_element == "bool":
+            category = "bool"
+        elif normalized_element in self.metal_source_bfloat_types:
+            category = "bfloat"
+        else:
+            scalar = self.metal_scalar_arithmetic_type_info(element_type)
+            category = scalar[0] if scalar is not None else "object"
+        return {
+            "value_type": value_type,
+            "category": category,
+            "width": width,
+            "element_type": element_type,
+            "identity": identity,
+        }
+
+    def metal_math_builtin_candidate_widths(self, argument_types):
+        widths = {
+            info["width"]
+            for argument_type in argument_types
+            if argument_type is not None
+            for info in [self.metal_math_builtin_type_info(argument_type)]
+            if info is not None
+        }
+        return tuple(sorted(widths)) if widths else (1, "N")
+
+    @staticmethod
+    def metal_math_builtin_vector_type(base_type, width):
+        if width == 1:
+            return base_type
+        if width == "N" or int(width) > 4:
+            return f"metal::vec<{base_type}, {width}>"
+        return f"{base_type}{width}"
+
+    def metal_math_builtin_candidates(
+        self, function_name, result_kind, family, arity, argument_types
+    ):
+        candidates = []
+        widths = self.metal_math_builtin_candidate_widths(argument_types)
+        if family == "floating_vector":
+            widths = tuple(width for width in widths if width != 1)
+        for width in widths:
+            bool_type = self.metal_math_builtin_vector_type("bool", width)
+            for base_type in self.metal_math_builtin_candidate_base_types(
+                function_name, family
+            ):
+                value_type = self.metal_math_builtin_vector_type(base_type, width)
+                if family == "select":
+                    parameter_types = (value_type, value_type, bool_type)
+                    display_parameter_types = parameter_types
+                elif family == "sincos":
+                    parameter_types = (value_type, value_type)
+                    display_parameter_types = (
+                        value_type,
+                        f"thread {value_type}&",
+                    )
+                else:
+                    parameter_types = (value_type,) * arity
+                    display_parameter_types = parameter_types
+
+                if result_kind == "bool_reduction":
+                    result_type = "bool"
+                elif result_kind == "bool_shape":
+                    result_type = bool_type
+                elif result_kind == "element":
+                    result_type = base_type
+                else:
+                    result_type = value_type
+                signature = (
+                    f"{result_type} {function_name}"
+                    f"({', '.join(display_parameter_types)})"
+                )
+                candidates.append(
+                    {
+                        "parameter_types": parameter_types,
+                        "result_type": result_type,
+                        "signature": signature,
+                        "concrete": width != "N",
+                        "exact_parameters": (1,) if family == "sincos" else (),
+                    }
+                )
+        return candidates
+
+    def metal_math_builtin_conversion_rank(self, actual_type, expected_type, family):
+        actual = self.metal_math_builtin_type_info(actual_type)
+        expected = self.metal_math_builtin_type_info(expected_type)
+        if actual is None or expected is None:
+            return None
+        if actual["category"] == "packed" or expected["category"] == "packed":
+            return None
+        if actual["identity"] == expected["identity"]:
+            return 4
+        if actual["width"] != expected["width"]:
+            if actual["width"] == 1 and expected["width"] != 1:
+                element_rank = self.metal_math_builtin_conversion_rank(
+                    actual["value_type"], expected["element_type"], family
+                )
+                return None if element_rank is None else max(1, element_rank - 1)
+            return None
+        if actual["width"] != 1:
+            return None
+        if "object" in {actual["category"], expected["category"]}:
+            return None
+
+        actual_name = self.normalized_metal_type(actual["element_type"])
+        expected_name = self.normalized_metal_type(expected["element_type"])
+        if actual["category"] == "bool":
+            if expected["category"] == "integer":
+                expected_scalar = self.metal_scalar_arithmetic_type_info(
+                    expected["element_type"]
+                )
+                if expected_scalar == ("integer", True, 32):
+                    return 2
+                return 1
+            return 1 if expected["category"] == "floating" else None
+        if expected["category"] == "bool":
+            return (
+                1 if actual["category"] in {"bfloat", "floating", "integer"} else None
+            )
+        if actual["category"] == "bfloat":
+            if expected["category"] == "floating":
+                if expected_name == "float":
+                    return 1 if family == "arithmetic" else 2
+                if expected_name == "double":
+                    return 1
+                return None
+            if expected["category"] == "integer":
+                return 1
+            return None
+        if expected["category"] == "bfloat":
+            return None
+
+        actual_scalar = self.metal_scalar_arithmetic_type_info(actual["element_type"])
+        expected_scalar = self.metal_scalar_arithmetic_type_info(
+            expected["element_type"]
+        )
+        if actual_scalar is None or expected_scalar is None:
+            return None
+        actual_family, _actual_signed, actual_bits = actual_scalar
+        expected_family, expected_signed, expected_bits = expected_scalar
+        if actual_family == expected_family == "integer":
+            if actual_bits < 32 and expected_bits == 32 and expected_signed:
+                return 2
+            return 1
+        if actual_family == expected_family == "floating":
+            return 2 if actual_bits < expected_bits else 1
+        if actual_name == "bool" or expected_name == "bool":
+            return 1
+        return 1
+
+    @staticmethod
+    def metal_math_builtin_rank_dominates(left, right):
+        return all(a >= b for a, b in zip(left, right)) and any(
+            a > b for a, b in zip(left, right)
+        )
+
+    def metal_math_builtin_result_type(self, expression):
+        builtin_name = self.map_metal_math_function_name(expression.name)
+        if builtin_name is None:
+            return None
+        rule = self.metal_math_builtin_result_rules.get(builtin_name)
+        if rule is None:
+            return None
+        result_kind, family, arity = rule
+        argument_types = [
+            self.metal_source_overload_value_type(self.expression_metal_type(argument))
+            for argument in expression.args
+        ]
+        diagnostic_argument_types = [
+            argument_type or "<unknown>" for argument_type in argument_types
+        ]
+        candidates = self.metal_math_builtin_candidates(
+            str(expression.name), result_kind, family, arity, argument_types
+        )
+        source_location = getattr(expression, "source_location", None)
+        if len(argument_types) != arity:
+            raise MetalBuiltinResultTypeResolutionError(
+                str(expression.name),
+                diagnostic_argument_types,
+                [candidate["signature"] for candidate in candidates],
+                f"the builtin requires {arity} argument{'s' if arity != 1 else ''}",
+                source_location,
+            )
+
+        concrete_candidates = [
+            candidate for candidate in candidates if candidate["concrete"]
+        ]
+        partially_viable = []
+        for candidate in concrete_candidates:
+            ranks = []
+            for index, (actual_type, expected_type) in enumerate(
+                zip(argument_types, candidate["parameter_types"])
+            ):
+                if actual_type is None:
+                    ranks.append(None)
+                    continue
+                if index in candidate["exact_parameters"]:
+                    actual_info = self.metal_math_builtin_type_info(actual_type)
+                    expected_info = self.metal_math_builtin_type_info(expected_type)
+                    if (
+                        actual_info is None
+                        or expected_info is None
+                        or actual_info["identity"] != expected_info["identity"]
+                    ):
+                        break
+                rank = self.metal_math_builtin_conversion_rank(
+                    actual_type, expected_type, family
+                )
+                if rank is None:
+                    break
+                ranks.append(rank)
+            else:
+                partially_viable.append((tuple(ranks), candidate))
+
+        if any(argument_type is None for argument_type in argument_types):
+            viable = (
+                [candidate for _ranks, candidate in partially_viable]
+                if concrete_candidates
+                and any(argument_type is not None for argument_type in argument_types)
+                else candidates
+            )
+            reason = (
+                "one or more builtin argument types could not be inferred"
+                if viable
+                else "no builtin signature matches the known argument types"
+            )
+            raise MetalBuiltinResultTypeResolutionError(
+                str(expression.name),
+                diagnostic_argument_types,
+                [candidate["signature"] for candidate in viable],
+                reason,
+                source_location,
+            )
+
+        if not partially_viable:
+            raise MetalBuiltinResultTypeResolutionError(
+                str(expression.name),
+                diagnostic_argument_types,
+                [candidate["signature"] for candidate in candidates],
+                "no builtin signature matches the inferred argument types",
+                source_location,
+            )
+
+        winners = [
+            entry
+            for entry in partially_viable
+            if not any(
+                other is not entry
+                and self.metal_math_builtin_rank_dominates(other[0], entry[0])
+                for other in partially_viable
+            )
+        ]
+        if len(winners) != 1:
+            raise MetalBuiltinResultTypeResolutionError(
+                str(expression.name),
+                diagnostic_argument_types,
+                [candidate["signature"] for _ranks, candidate in winners],
+                "multiple builtin signatures remain viable after type matching",
+                source_location,
+            )
+        return winners[0][1]["result_type"]
 
     def expression_precedence(self, expression):
         if isinstance(expression, AssignmentNode):
@@ -11251,6 +11724,9 @@ class MetalToCrossGLConverter:
             selected_callable = self.selected_metal_callable(expr)
             if selected_callable is not None:
                 return self.selected_metal_callable_return_type(selected_callable)
+            builtin_result_type = self.metal_math_builtin_result_type(expr)
+            if builtin_result_type is not None:
+                return builtin_result_type
             arity_candidates = [
                 candidate
                 for candidate in self.user_function_overloads_by_name.get(
