@@ -80,6 +80,14 @@ The current harness verifies:
   [#1537](https://github.com/CrossGL/crosstl/issues/1537) before DXC. This gate
   establishes compiler acceptance only; it does not dispatch these kernels or
   establish numerical parity;
+- a separate Windows CI Direct3D 12 execution proof for a checked-in,
+  MLX-shaped Metal compute fixture with a file-scope immutable two-dimensional
+  lookup table. The fixture is translated to HLSL during the test, compiled to
+  DXIL with DXC, dispatched through the built-in DirectX runtime adapter and
+  `compushady`, and read back as four exact unsigned values:
+  `[5, 19, 11, 13]`. Because every result selects a table entry, this is a
+  value-sensitive proof that the generated `static const` initializer survives;
+  it is independent of the compiler-only frontier gate above;
 - Vulkan assembly and validator checks for the existing non-fence regression
   frontier when SPIR-V tools are available. Vulkan atomic-fence feature work is
   deferred; the separate `fence.metal` contract check prevents generated
@@ -124,7 +132,10 @@ The current harness verifies:
 - on Linux CI, OpenGL SPIR-V specialization through PyOpenGL and Mesa EGL for a
   reduced generated compute artifact. The native adapter compiles the GLSL to
   SPIR-V, applies numeric constant ID 7, and requires exact readback for two
-  independently selected unsigned values.
+  independently selected unsigned values;
+- on Windows CI, native Direct3D 12 execution and exact readback for the reduced
+  file-scope immutable lookup fixture. This proof does not claim execution of
+  the pinned MLX frontier or the upstream MLX host runtime.
 
 Pull requests run the 12-source pinned reduced scope: 11 clean frontier sources
 and the explicitly blocked `fence.metal` contract source. They also run the
@@ -180,12 +191,15 @@ warnings. The reduced fixture execution
 report exercises the project runner and adapter contract with reference
 buffers. The native execution report attempts the built-in native adapter
 contract separately. On Windows CI the generated DirectX frontier HLSL must
-compile with DXC. Current DirectX smoke artifacts lower MLX bfloat16 aliases to
-HLSL `half` for toolchain coverage; exact bfloat16 storage and conversion
-semantics remain tracked separately. On macOS CI, the generated `fence.metal`
-round-trip artifact must compile to AIR with the native Metal compiler. This
-checks generated source and project metadata, not numerical runtime parity or
-equivalent resource visibility. CrossGL/crosstl#1660 tracks preservation of
+compile with DXC. A separate native test translates and executes the reduced
+immutable lookup fixture through Direct3D 12; it does not turn the frontier
+compiler gate into a runtime-parity claim. Current DirectX smoke artifacts lower
+MLX bfloat16 aliases to HLSL `half` for toolchain coverage; exact bfloat16
+storage and conversion semantics remain tracked separately. On macOS CI, the
+generated `fence.metal` round-trip artifact must compile to AIR with the native
+Metal compiler. This checks generated source and project metadata, not numerical
+runtime parity or equivalent resource visibility. CrossGL/crosstl#1660 tracks
+preservation of
 the source `volatile coherent(system)` pointer contract. On
 Linux CI the generated Vulkan
 `arangeuint32`, `arangeint32`, and `arangefloat32` entry points must assemble,
@@ -246,6 +260,17 @@ python demos/integrations/mlx/run_mlx_porting.py \
   --require-directx-toolchain
 ```
 
+Install the DirectX runtime extra separately to execute the value-sensitive
+lookup fixture through Direct3D 12:
+
+```powershell
+python -m pip install -e ".[directx-runtime]" pytest-xdist
+$env:CROSTL_RUN_DIRECTX_LOOKUP_DEVICE_TEST = "1"
+python -m pytest -q -n auto `
+  tests/test_translator/test_native_runtime_drivers.py `
+  -k "directx_compute_runtime_executes_mlx_file_scope_lookup_on_device"
+```
+
 On macOS, require native compilation of the generated Metal round-trip artifact:
 
 ```bash
@@ -295,9 +320,10 @@ CI. CrossGL/crosstl#1388 tracks the artifact execution metadata required by
 runtime-test manifests and native adapters. OpenGL type aliases are inlined
 before host-interface reflection and are not exposed as runtime resources.
 CrossGL/crosstl#1471 tracks entry-point
-ownership for reflected constants in runtime reports. CrossGL/crosstl#1472
-tracks the Direct3D compute runtime driver needed to move Windows DirectX
-coverage from DXC validation to native dispatch/readback. CrossGL/crosstl#1474
+ownership for reflected constants in runtime reports. The Direct3D compute
+runtime now covers the reduced immutable lookup fixture; CrossGL/crosstl#1472
+continues to track expansion from that bounded proof to the generated MLX
+frontier. CrossGL/crosstl#1474
 tracks exact DirectX bfloat16 lowering beyond the current compile-time smoke
 mapping. Current DXC checks use Shader Model 6 compute profiles and do not prove
 Direct3D 10 or 11 compatibility; CrossGL/crosstl#1670 tracks explicit target

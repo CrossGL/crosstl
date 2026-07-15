@@ -15,6 +15,7 @@ from ..ast import (
     BinaryOpNode,
     BlockNode,
     BreakNode,
+    CastNode,
     ConstructorNode,
     ContinueNode,
     CooperativeMatrixOpNode,
@@ -27,6 +28,7 @@ from ..ast import (
     FunctionNode,
     IdentifierNode,
     IfNode,
+    LiteralNode,
     LoopNode,
     MatchNode,
     MemberAccessNode,
@@ -424,6 +426,30 @@ class DirectXAggregateInitializerError(ValueError):
         self.expected_type = expected_type
         self.element_count = element_count
         self.expected_element_count = expected_element_count
+        self.reason = reason
+        self.source_location = source_location
+
+
+class DirectXCompileTimeGlobalError(ValueError):
+    """Raised when a file-scope constant has no faithful HLSL initializer."""
+
+    project_diagnostic_code = "project.translate.directx-compile-time-global-invalid"
+    missing_capabilities = ("directx.compile-time-global-initializer",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        variable_name=None,
+        expression_kind=None,
+        detail=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.variable_name = variable_name
+        self.expression_kind = expression_kind
+        self.detail = detail
         self.reason = reason
         self.source_location = source_location
 
@@ -1247,6 +1273,8 @@ class HLSLCodeGen:
         self.directx_specialization_constant_records = []
         self.directx_specialization_constant_global_ids = set()
         self.directx_specialization_constant_types = {}
+        self.directx_compile_time_global_node_ids = set()
+        self.directx_omitted_compile_time_global_node_ids = set()
         self.standard_math_constant_shadow_names = set()
         self.current_identifier_aliases = {}
         self.current_identifier_reserved_names = set()
@@ -1859,6 +1887,8 @@ class HLSLCodeGen:
         self.directx_specialization_constant_records = []
         self.directx_specialization_constant_global_ids = set()
         self.directx_specialization_constant_types = {}
+        self.directx_compile_time_global_node_ids = set()
+        self.directx_omitted_compile_time_global_node_ids = set()
         self.current_identifier_aliases = {}
         self.current_identifier_reserved_names = set()
         self.current_function_name = None
@@ -2155,6 +2185,7 @@ class HLSLCodeGen:
                 self.generic_struct_specializations,
             )
         )
+        self.prepare_directx_compile_time_globals(ast, global_vars)
         self.hlsl_lowered_struct_resource_members = (
             self.collect_hlsl_lowered_struct_resource_members(structs, functions)
         )
@@ -2442,7 +2473,14 @@ class HLSLCodeGen:
             else:
                 var_name = f"var{i}"
 
+            if id(node) in self.directx_omitted_compile_time_global_node_ids:
+                continue
+
             if self.hlsl_should_omit_metal_global_declaration(var_name, vtype):
+                continue
+
+            if id(node) in self.directx_compile_time_global_node_ids:
+                code += self.generate_directx_compile_time_global_declaration(node)
                 continue
 
             attribute_array_size = self.hlsl_resource_array_size_expression(node, vtype)
@@ -5321,6 +5359,542 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             code += f"static const {declaration} = {value_code};\n"
 
         return f"{code}\n" if code else ""
+
+    def directx_compile_time_global_error(
+        self,
+        node,
+        expression,
+        *,
+        reason,
+        detail=None,
+    ):
+        name = getattr(node, "name", getattr(node, "variable_name", "<unnamed>"))
+        explanation = detail or reason.replace("-", " ")
+        source_location = getattr(expression, "source_location", None) or getattr(
+            node, "source_location", None
+        )
+        raise DirectXCompileTimeGlobalError(
+            f"DirectX compile-time global '{name}' cannot be lowered: {explanation}",
+            variable_name=name,
+            expression_kind=(
+                expression.__class__.__name__ if expression is not None else None
+            ),
+            detail=detail,
+            reason=reason,
+            source_location=source_location,
+        )
+
+    def is_directx_compile_time_global_candidate(self, node):
+        if getattr(node, "initial_value", None) is None:
+            return False
+        if id(node) in self.directx_specialization_constant_global_ids:
+            return False
+
+        qualifiers = {
+            str(value).lower() for value in getattr(node, "qualifiers", []) or []
+        }
+        if not qualifiers.intersection({"const", "constant"}):
+            return False
+        if qualifiers.intersection(
+            {
+                "buffer",
+                "coherent",
+                "device",
+                "global",
+                "groupshared",
+                "in",
+                "inout",
+                "input",
+                "out",
+                "output",
+                "readonly",
+                "readwrite",
+                "restrict",
+                "shared",
+                "storage",
+                "thread",
+                "threadgroup",
+                "threadgroup_imageblock",
+                "uniform",
+                "volatile",
+                "workgroup",
+                "writeonly",
+            }
+        ):
+            return False
+        if getattr(node, "resource_qualifiers", None):
+            return False
+        if getattr(node, "semantic", None) is not None:
+            return False
+        if getattr(node, "attributes", None):
+            return False
+
+        vtype = getattr(node, "var_type", getattr(node, "vtype", None))
+        return not self.is_directx_compile_time_resource_type(vtype, node=node)
+
+    def is_directx_compile_time_resource_type(self, vtype, *, node=None, seen=None):
+        if isinstance(vtype, (PointerType, ReferenceType)):
+            return True
+        if isinstance(vtype, ArrayType):
+            return self.is_directx_compile_time_resource_type(
+                vtype.element_type,
+                node=node,
+                seen=seen,
+            )
+
+        type_name = self.type_name_string(vtype)
+        base_type, array_suffix = split_array_type_suffix(type_name)
+        if array_suffix:
+            return self.is_directx_compile_time_resource_type(
+                base_type,
+                node=node,
+                seen=seen,
+            )
+
+        mapped_type = self.map_resource_type_with_format(vtype, node)
+        if (
+            self.is_resource_parameter_type(vtype)
+            or self.is_sampler_type(vtype)
+            or self.is_image_type(vtype)
+            or mapped_type.startswith("Texture")
+            or self.is_hlsl_feedback_texture_type(mapped_type)
+            or self.is_hlsl_rw_texture_type(mapped_type)
+            or self.is_hlsl_acceleration_structure_type(mapped_type)
+            or self.is_hlsl_uav_buffer_type(mapped_type)
+            or self.is_hlsl_readonly_buffer_type(mapped_type)
+            or self.is_hlsl_constant_buffer_type(mapped_type)
+            or self.is_hlsl_texture_buffer_type(mapped_type)
+            or mapped_type in {"SamplerState", "SamplerComparisonState"}
+        ):
+            return True
+
+        mapped_value_type = self.map_type(vtype)
+        seen = set(seen or ())
+        if mapped_value_type in seen:
+            return False
+        fields = self.hlsl_struct_constructor_fields(mapped_value_type)
+        if fields is None:
+            return False
+        seen.add(mapped_value_type)
+        return any(
+            self.is_directx_compile_time_resource_type(
+                field_type,
+                seen=seen,
+            )
+            for _field_name, field_type in fields
+        )
+
+    def validate_directx_compile_time_global_type(
+        self,
+        node,
+        vtype,
+        *,
+        seen=None,
+    ):
+        if isinstance(vtype, (PointerType, ReferenceType)):
+            self.directx_compile_time_global_error(
+                node,
+                vtype,
+                reason="unrepresentable-value-type",
+                detail=f"pointer/reference type '{self.type_name_string(vtype)}'",
+            )
+
+        mapped_type = self.map_type(vtype)
+        array_type = self.hlsl_outer_array_type(mapped_type)
+        if array_type is not None:
+            _array_type, extent_text, element_type = array_type
+            extent = evaluate_literal_int_expression(
+                extent_text,
+                self.literal_int_constants,
+            )
+            if extent is None:
+                self.directx_compile_time_global_error(
+                    node,
+                    vtype,
+                    reason="array-extent-unresolved",
+                    detail=f"array extent '{extent_text}' is not a known integer constant",
+                )
+            if extent <= 0:
+                self.directx_compile_time_global_error(
+                    node,
+                    vtype,
+                    reason="array-extent-invalid",
+                    detail=f"array extent '{extent}' must be positive",
+                )
+            self.validate_directx_compile_time_global_type(
+                node,
+                element_type,
+                seen=seen,
+            )
+            return
+
+        if self.is_scalar_value_type(mapped_type) or self.is_vector_value_type(
+            mapped_type
+        ):
+            return
+
+        fields = self.hlsl_struct_constructor_fields(mapped_type)
+        if fields is not None:
+            if not fields:
+                self.directx_compile_time_global_error(
+                    node,
+                    vtype,
+                    reason="unrepresentable-value-type",
+                    detail=f"empty struct type '{mapped_type}'",
+                )
+            seen = set(seen or ())
+            if mapped_type in seen:
+                self.directx_compile_time_global_error(
+                    node,
+                    vtype,
+                    reason="recursive-value-type",
+                    detail=f"recursive struct type '{mapped_type}'",
+                )
+            seen.add(mapped_type)
+            for _field_name, field_type in fields:
+                self.validate_directx_compile_time_global_type(
+                    node,
+                    field_type,
+                    seen=seen,
+                )
+            return
+
+        self.directx_compile_time_global_error(
+            node,
+            vtype,
+            reason="unrepresentable-value-type",
+            detail=f"value type '{mapped_type}'",
+        )
+
+    def directx_compile_time_constructor_type(self, type_name):
+        mapped_type = self.map_type(type_name)
+        if self.is_scalar_value_type(mapped_type) or self.is_vector_value_type(
+            mapped_type
+        ):
+            return mapped_type
+        if self.hlsl_struct_constructor_fields(mapped_type) is not None:
+            return mapped_type
+        return None
+
+    def validate_directx_compile_time_global_expression(
+        self,
+        node,
+        expression,
+        known_constant_names,
+        candidate_names,
+    ):
+        def reject(reason, current, detail=None):
+            self.directx_compile_time_global_error(
+                node,
+                current,
+                reason=reason,
+                detail=detail,
+            )
+
+        def validate(current):
+            if isinstance(current, (bool, int, float, LiteralNode)):
+                return
+            if isinstance(current, (IdentifierNode, VariableNode)):
+                name = getattr(current, "name", None)
+                if name in known_constant_names:
+                    return
+                if name and render_standard_math_constant(name, "directx") is not None:
+                    return
+                reason = (
+                    "forward-reference" if name in candidate_names else "runtime-value"
+                )
+                reject(reason, current, name)
+            if isinstance(current, ArrayLiteralNode):
+                for element in getattr(current, "elements", []) or []:
+                    validate(element)
+                return
+            if isinstance(current, MemberAccessNode):
+                validate(
+                    getattr(current, "object", getattr(current, "object_expr", None))
+                )
+                return
+            if isinstance(current, SwizzleNode):
+                validate(current.vector_expr)
+                return
+            if isinstance(current, ArrayAccessNode):
+                validate(
+                    getattr(current, "array", getattr(current, "array_expr", None))
+                )
+                validate(
+                    getattr(current, "index", getattr(current, "index_expr", None))
+                )
+                return
+            if isinstance(current, BinaryOpNode):
+                validate(current.left)
+                validate(current.right)
+                return
+            if isinstance(current, UnaryOpNode):
+                operator = self.map_operator(current.op)
+                if operator not in {"+", "-", "!", "~"}:
+                    reject("invalid-unary-operator", current, operator)
+                validate(current.operand)
+                return
+            if isinstance(current, TernaryOpNode):
+                validate(current.condition)
+                validate(current.true_expr)
+                validate(current.false_expr)
+                return
+            if isinstance(current, CastNode):
+                if (
+                    self.directx_compile_time_constructor_type(current.target_type)
+                    is None
+                ):
+                    reject(
+                        "unrepresentable-cast-type",
+                        current,
+                        self.type_name_string(current.target_type),
+                    )
+                validate(current.expression)
+                return
+            if isinstance(current, ConstructorNode):
+                constructor_type = self.type_name_string(current.constructor_type)
+                if self.directx_compile_time_constructor_type(constructor_type) is None:
+                    reject("unrepresentable-constructor", current, constructor_type)
+                for argument in list(current.arguments or []) + list(
+                    (current.named_arguments or {}).values()
+                ):
+                    validate(argument)
+                return
+            if isinstance(current, FunctionCallNode):
+                function_name = self.function_call_name(current)
+                if self.directx_compile_time_constructor_type(function_name) is None:
+                    reject("function-call", current, function_name)
+                for argument in (
+                    getattr(current, "arguments", getattr(current, "args", [])) or []
+                ):
+                    validate(argument)
+                return
+            reject("unrepresentable-expression", current)
+
+        validate(expression)
+
+    def prepare_directx_compile_time_globals(self, ast, global_vars):
+        self.directx_compile_time_global_node_ids = set()
+        self.directx_omitted_compile_time_global_node_ids = set()
+        candidates = [
+            node
+            for node in global_vars or []
+            if self.is_directx_compile_time_global_candidate(node)
+        ]
+        candidate_names = {
+            getattr(node, "name", getattr(node, "variable_name", None))
+            for node in candidates
+        }
+        candidate_names.discard(None)
+        known_constant_names = {
+            getattr(node, "name", None)
+            for node in getattr(ast, "constants", []) or []
+            if getattr(node, "name", None)
+        }
+        known_constant_names.update(self.directx_specialization_constant_types)
+        known_constant_names.update(getattr(self, "enum_variant_constants", {}))
+        known_constant_names.update(self.HLSL_GLSL_BUILTIN_INT_CONSTANTS)
+
+        for node in candidates:
+            vtype = getattr(node, "var_type", getattr(node, "vtype", None))
+            name = getattr(node, "name", getattr(node, "variable_name", None))
+            struct_fields = self.hlsl_struct_constructor_fields(self.map_type(vtype))
+            if struct_fields == []:
+                self.validate_directx_compile_time_global_expression(
+                    node,
+                    getattr(node, "initial_value", None),
+                    known_constant_names,
+                    candidate_names,
+                )
+                referenced = any(
+                    isinstance(candidate, IdentifierNode) and candidate.name == name
+                    for candidate in self.walk_ast(ast)
+                )
+                if name and not referenced:
+                    self.directx_omitted_compile_time_global_node_ids.add(id(node))
+                    known_constant_names.add(name)
+                    continue
+            self.validate_directx_compile_time_global_type(node, vtype)
+            self.validate_directx_compile_time_global_expression(
+                node,
+                getattr(node, "initial_value", None),
+                known_constant_names,
+                candidate_names,
+            )
+            self.directx_compile_time_global_node_ids.add(id(node))
+            if name:
+                known_constant_names.add(name)
+
+            if self.map_type(vtype) not in {"int", "uint", "int64_t", "uint64_t"}:
+                continue
+            value = evaluate_literal_int_expression(
+                getattr(node, "initial_value", None),
+                self.literal_int_constants,
+            )
+            if value is not None and name:
+                self.literal_int_constants[name] = value
+
+    def hlsl_compile_time_default_initializer(self, node, expression, expected_type):
+        mapped_type = self.map_type(expected_type)
+        array_type = self.hlsl_outer_array_type(mapped_type)
+        if array_type is not None:
+            _array_type, extent_text, element_type = array_type
+            extent = evaluate_literal_int_expression(
+                extent_text,
+                self.literal_int_constants,
+            )
+            if extent is None or extent <= 0:
+                self.directx_compile_time_global_error(
+                    node,
+                    expression,
+                    reason="array-extent-unresolved",
+                    detail=f"array extent '{extent_text}' is not a positive integer constant",
+                )
+            elements = [
+                self.hlsl_compile_time_default_initializer(
+                    node,
+                    expression,
+                    element_type,
+                )
+                for _index in range(extent)
+            ]
+            return "{" + ", ".join(elements) + "}"
+
+        fields = self.hlsl_struct_constructor_fields(mapped_type)
+        if fields is not None:
+            values = [
+                self.hlsl_compile_time_default_initializer(
+                    node,
+                    expression,
+                    field_type,
+                )
+                for _field_name, field_type in fields
+            ]
+            return "{" + ", ".join(values) + "}"
+        if self.is_vector_value_type(mapped_type):
+            return f"({mapped_type})0"
+        return default_value_expression(self, mapped_type)
+
+    def hlsl_compile_time_initializer_expression(
+        self,
+        node,
+        expression,
+        expected_type,
+    ):
+        mapped_type = self.map_type(expected_type)
+        array_type = self.hlsl_outer_array_type(mapped_type)
+        if array_type is not None:
+            if not isinstance(expression, ArrayLiteralNode):
+                self.directx_compile_time_global_error(
+                    node,
+                    expression,
+                    reason="array-initializer-shape",
+                    detail="fixed arrays require a brace initializer",
+                )
+            _mapped_type, extent, element_type = (
+                self.hlsl_fixed_array_aggregate_contract(expression, mapped_type)
+            )
+            elements = list(getattr(expression, "elements", []) or [])
+            if self.hlsl_is_zero_aggregate_initializer(expression):
+                elements = []
+            if len(elements) > extent:
+                self.hlsl_aggregate_error(
+                    expression,
+                    expected_type=mapped_type,
+                    reason="element-count-mismatch",
+                    expected_element_count=extent,
+                )
+            rendered = [
+                self.hlsl_compile_time_initializer_expression(
+                    node,
+                    element,
+                    element_type,
+                )
+                for element in elements
+            ]
+            rendered.extend(
+                self.hlsl_compile_time_default_initializer(
+                    node,
+                    expression,
+                    element_type,
+                )
+                for _index in range(len(elements), extent)
+            )
+            return "{" + ", ".join(rendered) + "}"
+
+        fields = self.hlsl_struct_constructor_fields(mapped_type)
+        if fields is not None:
+            initializer = self.hlsl_struct_initializer_components(
+                expected_type,
+                expression,
+            )
+            if initializer is not None:
+                _type_name, initializer_fields, _rendered_args, field_exprs = (
+                    initializer
+                )
+                rendered = []
+                for (_field_name, field_type), field_expression in zip(
+                    initializer_fields,
+                    field_exprs,
+                ):
+                    if field_expression is None:
+                        rendered.append(
+                            self.hlsl_compile_time_default_initializer(
+                                node,
+                                expression,
+                                field_type,
+                            )
+                        )
+                    else:
+                        rendered.append(
+                            self.hlsl_compile_time_initializer_expression(
+                                node,
+                                field_expression,
+                                field_type,
+                            )
+                        )
+                return "{" + ", ".join(rendered) + "}"
+            if isinstance(expression, (ArrayLiteralNode, ConstructorNode)) or (
+                isinstance(expression, FunctionCallNode)
+                and self.function_call_name(expression)
+                == self.type_name_string(expected_type)
+            ):
+                self.directx_compile_time_global_error(
+                    node,
+                    expression,
+                    reason="struct-initializer-shape",
+                    detail=f"initializer does not match struct type '{mapped_type}'",
+                )
+
+        if isinstance(expression, ArrayLiteralNode):
+            return self.hlsl_contextual_aggregate_initializer(expression, mapped_type)
+        if isinstance(expression, CastNode):
+            target_type = self.map_type(expression.target_type)
+            operand = self.hlsl_compile_time_initializer_expression(
+                node,
+                expression.expression,
+                expression.target_type,
+            )
+            return f"{target_type}({operand})"
+        if isinstance(expression, ConstructorNode):
+            constructor_type = self.map_type(expression.constructor_type)
+            arguments = [
+                self.generate_constant_expression(argument)
+                for argument in expression.arguments
+            ]
+            return f"{constructor_type}({', '.join(arguments)})"
+        return self.generate_constant_expression(expression, expected_type)
+
+    def generate_directx_compile_time_global_declaration(self, node):
+        name = getattr(node, "name", getattr(node, "variable_name", None))
+        vtype = getattr(node, "var_type", getattr(node, "vtype", None))
+        declaration = format_c_style_array_declaration(self.map_type(vtype), name)
+        initializer = self.hlsl_compile_time_initializer_expression(
+            node,
+            getattr(node, "initial_value", None),
+            vtype,
+        )
+        return f"static const {declaration} = {initializer};\n"
 
     def referenced_hlsl_glsl_builtin_int_constants(self, ast):
         declared_names = {

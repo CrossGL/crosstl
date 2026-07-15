@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 import crosstl.project as project_api
+from crosstl._crosstl import translate
 from crosstl.project.runtime_verification import (
     COMPARISON_FAILED,
     PASSED,
@@ -1411,6 +1412,109 @@ def test_build_runtime_test_manifest_from_mlx_fixture_metadata():
         "globalSize": [4, 1, 1],
         "metadata": {"source": "fixture", "stage": "compute", "status": "available"},
     }
+
+
+def test_mlx_file_scope_immutable_lookup_fixture_is_value_sensitive():
+    fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / "mlx"
+    source_path = fixture_dir / "file_scope_immutable_lookup.metal"
+    artifact_report = fixture_dir / "file_scope_immutable_lookup.artifacts.json"
+    fixture_metadata = fixture_dir / "file_scope_immutable_lookup.fixture-metadata.json"
+
+    generated = translate(
+        str(source_path),
+        backend="directx",
+        source_backend="metal",
+        format_output=False,
+    )
+    assert (
+        "static const uint lookup_table[2][4] = "
+        "{{3u, 5u, 7u, 11u}, {13u, 17u, 19u, 23u}};"
+    ) in generated
+    assert "static const uint lookup_table[2][4];" not in generated
+    assert "output[index] = lookup_table[row][column];" in generated
+
+    manifest = build_runtime_test_manifest(
+        artifact_report,
+        fixture_metadata,
+        project_root=ROOT,
+    )
+
+    assert manifest["success"] is True
+    assert manifest["summary"]["testCount"] == 1
+    assert manifest["summary"]["testsByTarget"] == {"directx": 1}
+    assert manifest["summary"]["runtimeMetadataStatusCounts"] == {"ready": 1}
+    assert manifest["adapters"][0]["executor"] == "directx"
+    assert manifest["adapters"][0]["platformRequirements"]["requiredTools"] == ["dxc"]
+    test_case = manifest["tests"][0]
+    assert test_case["id"] == "mlx-file-scope-immutable-lookup-u32"
+    assert test_case["expectedOutputs"] == [
+        {
+            "name": "output",
+            "kind": "buffer",
+            "dtype": "uint32",
+            "shape": [4],
+            "values": [5, 19, 11, 13],
+            "tolerance": {"absolute": 0.0, "relative": 0.0},
+        }
+    ]
+    assert test_case["runtimeAdapter"]["dispatch"] == {
+        "entryPoint": "CSMain",
+        "globalSize": [4, 1, 1],
+    }
+
+    plan = plan_runtime_test_manifest(manifest)
+    runtime_execution = plan["testCases"][0]["runtimeExecution"]
+    assert runtime_execution["dispatch"] == {
+        "entryPoint": "CSMain",
+        "workgroupSize": [1, 1, 1],
+        "workgroupCount": [4, 1, 1],
+        "globalSize": [4, 1, 1],
+        "metadata": {"stage": "compute", "source": "fixture", "status": "available"},
+    }
+    assert runtime_execution["resourceBindings"][0]["binding"] == {
+        "id": "buffer|0|output",
+        "name": "output",
+        "kind": "buffer",
+        "type": "RWStructuredBuffer<uint>",
+        "set": 0,
+        "binding": 0,
+        "access": "write",
+    }
+
+
+def test_mlx_workflow_requires_directx_lookup_numerical_execution():
+    workflow = (ROOT / ".github" / "workflows" / "mlx-project-porting.yml").read_text(
+        encoding="utf-8"
+    )
+    for watched_path in (
+        "tests/fixtures/runtime_verification/**",
+        "tests/test_translator/test_native_runtime_drivers.py",
+        "tests/test_translator/test_runtime_verification.py",
+    ):
+        assert workflow.count(f'- "{watched_path}"') == 2
+
+    compile_start = workflow.index("- name: Run MLX project-porting checks")
+    runtime_start = workflow.index(
+        "- name: Prove Direct3D immutable lookup numerical execution"
+    )
+    runtime_end = workflow.index("- name: Verify MLX frontier accounting")
+    assert compile_start < runtime_start < runtime_end
+
+    compile_step = workflow[compile_start:runtime_start]
+    runtime_step = workflow[runtime_start:runtime_end]
+    assert "--require-directx-toolchain" in compile_step
+    assert "CROSTL_RUN_DIRECTX_LOOKUP_DEVICE_TEST" not in compile_step
+    assert "if: runner.os == 'Windows'" in runtime_step
+    assert 'CROSTL_RUN_DIRECTX_LOOKUP_DEVICE_TEST: "1"' in runtime_step
+    assert "python -m pytest -q -n auto" in runtime_step
+    assert "tests/test_translator/test_native_runtime_drivers.py" in runtime_step
+    assert (
+        "directx_compute_runtime_executes_mlx_file_scope_lookup_on_device"
+        in runtime_step
+    )
+    assert "continue-on-error" not in runtime_step
+    assert "|| true" not in runtime_step
+    assert 'python -m pip install -e ".[directx-runtime]" pytest-xdist' in workflow
 
 
 def test_build_runtime_test_manifest_reports_ambiguous_fixture_selector(tmp_path):
