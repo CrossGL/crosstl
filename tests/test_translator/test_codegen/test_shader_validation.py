@@ -13122,6 +13122,55 @@ kernel void read_alias(
     )
 
 
+def test_translated_metal_union_storage_aliasing_validates_with_dxc(tmp_path):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    metal_source = tmp_path / "union_storage_aliasing.metal"
+    source = tmp_path / "union_storage_aliasing.hlsl"
+    output = tmp_path / "union_storage_aliasing.dxil"
+    metal_source.write_text(
+        """
+#include <metal_stdlib>
+using namespace metal;
+
+union rbits {
+    uint2 val;
+    uchar4 bytes[2];
+};
+
+kernel void union_storage(
+    device uint* results [[buffer(0)]]) {
+    rbits bits;
+    bits.val = uint2(0x04030201u, 0x08070605u);
+    results[0] = bits.bytes[0][0];
+    results[1] = bits.bytes[1][3];
+    bits.bytes[0] = uchar4(9u, 10u, 11u, 12u);
+    results[2] = bits.val.x;
+}
+""",
+        encoding="utf-8",
+    )
+    code = crosstl.translate(
+        str(metal_source),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "uint2 CrossGLUnionStorage;" in code
+    assert "uint2 val;" not in code
+    assert "uint4 bytes[2];" not in code
+    assert "__crossgl_union_unpack_u8x4" in code
+    assert "__crossgl_union_pack_u8x4" in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
 def test_translated_metal_conditional_typed_resource_pointer_alias_validates_with_dxc(
     tmp_path,
 ):

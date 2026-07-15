@@ -1459,6 +1459,31 @@ class MetalToCrossGLConverter:
             member_size = stride * extent
         return member_size, member_alignment
 
+    def metal_union_layout_contract(self, struct_node):
+        """Return source ABI metadata retained by pointer-free target lowering."""
+        union_name = getattr(struct_node, "name", None)
+        aggregate_layout = self.metal_concrete_type_layout(union_name)
+        aggregate_size, aggregate_alignment = aggregate_layout or (0, 0)
+        member_layouts = {}
+        for member in getattr(struct_node, "members", []) or []:
+            if not isinstance(member, VariableNode):
+                continue
+            qualifiers = {
+                str(qualifier).lower()
+                for qualifier in getattr(member, "qualifiers", []) or []
+            }
+            if "static" in qualifiers:
+                continue
+            member_layouts[id(member)] = self.metal_struct_member_layout(
+                member,
+                {union_name} if union_name else set(),
+            ) or (0, 0)
+        return {
+            "size": aggregate_size,
+            "alignment": aggregate_alignment,
+            "members": member_layouts,
+        }
+
     @staticmethod
     def align_metal_layout_offset(offset, alignment):
         return ((offset + alignment - 1) // alignment) * alignment
@@ -2185,11 +2210,16 @@ class MetalToCrossGLConverter:
                     code += "    };\n\n"
         for struct_node in structs:
             if isinstance(struct_node, StructNode):
-                if getattr(struct_node, "aggregate_kind", None) == "union":
+                is_union = getattr(struct_node, "aggregate_kind", None) == "union"
+                union_layout = None
+                if is_union:
                     union_name = self.map_struct_name(struct_node.name or "anonymous")
+                    union_layout = self.metal_union_layout_contract(struct_node)
                     code += (
-                        f"    // Metal union {union_name} represented as "
-                        "struct-like layout; overlapping storage is not modeled\n"
+                        f"    // Metal union {union_name} retains overlapping "
+                        "storage through layout metadata\n"
+                        f"    @union_layout({union_layout['size']}, "
+                        f"{union_layout['alignment']}, little_endian, metal)\n"
                     )
                 if struct_node.name in self.constant_struct_name:
                     code += "    // cbuffers\n"
@@ -2229,6 +2259,14 @@ class MetalToCrossGLConverter:
                         member,
                         owner=self.map_struct_name(struct_node.name),
                     )
+                    if is_union and isinstance(member, VariableNode):
+                        member_size, member_alignment = union_layout["members"].get(
+                            id(member), (0, 0)
+                        )
+                        decl = (
+                            "@union_member_layout(0, "
+                            f"{member_size}, {member_alignment}) {decl}"
+                        )
                     code += f"        {decl};\n"
                 code += "    }\n\n"
 

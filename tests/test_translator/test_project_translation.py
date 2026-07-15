@@ -12839,6 +12839,96 @@ def test_metal_fixed_array_value_locals_match_direct_and_project_directx(tmp_pat
     assert_directx_compute_validates_if_available(direct, tmp_path)
 
 
+def test_metal_union_storage_aliasing_matches_direct_and_project_directx(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source_path = repo / "union-storage.metal"
+    source_path.write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            union rbits {
+              uint2 val;
+              uchar4 bytes[2];
+            };
+
+            kernel void union_storage(
+                device uint* output [[buffer(0)]]) {
+              rbits bits;
+              bits.val = uint2(0x04030201u, 0x08070605u);
+              output[0] = bits.bytes[0][0];
+              output[1] = bits.bytes[1][3];
+              bits.bytes[1] = uchar4(9u, 10u, 11u, 12u);
+              output[2] = bits.val.y;
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+    direct = crosstl_cli.translate(
+        str(source_path), backend="directx", format_output=False
+    )
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    project = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+    assert project == direct
+    assert "uint2 CrossGLUnionStorage;" in direct
+    assert "uint2 val;" not in direct
+    assert "uint4 bytes[2];" not in direct
+    assert "__crossgl_union_unpack_u8x4(bits.CrossGLUnionStorage[0])" in direct
+    assert (
+        "bits.CrossGLUnionStorage[1] = "
+        "__crossgl_union_pack_u8x4(uint4(9u, 10u, 11u, 12u));"
+    ) in direct
+    HLSLParser(HLSLLexer(direct).tokenize()).parse()
+    assert_directx_compute_validates_if_available(direct, tmp_path)
+
+
+def test_metal_union_layout_diagnostic_matches_direct_and_project(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source_path = repo / "unsupported-union.metal"
+    source_path.write_text(
+        "union Unsupported { uint2 words; uint word; };\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as direct_error:
+        crosstl_cli.translate(str(source_path), backend="directx", format_output=False)
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert getattr(direct_error.value, "reason", None) == "member-size-mismatch"
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.directx-union-layout-unsupported": 1
+    }
+    assert payload["summary"]["missingCapabilityCounts"] == {
+        "directx.union-storage-aliasing": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["message"] == str(direct_error.value)
+    assert diagnostic["code"] == ("project.translate.directx-union-layout-unsupported")
+    assert diagnostic["missingCapabilities"] == ["directx.union-storage-aliasing"]
+    assert payload["artifacts"][0]["status"] == "failed"
+    assert not (repo / payload["artifacts"][0]["path"]).exists()
+
+
 @pytest.mark.parametrize("target", ["directx", "opengl"])
 def test_translate_project_matches_direct_metal_materialized_signatures(
     tmp_path,

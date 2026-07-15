@@ -1,4 +1,5 @@
 import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ def _load_smoke_module():
     spec = importlib.util.spec_from_file_location("directx_runtime_smoke", SMOKE_PATH)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -89,6 +91,40 @@ def test_directx_runtime_smoke_translates_compiles_and_builds_dispatch(
     assert request.loaded_artifact == b"DXBC-smoke"
     assert request.entry_point == "CSMain"
     assert request.dispatch.workgroup_count == (4, 1, 1)
+
+
+def test_directx_runtime_smoke_builds_union_storage_dispatch(tmp_path, monkeypatch):
+    module = _load_smoke_module()
+
+    def passing_dxc(command, **kwargs):
+        _ = kwargs
+        output_path = Path(command[command.index("-Fo") + 1])
+        output_path.write_bytes(b"DXBC-union-smoke")
+        return type("Result", (), {"returncode": 0, "stderr": "", "stdout": ""})()
+
+    monkeypatch.setattr(module.subprocess, "run", passing_dxc)
+
+    hlsl_path, dxil_path = module._translate_and_compile(
+        tmp_path,
+        "dxc",
+        module.UNION_CASE,
+    )
+    request = module._dispatch_request(hlsl_path, dxil_path, module.UNION_CASE)
+    generated = hlsl_path.read_text(encoding="utf-8")
+
+    assert "uint2 CrossGLUnionStorage;" in generated
+    assert "uint2 words;" not in generated
+    assert "uint4 bytes[2];" not in generated
+    assert request.loaded_artifact == b"DXBC-union-smoke"
+    assert request.buffers["output"].dtype == "uint32"
+    assert request.buffers["output"].shape == (4,)
+    assert request.dispatch.workgroup_count == (1, 1, 1)
+    assert list(module.UNION_CASE.expected_values) == [
+        1,
+        8,
+        0x0C0B0A09,
+        0x08070605,
+    ]
 
 
 def test_directx_runtime_smoke_fails_closed_for_dxc_errors(tmp_path, monkeypatch):

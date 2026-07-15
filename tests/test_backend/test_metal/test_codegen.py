@@ -2096,7 +2096,7 @@ def test_codegen_range_for_loop_from_mlx_random():
     assert "value += r;" in crossgl
 
 
-def test_codegen_using_union_alias_from_mlx_cexpf_header_is_diagnostic_struct():
+def test_codegen_using_union_alias_from_mlx_cexpf_header_retains_layout_contract():
     # Reduced from:
     # Repo: https://github.com/ml-explore/mlx
     # Commit: b155224b9963cd9476363b464a559232a0868000
@@ -2116,14 +2116,34 @@ def test_codegen_using_union_alias_from_mlx_cexpf_header_is_diagnostic_struct():
     crossgl = convert(code)
 
     assert (
-        "// Metal union ieee_float_shape_type represented as struct-like layout; "
-        "overlapping storage is not modeled"
+        "// Metal union ieee_float_shape_type retains overlapping storage through "
+        "layout metadata"
     ) in crossgl
+    assert "@union_layout(4, 4, little_endian, metal)" in crossgl
     assert "struct ieee_float_shape_type {" in crossgl
-    assert "float value;" in crossgl
-    assert "uint word;" in crossgl
+    assert "@union_member_layout(0, 4, 4) float value;" in crossgl
+    assert "@union_member_layout(0, 4, 4) uint word;" in crossgl
     assert "using ieee_float_shape_type = union" not in crossgl
     assert parse_crossgl(crossgl) is not None
+
+
+def test_codegen_mlx_random_union_retains_member_array_layout_contract():
+    crossgl = convert("""
+        union rbits {
+          uint2 val;
+          uchar4 bytes[2];
+        };
+        """)
+
+    assert "@union_layout(8, 8, little_endian, metal)" in crossgl
+    assert "@union_member_layout(0, 8, 8) uvec2 val;" in crossgl
+    assert "@union_member_layout(0, 8, 4) u8vec4[2] bytes;" in crossgl
+    parsed = parse_crossgl(crossgl)
+    union = parsed.structs[0]
+    assert [attribute.name for attribute in union.attributes] == ["union_layout"]
+    assert [
+        attribute.name for member in union.members for attribute in member.attributes
+    ] == ["union_member_layout", "union_member_layout"]
 
 
 def test_codegen_template_struct_base_clause_from_mlx_type_traits():
