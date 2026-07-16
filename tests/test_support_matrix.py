@@ -252,6 +252,61 @@ def test_project_workgroup_size_specialization_support_is_target_scoped():
             )
 
 
+def test_project_execution_contract_documentation_has_focused_evidence():
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    features = {feature["id"]: feature for feature in matrix["features"]}
+    workgroup_evidence = {
+        (
+            "tests/test_translator/test_project_workgroup_rules.py::def "
+            "test_project_workgroup_size_materializes_each_host_named_entry"
+        ),
+        (
+            "tests/test_translator/test_project_workgroup_rules.py::def "
+            "test_project_workgroup_size_variants_keep_host_entry_identities_"
+            "and_replay"
+        ),
+        (
+            "tests/test_translator/test_project_workgroup_rules.py::def "
+            "test_project_workgroup_size_keeps_ordinary_multi_entry_aggregate_closed"
+        ),
+    }
+    runtime_evidence = {
+        (
+            "tests/test_translator/test_runtime_verification.py::def "
+            "test_plan_runtime_test_manifest_rejects_compiled_workgroup_size_"
+            "mismatch"
+        ),
+        (
+            "tests/test_translator/test_runtime_verification.py::def "
+            "test_plan_runtime_test_manifest_completes_missing_workgroup_size_side"
+        ),
+    }
+    for backend in ("directx", "opengl"):
+        assert workgroup_evidence <= set(
+            features["project.workgroup_size_specialization"]["support"][backend][
+                "evidence"
+            ]
+        )
+        assert runtime_evidence <= set(
+            features["project.runtime_test_manifest"]["support"][backend]["evidence"]
+        )
+
+    docs = (ROOT / "docs" / "source" / "project-porting.rst").read_text(
+        encoding="utf-8"
+    )
+    normalized_docs = " ".join(docs.split())
+    assert "host-named template materialization" in normalized_docs
+    assert (
+        "sources without that deterministic materialization identity" in normalized_docs
+    )
+    assert "project.runtime-verification.workgroup-size-mismatch" in normalized_docs
+    assert "either missing side of the runtime contract can be" in normalized_docs
+
+
 def test_project_subgroup_width_specialization_support_is_target_scoped():
     matrix = json.loads(
         (ROOT / "support" / "generated" / "support-matrix.json").read_text(

@@ -593,6 +593,17 @@ The contract fields are intentionally limited to kernel execution metadata:
      - Expected pre-run, runtime, post-run, or comparison checks that a
        downstream executor should perform or report as skipped/unavailable.
 
+Runtime planning scopes artifact execution metadata to the selected compiled
+entry before merging the fixture's requested adapter contract. When both the
+selected entry and requested dispatch provide a concrete workgroup size, the
+values must match. A mismatch produces
+``project.runtime-verification.workgroup-size-mismatch`` during runtime setup,
+records both sizes and the selected-entry provenance, and leaves the test case
+unplanned. When only one side provides the size, the planner carries that value
+into the merged dispatch, so either missing side of the runtime contract can be
+completed from the other. This completion does not hide a disagreement when
+both sides are present.
+
 Downstream runtimes implement the ``RuntimeAdapter`` protocol or subclass
 ``RuntimeExecutor`` and receive the merged contract in ``run(request)``. For
 example, an MLX validation adapter can consume translated Metal artifacts and
@@ -1045,6 +1056,18 @@ metadata, not preprocessor defines. They therefore do not enter the artifact
 define map, while each named size still produces its own variant path and
 deterministic execution identity.
 
+For DirectX and OpenGL translation from Metal, a concrete
+``project.workgroup_size`` or
+``project.variants.<name>.workgroup_size`` can specialize every compute entry
+produced by deterministic, host-named template materialization. This requires
+a complete one-to-one join between emitted compute stages and materialization
+records using their stable ``hostName`` and ``materializedName`` identities.
+Every joined entry receives the configured size for that project variant.
+DirectX preserves the entries in one HLSL library artifact, while OpenGL emits
+one standalone ``main`` artifact per entry. Their execution records retain the
+source, materialized, and target entry identities together with
+``project-config`` or ``project-variant`` provenance.
+
 ``[project.workgroup_size_rules]`` defines repository-relative, source-specific
 workgroup sizes for materialized compute entries. Each key is a source path
 pattern and each value contains three integral expressions in X, Y, Z order.
@@ -1086,10 +1109,14 @@ validation and artifact-matrix inspection reject a missing split artifact.
 Helper wrappers are not presented as runnable OpenGL entries.
 
 The fixed ``project.workgroup_size`` contract remains available for genuinely
-single-entry artifacts and for source metadata proving a shared size. A
-multi-entry OpenGL source is still packaged as separate runnable artifacts even
-when every entry uses the same size. Translation fails closed if the artifact
-model cannot represent that split.
+single-entry artifacts, source metadata proving a shared size, and the complete
+host-named materialization join described above. Merely configuring one size
+does not prove an ordinary multi-entry aggregate safe: sources without that
+deterministic materialization identity remain ambiguous and fail closed instead
+of applying the value to every entry. Missing, duplicate, conflicting, or
+unmatched host records also fail closed. A multi-entry OpenGL source is still
+packaged as separate runnable artifacts even when every entry uses the same
+size, and translation fails if the artifact model cannot represent that split.
 
 Targets that do not implement per-entry workgroup specialization reject a
 matching rule before source materialization or target generation. The failed
