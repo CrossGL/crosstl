@@ -9452,6 +9452,75 @@ def test_translate_project_reports_unsupported_opengl_workgroup_pointer(tmp_path
     )
 
 
+def test_translate_project_reports_nested_opengl_workgroup_pointer_bounds(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "out_of_bounds.cgl").write_text(
+        textwrap.dedent("""
+            shader OutOfBoundsWorkgroupPointerHelpers {
+                void leaf(threadgroup float* values) {
+                    values[0] = values[1];
+                }
+
+                void middle(threadgroup float* values) {
+                    leaf(values + 1u);
+                }
+
+                compute {
+                    layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+                    void main() {
+                        threadgroup float sharedValues[8];
+                        middle(sharedValues + 7u);
+                    }
+                }
+            }
+        """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="translated",
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["diagnosticsByCode"] == {
+        "project.translate.opengl-workgroup-pointer-unsupported": 1
+    }
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == (
+        "project.translate.opengl-workgroup-pointer-unsupported"
+    )
+    assert diagnostic["missingCapabilities"] == ["opengl.workgroup-pointer-lowering"]
+    assert diagnostic["details"] == {
+        "sourcePath": "out_of_bounds.cgl",
+        "targetArtifact": "translated/opengl/out_of_bounds.glsl",
+        "workgroupPointer": {
+            "backingName": "sharedValues",
+            "function": "leaf",
+            "materializationName": "leaf__glsl_values_main_sharedValues_float_8",
+            "offsetExpression": "(values_offset + 1u) (proven 8)",
+            "parameter": "values",
+            "reason": "view-out-of-bounds",
+        },
+    }
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert artifact["path"] == "translated/opengl/out_of_bounds.glsl"
+    assert not (repo / artifact["path"]).exists()
+
+    report_path = repo / "translated" / "report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert {diagnostic["code"] for diagnostic in validation["diagnostics"]}.isdisjoint(
+        {"project.validate.invalid-report"}
+    )
+
+
 def test_translate_project_reports_opengl_workgroup_pointer_provenance(
     tmp_path,
     monkeypatch,
