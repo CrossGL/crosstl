@@ -1974,8 +1974,7 @@ def test_hlsl_complex_compound_and_subgroup_operations_validate(tmp_path):
             "rhs-may-change-assignment-target",
         ),
         (
-            "values[index] += "
-            "simd_shuffle_down(nextValue(index, values[0]), 1u);",
+            "values[index] += " "simd_shuffle_down(nextValue(index, values[0]), 1u);",
             "rhs-may-change-assignment-target",
         ),
     ],
@@ -5707,13 +5706,11 @@ def test_hlsl_metal_constant_pointer_helpers_forward_alias_offsets(tmp_path):
     assert "right[uint((right_offset + 1))]" in generated
     assert (
         f"{two_pointer_overload.group(1)}(values, int64_t(left_offset), "
-        "values, int64_t(right_offset))"
-        in generated
+        "values, int64_t(right_offset))" in generated
     )
     assert (
         f"{three_pointer_overload.group(1)}(values, int64_t(left_offset), "
-        "values, int64_t(right_offset), values, int64_t(third_offset))"
-        in generated
+        "values, int64_t(right_offset), values, int64_t(third_offset))" in generated
     )
     assert "int64_t* left" not in generated
     assert "int64_t* right" not in generated

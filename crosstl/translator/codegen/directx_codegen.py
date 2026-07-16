@@ -9084,9 +9084,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             func_name = getattr(func_expr, "name", func_expr)
             if self.hlsl_metal_simd_shuffle_name(func_name) is not None:
-                args = getattr(
-                    expression, "arguments", getattr(expression, "args", [])
-                )
+                args = getattr(expression, "arguments", getattr(expression, "args", []))
                 return any(
                     self.hlsl_expression_has_observable_side_effects(argument)
                     for argument in args
@@ -10735,7 +10733,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         expression.false_expr if condition else expression.true_expr
                     )
                     binding = self.hlsl_resource_pointer_binding(alternate)
-                    if binding is not None and binding.get("kind") == "workgroup-pointer":
+                    if (
+                        binding is not None
+                        and binding.get("kind") == "workgroup-pointer"
+                    ):
                         binding["selected_null"] = True
                         return binding
                 return None
@@ -11369,14 +11370,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             lhs = self.generate_expression(target)
             return "\n".join([*lift_statements, f"{lhs} {op} {rhs}"])
 
-        compound_assignment = (
-            self.generate_hlsl_complex64_compound_assignment(
-                node,
-                target,
-                value,
-                op,
-                target_type=target_type,
-            )
+        compound_assignment = self.generate_hlsl_complex64_compound_assignment(
+            node,
+            target,
+            value,
+            op,
+            target_type=target_type,
         )
         if compound_assignment is not None:
             return compound_assignment
@@ -13636,9 +13635,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             data = self.generate_expression_with_expected(args[0], None)
             delta = self.generate_expression_with_expected(args[1], "uint")
             if complex_value:
-                return complex_wave_read(
-                    data, f"(WaveGetLaneIndex() + uint({delta}))"
-                )
+                return complex_wave_read(data, f"(WaveGetLaneIndex() + uint({delta}))")
             return self.hlsl_cast_metal_simd_shuffle_result(
                 f"WaveReadLaneAt({data}, (WaveGetLaneIndex() + uint({delta})))"
             )
@@ -13647,9 +13644,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             data = self.generate_expression_with_expected(args[0], None)
             delta = self.generate_expression_with_expected(args[1], "uint")
             if complex_value:
-                return complex_wave_read(
-                    data, f"(WaveGetLaneIndex() - uint({delta}))"
-                )
+                return complex_wave_read(data, f"(WaveGetLaneIndex() - uint({delta}))")
             return self.hlsl_cast_metal_simd_shuffle_result(
                 f"WaveReadLaneAt({data}, (WaveGetLaneIndex() - uint({delta})))"
             )
@@ -23030,9 +23025,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     ),
                     declarations[0],
                 )
-                self.register_hlsl_function_target_metadata(
-                    target_name, representative
-                )
+                self.register_hlsl_function_target_metadata(target_name, representative)
 
         for function_name, overloads in groups.items():
             all_source_groups = {}
@@ -23077,9 +23070,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 self.hlsl_resource_pointer_parameter(parameter)
                 for function in overloads
                 for parameter in (
-                    getattr(
-                        function, "parameters", getattr(function, "params", [])
-                    )
+                    getattr(function, "parameters", getattr(function, "params", []))
                     or []
                 )
             )
