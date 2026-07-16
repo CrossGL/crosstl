@@ -1,7 +1,9 @@
 import json
 import shutil
 import subprocess
+import sys
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -14,6 +16,8 @@ from crosstl.project import (
     translate_project,
     validate_project_report,
 )
+
+ROOT = Path(__file__).resolve().parents[2]
 
 MULTI_ENTRY_COMPUTE = textwrap.dedent("""
     shader StandaloneDirectXCompute {
@@ -97,6 +101,30 @@ def _write_source(tmp_path, source=MULTI_ENTRY_COMPUTE):
     source_path.parent.mkdir(parents=True)
     source_path.write_text(source, encoding="utf-8")
     return root
+
+
+def _write_materialized_metal_source(root):
+    source_path = root / "kernels" / "materialized.metal"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <typename T>
+            [[kernel]] void copy_values(
+                const device T* values [[buffer(0)]],
+                device T* results [[buffer(1)]],
+                uint gid [[thread_position_in_grid]]) {
+                results[gid] = values[gid];
+            }
+
+            template [[host_name("copy_float")]] [[kernel]]
+            decltype(copy_values<float>) copy_values<float>;
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    return source_path
 
 
 def _assert_hlsl_compute_compiles_if_available(shader_path, tmp_path):
@@ -294,6 +322,71 @@ def test_directx_project_preserves_aggregate_output_without_selection(tmp_path):
     assert "unrelated_input" in generated
     assert "SelectedConfig" in generated
     assert "UnrelatedConfig" in generated
+
+
+def test_translate_project_cli_packages_materialized_directx_entry(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    _write_materialized_metal_source(root)
+    config_path = root / "crosstl.toml"
+    config_path.write_text(
+        textwrap.dedent("""
+            [project]
+            include = ["kernels/materialized.metal"]
+            targets = ["directx"]
+            output_dir = "translated"
+
+            [project.entry_points]
+            "kernels/*.metal" = "copy_float"
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    report_path = root / "portability-report.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "crosstl._crosstl",
+            "translate-project",
+            str(root),
+            "--config",
+            str(config_path),
+            "--report",
+            str(report_path),
+            "--no-format",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    artifact = payload["artifacts"][0]
+    assert artifact["path"] == (
+        "translated/directx/kernels/materialized/copy_float.hlsl"
+    )
+    assert artifact["entryPoint"] == {
+        "source": "copy_float",
+        "target": "CSMain",
+        "stage": "compute",
+    }
+    assert artifact["provenance"]["pipeline"] == "entry-scoped-translate"
+    assert artifact["templateMaterialization"]["status"] == "materialized"
+    assert {
+        record["hostName"]
+        for record in artifact["templateMaterialization"]["specializations"]
+    } == {"copy_float"}
+    shader_path = root / artifact["path"]
+    generated = shader_path.read_text(encoding="utf-8")
+    assert generated.count("void CSMain(") == 1
+    assert "StructuredBuffer<float> values" in generated
+    assert "RWStructuredBuffer<float> results" in generated
+    _assert_hlsl_compute_compiles_if_available(shader_path, tmp_path)
 
 
 @pytest.mark.parametrize(

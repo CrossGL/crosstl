@@ -7,3 +7,6 @@ output_dir = ".crosstl-mlx-arange-runtime/out"
 
 [project.sources]
 "**/*.metal" = "metal"
+
+[project.entry_points]
+"mlx/backend/metal/kernels/arange.metal" = "arangeuint32"

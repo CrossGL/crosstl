@@ -25,7 +25,7 @@
         "source": "mlx/backend/metal/kernels/arange.metal",
         "target": "directx"
       },
-      "entryPoint": "CSMain_3",
+      "entryPoint": "CSMain",
       "inputs": [
         {
           "name": "start",
@@ -63,7 +63,7 @@
         "id": "mlx-pinned-arange-directx-contract-v1",
         "entryPoints": [
           {
-            "name": "CSMain_3",
+            "name": "CSMain",
             "stage": "compute",
             "workgroupSize": [
               1,
@@ -81,10 +81,10 @@
             "kind": "constant-buffer",
             "type": "arangeuint32_start_Constants",
             "set": 0,
-            "binding": 4,
+            "binding": 0,
             "access": "read",
             "value": "start",
-            "entryPoint": "CSMain_3",
+            "entryPoint": "CSMain",
             "metadata": {
               "required": true,
               "parameterBlock": {
@@ -99,10 +99,10 @@
             "kind": "constant-buffer",
             "type": "arangeuint32_step_Constants",
             "set": 0,
-            "binding": 5,
+            "binding": 1,
             "access": "read",
             "value": "step",
-            "entryPoint": "CSMain_3",
+            "entryPoint": "CSMain",
             "metadata": {
               "required": true,
               "parameterBlock": {
@@ -120,7 +120,7 @@
             "binding": 2,
             "access": "read_write",
             "value": "out",
-            "entryPoint": "CSMain_3",
+            "entryPoint": "CSMain",
             "metadata": {
               "required": true,
               "byteStride": 4
@@ -128,7 +128,7 @@
           }
         ],
         "dispatch": {
-          "entryPoint": "CSMain_3",
+          "entryPoint": "CSMain",
           "globalSize": [
             7,
             1,

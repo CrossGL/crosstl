@@ -961,6 +961,17 @@ def test_directx_compute_runtime_executes_translated_pinned_mlx_arange_on_device
         assert report["summary"]["failedCount"] == 0
         artifact = report["artifacts"][0]
         assert artifact["source"] == "mlx/backend/metal/kernels/arange.metal"
+        assert artifact["path"].endswith(
+            "/directx/mlx/backend/metal/kernels/arange/arangeuint32.hlsl"
+        )
+        assert artifact["entryPoint"] == {
+            "source": "arangeuint32",
+            "target": "CSMain",
+            "stage": "compute",
+        }
+        assert artifact["provenance"]["pipeline"] == "entry-scoped-translate"
+        assert artifact["sourceMap"]["generated"]["file"] == artifact["path"]
+        assert artifact["sourceRemap"]["generatedFile"] == artifact["path"]
         assert artifact["sourceHash"] == {
             "algorithm": "sha256",
             "value": "ca29a59005b5ad54dccc369542e32804229490a41eb30d568adcd913d1ee68d1",
@@ -979,10 +990,25 @@ def test_directx_compute_runtime_executes_translated_pinned_mlx_arange_on_device
             runtime_artifacts, indent=2
         )
         reflected = runtime_artifacts["artifacts"][0]
-        assert reflected["hostInterface"]["status"] == "ambiguous"
-        assert {block["name"] for block in reflected["parameterBlocks"]} >= {
+        assert reflected["hostInterface"]["status"] == "ready"
+        assert reflected["entryPoints"] == [
+            {
+                "name": "CSMain",
+                "stage": "compute",
+                "executionConfig": {"numthreads": [1, 1, 1]},
+            }
+        ]
+        assert {block["name"] for block in reflected["parameterBlocks"]} == {
             "arangeuint32_start_Constants",
             "arangeuint32_step_Constants",
+        }
+        assert {
+            (binding["name"], binding["kind"], binding["binding"])
+            for binding in reflected["resourceBindings"]
+        } == {
+            ("arangeuint32_start_Constants", "constant-buffer", 0),
+            ("arangeuint32_step_Constants", "constant-buffer", 1),
+            ("out_", "buffer", 2),
         }
 
         manifest = build_runtime_test_manifest(
@@ -998,7 +1024,7 @@ def test_directx_compute_runtime_executes_translated_pinned_mlx_arange_on_device
         )
         case = plan["testCases"][0]
         assert case["status"] == "planned", json.dumps(plan, indent=2)
-        assert case["runtimeExecution"]["dispatch"]["entryPoint"] == "CSMain_3"
+        assert case["runtimeExecution"]["dispatch"]["entryPoint"] == "CSMain"
         assert [
             (
                 item["binding"]["name"],
@@ -1007,8 +1033,8 @@ def test_directx_compute_runtime_executes_translated_pinned_mlx_arange_on_device
             )
             for item in case["runtimeExecution"]["resourceBindings"]
         ] == [
-            ("arangeuint32_start_Constants", "constant-buffer", 4),
-            ("arangeuint32_step_Constants", "constant-buffer", 5),
+            ("arangeuint32_start_Constants", "constant-buffer", 0),
+            ("arangeuint32_step_Constants", "constant-buffer", 1),
             ("out_", "buffer", 2),
         ]
         assert case["runtimeAdapter"]["metadata"]["sourceEntryPoint"] == (
@@ -1038,7 +1064,7 @@ def test_directx_compute_runtime_executes_translated_pinned_mlx_arange_on_device
     result = runtime_report["results"][0]
     assert result["status"] == "passed", json.dumps(runtime_report, indent=2)
     native_dispatch = result["executor"]["details"]["nativeRuntimeDispatch"]
-    assert native_dispatch["entryPoint"] == "CSMain_3"
+    assert native_dispatch["entryPoint"] == "CSMain"
     assert set(native_dispatch["buffers"]) == {
         "arangeuint32_start_Constants",
         "arangeuint32_step_Constants",

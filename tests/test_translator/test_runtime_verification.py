@@ -1215,9 +1215,9 @@ def test_plan_runtime_test_manifest_rejects_invalid_artifact_contract_mode(tmp_p
 
 def test_mlx_arange_directx_generated_manifest_plans_curated_interface(tmp_path):
     fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / "mlx"
-    artifact_path = tmp_path / "out" / "directx" / "arange.hlsl"
+    artifact_path = tmp_path / "out" / "directx" / "arange" / "arangeuint32.hlsl"
     artifact_path.parent.mkdir(parents=True)
-    artifact_path.write_text("// generated aggregate", encoding="utf-8")
+    artifact_path.write_text("// generated standalone entry", encoding="utf-8")
     artifact_report = {
         "kind": "crosstl-runtime-artifact-manifest",
         "project": {"root": str(tmp_path), "targets": ["directx"]},
@@ -1225,7 +1225,7 @@ def test_mlx_arange_directx_generated_manifest_plans_curated_interface(tmp_path)
             {
                 "id": "mlx-arange-generated-directx",
                 "source": "mlx/backend/metal/kernels/arange.metal",
-                "path": "out/directx/arange.hlsl",
+                "path": "out/directx/arange/arangeuint32.hlsl",
                 "target": "directx",
                 "sourceBackend": "metal",
                 "status": "translated",
@@ -1294,14 +1294,14 @@ def test_mlx_arange_directx_generated_manifest_plans_curated_interface(tmp_path)
     )
 
     assert manifest["success"] is True
-    assert manifest["tests"][0]["entryPoint"] == "CSMain_3"
+    assert manifest["tests"][0]["entryPoint"] == "CSMain"
     assert manifest["tests"][0]["metadata"]["runtimeMetadata"]["status"] == (
         "incomplete"
     )
     case = plan["testCases"][0]
     assert case["status"] == "planned"
     assert case["runtimeExecution"]["dispatch"] == {
-        "entryPoint": "CSMain_3",
+        "entryPoint": "CSMain",
         "workgroupSize": [1, 1, 1],
         "workgroupCount": [7, 1, 1],
         "globalSize": [7, 1, 1],
@@ -1312,7 +1312,7 @@ def test_mlx_arange_directx_generated_manifest_plans_curated_interface(tmp_path)
         "arangeuint32_step_Constants",
         "out_",
     ]
-    assert [binding["binding"]["binding"] for binding in bindings] == [4, 5, 2]
+    assert [binding["binding"]["binding"] for binding in bindings] == [0, 1, 2]
     assert bindings[0]["binding"]["metadata"]["parameterBlock"] == {
         "field": "arangeuint32_start",
         "byteOffset": 0,
