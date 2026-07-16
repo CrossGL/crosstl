@@ -464,3 +464,42 @@ def test_workgroup_pointer_helper_rejects_unbounded_runtime_offset():
     assert "group.x" in error.offset_expression
     assert error.materialization_name is not None
     assert error.reason == "unprovable-view-offset"
+
+
+def test_workgroup_pointer_helper_proves_bounded_loop_accesses(tmp_path):
+    shader = """
+    shader BoundedWorkgroupPointerLoop {
+        void fill_values(threadgroup int* values) {
+            for (int index = 0; index < 4; index++) {
+                values[index] = index;
+            }
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup int sharedValues[8];
+                fill_values(sharedValues + 2);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert re.search(r"\bint\s*\*", generated) is None, generated
+    helper = re.search(
+        r"\bvoid\s+fill_values[A-Za-z0-9_]*\s*" r"\([^)]*\)\s*\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert helper is not None, generated
+    assert "main_sharedValues" in helper.group("body"), generated
+    assert "values_offset" in helper.group("body"), generated
+
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "bounded_workgroup_pointer_loop",
+    )
