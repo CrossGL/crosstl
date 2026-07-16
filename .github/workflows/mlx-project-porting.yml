@@ -166,7 +166,8 @@ jobs:
             python demos/integrations/mlx/run_mlx_porting.py \
               --mode reduced-frontier \
               --mlx-root mlx-upstream \
-              --require-directx-toolchain
+              --require-directx-toolchain \
+              --require-directx-gemv-compiler-frontier
           else
             python demos/integrations/mlx/run_mlx_porting.py \
               --mode reduced-frontier \
@@ -228,8 +229,16 @@ jobs:
           from pathlib import Path
 
           from demos.integrations.mlx.run_mlx_porting import (
+              GEMV_DIRECTX_COMPILER_ENTRY_POINTS,
+              GEMV_DIRECTX_EXPECTED_ENTRY_POINTS,
+              GEMV_DIRECTX_UNUSED_LID_WARNING_ISSUE,
+              GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE,
+              GEMV_OPENGL_WORKGROUP_SIZE_ISSUE,
               MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS,
               MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES,
+              MLX_GEMV_SHA256,
+              MLX_GEMV_SOURCE,
+              MLX_GEMV_SOURCE_SIZE_BYTES,
               MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES,
           )
 
@@ -393,6 +402,84 @@ jobs:
                       "DirectX frontier toolchain must validate every configured "
                       "source artifact and compute entry"
                   )
+          expected_directx_gemv = os.environ["RUNNER_OS"] == "Windows"
+          if (
+              scope["directxGemvCompilerFrontierRequired"]
+              is not expected_directx_gemv
+          ):
+              raise SystemExit("DirectX GEMV compiler-frontier scope is incorrect")
+          if expected_directx_gemv:
+              gemv_directx = checks["gemv-directx-compiler-frontier"]
+              if (
+                  gemv_directx["status"] != "passed"
+                  or gemv_directx["source"] != MLX_GEMV_SOURCE
+                  or gemv_directx["sourceHash"] != MLX_GEMV_SHA256
+                  or gemv_directx["sourceSizeBytes"] != MLX_GEMV_SOURCE_SIZE_BYTES
+                  or gemv_directx["artifactStatus"] != "translated"
+                  or gemv_directx["projectDiagnosticCount"] != 0
+                  or gemv_directx["templateSpecializationCount"] != 225
+                  or gemv_directx["unsupportedSpecializationCount"] != 0
+                  or gemv_directx["materializationResidueCount"] != 0
+                  or gemv_directx["computeEntryPointCount"] != 224
+                  or gemv_directx["artifactProvenance"]
+                  != {
+                      "intermediate": "crossgl",
+                      "pipeline": "single-file-translate",
+                  }
+                  or gemv_directx["artifactHash"]["algorithm"] != "sha256"
+                  or gemv_directx["artifactSizeBytes"] <= 0
+              ):
+                  raise SystemExit("DirectX GEMV project-artifact evidence is incomplete")
+              if (
+                  gemv_directx["entryProfile"] != "cs_6_0"
+                  or gemv_directx["entryProfileCompilerEntryPoints"]
+                  != list(GEMV_DIRECTX_COMPILER_ENTRY_POINTS)
+                  or gemv_directx["entryProfileCompiledEntryPointCount"] != 3
+                  or gemv_directx["libraryProfile"] != "lib_6_6"
+                  or gemv_directx["libraryExports"]
+                  != list(GEMV_DIRECTX_EXPECTED_ENTRY_POINTS)
+                  or gemv_directx["libraryExportCount"] != 224
+                  or gemv_directx["libraryCompilerRun"]["status"] != "compiled"
+                  or gemv_directx["libraryCompilerRun"]["outputSizeBytes"] <= 0
+                  or gemv_directx["compilerCoveredEntryPointCount"] != 224
+                  or gemv_directx["uncompiledEntryPointCount"] != 0
+                  or gemv_directx["compilerCoverageStatus"]
+                  != "all-exported-entry-points-compiled"
+              ):
+                  raise SystemExit("DirectX GEMV compiler coverage is incomplete")
+              entry_warning = gemv_directx["entryProfileAllowedWarning"]
+              library_warnings = gemv_directx["libraryAllowedWarnings"]
+              if (
+                  entry_warning["countPerRun"] != 224
+                  or entry_warning["trackedIssue"]
+                  != GEMV_DIRECTX_UNUSED_LID_WARNING_ISSUE
+                  or library_warnings[0]["count"] != 224
+                  or library_warnings[0]["trackedIssue"]
+                  != GEMV_DIRECTX_UNUSED_LID_WARNING_ISSUE
+                  or library_warnings[1]["count"] != 224
+                  or library_warnings[1]["trackedIssue"]
+                  != GEMV_OPENGL_WORKGROUP_SIZE_ISSUE
+              ):
+                  raise SystemExit("DirectX GEMV compiler warning evidence changed")
+              if (
+                  gemv_directx["wholeArtifactSemanticValidityClaimed"] is not False
+                  or gemv_directx["libraryExecutionSemanticsEstablished"] is not False
+                  or gemv_directx["numthreadsContractEstablished"] is not False
+                  or gemv_directx["exactWorkgroupSizeEstablished"] is not False
+                  or gemv_directx["requiredWaveSize"] != 32
+                  or gemv_directx["requiredWaveSizeEstablished"] is not False
+                  or gemv_directx["executionContractBlockedBy"]
+                  != [
+                      GEMV_OPENGL_WORKGROUP_SIZE_ISSUE,
+                      GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE,
+                  ]
+                  or gemv_directx["runtimeExecutionAttempted"] is not False
+                  or gemv_directx["numericalParityClaimed"] is not False
+                  or gemv_directx["runtimeParityClaimed"] is not False
+              ):
+                  raise SystemExit("DirectX GEMV execution non-claims changed")
+          elif "gemv-directx-compiler-frontier" in checks:
+              raise SystemExit("DirectX GEMV compiler frontier ran outside Windows")
           opengl = checks["opengl-frontier"]
           if set(opengl["sources"]) != opengl_frontier_sources:
               raise SystemExit("OpenGL toolchain frontier sources are incomplete")

@@ -134,6 +134,13 @@ The current harness verifies:
   In the CI-required mode every artifact compiles for OpenGL/SPIR-V 1.3 and
   passes `spirv-val`. This is native artifact validation only; the gate does not
   run the kernels or establish runtime parity;
+- full project materialization of pinned `gemv.metal` for DirectX. The gate
+  requires 225 materialized specializations, no unsupported materializations or
+  unresolved residue, one HLSL artifact, and exactly 224 compute entries. DXC
+  compiles `CSMain`, `CSMain_85`, and `CSMain_113` under `cs_6_0`, then compiles
+  all 224 functions in one `lib_6_6` invocation with an exact export set. Every
+  invocation must emit a nonempty binary and only the explicitly tracked
+  warning classes;
 - full project materialization of pinned `gemv.metal` for OpenGL as a strict
   expected frontier. All 225 source specializations must materialize, after
   which translation must report the exact tracked workgroup-pointer diagnostic
@@ -290,12 +297,14 @@ python demos/integrations/mlx/run_mlx_porting.py \
 ```
 
 On Windows, install DXC to require DirectX HLSL validation for the reduced
-frontier and all three reference-accessor artifact proofs:
+frontier, the pinned GEMV compiler frontier, and all three reference-accessor
+artifact proofs:
 
 ```bash
 python demos/integrations/mlx/run_mlx_porting.py \
   --mlx-root C:/path/to/mlx \
-  --require-directx-toolchain
+  --require-directx-toolchain \
+  --require-directx-gemv-compiler-frontier
 ```
 
 Install the DirectX runtime extra separately to execute the value-sensitive
@@ -392,6 +401,30 @@ workgroup access range cannot be proven. No GLSL artifact is emitted, so
 `glslangValidator`, runtime execution, and numerical parity do not apply to this
 check yet. [#1671](https://github.com/CrossGL/crosstl/issues/1671) remains open
 for the range-proof contract.
+
+The pinned `gemv.metal` DirectX compiler frontier verifies source SHA-256
+`c34db77e61c1fea01f7f5d319a0bec1029a253e54d66bbce9009f32fe828ce9f` and
+source size 5,383 bytes before translation. The project report must contain one
+clean translated artifact, all 225 materializations with no unsupported
+records, and no unresolved materialization residue. Its generated SHA-256 and
+byte count are checked against the emitted HLSL. The artifact must expose the
+exact set `CSMain`, `CSMain_2`, ..., `CSMain_224`. DXC compiles representative
+scalar, complex/Wave, and gather/constant-pointer paths (`CSMain`, `CSMain_85`,
+and `CSMain_113`) with `cs_6_0`. A second `lib_6_6` invocation exports and
+code-generates all 224 functions in one DXIL library.
+
+The entry-profile compiles admit exactly 224 unused-expression warnings for
+`lid;` per invocation. The library compile admits that same class plus exactly
+224 `numthreads ignored without accompanying shader attribute` warnings caused
+by using a library profile. Any other diagnostic fails the gate.
+[#1787](https://github.com/CrossGL/crosstl/issues/1787) tracks the unused
+thread-position expressions. [#1750](https://github.com/CrossGL/crosstl/issues/1750)
+tracks the unresolved workgroup-size contract represented by the emitted
+`[numthreads(1, 1, 1)]`; [#1786](https://github.com/CrossGL/crosstl/issues/1786)
+tracks the required 32-lane wave-size specialization. Library compilation proves
+that DXC accepts and code-generates every exported function. It does not establish
+workgroup or wave semantics, runtime execution, numerical parity, or whole-kernel
+semantic validity.
 
 The separate pinned `gemv.metal` OpenGL frontier uses the same 4,096
 specialization limit and 2,097,152-item materialization work budget. It requires

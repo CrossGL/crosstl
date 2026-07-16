@@ -3364,6 +3364,630 @@ def test_gemv_opengl_frontier_flag_replaces_toolchain_flag():
         module.parse_args(["--mlx-root", "/tmp/mlx", "--require-opengl-gemv-toolchain"])
 
 
+def _gemv_directx_frontier_source(module, *, replace_entry=None):
+    entry_points = ["CSMain", *(f"CSMain_{index}" for index in range(2, 225))]
+    if replace_entry is not None:
+        old_entry, new_entry = replace_entry
+        entry_points[entry_points.index(old_entry)] = new_entry
+    return "\n".join(
+        (
+            "[numthreads(1, 1, 1)]\n"
+            f"void {entry_point}(uint3 lid : SV_GroupThreadID) {{\n"
+            "    lid;\n"
+            "}\n"
+        )
+        for entry_point in entry_points
+    )
+
+
+def _prepare_gemv_directx_frontier_check(
+    module,
+    tmp_path,
+    monkeypatch,
+    *,
+    generated=None,
+):
+    mlx_root = tmp_path / "mlx"
+    work_dir = mlx_root / ".crosstl-mlx-porting"
+    config_dir = work_dir / "configs"
+    report_dir = work_dir / "reports"
+    log_dir = work_dir / "logs"
+    source_path = mlx_root / module.MLX_GEMV_SOURCE
+    artifact_path = (
+        work_dir
+        / "out-gemv-directx-compiler-frontier"
+        / "directx"
+        / module.MLX_GEMV_SOURCE
+    ).with_suffix(".hlsl")
+    for path in (
+        config_dir,
+        report_dir,
+        log_dir,
+        source_path.parent,
+        artifact_path.parent,
+    ):
+        path.mkdir(parents=True, exist_ok=True)
+    source_path.write_bytes(b"x" * module.MLX_GEMV_SOURCE_SIZE_BYTES)
+    generated = generated or _gemv_directx_frontier_source(module)
+    artifact_path.write_text(generated, encoding="utf-8")
+
+    real_sha256 = module._sha256
+
+    def pinned_source_sha256(path):
+        if Path(path).resolve() == source_path.resolve():
+            return module.MLX_GEMV_SHA256
+        return real_sha256(path)
+
+    monkeypatch.setattr(module, "_sha256", pinned_source_sha256)
+    source_hash = {"algorithm": "sha256", "value": module.MLX_GEMV_SHA256}
+    generated_hash = hashlib.sha256(generated.encode("utf-8")).hexdigest()
+    relative_artifact_path = artifact_path.relative_to(mlx_root).as_posix()
+    report = {
+        "kind": "crosstl-project-portability-report",
+        "summary": {
+            "unitCount": 1,
+            "skippedCount": 0,
+            "targetCount": 1,
+            "artifactCount": 1,
+            "translatedCount": 1,
+            "failedCount": 0,
+            "diagnosticCounts": {"error": 0, "note": 0, "warning": 0},
+            "diagnosticsByCode": {},
+            "missingCapabilityCounts": {},
+            "artifactProvenanceByPipeline": {"single-file-translate": 1},
+            "artifactProvenanceByIntermediate": {"crossgl": 1},
+        },
+        "units": [
+            {
+                "id": module.MLX_GEMV_SOURCE,
+                "path": module.MLX_GEMV_SOURCE,
+                "sourceBackend": "metal",
+                "extension": ".metal",
+                "sourceHash": source_hash,
+                "sourceSizeBytes": module.MLX_GEMV_SOURCE_SIZE_BYTES,
+            }
+        ],
+        "diagnostics": [],
+        "artifacts": [
+            {
+                "source": module.MLX_GEMV_SOURCE,
+                "sourceBackend": "metal",
+                "target": "directx",
+                "path": relative_artifact_path,
+                "status": "translated",
+                "sourceHash": source_hash,
+                "sourceSizeBytes": module.MLX_GEMV_SOURCE_SIZE_BYTES,
+                "generatedHash": {"algorithm": "sha256", "value": generated_hash},
+                "generatedSizeBytes": len(generated.encode("utf-8")),
+                "provenance": {
+                    "intermediate": "crossgl",
+                    "pipeline": "single-file-translate",
+                },
+                "templateMaterialization": {
+                    "status": "materialized",
+                    "specializationCount": module.GEMV_EXPECTED_SPECIALIZATION_COUNT,
+                    "specializations": [
+                        {"materializedName": f"specialization_{index}"}
+                        for index in range(module.GEMV_EXPECTED_SPECIALIZATION_COUNT)
+                    ],
+                    "unsupported": [],
+                },
+            }
+        ],
+    }
+    report_path = report_dir / "gemv-directx-compiler-frontier.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    return (
+        (mlx_root, work_dir, config_dir, report_dir, log_dir),
+        report_path,
+        artifact_path,
+        generated,
+    )
+
+
+def _stub_gemv_directx_frontier(
+    module,
+    monkeypatch,
+    commands,
+    report_path,
+    artifact_path,
+    generated,
+    *,
+    emit_translation_artifact=True,
+    compiler_failure_entry=None,
+    missing_binary_entry=None,
+    unexpected_warning_entry=None,
+    library_failure=False,
+    missing_library=False,
+    unexpected_library_warning=False,
+):
+    report_text = report_path.read_text(encoding="utf-8")
+    monkeypatch.setattr(module.shutil, "which", lambda name: f"/tools/{name}")
+
+    def fake_run_command(name, command, *, log_dir, **kwargs):
+        commands.append((name, list(command), kwargs))
+        stdout_path = log_dir / f"{name}.stdout"
+        stderr_path = log_dir / f"{name}.stderr"
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text("", encoding="utf-8")
+        if name == "translate-gemv-directx-compiler-frontier":
+            report_path.write_text(report_text, encoding="utf-8")
+            if emit_translation_artifact:
+                artifact_path.parent.mkdir(parents=True, exist_ok=True)
+                artifact_path.write_text(generated, encoding="utf-8")
+            return module.CommandResult(
+                name, list(command), 0, stdout_path, stderr_path
+            )
+
+        output_path = Path(command[command.index("-Fo") + 1])
+        if name == "compile-gemv-directx-all-entries":
+            if not library_failure and not missing_library:
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_bytes(b"DXIL:all-entries")
+            if not library_failure:
+                warnings = []
+                for line_number in range(
+                    1, module.GEMV_DIRECTX_EXPECTED_WARNING_COUNT_PER_CLASS + 1
+                ):
+                    warnings.extend(
+                        (
+                            "C:/generated/gemv.hlsl:"
+                            f"{line_number}:5: warning: "
+                            f"{module.GEMV_DIRECTX_UNUSED_LID_WARNING_MESSAGE}",
+                            f"    {module.GEMV_DIRECTX_UNUSED_LID_WARNING_SOURCE}",
+                            "    ^~~",
+                        )
+                    )
+                numthreads_message = (
+                    module.GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_MESSAGE
+                )
+                if unexpected_library_warning:
+                    numthreads_message = "library export changed [-Wlibrary-export]"
+                for line_number in range(
+                    1, module.GEMV_DIRECTX_EXPECTED_WARNING_COUNT_PER_CLASS + 1
+                ):
+                    warnings.extend(
+                        (
+                            "C:/generated/gemv.hlsl:"
+                            f"{line_number}:2: warning: {numthreads_message}",
+                            "    "
+                            f"{module.GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_SOURCE}",
+                            "     ^",
+                        )
+                    )
+                stderr_path.write_text("\n".join(warnings) + "\n", encoding="utf-8")
+            return module.CommandResult(
+                name,
+                list(command),
+                1 if library_failure else 0,
+                stdout_path,
+                stderr_path,
+            )
+
+        entry_point = command[command.index("-E") + 1]
+        returncode = 1 if entry_point == compiler_failure_entry else 0
+        if returncode == 0 and entry_point != missing_binary_entry:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(f"DXIL:{entry_point}".encode())
+        if returncode == 0:
+            warning_message = module.GEMV_DIRECTX_UNUSED_LID_WARNING_MESSAGE
+            if entry_point == unexpected_warning_entry:
+                warning_message = "wave width was selected implicitly [-Wwave-size]"
+            warnings = []
+            for line_number in range(
+                1, module.GEMV_DIRECTX_EXPECTED_WARNING_COUNT_PER_CLASS + 1
+            ):
+                warnings.extend(
+                    (
+                        "C:/generated/gemv.hlsl:"
+                        f"{line_number}:5: warning: {warning_message}",
+                        f"    {module.GEMV_DIRECTX_UNUSED_LID_WARNING_SOURCE}",
+                        "    ^~~",
+                    )
+                )
+            stderr_path.write_text("\n".join(warnings) + "\n", encoding="utf-8")
+        return module.CommandResult(
+            name, list(command), returncode, stdout_path, stderr_path
+        )
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+
+
+def test_gemv_directx_compiler_frontier_accepts_exact_pinned_artifact(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_harness()
+    paths, report_path, artifact_path, generated = _prepare_gemv_directx_frontier_check(
+        module, tmp_path, monkeypatch
+    )
+    commands = []
+    _stub_gemv_directx_frontier(
+        module,
+        monkeypatch,
+        commands,
+        report_path,
+        artifact_path,
+        generated,
+    )
+
+    result = module._check_gemv_directx_compiler_frontier(*paths, "python")
+
+    assert result["status"] == "passed"
+    assert result["sourceHash"] == module.MLX_GEMV_SHA256
+    assert result["sourceSizeBytes"] == module.MLX_GEMV_SOURCE_SIZE_BYTES
+    assert result["artifactStatus"] == "translated"
+    assert (
+        result["artifactHash"]["value"]
+        == hashlib.sha256(generated.encode("utf-8")).hexdigest()
+    )
+    assert result["artifactSizeBytes"] == len(generated.encode("utf-8"))
+    assert result["artifactProvenance"] == {
+        "intermediate": "crossgl",
+        "pipeline": "single-file-translate",
+    }
+    assert result["templateSpecializationCount"] == 225
+    assert result["unsupportedSpecializationCount"] == 0
+    assert result["materializationResidueCount"] == 0
+    assert result["computeEntryPointCount"] == 224
+    assert result["entryProfileCompilerEntryPoints"] == [
+        "CSMain",
+        "CSMain_85",
+        "CSMain_113",
+    ]
+    assert result["entryProfileCompiledEntryPointCount"] == 3
+    assert result["entryProfileAllowedWarning"] == {
+        "message": "expression result unused [-Wunused-value]",
+        "sourceExpression": "lid;",
+        "countPerRun": 224,
+        "totalCount": 672,
+        "trackedIssue": "https://github.com/CrossGL/crosstl/issues/1787",
+    }
+    assert result["libraryProfile"] == "lib_6_6"
+    assert result["libraryExports"] == list(module.GEMV_DIRECTX_EXPECTED_ENTRY_POINTS)
+    assert result["libraryExportCount"] == 224
+    assert result["libraryCompilerRun"]["status"] == "compiled"
+    assert result["libraryCompilerRun"]["outputSizeBytes"] > 0
+    assert result["libraryCompilerRun"]["allowedWarningCounts"] == {
+        "unusedLid": 224,
+        "libraryNumthreads": 224,
+    }
+    assert result["libraryAllowedWarnings"] == [
+        {
+            "message": "expression result unused [-Wunused-value]",
+            "sourceExpression": "lid;",
+            "count": 224,
+            "trackedIssue": "https://github.com/CrossGL/crosstl/issues/1787",
+        },
+        {
+            "message": (
+                "attribute 'numthreads' ignored without accompanying shader "
+                "attribute [-Wmisplaced-attributes]"
+            ),
+            "sourceExpression": "[numthreads(1, 1, 1)]",
+            "count": 224,
+            "trackedIssue": "https://github.com/CrossGL/crosstl/issues/1750",
+        },
+    ]
+    assert result["compilerCoveredEntryPointCount"] == 224
+    assert result["uncompiledEntryPointCount"] == 0
+    assert result["compilerCoverageStatus"] == "all-exported-entry-points-compiled"
+    assert result["libraryCodeGenerationScope"] == "all-exported-functions"
+    assert result["wholeArtifactSemanticValidityClaimed"] is False
+    assert result["libraryExecutionSemanticsEstablished"] is False
+    assert result["observedNumthreadsDirective"] == "[numthreads(1, 1, 1)]"
+    assert result["numthreadsContractEstablished"] is False
+    assert result["exactWorkgroupSizeEstablished"] is False
+    assert result["requiredWaveSize"] == 32
+    assert result["requiredWaveSizeEstablished"] is False
+    assert result["executionContractBlockedBy"] == list(
+        module.GEMV_DIRECTX_EXECUTION_TRACKED_ISSUES
+    )
+    assert result["runtimeExecutionAttempted"] is False
+    assert result["runtimeIntegrationIncluded"] is False
+    assert result["numericalParityClaimed"] is False
+    assert result["runtimeParityClaimed"] is False
+    assert [run["entryPoint"] for run in result["entryProfileCompilerRuns"]] == [
+        "CSMain",
+        "CSMain_85",
+        "CSMain_113",
+    ]
+    assert all(run["outputSizeBytes"] > 0 for run in result["entryProfileCompilerRuns"])
+    assert [name for name, _command, _kwargs in commands] == [
+        "translate-gemv-directx-compiler-frontier",
+        "compile-gemv-directx-csmain",
+        "compile-gemv-directx-csmain-85",
+        "compile-gemv-directx-csmain-113",
+        "compile-gemv-directx-all-entries",
+    ]
+    assert commands[0][2] == {"check": False, "timeout_seconds": 900}
+    assert commands[0][1][-1] == "--no-format"
+    for _name, command, kwargs in commands[1:4]:
+        assert command[command.index("-T") + 1] == "cs_6_0"
+        assert Path(command[command.index("-Fo") + 1]).is_file()
+        assert kwargs == {"check": False}
+    library_command = commands[4][1]
+    assert library_command[library_command.index("-T") + 1] == "lib_6_6"
+    exports = library_command[library_command.index("-exports") + 1].split(";")
+    assert exports == list(module.GEMV_DIRECTX_EXPECTED_ENTRY_POINTS)
+    assert len(exports) == len(set(exports)) == 224
+    assert Path(library_command[library_command.index("-Fo") + 1]).is_file()
+    assert commands[4][2] == {"check": False}
+    config = (paths[2] / "gemv-directx-compiler-frontier.toml").read_text(
+        encoding="utf-8"
+    )
+    assert f'include = ["{module.MLX_GEMV_SOURCE}"]' in config
+    assert 'targets = ["directx"]' in config
+    assert "max_template_specializations = 4096" in config
+    assert "max_template_materialization_work = 2097152" in config
+
+
+def test_gemv_directx_compiler_frontier_rejects_wrong_source_hash(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_harness()
+    paths, report_path, artifact_path, generated = _prepare_gemv_directx_frontier_check(
+        module, tmp_path, monkeypatch
+    )
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["units"][0]["sourceHash"]["value"] = "0" * 64
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    _stub_gemv_directx_frontier(
+        module, monkeypatch, [], report_path, artifact_path, generated
+    )
+
+    with pytest.raises(module.PortingCheckError, match="source-unit provenance"):
+        module._check_gemv_directx_compiler_frontier(*paths, "python")
+
+
+def test_gemv_directx_compiler_frontier_rejects_materialization_count_drift(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_harness()
+    paths, report_path, artifact_path, generated = _prepare_gemv_directx_frontier_check(
+        module, tmp_path, monkeypatch
+    )
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    materialization = report["artifacts"][0]["templateMaterialization"]
+    materialization["specializationCount"] -= 1
+    materialization["specializations"].pop()
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    _stub_gemv_directx_frontier(
+        module, monkeypatch, [], report_path, artifact_path, generated
+    )
+
+    with pytest.raises(module.PortingCheckError, match="materialization evidence"):
+        module._check_gemv_directx_compiler_frontier(*paths, "python")
+
+
+def test_gemv_directx_compiler_frontier_rejects_missing_output(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_harness()
+    paths, report_path, artifact_path, generated = _prepare_gemv_directx_frontier_check(
+        module, tmp_path, monkeypatch
+    )
+    _stub_gemv_directx_frontier(
+        module,
+        monkeypatch,
+        [],
+        report_path,
+        artifact_path,
+        generated,
+        emit_translation_artifact=False,
+    )
+
+    with pytest.raises(module.PortingCheckError, match="artifact is missing"):
+        module._check_gemv_directx_compiler_frontier(*paths, "python")
+
+
+def test_gemv_directx_compiler_frontier_rejects_artifact_hash_drift(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_harness()
+    paths, report_path, artifact_path, generated = _prepare_gemv_directx_frontier_check(
+        module, tmp_path, monkeypatch
+    )
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["artifacts"][0]["generatedHash"]["value"] = "f" * 64
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    _stub_gemv_directx_frontier(
+        module, monkeypatch, [], report_path, artifact_path, generated
+    )
+
+    with pytest.raises(module.PortingCheckError, match="hash or size"):
+        module._check_gemv_directx_compiler_frontier(*paths, "python")
+
+
+def test_gemv_directx_compiler_frontier_rejects_compiler_failure(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_harness()
+    paths, report_path, artifact_path, generated = _prepare_gemv_directx_frontier_check(
+        module, tmp_path, monkeypatch
+    )
+    _stub_gemv_directx_frontier(
+        module,
+        monkeypatch,
+        [],
+        report_path,
+        artifact_path,
+        generated,
+        compiler_failure_entry="CSMain_85",
+    )
+
+    with pytest.raises(module.PortingCheckError, match="failed to compile.*CSMain_85"):
+        module._check_gemv_directx_compiler_frontier(*paths, "python")
+
+
+def test_gemv_directx_compiler_frontier_rejects_missing_compiler_binary(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_harness()
+    paths, report_path, artifact_path, generated = _prepare_gemv_directx_frontier_check(
+        module, tmp_path, monkeypatch
+    )
+    _stub_gemv_directx_frontier(
+        module,
+        monkeypatch,
+        [],
+        report_path,
+        artifact_path,
+        generated,
+        missing_binary_entry="CSMain_113",
+    )
+
+    with pytest.raises(module.PortingCheckError, match="did not emit a binary"):
+        module._check_gemv_directx_compiler_frontier(*paths, "python")
+
+
+def test_gemv_directx_compiler_frontier_rejects_unexpected_warning(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_harness()
+    paths, report_path, artifact_path, generated = _prepare_gemv_directx_frontier_check(
+        module, tmp_path, monkeypatch
+    )
+    _stub_gemv_directx_frontier(
+        module,
+        monkeypatch,
+        [],
+        report_path,
+        artifact_path,
+        generated,
+        unexpected_warning_entry="CSMain_113",
+    )
+
+    with pytest.raises(module.PortingCheckError, match="DXC diagnostics changed"):
+        module._check_gemv_directx_compiler_frontier(*paths, "python")
+
+
+def test_gemv_directx_compiler_frontier_rejects_library_failure(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_harness()
+    paths, report_path, artifact_path, generated = _prepare_gemv_directx_frontier_check(
+        module, tmp_path, monkeypatch
+    )
+    _stub_gemv_directx_frontier(
+        module,
+        monkeypatch,
+        [],
+        report_path,
+        artifact_path,
+        generated,
+        library_failure=True,
+    )
+
+    with pytest.raises(module.PortingCheckError, match="all-entry library"):
+        module._check_gemv_directx_compiler_frontier(*paths, "python")
+
+
+def test_gemv_directx_compiler_frontier_rejects_missing_library(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_harness()
+    paths, report_path, artifact_path, generated = _prepare_gemv_directx_frontier_check(
+        module, tmp_path, monkeypatch
+    )
+    _stub_gemv_directx_frontier(
+        module,
+        monkeypatch,
+        [],
+        report_path,
+        artifact_path,
+        generated,
+        missing_library=True,
+    )
+
+    with pytest.raises(module.PortingCheckError, match="did not emit.*all-entry"):
+        module._check_gemv_directx_compiler_frontier(*paths, "python")
+
+
+def test_gemv_directx_compiler_frontier_rejects_library_warning_drift(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_harness()
+    paths, report_path, artifact_path, generated = _prepare_gemv_directx_frontier_check(
+        module, tmp_path, monkeypatch
+    )
+    _stub_gemv_directx_frontier(
+        module,
+        monkeypatch,
+        [],
+        report_path,
+        artifact_path,
+        generated,
+        unexpected_library_warning=True,
+    )
+
+    with pytest.raises(module.PortingCheckError, match="all-entry library"):
+        module._check_gemv_directx_compiler_frontier(*paths, "python")
+
+
+def test_gemv_directx_compiler_frontier_rejects_wrong_entry_selection(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_harness()
+    generated = _gemv_directx_frontier_source(
+        module, replace_entry=("CSMain_85", "CSMain_225")
+    )
+    paths, report_path, artifact_path, generated = _prepare_gemv_directx_frontier_check(
+        module, tmp_path, monkeypatch, generated=generated
+    )
+    _stub_gemv_directx_frontier(
+        module, monkeypatch, [], report_path, artifact_path, generated
+    )
+
+    with pytest.raises(module.PortingCheckError, match="entry selection changed"):
+        module._check_gemv_directx_compiler_frontier(*paths, "python")
+
+
+def test_gemv_directx_compiler_frontier_rejects_export_set_drift(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_harness()
+    generated = _gemv_directx_frontier_source(
+        module, replace_entry=("CSMain_84", "CSMain_225")
+    )
+    paths, report_path, artifact_path, generated = _prepare_gemv_directx_frontier_check(
+        module, tmp_path, monkeypatch, generated=generated
+    )
+    _stub_gemv_directx_frontier(
+        module, monkeypatch, [], report_path, artifact_path, generated
+    )
+
+    with pytest.raises(module.PortingCheckError, match="artifact export set changed"):
+        module._check_gemv_directx_compiler_frontier(*paths, "python")
+
+
+def test_gemv_directx_compiler_frontier_flag_is_reduced_scope_only(tmp_path):
+    module = _load_harness()
+    args = module.parse_args(
+        [
+            "--mlx-root",
+            str(tmp_path),
+            "--require-directx-gemv-compiler-frontier",
+        ]
+    )
+    assert args.require_directx_gemv_compiler_frontier is True
+    args.mode = module.FULL_CORPUS_MODE
+    with pytest.raises(module.PortingCheckError, match="only valid"):
+        module.run_checks(args)
+
+
 def _prepare_gemv_vulkan_check(module, tmp_path, generated):
     mlx_root = tmp_path / "mlx"
     work_dir = mlx_root / ".crosstl-mlx-porting"
@@ -4616,6 +5240,90 @@ def test_fft_opengl_evidence_records_provenance_without_artifact_claims():
     assert "No GLSL artifact is emitted" in readme
 
 
+def test_gemv_directx_gap_records_full_compiler_coverage_without_runtime_claims():
+    module = _load_harness()
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    status = gaps["directx_gemv_compiler_frontier_status"]
+    assert status["status"] == "all-exported-entry-points-compiled"
+    assert status["source"] == module.MLX_GEMV_SOURCE
+    assert status["source_sha256"] == module.MLX_GEMV_SHA256
+    assert status["source_size_bytes"] == module.MLX_GEMV_SOURCE_SIZE_BYTES
+    assert status["target"] == "directx"
+    assert status["project_translation"] == {
+        "unit_count": 1,
+        "artifact_count": 1,
+        "translated_count": 1,
+        "failed_count": 0,
+        "project_diagnostic_count": 0,
+        "max_template_specializations": 4096,
+        "max_template_materialization_work": 2097152,
+    }
+    assert status["materialization"] == {
+        "status": "materialized",
+        "specialization_count": 225,
+        "unsupported_specialization_count": 0,
+        "unresolved_residue_count": 0,
+    }
+    assert status["artifact"]["compute_entry_count"] == 224
+    assert status["artifact"]["provenance"] == {
+        "intermediate": "crossgl",
+        "pipeline": "single-file-translate",
+    }
+    compiler = status["compiler"]
+    assert compiler["entry_profile"] == {
+        "profile": "cs_6_0",
+        "entry_points": ["CSMain", "CSMain_85", "CSMain_113"],
+        "compiled_binary_count": 3,
+    }
+    assert compiler["library_profile"] == {
+        "profile": "lib_6_6",
+        "export_set": "CSMain;CSMain_2;...;CSMain_224",
+        "export_count": 224,
+        "compiled_library_count": 1,
+        "coverage": "all-exported-functions-code-generated",
+    }
+    assert compiler["allowed_warnings"]["unused_lid"]["count_per_invocation"] == 224
+    assert (
+        compiler["allowed_warnings"]["unused_lid"]["tracked_by"]
+        == module.GEMV_DIRECTX_UNUSED_LID_WARNING_ISSUE
+    )
+    assert compiler["allowed_warnings"]["library_numthreads"]["count"] == 224
+    assert (
+        compiler["allowed_warnings"]["library_numthreads"]["tracked_by"]
+        == module.GEMV_OPENGL_WORKGROUP_SIZE_ISSUE
+    )
+    assert compiler["whole_artifact_semantic_validity_claimed"] is False
+    assert status["execution_contracts"] == {
+        "observed_numthreads_directive": "[numthreads(1, 1, 1)]",
+        "numthreads_contract_established": False,
+        "exact_workgroup_size_established": False,
+        "required_wave_size": 32,
+        "required_wave_size_established": False,
+        "library_execution_semantics_established": False,
+        "blocked_by": list(module.GEMV_DIRECTX_EXECUTION_TRACKED_ISSUES),
+    }
+    assert status["tracked_issues"] == [
+        *module.GEMV_DIRECTX_EXECUTION_TRACKED_ISSUES,
+        module.GEMV_DIRECTX_UNUSED_LID_WARNING_ISSUE,
+    ]
+    assert status["runtime_execution_attempted"] is False
+    assert status["runtime_integration_included"] is False
+    assert status["numerical_parity_claimed"] is False
+    assert status["runtime_parity_claimed"] is False
+    assert module.GEMV_DIRECTX_UNUSED_LID_WARNING_ISSUE in gaps["tracked_issues"]
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "--require-directx-gemv-compiler-frontier" in readme
+    assert "A second `lib_6_6` invocation exports and code-generates all 224" in readme
+    assert "Any other diagnostic fails the gate" in readme
+    assert "It does not establish workgroup or wave semantics" in readme
+
+
 def test_gemv_opengl_gap_records_strict_expected_frontier():
     module = _load_harness()
     gaps = json.loads(
@@ -4863,6 +5571,15 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
         "_check_arange_opengl",
         lambda *args: {"name": "arange-opengl", "status": "passed"},
     )
+    monkeypatch.setattr(
+        module,
+        "_check_gemv_directx_compiler_frontier",
+        lambda *args: {
+            "name": "gemv-directx-compiler-frontier",
+            "status": "passed",
+            "runtimeParityClaimed": False,
+        },
+    )
     opengl_frontier_requirements = []
 
     def fake_opengl_frontier_check(*args, require_toolchain):
@@ -4925,6 +5642,7 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
             no_clean=False,
             python="python",
             require_directx_toolchain=False,
+            require_directx_gemv_compiler_frontier=True,
             require_vulkan_toolchain=False,
             require_vulkan_native_runtime=False,
             require_opengl_native_runtime=True,
@@ -4944,6 +5662,7 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
         "template-member-buffer-pointer",
         "directx-vulkan-frontier",
         "arange-opengl",
+        "gemv-directx-compiler-frontier",
         "opengl-frontier",
         "fft-opengl-workgroup-pointer-frontier",
         "gemv-opengl-frontier",
@@ -4959,6 +5678,7 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
         }
     ]
     assert result["scope"]["openglFrontierToolchainRequired"] is True
+    assert result["scope"]["directxGemvCompilerFrontierRequired"] is True
     assert result["scope"]["fftOpenGLWorkgroupPointerFrontierIncluded"] is True
     assert result["scope"]["openglGemvFrontierRequired"] is True
     assert result["scope"]["openglNativeRuntimeRequired"] is True

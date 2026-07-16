@@ -2154,6 +2154,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "--mode reduced-frontier" in mlx_porting
     assert "--require-metal-toolchain" in mlx_porting
     assert "--require-directx-toolchain" in mlx_porting
+    assert "--require-directx-gemv-compiler-frontier" in mlx_porting
     assert "--require-opengl-frontier-toolchain" in mlx_porting
     assert "--require-opengl-gemv-frontier" in mlx_porting
     assert "--require-opengl-gemv-toolchain" not in mlx_porting
@@ -2195,6 +2196,15 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "DirectX frontier accounting is incomplete" in mlx_porting
     assert "DirectX frontier toolchain must validate every configured" in mlx_porting
     assert "source artifact and compute entry" in mlx_porting
+    assert 'checks["gemv-directx-compiler-frontier"]' in mlx_porting
+    assert "GEMV_DIRECTX_EXPECTED_ENTRY_POINTS" in mlx_porting
+    assert "GEMV_DIRECTX_UNUSED_LID_WARNING_ISSUE" in mlx_porting
+    assert 'gemv_directx["entryProfile"] != "cs_6_0"' in mlx_porting
+    assert 'gemv_directx["libraryProfile"] != "lib_6_6"' in mlx_porting
+    assert 'gemv_directx["libraryExportCount"] != 224' in mlx_porting
+    assert 'gemv_directx["compilerCoveredEntryPointCount"] != 224' in mlx_porting
+    assert "DirectX GEMV compiler warning evidence changed" in mlx_porting
+    assert "DirectX GEMV execution non-claims changed" in mlx_porting
     assert 'checks["reference-accessor-lvalue-identity"]' in mlx_porting
     assert "reference accessor proof accounting is incomplete" in mlx_porting
     assert "reference accessor {target} storage evidence is incomplete" in mlx_porting

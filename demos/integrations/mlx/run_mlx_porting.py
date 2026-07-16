@@ -202,6 +202,24 @@ GEMV_MAX_TEMPLATE_SPECIALIZATIONS = 4096
 GEMV_MAX_TEMPLATE_MATERIALIZATION_WORK = 2097152
 GEMV_EXPECTED_SPECIALIZATION_COUNT = 225
 GEMV_EXPECTED_ENTRY_POINT_COUNT = 224
+GEMV_DIRECTX_TRANSLATION_TIMEOUT_SECONDS = 900
+GEMV_DIRECTX_ENTRY_PROFILE = "cs_6_0"
+GEMV_DIRECTX_LIBRARY_PROFILE = "lib_6_6"
+GEMV_DIRECTX_EXPECTED_ENTRY_POINTS = (
+    "CSMain",
+    *(f"CSMain_{index}" for index in range(2, GEMV_EXPECTED_ENTRY_POINT_COUNT + 1)),
+)
+GEMV_DIRECTX_COMPILER_ENTRY_POINTS = ("CSMain", "CSMain_85", "CSMain_113")
+GEMV_DIRECTX_EXPECTED_NUMTHREADS = (1, 1, 1)
+GEMV_DIRECTX_UNUSED_LID_WARNING_MESSAGE = "expression result unused [-Wunused-value]"
+GEMV_DIRECTX_UNUSED_LID_WARNING_SOURCE = "lid;"
+GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_MESSAGE = (
+    "attribute 'numthreads' ignored without accompanying shader attribute "
+    "[-Wmisplaced-attributes]"
+)
+GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_SOURCE = "[numthreads(1, 1, 1)]"
+GEMV_DIRECTX_EXPECTED_WARNING_COUNT_PER_CLASS = GEMV_EXPECTED_ENTRY_POINT_COUNT
+GEMV_DIRECTX_UNUSED_LID_WARNING_ISSUE = "https://github.com/CrossGL/crosstl/issues/1787"
 GEMV_OPENGL_TRANSLATION_TIMEOUT_SECONDS = 900
 GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE = (
     "project.translate.opengl-workgroup-pointer-unsupported"
@@ -231,6 +249,7 @@ GEMV_OPENGL_EXECUTION_TRACKED_ISSUES = (
     GEMV_OPENGL_WORKGROUP_SIZE_ISSUE,
     GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE,
 )
+GEMV_DIRECTX_EXECUTION_TRACKED_ISSUES = GEMV_OPENGL_EXECUTION_TRACKED_ISSUES
 GEMV_OPENGL_FRONTIER_TRACKED_ISSUES = (
     GEMV_OPENGL_BACKING_RANGE_ISSUE,
     *GEMV_OPENGL_EXECUTION_TRACKED_ISSUES,
@@ -350,6 +369,7 @@ FULL_CORPUS_TRACKED_ISSUES = (
     *OPENGL_ARANGE_VALIDATION_TRACKED_ISSUES,
     *OPENGL_SCALED_DOT_PRODUCT_ATTENTION_TRACKED_ISSUES,
     *GEMV_OPENGL_EXECUTION_TRACKED_ISSUES,
+    GEMV_DIRECTX_UNUSED_LID_WARNING_ISSUE,
     *RUNTIME_READINESS_TRACKED_ISSUES,
     *FENCE_CONTRACT_TRACKED_ISSUES,
     *VULKAN_GEMV_SEMANTIC_TRACKED_ISSUES,
@@ -3488,6 +3508,458 @@ def _check_fft_opengl_workgroup_pointer_frontier(
     }
 
 
+def _dxc_diagnostics(result: CommandResult) -> list[dict[str, Any]]:
+    header_pattern = re.compile(
+        r"^(?P<path>.+):(?P<line>\d+):(?P<column>\d+): "
+        r"(?P<severity>warning|error|note): (?P<message>.+)$",
+        re.IGNORECASE,
+    )
+    diagnostics: list[dict[str, Any]] = []
+    for stream_path in (result.stdout_path, result.stderr_path):
+        lines = stream_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        for index, line in enumerate(lines):
+            if re.search(r"\b(?:warning|error|note):", line, re.IGNORECASE) is None:
+                continue
+            match = header_pattern.match(line)
+            _require(
+                match is not None,
+                f"DXC emitted an unrecognized diagnostic: {line}",
+            )
+            diagnostics.append(
+                {
+                    "severity": match.group("severity").lower(),
+                    "message": match.group("message"),
+                    "sourceLine": (
+                        lines[index + 1].strip() if index + 1 < len(lines) else ""
+                    ),
+                }
+            )
+    return diagnostics
+
+
+def _check_gemv_directx_compiler_frontier(
+    mlx_root: Path,
+    work_dir: Path,
+    config_dir: Path,
+    report_dir: Path,
+    log_dir: Path,
+    python: str,
+) -> dict[str, Any]:
+    dxc = shutil.which("dxc")
+    _require(dxc is not None, "DirectX GEMV compiler validation requires dxc")
+
+    source_path = mlx_root / MLX_GEMV_SOURCE
+    _require(source_path.is_file(), f"pinned MLX GEMV source is missing: {source_path}")
+    _require(
+        source_path.stat().st_size == MLX_GEMV_SOURCE_SIZE_BYTES
+        and _sha256(source_path) == MLX_GEMV_SHA256,
+        "DirectX GEMV source identity changed at the pinned MLX commit",
+    )
+
+    config_path = config_dir / "gemv-directx-compiler-frontier.toml"
+    report_path = report_dir / "gemv-directx-compiler-frontier.json"
+    output_dir = work_dir / "out-gemv-directx-compiler-frontier"
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    report_path.unlink(missing_ok=True)
+    _write_project_config(
+        config_path,
+        include=MLX_GEMV_SOURCE,
+        targets=("directx",),
+        output_dir=_relpath(output_dir, mlx_root),
+        metal_source_options={
+            "max_template_specializations": GEMV_MAX_TEMPLATE_SPECIALIZATIONS,
+            "max_template_materialization_work": GEMV_MAX_TEMPLATE_MATERIALIZATION_WORK,
+        },
+    )
+    translation = _run_command(
+        "translate-gemv-directx-compiler-frontier",
+        [
+            python,
+            "-m",
+            "crosstl",
+            "translate-project",
+            str(mlx_root),
+            "--config",
+            str(config_path),
+            "--report",
+            str(report_path),
+            "--no-format",
+        ],
+        log_dir=log_dir,
+        check=False,
+        timeout_seconds=GEMV_DIRECTX_TRANSLATION_TIMEOUT_SECONDS,
+    )
+    _require(
+        translation.returncode == 0,
+        "DirectX GEMV project translation failed; inspect the translation logs",
+    )
+    _require(
+        report_path.is_file(),
+        "DirectX GEMV translation did not produce a project report",
+    )
+
+    payload = _load_json(report_path)
+    _require(
+        payload.get("kind") == "crosstl-project-portability-report",
+        "DirectX GEMV translation report kind changed",
+    )
+    summary = payload.get("summary", {})
+    _require(
+        isinstance(summary, Mapping)
+        and summary.get("unitCount") == 1
+        and summary.get("skippedCount") == 0
+        and summary.get("targetCount") == 1
+        and summary.get("artifactCount") == 1
+        and summary.get("translatedCount") == 1
+        and summary.get("failedCount") == 0,
+        "DirectX GEMV report did not retain one clean translated artifact",
+    )
+    _require(
+        summary.get("diagnosticCounts") == {"error": 0, "note": 0, "warning": 0}
+        and summary.get("diagnosticsByCode") == {}
+        and summary.get("missingCapabilityCounts") == {}
+        and payload.get("diagnostics") == [],
+        "DirectX GEMV project translation emitted an unexpected diagnostic",
+    )
+    _require(
+        summary.get("artifactProvenanceByPipeline") == {"single-file-translate": 1}
+        and summary.get("artifactProvenanceByIntermediate") == {"crossgl": 1},
+        "DirectX GEMV report provenance summary changed",
+    )
+
+    expected_source_hash = {"algorithm": "sha256", "value": MLX_GEMV_SHA256}
+    units = payload.get("units", [])
+    _require(
+        isinstance(units, list)
+        and len(units) == 1
+        and isinstance(units[0], Mapping)
+        and units[0].get("id") == MLX_GEMV_SOURCE
+        and units[0].get("path") == MLX_GEMV_SOURCE
+        and units[0].get("sourceBackend") == "metal"
+        and units[0].get("extension") == ".metal"
+        and units[0].get("sourceHash") == expected_source_hash
+        and units[0].get("sourceSizeBytes") == MLX_GEMV_SOURCE_SIZE_BYTES,
+        "DirectX GEMV source-unit provenance changed at the pinned MLX commit",
+    )
+
+    artifacts = payload.get("artifacts", [])
+    _require(
+        isinstance(artifacts, list)
+        and len(artifacts) == 1
+        and isinstance(artifacts[0], Mapping),
+        "DirectX GEMV report must contain one artifact record",
+    )
+    artifact = artifacts[0]
+    artifact_path = artifact.get("path")
+    _require(
+        artifact.get("source") == MLX_GEMV_SOURCE
+        and artifact.get("sourceBackend") == "metal"
+        and artifact.get("target") == "directx"
+        and artifact.get("status") == "translated"
+        and isinstance(artifact_path, str),
+        "DirectX GEMV translated artifact contract changed",
+    )
+    _require(
+        artifact.get("sourceHash") == expected_source_hash
+        and artifact.get("sourceSizeBytes") == MLX_GEMV_SOURCE_SIZE_BYTES
+        and artifact.get("provenance")
+        == {"intermediate": "crossgl", "pipeline": "single-file-translate"},
+        "DirectX GEMV artifact provenance changed",
+    )
+
+    generated_path = (mlx_root / artifact_path).resolve()
+    _require(
+        _is_relative_to(generated_path, output_dir.resolve()),
+        "DirectX GEMV artifact path escaped its output directory",
+    )
+    _require(
+        generated_path.is_file(),
+        f"DirectX GEMV artifact is missing: {artifact_path}",
+    )
+    generated_hash = _sha256(generated_path)
+    generated_size = generated_path.stat().st_size
+    _require(
+        artifact.get("generatedHash")
+        == {"algorithm": "sha256", "value": generated_hash}
+        and artifact.get("generatedSizeBytes") == generated_size
+        and generated_size > 0,
+        "DirectX GEMV artifact hash or size does not match the emitted file",
+    )
+
+    materialization = artifact.get("templateMaterialization", {})
+    specializations = (
+        materialization.get("specializations", [])
+        if isinstance(materialization, Mapping)
+        else []
+    )
+    _require(
+        isinstance(materialization, Mapping)
+        and materialization.get("status") == "materialized"
+        and materialization.get("specializationCount")
+        == GEMV_EXPECTED_SPECIALIZATION_COUNT
+        and isinstance(specializations, list)
+        and len(specializations) == GEMV_EXPECTED_SPECIALIZATION_COUNT
+        and materialization.get("unsupported") == [],
+        "DirectX GEMV artifact did not retain complete materialization evidence",
+    )
+
+    generated = generated_path.read_text(encoding="utf-8")
+    compute_entries = re.findall(
+        r"(?m)^[ \t]*\[numthreads\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)\]"
+        r"\s*\r?\n[ \t]*void[ \t]+(CSMain(?:_\d+)?)[ \t]*\(",
+        generated,
+    )
+    entry_points = [entry for *_dimensions, entry in compute_entries]
+    _require(
+        len(compute_entries) == GEMV_EXPECTED_ENTRY_POINT_COUNT
+        and len(set(entry_points)) == GEMV_EXPECTED_ENTRY_POINT_COUNT,
+        "DirectX GEMV artifact compute-entry count changed",
+    )
+    _require(
+        all(
+            tuple(int(value) for value in dimensions)
+            == GEMV_DIRECTX_EXPECTED_NUMTHREADS
+            for *dimensions, _entry in compute_entries
+        ),
+        "DirectX GEMV emitted numthreads directives changed",
+    )
+    _require(
+        all(
+            entry_point in entry_points
+            for entry_point in GEMV_DIRECTX_COMPILER_ENTRY_POINTS
+        ),
+        "DirectX GEMV compiler-frontier entry selection changed",
+    )
+    _require(
+        entry_points == list(GEMV_DIRECTX_EXPECTED_ENTRY_POINTS),
+        "DirectX GEMV artifact export set changed",
+    )
+    residue = re.search(
+        r"BinaryOpNode|IdentifierNode|LiteralNode|PrimitiveType|"
+        r"\b(?:acc_type|nullptr)\b|(?:^|\s)WARNING:",
+        generated,
+        re.MULTILINE,
+    )
+    _require(
+        residue is None,
+        "DirectX GEMV artifact retained unresolved materialization text: "
+        f"{residue.group(0) if residue else ''}",
+    )
+
+    compile_dir = work_dir / "validation" / "gemv-directx"
+    compile_dir.mkdir(parents=True, exist_ok=True)
+    entry_profile_runs = []
+    for entry_point in GEMV_DIRECTX_COMPILER_ENTRY_POINTS:
+        output_path = compile_dir / f"{entry_point}.dxil"
+        output_path.unlink(missing_ok=True)
+        command_name = entry_point.lower().replace("_", "-")
+        compile_result = _run_command(
+            f"compile-gemv-directx-{command_name}",
+            [
+                dxc,
+                "-T",
+                GEMV_DIRECTX_ENTRY_PROFILE,
+                "-E",
+                entry_point,
+                str(generated_path),
+                "-Fo",
+                str(output_path),
+            ],
+            log_dir=log_dir,
+            check=False,
+        )
+        _require(
+            compile_result.returncode == 0,
+            f"DXC failed to compile DirectX GEMV entry {entry_point}",
+        )
+        _require(
+            output_path.is_file() and output_path.stat().st_size > 0,
+            f"DXC did not emit a binary for DirectX GEMV entry {entry_point}",
+        )
+        diagnostics = _dxc_diagnostics(compile_result)
+        diagnostic_counts = Counter(
+            (
+                diagnostic.get("severity"),
+                diagnostic.get("message"),
+                diagnostic.get("sourceLine"),
+            )
+            for diagnostic in diagnostics
+        )
+        _require(
+            diagnostic_counts
+            == Counter(
+                {
+                    (
+                        "warning",
+                        GEMV_DIRECTX_UNUSED_LID_WARNING_MESSAGE,
+                        GEMV_DIRECTX_UNUSED_LID_WARNING_SOURCE,
+                    ): GEMV_DIRECTX_EXPECTED_WARNING_COUNT_PER_CLASS
+                }
+            ),
+            f"DXC diagnostics changed for DirectX GEMV entry {entry_point}",
+        )
+        entry_profile_runs.append(
+            {
+                "entryPoint": entry_point,
+                "profile": GEMV_DIRECTX_ENTRY_PROFILE,
+                "status": "compiled",
+                "output": _relpath(output_path, mlx_root),
+                "outputHash": {
+                    "algorithm": "sha256",
+                    "value": _sha256(output_path),
+                },
+                "outputSizeBytes": output_path.stat().st_size,
+                "allowedWarningCount": len(diagnostics),
+                "stdout": _relpath(compile_result.stdout_path, mlx_root),
+                "stderr": _relpath(compile_result.stderr_path, mlx_root),
+            }
+        )
+
+    library_exports = ";".join(GEMV_DIRECTX_EXPECTED_ENTRY_POINTS)
+    library_output_path = compile_dir / "all-entries.dxil"
+    library_output_path.unlink(missing_ok=True)
+    library_result = _run_command(
+        "compile-gemv-directx-all-entries",
+        [
+            dxc,
+            "-T",
+            GEMV_DIRECTX_LIBRARY_PROFILE,
+            "-exports",
+            library_exports,
+            str(generated_path),
+            "-Fo",
+            str(library_output_path),
+        ],
+        log_dir=log_dir,
+        check=False,
+    )
+    _require(
+        library_result.returncode == 0,
+        "DXC failed to compile the DirectX GEMV all-entry library",
+    )
+    _require(
+        library_output_path.is_file() and library_output_path.stat().st_size > 0,
+        "DXC did not emit the DirectX GEMV all-entry library",
+    )
+    library_diagnostics = _dxc_diagnostics(library_result)
+    library_diagnostic_counts = Counter(
+        (
+            diagnostic.get("severity"),
+            diagnostic.get("message"),
+            diagnostic.get("sourceLine"),
+        )
+        for diagnostic in library_diagnostics
+    )
+    expected_library_diagnostic_counts = Counter(
+        {
+            (
+                "warning",
+                GEMV_DIRECTX_UNUSED_LID_WARNING_MESSAGE,
+                GEMV_DIRECTX_UNUSED_LID_WARNING_SOURCE,
+            ): GEMV_DIRECTX_EXPECTED_WARNING_COUNT_PER_CLASS,
+            (
+                "warning",
+                GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_MESSAGE,
+                GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_SOURCE,
+            ): GEMV_DIRECTX_EXPECTED_WARNING_COUNT_PER_CLASS,
+        }
+    )
+    _require(
+        library_diagnostic_counts == expected_library_diagnostic_counts,
+        "DXC diagnostics changed for the DirectX GEMV all-entry library",
+    )
+    library_output_hash = _sha256(library_output_path)
+    library_output_size = library_output_path.stat().st_size
+
+    return {
+        "name": "gemv-directx-compiler-frontier",
+        "status": "passed",
+        "report": _relpath(report_path, mlx_root),
+        "source": MLX_GEMV_SOURCE,
+        "sourceHash": MLX_GEMV_SHA256,
+        "sourceSizeBytes": MLX_GEMV_SOURCE_SIZE_BYTES,
+        "target": "directx",
+        "artifactStatus": "translated",
+        "artifact": _relpath(generated_path, mlx_root),
+        "artifactHash": {"algorithm": "sha256", "value": generated_hash},
+        "artifactSizeBytes": generated_size,
+        "artifactProvenance": {
+            "intermediate": "crossgl",
+            "pipeline": "single-file-translate",
+        },
+        "projectDiagnosticCount": 0,
+        "templateMaterializationStatus": "materialized",
+        "templateSpecializationCount": GEMV_EXPECTED_SPECIALIZATION_COUNT,
+        "unsupportedSpecializationCount": 0,
+        "materializationResidueCount": 0,
+        "computeEntryPointCount": GEMV_EXPECTED_ENTRY_POINT_COUNT,
+        "compiler": "dxc",
+        "entryProfile": GEMV_DIRECTX_ENTRY_PROFILE,
+        "entryProfileCompilerEntryPoints": list(GEMV_DIRECTX_COMPILER_ENTRY_POINTS),
+        "entryProfileCompiledEntryPointCount": len(entry_profile_runs),
+        "entryProfileCompilerRuns": entry_profile_runs,
+        "entryProfileAllowedWarning": {
+            "message": GEMV_DIRECTX_UNUSED_LID_WARNING_MESSAGE,
+            "sourceExpression": GEMV_DIRECTX_UNUSED_LID_WARNING_SOURCE,
+            "countPerRun": GEMV_DIRECTX_EXPECTED_WARNING_COUNT_PER_CLASS,
+            "totalCount": sum(run["allowedWarningCount"] for run in entry_profile_runs),
+            "trackedIssue": GEMV_DIRECTX_UNUSED_LID_WARNING_ISSUE,
+        },
+        "libraryProfile": GEMV_DIRECTX_LIBRARY_PROFILE,
+        "libraryExports": list(GEMV_DIRECTX_EXPECTED_ENTRY_POINTS),
+        "libraryExportCount": len(GEMV_DIRECTX_EXPECTED_ENTRY_POINTS),
+        "libraryExportSetHash": {
+            "algorithm": "sha256",
+            "value": hashlib.sha256(library_exports.encode("utf-8")).hexdigest(),
+        },
+        "libraryCompilerRun": {
+            "profile": GEMV_DIRECTX_LIBRARY_PROFILE,
+            "status": "compiled",
+            "output": _relpath(library_output_path, mlx_root),
+            "outputHash": {"algorithm": "sha256", "value": library_output_hash},
+            "outputSizeBytes": library_output_size,
+            "allowedWarningCounts": {
+                "unusedLid": GEMV_DIRECTX_EXPECTED_WARNING_COUNT_PER_CLASS,
+                "libraryNumthreads": GEMV_DIRECTX_EXPECTED_WARNING_COUNT_PER_CLASS,
+            },
+            "stdout": _relpath(library_result.stdout_path, mlx_root),
+            "stderr": _relpath(library_result.stderr_path, mlx_root),
+        },
+        "libraryAllowedWarnings": [
+            {
+                "message": GEMV_DIRECTX_UNUSED_LID_WARNING_MESSAGE,
+                "sourceExpression": GEMV_DIRECTX_UNUSED_LID_WARNING_SOURCE,
+                "count": GEMV_DIRECTX_EXPECTED_WARNING_COUNT_PER_CLASS,
+                "trackedIssue": GEMV_DIRECTX_UNUSED_LID_WARNING_ISSUE,
+            },
+            {
+                "message": GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_MESSAGE,
+                "sourceExpression": GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_SOURCE,
+                "count": GEMV_DIRECTX_EXPECTED_WARNING_COUNT_PER_CLASS,
+                "trackedIssue": GEMV_OPENGL_WORKGROUP_SIZE_ISSUE,
+            },
+        ],
+        "compilerCoveredEntryPointCount": GEMV_EXPECTED_ENTRY_POINT_COUNT,
+        "uncompiledEntryPointCount": 0,
+        "compilerCoverageStatus": "all-exported-entry-points-compiled",
+        "libraryCodeGenerationScope": "all-exported-functions",
+        "wholeArtifactSemanticValidityClaimed": False,
+        "libraryExecutionSemanticsEstablished": False,
+        "observedNumthreadsDirective": "[numthreads(1, 1, 1)]",
+        "numthreadsDirectiveCount": GEMV_EXPECTED_ENTRY_POINT_COUNT,
+        "numthreadsContractEstablished": False,
+        "exactWorkgroupSizeEstablished": False,
+        "requiredWaveSize": 32,
+        "requiredWaveSizeEstablished": False,
+        "executionContractBlockedBy": list(GEMV_DIRECTX_EXECUTION_TRACKED_ISSUES),
+        "runtimeExecutionAttempted": False,
+        "runtimeIntegrationIncluded": False,
+        "numericalParityClaimed": False,
+        "runtimeParityClaimed": False,
+    }
+
+
 def _check_gemv_opengl_frontier(
     mlx_root: Path,
     work_dir: Path,
@@ -4879,6 +5351,9 @@ def _translate_full_corpus(
 def run_checks(args: argparse.Namespace) -> dict[str, Any]:
     mlx_root = Path(args.mlx_root).resolve()
     require_metal_toolchain = bool(getattr(args, "require_metal_toolchain", False))
+    require_directx_gemv_compiler_frontier = bool(
+        getattr(args, "require_directx_gemv_compiler_frontier", False)
+    )
     require_opengl_frontier_toolchain = bool(
         getattr(args, "require_opengl_frontier_toolchain", False)
     )
@@ -4890,6 +5365,12 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
     )
     require_vulkan_gemv_toolchain = bool(
         getattr(args, "require_vulkan_gemv_toolchain", False)
+    )
+    _require(
+        not require_directx_gemv_compiler_frontier
+        or args.mode == REDUCED_FRONTIER_MODE,
+        "--require-directx-gemv-compiler-frontier is only valid in "
+        "reduced-frontier mode",
     )
     _require(
         not require_opengl_frontier_toolchain or args.mode == REDUCED_FRONTIER_MODE,
@@ -4993,6 +5474,17 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
                 args.python,
             )
         )
+        if require_directx_gemv_compiler_frontier:
+            checks.append(
+                _check_gemv_directx_compiler_frontier(
+                    mlx_root,
+                    work_dir,
+                    config_dir,
+                    report_dir,
+                    log_dir,
+                    args.python,
+                )
+            )
         checks.append(
             _check_opengl_frontier(
                 mlx_root,
@@ -5111,6 +5603,9 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             ),
             "templateMemberBufferPointerNativeValidationIncluded": False,
             "openglFrontierToolchainRequired": require_opengl_frontier_toolchain,
+            "directxGemvCompilerFrontierRequired": (
+                require_directx_gemv_compiler_frontier
+            ),
             "fftOpenGLWorkgroupPointerFrontierIncluded": (
                 fft_opengl_pointer_frontier_included
             ),
@@ -5165,6 +5660,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--require-directx-toolchain",
         action="store_true",
         help="Fail unless the DirectX HLSL smoke check runs successfully.",
+    )
+    parser.add_argument(
+        "--require-directx-gemv-compiler-frontier",
+        action="store_true",
+        help=(
+            "Translate pinned GEMV to DirectX and compile the three configured "
+            "representative entries with DXC."
+        ),
     )
     parser.add_argument(
         "--require-vulkan-toolchain",

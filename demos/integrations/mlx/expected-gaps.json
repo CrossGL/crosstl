@@ -202,6 +202,94 @@
     "runtime_integration_included": false,
     "runtime_parity_claimed": false
   },
+  "directx_gemv_compiler_frontier_status": {
+    "status": "all-exported-entry-points-compiled",
+    "source": "mlx/backend/metal/kernels/gemv.metal",
+    "source_sha256": "c34db77e61c1fea01f7f5d319a0bec1029a253e54d66bbce9009f32fe828ce9f",
+    "source_size_bytes": 5383,
+    "target": "directx",
+    "project_translation": {
+      "unit_count": 1,
+      "artifact_count": 1,
+      "translated_count": 1,
+      "failed_count": 0,
+      "project_diagnostic_count": 0,
+      "max_template_specializations": 4096,
+      "max_template_materialization_work": 2097152
+    },
+    "materialization": {
+      "status": "materialized",
+      "specialization_count": 225,
+      "unsupported_specialization_count": 0,
+      "unresolved_residue_count": 0
+    },
+    "artifact": {
+      "status": "translated",
+      "provenance": {
+        "intermediate": "crossgl",
+        "pipeline": "single-file-translate"
+      },
+      "generated_hash_verification": "report-sha256-matches-emitted-bytes",
+      "generated_size_verification": "report-size-matches-emitted-bytes",
+      "compute_entry_count": 224
+    },
+    "compiler": {
+      "name": "dxc",
+      "entry_profile": {
+        "profile": "cs_6_0",
+        "entry_points": [
+          "CSMain",
+          "CSMain_85",
+          "CSMain_113"
+        ],
+        "compiled_binary_count": 3
+      },
+      "library_profile": {
+        "profile": "lib_6_6",
+        "export_set": "CSMain;CSMain_2;...;CSMain_224",
+        "export_count": 224,
+        "compiled_library_count": 1,
+        "coverage": "all-exported-functions-code-generated"
+      },
+      "allowed_warnings": {
+        "unused_lid": {
+          "message": "expression result unused [-Wunused-value]",
+          "source_expression": "lid;",
+          "count_per_invocation": 224,
+          "tracked_by": "https://github.com/CrossGL/crosstl/issues/1787"
+        },
+        "library_numthreads": {
+          "message": "attribute 'numthreads' ignored without accompanying shader attribute [-Wmisplaced-attributes]",
+          "source_expression": "[numthreads(1, 1, 1)]",
+          "profile": "lib_6_6",
+          "count": 224,
+          "tracked_by": "https://github.com/CrossGL/crosstl/issues/1750"
+        }
+      },
+      "whole_artifact_semantic_validity_claimed": false
+    },
+    "execution_contracts": {
+      "observed_numthreads_directive": "[numthreads(1, 1, 1)]",
+      "numthreads_contract_established": false,
+      "exact_workgroup_size_established": false,
+      "required_wave_size": 32,
+      "required_wave_size_established": false,
+      "library_execution_semantics_established": false,
+      "blocked_by": [
+        "https://github.com/CrossGL/crosstl/issues/1750",
+        "https://github.com/CrossGL/crosstl/issues/1786"
+      ]
+    },
+    "tracked_issues": [
+      "https://github.com/CrossGL/crosstl/issues/1750",
+      "https://github.com/CrossGL/crosstl/issues/1786",
+      "https://github.com/CrossGL/crosstl/issues/1787"
+    ],
+    "runtime_execution_attempted": false,
+    "runtime_integration_included": false,
+    "numerical_parity_claimed": false,
+    "runtime_parity_claimed": false
+  },
   "opengl_gemv_frontier_status": {
     "status": "blocked-as-expected",
     "source": "mlx/backend/metal/kernels/gemv.metal",
@@ -771,6 +859,7 @@
     "https://github.com/CrossGL/crosstl/issues/1696",
     "https://github.com/CrossGL/crosstl/issues/1750",
     "https://github.com/CrossGL/crosstl/issues/1786",
+    "https://github.com/CrossGL/crosstl/issues/1787",
     "https://github.com/CrossGL/crosstl/issues/1312",
     "https://github.com/CrossGL/crosstl/issues/1376",
     "https://github.com/CrossGL/crosstl/issues/1676",
