@@ -2773,6 +2773,7 @@ def _dynamic_workgroup_report(
     target,
     sources,
     validated,
+    toolchain_available=True,
     reverse=False,
 ):
     extensions = {"directx": ".hlsl", "opengl": ".glsl"}
@@ -2878,7 +2879,36 @@ def _dynamic_workgroup_report(
         "diagnostics": diagnostics,
     }
     if validated:
-        report["validation"] = {"summary": {"failedCount": source_count}}
+        tool_name = {"directx": "dxc", "opengl": "glslangValidator"}[target]
+        report["validation"] = {
+            "summary": {"failedCount": source_count},
+            "toolchains": [
+                {
+                    "target": target,
+                    "status": "available" if toolchain_available else "unavailable",
+                    "tools": [
+                        {
+                            "name": tool_name,
+                            "available": toolchain_available,
+                            "path": (
+                                f"/usr/bin/{tool_name}" if toolchain_available else None
+                            ),
+                        }
+                    ],
+                }
+            ],
+        }
+        if not toolchain_available:
+            warning = {
+                "severity": "warning",
+                "code": "project.validate.toolchain-unavailable",
+                "message": f"No validation toolchain is available for target {target}",
+                "target": target,
+                "missingCapabilities": ["toolchain.validation"],
+            }
+            report["diagnostics"].append(warning)
+            report["summary"]["diagnosticCounts"]["warning"] = 1
+            report["summary"]["diagnosticsByCode"][warning["code"]] = 1
     return report
 
 
@@ -3109,6 +3139,33 @@ def test_dynamic_workgroup_report_rejects_unexpected_warning(tmp_path):
             sources=sources,
             validated=False,
         )
+
+
+def test_dynamic_workgroup_report_accepts_explicitly_unavailable_toolchain(tmp_path):
+    module = _load_harness()
+    mlx_root = tmp_path / "mlx"
+    output_dir = mlx_root / "out-directx-workgroup-frontier"
+    sources = module.MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+    payload = _dynamic_workgroup_report(
+        module,
+        mlx_root,
+        output_dir,
+        target="directx",
+        sources=sources,
+        validated=True,
+        toolchain_available=False,
+    )
+
+    evidence = module._require_dynamic_workgroup_blocker_report(
+        mlx_root,
+        output_dir,
+        payload,
+        target="directx",
+        sources=sources,
+        validated=True,
+    )
+
+    assert set(evidence) == set(sources)
 
 
 def _prepare_opengl_frontier_check(module, tmp_path):

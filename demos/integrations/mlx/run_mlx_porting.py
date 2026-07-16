@@ -2871,12 +2871,54 @@ def _require_dynamic_workgroup_blocker_report(
     )
     expected_sources = set(sources)
     summary = payload.get("summary")
-    expected_diagnostics = {
+    expected_error_diagnostics = {
         MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_CODE: len(sources),
     }
     if validated:
-        expected_diagnostics["project.validate.failed-artifact"] = len(sources)
-    expected_error_count = sum(expected_diagnostics.values())
+        expected_error_diagnostics["project.validate.failed-artifact"] = len(sources)
+    expected_warning_diagnostics: dict[str, int] = {}
+    if validated:
+        validation = payload.get("validation")
+        toolchains = (
+            validation.get("toolchains") if isinstance(validation, Mapping) else None
+        )
+        target_toolchains = [
+            record
+            for record in toolchains or []
+            if isinstance(record, Mapping) and record.get("target") == target
+        ]
+        _require(
+            isinstance(toolchains, list) and len(target_toolchains) == 1,
+            f"{target.title()} dynamic-workgroup toolchain status changed",
+        )
+        toolchain = target_toolchains[0]
+        tools = toolchain.get("tools")
+        status = toolchain.get("status")
+        _require(
+            status in {"available", "unavailable"}
+            and isinstance(tools, list)
+            and bool(tools)
+            and all(isinstance(tool, Mapping) for tool in tools)
+            and (
+                (
+                    status == "available"
+                    and any(tool.get("available") is True for tool in tools)
+                )
+                or (
+                    status == "unavailable"
+                    and all(tool.get("available") is False for tool in tools)
+                )
+            ),
+            f"{target.title()} dynamic-workgroup toolchain evidence changed",
+        )
+        if status == "unavailable":
+            expected_warning_diagnostics["project.validate.toolchain-unavailable"] = 1
+    expected_diagnostics = {
+        **expected_error_diagnostics,
+        **expected_warning_diagnostics,
+    }
+    expected_error_count = sum(expected_error_diagnostics.values())
+    expected_warning_count = sum(expected_warning_diagnostics.values())
     _require(
         isinstance(summary, Mapping)
         and summary.get("unitCount") == len(sources)
@@ -2884,7 +2926,11 @@ def _require_dynamic_workgroup_blocker_report(
         and summary.get("translatedCount") == 0
         and summary.get("failedCount") == len(sources)
         and summary.get("diagnosticCounts")
-        == {"error": expected_error_count, "note": 0, "warning": 0}
+        == {
+            "error": expected_error_count,
+            "note": 0,
+            "warning": expected_warning_count,
+        }
         and summary.get("diagnosticsByCode") == expected_diagnostics
         and summary.get("artifactsByTarget")
         == {
@@ -2904,8 +2950,24 @@ def _require_dynamic_workgroup_blocker_report(
     _require(
         len(error_diagnostics) == expected_error_count
         and Counter(str(diagnostic.get("code")) for diagnostic in error_diagnostics)
-        == Counter(expected_diagnostics),
+        == Counter(expected_error_diagnostics),
         f"{target.title()} dynamic-workgroup diagnostics changed",
+    )
+    warning_diagnostics = [
+        diagnostic
+        for diagnostic in payload.get("diagnostics", [])
+        if isinstance(diagnostic, Mapping) and diagnostic.get("severity") == "warning"
+    ]
+    _require(
+        len(warning_diagnostics) == expected_warning_count
+        and Counter(str(diagnostic.get("code")) for diagnostic in warning_diagnostics)
+        == Counter(expected_warning_diagnostics)
+        and all(
+            diagnostic.get("target") == target
+            and diagnostic.get("missingCapabilities") == ["toolchain.validation"]
+            for diagnostic in warning_diagnostics
+        ),
+        f"{target.title()} dynamic-workgroup warning diagnostics changed",
     )
     diagnostics_by_source: dict[str, Mapping[str, Any]] = {}
     source_entries_by_source: dict[str, set[str]] = {}
