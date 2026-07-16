@@ -123,7 +123,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1292
+        "test_count": 1295
       },
       "translator_codegen": {
         "exists": true,
@@ -248,7 +248,7 @@
           "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1442
+        "test_count": 1446
       },
       "translator_codegen": {
         "exists": true,
@@ -5321,10 +5321,14 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_array_handling",
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_codegen_lowers_fixed_array_value_locals_and_indexing",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_workgroup_pointer_aliases_compose_offsets_and_forward_writes",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_workgroup_pointer_nested_helpers_specialize_by_backing_identity",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_workgroup_pointer_rejects_composed_out_of_bounds_view",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_workgroup_pointer_rejects_unprovable_composed_offset",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_fixed_array_value_locals_validate_with_dxc",
             "tests/test_translator/test_project_translation.py::def test_metal_fixed_array_value_locals_match_direct_and_project_directx"
           ],
-          "notes": "DirectX preserves native HLSL arrays for storage while lowering fixed-array return values to scalar-compatible vectors or generated carrier structs. Matching local declarations and initializers use the same value representation, retain source array types for overload resolution, and preserve constant and dynamic indexing. Direct and project Metal translation plus official DXC validation cover the value-local contract.",
+          "notes": "DirectX preserves native HLSL arrays for storage while lowering fixed-array return values to scalar-compatible vectors or generated carrier structs. Matching local declarations and initializers use the same value representation, retain source array types for overload resolution, and preserve constant and dynamic indexing. Compute workgroup pointer helpers are specialized by concrete groupshared backing identity and fixed extent, with nested views represented as composed integer offsets instead of pointer or array parameters. Static expressions and recognized flat local-invocation ranges are checked against the backing extent; unresolved backing selection, unbounded offsets, and out-of-range views fail closed with structured diagnostics. Direct and project Metal translation plus official DXC validation cover the value-local contract. This support row does not assert complete runtime integration or corpus parity.",
           "status": "supported"
         },
         "hip": {
@@ -5359,12 +5363,18 @@
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_statically_null_unreachable_workgroup_pointer_is_elided",
             "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py::def test_atomic_add_through_workgroup_alias_preserves_base_and_access_offsets",
             "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py::def test_generic_workgroup_pointer_helper_specializes_without_pointer",
+            "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py::def test_nested_workgroup_pointer_helpers_preserve_bounded_backing_view",
+            "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py::def test_nested_workgroup_pointer_helper_rejects_out_of_bounds_view",
+            "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py::def test_workgroup_pointer_helper_rejects_unbounded_runtime_offset",
+            "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py::def test_workgroup_pointer_helper_proves_bounded_loop_accesses",
             "tests/test_translator/test_project_translation.py::def test_translate_project_reports_unsupported_opengl_workgroup_pointer",
             "tests/test_translator/test_project_translation.py::def test_translate_project_reports_reachable_null_opengl_workgroup_pointer",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_opengl_workgroup_pointer_provenance",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_nested_opengl_workgroup_pointer_bounds",
             "tests/test_translator/test_native_runtime_drivers.py::def test_runtime_parity_glsl_workgroup_alias_offset_executes_on_vulkan",
             "tests/test_translator/test_native_runtime_drivers.py::def test_runtime_parity_glsl_partial_aggregate_executes_on_vulkan"
           ],
-          "notes": "OpenGL lowers fixed arrays and indexed access, recursively materializes omitted trailing values in partial fixed-array and struct initializers, hoists function-local workgroup arrays to module-scope shared storage, and represents concrete workgroup pointer aliases as backing arrays plus composed element offsets. Nested aliases and helper calls preserve offsets, statically unreachable null-pointer parameters are removed, and excess initializer elements, unresolved extents, or reachable null pointers produce structured diagnostics.",
+          "notes": "OpenGL lowers fixed arrays and indexed access, recursively materializes omitted trailing values in partial fixed-array and struct initializers, and hoists function-local workgroup arrays to module-scope shared storage. Compute workgroup pointer helpers are specialized by concrete shared backing and extent, with nested views represented as composed integer offsets instead of pointer parameters. Static expressions and bounded loop ranges are checked against the backing extent. Unbounded runtime offsets, out-of-range composed views, unresolved extents, reachable null pointers, and other unrepresentable cases fail closed with structured project diagnostics that retain available codegen provenance; statically unreachable null-pointer parameters are removed. This support row does not assert complete runtime integration or corpus parity.",
           "status": "supported"
         },
         "rust": {
