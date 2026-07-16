@@ -13279,8 +13279,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return None
 
         left, right = (self.generate_expression(argument) for argument in args)
-        operator = "&&" if func_name == "min" else "||"
-        return f"(({left}) {operator} ({right}))"
+        operation = "and" if func_name == "min" else "or"
+        if width == 1:
+            operator = "&&" if func_name == "min" else "||"
+            return f"(({left}) {operator} ({right}))"
+        return f"{operation}({left}, {right})"
 
     def hlsl_trailing_zero_builtin_is_shadowed(self, func_name):
         return (
