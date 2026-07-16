@@ -370,16 +370,16 @@ GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE = (
 GEMV_OPENGL_EXPECTED_MISSING_CAPABILITY = "opengl.workgroup-pointer-lowering"
 GEMV_OPENGL_EXPECTED_MESSAGE = (
     "OpenGL cannot prove the workgroup pointer access range for "
-    "'GEMVKernel_float_1_8_1_32_4_4_0__run.tgp_memory' into shared backing "
+    "'GEMVKernel_bfloat16_t_1_8_1_32_1_4_0__run.tgp_memory' into shared backing "
     "'tgp_memory'"
 )
 GEMV_OPENGL_EXPECTED_POINTER_EVIDENCE = {
     "backingName": "tgp_memory",
-    "function": "GEMVKernel_float_1_8_1_32_4_4_0__run",
+    "function": "GEMVKernel_bfloat16_t_1_8_1_32_1_4_0__run",
     "materializationName": (
-        "GEMVKernel_float_1_8_1_32_4_4_0_run__glsl_tgp_memory_"
-        "gemv_float32_bm1_bn8_sm1_sn32_tm4_tn4_nc0_axpby0_"
-        "tgp_memory_float_64"
+        "GEMVKernel_bfloat16_t_1_8_1_32_1_4_0_run__glsl_tgp_memory_"
+        "gemv_bfloat16_bm1_bn8_sm1_sn32_tm1_tn4_nc0_axpby0_"
+        "tgp_memory_float_16"
     ),
     "offsetExpression": "0",
     "parameter": "tgp_memory",

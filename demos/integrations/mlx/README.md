@@ -124,17 +124,15 @@ The current harness verifies:
   it is independent of the compiler-only frontier gate above;
 - a second, independent Windows CI Direct3D 12 execution proof that translates
   the actual pinned `mlx/backend/metal/kernels/arange.metal` source with the MLX
-  repository root as an include path. The proof verifies the pinned source hash,
-  builds the generated runtime artifact manifest and fixture plan, and uses a
-  curated replacement contract because aggregate HLSL reflection currently
-  reports an ambiguous host interface and exposes only the first compute entry.
-  The contract selects the generated `arangeuint32` entry `CSMain_3`, binds its
-  `b4` start and `b5` step parameter blocks and `u2` output resource, compiles
-  that entry to DXIL with DXC, and dispatches it through the built-in Direct3D
-  12 adapter. Seven invocations use `start = 300` and `step = 17`; the required
-  zero-tolerance readback is `[300, 317, 334, 351, 368, 385, 402]`. Internal
-  zeroed descriptors fill unused lower register slots required by compushady's
-  contiguous descriptor lists; they are not fixture inputs or shader resources;
+  repository root as an include path. Project configuration selects the
+  materialized `arangeuint32` entry and emits a standalone artifact at the
+  deterministic `arange/arangeuint32.hlsl` path. The proof verifies the pinned
+  source hash, entry-scoped provenance, source mapping, and the generated runtime
+  artifact manifest before compiling `CSMain` to DXIL with DXC. It binds only
+  the reflected `b0` start, `b1` step, and `u2` output resources and dispatches
+  through the built-in Direct3D 12 adapter. Seven invocations use `start = 300`
+  and `step = 17`; the required zero-tolerance readback is
+  `[300, 317, 334, 351, 368, 385, 402]`;
 - Vulkan assembly and validator checks for the existing non-fence regression
   frontier when SPIR-V tools are available. Vulkan atomic-fence feature work is
   deferred; the separate `fence.metal` contract check prevents generated
@@ -248,7 +246,7 @@ OpenGL, or Vulkan dispatch. OpenGL project translation packages source entry
 interface; its unsigned fixture uses values above the 8-bit range to detect
 entry drift. The general DirectX readiness probe still describes the aggregate
 artifact's first `uint8` entry. The separate required Windows device proof
-selects `arangeuint32` as generated entry `CSMain_3`. Vulkan execution selects
+packages `arangeuint32` as a standalone `CSMain` artifact. Vulkan execution selects
 `arangeuint32`, `arangeint32`, and
 `arangefloat32` explicitly and uses the same wide unsigned probe.
 Plans report remaining non-blocking platform, layout, and entry-point ownership
@@ -470,13 +468,15 @@ unsupported records. Its project configuration and report must retain the exact
 an execution blocker. The required diagnostic is
 `project.translate.opengl-workgroup-pointer-unsupported` with capability
 `opengl.workgroup-pointer-lowering`; it must retain function
-`GEMVKernel_float_1_8_1_32_4_4_0__run`, parameter and backing `tgp_memory`,
+`GEMVKernel_bfloat16_t_1_8_1_32_1_4_0__run`, parameter and backing `tgp_memory`,
 offset `0`, and reason `unprovable-view-access`. The concrete index derivation is
-`sgN = simd_gid % 8`, `simdM = simd_gid / 8`, `bm = simdM * 4`, and
-`tgp_results = tgp_memory + sgN * 8 + bm`. The witness `simd_gid == 16`
-produces base offset `8`, which is in bounds. The later guarded reduction can
-add relative index `59`, reaching element `67`; the 64-element backing's highest
-valid element index is `63`.
+`sgN = simd_gid % 8`, `simdM = simd_gid / 8`, `bm = simdM`, and
+`tgp_results = tgp_memory + sgN * 2 + bm`. Under the source-required 32-lane
+subgroup width and the configured `[32, 8, 1]` workgroup, `simd_gid` is in
+`[0, 7]`, the base offset is in `[0, 14]`, and the guarded reduction reaches at
+most element `14` of the 16-element backing. Translation remains fail-closed
+because the target-independent backing-view analysis does not yet carry this
+range proof, while the target subgroup-width contract is also not established.
 [#1671](https://github.com/CrossGL/crosstl/issues/1671) tracks backing and range
 propagation and remains the translation blocker.
 [#1786](https://github.com/CrossGL/crosstl/issues/1786) remains the execution

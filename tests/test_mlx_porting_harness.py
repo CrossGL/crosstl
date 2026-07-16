@@ -6234,14 +6234,15 @@ def test_gemv_opengl_gap_records_strict_expected_frontier():
     assert status["range_derivation"] == {
         "sgN": "simd_gid % 8",
         "simdM": "simd_gid / 8",
-        "bm": "simdM * 4",
-        "tgp_results": "tgp_memory + sgN * 8 + bm",
-        "witness_simd_gid": 16,
-        "base_offset": 8,
-        "guarded_relative_index": 59,
-        "reached_element_index": 67,
-        "backing_element_count": 64,
-        "highest_valid_element_index": 63,
+        "bm": "simdM * 1",
+        "tgp_results": "tgp_memory + sgN * 2 + bm",
+        "source_required_subgroup_width": 32,
+        "configured_workgroup_size": [32, 8, 1],
+        "source_reachable_simd_gid": [0, 7],
+        "base_offset_range": [0, 14],
+        "guarded_reduction_max_element_index": 14,
+        "backing_element_count": 16,
+        "highest_valid_element_index": 15,
     }
     assert status["artifact_emitted"] is False
     assert status["native_validation_attempted"] is False
@@ -6271,9 +6272,9 @@ def test_gemv_opengl_gap_records_strict_expected_frontier():
     assert "--require-opengl-gemv-frontier" in readme
     assert "--require-opengl-gemv-toolchain" not in readme
     assert "all 225 specializations materialized" in readme
-    assert "`simd_gid == 16` produces base offset `8`, which is in bounds" in readme
-    assert "relative index `59`, reaching element `67`" in readme
-    assert "highest valid element index is `63`" in readme
+    assert "the base offset is in `[0, 14]`" in readme
+    assert "at most element `14` of the 16-element backing" in readme
+    assert "target subgroup-width contract is also not established" in readme
     assert "attempts no native compiler" in readme
     assert "does not claim an emitted or runnable GEMV artifact" in readme
 

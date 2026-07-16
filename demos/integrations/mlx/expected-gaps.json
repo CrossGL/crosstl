@@ -391,11 +391,11 @@
     "diagnostic": {
       "code": "project.translate.opengl-workgroup-pointer-unsupported",
       "missing_capability": "opengl.workgroup-pointer-lowering",
-      "message": "OpenGL cannot prove the workgroup pointer access range for 'GEMVKernel_float_1_8_1_32_4_4_0__run.tgp_memory' into shared backing 'tgp_memory'",
+      "message": "OpenGL cannot prove the workgroup pointer access range for 'GEMVKernel_bfloat16_t_1_8_1_32_1_4_0__run.tgp_memory' into shared backing 'tgp_memory'",
       "workgroup_pointer": {
         "backingName": "tgp_memory",
-        "function": "GEMVKernel_float_1_8_1_32_4_4_0__run",
-        "materializationName": "GEMVKernel_float_1_8_1_32_4_4_0_run__glsl_tgp_memory_gemv_float32_bm1_bn8_sm1_sn32_tm4_tn4_nc0_axpby0_tgp_memory_float_64",
+        "function": "GEMVKernel_bfloat16_t_1_8_1_32_1_4_0__run",
+        "materializationName": "GEMVKernel_bfloat16_t_1_8_1_32_1_4_0_run__glsl_tgp_memory_gemv_bfloat16_bm1_bn8_sm1_sn32_tm1_tn4_nc0_axpby0_tgp_memory_float_16",
         "offsetExpression": "0",
         "parameter": "tgp_memory",
         "reason": "unprovable-view-access"
@@ -404,14 +404,25 @@
     "range_derivation": {
       "sgN": "simd_gid % 8",
       "simdM": "simd_gid / 8",
-      "bm": "simdM * 4",
-      "tgp_results": "tgp_memory + sgN * 8 + bm",
-      "witness_simd_gid": 16,
-      "base_offset": 8,
-      "guarded_relative_index": 59,
-      "reached_element_index": 67,
-      "backing_element_count": 64,
-      "highest_valid_element_index": 63
+      "bm": "simdM * 1",
+      "tgp_results": "tgp_memory + sgN * 2 + bm",
+      "source_required_subgroup_width": 32,
+      "configured_workgroup_size": [
+        32,
+        8,
+        1
+      ],
+      "source_reachable_simd_gid": [
+        0,
+        7
+      ],
+      "base_offset_range": [
+        0,
+        14
+      ],
+      "guarded_reduction_max_element_index": 14,
+      "backing_element_count": 16,
+      "highest_valid_element_index": 15
     },
     "provenance_status": "concrete-backing-preserved",
     "access_range_status": "unprovable",
