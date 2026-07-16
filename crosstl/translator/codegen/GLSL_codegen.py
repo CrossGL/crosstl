@@ -27983,6 +27983,47 @@ complex64_t crossgl_complex64_mod_assign(
         ) or self.glsl_private_pointer_expression_has_side_effects(delta_expression)
         return binding
 
+    def glsl_private_pointer_builtin_range_interval(
+        self,
+        function_name,
+        arguments,
+        intervals,
+        constants,
+        interval_resolver,
+    ):
+        expected_arity = {"min": 2, "max": 2, "clamp": 3}.get(function_name)
+        if (
+            expected_arity is None
+            or len(arguments) != expected_arity
+            or self.glsl_function_overloads_by_name.get(function_name)
+        ):
+            return None
+
+        argument_intervals = [
+            interval_resolver(argument, intervals, constants) for argument in arguments
+        ]
+        if any(interval is None for interval in argument_intervals):
+            return None
+
+        if function_name == "min":
+            left, right = argument_intervals
+            return min(left[0], right[0]), min(left[1], right[1])
+        if function_name == "max":
+            left, right = argument_intervals
+            return max(left[0], right[0]), max(left[1], right[1])
+
+        value, lower, upper = argument_intervals
+        if lower[1] > upper[0]:
+            return None
+        lower_clamped = (
+            max(value[0], lower[0]),
+            max(value[1], lower[1]),
+        )
+        return (
+            min(lower_clamped[0], upper[0]),
+            min(lower_clamped[1], upper[1]),
+        )
+
     def glsl_private_pointer_affine_interval(self, expression, intervals, constants):
         value = self.literal_int_value(expression, constants)
         if value is not None:
@@ -28066,6 +28107,13 @@ complex64_t crossgl_complex64_mod_assign(
                 return self.glsl_private_pointer_affine_interval(
                     arguments[0], intervals, constants
                 )
+            return self.glsl_private_pointer_builtin_range_interval(
+                function_name,
+                arguments,
+                intervals,
+                constants,
+                self.glsl_private_pointer_affine_interval,
+            )
         return None
 
     def glsl_private_pointer_interval(self, expression, intervals, constants):
@@ -28163,6 +28211,13 @@ complex64_t crossgl_complex64_mod_assign(
                 return self.glsl_private_pointer_interval(
                     arguments[0], intervals, constants
                 )
+            return self.glsl_private_pointer_builtin_range_interval(
+                function_name,
+                arguments,
+                intervals,
+                constants,
+                self.glsl_private_pointer_interval,
+            )
         return None
 
     def glsl_private_pointer_loop_interval(self, node, intervals, constants):

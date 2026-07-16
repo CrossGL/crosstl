@@ -503,3 +503,134 @@ def test_workgroup_pointer_helper_proves_bounded_loop_accesses(tmp_path):
         tmp_path,
         "bounded_workgroup_pointer_loop",
     )
+
+
+def test_workgroup_pointer_helper_proves_min_limited_accesses(tmp_path):
+    shader = """
+    shader MinLimitedWorkgroupPointerAccess {
+        void load_pair(
+            threadgroup float* values,
+            uint candidate,
+            uint max_index
+        ) {
+            uint index = candidate;
+            index = min(index, max_index);
+            values[index] = 1.0;
+            values[index + 1u] = 2.0;
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint lane @ gl_LocalInvocationIndex) {
+                threadgroup float sharedValues[8];
+                load_pair(sharedValues, lane, 6u);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    backing = re.search(
+        r"^shared\s+float\s+([A-Za-z_]\w*)\s*\[\s*8\s*\]\s*;",
+        generated,
+        re.MULTILINE,
+    )
+    helper = re.search(
+        r"\bvoid\s+load_pair[A-Za-z0-9_]*\s*" r"\([^)]*\)\s*\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert backing is not None, generated
+    assert helper is not None, generated
+    assert re.search(r"\bfloat\s*\*", generated) is None, generated
+    assert re.search(
+        r"\bindex\s*=\s*min\s*\(\s*index\s*,\s*max_index\s*\)",
+        helper.group("body"),
+    ), generated
+    accesses = re.findall(
+        rf"\b{re.escape(backing.group(1))}\s*\[([^\]]+)\]",
+        helper.group("body"),
+    )
+    assert len(accesses) == 2, generated
+    assert any("1u" in expression or "+ 1" in expression for expression in accesses)
+
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "min_limited_workgroup_pointer_access",
+    )
+
+
+def test_workgroup_pointer_helper_rejects_min_limited_out_of_bounds_access():
+    shader = """
+    shader OutOfBoundsMinLimitedWorkgroupPointerAccess {
+        void load_pair(
+            threadgroup float* values,
+            uint candidate,
+            uint max_index
+        ) {
+            uint index = candidate;
+            index = min(index, max_index);
+            values[index] = 1.0;
+            values[index + 1u] = 2.0;
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint lane @ gl_LocalInvocationIndex) {
+                threadgroup float sharedValues[8];
+                load_pair(sharedValues, lane, 7u);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "load_pair"
+    assert error.parameter_name == "values"
+    assert error.backing_name is not None and error.backing_name.endswith(
+        "sharedValues"
+    )
+    assert error.reason == "view-out-of-bounds"
+
+
+def test_workgroup_pointer_helper_rejects_min_with_unprovable_operand():
+    shader = """
+    shader UnprovableMinLimitedWorkgroupPointerAccess {
+        void load_pair(
+            threadgroup float* values,
+            uint candidate,
+            uint max_index
+        ) {
+            uint index = candidate;
+            index = min(index, max_index);
+            values[index] = 1.0;
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint3 group @ gl_WorkGroupID) {
+                threadgroup float sharedValues[8];
+                load_pair(sharedValues, group.x, 6u);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "load_pair"
+    assert error.parameter_name == "values"
+    assert error.backing_name is not None and error.backing_name.endswith(
+        "sharedValues"
+    )
+    assert error.reason == "unprovable-view-access"
