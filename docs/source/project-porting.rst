@@ -1088,6 +1088,12 @@ multi-entry OpenGL source is still packaged as separate runnable artifacts even
 when every entry uses the same size. Translation fails closed if the artifact
 model cannot represent that split.
 
+Targets that do not implement per-entry workgroup specialization reject a
+matching rule before source materialization or target generation. The failed
+artifact and structured ``execution-specialization`` diagnostic retain the
+selected rule, target, and supported target set so the configuration cannot be
+silently ignored.
+
 Successful artifact records include an ``execution`` object with the canonical
 ``workgroupSize``, affected ``sourceEntryPoints``, configuration or source
 ``provenance``, and a SHA-256 ``identity``. Report validation recomputes that

@@ -1898,6 +1898,9 @@ VALIDATION_TOOLCHAIN_RUN_FIELDS = frozenset(
     )
 )
 VALIDATION_TOOLCHAIN_RUN_CHECK_KINDS = frozenset(("artifact", "tool-availability"))
+PROJECT_REPORT_DIAGNOSTIC_CHECK_KINDS = frozenset(
+    (*VALIDATION_TOOLCHAIN_RUN_CHECK_KINDS, "execution-specialization")
+)
 SOURCE_MAP_SPAN_FIELDS = (
     "file",
     "line",
@@ -9050,6 +9053,31 @@ def _configured_workgroup_size_rule(
         {
             "kind": "materialized-template-rule",
             "path": path,
+        },
+    )
+
+
+def _unsupported_workgroup_size_rule_target_error(
+    config: ProjectConfig,
+    unit: ProjectTranslationUnit,
+    target: str,
+) -> ProjectWorkgroupSizeError | None:
+    if target in WORKGROUP_SIZE_SPECIALIZATION_TARGETS:
+        return None
+    configured = _configured_workgroup_size_rule(config, unit.relative_path)
+    if configured is None:
+        return None
+    pattern, components, provenance = configured
+    return ProjectWorkgroupSizeError(
+        f"Per-entry workgroup-size rules are not supported for target '{target}'.",
+        code="project.translate.workgroup-size-rule-unsupported-target",
+        reason="target-not-supported",
+        rule_details={
+            "path": provenance["path"],
+            "sourcePattern": pattern,
+            "components": list(components),
+            "target": target,
+            "supportedTargets": sorted(WORKGROUP_SIZE_SPECIALIZATION_TARGETS),
         },
     )
 
@@ -19120,6 +19148,7 @@ def _workgroup_size_failure_details(
         "project.translate.workgroup-size-invalid",
         "project.translate.workgroup-size-entry-ambiguous",
         "project.translate.workgroup-size-rule-invalid",
+        "project.translate.workgroup-size-rule-unsupported-target",
         "project.translate.workgroup-size-materialization-invalid",
     }:
         return {}
@@ -21592,6 +21621,15 @@ def translate_project(
                     target=target,
                 )
                 try:
+                    unsupported_rule_target = (
+                        _unsupported_workgroup_size_rule_target_error(
+                            config,
+                            unit,
+                            target,
+                        )
+                    )
+                    if unsupported_rule_target is not None:
+                        raise unsupported_rule_target
                     template_materialization = (
                         _project_template_materialization_for_artifact(
                             unit=unit,
@@ -46351,8 +46389,8 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     )
             if "checkKind" in diagnostic:
                 check_kind = diagnostic.get("checkKind")
-                if check_kind not in VALIDATION_TOOLCHAIN_RUN_CHECK_KINDS:
-                    allowed = ", ".join(sorted(VALIDATION_TOOLCHAIN_RUN_CHECK_KINDS))
+                if check_kind not in PROJECT_REPORT_DIAGNOSTIC_CHECK_KINDS:
+                    allowed = ", ".join(sorted(PROJECT_REPORT_DIAGNOSTIC_CHECK_KINDS))
                     reasons.append(
                         f"diagnostics[{index}].checkKind must be one of {allowed}"
                     )

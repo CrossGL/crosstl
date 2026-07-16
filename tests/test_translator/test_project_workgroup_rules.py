@@ -288,6 +288,65 @@ def test_project_workgroup_rule_reuses_one_materialized_ast_per_target(
     assert ast_calls == [("directx", True), ("opengl", True)]
 
 
+def test_project_workgroup_rule_rejects_unsupported_target(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_two_entry_fixture(repo)
+
+    report = project_api.translate_project(
+        _rule_config(repo, targets=("directx", "vulkan")),
+        format_output=False,
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 1
+    directx = next(
+        artifact for artifact in payload["artifacts"] if artifact["target"] == "directx"
+    )
+    vulkan = next(
+        artifact for artifact in payload["artifacts"] if artifact["target"] == "vulkan"
+    )
+    assert directx["status"] == "translated"
+    assert vulkan["status"] == "failed"
+    assert not (repo / vulkan["path"]).exists()
+
+    diagnostic = _diagnostic(
+        payload,
+        "project.translate.workgroup-size-rule-unsupported-target",
+    )
+    assert diagnostic["checkKind"] == "execution-specialization"
+    assert diagnostic["details"] == {
+        "executionSpecialization": {
+            "reason": "target-not-supported",
+            "rule": {
+                "components": ["32", "BN", "BM"],
+                "path": 'project.workgroup_size_rules["shaders/tiled.metal"]',
+                "sourcePattern": "shaders/tiled.metal",
+                "supportedTargets": ["directx", "opengl"],
+                "target": "vulkan",
+            },
+            "sourceEntryPoints": [],
+        },
+        "sourcePath": "shaders/tiled.metal",
+        "targetArtifact": vulkan["path"],
+    }
+
+    report_path = repo / "report.json"
+    report.write_json(report_path)
+    validation = project_api.validate_project_report(report_path)
+    assert validation["success"] is False
+    assert (
+        "project.validate.invalid-report" not in validation["diagnosticsByCode"]
+    ), validation["diagnostics"]
+    assert (
+        validation["diagnosticsByCode"][
+            "project.translate.workgroup-size-rule-unsupported-target"
+        ]
+        == 1
+    )
+
+
 def test_project_workgroup_rule_join_is_independent_of_record_order(
     tmp_path, monkeypatch
 ):
