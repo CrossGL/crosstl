@@ -1662,10 +1662,21 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert frontier["artifacts"] == len(
         module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
     ) * len(frontier["targets"])
-    assert frontier["status"] == "structurally-validated"
-    assert frontier["scope"] == "clean-frontier"
+    assert frontier["status"] == "target-split-with-expected-workgroup-blockers"
+    assert frontier["scope"] == "target-split-frontier"
+    assert frontier["translated_artifacts"] == 16
+    assert frontier["failed_artifacts"] == 6
+    assert frontier["target_artifacts"] == {
+        "directx": {"translated": 5, "failed": 6},
+        "vulkan": {"translated": 11, "failed": 0},
+    }
     assert frontier["semantic_readiness_status"] == "not-established"
-    assert frontier["blocked_by"] == []
+    assert frontier["workgroup_blocked_diagnostic"] == (
+        module.MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_CODE
+    )
+    assert frontier["workgroup_blocked_by"] == (
+        module.MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE
+    )
     assert frontier["excluded_blocked_sources"] == [module.MLX_FENCE_SOURCE]
     assert frontier["runtime_integration_included"] is False
     assert frontier["runtime_parity_claimed"] is False
@@ -1694,49 +1705,47 @@ def test_expected_gaps_tracks_current_frontier_and_runtime_fixture_counts():
     assert fence["runtime_parity_claimed"] is False
 
     arg_reduce = expected_gaps["arg_reduce_status"]
-    assert arg_reduce == {
-        "status": "translated",
-        "source": module.MLX_ARG_REDUCE_SOURCE,
-        "targets": list(module.FULL_CORPUS_TARGETS),
-        "artifact_records": len(module.FULL_CORPUS_TARGETS),
-        "translated_artifacts": len(module.FULL_CORPUS_TARGETS),
-        "failed_artifacts": 0,
-        "template_materialization_status": "materialized",
-        "specialization_count": 51,
-        "unsupported_specialization_count": 0,
-        "native_validation": {
-            "directx": "required-on-windows-ci",
-            "opengl": "validated",
-            "vulkan": "validated",
-        },
-        "entry_packaging_blocked_by": [
-            "https://github.com/CrossGL/crosstl/issues/1523"
-        ],
-    }
+    assert arg_reduce["status"] == "target-dependent"
+    assert arg_reduce["source"] == module.MLX_ARG_REDUCE_SOURCE
+    assert arg_reduce["artifact_records"] == len(module.FULL_CORPUS_TARGETS)
+    assert arg_reduce["translated_artifacts"] == 1
+    assert arg_reduce["failed_artifacts"] == 2
+    assert arg_reduce["translated_targets"] == ["vulkan"]
+    assert arg_reduce["workgroup_blocked_targets"] == ["directx", "opengl"]
+    assert arg_reduce["workgroup_blocked_diagnostic"] == (
+        module.MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_CODE
+    )
+    assert arg_reduce["workgroup_blocked_by"] == (
+        module.MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE
+    )
 
     opengl_frontier = expected_gaps["opengl_frontier_status"]
-    assert opengl_frontier["status"] == "toolchain-validated"
-    assert opengl_frontier["sources"] == list(
-        module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES
+    assert opengl_frontier["status"] == (
+        "toolchain-validated-with-expected-workgroup-blockers"
     )
-    assert opengl_frontier["source_count"] == len(
-        module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES
+    assert opengl_frontier["sources"] == list(module.MLX_OPENGL_FRONTIER_SOURCES)
+    assert opengl_frontier["source_count"] == len(module.MLX_OPENGL_FRONTIER_SOURCES)
+    assert opengl_frontier["artifact_count"] == len(module.MLX_OPENGL_FRONTIER_SOURCES)
+    assert opengl_frontier["translated_sources"] == list(
+        module.MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES
     )
-    assert opengl_frontier["artifact_count"] == len(
-        module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES
+    assert opengl_frontier["workgroup_blocked_sources"] == list(
+        module.MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
     )
-    assert opengl_frontier["project_diagnostic_count"] == 0
-    assert len(module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES) == 8
-    assert opengl_frontier["glslang_compiled_artifact_count"] == 8
-    assert opengl_frontier["spirv_validated_artifact_count"] == 8
+    assert opengl_frontier["clean_project_diagnostic_count"] == 0
+    assert len(module.MLX_OPENGL_FRONTIER_SOURCES) == 8
+    assert opengl_frontier["glslang_compiled_artifact_count"] == 3
+    assert opengl_frontier["spirv_validated_artifact_count"] == 3
     assert opengl_frontier["glslang_target_environments"] == [
         "opengl",
         "spirv1.3",
     ]
     assert opengl_frontier["spirv_val_target_environment"] == "spv1.3"
-    assert opengl_frontier["specialization_constants"] == (
-        module.MLX_OPENGL_SPECIALIZATION_CONSTANT_IDS
-    )
+    assert opengl_frontier["specialization_constants"] == {
+        module.MLX_ROPE_SOURCE: module.MLX_OPENGL_SPECIALIZATION_CONSTANT_IDS[
+            module.MLX_ROPE_SOURCE
+        ]
+    }
     assert opengl_frontier["runtime_integration_included"] is False
     assert opengl_frontier["runtime_parity_claimed"] is False
 
@@ -2112,17 +2121,21 @@ def test_static_constant_materialization_issue_is_active():
     assert issue in module.FULL_CORPUS_TRACKED_ISSUES
 
 
-def test_arg_reduce_advances_into_clean_toolchain_frontiers():
+def test_arg_reduce_remains_in_frontiers_but_fail_closes_native_targets():
     module = _load_harness()
 
     assert module.MLX_ARG_REDUCE_SOURCE in (module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES)
+    assert module.MLX_ARG_REDUCE_SOURCE in (module.MLX_OPENGL_FRONTIER_SOURCES)
     assert module.MLX_ARG_REDUCE_SOURCE in (
-        module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES
+        module.MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
     )
-    assert module.MLX_ARG_REDUCE_SOURCE in (
+    assert module.MLX_ARG_REDUCE_SOURCE not in (
         module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
     )
-    assert module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES == (
+    assert module.MLX_ARG_REDUCE_SOURCE in (
+        module.MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+    )
+    assert module.MLX_OPENGL_FRONTIER_SOURCES == (
         module.MLX_ARG_REDUCE_SOURCE,
         module.MLX_BINARY_TWO_SOURCE,
         module.MLX_LOGSUMEXP_SOURCE,
@@ -2130,6 +2143,11 @@ def test_arg_reduce_advances_into_clean_toolchain_frontiers():
         module.MLX_ROPE_SOURCE,
         module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
         module.MLX_SOFTMAX_SOURCE,
+        module.MLX_TERNARY_SOURCE,
+    )
+    assert module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES == (
+        module.MLX_BINARY_TWO_SOURCE,
+        module.MLX_ROPE_SOURCE,
         module.MLX_TERNARY_SOURCE,
     )
     assert module.MLX_REDUCED_FRONTIER_SOURCES == tuple(
@@ -2185,7 +2203,7 @@ def test_opengl_toolchain_frontier_matches_pinned_validator_inventory():
             encoding="utf-8"
         )
     )
-    expected_sources = (
+    expected_frontier_sources = (
         module.MLX_ARG_REDUCE_SOURCE,
         module.MLX_BINARY_TWO_SOURCE,
         module.MLX_LOGSUMEXP_SOURCE,
@@ -2195,22 +2213,30 @@ def test_opengl_toolchain_frontier_matches_pinned_validator_inventory():
         module.MLX_SOFTMAX_SOURCE,
         module.MLX_TERNARY_SOURCE,
     )
+    expected_sources = (
+        module.MLX_BINARY_TWO_SOURCE,
+        module.MLX_ROPE_SOURCE,
+        module.MLX_TERNARY_SOURCE,
+    )
 
     assert module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES == expected_sources
-    assert len(expected_sources) == 8
+    assert module.MLX_OPENGL_FRONTIER_SOURCES == expected_frontier_sources
+    assert len(expected_frontier_sources) == 8
+    assert len(expected_sources) == 3
     status = expected_gaps["opengl_frontier_status"]
-    assert status["sources"] == list(expected_sources)
+    assert status["sources"] == list(expected_frontier_sources)
     assert status["source_count"] == 8
     assert status["artifact_count"] == 8
-    assert status["glslang_compiled_artifact_count"] == 8
-    assert status["spirv_validated_artifact_count"] == 8
+    assert status["translated_sources"] == list(expected_sources)
+    assert status["glslang_compiled_artifact_count"] == 3
+    assert status["spirv_validated_artifact_count"] == 3
     assert status["runtime_integration_included"] is False
     assert status["runtime_parity_claimed"] is False
 
     workflow = MLX_WORKFLOW_PATH.read_text(encoding="utf-8")
     assert "MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES" in workflow
-    assert "if opengl_frontier_count != 8:" in workflow
-    assert "expected 8 OpenGL toolchain frontier sources" in workflow
+    assert "if opengl_toolchain_frontier_count != 3:" in workflow
+    assert "expected 3 OpenGL toolchain frontier sources" in workflow
 
 
 def test_fence_is_blocked_outside_clean_and_directx_toolchain_frontiers():
@@ -2281,7 +2307,7 @@ def test_empty_initializer_issue_is_resolved_for_pinned_quantized_nax():
     )
 
 
-def test_scaled_dot_product_attention_enters_native_toolchain_frontiers():
+def test_scaled_dot_product_attention_is_vulkan_only_until_runtime_dispatch_maps():
     module = _load_harness()
     source = module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE
     resolved_issue = "https://github.com/CrossGL/crosstl/issues/1535"
@@ -2296,8 +2322,11 @@ def test_scaled_dot_product_attention_enters_native_toolchain_frontiers():
     )
     assert resolved_issue in module.RESOLVED_FRONTIER_ISSUES
     assert resolved_issue not in module.FULL_CORPUS_TRACKED_ISSUES
-    assert source in module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES
-    assert source in module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
+    assert source in module.MLX_OPENGL_FRONTIER_SOURCES
+    assert source in module.MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+    assert source in module.MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+    assert source not in module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES
+    assert source not in module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
     assert module.OPENGL_SCALED_DOT_PRODUCT_ATTENTION_TRACKED_ISSUES == (
         function_constant_issue,
     )
@@ -2308,37 +2337,28 @@ def test_scaled_dot_product_attention_enters_native_toolchain_frontiers():
 def test_scaled_attention_local_alias_evidence_requires_complete_entries(tmp_path):
     module = _load_harness()
     mlx_root = tmp_path / "mlx"
-    directx_path = Path("out/directx/scaled_dot_product_attention.hlsl")
     vulkan_path = Path("out/vulkan/scaled_dot_product_attention.spvasm")
-    for path in (directx_path, vulkan_path):
-        (mlx_root / path).parent.mkdir(parents=True, exist_ok=True)
+    (mlx_root / vulkan_path).parent.mkdir(parents=True, exist_ok=True)
 
-    directx = "\n".join(
-        f"[numthreads(1, 1, 1)]\nvoid CSMain_{index}() {{}}" for index in range(42)
-    )
     vulkan = "\n".join(
         f'  OpEntryPoint GLCompute %{index + 1} "sdpa_{index}"' for index in range(42)
     )
-    (mlx_root / directx_path).write_text(directx, encoding="utf-8")
     (mlx_root / vulkan_path).write_text(vulkan, encoding="utf-8")
     payload = {
         "artifacts": [
             {
                 "source": module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
-                "target": target,
-                "path": path.as_posix(),
+                "target": "vulkan",
+                "path": vulkan_path.as_posix(),
                 "status": "translated",
             }
-            for target, path in (
-                ("directx", directx_path),
-                ("vulkan", vulkan_path),
-            )
         ]
     }
 
     evidence = module._scaled_attention_local_alias_evidence(mlx_root, payload)
 
-    assert evidence["entryCountByTarget"] == {"directx": 42, "vulkan": 42}
+    assert evidence["target"] == "vulkan"
+    assert evidence["entryCount"] == 42
     assert evidence["resolvedDeclarationTypeCount"] == 402
     assert evidence["resolvedCastCount"] == 87
     assert evidence["resolvedStaticMemberCount"] == 42
@@ -2625,20 +2645,40 @@ def _arange_opengl_frontier_source():
     """
 
 
-def _prepare_opengl_frontier_check(module, tmp_path):
-    mlx_root = tmp_path / "mlx"
-    work_dir = mlx_root / ".crosstl-mlx-porting"
-    config_dir = work_dir / "configs"
-    report_dir = work_dir / "reports"
-    log_dir = work_dir / "logs"
-    for path in (config_dir, report_dir, log_dir):
-        path.mkdir(parents=True, exist_ok=True)
+def _frontier_unit(source, index):
+    return {
+        "id": source,
+        "path": source,
+        "sourceBackend": "metal",
+        "sourceHash": {"algorithm": "sha256", "value": f"source-{index}"},
+        "sourceSizeBytes": 1000 + index,
+    }
+
+
+def _write_clean_frontier_report(
+    module,
+    mlx_root,
+    output_dir,
+    report_path,
+    *,
+    target,
+    sources,
+    toolchain_runs=(),
+    reverse=False,
+):
+    extensions = {"directx": ".hlsl", "opengl": ".glsl", "vulkan": ".spvasm"}
+    units = [_frontier_unit(source, index) for index, source in enumerate(sources)]
+    units_by_source = {unit["path"]: unit for unit in units}
     artifacts = []
-    for source in module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES:
-        generated_path = work_dir / "out" / "opengl" / f"{Path(source).stem}.glsl"
+    for source in sources:
+        generated_path = (output_dir / target / Path(source)).with_suffix(
+            extensions[target]
+        )
         generated_path.parent.mkdir(parents=True, exist_ok=True)
-        expected_constants = module.MLX_OPENGL_SPECIALIZATION_CONSTANT_IDS.get(
-            source, {}
+        expected_constants = (
+            module.MLX_OPENGL_SPECIALIZATION_CONSTANT_IDS.get(source, {})
+            if target == "opengl"
+            else {}
         )
         declarations = [
             "layout(constant_id = {}) const {} {} = {};".format(
@@ -2653,9 +2693,12 @@ def _prepare_opengl_frontier_check(module, tmp_path):
             "\n".join(["#version 450 core", *declarations, "void main() {}", ""]),
             encoding="utf-8",
         )
+        unit = units_by_source[source]
         artifact = {
             "source": source,
-            "target": "opengl",
+            "sourceHash": unit["sourceHash"],
+            "sourceSizeBytes": unit["sourceSizeBytes"],
+            "target": target,
             "path": generated_path.relative_to(mlx_root).as_posix(),
             "status": "translated",
         }
@@ -2669,21 +2712,303 @@ def _prepare_opengl_frontier_check(module, tmp_path):
                 "targetSupportsDeferredSpecialization": True,
             }
         artifacts.append(artifact)
-    frontier_count = len(module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES)
+    if reverse:
+        units.reverse()
+        artifacts.reverse()
+    source_count = len(sources)
     report = {
+        "project": {
+            "includePatterns": list(reversed(sources)) if reverse else list(sources),
+            "targets": [target],
+            "workgroupSizeRules": {},
+            "workgroupSizeRuleCount": 0,
+        },
         "summary": {
-            "unitCount": frontier_count,
-            "artifactCount": frontier_count,
-            "translatedCount": frontier_count,
+            "unitCount": source_count,
+            "artifactCount": source_count,
+            "translatedCount": source_count,
             "failedCount": 0,
             "diagnosticCounts": {"note": 0, "warning": 0, "error": 0},
+            "artifactsByTarget": {
+                target: {
+                    "artifactCount": source_count,
+                    "translatedCount": source_count,
+                    "failedCount": 0,
+                }
+            },
         },
+        "units": units,
         "artifacts": artifacts,
         "diagnostics": [],
+        "validation": {
+            "summary": {"failedCount": 0},
+            "toolchainRuns": list(toolchain_runs),
+        },
     }
-    (report_dir / "opengl-frontier.json").write_text(
-        json.dumps(report),
-        encoding="utf-8",
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    return report
+
+
+def _dynamic_workgroup_report(
+    module,
+    mlx_root,
+    output_dir,
+    *,
+    target,
+    sources,
+    validated,
+    reverse=False,
+):
+    extensions = {"directx": ".hlsl", "opengl": ".glsl"}
+    units = [_frontier_unit(source, index) for index, source in enumerate(sources)]
+    units_by_source = {unit["path"]: unit for unit in units}
+    diagnostics = []
+    artifacts = []
+    for source in sources:
+        entry_count = module.MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS[source]
+        entry_points = [f"entry_{index}" for index in range(entry_count)]
+        artifact_path = (output_dir / target / Path(source)).with_suffix(
+            extensions[target]
+        )
+        unit = units_by_source[source]
+        diagnostics.append(
+            {
+                "severity": "error",
+                "code": module.MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_CODE,
+                "message": module.MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_MESSAGE,
+                "target": target,
+                "checkKind": "execution-specialization",
+                "missingCapabilities": ["execution.workgroup-size-specialization"],
+                "details": {
+                    "sourcePath": source,
+                    "executionSpecialization": {
+                        "reason": "aggregate-entry-size-unproven",
+                        "sourceEntryPoints": entry_points,
+                    },
+                },
+            }
+        )
+        artifacts.append(
+            {
+                "source": source,
+                "sourceHash": unit["sourceHash"],
+                "sourceSizeBytes": unit["sourceSizeBytes"],
+                "target": target,
+                "path": artifact_path.relative_to(mlx_root).as_posix(),
+                "status": "failed",
+                "error": module.MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_MESSAGE,
+                "templateMaterialization": {
+                    "status": "materialized",
+                    "specializationCount": entry_count,
+                    "specializations": [
+                        {"hostName": entry_point} for entry_point in entry_points
+                    ],
+                    "unsupported": [],
+                },
+            }
+        )
+        if validated:
+            diagnostics.append(
+                {
+                    "severity": "error",
+                    "code": "project.validate.failed-artifact",
+                    "target": target,
+                    "details": {"sourcePath": source},
+                }
+            )
+    if reverse:
+        units.reverse()
+        diagnostics.reverse()
+        artifacts.reverse()
+    expected_diagnostics = {module.MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_CODE: len(sources)}
+    if validated:
+        expected_diagnostics["project.validate.failed-artifact"] = len(sources)
+    source_count = len(sources)
+    report = {
+        "project": {
+            "includePatterns": list(reversed(sources)) if reverse else list(sources),
+            "targets": [target],
+            "workgroupSizeRules": {},
+            "workgroupSizeRuleCount": 0,
+        },
+        "summary": {
+            "unitCount": source_count,
+            "artifactCount": source_count,
+            "translatedCount": 0,
+            "failedCount": source_count,
+            "diagnosticCounts": {"error": len(diagnostics)},
+            "diagnosticsByCode": expected_diagnostics,
+            "artifactsByTarget": {
+                target: {
+                    "artifactCount": source_count,
+                    "translatedCount": 0,
+                    "failedCount": source_count,
+                }
+            },
+        },
+        "units": units,
+        "artifacts": artifacts,
+        "diagnostics": diagnostics,
+    }
+    if validated:
+        report["validation"] = {"summary": {"failedCount": source_count}}
+    return report
+
+
+def _write_dynamic_workgroup_report(module, report_path, *args, **kwargs):
+    report = _dynamic_workgroup_report(module, *args, **kwargs)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    return report
+
+
+def _saved_report_payloads(report_dir, *names):
+    return {
+        name: (report_dir / f"{name}.json").read_text(encoding="utf-8")
+        for name in names
+    }
+
+
+def _restore_fake_report(module, mlx_root, report_dir, name, payloads):
+    payload = payloads.get(name)
+    if payload is not None:
+        report = json.loads(payload)
+        for artifact in report.get("artifacts", []):
+            if artifact.get("status") != "translated":
+                continue
+            generated_path = mlx_root / artifact["path"]
+            generated_path.parent.mkdir(parents=True, exist_ok=True)
+            expected_constants = module.MLX_OPENGL_SPECIALIZATION_CONSTANT_IDS.get(
+                artifact.get("source"), {}
+            )
+            declarations = [
+                "layout(constant_id = {}) const {} {} = {};".format(
+                    constant_id,
+                    "int" if constant_name == "blocks" else "bool",
+                    constant_name,
+                    "1" if constant_name == "blocks" else "false",
+                )
+                for constant_name, constant_id in expected_constants.items()
+            ]
+            generated_path.write_text(
+                "\n".join(["#version 450 core", *declarations, "void main() {}", ""]),
+                encoding="utf-8",
+            )
+        (report_dir / f"{name}.json").write_text(payload, encoding="utf-8")
+
+
+def test_dynamic_workgroup_config_report_join_is_order_independent(tmp_path):
+    module = _load_harness()
+    mlx_root = tmp_path / "mlx"
+    output_dir = mlx_root / "out-directx-workgroup-frontier"
+    sources = module.MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+    payload = _dynamic_workgroup_report(
+        module,
+        mlx_root,
+        output_dir,
+        target="directx",
+        sources=sources,
+        validated=True,
+        reverse=True,
+    )
+
+    evidence = module._require_dynamic_workgroup_blocker_report(
+        mlx_root,
+        output_dir,
+        payload,
+        target="directx",
+        sources=sources,
+        validated=True,
+    )
+
+    assert set(evidence) == set(sources)
+    assert all(item["artifactEmitted"] is False for item in evidence.values())
+
+
+def test_dynamic_workgroup_config_report_join_rejects_unproved_rule(tmp_path):
+    module = _load_harness()
+    mlx_root = tmp_path / "mlx"
+    output_dir = mlx_root / "out-directx-workgroup-frontier"
+    sources = module.MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+    payload = _dynamic_workgroup_report(
+        module,
+        mlx_root,
+        output_dir,
+        target="directx",
+        sources=sources,
+        validated=True,
+    )
+    payload["project"]["workgroupSizeRules"] = {sources[0]: [1, 1, 1]}
+    payload["project"]["workgroupSizeRuleCount"] = 1
+
+    with pytest.raises(
+        module.PortingCheckError,
+        match="gained an unproved workgroup-size rule",
+    ):
+        module._require_dynamic_workgroup_blocker_report(
+            mlx_root,
+            output_dir,
+            payload,
+            target="directx",
+            sources=sources,
+            validated=True,
+        )
+
+
+def test_dynamic_workgroup_config_report_join_rejects_artifact_mismatch(tmp_path):
+    module = _load_harness()
+    mlx_root = tmp_path / "mlx"
+    output_dir = mlx_root / "out-directx-workgroup-frontier"
+    sources = module.MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+    payload = _dynamic_workgroup_report(
+        module,
+        mlx_root,
+        output_dir,
+        target="directx",
+        sources=sources,
+        validated=True,
+    )
+    payload["artifacts"][0]["source"] = sources[1]
+
+    with pytest.raises(
+        module.PortingCheckError,
+        match="artifact/source join changed",
+    ):
+        module._require_dynamic_workgroup_blocker_report(
+            mlx_root,
+            output_dir,
+            payload,
+            target="directx",
+            sources=sources,
+            validated=True,
+        )
+
+
+def _prepare_opengl_frontier_check(module, tmp_path):
+    mlx_root = tmp_path / "mlx"
+    work_dir = mlx_root / ".crosstl-mlx-porting"
+    config_dir = work_dir / "configs"
+    report_dir = work_dir / "reports"
+    log_dir = work_dir / "logs"
+    for path in (config_dir, report_dir, log_dir):
+        path.mkdir(parents=True, exist_ok=True)
+    _write_clean_frontier_report(
+        module,
+        mlx_root,
+        work_dir / "out-opengl-frontier",
+        report_dir / "opengl-frontier.json",
+        target="opengl",
+        sources=module.MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES,
+    )
+    _write_dynamic_workgroup_report(
+        module,
+        report_dir / "opengl-workgroup-frontier.json",
+        mlx_root,
+        work_dir / "out-opengl-workgroup-frontier",
+        target="opengl",
+        sources=module.MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
+        validated=False,
     )
     return mlx_root, work_dir, config_dir, report_dir, log_dir
 
@@ -2694,10 +3019,14 @@ def test_opengl_frontier_required_toolchain_compiles_and_validates_artifacts(
 ):
     module = _load_harness()
     paths = _prepare_opengl_frontier_check(module, tmp_path)
+    payloads = _saved_report_payloads(
+        paths[3], "opengl-frontier", "opengl-workgroup-frontier"
+    )
     commands = []
 
     def fake_run_command(name, command, *, log_dir, **_kwargs):
         commands.append((name, list(command)))
+        _restore_fake_report(module, paths[0], paths[3], name, payloads)
         stdout_path = log_dir / f"{name}.stdout"
         stderr_path = log_dir / f"{name}.stderr"
         stdout_path.write_text("", encoding="utf-8")
@@ -2706,7 +3035,13 @@ def test_opengl_frontier_required_toolchain_compiles_and_validates_artifacts(
             output_path = Path(command[command.index("-o") + 1])
             output_path.parent.mkdir(parents=True, exist_ok=True)
             output_path.write_bytes(b"\x03\x02\x23\x07")
-        return module.CommandResult(name, list(command), 0, stdout_path, stderr_path)
+        return module.CommandResult(
+            name,
+            list(command),
+            1 if name == "opengl-workgroup-frontier" else 0,
+            stdout_path,
+            stderr_path,
+        )
 
     tools = {
         "glslangValidator": "/tools/glslangValidator",
@@ -2721,10 +3056,16 @@ def test_opengl_frontier_required_toolchain_compiles_and_validates_artifacts(
         require_toolchain=True,
     )
 
-    assert result["status"] == "passed"
-    assert result["sources"] == list(module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES)
-    assert result["sourceCount"] == len(module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES)
-    assert result["artifactCount"] == len(module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES)
+    assert result["status"] == "passed-with-expected-workgroup-blockers"
+    assert result["sources"] == list(module.MLX_OPENGL_FRONTIER_SOURCES)
+    assert result["sourceCount"] == len(module.MLX_OPENGL_FRONTIER_SOURCES)
+    assert result["artifactCount"] == len(module.MLX_OPENGL_FRONTIER_SOURCES)
+    assert result["translatedSources"] == list(
+        module.MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES
+    )
+    assert result["workgroupBlockedSources"] == list(
+        module.MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+    )
     assert result["projectDiagnosticCount"] == 0
     assert result["toolchainRequired"] is True
     assert result["toolchainValidatedSources"] == list(
@@ -2735,37 +3076,30 @@ def test_opengl_frontier_required_toolchain_compiles_and_validates_artifacts(
     )
     assert result["nativeValidationStatus"] == "validated"
     assert result["spirvValidator"] == "spirv-val"
-    assert result["specializationConstants"] == (
-        module.MLX_OPENGL_SPECIALIZATION_CONSTANT_IDS
-    )
+    assert result["specializationConstants"] == {
+        module.MLX_ROPE_SOURCE: module.MLX_OPENGL_SPECIALIZATION_CONSTANT_IDS[
+            module.MLX_ROPE_SOURCE
+        ]
+    }
     assert result["runtimeIntegrationIncluded"] is False
     assert [name for name, _command in commands] == [
-        "translate-opengl-frontier",
-        "validate-arg-reduce-opengl",
-        "validate-arg-reduce-opengl-spirv",
+        "opengl-frontier",
+        "opengl-workgroup-frontier",
         "validate-binary-two-opengl",
         "validate-binary-two-opengl-spirv",
-        "validate-logsumexp-opengl",
-        "validate-logsumexp-opengl-spirv",
-        "validate-rms-norm-opengl",
-        "validate-rms-norm-opengl-spirv",
         "validate-rope-opengl",
         "validate-rope-opengl-spirv",
-        "validate-scaled-dot-product-attention-opengl",
-        "validate-scaled-dot-product-attention-opengl-spirv",
-        "validate-softmax-opengl",
-        "validate-softmax-opengl-spirv",
         "validate-ternary-opengl",
         "validate-ternary-opengl-spirv",
     ]
-    assert commands[1][1][:5] == [
+    assert commands[2][1][:5] == [
         "/tools/glslangValidator",
         "--target-env",
         "opengl",
         "--target-env",
         "spirv1.3",
     ]
-    assert commands[2][1][:3] == [
+    assert commands[3][1][:3] == [
         "/tools/spirv-val",
         "--target-env",
         "spv1.3",
@@ -2777,7 +3111,9 @@ def test_opengl_frontier_required_toolchain_compiles_and_validates_artifacts(
     for source in module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES:
         stem = Path(source).stem
         command_name = stem.replace("_", "-")
-        generated_path = paths[1] / "out" / "opengl" / f"{stem}.glsl"
+        generated_path = (
+            paths[1] / "out-opengl-frontier" / "opengl" / Path(source)
+        ).with_suffix(".glsl")
         output_path = paths[0] / result["nativeValidationOutputs"][source]
         assert (
             str(generated_path) in commands_by_name[f"validate-{command_name}-opengl"]
@@ -2789,24 +3125,38 @@ def test_opengl_frontier_required_toolchain_compiles_and_validates_artifacts(
     config = (paths[2] / "opengl-frontier.toml").read_text(encoding="utf-8")
     for source in module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES:
         assert source in config
-    assert module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE in config
     assert module.MLX_TERNARY_SOURCE in config
-    assert "mlx/backend/metal/kernels/rms_norm.metal" in config
+    assert module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE not in config
     assert 'targets = ["opengl"]' in config
+    blocked_config = (paths[2] / "opengl-workgroup-frontier.toml").read_text(
+        encoding="utf-8"
+    )
+    for source in module.MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES:
+        assert source in blocked_config
 
 
 def test_opengl_frontier_skips_toolchain_when_not_required(tmp_path, monkeypatch):
     module = _load_harness()
     paths = _prepare_opengl_frontier_check(module, tmp_path)
+    payloads = _saved_report_payloads(
+        paths[3], "opengl-frontier", "opengl-workgroup-frontier"
+    )
     commands = []
 
     def fake_run_command(name, command, *, log_dir, **_kwargs):
         commands.append(name)
+        _restore_fake_report(module, paths[0], paths[3], name, payloads)
         stdout_path = log_dir / f"{name}.stdout"
         stderr_path = log_dir / f"{name}.stderr"
         stdout_path.write_text("", encoding="utf-8")
         stderr_path.write_text("", encoding="utf-8")
-        return module.CommandResult(name, list(command), 0, stdout_path, stderr_path)
+        return module.CommandResult(
+            name,
+            list(command),
+            1 if name == "opengl-workgroup-frontier" else 0,
+            stdout_path,
+            stderr_path,
+        )
 
     monkeypatch.setattr(module, "_run_command", fake_run_command)
     monkeypatch.setattr(
@@ -2821,7 +3171,7 @@ def test_opengl_frontier_skips_toolchain_when_not_required(tmp_path, monkeypatch
         require_toolchain=False,
     )
 
-    assert commands == ["translate-opengl-frontier"]
+    assert commands == ["opengl-frontier", "opengl-workgroup-frontier"]
     assert result["toolchainRequired"] is False
     assert result["toolchainValidatedSources"] == []
     assert result["toolchainValidatedArtifactCount"] == 0
@@ -2837,19 +3187,29 @@ def test_opengl_frontier_requires_every_clean_artifact(tmp_path, monkeypatch):
     report["summary"]["artifactCount"] -= 1
     report["artifacts"].pop()
     report_path.write_text(json.dumps(report), encoding="utf-8")
+    payloads = _saved_report_payloads(
+        paths[3], "opengl-frontier", "opengl-workgroup-frontier"
+    )
 
     def fake_run_command(name, command, *, log_dir, **_kwargs):
+        _restore_fake_report(module, paths[0], paths[3], name, payloads)
         stdout_path = log_dir / f"{name}.stdout"
         stderr_path = log_dir / f"{name}.stderr"
         stdout_path.write_text("", encoding="utf-8")
         stderr_path.write_text("", encoding="utf-8")
-        return module.CommandResult(name, list(command), 0, stdout_path, stderr_path)
+        return module.CommandResult(
+            name,
+            list(command),
+            1 if name == "opengl-workgroup-frontier" else 0,
+            stdout_path,
+            stderr_path,
+        )
 
     monkeypatch.setattr(module, "_run_command", fake_run_command)
 
     with pytest.raises(
         module.PortingCheckError,
-        match="every clean translated artifact",
+        match="every clean source artifact",
     ):
         module._check_opengl_frontier(
             *paths,
@@ -2872,13 +3232,23 @@ def test_opengl_frontier_requires_zero_project_diagnostics(tmp_path, monkeypatch
         }
     ]
     report_path.write_text(json.dumps(report), encoding="utf-8")
+    payloads = _saved_report_payloads(
+        paths[3], "opengl-frontier", "opengl-workgroup-frontier"
+    )
 
     def fake_run_command(name, command, *, log_dir, **_kwargs):
+        _restore_fake_report(module, paths[0], paths[3], name, payloads)
         stdout_path = log_dir / f"{name}.stdout"
         stderr_path = log_dir / f"{name}.stderr"
         stdout_path.write_text("", encoding="utf-8")
         stderr_path.write_text("", encoding="utf-8")
-        return module.CommandResult(name, list(command), 0, stdout_path, stderr_path)
+        return module.CommandResult(
+            name,
+            list(command),
+            1 if name == "opengl-workgroup-frontier" else 0,
+            stdout_path,
+            stderr_path,
+        )
 
     monkeypatch.setattr(module, "_run_command", fake_run_command)
 
@@ -4693,17 +5063,17 @@ def test_reduced_runtime_readiness_aggregates_fixture_execution(monkeypatch):
     calls = []
     reports = [
         {
-            "name": "directx-vulkan-runtime-readiness",
+            "name": "directx-runtime-readiness",
             "status": "planned",
-            "testCount": 2,
+            "testCount": 1,
             "diagnosticsByCode": {},
             "runtimeArtifactDiagnosticsByCode": {},
             "runtimePlanDiagnosticsByCode": {},
             "runtimeFixtureExecution": {
                 "status": "passed",
                 "summary": {
-                    "fixtureCount": 2,
-                    "passedCount": 2,
+                    "fixtureCount": 1,
+                    "passedCount": 1,
                     "skippedCount": 0,
                     "unavailableCount": 0,
                     "translationFailedCount": 0,
@@ -4715,10 +5085,44 @@ def test_reduced_runtime_readiness_aggregates_fixture_execution(monkeypatch):
             "nativeRuntimeExecution": {
                 "status": "blocked-by-runtime-driver",
                 "summary": {
-                    "fixtureCount": 2,
+                    "fixtureCount": 1,
                     "passedCount": 0,
                     "skippedCount": 0,
-                    "unavailableCount": 2,
+                    "unavailableCount": 1,
+                    "translationFailedCount": 0,
+                    "runtimeFailedCount": 0,
+                    "comparisonFailedCount": 0,
+                    "failedCount": 0,
+                },
+            },
+        },
+        {
+            "name": "vulkan-runtime-readiness",
+            "status": "planned",
+            "testCount": 1,
+            "diagnosticsByCode": {},
+            "runtimeArtifactDiagnosticsByCode": {},
+            "runtimePlanDiagnosticsByCode": {},
+            "runtimeFixtureExecution": {
+                "status": "passed",
+                "summary": {
+                    "fixtureCount": 1,
+                    "passedCount": 1,
+                    "skippedCount": 0,
+                    "unavailableCount": 0,
+                    "translationFailedCount": 0,
+                    "runtimeFailedCount": 0,
+                    "comparisonFailedCount": 0,
+                    "failedCount": 0,
+                },
+            },
+            "nativeRuntimeExecution": {
+                "status": "blocked-by-runtime-driver",
+                "summary": {
+                    "fixtureCount": 1,
+                    "passedCount": 0,
+                    "skippedCount": 0,
+                    "unavailableCount": 1,
                     "translationFailedCount": 0,
                     "runtimeFailedCount": 0,
                     "comparisonFailedCount": 0,
@@ -4781,13 +5185,18 @@ def test_reduced_runtime_readiness_aggregates_fixture_execution(monkeypatch):
         require_opengl_native_runtime=True,
     )
 
-    assert calls[0]["required_native_runtime_targets"] == ("vulkan",)
-    assert calls[1]["required_native_runtime_targets"] == ("opengl",)
+    assert calls[0]["name"] == "directx-runtime-readiness"
+    assert calls[0]["artifact_report"] == Path("/tmp/reports/directx-frontier.json")
+    assert calls[0]["required_native_runtime_targets"] == ()
+    assert calls[1]["name"] == "vulkan-runtime-readiness"
+    assert calls[1]["artifact_report"] == Path("/tmp/reports/vulkan-frontier.json")
+    assert calls[1]["required_native_runtime_targets"] == ("vulkan",)
+    assert calls[2]["required_native_runtime_targets"] == ("opengl",)
     assert result["status"] == "blocked-by-tracked-issues"
     assert result["runtimeFixtureExecutionIncluded"] is True
     assert result["runtimeFixtureExecutionByStatus"] == {
         "blocked-by-tracked-issues": 1,
-        "passed": 1,
+        "passed": 2,
     }
     assert result["runtimeFixtureExecutionSummary"] == {
         "comparisonFailedCount": 0,
@@ -4801,7 +5210,7 @@ def test_reduced_runtime_readiness_aggregates_fixture_execution(monkeypatch):
     }
     assert result["nativeRuntimeExecutionIncluded"] is True
     assert result["nativeRuntimeExecutionByStatus"] == {
-        "blocked-by-runtime-driver": 2,
+        "blocked-by-runtime-driver": 3,
     }
     assert result["nativeRuntimeExecutionSummary"] == {
         "comparisonFailedCount": 0,
@@ -5022,15 +5431,8 @@ def test_reduced_frontier_accepts_multiple_vulkan_toolchain_runs_per_artifact(
     for directory in (config_dir, report_dir, log_dir):
         directory.mkdir(parents=True)
 
-    frontier_count = len(module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES)
-    base_vulkan_paths = [
-        f".crosstl/out/vulkan/{Path(source).with_suffix('.spvasm')}"
-        for source in module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
-    ]
-    toolchain_vulkan_paths = [
-        f".crosstl/toolchain/vulkan/{Path(source).with_suffix('.spvasm')}"
-        for source in module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
-    ]
+    sources = module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
+    frontier_count = len(sources)
     commands = []
     alias_evidence = {"source": module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE}
     monkeypatch.setattr(
@@ -5041,55 +5443,36 @@ def test_reduced_frontier_accepts_multiple_vulkan_toolchain_runs_per_artifact(
 
     def fake_run_command(name, command, *, log_dir, check=True, timeout_seconds=None):
         commands.append((name, list(command)))
-        report = {
-            "summary": {
-                "unitCount": frontier_count,
-                "artifactCount": frontier_count * 2,
-                "translatedCount": frontier_count * 2,
-                "failedCount": 0,
-                "diagnosticCounts": {"error": 0},
-                "artifactsByTarget": {
-                    "directx": {
-                        "translatedCount": frontier_count,
-                        "failedCount": 0,
-                    },
-                    "vulkan": {
-                        "translatedCount": frontier_count,
-                        "failedCount": 0,
-                    },
-                },
-            },
-            "artifacts": [
-                {"target": "vulkan", "path": path, "status": "translated"}
-                for path in (
-                    base_vulkan_paths
-                    if name == "translate-directx-vulkan-frontier"
-                    else toolchain_vulkan_paths
-                )
-            ],
-            "validation": {
-                "summary": {"failedCount": 0},
-                "toolchainRuns": (
-                    []
-                    if name == "translate-directx-vulkan-frontier"
-                    else [
-                        {
-                            "target": "vulkan",
-                            "path": path,
-                            "status": "ok",
-                        }
-                        for path in toolchain_vulkan_paths
-                        for _ in range(2)
-                    ]
-                ),
-            },
-        }
-        report_name = (
-            "directx-vulkan-frontier.json"
-            if name == "translate-directx-vulkan-frontier"
-            else "vulkan-frontier-toolchain.json"
+        output_dir = (
+            work_dir / "out-vulkan-frontier"
+            if name == "vulkan-frontier"
+            else work_dir / "out-vulkan-frontier-toolchain"
         )
-        (report_dir / report_name).write_text(json.dumps(report), encoding="utf-8")
+        toolchain_runs = []
+        if name == "validate-vulkan-frontier-toolchain":
+            for source in sources:
+                artifact_path = (output_dir / "vulkan" / Path(source)).with_suffix(
+                    ".spvasm"
+                )
+                relative_path = artifact_path.relative_to(mlx_root).as_posix()
+                toolchain_runs.extend(
+                    {
+                        "source": source,
+                        "target": "vulkan",
+                        "path": relative_path,
+                        "status": "ok",
+                    }
+                    for _ in range(2)
+                )
+        _write_clean_frontier_report(
+            module,
+            mlx_root,
+            output_dir,
+            report_dir / f"{name}.json",
+            target="vulkan",
+            sources=sources,
+            toolchain_runs=toolchain_runs,
+        )
         stdout_path = log_dir / f"{name}.stdout"
         stderr_path = log_dir / f"{name}.stderr"
         stdout_path.write_text("", encoding="utf-8")
@@ -5098,32 +5481,32 @@ def test_reduced_frontier_accepts_multiple_vulkan_toolchain_runs_per_artifact(
 
     monkeypatch.setattr(module, "_run_command", fake_run_command)
 
-    result = module._translate_directx_vulkan_frontier(
+    result = module._translate_vulkan_frontier(
         mlx_root,
         work_dir,
         config_dir,
         report_dir,
         log_dir,
         "python",
-        require_directx_toolchain=False,
-        require_vulkan_toolchain=True,
+        require_toolchain=True,
+        run_optional_toolchain=False,
     )
 
     assert result["toolchainRuns"] == frontier_count * 2
     assert result["status"] == "passed"
-    assert result["scope"] == "clean-frontier"
+    assert result["scope"] == "target-split-frontier"
     assert result["vulkanValidationStatus"] == "validated"
     assert result["semanticReadinessStatus"] == "not-established"
     assert result["regressionEvidence"] == [alias_evidence]
     assert result["runtimeParityClaimed"] is False
-    assert commands[0][0] == "translate-directx-vulkan-frontier"
+    assert commands[0][0] == "vulkan-frontier"
     assert "--validate" in commands[0][1]
     assert "--run-toolchains" not in commands[0][1]
     assert commands[1][0] == "validate-vulkan-frontier-toolchain"
     assert "--run-toolchains" in commands[1][1]
-    toolchain_config = (config_dir / "vulkan-frontier-toolchain.toml").read_text(
-        encoding="utf-8"
-    )
+    toolchain_config = (
+        config_dir / "validate-vulkan-frontier-toolchain.toml"
+    ).read_text(encoding="utf-8")
     assert 'targets = ["vulkan"]' in toolchain_config
     assert module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE in toolchain_config
 
@@ -5141,100 +5524,77 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
     for directory in (config_dir, report_dir, log_dir):
         directory.mkdir(parents=True)
 
-    frontier_count = len(module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES)
     directx_toolchain_count = len(module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES)
-    directx_paths = {
-        source: f".crosstl/out/directx/{Path(source).with_suffix('.hlsl')}"
-        for source in module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
-    }
-    directx_toolchain_paths = {
-        source: f".crosstl/out/directx/{Path(source).with_suffix('.hlsl')}"
-        for source in module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
-    }
     commands = []
-    alias_evidence = {"source": module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE}
-    monkeypatch.setattr(
-        module,
-        "_scaled_attention_local_alias_evidence",
-        lambda *_args: alias_evidence,
-    )
 
     def fake_run_command(name, command, *, log_dir, check=True, timeout_seconds=None):
         commands.append((name, list(command)))
-        is_toolchain = name != "translate-directx-vulkan-frontier"
-        report_directx_paths = (
-            directx_toolchain_paths if is_toolchain else directx_paths
-        )
-        report = {
-            "summary": {
-                "unitCount": frontier_count,
-                "artifactCount": frontier_count * 2,
-                "translatedCount": frontier_count * 2,
-                "failedCount": 0,
-                "diagnosticCounts": {"error": 0},
-                "artifactsByTarget": {
-                    "directx": {
-                        "translatedCount": frontier_count,
-                        "failedCount": 0,
-                    },
-                    "vulkan": {
-                        "translatedCount": frontier_count,
-                        "failedCount": 0,
-                    },
-                },
-            },
-            "artifacts": [
-                {
-                    "source": source,
-                    "target": "directx",
-                    "path": path,
-                    "status": "translated",
-                }
-                for source, path in report_directx_paths.items()
-            ],
-            "validation": {
-                "summary": {"failedCount": 0},
-                "toolchainRuns": (
-                    []
-                    if not is_toolchain
-                    else [
-                        {
-                            "source": source,
-                            "target": "directx",
-                            "path": path,
-                            "command": [
-                                "dxc",
-                                "-T",
-                                "cs_6_0",
-                                "-E",
-                                "CSMain" if index == 0 else f"CSMain_{index + 1}",
-                                path,
-                            ],
-                            "status": "ok",
-                        }
-                        for source, path in directx_toolchain_paths.items()
-                        for index in range(
-                            module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS[source]
+        returncode = 0
+        if name == "directx-workgroup-frontier":
+            _write_dynamic_workgroup_report(
+                module,
+                report_dir / f"{name}.json",
+                mlx_root,
+                work_dir / "out-directx-workgroup-frontier",
+                target="directx",
+                sources=module.MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
+                validated=True,
+            )
+            returncode = 1
+        else:
+            is_toolchain = name == "validate-directx-frontier-toolchain"
+            output_dir = (
+                work_dir / "out-directx-frontier-toolchain"
+                if is_toolchain
+                else work_dir / "out-directx-frontier"
+            )
+            toolchain_runs = []
+            if is_toolchain:
+                for source in module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES:
+                    artifact_path = (output_dir / "directx" / Path(source)).with_suffix(
+                        ".hlsl"
+                    )
+                    relative_path = artifact_path.relative_to(mlx_root).as_posix()
+                    for index in range(
+                        module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS[source]
+                    ):
+                        entry_point = "CSMain" if index == 0 else f"CSMain_{index + 1}"
+                        toolchain_runs.append(
+                            {
+                                "source": source,
+                                "target": "directx",
+                                "path": relative_path,
+                                "command": [
+                                    "dxc",
+                                    "-T",
+                                    "cs_6_0",
+                                    "-E",
+                                    entry_point,
+                                    relative_path,
+                                ],
+                                "status": "ok",
+                            }
                         )
-                    ]
-                ),
-            },
-        }
-        report_name = (
-            "directx-vulkan-frontier.json"
-            if name == "translate-directx-vulkan-frontier"
-            else "directx-frontier-toolchain.json"
-        )
-        (report_dir / report_name).write_text(json.dumps(report), encoding="utf-8")
+            _write_clean_frontier_report(
+                module,
+                mlx_root,
+                output_dir,
+                report_dir / f"{name}.json",
+                target="directx",
+                sources=module.MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES,
+                toolchain_runs=toolchain_runs,
+            )
         stdout_path = log_dir / f"{name}.stdout"
         stderr_path = log_dir / f"{name}.stderr"
         stdout_path.write_text("", encoding="utf-8")
         stderr_path.write_text("", encoding="utf-8")
-        return module.CommandResult(name, list(command), 0, stdout_path, stderr_path)
+        return module.CommandResult(
+            name, list(command), returncode, stdout_path, stderr_path
+        )
 
     monkeypatch.setattr(module, "_run_command", fake_run_command)
 
-    result = module._translate_directx_vulkan_frontier(
+    result = module._translate_directx_frontier(
         mlx_root,
         work_dir,
         config_dir,
@@ -5242,11 +5602,10 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
         log_dir,
         "python",
         require_directx_toolchain=True,
-        require_vulkan_toolchain=False,
     )
 
     assert result["toolchainRuns"] == (module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT)
-    assert result["status"] == "passed"
+    assert result["status"] == "passed-with-expected-workgroup-blockers"
     assert result["directxToolchainRequired"] is True
     assert result["directxToolchainSources"] == list(
         module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
@@ -5270,12 +5629,15 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
     )
     assert result["semanticReadinessStatus"] == "not-established"
     assert result["directxValidationStatus"] == "validated"
-    assert result["vulkanValidationStatus"] == "not-run"
-    assert commands[1][0] == "validate-directx-frontier-toolchain"
-    assert "--run-toolchains" in commands[1][1]
-    toolchain_config = (config_dir / "directx-frontier-toolchain.toml").read_text(
-        encoding="utf-8"
+    assert result["workgroupBlockedSources"] == list(
+        module.MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
     )
+    assert commands[1][0] == "directx-workgroup-frontier"
+    assert commands[2][0] == "validate-directx-frontier-toolchain"
+    assert "--run-toolchains" in commands[2][1]
+    toolchain_config = (
+        config_dir / "validate-directx-frontier-toolchain.toml"
+    ).read_text(encoding="utf-8")
     assert 'targets = ["directx"]' in toolchain_config
     assert "[project.specialization_constants]" in toolchain_config
     for selector, value in module.MLX_FRONTIER_SPECIALIZATION_CONSTANTS.items():
@@ -5292,7 +5654,7 @@ def test_directx_toolchain_frontier_matches_pinned_dxc_inventory():
         )
     )
 
-    expected_sources = (
+    expected_all_sources = (
         module.MLX_ARANGE_SOURCE,
         module.MLX_ARG_REDUCE_SOURCE,
         module.MLX_BINARY_TWO_SOURCE,
@@ -5305,36 +5667,40 @@ def test_directx_toolchain_frontier_matches_pinned_dxc_inventory():
         module.MLX_SOFTMAX_SOURCE,
         module.MLX_TERNARY_SOURCE,
     )
+    expected_sources = (
+        module.MLX_ARANGE_SOURCE,
+        module.MLX_BINARY_TWO_SOURCE,
+        module.MLX_RANDOM_SOURCE,
+        module.MLX_ROPE_SOURCE,
+        module.MLX_TERNARY_SOURCE,
+    )
     assert module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES == expected_sources
-    assert set(expected_sources) == set(module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES)
+    assert module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES == expected_all_sources
+    assert tuple(module.MLX_DIRECTX_FRONTIER_ENTRY_POINT_COUNTS) == (
+        expected_all_sources
+    )
     assert tuple(module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS) == expected_sources
-    assert {
-        source: module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS[source]
-        for source in (
-            module.MLX_BINARY_TWO_SOURCE,
-            module.MLX_LAYER_NORM_SOURCE,
-            module.MLX_LOGSUMEXP_SOURCE,
-            module.MLX_RANDOM_SOURCE,
-            module.MLX_RMS_NORM_SOURCE,
-            module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
-            module.MLX_SOFTMAX_SOURCE,
-            module.MLX_TERNARY_SOURCE,
-        )
-    } == {
+    assert module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS == {
+        module.MLX_ARANGE_SOURCE: 11,
         module.MLX_BINARY_TWO_SOURCE: 225,
+        module.MLX_RANDOM_SOURCE: 2,
+        module.MLX_ROPE_SOURCE: 18,
+        module.MLX_TERNARY_SOURCE: 212,
+    }
+    assert module.MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS == {
+        module.MLX_ARG_REDUCE_SOURCE: 24,
         module.MLX_LAYER_NORM_SOURCE: 12,
         module.MLX_LOGSUMEXP_SOURCE: 6,
-        module.MLX_RANDOM_SOURCE: 2,
         module.MLX_RMS_NORM_SOURCE: 12,
         module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE: 42,
         module.MLX_SOFTMAX_SOURCE: 10,
-        module.MLX_TERNARY_SOURCE: 212,
     }
-    assert len(expected_sources) == 11
+    assert len(expected_sources) == 5
     assert module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT == sum(
         module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS.values()
     )
-    assert module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT == 574
+    assert module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT == 468
+    assert sum(module.MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS.values()) == 106
     directx_status = gaps["directx_toolchain_status"]
     assert directx_status["specialization_constants"] == (
         module.MLX_FRONTIER_SPECIALIZATION_CONSTANTS
@@ -5343,7 +5709,27 @@ def test_directx_toolchain_frontier_matches_pinned_dxc_inventory():
     assert directx_status["expected_entry_point_counts"] == (
         module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS
     )
-    assert set(directx_status["directx_toolchain_gaps"]) == {module.MLX_FENCE_SOURCE}
+    assert directx_status["workgroup_blocked_sources"] == list(
+        module.MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+    )
+    assert directx_status["workgroup_blocked_entry_point_counts"] == (
+        module.MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS
+    )
+    assert directx_status["workgroup_blocked_diagnostic"] == (
+        module.MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_CODE
+    )
+    assert directx_status["workgroup_blocked_by"] == (
+        module.MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE
+    )
+    assert directx_status["dispatch_evidence"] == (
+        module.MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE
+    )
+    assert module.MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE[
+        module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE
+    ]["hostLines"].endswith("613-640,685-753")
+    assert set(directx_status["directx_toolchain_gaps"]) == (
+        set(module.MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES) | {module.MLX_FENCE_SOURCE}
+    )
     assert {
         f"https://github.com/CrossGL/crosstl/issues/{issue}"
         for issue in (1694, 1695, 1701, 1728)
@@ -5359,15 +5745,16 @@ def test_directx_frontier_readme_records_compile_only_scope_and_current_gaps():
 
     assert "official DXC v1.9.2602.24 on Windows CI" in readme
     assert (
-        "the full 11-source clean frontier: `arange.metal`, `arg_reduce.metal`"
+        "the emitted five-source frontier: `arange.metal`, `binary_two.metal`,"
         in normalized_readme
     )
-    assert (
-        "11, 24, 225, 12, 6, 2, 12, 18, 42, 10, and 212 entries respectively"
-        in normalized_readme
+    assert "11, 225, 2, 18, and 212 entries respectively" in normalized_readme
+    assert "468 generated compute entries" in normalized_readme
+    assert "six excluded aggregate sources cover 106 compute entries" in (
+        normalized_readme
     )
-    assert "574 generated compute entries" in normalized_readme
-    for issue in (1694, 1695, 1696, 1701, 1728, 1542, 1537):
+    assert "no placeholder workgroup size is restored" in normalized_readme
+    for issue in (1694, 1695, 1696, 1701, 1728, 1750, 1542, 1537):
         assert f"https://github.com/CrossGL/crosstl/issues/{issue}" in readme
     assert "does not dispatch these kernels or establish numerical parity" in (
         normalized_readme
@@ -5696,8 +6083,13 @@ def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatc
     )
     monkeypatch.setattr(
         module,
-        "_translate_directx_vulkan_frontier",
-        lambda *args, **kwargs: pytest.fail("reduced frontier should not run"),
+        "_translate_directx_frontier",
+        lambda *args, **kwargs: pytest.fail("reduced DirectX frontier should not run"),
+    )
+    monkeypatch.setattr(
+        module,
+        "_translate_vulkan_frontier",
+        lambda *args, **kwargs: pytest.fail("reduced Vulkan frontier should not run"),
     )
     monkeypatch.setattr(
         module,
@@ -5808,14 +6200,20 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
             "runtimeParityClaimed": False,
         },
     )
-    monkeypatch.setattr(
-        module,
-        "_translate_directx_vulkan_frontier",
-        lambda *args, **kwargs: {
-            "name": "directx-vulkan-frontier",
-            "status": "passed",
-        },
-    )
+    directx_frontier_requirements = []
+
+    def fake_directx_frontier(*args, require_directx_toolchain):
+        directx_frontier_requirements.append(require_directx_toolchain)
+        return {"name": "directx-frontier", "status": "passed"}
+
+    vulkan_frontier_requirements = []
+
+    def fake_vulkan_frontier(*args, require_toolchain, run_optional_toolchain):
+        vulkan_frontier_requirements.append((require_toolchain, run_optional_toolchain))
+        return {"name": "vulkan-frontier", "status": "passed"}
+
+    monkeypatch.setattr(module, "_translate_directx_frontier", fake_directx_frontier)
+    monkeypatch.setattr(module, "_translate_vulkan_frontier", fake_vulkan_frontier)
     monkeypatch.setattr(
         module,
         "_check_arange_opengl",
@@ -5910,7 +6308,8 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
         "atomic-fence-contract",
         "reference-accessor-lvalue-identity",
         "template-member-buffer-pointer",
-        "directx-vulkan-frontier",
+        "directx-frontier",
+        "vulkan-frontier",
         "arange-opengl",
         "gemv-directx-compiler-frontier",
         "opengl-frontier",
@@ -5920,6 +6319,8 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
         "runtime-readiness",
     ]
     assert reference_accessor_requirements == [(False, True)]
+    assert directx_frontier_requirements == [False]
+    assert vulkan_frontier_requirements == [(False, True)]
     assert opengl_frontier_requirements == [True]
     assert runtime_requirements == [
         {
@@ -5956,6 +6357,21 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
     assert result["scope"]["blockedFrontierIssues"] == [
         "https://github.com/CrossGL/crosstl/issues/1537"
     ]
+    assert result["scope"]["directxTranslatedFrontierSources"] == list(
+        module.MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES
+    )
+    assert result["scope"]["directxWorkgroupBlockedFrontierSources"] == list(
+        module.MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+    )
+    assert result["scope"]["vulkanTranslatedFrontierSources"] == list(
+        module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
+    )
+    assert result["scope"]["openglTranslatedFrontierSources"] == list(
+        module.MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES
+    )
+    assert result["scope"]["openglWorkgroupBlockedFrontierSources"] == list(
+        module.MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+    )
 
 
 def test_rms_norm_contract_fixture_matches_pinned_harness_configuration():

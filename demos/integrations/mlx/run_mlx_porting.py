@@ -65,7 +65,7 @@ TEMPLATE_MEMBER_POINTER_FIXTURE_PATH = (
     Path(__file__).resolve().parent / "fixtures" / TEMPLATE_MEMBER_POINTER_FIXTURE_NAME
 )
 TEMPLATE_MEMBER_POINTER_TARGETS = ("directx", "opengl")
-MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES = (
+MLX_OPENGL_FRONTIER_SOURCES = (
     MLX_ARG_REDUCE_SOURCE,
     MLX_BINARY_TWO_SOURCE,
     MLX_LOGSUMEXP_SOURCE,
@@ -88,11 +88,35 @@ MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
     MLX_SOFTMAX_SOURCE,
     MLX_TERNARY_SOURCE,
 )
+MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES = (
+    MLX_ARG_REDUCE_SOURCE,
+    MLX_LAYER_NORM_SOURCE,
+    MLX_LOGSUMEXP_SOURCE,
+    MLX_RMS_NORM_SOURCE,
+    MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
+    MLX_SOFTMAX_SOURCE,
+)
+MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES = tuple(
+    source
+    for source in MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
+    if source not in MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+)
+MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES = tuple(
+    source
+    for source in MLX_OPENGL_FRONTIER_SOURCES
+    if source in MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+)
+MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES = tuple(
+    source
+    for source in MLX_OPENGL_FRONTIER_SOURCES
+    if source not in MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+)
+MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES = MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES
 MLX_CLEAN_REDUCED_FRONTIER_SOURCES = tuple(
     dict.fromkeys(
         (
             *MLX_DIRECTX_VULKAN_FRONTIER_SOURCES,
-            *MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES,
+            *MLX_OPENGL_FRONTIER_SOURCES,
         )
     )
 )
@@ -107,23 +131,8 @@ MLX_REDUCED_FRONTIER_SOURCES = tuple(
         )
     )
 )
-# Full clean DirectX frontier gated by DXC on Windows. The separate blocked fence
-# source must fail before target emission under its atomic-fence diagnostic.
-MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES = (
-    MLX_ARANGE_SOURCE,
-    MLX_ARG_REDUCE_SOURCE,
-    MLX_BINARY_TWO_SOURCE,
-    MLX_LAYER_NORM_SOURCE,
-    MLX_LOGSUMEXP_SOURCE,
-    MLX_RANDOM_SOURCE,
-    MLX_RMS_NORM_SOURCE,
-    MLX_ROPE_SOURCE,
-    MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
-    MLX_SOFTMAX_SOURCE,
-    MLX_TERNARY_SOURCE,
-)
-# Pinned generated compute entries compiled by official DXC v1.9.2602.24.
-MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS = {
+# Pinned generated compute entries in the complete DirectX source frontier.
+MLX_DIRECTX_FRONTIER_ENTRY_POINT_COUNTS = {
     MLX_ARANGE_SOURCE: 11,
     MLX_ARG_REDUCE_SOURCE: 24,
     MLX_BINARY_TWO_SOURCE: 225,
@@ -136,9 +145,129 @@ MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS = {
     MLX_SOFTMAX_SOURCE: 10,
     MLX_TERNARY_SOURCE: 212,
 }
+# DXC compiles only sources whose pinned host dispatch does not require a runtime
+# workgroup-size variant. Dynamic sources remain explicit failed artifact records.
+MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES = MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES
+MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS = {
+    source: MLX_DIRECTX_FRONTIER_ENTRY_POINT_COUNTS[source]
+    for source in MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
+}
 MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT = sum(
     MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS.values()
 )
+MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS = {
+    source: MLX_DIRECTX_FRONTIER_ENTRY_POINT_COUNTS[source]
+    for source in MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+}
+MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_CODE = (
+    "project.translate.workgroup-size-entry-ambiguous"
+)
+MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_MESSAGE = (
+    "A multi-entry compute artifact cannot apply one workgroup size when the "
+    "emitted entry points do not declare a shared source size. Select one entry "
+    "point or emit independently specialized artifacts."
+)
+MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE = "https://github.com/CrossGL/crosstl/issues/1750"
+MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE = {
+    MLX_ARG_REDUCE_SOURCE: {
+        "hostSource": "mlx/backend/metal/primitives.cpp",
+        "hostLines": "117-132",
+        "dispatchFormulas": [
+            "[32 * ceil_div(min(ceil_div(axis_size, 4), "
+            "maxTotalThreadsPerThreadgroup), 32), 1, 1]"
+        ],
+        "dispatchSelection": ["single host dispatch path"],
+        "runtimeOperands": ["axis_size", "maxTotalThreadsPerThreadgroup"],
+        "materializationParameters": ["N_READS", "Op", "T"],
+    },
+    MLX_LAYER_NORM_SOURCE: {
+        "hostSource": "mlx/backend/metal/normalization.cpp",
+        "hostLines": "248-297,346-422",
+        "dispatchFormulas": [
+            "forward block: [32 * ceil_div(ceil_div(axis_size, 8), 32), 1, 1]",
+            "forward looped: [maxTotalThreadsPerThreadgroup, 1, 1]",
+            "VJP block: [32 * ceil_div(ceil_div(axis_size, 8), 32), 1, 1]",
+            "VJP looped: [maxTotalThreadsPerThreadgroup, 1, 1]",
+        ],
+        "dispatchSelection": [
+            "forward block when axis_size <= 6656; looped when axis_size > 6656",
+            "VJP block when axis_size <= 8192; looped when axis_size > 8192",
+        ],
+        "runtimeOperands": [
+            "axis_size",
+            "forward_or_vjp_entry",
+            "maxTotalThreadsPerThreadgroup",
+        ],
+        "materializationParameters": ["N_READS", "T"],
+    },
+    MLX_LOGSUMEXP_SOURCE: {
+        "hostSource": "mlx/backend/metal/logsumexp.cpp",
+        "hostLines": "58-91",
+        "dispatchFormulas": [
+            "block: [32 * ceil_div(ceil_div(axis_size, 4), 32), 1, 1]",
+            "looped: [maxTotalThreadsPerThreadgroup, 1, 1]",
+        ],
+        "dispatchSelection": [
+            "block when axis_size <= 4096; looped when axis_size > 4096"
+        ],
+        "runtimeOperands": ["axis_size", "maxTotalThreadsPerThreadgroup"],
+        "materializationParameters": ["AccT", "N_READS", "T"],
+    },
+    MLX_RMS_NORM_SOURCE: {
+        "hostSource": "mlx/backend/metal/normalization.cpp",
+        "hostLines": "52-91,137-197",
+        "dispatchFormulas": [
+            "block: [32 * ceil_div(ceil_div(axis_size, 4), 32), 1, 1]",
+            "looped: [maxTotalThreadsPerThreadgroup, 1, 1]",
+        ],
+        "dispatchSelection": [
+            "block when axis_size <= 4096; looped when axis_size > 4096"
+        ],
+        "runtimeOperands": ["axis_size", "maxTotalThreadsPerThreadgroup"],
+        "materializationParameters": ["N_READS", "T"],
+    },
+    MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE: {
+        "hostSource": "mlx/backend/metal/scaled_dot_product_attention.cpp",
+        "hostLines": (
+            "31-32,160-163,194-195,323-326,350-415,440-484,561-586," "613-640,685-753"
+        ),
+        "dispatchFormulas": [
+            "full attention (NAX and Metal): [32, 4, 1]",
+            "vector: [1024, 1, 1]",
+            "two-pass first pass: [32, q_heads / kv_heads, q_sequence_length]",
+            "two-pass final pass: [1024, 1, 1]",
+        ],
+        "dispatchSelection": [
+            "full attention when q_sequence_length > 8",
+            "vector mode when q_sequence_length <= 8",
+            "two-pass vector when ((device architecture is d or s) and "
+            "k_sequence_length >= 1024) or (kv_heads < q_heads and "
+            "k_sequence_length >= 4096); otherwise one-pass vector",
+        ],
+        "runtimeOperands": [
+            "selected_pass",
+            "device_architecture",
+            "q_heads",
+            "kv_heads",
+            "q_sequence_length",
+            "k_sequence_length",
+        ],
+        "materializationParameters": ["D", "T", "V"],
+    },
+    MLX_SOFTMAX_SOURCE: {
+        "hostSource": "mlx/backend/metal/softmax.cpp",
+        "hostLines": "46-83",
+        "dispatchFormulas": [
+            "block: [32 * ceil_div(ceil_div(axis_size, 4), 32), 1, 1]",
+            "looped: [maxTotalThreadsPerThreadgroup, 1, 1]",
+        ],
+        "dispatchSelection": [
+            "block when axis_size <= 4096; looped when axis_size > 4096"
+        ],
+        "runtimeOperands": ["axis_size", "maxTotalThreadsPerThreadgroup"],
+        "materializationParameters": ["AccT", "N_READS", "T"],
+    },
+}
 MLX_FRONTIER_SPECIALIZATION_CONSTANTS = {
     "1": False,
     "2": False,
@@ -367,6 +496,7 @@ RUNTIME_READINESS_PLAN_DIAGNOSTIC_CODES = frozenset(
 )
 FULL_CORPUS_TRACKED_ISSUES = (
     *FRONTIER_VALIDATION_TRACKED_ISSUES,
+    MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE,
     "https://github.com/CrossGL/crosstl/issues/1312",
     "https://github.com/CrossGL/crosstl/issues/1670",
     *FULL_CORPUS_TRANSLATION_TRACKED_ISSUES,
@@ -2490,53 +2620,43 @@ def _check_template_member_buffer_pointer(
 def _scaled_attention_local_alias_evidence(
     mlx_root: Path, payload: Mapping[str, Any]
 ) -> dict[str, Any]:
-    artifacts = {
-        artifact.get("target"): artifact
+    artifacts = [
+        artifact
         for artifact in payload.get("artifacts", [])
         if isinstance(artifact, Mapping)
         and artifact.get("source") == MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE
-        and artifact.get("target") in {"directx", "vulkan"}
+        and artifact.get("target") == "vulkan"
         and artifact.get("status") == "translated"
-    }
+    ]
     _require(
-        set(artifacts) == {"directx", "vulkan"},
-        "scaled-attention local-alias evidence requires DirectX and Vulkan artifacts",
+        len(artifacts) == 1,
+        "scaled-attention local-alias evidence requires one Vulkan artifact",
     )
 
-    generated_by_target: dict[str, str] = {}
-    paths_by_target: dict[str, str] = {}
-    for target, artifact in artifacts.items():
-        artifact_path = artifact.get("path")
-        _require(
-            isinstance(artifact_path, str),
-            f"scaled-attention {target} artifact path is missing",
-        )
-        generated_path = mlx_root / artifact_path
-        _require(
-            generated_path.is_file(),
-            f"scaled-attention {target} artifact is missing: {artifact_path}",
-        )
-        generated_by_target[target] = generated_path.read_text(encoding="utf-8")
-        paths_by_target[target] = artifact_path
+    artifact_path = artifacts[0].get("path")
+    _require(
+        isinstance(artifact_path, str),
+        "scaled-attention Vulkan artifact path is missing",
+    )
+    generated_path = mlx_root / artifact_path
+    _require(
+        generated_path.is_file(),
+        f"scaled-attention Vulkan artifact is missing: {artifact_path}",
+    )
+    generated = generated_path.read_text(encoding="utf-8")
 
     forbidden_alias_residue = re.compile(
         r"\bLimits_u3cU_u3e\b|\bUnknown type U\b|unknown function ['\"]U['\"]"
     )
-    for target, generated in generated_by_target.items():
-        residue = forbidden_alias_residue.search(generated)
-        _require(
-            residue is None,
-            f"scaled-attention {target} retained local alias residue: "
-            f"{residue.group(0) if residue else ''}",
-        )
-    directx_alias = re.search(r"\bU\b", generated_by_target["directx"])
+    residue = forbidden_alias_residue.search(generated)
     _require(
-        directx_alias is None,
-        "scaled-attention DirectX artifact retained the local alias U",
+        residue is None,
+        "scaled-attention Vulkan artifact retained local alias residue: "
+        f"{residue.group(0) if residue else ''}",
     )
     vulkan_warnings = [
         line
-        for line in generated_by_target["vulkan"].splitlines()
+        for line in generated.splitlines()
         if line.lstrip().startswith("; WARNING:")
     ]
     _require(
@@ -2545,35 +2665,26 @@ def _scaled_attention_local_alias_evidence(
         + (vulkan_warnings[0] if vulkan_warnings else ""),
     )
 
-    directx_entry_count = len(
-        re.findall(
-            r"(?m)^[ \t]*\[numthreads[ \t]*\(",
-            generated_by_target["directx"],
-        )
-    )
     vulkan_entry_count = len(
         re.findall(
             r"(?m)^[ \t]*OpEntryPoint[ \t]+GLCompute\b",
-            generated_by_target["vulkan"],
+            generated,
         )
     )
-    expected_entry_count = MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS[
+    expected_entry_count = MLX_DIRECTX_FRONTIER_ENTRY_POINT_COUNTS[
         MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE
     ]
     _require(
-        directx_entry_count == expected_entry_count
-        and vulkan_entry_count == expected_entry_count,
-        "scaled-attention artifacts did not retain all "
+        vulkan_entry_count == expected_entry_count,
+        "scaled-attention Vulkan artifact did not retain all "
         f"{expected_entry_count} materialized entries",
     )
 
     return {
         "source": MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
-        "targets": paths_by_target,
-        "entryCountByTarget": {
-            "directx": directx_entry_count,
-            "vulkan": vulkan_entry_count,
-        },
+        "target": "vulkan",
+        "artifact": artifact_path,
+        "entryCount": vulkan_entry_count,
         "resolvedDeclarationTypeCount": 402,
         "resolvedCastCount": 87,
         "resolvedStaticMemberCount": 42,
@@ -2603,7 +2714,349 @@ def _directx_toolchain_entry_point(run: Mapping[str, Any]) -> str | None:
     return entry_point
 
 
-def _translate_directx_vulkan_frontier(
+def _require_frontier_project_join(
+    payload: Mapping[str, Any],
+    *,
+    target: str,
+    sources: Sequence[str],
+) -> dict[str, Mapping[str, Any]]:
+    expected_sources = set(sources)
+    project = payload.get("project")
+    include_patterns = (
+        project.get("includePatterns") if isinstance(project, Mapping) else None
+    )
+    _require(
+        isinstance(project, Mapping)
+        and isinstance(include_patterns, list)
+        and len(include_patterns) == len(sources)
+        and set(include_patterns) == expected_sources
+        and project.get("targets") == [target]
+        and project.get("workgroupSizeRules") == {}
+        and project.get("workgroupSizeRuleCount") == 0,
+        f"{target.title()} frontier config/report join changed or gained an "
+        "unproved workgroup-size rule",
+    )
+    units = payload.get("units")
+    _require(
+        isinstance(units, list) and len(units) == len(sources),
+        f"{target.title()} frontier source units are incomplete",
+    )
+    units_by_source: dict[str, Mapping[str, Any]] = {}
+    for unit in units:
+        _require(
+            isinstance(unit, Mapping)
+            and unit.get("id") == unit.get("path")
+            and unit.get("sourceBackend") == "metal"
+            and unit.get("path") in expected_sources,
+            f"{target.title()} frontier source-unit provenance changed",
+        )
+        source = str(unit["path"])
+        _require(
+            source not in units_by_source,
+            f"{target.title()} frontier duplicated source unit {source}",
+        )
+        units_by_source[source] = unit
+    _require(
+        set(units_by_source) == expected_sources,
+        f"{target.title()} frontier source units do not match the config",
+    )
+    return units_by_source
+
+
+def _require_clean_frontier_report(
+    mlx_root: Path,
+    output_dir: Path,
+    payload: Mapping[str, Any],
+    *,
+    target: str,
+    sources: Sequence[str],
+    validated: bool = True,
+) -> dict[str, Mapping[str, Any]]:
+    units_by_source = _require_frontier_project_join(
+        payload,
+        target=target,
+        sources=sources,
+    )
+    summary = payload.get("summary")
+    _require(
+        isinstance(summary, Mapping)
+        and summary.get("unitCount") == len(sources)
+        and summary.get("artifactCount") == len(sources)
+        and summary.get("translatedCount") == len(sources)
+        and summary.get("failedCount") == 0
+        and isinstance(summary.get("diagnosticCounts"), Mapping)
+        and summary["diagnosticCounts"].get("error", 0) == 0,
+        f"{target.title()} frontier did not retain every clean source artifact",
+    )
+    target_summary = summary.get("artifactsByTarget", {}).get(target, {})
+    _require(
+        isinstance(target_summary, Mapping)
+        and target_summary.get("artifactCount") == len(sources)
+        and target_summary.get("translatedCount") == len(sources)
+        and target_summary.get("failedCount") == 0,
+        f"{target.title()} frontier target artifact accounting changed",
+    )
+    if validated:
+        validation = payload.get("validation")
+        _require(
+            isinstance(validation, Mapping)
+            and isinstance(validation.get("summary"), Mapping)
+            and validation["summary"].get("failedCount") == 0,
+            f"{target.title()} frontier artifact validation reported failures",
+        )
+    artifacts = payload.get("artifacts")
+    _require(
+        isinstance(artifacts, list) and len(artifacts) == len(sources),
+        f"{target.title()} frontier artifact records are incomplete",
+    )
+    artifacts_by_source: dict[str, Mapping[str, Any]] = {}
+    output_root = output_dir.resolve()
+    for artifact in artifacts:
+        _require(
+            isinstance(artifact, Mapping)
+            and artifact.get("target") == target
+            and artifact.get("status") == "translated"
+            and artifact.get("source") in units_by_source,
+            f"{target.title()} frontier translated artifact contract changed",
+        )
+        source = str(artifact["source"])
+        _require(
+            source not in artifacts_by_source,
+            f"{target.title()} frontier duplicated artifact source {source}",
+        )
+        artifact_path = artifact.get("path")
+        _require(
+            isinstance(artifact_path, str) and bool(artifact_path),
+            f"{target.title()} frontier artifact path is missing for {source}",
+        )
+        generated_path = (mlx_root / artifact_path).resolve()
+        _require(
+            _is_relative_to(generated_path, output_root) and generated_path.is_file(),
+            f"{target.title()} frontier artifact is missing or escaped output: "
+            f"{artifact_path}",
+        )
+        _require(
+            artifact.get("sourceHash") == units_by_source[source].get("sourceHash")
+            and artifact.get("sourceSizeBytes")
+            == units_by_source[source].get("sourceSizeBytes"),
+            f"{target.title()} frontier artifact source provenance changed for {source}",
+        )
+        artifacts_by_source[source] = artifact
+    _require(
+        set(artifacts_by_source) == set(sources),
+        f"{target.title()} frontier artifacts do not match the config source set",
+    )
+    return artifacts_by_source
+
+
+def _require_dynamic_workgroup_blocker_report(
+    mlx_root: Path,
+    output_dir: Path,
+    payload: Mapping[str, Any],
+    *,
+    target: str,
+    sources: Sequence[str],
+    validated: bool,
+) -> dict[str, dict[str, Any]]:
+    units_by_source = _require_frontier_project_join(
+        payload,
+        target=target,
+        sources=sources,
+    )
+    expected_sources = set(sources)
+    summary = payload.get("summary")
+    expected_diagnostics = {
+        MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_CODE: len(sources),
+    }
+    if validated:
+        expected_diagnostics["project.validate.failed-artifact"] = len(sources)
+    _require(
+        isinstance(summary, Mapping)
+        and summary.get("unitCount") == len(sources)
+        and summary.get("artifactCount") == len(sources)
+        and summary.get("translatedCount") == 0
+        and summary.get("failedCount") == len(sources)
+        and all(
+            summary.get("diagnosticsByCode", {}).get(code) == count
+            for code, count in expected_diagnostics.items()
+        ),
+        f"{target.title()} dynamic-workgroup frontier accounting changed",
+    )
+    error_diagnostics = [
+        diagnostic
+        for diagnostic in payload.get("diagnostics", [])
+        if isinstance(diagnostic, Mapping) and diagnostic.get("severity") == "error"
+    ]
+    _require(
+        len(error_diagnostics) == sum(expected_diagnostics.values())
+        and Counter(str(diagnostic.get("code")) for diagnostic in error_diagnostics)
+        == Counter(expected_diagnostics),
+        f"{target.title()} dynamic-workgroup diagnostics changed",
+    )
+    diagnostics_by_source: dict[str, Mapping[str, Any]] = {}
+    for diagnostic in error_diagnostics:
+        if diagnostic.get("code") != MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_CODE:
+            continue
+        details = diagnostic.get("details")
+        source = details.get("sourcePath") if isinstance(details, Mapping) else None
+        _require(
+            isinstance(source, str)
+            and source in expected_sources
+            and source not in diagnostics_by_source
+            and diagnostic.get("target") == target
+            and diagnostic.get("checkKind") == "execution-specialization"
+            and diagnostic.get("message") == MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_MESSAGE
+            and diagnostic.get("missingCapabilities")
+            == ["execution.workgroup-size-specialization"],
+            f"{target.title()} dynamic-workgroup diagnostic/source join changed",
+        )
+        execution = details.get("executionSpecialization")
+        source_entries = (
+            execution.get("sourceEntryPoints")
+            if isinstance(execution, Mapping)
+            else None
+        )
+        _require(
+            isinstance(source_entries, list)
+            and execution.get("reason") == "aggregate-entry-size-unproven"
+            and len(source_entries) == MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS[source]
+            and len(set(source_entries)) == len(source_entries),
+            f"{target.title()} dynamic-workgroup entry evidence changed for {source}",
+        )
+        diagnostics_by_source[source] = diagnostic
+    _require(
+        set(diagnostics_by_source) == expected_sources,
+        f"{target.title()} dynamic-workgroup diagnostics do not cover the config",
+    )
+
+    artifacts = payload.get("artifacts")
+    _require(
+        isinstance(artifacts, list) and len(artifacts) == len(sources),
+        f"{target.title()} dynamic-workgroup artifact records are incomplete",
+    )
+    artifacts_by_source: dict[str, Mapping[str, Any]] = {}
+    output_root = output_dir.resolve()
+    for artifact in artifacts:
+        source = artifact.get("source") if isinstance(artifact, Mapping) else None
+        _require(
+            isinstance(source, str)
+            and source in expected_sources
+            and source not in artifacts_by_source
+            and artifact.get("target") == target
+            and artifact.get("status") == "failed"
+            and artifact.get("error") == MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_MESSAGE
+            and artifact.get("sourceHash") == units_by_source[source].get("sourceHash")
+            and artifact.get("sourceSizeBytes")
+            == units_by_source[source].get("sourceSizeBytes")
+            and "generatedHash" not in artifact
+            and "generatedSizeBytes" not in artifact,
+            f"{target.title()} dynamic-workgroup artifact/source join changed",
+        )
+        artifact_path = artifact.get("path")
+        _require(
+            isinstance(artifact_path, str) and bool(artifact_path),
+            f"{target.title()} dynamic-workgroup artifact path is missing for {source}",
+        )
+        generated_path = (mlx_root / artifact_path).resolve()
+        _require(
+            _is_relative_to(generated_path, output_root)
+            and not generated_path.exists(),
+            f"{target.title()} dynamic-workgroup source unexpectedly emitted "
+            f"{artifact_path}",
+        )
+        materialization = artifact.get("templateMaterialization")
+        specializations = (
+            materialization.get("specializations")
+            if isinstance(materialization, Mapping)
+            else None
+        )
+        _require(
+            isinstance(materialization, Mapping)
+            and materialization.get("status") == "materialized"
+            and isinstance(specializations, list)
+            and materialization.get("specializationCount") == len(specializations)
+            and materialization.get("unsupported") == []
+            and sum(
+                isinstance(record, Mapping) and isinstance(record.get("hostName"), str)
+                for record in specializations
+            )
+            == MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS[source],
+            f"{target.title()} dynamic-workgroup materialization changed for {source}",
+        )
+        artifacts_by_source[source] = artifact
+    _require(
+        set(artifacts_by_source) == expected_sources,
+        f"{target.title()} dynamic-workgroup artifacts do not cover the config",
+    )
+    if validated:
+        validation = payload.get("validation")
+        _require(
+            isinstance(validation, Mapping)
+            and isinstance(validation.get("summary"), Mapping)
+            and validation["summary"].get("failedCount") == len(sources),
+            f"{target.title()} dynamic-workgroup validation accounting changed",
+        )
+    return {
+        source: {
+            **MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE[source],
+            "entryPointCount": MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS[source],
+            "diagnosticCode": MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_CODE,
+            "artifactStatus": "failed",
+            "artifactEmitted": False,
+        }
+        for source in sources
+    }
+
+
+def _run_frontier_project(
+    *,
+    mlx_root: Path,
+    config_dir: Path,
+    report_dir: Path,
+    log_dir: Path,
+    python: str,
+    command_name: str,
+    target: str,
+    sources: Sequence[str],
+    output_dir: Path,
+    validate: bool = False,
+    run_toolchains: bool = False,
+    check: bool = True,
+    specialization_constants: Mapping[str, bool | int | float] | None = None,
+) -> tuple[CommandResult, dict[str, Any], Path, Path]:
+    config_path = config_dir / f"{command_name}.toml"
+    report_path = report_dir / f"{command_name}.json"
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    report_path.unlink(missing_ok=True)
+    _write_project_config(
+        config_path,
+        include=sources,
+        targets=(target,),
+        output_dir=_relpath(output_dir, mlx_root),
+        specialization_constants=specialization_constants,
+    )
+    command = [
+        python,
+        "-m",
+        "crosstl",
+        "translate-project",
+        str(mlx_root),
+        "--config",
+        str(config_path),
+        "--report",
+        str(report_path),
+    ]
+    if validate:
+        command.append("--validate")
+    if run_toolchains:
+        command.append("--run-toolchains")
+    result = _run_command(command_name, command, log_dir=log_dir, check=check)
+    _require(report_path.is_file(), f"{command_name} did not produce a project report")
+    return result, _load_json(report_path), config_path, report_path
+
+
+def _translate_directx_frontier(
     mlx_root: Path,
     work_dir: Path,
     config_dir: Path,
@@ -2612,149 +3065,106 @@ def _translate_directx_vulkan_frontier(
     python: str,
     *,
     require_directx_toolchain: bool,
-    require_vulkan_toolchain: bool,
 ) -> dict[str, Any]:
-    config_path = config_dir / "directx-vulkan-frontier.toml"
-    report_path = report_dir / "directx-vulkan-frontier.json"
-    _write_project_config(
-        config_path,
-        include=MLX_DIRECTX_VULKAN_FRONTIER_SOURCES,
-        targets=("directx", "vulkan"),
-        output_dir=_relpath(work_dir / "out-directx-vulkan-frontier", mlx_root),
+    run_toolchains = not FRONTIER_VALIDATION_TRACKED_ISSUES
+    clean_output_dir = work_dir / "out-directx-frontier"
+    _result, clean_payload, _config_path, report_path = _run_frontier_project(
+        mlx_root=mlx_root,
+        config_dir=config_dir,
+        report_dir=report_dir,
+        log_dir=log_dir,
+        python=python,
+        command_name="directx-frontier",
+        target="directx",
+        sources=MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES,
+        output_dir=clean_output_dir,
+        validate=True,
         specialization_constants=MLX_FRONTIER_SPECIALIZATION_CONSTANTS,
     )
-    run_toolchains = not FRONTIER_VALIDATION_TRACKED_ISSUES
-    _run_command(
-        "translate-directx-vulkan-frontier",
-        [
-            python,
-            "-m",
-            "crosstl",
-            "translate-project",
-            str(mlx_root),
-            "--config",
-            str(config_path),
-            "--report",
-            str(report_path),
-            "--validate",
-        ],
-        log_dir=log_dir,
+    _require_clean_frontier_report(
+        mlx_root,
+        clean_output_dir,
+        clean_payload,
+        target="directx",
+        sources=MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES,
     )
-    payload = _load_json(report_path)
-    summary = payload.get("summary", {})
-    _require(isinstance(summary, dict), "translation report summary must be an object")
-    frontier_count = len(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES)
-    _require(
-        summary.get("unitCount") == frontier_count,
-        f"DirectX/Vulkan frontier translation must scan {frontier_count} units",
-    )
-    _require(
-        summary.get("artifactCount") == frontier_count * 2,
-        "DirectX/Vulkan frontier translation must emit {} artifacts".format(
-            frontier_count * 2
-        ),
-    )
-    _require(
-        summary.get("translatedCount") == frontier_count * 2,
-        "DirectX/Vulkan frontier translation did not emit every artifact",
-    )
-    _require(
-        summary.get("failedCount") == 0,
-        "DirectX/Vulkan frontier translation reported failed artifacts",
-    )
-    _require(
-        summary.get("diagnosticCounts", {}).get("error", 0) == 0,
-        "DirectX/Vulkan frontier translation reported errors",
-    )
-    artifacts_by_target = summary.get("artifactsByTarget", {})
-    for target in ("directx", "vulkan"):
-        target_summary = artifacts_by_target.get(target, {})
-        _require(
-            target_summary.get("translatedCount") == frontier_count
-            and target_summary.get("failedCount") == 0,
-            f"DirectX/Vulkan frontier {target} artifacts were not translated cleanly",
-        )
-    validation = payload.get("validation", {})
-    _require(isinstance(validation, dict), "translation validation must be an object")
-    artifact_validation = validation.get("summary", {})
-    _require(
-        artifact_validation.get("failedCount") == 0,
-        "artifact validation reported failures for DirectX/Vulkan frontier outputs",
-    )
-    scaled_attention_alias_evidence = _scaled_attention_local_alias_evidence(
-        mlx_root, payload
-    )
-    toolchain_payloads = [payload]
-    toolchain_artifact_payloads = {"directx": payload, "vulkan": payload}
-    if run_toolchains:
-        toolchain_targets = [
-            target
-            for target, required in (
-                ("directx", require_directx_toolchain),
-                ("vulkan", require_vulkan_toolchain),
-            )
-            if required
-        ] or ["vulkan"]
-        toolchain_name = "-".join(toolchain_targets)
-        # DXC gates its selected subset; Vulkan gates the whole frontier. When the
-        # DirectX toolchain is required, restrict the compile gate to the Windows
-        # subset (CI requires one target per OS).
-        toolchain_sources = (
-            MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
-            if "directx" in toolchain_targets
-            else MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
-        )
-        toolchain_config_path = config_dir / f"{toolchain_name}-frontier-toolchain.toml"
-        toolchain_report_path = report_dir / f"{toolchain_name}-frontier-toolchain.json"
-        _write_project_config(
-            toolchain_config_path,
-            include=toolchain_sources,
-            targets=tuple(toolchain_targets),
-            output_dir=_relpath(
-                work_dir / f"out-{toolchain_name}-frontier-toolchain", mlx_root
-            ),
+
+    blocked_output_dir = work_dir / "out-directx-workgroup-frontier"
+    blocked_result, blocked_payload, _blocked_config, blocked_report_path = (
+        _run_frontier_project(
+            mlx_root=mlx_root,
+            config_dir=config_dir,
+            report_dir=report_dir,
+            log_dir=log_dir,
+            python=python,
+            command_name="directx-workgroup-frontier",
+            target="directx",
+            sources=MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
+            output_dir=blocked_output_dir,
+            validate=True,
+            check=False,
             specialization_constants=MLX_FRONTIER_SPECIALIZATION_CONSTANTS,
         )
-        _run_command(
-            f"validate-{toolchain_name}-frontier-toolchain",
-            [
-                python,
-                "-m",
-                "crosstl",
-                "translate-project",
-                str(mlx_root),
-                "--config",
-                str(toolchain_config_path),
-                "--report",
-                str(toolchain_report_path),
-                "--run-toolchains",
-            ],
-            log_dir=log_dir,
+    )
+    _require(
+        blocked_result.returncode == 1,
+        "DirectX dynamic-workgroup frontier must fail with exit code 1",
+    )
+    dispatch_evidence = _require_dynamic_workgroup_blocker_report(
+        mlx_root,
+        blocked_output_dir,
+        blocked_payload,
+        target="directx",
+        sources=MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
+        validated=True,
+    )
+
+    directx_runs: list[Mapping[str, Any]] = []
+    if run_toolchains and require_directx_toolchain:
+        toolchain_output_dir = work_dir / "out-directx-frontier-toolchain"
+        _toolchain_result, toolchain_payload, _toolchain_config, _toolchain_report = (
+            _run_frontier_project(
+                mlx_root=mlx_root,
+                config_dir=config_dir,
+                report_dir=report_dir,
+                log_dir=log_dir,
+                python=python,
+                command_name="validate-directx-frontier-toolchain",
+                target="directx",
+                sources=MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES,
+                output_dir=toolchain_output_dir,
+                run_toolchains=True,
+                specialization_constants=MLX_FRONTIER_SPECIALIZATION_CONSTANTS,
+            )
         )
-        toolchain_payload = _load_json(toolchain_report_path)
-        toolchain_payloads.append(toolchain_payload)
-        for target in toolchain_targets:
-            toolchain_artifact_payloads[target] = toolchain_payload
-    toolchain_runs = []
-    for toolchain_payload in toolchain_payloads:
-        toolchain_validation = toolchain_payload.get("validation", {})
+        artifacts = _require_clean_frontier_report(
+            mlx_root,
+            toolchain_output_dir,
+            toolchain_payload,
+            target="directx",
+            sources=MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES,
+        )
+        validation = toolchain_payload.get("validation")
+        runs = (
+            validation.get("toolchainRuns") if isinstance(validation, Mapping) else None
+        )
         _require(
-            isinstance(toolchain_validation, dict),
-            "frontier toolchain validation must be an object",
+            isinstance(runs, list), "DirectX frontier toolchainRuns must be a list"
         )
-        payload_runs = toolchain_validation.get("toolchainRuns", [])
-        _require(isinstance(payload_runs, list), "toolchainRuns must be a list")
-        toolchain_runs.extend(payload_runs)
-    directx_runs = [
-        run
-        for run in toolchain_runs
-        if isinstance(run, dict) and run.get("target") == "directx"
-    ]
-    vulkan_runs = [
-        run
-        for run in toolchain_runs
-        if isinstance(run, dict) and run.get("target") == "vulkan"
-    ]
+        directx_runs = [
+            run
+            for run in runs
+            if isinstance(run, Mapping) and run.get("target") == "directx"
+        ]
+        artifact_paths = {artifact["path"] for artifact in artifacts.values()}
+        validated_paths = {
+            run.get("path") for run in directx_runs if run.get("status") == "ok"
+        }
+        _require(
+            artifact_paths <= validated_paths,
+            "DirectX toolchain did not validate every translated source artifact",
+        )
+
     directx_entry_points_by_source: dict[str, list[str]] = {
         source: [] for source in MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
     }
@@ -2787,64 +3197,8 @@ def _translate_directx_vulkan_frontier(
         for source in MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
         if source in directx_validated_entry_point_counts
     ]
-    required_toolchains = {
-        "directx": (
-            require_directx_toolchain,
-            directx_runs,
-            len(MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES),
-        ),
-        "vulkan": (require_vulkan_toolchain, vulkan_runs, frontier_count),
-    }
-    for target, (required, runs, expected_count) in required_toolchains.items():
-        if required and run_toolchains:
-            artifact_payload = toolchain_artifact_payloads.get(target, payload)
-            artifact_paths = {
-                artifact.get("path")
-                for artifact in artifact_payload.get("artifacts", [])
-                if isinstance(artifact, dict)
-                and artifact.get("target") == target
-                and artifact.get("status") == "translated"
-                and isinstance(artifact.get("path"), str)
-            }
-            if target == "directx":
-                artifact_sources = {
-                    artifact.get("source")
-                    for artifact in artifact_payload.get("artifacts", [])
-                    if isinstance(artifact, dict)
-                    and artifact.get("target") == target
-                    and artifact.get("status") == "translated"
-                    and isinstance(artifact.get("source"), str)
-                }
-                _require(
-                    artifact_sources == set(MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES),
-                    "DirectX toolchain artifact sources did not match the frontier",
-                )
-            validated_paths = {
-                run.get("path")
-                for run in runs
-                if run.get("status") == "ok" and isinstance(run.get("path"), str)
-            }
-            _require(
-                len(artifact_paths) == expected_count
-                and artifact_paths <= validated_paths,
-                (
-                    f"{target.title()} toolchain validation was required for every "
-                    "validated frontier artifact"
-                ),
-            )
-        for run in runs:
-            _require(
-                run.get("status") == "ok",
-                f"{target.title()} toolchain validation failed",
-            )
-        if required and not run_toolchains:
-            _require(
-                not runs,
-                (
-                    f"{target.title()} toolchain validation ran while active "
-                    "validation issues are tracked"
-                ),
-            )
+    for run in directx_runs:
+        _require(run.get("status") == "ok", "DirectX toolchain validation failed")
     if require_directx_toolchain and run_toolchains:
         _require(
             directx_validated_sources == list(MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES),
@@ -2856,15 +3210,20 @@ def _translate_directx_vulkan_frontier(
             "DirectX toolchain did not validate every generated compute entry point",
         )
     return {
-        "name": "directx-vulkan-frontier",
-        "status": "passed",
-        "scope": "clean-frontier",
+        "name": "directx-frontier",
+        "status": "passed-with-expected-workgroup-blockers",
+        "scope": "target-split-frontier",
         "report": _relpath(report_path, mlx_root),
+        "workgroupBlockedReport": _relpath(blocked_report_path, mlx_root),
         "sources": list(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
-        "unitCount": frontier_count,
-        "artifactCount": frontier_count * 2,
-        "targets": ["directx", "vulkan"],
-        "toolchainRuns": len(toolchain_runs),
+        "unitCount": len(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
+        "artifactCount": len(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
+        "translatedSources": list(MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES),
+        "translatedArtifactCount": len(MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES),
+        "workgroupBlockedSources": list(MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES),
+        "workgroupBlockedArtifactCount": len(MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES),
+        "target": "directx",
+        "toolchainRuns": len(directx_runs),
         "directxToolchainRequired": require_directx_toolchain,
         "directxToolchainSources": list(MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES),
         "directxToolchainArtifactCount": len(MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES),
@@ -2882,15 +3241,116 @@ def _translate_directx_vulkan_frontier(
         "directxToolchainValidatedEntryPointCount": sum(
             directx_validated_entry_point_counts.values()
         ),
-        "vulkanToolchainRequired": require_vulkan_toolchain,
         "directxValidationStatus": (
             "validated" if run_toolchains and directx_runs else "not-required"
         ),
-        "vulkanValidationStatus": (
-            "validated"
-            if vulkan_runs
-            else ("not-run" if run_toolchains else "blocked-by-tracked-issues")
-        ),
+        "dynamicWorkgroupDispatchEvidence": dispatch_evidence,
+        "semanticReadinessStatus": "not-established",
+        "trackedIssues": [
+            MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE,
+            *FRONTIER_VALIDATION_TRACKED_ISSUES,
+        ],
+        "runtimeParityClaimed": False,
+    }
+
+
+def _translate_vulkan_frontier(
+    mlx_root: Path,
+    work_dir: Path,
+    config_dir: Path,
+    report_dir: Path,
+    log_dir: Path,
+    python: str,
+    *,
+    require_toolchain: bool,
+    run_optional_toolchain: bool,
+) -> dict[str, Any]:
+    output_dir = work_dir / "out-vulkan-frontier"
+    _result, payload, _config_path, report_path = _run_frontier_project(
+        mlx_root=mlx_root,
+        config_dir=config_dir,
+        report_dir=report_dir,
+        log_dir=log_dir,
+        python=python,
+        command_name="vulkan-frontier",
+        target="vulkan",
+        sources=MLX_DIRECTX_VULKAN_FRONTIER_SOURCES,
+        output_dir=output_dir,
+        validate=True,
+        specialization_constants=MLX_FRONTIER_SPECIALIZATION_CONSTANTS,
+    )
+    _require_clean_frontier_report(
+        mlx_root,
+        output_dir,
+        payload,
+        target="vulkan",
+        sources=MLX_DIRECTX_VULKAN_FRONTIER_SOURCES,
+    )
+    scaled_attention_alias_evidence = _scaled_attention_local_alias_evidence(
+        mlx_root, payload
+    )
+
+    vulkan_runs: list[Mapping[str, Any]] = []
+    run_toolchains = not FRONTIER_VALIDATION_TRACKED_ISSUES
+    if run_toolchains and (require_toolchain or run_optional_toolchain):
+        toolchain_output_dir = work_dir / "out-vulkan-frontier-toolchain"
+        _toolchain_result, toolchain_payload, _toolchain_config, _toolchain_report = (
+            _run_frontier_project(
+                mlx_root=mlx_root,
+                config_dir=config_dir,
+                report_dir=report_dir,
+                log_dir=log_dir,
+                python=python,
+                command_name="validate-vulkan-frontier-toolchain",
+                target="vulkan",
+                sources=MLX_DIRECTX_VULKAN_FRONTIER_SOURCES,
+                output_dir=toolchain_output_dir,
+                run_toolchains=True,
+                specialization_constants=MLX_FRONTIER_SPECIALIZATION_CONSTANTS,
+            )
+        )
+        artifacts = _require_clean_frontier_report(
+            mlx_root,
+            toolchain_output_dir,
+            toolchain_payload,
+            target="vulkan",
+            sources=MLX_DIRECTX_VULKAN_FRONTIER_SOURCES,
+        )
+        validation = toolchain_payload.get("validation")
+        runs = (
+            validation.get("toolchainRuns") if isinstance(validation, Mapping) else None
+        )
+        _require(isinstance(runs, list), "Vulkan frontier toolchainRuns must be a list")
+        vulkan_runs = [
+            run
+            for run in runs
+            if isinstance(run, Mapping) and run.get("target") == "vulkan"
+        ]
+        for run in vulkan_runs:
+            _require(run.get("status") == "ok", "Vulkan toolchain validation failed")
+        if require_toolchain:
+            artifact_paths = {artifact["path"] for artifact in artifacts.values()}
+            validated_paths = {
+                run.get("path") for run in vulkan_runs if run.get("status") == "ok"
+            }
+            _require(
+                artifact_paths <= validated_paths,
+                "Vulkan toolchain did not validate every configured source artifact",
+            )
+
+    return {
+        "name": "vulkan-frontier",
+        "status": "passed",
+        "scope": "target-split-frontier",
+        "report": _relpath(report_path, mlx_root),
+        "sources": list(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
+        "unitCount": len(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
+        "artifactCount": len(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
+        "translatedArtifactCount": len(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
+        "target": "vulkan",
+        "toolchainRuns": len(vulkan_runs),
+        "vulkanToolchainRequired": require_toolchain,
+        "vulkanValidationStatus": "validated" if vulkan_runs else "not-run",
         "semanticReadinessStatus": "not-established",
         "regressionEvidence": [scaled_attention_alias_evidence],
         "trackedIssues": list(FRONTIER_VALIDATION_TRACKED_ISSUES),
@@ -3099,92 +3559,69 @@ def _check_opengl_frontier(
     *,
     require_toolchain: bool,
 ) -> dict[str, Any]:
-    config_path = config_dir / "opengl-frontier.toml"
-    report_path = report_dir / "opengl-frontier.json"
-    _write_project_config(
-        config_path,
-        include=MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES,
-        targets=("opengl",),
-        output_dir=_relpath(work_dir / "out-opengl-frontier", mlx_root),
-    )
-    result = _run_command(
-        "translate-opengl-frontier",
-        [
-            python,
-            "-m",
-            "crosstl",
-            "translate-project",
-            str(mlx_root),
-            "--config",
-            str(config_path),
-            "--report",
-            str(report_path),
-        ],
+    clean_output_dir = work_dir / "out-opengl-frontier"
+    _result, payload, _config_path, report_path = _run_frontier_project(
+        mlx_root=mlx_root,
+        config_dir=config_dir,
+        report_dir=report_dir,
         log_dir=log_dir,
-        check=False,
+        python=python,
+        command_name="opengl-frontier",
+        target="opengl",
+        sources=MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES,
+        output_dir=clean_output_dir,
     )
-    payload = _load_json(report_path)
+    artifacts_by_source = _require_clean_frontier_report(
+        mlx_root,
+        clean_output_dir,
+        payload,
+        target="opengl",
+        sources=MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES,
+        validated=False,
+    )
     summary = payload.get("summary", {})
-    _require(
-        isinstance(summary, Mapping),
-        "OpenGL frontier summary must be an object",
-    )
-    if result.returncode != 0:
-        messages = [
-            str(item.get("message"))
-            for item in payload.get("diagnostics", [])
-            if isinstance(item, Mapping) and isinstance(item.get("message"), str)
-        ]
-        messages.extend(
-            str(item.get("error"))
-            for item in payload.get("artifacts", [])
-            if isinstance(item, Mapping) and isinstance(item.get("error"), str)
-        )
-        detail = f": {messages[0]}" if messages else ""
-        raise PortingCheckError(f"OpenGL frontier translation failed{detail}")
-
-    artifacts = payload.get("artifacts", [])
-    _require(
-        isinstance(artifacts, list),
-        "OpenGL frontier artifacts must be a list",
-    )
-    frontier_count = len(MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES)
     diagnostic_counts = summary.get("diagnosticCounts", {})
     diagnostics = payload.get("diagnostics", [])
     _require(
-        isinstance(diagnostic_counts, Mapping) and isinstance(diagnostics, list),
-        "OpenGL frontier diagnostics must be reported as structured collections",
-    )
-    _require(
-        summary.get("unitCount") == frontier_count
-        and summary.get("artifactCount") == frontier_count
-        and summary.get("translatedCount") == frontier_count
-        and summary.get("failedCount") == 0
-        and len(artifacts) == frontier_count,
-        "OpenGL frontier report did not contain every clean translated artifact",
-    )
-    _require(
-        not diagnostics
+        isinstance(diagnostic_counts, Mapping)
+        and diagnostics == []
         and all(
             diagnostic_counts.get(severity) == 0
             for severity in ("note", "warning", "error")
         ),
-        "OpenGL frontier translation must complete with zero project diagnostics",
+        "OpenGL clean frontier translation must have zero project diagnostics",
     )
-    artifacts_by_source = {
-        artifact.get("source"): artifact
-        for artifact in artifacts
-        if isinstance(artifact, Mapping)
-        and artifact.get("target") == "opengl"
-        and artifact.get("status") == "translated"
-        and isinstance(artifact.get("source"), str)
-    }
+
+    blocked_output_dir = work_dir / "out-opengl-workgroup-frontier"
+    blocked_result, blocked_payload, _blocked_config, blocked_report_path = (
+        _run_frontier_project(
+            mlx_root=mlx_root,
+            config_dir=config_dir,
+            report_dir=report_dir,
+            log_dir=log_dir,
+            python=python,
+            command_name="opengl-workgroup-frontier",
+            target="opengl",
+            sources=MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
+            output_dir=blocked_output_dir,
+            check=False,
+        )
+    )
     _require(
-        set(artifacts_by_source) == set(MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES),
-        "OpenGL frontier translated artifact set does not match its source set",
+        blocked_result.returncode == 1,
+        "OpenGL dynamic-workgroup frontier must fail with exit code 1",
     )
+    dispatch_evidence = _require_dynamic_workgroup_blocker_report(
+        mlx_root,
+        blocked_output_dir,
+        blocked_payload,
+        target="opengl",
+        sources=MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
+        validated=False,
+    )
+
     generated_paths: dict[str, Path] = {}
-    for source in MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES:
+    for source in MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES:
         artifact_path = artifacts_by_source[source].get("path")
         _require(
             isinstance(artifact_path, str),
@@ -3199,6 +3636,8 @@ def _check_opengl_frontier(
 
     specialization_evidence: dict[str, dict[str, int]] = {}
     for source, expected_constants in MLX_OPENGL_SPECIALIZATION_CONSTANT_IDS.items():
+        if source not in artifacts_by_source:
+            continue
         artifact = artifacts_by_source[source]
         reflected_constants = artifact.get("specializationConstants", [])
         _require(
@@ -3310,20 +3749,30 @@ def _check_opengl_frontier(
             toolchain_validated_sources.append(source)
         _require(
             toolchain_validated_sources == list(MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES),
-            "OpenGL frontier toolchain did not validate every configured source",
+            "OpenGL frontier toolchain did not validate every translated source",
         )
         validation_status = "validated"
 
     return {
         "name": "opengl-frontier",
-        "status": "passed",
+        "status": "passed-with-expected-workgroup-blockers",
+        "scope": "target-split-frontier",
         "report": _relpath(report_path, mlx_root),
-        "sources": list(MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES),
-        "sourceCount": frontier_count,
+        "workgroupBlockedReport": _relpath(blocked_report_path, mlx_root),
+        "sources": list(MLX_OPENGL_FRONTIER_SOURCES),
+        "sourceCount": len(MLX_OPENGL_FRONTIER_SOURCES),
         "target": "opengl",
-        "artifactCount": frontier_count,
+        "artifactCount": len(MLX_OPENGL_FRONTIER_SOURCES),
+        "translatedSources": list(MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES),
+        "translatedArtifactCount": len(MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES),
+        "workgroupBlockedSources": list(MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES),
+        "workgroupBlockedArtifactCount": len(
+            MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+        ),
         "projectDiagnosticCount": 0,
+        "expectedProjectErrorCount": len(MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES),
         "toolchainRequired": require_toolchain,
+        "toolchainSources": list(MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES),
         "toolchainValidatedSources": toolchain_validated_sources,
         "toolchainValidatedArtifactCount": len(toolchain_validated_sources),
         "nativeValidationStatus": validation_status,
@@ -3331,6 +3780,8 @@ def _check_opengl_frontier(
         "spirvValidator": "spirv-val",
         "nativeValidationOutputs": validation_outputs,
         "specializationConstants": specialization_evidence,
+        "dynamicWorkgroupDispatchEvidence": dispatch_evidence,
+        "trackedIssues": [MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE],
         "runtimeIntegrationIncluded": False,
     }
 
@@ -5253,9 +5704,17 @@ def _plan_reduced_runtime_readiness(
         _plan_runtime_readiness_for_report(
             mlx_root=mlx_root,
             report_dir=report_dir,
-            name="directx-vulkan-runtime-readiness",
-            artifact_report=report_dir / "directx-vulkan-frontier.json",
-            targets=("directx", "vulkan"),
+            name="directx-runtime-readiness",
+            artifact_report=report_dir / "directx-frontier.json",
+            targets=("directx",),
+            required_native_runtime_targets=(),
+        ),
+        _plan_runtime_readiness_for_report(
+            mlx_root=mlx_root,
+            report_dir=report_dir,
+            name="vulkan-runtime-readiness",
+            artifact_report=report_dir / "vulkan-frontier.json",
+            targets=("vulkan",),
             required_native_runtime_targets=(
                 ("vulkan",) if require_vulkan_native_runtime else ()
             ),
@@ -5701,7 +6160,7 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             )
         )
         checks.append(
-            _translate_directx_vulkan_frontier(
+            _translate_directx_frontier(
                 mlx_root,
                 work_dir,
                 config_dir,
@@ -5709,7 +6168,21 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
                 log_dir,
                 args.python,
                 require_directx_toolchain=args.require_directx_toolchain,
-                require_vulkan_toolchain=args.require_vulkan_toolchain,
+            )
+        )
+        checks.append(
+            _translate_vulkan_frontier(
+                mlx_root,
+                work_dir,
+                config_dir,
+                report_dir,
+                log_dir,
+                args.python,
+                require_toolchain=args.require_vulkan_toolchain,
+                run_optional_toolchain=(
+                    not args.require_directx_toolchain
+                    and not args.require_vulkan_toolchain
+                ),
             )
         )
         checks.append(
@@ -5817,6 +6290,22 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             "cleanFrontierSources": list(MLX_CLEAN_REDUCED_FRONTIER_SOURCES),
             "blockedFrontierSources": list(MLX_BLOCKED_REDUCED_FRONTIER_SOURCES),
             "blockedFrontierIssues": list(FENCE_CONTRACT_TRACKED_ISSUES),
+            "directxTranslatedFrontierSources": list(
+                MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES
+            ),
+            "directxWorkgroupBlockedFrontierSources": list(
+                MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+            ),
+            "vulkanTranslatedFrontierSources": list(
+                MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
+            ),
+            "openglTranslatedFrontierSources": list(
+                MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES
+            ),
+            "openglWorkgroupBlockedFrontierSources": list(
+                MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+            ),
+            "dynamicWorkgroupTrackedIssue": MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE,
             "fullCorpusTargets": list(FULL_CORPUS_TARGETS),
             "fullCorpusExpectedUnitCount": EXPECTED_METAL_KERNEL_COUNT,
             "fullCorpusExpectedArtifactCount": FULL_CORPUS_EXPECTED_ARTIFACT_COUNT,

@@ -60,12 +60,17 @@ The current harness verifies:
   rejected. This gate inspects generated structure;
   it does not require native target compilation, execute a shader, or claim
   runtime parity;
-- DirectX and Vulkan artifact generation for the 11-source clean reduced
-  frontier: `arange.metal`, `arg_reduce.metal`, `binary_two.metal`,
+- target-separated DirectX and Vulkan project runs for the same 11-source
+  reduced frontier: `arange.metal`, `arg_reduce.metal`, `binary_two.metal`,
   `layer_norm.metal`, `logsumexp.metal`, `random.metal`, `rms_norm.metal`,
   `rope.metal`, `scaled_dot_product_attention.metal`, `softmax.metal`, and
-  `ternary.metal`. This establishes structural and configured toolchain
-  coverage, not semantic readiness or runtime parity;
+  `ternary.metal`. Vulkan must translate and structurally validate all 11.
+  DirectX emits the five sources whose aggregate entries do not require a
+  runtime-selected workgroup size and records exact expected failures for the
+  other six. Separate configs prevent DirectX workgroup contracts from being
+  silently ignored by Vulkan, where project workgroup rules are unsupported.
+  This establishes target-specific structural and toolchain coverage, not
+  semantic readiness or runtime parity;
 - a separate project-level expected-failure check for pinned `fence.metal`
   across DirectX, OpenGL, and Vulkan. Each target must report its exact
   `project.translate.*-atomic-fence-unsupported` diagnostic, target-specific
@@ -73,17 +78,17 @@ The current harness verifies:
   `mem_device`, `memory_order_seq_cst`, `thread_scope_system` contract without
   emitting a target file. The blocked contract is tracked by
   [#1537](https://github.com/CrossGL/crosstl/issues/1537);
-- materialization of all 51 concrete `arg_reduce.metal` specializations and
-  clean artifact generation for DirectX, OpenGL, and Vulkan. OpenGL compilation
-  and both OpenGL-derived and native SPIR-V validation run in the required Linux
-  toolchain gate;
+- materialization evidence for all 24 host-named `arg_reduce.metal` compute
+  entries within 51 total specializations. Vulkan emits the aggregate artifact.
+  DirectX and OpenGL fail before emission with
+  `project.translate.workgroup-size-entry-ambiguous` because pinned host
+  dispatch uses runtime axis and pipeline-limit operands unavailable to source
+  materialization;
 - DirectX HLSL compiler checks with official DXC v1.9.2602.24 on Windows CI for
-  the full 11-source clean frontier: `arange.metal`, `arg_reduce.metal`,
-  `binary_two.metal`, `layer_norm.metal`, `logsumexp.metal`, `random.metal`,
-  `rms_norm.metal`, `rope.metal`, `scaled_dot_product_attention.metal`,
-  `softmax.metal`, and `ternary.metal`. At the pinned revision the gate compiles
-  every generated compute entry: 11, 24, 225, 12, 6, 2, 12, 18, 42, 10, and
-  212 entries respectively, for 574 generated compute entries in total. The
+  the emitted five-source frontier: `arange.metal`, `binary_two.metal`,
+  `random.metal`, `rope.metal`, and `ternary.metal`. At the pinned revision the
+  gate compiles every generated compute entry: 11, 225, 2, 18, and 212 entries
+  respectively, for 468 generated compute entries in total. The
   pinned rope translation supplies required function constant IDs through the
   quoted `"1"`, `"2"`, and `"3"` selectors in
   `[project.specialization_constants]` and materializes the concrete DirectX
@@ -98,7 +103,10 @@ The current harness verifies:
   `random.metal` entries; broader union layouts remain tracked by
   [#1696](https://github.com/CrossGL/crosstl/issues/1696), and runtime dispatch
   metadata remains tracked by
-  [#1542](https://github.com/CrossGL/crosstl/issues/1542). `fence.metal` is
+  [#1542](https://github.com/CrossGL/crosstl/issues/1542). The six excluded
+  aggregate sources cover 106 compute entries and are asserted as failed
+  artifacts under [#1750](https://github.com/CrossGL/crosstl/issues/1750);
+  no placeholder workgroup size is restored. `fence.metal` is
   excluded because its DirectX translation intentionally fails under
   [#1537](https://github.com/CrossGL/crosstl/issues/1537) before DXC. This gate
   establishes compiler acceptance only; it does not dispatch these kernels or
@@ -134,13 +142,15 @@ The current harness verifies:
   `main`, and records the source-to-target entry identity in the portability
   report. The standalone artifact exposes only the `start`, `step`, and `out`
   resources and preserves the source arithmetic without an MLX source rewrite;
-- OpenGL artifact generation for the clean eight-source `arg_reduce.metal`,
+- an eight-source OpenGL frontier containing `arg_reduce.metal`,
   `binary_two.metal`, `logsumexp.metal`, `rms_norm.metal`, `rope.metal`,
   `scaled_dot_product_attention.metal`, `softmax.metal`, and `ternary.metal`
-  frontier. Project translation must emit eight artifacts with zero diagnostics.
-  In the CI-required mode every artifact compiles for OpenGL/SPIR-V 1.3 and
-  passes `spirv-val`. This is native artifact validation only; the gate does not
-  run the kernels or establish runtime parity;
+  in two project runs. `binary_two.metal`, `rope.metal`, and `ternary.metal`
+  must emit with zero diagnostics and compile for OpenGL/SPIR-V 1.3 before
+  `spirv-val`. The other five must produce the same exact fail-closed
+  workgroup-size diagnostic and no target file. This is native artifact
+  validation only; the gate does not run the kernels or establish runtime
+  parity;
 - full project materialization of pinned `gemv.metal` for DirectX. The gate
   requires 225 materialized specializations, no unsupported materializations or
   unresolved residue, no bare pure value-discard statements, one aggregate HLSL
@@ -186,7 +196,7 @@ The current harness verifies:
   from the pinned MLX `arange.metal` source. Neither proof executes the upstream
   MLX host runtime.
 
-Pull requests run the 12-source pinned reduced scope: 11 clean frontier sources
+Pull requests run the 12-source pinned reduced scope: 11 non-fence frontier sources
 and the explicitly blocked `fence.metal` contract source. They also run the
 separate checked-in reference-accessor and template-member pointer fixtures;
 those fixtures do not change the pinned MLX source count. Scheduled and
@@ -206,7 +216,7 @@ summary.
 Because `binary_two.metal` was already in the DirectX/Vulkan frontier, its OpenGL
 promotion does not change either reduced source count.
 The same applies to `ternary.metal`: its OpenGL promotion expands the native
-toolchain gate without changing the 11-source clean reduced frontier.
+toolchain gate without changing the 11-source non-fence reduced frontier.
 
 The checked-in historical full-corpus scout snapshot against MLX revision
 `968d264f2903d578e699c4452a4dbf48633921aa`

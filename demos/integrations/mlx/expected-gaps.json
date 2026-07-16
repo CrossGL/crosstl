@@ -3,17 +3,30 @@
   "repository": "https://github.com/ml-explore/mlx",
   "commit": "4367c73b60541ddd5a266ce4644fd93d20223b6e",
   "frontier_status": {
-    "status": "structurally-validated",
-    "scope": "clean-frontier",
+    "status": "target-split-with-expected-workgroup-blockers",
+    "scope": "target-split-frontier",
     "sources": 11,
     "targets": [
       "directx",
       "vulkan"
     ],
     "artifacts": 22,
+    "translated_artifacts": 16,
+    "failed_artifacts": 6,
+    "target_artifacts": {
+      "directx": {
+        "translated": 5,
+        "failed": 6
+      },
+      "vulkan": {
+        "translated": 11,
+        "failed": 0
+      }
+    },
     "structural_validation_status": "validated",
     "semantic_readiness_status": "not-established",
-    "blocked_by": [],
+    "workgroup_blocked_diagnostic": "project.translate.workgroup-size-entry-ambiguous",
+    "workgroup_blocked_by": "https://github.com/CrossGL/crosstl/issues/1750",
     "excluded_blocked_sources": [
       "mlx/backend/metal/kernels/fence.metal"
     ],
@@ -88,7 +101,7 @@
     "runtime_parity_claimed": false
   },
   "arg_reduce_status": {
-    "status": "translated",
+    "status": "target-dependent",
     "source": "mlx/backend/metal/kernels/arg_reduce.metal",
     "targets": [
       "directx",
@@ -96,14 +109,23 @@
       "vulkan"
     ],
     "artifact_records": 3,
-    "translated_artifacts": 3,
-    "failed_artifacts": 0,
+    "translated_artifacts": 1,
+    "failed_artifacts": 2,
+    "translated_targets": [
+      "vulkan"
+    ],
+    "workgroup_blocked_targets": [
+      "directx",
+      "opengl"
+    ],
+    "workgroup_blocked_diagnostic": "project.translate.workgroup-size-entry-ambiguous",
+    "workgroup_blocked_by": "https://github.com/CrossGL/crosstl/issues/1750",
     "template_materialization_status": "materialized",
     "specialization_count": 51,
     "unsupported_specialization_count": 0,
     "native_validation": {
-      "directx": "required-on-windows-ci",
-      "opengl": "validated",
+      "directx": "blocked-before-emission",
+      "opengl": "blocked-before-emission",
       "vulkan": "validated"
     },
     "entry_packaging_blocked_by": [
@@ -111,7 +133,7 @@
     ]
   },
   "opengl_frontier_status": {
-    "status": "toolchain-validated",
+    "status": "toolchain-validated-with-expected-workgroup-blockers",
     "sources": [
       "mlx/backend/metal/kernels/arg_reduce.metal",
       "mlx/backend/metal/kernels/binary_two.metal",
@@ -125,31 +147,35 @@
     "source_count": 8,
     "target": "opengl",
     "artifact_count": 8,
-    "project_diagnostic_count": 0,
-    "glslang_compiled_artifact_count": 8,
-    "spirv_validated_artifact_count": 8,
+    "translated_sources": [
+      "mlx/backend/metal/kernels/binary_two.metal",
+      "mlx/backend/metal/kernels/rope.metal",
+      "mlx/backend/metal/kernels/ternary.metal"
+    ],
+    "translated_artifact_count": 3,
+    "workgroup_blocked_sources": [
+      "mlx/backend/metal/kernels/arg_reduce.metal",
+      "mlx/backend/metal/kernels/logsumexp.metal",
+      "mlx/backend/metal/kernels/rms_norm.metal",
+      "mlx/backend/metal/kernels/scaled_dot_product_attention.metal",
+      "mlx/backend/metal/kernels/softmax.metal"
+    ],
+    "workgroup_blocked_artifact_count": 5,
+    "workgroup_blocked_diagnostic": "project.translate.workgroup-size-entry-ambiguous",
+    "workgroup_blocked_by": "https://github.com/CrossGL/crosstl/issues/1750",
+    "clean_project_diagnostic_count": 0,
+    "glslang_compiled_artifact_count": 3,
+    "spirv_validated_artifact_count": 3,
     "glslang_target_environments": [
       "opengl",
       "spirv1.3"
     ],
     "spirv_val_target_environment": "spv1.3",
     "specialization_constants": {
-      "mlx/backend/metal/kernels/rms_norm.metal": {
-        "has_w": 20
-      },
       "mlx/backend/metal/kernels/rope.metal": {
         "forward": 1,
         "hs_transpose": 3,
         "traditional": 2
-      },
-      "mlx/backend/metal/kernels/scaled_dot_product_attention.metal": {
-        "blocks": 26,
-        "bool_mask": 23,
-        "do_causal": 22,
-        "float_mask": 24,
-        "has_mask": 20,
-        "has_sinks": 25,
-        "query_transposed": 21
       }
     },
     "binary_two_fixed_array_resource_status": {
@@ -700,8 +726,8 @@
     "runtime_integration_included": false
   },
   "directx_toolchain_status": {
-    "status": "passing",
-    "note": "Windows CI compiles all 574 generated compute entries in the full 11-source clean DirectX HLSL frontier below. This is native compiler validation only and does not establish Direct3D runtime execution or numerical parity. fence.metal is a separate blocked source and emits no DirectX artifact under its atomic-fence contract diagnostic.",
+    "status": "passing-with-expected-workgroup-blockers",
+    "note": "Windows CI compiles all 468 generated compute entries in the five-source emitted DirectX HLSL frontier below. Six runtime-selected workgroup sources covering 106 entries fail before emission; no placeholder workgroup size is applied. This is native compiler validation only and does not establish Direct3D runtime execution or numerical parity.",
     "compiler": {
       "name": "dxc",
       "version": "v1.9.2602.24"
@@ -720,31 +746,176 @@
     },
     "expected_entry_point_counts": {
       "mlx/backend/metal/kernels/arange.metal": 11,
-      "mlx/backend/metal/kernels/arg_reduce.metal": 24,
       "mlx/backend/metal/kernels/binary_two.metal": 225,
-      "mlx/backend/metal/kernels/layer_norm.metal": 12,
-      "mlx/backend/metal/kernels/logsumexp.metal": 6,
       "mlx/backend/metal/kernels/random.metal": 2,
-      "mlx/backend/metal/kernels/rms_norm.metal": 12,
       "mlx/backend/metal/kernels/rope.metal": 18,
-      "mlx/backend/metal/kernels/scaled_dot_product_attention.metal": 42,
-      "mlx/backend/metal/kernels/softmax.metal": 10,
       "mlx/backend/metal/kernels/ternary.metal": 212
     },
+    "expected_entry_point_count": 468,
     "dxc_validated_sources": [
       "mlx/backend/metal/kernels/arange.metal",
-      "mlx/backend/metal/kernels/arg_reduce.metal",
       "mlx/backend/metal/kernels/binary_two.metal",
-      "mlx/backend/metal/kernels/layer_norm.metal",
-      "mlx/backend/metal/kernels/logsumexp.metal",
       "mlx/backend/metal/kernels/random.metal",
-      "mlx/backend/metal/kernels/rms_norm.metal",
       "mlx/backend/metal/kernels/rope.metal",
-      "mlx/backend/metal/kernels/scaled_dot_product_attention.metal",
-      "mlx/backend/metal/kernels/softmax.metal",
       "mlx/backend/metal/kernels/ternary.metal"
     ],
+    "workgroup_blocked_sources": [
+      "mlx/backend/metal/kernels/arg_reduce.metal",
+      "mlx/backend/metal/kernels/layer_norm.metal",
+      "mlx/backend/metal/kernels/logsumexp.metal",
+      "mlx/backend/metal/kernels/rms_norm.metal",
+      "mlx/backend/metal/kernels/scaled_dot_product_attention.metal",
+      "mlx/backend/metal/kernels/softmax.metal"
+    ],
+    "workgroup_blocked_entry_point_counts": {
+      "mlx/backend/metal/kernels/arg_reduce.metal": 24,
+      "mlx/backend/metal/kernels/layer_norm.metal": 12,
+      "mlx/backend/metal/kernels/logsumexp.metal": 6,
+      "mlx/backend/metal/kernels/rms_norm.metal": 12,
+      "mlx/backend/metal/kernels/scaled_dot_product_attention.metal": 42,
+      "mlx/backend/metal/kernels/softmax.metal": 10
+    },
+    "workgroup_blocked_entry_point_count": 106,
+    "workgroup_blocked_diagnostic": "project.translate.workgroup-size-entry-ambiguous",
+    "workgroup_blocked_by": "https://github.com/CrossGL/crosstl/issues/1750",
+    "dispatch_evidence": {
+      "mlx/backend/metal/kernels/arg_reduce.metal": {
+        "hostSource": "mlx/backend/metal/primitives.cpp",
+        "hostLines": "117-132",
+        "dispatchFormulas": [
+          "[32 * ceil_div(min(ceil_div(axis_size, 4), maxTotalThreadsPerThreadgroup), 32), 1, 1]"
+        ],
+        "dispatchSelection": [
+          "single host dispatch path"
+        ],
+        "runtimeOperands": [
+          "axis_size",
+          "maxTotalThreadsPerThreadgroup"
+        ],
+        "materializationParameters": [
+          "N_READS",
+          "Op",
+          "T"
+        ]
+      },
+      "mlx/backend/metal/kernels/layer_norm.metal": {
+        "hostSource": "mlx/backend/metal/normalization.cpp",
+        "hostLines": "248-297,346-422",
+        "dispatchFormulas": [
+          "forward block: [32 * ceil_div(ceil_div(axis_size, 8), 32), 1, 1]",
+          "forward looped: [maxTotalThreadsPerThreadgroup, 1, 1]",
+          "VJP block: [32 * ceil_div(ceil_div(axis_size, 8), 32), 1, 1]",
+          "VJP looped: [maxTotalThreadsPerThreadgroup, 1, 1]"
+        ],
+        "dispatchSelection": [
+          "forward block when axis_size <= 6656; looped when axis_size > 6656",
+          "VJP block when axis_size <= 8192; looped when axis_size > 8192"
+        ],
+        "runtimeOperands": [
+          "axis_size",
+          "forward_or_vjp_entry",
+          "maxTotalThreadsPerThreadgroup"
+        ],
+        "materializationParameters": [
+          "N_READS",
+          "T"
+        ]
+      },
+      "mlx/backend/metal/kernels/logsumexp.metal": {
+        "hostSource": "mlx/backend/metal/logsumexp.cpp",
+        "hostLines": "58-91",
+        "dispatchFormulas": [
+          "block: [32 * ceil_div(ceil_div(axis_size, 4), 32), 1, 1]",
+          "looped: [maxTotalThreadsPerThreadgroup, 1, 1]"
+        ],
+        "dispatchSelection": [
+          "block when axis_size <= 4096; looped when axis_size > 4096"
+        ],
+        "runtimeOperands": [
+          "axis_size",
+          "maxTotalThreadsPerThreadgroup"
+        ],
+        "materializationParameters": [
+          "AccT",
+          "N_READS",
+          "T"
+        ]
+      },
+      "mlx/backend/metal/kernels/rms_norm.metal": {
+        "hostSource": "mlx/backend/metal/normalization.cpp",
+        "hostLines": "52-91,137-197",
+        "dispatchFormulas": [
+          "block: [32 * ceil_div(ceil_div(axis_size, 4), 32), 1, 1]",
+          "looped: [maxTotalThreadsPerThreadgroup, 1, 1]"
+        ],
+        "dispatchSelection": [
+          "block when axis_size <= 4096; looped when axis_size > 4096"
+        ],
+        "runtimeOperands": [
+          "axis_size",
+          "maxTotalThreadsPerThreadgroup"
+        ],
+        "materializationParameters": [
+          "N_READS",
+          "T"
+        ]
+      },
+      "mlx/backend/metal/kernels/scaled_dot_product_attention.metal": {
+        "hostSource": "mlx/backend/metal/scaled_dot_product_attention.cpp",
+        "hostLines": "31-32,160-163,194-195,323-326,350-415,440-484,561-586,613-640,685-753",
+        "dispatchFormulas": [
+          "full attention (NAX and Metal): [32, 4, 1]",
+          "vector: [1024, 1, 1]",
+          "two-pass first pass: [32, q_heads / kv_heads, q_sequence_length]",
+          "two-pass final pass: [1024, 1, 1]"
+        ],
+        "dispatchSelection": [
+          "full attention when q_sequence_length > 8",
+          "vector mode when q_sequence_length <= 8",
+          "two-pass vector when ((device architecture is d or s) and k_sequence_length >= 1024) or (kv_heads < q_heads and k_sequence_length >= 4096); otherwise one-pass vector"
+        ],
+        "runtimeOperands": [
+          "selected_pass",
+          "device_architecture",
+          "q_heads",
+          "kv_heads",
+          "q_sequence_length",
+          "k_sequence_length"
+        ],
+        "materializationParameters": [
+          "D",
+          "T",
+          "V"
+        ]
+      },
+      "mlx/backend/metal/kernels/softmax.metal": {
+        "hostSource": "mlx/backend/metal/softmax.cpp",
+        "hostLines": "46-83",
+        "dispatchFormulas": [
+          "block: [32 * ceil_div(ceil_div(axis_size, 4), 32), 1, 1]",
+          "looped: [maxTotalThreadsPerThreadgroup, 1, 1]"
+        ],
+        "dispatchSelection": [
+          "block when axis_size <= 4096; looped when axis_size > 4096"
+        ],
+        "runtimeOperands": [
+          "axis_size",
+          "maxTotalThreadsPerThreadgroup"
+        ],
+        "materializationParameters": [
+          "AccT",
+          "N_READS",
+          "T"
+        ]
+      }
+    },
     "directx_toolchain_gaps": {
+      "mlx/backend/metal/kernels/arg_reduce.metal": "runtime-selected workgroup size is unavailable to source materialization and fails with project.translate.workgroup-size-entry-ambiguous (https://github.com/CrossGL/crosstl/issues/1750)",
+      "mlx/backend/metal/kernels/layer_norm.metal": "runtime-selected workgroup size is unavailable to source materialization and fails with project.translate.workgroup-size-entry-ambiguous (https://github.com/CrossGL/crosstl/issues/1750)",
+      "mlx/backend/metal/kernels/logsumexp.metal": "runtime-selected workgroup size is unavailable to source materialization and fails with project.translate.workgroup-size-entry-ambiguous (https://github.com/CrossGL/crosstl/issues/1750)",
+      "mlx/backend/metal/kernels/rms_norm.metal": "runtime-selected workgroup size is unavailable to source materialization and fails with project.translate.workgroup-size-entry-ambiguous (https://github.com/CrossGL/crosstl/issues/1750)",
+      "mlx/backend/metal/kernels/scaled_dot_product_attention.metal": "runtime-selected pass and shape determine the workgroup size, which is unavailable to source materialization; translation fails with project.translate.workgroup-size-entry-ambiguous (https://github.com/CrossGL/crosstl/issues/1750)",
+      "mlx/backend/metal/kernels/softmax.metal": "runtime-selected workgroup size is unavailable to source materialization and fails with project.translate.workgroup-size-entry-ambiguous (https://github.com/CrossGL/crosstl/issues/1750)",
       "mlx/backend/metal/kernels/fence.metal": "the requested mem_device, memory_order_seq_cst, thread_scope_system atomic-fence contract is not representable in HLSL and fails with project.translate.directx-atomic-fence-unsupported (https://github.com/CrossGL/crosstl/issues/1537)"
     },
     "native_runtime_executed": false,

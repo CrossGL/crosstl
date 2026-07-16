@@ -2183,19 +2183,26 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert '"tests/test_translator/test_codegen/test_directx_codegen.py"' in mlx_porting
     assert '"tests/test_translator/test_project_translation.py"' in mlx_porting
     assert "Verify MLX frontier accounting" in mlx_porting
-    assert "expected 11 clean MLX frontier sources" in mlx_porting
+    assert "expected 11 non-fence MLX frontier sources" in mlx_porting
     assert "fence contract accounting must be 3 failed, 0 emitted" in mlx_porting
     assert "MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES" in mlx_porting
     assert "MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS" in mlx_porting
-    assert 'checks["directx-vulkan-frontier"]' in mlx_porting
+    assert "MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE" in mlx_porting
+    assert "MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS" in mlx_porting
+    assert 'checks["directx-frontier"]' in mlx_porting
+    assert 'checks["vulkan-frontier"]' in mlx_porting
     assert 'directx["directxToolchainArtifactCount"]' in mlx_porting
     assert 'directx["directxToolchainValidatedArtifactCount"]' in mlx_porting
     assert 'directx["directxToolchainValidatedEntryPointCounts"]' in mlx_porting
     assert 'directx["directxToolchainValidatedEntryPointCount"]' in mlx_porting
     assert 'directx["toolchainRuns"] != directx_entry_point_count' in mlx_porting
     assert "DirectX frontier accounting is incomplete" in mlx_porting
+    assert "DirectX workgroup blocker evidence changed" in mlx_porting
+    assert "expected 106 fail-closed DirectX compute entries" in mlx_porting
     assert "DirectX frontier toolchain must validate every configured" in mlx_porting
     assert "source artifact and compute entry" in mlx_porting
+    assert "Vulkan frontier accounting is incomplete" in mlx_porting
+    assert "Vulkan frontier toolchain validation is incomplete" in mlx_porting
     assert 'checks["gemv-directx-compiler-frontier"]' in mlx_porting
     assert "GEMV_DIRECTX_EXPECTED_ENTRY_POINTS" in mlx_porting
     assert "GEMV_WORKGROUP_SIZE_RULE" in mlx_porting
@@ -2238,12 +2245,14 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     )
     assert "reference accessor {target} native validation must be" in mlx_porting
     assert "MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES" in mlx_porting
-    assert "expected 8 OpenGL toolchain frontier sources" in mlx_porting
-    assert "OpenGL frontier accounting must cover every configured source" in (
+    assert "MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES" in mlx_porting
+    assert "expected 8 OpenGL attempted frontier sources" in mlx_porting
+    assert "expected 3 OpenGL toolchain frontier sources" in mlx_porting
+    assert "OpenGL target-split frontier accounting is incomplete" in mlx_porting
+    assert "OpenGL workgroup blocker evidence changed" in mlx_porting
+    assert "OpenGL frontier toolchain must validate every emitted source" in (
         mlx_porting
     )
-    assert "with one artifact and zero project diagnostics" in mlx_porting
-    assert "OpenGL frontier toolchain must validate every source path" in mlx_porting
     assert "mlx/backend/metal/kernels/binary_two.metal" in mlx_porting
     assert "mesa-vulkan-drivers" in mlx_porting
     assert "vulkan==1.3.275.1" in mlx_porting
@@ -2260,7 +2269,8 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "name: mlx-full-corpus-scout" in mlx_porting
     assert "include-hidden-files: true" in mlx_porting
     assert "retention-days: 30" in mlx_porting
-    assert 'f"validate-{toolchain_name}-frontier-toolchain"' in harness
+    assert 'command_name="validate-directx-frontier-toolchain"' in harness
+    assert 'command_name="validate-vulkan-frontier-toolchain"' in harness
     assert "require_directx_toolchain" in harness
     assert '"--run-toolchains"' in harness
     assert '"--validate"' in harness
@@ -2344,6 +2354,9 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES" in harness
     assert "MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS" in harness
     assert "MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT" in harness
+    assert "MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES" in harness
+    assert "MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_CODE" in harness
+    assert "MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE" in harness
     assert "MLX_BLOCKED_REDUCED_FRONTIER_SOURCES" in harness
     assert "_check_atomic_fence_contract" in harness
     assert "project.translate.directx-atomic-fence-unsupported" in harness
