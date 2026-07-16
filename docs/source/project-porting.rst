@@ -227,6 +227,30 @@ implement standalone entry generation also fail explicitly instead of pruning
 an aggregate artifact. When ``project.entry_points`` is absent, project
 translation keeps the existing aggregate output path and behavior.
 
+Fail-Closed Pointer Provenance
+------------------------------
+
+Targets that cannot represent a source pointer directly must prove its backing
+storage and composed offset before emitting an artifact. For workgroup storage,
+that proof includes the concrete backing declaration, entry-point ownership,
+element extent and type, offset composition through helper calls, and the
+affected materialization or specialization. Dynamic backing selection,
+unresolved offsets, incompatible declarations, escaped identity, and
+cross-entry ownership fail closed instead of producing target code with altered
+aliasing or synchronization behavior.
+
+When the target exception provides provenance, an OpenGL workgroup-pointer
+diagnostic records the available ``function``, ``parameter``, ``backingName``,
+``offsetExpression``, ``materializationName``, and ``reason`` values under
+``details.workgroupPointer``. Unavailable values are omitted so consumers can
+distinguish retained evidence from assumptions. The surrounding diagnostic
+also identifies the source path, intended artifact, target, and missing target
+capability.
+
+This report contract localizes translation work and preserves actionable
+evidence. It does not establish whole-repository semantic parity, rewrite host
+runtime integration, or prove execution correctness for a framework or corpus.
+
 Project scan, report, and translation commands also accept repeatable
 ``--source-root``, ``--include-dir``, ``--define``, and ``--source-override``
 overrides. CLI source roots replace the configured source roots for that

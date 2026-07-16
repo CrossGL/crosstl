@@ -9452,6 +9452,127 @@ def test_translate_project_reports_unsupported_opengl_workgroup_pointer(tmp_path
     )
 
 
+def test_translate_project_reports_opengl_workgroup_pointer_provenance(
+    tmp_path,
+    monkeypatch,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "workgroup_provenance.cgl").write_text(
+        SIMPLE_CROSSL,
+        encoding="utf-8",
+    )
+
+    class WorkgroupPointerFailure(ValueError):
+        project_diagnostic_code = (
+            "project.translate.opengl-workgroup-pointer-unsupported"
+        )
+        missing_capabilities = ("opengl.workgroup-pointer-lowering",)
+
+    def raise_workgroup_pointer_failure(*_args, **_kwargs):
+        failure = WorkgroupPointerFailure(
+            "OpenGL cannot preserve the selected workgroup pointer view"
+        )
+        failure.function_name = "radix_n_steps_float_radix2"
+        failure.parameter_name = "shared_values"
+        failure.backing_name = "fft_main_shared_in"
+        failure.offset_expression = "((simd_group_id * 32) + lane_offset)"
+        failure.materialization_name = "radix_n_steps_float_radix2__fft_main"
+        failure.reason = "offset-range-unresolved"
+        raise failure
+
+    monkeypatch.setattr(
+        project_pipeline,
+        "translate",
+        raise_workgroup_pointer_failure,
+    )
+
+    report = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="translated",
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == (
+        "project.translate.opengl-workgroup-pointer-unsupported"
+    )
+    assert diagnostic["missingCapabilities"] == ["opengl.workgroup-pointer-lowering"]
+    assert diagnostic["details"] == {
+        "sourcePath": "workgroup_provenance.cgl",
+        "targetArtifact": "translated/opengl/workgroup_provenance.glsl",
+        "workgroupPointer": {
+            "backingName": "fft_main_shared_in",
+            "function": "radix_n_steps_float_radix2",
+            "materializationName": "radix_n_steps_float_radix2__fft_main",
+            "offsetExpression": "((simd_group_id * 32) + lane_offset)",
+            "parameter": "shared_values",
+            "reason": "offset-range-unresolved",
+        },
+    }
+    assert list(diagnostic["details"]["workgroupPointer"]) == sorted(
+        diagnostic["details"]["workgroupPointer"]
+    )
+    assert not (repo / payload["artifacts"][0]["path"]).exists()
+
+
+def test_opengl_workgroup_pointer_provenance_omits_absent_fields_and_is_stable(
+    tmp_path,
+    monkeypatch,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "sparse_provenance.cgl").write_text(
+        SIMPLE_CROSSL,
+        encoding="utf-8",
+    )
+
+    class WorkgroupPointerFailure(ValueError):
+        project_diagnostic_code = (
+            "project.translate.opengl-workgroup-pointer-unsupported"
+        )
+        missing_capabilities = ("opengl.workgroup-pointer-lowering",)
+
+    def raise_workgroup_pointer_failure(*_args, **_kwargs):
+        failure = WorkgroupPointerFailure(
+            "OpenGL workgroup pointer backing is unresolved"
+        )
+        failure.function_name = "dispatch"
+        failure.parameter_name = None
+        failure.backing_name = ""
+        failure.offset_expression = None
+        failure.materialization_name = "dispatch_float"
+        failure.reason = "backing-unresolved"
+        raise failure
+
+    monkeypatch.setattr(
+        project_pipeline,
+        "translate",
+        raise_workgroup_pointer_failure,
+    )
+
+    report = translate_project(
+        repo,
+        targets=["opengl"],
+        output_dir="translated",
+    )
+    pointer = report.to_json()["diagnostics"][0]["details"]["workgroupPointer"]
+
+    assert pointer == {
+        "function": "dispatch",
+        "materializationName": "dispatch_float",
+        "reason": "backing-unresolved",
+    }
+    first_report = repo / "first-report.json"
+    second_report = repo / "second-report.json"
+    report.write_json(first_report)
+    report.write_json(second_report)
+    assert first_report.read_bytes() == second_report.read_bytes()
+
+
 def test_translate_project_reports_reachable_null_opengl_workgroup_pointer(tmp_path):
     repo = tmp_path / "repo"
     shader_dir = repo / "shaders"

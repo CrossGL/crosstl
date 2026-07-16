@@ -17918,15 +17918,17 @@ def _opengl_workgroup_pointer_failure_details(
         "targetArtifact": artifact_path or "",
     }
     pointer = {}
-    function_name = getattr(exc, "function_name", None)
-    parameter_name = getattr(exc, "parameter_name", None)
-    reason = getattr(exc, "reason", None)
-    if _is_non_empty_string(function_name):
-        pointer["function"] = function_name
-    if _is_non_empty_string(parameter_name):
-        pointer["parameter"] = parameter_name
-    if _is_non_empty_string(reason):
-        pointer["reason"] = reason
+    fields = {
+        "function": getattr(exc, "function_name", None),
+        "parameter": getattr(exc, "parameter_name", None),
+        "backingName": getattr(exc, "backing_name", None),
+        "offsetExpression": getattr(exc, "offset_expression", None),
+        "materializationName": getattr(exc, "materialization_name", None),
+        "reason": getattr(exc, "reason", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            pointer[name] = value
     if pointer:
         details["workgroupPointer"] = dict(sorted(pointer.items()))
     return dict(sorted(details.items()))
