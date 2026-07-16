@@ -1,0 +1,95 @@
+name: MLX Native Metal Reference Baseline
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUNBUFFERED: "1"
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mlx-native-metal-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-metal-reference:
+    name: Pinned MLX native Metal reference
+    runs-on: macos-26
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout CrossTL
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install native baseline build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install setuptools wheel cmake ninja typing_extensions numpy ml_dtypes
+          python --version
+          cmake --version
+          ninja --version
+          xcodebuild -version
+          xcrun --sdk macosx metal --version
+
+      - name: Checkout pinned MLX Metal source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf mlx-metal-source
+          git init mlx-metal-source
+          git -C mlx-metal-source remote add origin https://github.com/ml-explore/mlx.git
+          git -C mlx-metal-source config advice.detachedHead false
+          git -C mlx-metal-source sparse-checkout init --no-cone
+          git -C mlx-metal-source sparse-checkout set /mlx/backend/metal/kernels/
+          git -C mlx-metal-source fetch --depth=1 --filter=blob:none origin "$MLX_COMMIT"
+          git -C mlx-metal-source checkout --detach FETCH_HEAD
+          test "$(git -C mlx-metal-source rev-parse HEAD)" = "$MLX_COMMIT"
+          test -z "$(git -C mlx-metal-source status --porcelain=v1 --untracked-files=all -- mlx/backend/metal/kernels)"
+
+      - name: Checkout full pinned MLX test tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf mlx-upstream
+          git init mlx-upstream
+          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
+          git -C mlx-upstream config advice.detachedHead false
+          git -C mlx-upstream fetch --depth=1 --filter=blob:none origin "$MLX_COMMIT"
+          git -C mlx-upstream checkout --detach FETCH_HEAD
+          test "$(git -C mlx-upstream rev-parse HEAD)" = "$MLX_COMMIT"
+          test -z "$(git -C mlx-upstream status --porcelain=v1 --untracked-files=all)"
+
+      - name: Run native Metal reference baseline
+        run: |
+          python demos/integrations/mlx/run_mlx_native_metal.py \
+            --mlx-root mlx-metal-source \
+            --mlx-python-root mlx-upstream \
+            --output-dir .crosstl-mlx-native-metal \
+            --jobs 3
+
+      - name: Upload native Metal evidence and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-native-metal-evidence-${{ github.run_attempt }}
+          path: |
+            .crosstl-mlx-native-metal/evidence.json
+            .crosstl-mlx-native-metal/logs
+          if-no-files-found: error
+          retention-days: 14
