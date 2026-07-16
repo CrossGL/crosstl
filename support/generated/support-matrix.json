@@ -123,7 +123,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1301
+        "test_count": 1305
       },
       "translator_codegen": {
         "exists": true,
@@ -248,7 +248,7 @@
           "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1453
+        "test_count": 1455
       },
       "translator_codegen": {
         "exists": true,
@@ -619,7 +619,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 1484
+        "test_count": 1485
       },
       "translator_codegen": {
         "exists": true,
@@ -8654,10 +8654,12 @@
         },
         "directx": {
           "evidence": [
-            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_entry_scoped_generation_keeps_selected_execution_contract",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_entry_scoped_generation_reports_available_entries",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_allows_entry_scoped_workgroup_size_specialization"
           ],
-          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
-          "status": "validated_rejection"
+          "notes": "Project configuration selects one materialized compute entry and emits an independently loadable HLSL artifact at a deterministic entry path. The artifact records deterministic source-to-target entry identity, the selected execution contract, reflected compute entry and resources, source maps, and entry-scoped translation provenance. Evidence is limited to generation, project reporting, reflection, and available compiler validation; runtime execution and numerical parity are not claimed.",
+          "status": "supported"
         },
         "hip": {
           "evidence": [
@@ -16204,10 +16206,10 @@
       "directx": {
         "diagnostic": 2,
         "partial": 0,
-        "supported": 70,
+        "supported": 71,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 1
+        "validated_rejection": 0
       },
       "hip": {
         "diagnostic": 8,

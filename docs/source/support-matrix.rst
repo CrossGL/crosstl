@@ -22,11 +22,11 @@ implicitly supported.
 .. csv-table:: Backend inventory
    :header: "Backend", "Target aliases", "Target profiles", "Ext", "Target generator", "Source kind", "Native frontend", "Tests", "Test count", "Unsupported markers", "Docs source"
 
-   "DirectX / HLSL", "dx11, dx12, d3d11, d3d12", "directx-11, directx-12", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "native", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "1301", "368", "Microsoft Learn HLSL reference; HLSL specification project"
-   "OpenGL / GLSL", "", "", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "native", "crosstl/backend/GLSL", "tests/test_translator/test_arithmetic_conversions.py, tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_translator/test_codegen/test_GLSL_storage_pointer_codegen.py, tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py, tests/test_backend/test_GLSL", "1453", "253", "GLSL 4.60 specification; OpenGL registry"
+   "DirectX / HLSL", "dx11, dx12, d3d11, d3d12", "directx-11, directx-12", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "native", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "1305", "368", "Microsoft Learn HLSL reference; HLSL specification project"
+   "OpenGL / GLSL", "", "", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "native", "crosstl/backend/GLSL", "tests/test_translator/test_arithmetic_conversions.py, tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_translator/test_codegen/test_GLSL_storage_pointer_codegen.py, tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py, tests/test_backend/test_GLSL", "1455", "253", "GLSL 4.60 specification; OpenGL registry"
    "WebGL / GLSL ES", "webgl2, essl, glsl-es", "", ".webgl.glsl", "crosstl/translator/codegen/webgl_codegen.py", "target-only", "", "tests/test_translator/test_arithmetic_conversions.py, tests/test_translator/test_codegen/test_webgl_codegen.py", "59", "39", "WebGL 2.0 specification; OpenGL ES Shading Language 3.00 specification"
    "WebGPU / WGSL", "webgpu", "", ".wgsl", "crosstl/translator/codegen/wgsl_codegen.py", "target-only", "", "tests/test_translator/test_codegen/test_wgsl_codegen.py", "104", "70", "WGSL specification; WebGPU specification"
-   "Metal", "", "", ".metal", "crosstl/translator/codegen/metal_codegen.py", "native", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "1484", "551", "Apple Metal resources; Metal Shading Language specification"
+   "Metal", "", "", ".metal", "crosstl/translator/codegen/metal_codegen.py", "native", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "1485", "551", "Apple Metal resources; Metal Shading Language specification"
    "Vulkan SPIR-V", "", "vulkan-khr-cooperative-matrix", ".spvasm", "crosstl/translator/codegen/SPIRV_codegen.py", "native", "crosstl/backend/SPIRV", "tests/test_translator/test_codegen/test_SPIRV_codegen.py, tests/test_backend/test_SPIRV", "1234", "115", "SPIR-V unified grammar; Khronos SPIR-V headers; SPV_KHR_cooperative_matrix specification"
    "CUDA", "", "", ".cu", "crosstl/translator/codegen/cuda_codegen.py", "native", "crosstl/backend/CUDA", "tests/test_translator/test_codegen/test_CUDA_codegen.py, tests/test_backend/test_CUDA", "782", "193", "CUDA C++ programming guide"
    "HIP", "", "", ".hip", "crosstl/translator/codegen/hip_codegen.py", "native", "crosstl/backend/HIP", "tests/test_translator/test_codegen/test_hip_codegen.py, tests/test_backend/test_HIP", "832", "135", "ROCm HIP documentation"
@@ -37,7 +37,7 @@ implicitly supported.
 .. csv-table:: Summary by backend
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "70", "0", "2", "1", "0", "0"
+   "DirectX / HLSL", "71", "0", "2", "0", "0", "0"
    "OpenGL / GLSL", "71", "0", "2", "0", "0", "0"
    "WebGL / GLSL ES", "40", "0", "23", "10", "0", "0"
    "WebGPU / WGSL", "44", "0", "21", "8", "0", "0"
@@ -58,7 +58,7 @@ scope for graphics backend completion work.
 .. csv-table:: Graphics backend status summary
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "70", "0", "2", "1", "0", "0"
+   "DirectX / HLSL", "71", "0", "2", "0", "0", "0"
    "OpenGL / GLSL", "71", "0", "2", "0", "0", "0"
    "Metal", "68", "0", "4", "1", "0", "0"
 
@@ -75,7 +75,7 @@ inspection, diagnostics, validation, and corpus-coverage rows.
 .. csv-table:: Project-porting status summary
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
-   "DirectX / HLSL", "27", "0", "1", "1", "0", "0"
+   "DirectX / HLSL", "28", "0", "1", "0", "0", "0"
    "OpenGL / GLSL", "28", "0", "1", "0", "0", "0"
    "WebGL / GLSL ES", "27", "0", "1", "1", "0", "0"
    "WebGPU / WGSL", "27", "0", "1", "1", "0", "0"
@@ -183,7 +183,7 @@ Each category below uses the status codes from the legend.
    "Project include resolution", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Macro and define variants", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Batch project translation", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Entry-scoped project artifacts", "R", "Y", "R", "R", "R", "R", "R", "R", "R", "R", "R"
+   "Entry-scoped project artifacts", "Y", "Y", "R", "R", "R", "R", "R", "R", "R", "R", "R"
    "Optional validation hooks", "D", "D", "D", "D", "D", "D", "D", "D", "D", "D", "D"
    "Migration action report", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Runtime integration planning", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
