@@ -10,6 +10,7 @@ runtime parity, or numerical parity.
 ## Evidence Sections
 
 The deterministic `evidence.json` report keeps three results separate.
+Before compilation, it requires and records an `arm64` host architecture.
 
 ### Source Compile And Link
 

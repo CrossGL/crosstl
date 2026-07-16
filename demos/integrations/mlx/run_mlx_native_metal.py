@@ -960,6 +960,7 @@ def _probe_toolchain(
     runner: CommandRunner,
 ) -> dict[str, Any]:
     commands = (
+        ("machine-architecture", ("uname", "-m")),
         ("sdk-path", ("xcrun", "--sdk", "macosx", "--show-sdk-path")),
         ("sdk-version", ("xcrun", "--sdk", "macosx", "--show-sdk-version")),
         (
@@ -991,6 +992,11 @@ def _probe_toolchain(
         _require_success(result, f"toolchain probe {name}")
         results[name] = result
 
+    architecture = results["machine-architecture"].stdout.strip()
+    _require(
+        architecture == "arm64",
+        f"native MLX Metal baseline requires arm64; found {architecture or 'nothing'}",
+    )
     sdk_path = results["sdk-path"].stdout.strip()
     sdk_version = results["sdk-version"].stdout.strip()
     sdk_build_version = results["sdk-build-version"].stdout.strip()
@@ -1014,6 +1020,7 @@ def _probe_toolchain(
     metal_nm_version = results["metal-nm-version"].stdout.strip()
     _require(metal_nm_version, "metal-nm --version returned no output")
     return {
+        "architecture": architecture,
         "deploymentTarget": MACOS_DEPLOYMENT_TARGET,
         "macos": _parse_sw_vers(results["macos-version"].stdout),
         "sdk": {

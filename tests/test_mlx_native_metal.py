@@ -54,6 +54,7 @@ class FakeRunner:
         python_skipped=None,
         cpp_cases=None,
         cpp_assertions=None,
+        architecture="arm64",
     ):
         self.module = module
         self.revision = revision or module.MLX_COMMIT
@@ -67,6 +68,7 @@ class FakeRunner:
         )
         self.cpp_cases = cpp_cases or module.EXPECTED_CPP_TEST_CASE_COUNT
         self.cpp_assertions = cpp_assertions or module.EXPECTED_CPP_ASSERTION_COUNT
+        self.architecture = architecture
         self.sdk_path = (tmp_path / "MacOSX.sdk").resolve()
         self.metal_path = (tmp_path / "toolchain" / "metal").resolve()
         self.metal_nm_path = (tmp_path / "toolchain" / "metal-nm").resolve()
@@ -92,6 +94,8 @@ class FakeRunner:
             stdout = self.revision + "\n"
         elif name in {"checkout-kernel-status", "python-checkout-status"}:
             stdout = ""
+        elif name == "toolchain-machine-architecture":
+            stdout = self.architecture + "\n"
         elif name == "toolchain-sdk-path":
             stdout = str(self.sdk_path) + "\n"
         elif name == "toolchain-sdk-version":
@@ -231,6 +235,7 @@ def test_fake_native_baseline_emits_complete_deterministic_evidence(
     assert payload["mlx"]["sourceCheckout"]["revision"] == module.MLX_COMMIT
     assert payload["mlx"]["testCheckout"]["revision"] == module.MLX_COMMIT
     source_proof = payload["sourceCompileLink"]
+    assert payload["toolchain"]["architecture"] == "arm64"
     manifest = source_proof["sourceManifest"]
     assert manifest["sourceCount"] == 40
     assert manifest["expectedSha256"] == manifest["actualSha256"]
@@ -461,6 +466,26 @@ def test_cpu_default_device_fails_native_gpu_baseline(tmp_path, monkeypatch):
     names = {name for name, _, _ in runner.calls}
     assert "python-unittest" not in names
     assert "cpp-configure" not in names
+
+
+def test_non_arm64_host_fails_before_metal_compilation(tmp_path, monkeypatch):
+    module = _load_helper()
+    metal_root, test_root, output_dir = _prepare_checkouts(
+        module, tmp_path, monkeypatch
+    )
+    runner = FakeRunner(module, tmp_path, architecture="x86_64")
+
+    with pytest.raises(module.MlxNativeMetalProofError, match="requires arm64"):
+        module.run_proof(
+            metal_root,
+            test_root,
+            output_dir,
+            python_executable="python3.13",
+            runner=runner,
+            jobs=1,
+        )
+
+    assert not any(name.startswith("compile-") for name, _, _ in runner.calls)
 
 
 def test_python_test_count_drift_fails_closed(tmp_path, monkeypatch):
