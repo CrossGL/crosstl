@@ -19869,6 +19869,33 @@ def _workgroup_size_failure_details(
     }
 
 
+def _directx_entry_point_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.directx-entry-point-unavailable"
+    ):
+        return {}
+
+    selection = {
+        "entryPoint": getattr(exc, "entry_point", None),
+        "availableEntryPoints": sorted(
+            str(entry) for entry in getattr(exc, "available_entry_points", ()) or ()
+        ),
+        "reason": getattr(exc, "reason", None),
+        "stage": getattr(exc, "stage", None),
+    }
+    return {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+        "entryPointSelection": {
+            key: value for key, value in sorted(selection.items()) if value is not None
+        },
+    }
+
+
 def _translation_failure_details(
     exc: Exception,
     target: str,
@@ -19910,6 +19937,7 @@ def _translation_failure_details(
         **_metal_callable_alias_failure_details(exc, unit, artifact_path),
         **_template_materialization_failure_details(exc),
         **_workgroup_size_failure_details(exc, unit, artifact_path),
+        **_directx_entry_point_failure_details(exc, unit, artifact_path),
     }
 
 
