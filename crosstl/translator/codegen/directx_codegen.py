@@ -43,6 +43,7 @@ from ..ast import (
     RayTracingOpNode,
     ReferenceType,
     ReturnNode,
+    StageMap,
     StructMemberNode,
     StructNode,
     SwitchNode,
@@ -349,6 +350,41 @@ class DirectXUnresolvedSourceTypeError(ValueError):
 
     def __init__(self, message):
         super().__init__(message)
+
+
+class DirectXWorkgroupSizeError(ValueError):
+    """Raised when an HLSL compute workgroup size is not representable."""
+
+    project_diagnostic_code = "project.translate.workgroup-size-invalid"
+    missing_capabilities = ("execution.workgroup-size-specialization",)
+    check_kind = "execution-specialization"
+
+    def __init__(self, message, *, workgroup_size, reason):
+        super().__init__(message)
+        self.workgroup_size = tuple(workgroup_size)
+        self.reason = reason
+
+
+class DirectXEntryPointSelectionError(ValueError):
+    """Raised when a requested standalone DirectX entry cannot be selected."""
+
+    project_diagnostic_code = "project.translate.directx-entry-point-unavailable"
+    missing_capabilities = ("artifact.entry-point-selection",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        entry_point=None,
+        available_entry_points=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.entry_point = entry_point
+        self.available_entry_points = tuple(available_entry_points or ())
+        self.reason = reason
+        self.source_location = source_location
 
 
 class DirectXTextureOffsetError(ValueError):
@@ -1909,6 +1945,144 @@ class HLSLCodeGen:
     def generate(self, ast):
         """Generate complete HLSL source for a CrossGL AST."""
         return self.generate_program(ast)
+
+    def generate_entry(self, ast, entry_point):
+        """Generate one independently loadable HLSL stage entry artifact."""
+        scoped_ast = self.entry_scoped_ast(ast, entry_point)
+        return self.generate_program(scoped_ast)
+
+    def entry_scoped_ast(self, ast, entry_point):
+        if not isinstance(entry_point, str) or not entry_point.strip():
+            raise DirectXEntryPointSelectionError(
+                "DirectX entry-point selection requires a non-empty source entry "
+                "name",
+                entry_point=entry_point,
+                reason="invalid-name",
+            )
+        entry_point = entry_point.strip()
+        stage_entry_types = self.stage_entry_types()
+        entries = collect_stage_entry_records(ast, None, stage_entry_types)
+        available = sorted(
+            {
+                str(getattr(function, "name", ""))
+                for _entry_id, _stage_name, function in entries
+                if getattr(function, "name", None)
+            }
+        )
+        matches = [
+            (entry_id, stage_name, function)
+            for entry_id, stage_name, function in entries
+            if getattr(function, "name", None) == entry_point
+        ]
+        if not matches:
+            raise DirectXEntryPointSelectionError(
+                f"DirectX source entry point '{entry_point}' was not found",
+                entry_point=entry_point,
+                available_entry_points=available,
+                reason="not-found",
+            )
+        if len(matches) != 1:
+            raise DirectXEntryPointSelectionError(
+                f"DirectX source entry point '{entry_point}' is ambiguous",
+                entry_point=entry_point,
+                available_entry_points=available,
+                reason="ambiguous",
+            )
+
+        _selected_id, selected_stage_name, selected_function = matches[0]
+        selected_stage = next(
+            (
+                (stage_type, stage)
+                for stage_type, stage in getattr(ast, "stages", {}).items()
+                if getattr(stage, "entry_point", None) is selected_function
+            ),
+            None,
+        )
+        scoped_ast = deepcopy(ast)
+        selected_copy_function = None
+        scoped_ast.functions = [
+            function
+            for function in getattr(scoped_ast, "functions", []) or []
+            if function_stage_name(function) not in stage_entry_types
+            or (
+                selected_stage is None
+                and function_stage_name(function) == selected_stage_name
+                and getattr(function, "name", None) == entry_point
+            )
+        ]
+        selected_stages = StageMap()
+        if selected_stage is not None:
+            stage_type, stage = selected_stage
+            selected_stage_copy = deepcopy(stage)
+            selected_stages.append(stage_type, selected_stage_copy)
+            selected_copy_function = selected_stage_copy.entry_point
+        else:
+            selected_copy_function = next(
+                (
+                    function
+                    for function in scoped_ast.functions
+                    if function_stage_name(function) == selected_stage_name
+                    and getattr(function, "name", None) == entry_point
+                ),
+                None,
+            )
+        scoped_ast.stages = selected_stages
+        if selected_copy_function is None:
+            raise DirectXEntryPointSelectionError(
+                f"DirectX source entry point '{entry_point}' could not be copied",
+                entry_point=entry_point,
+                available_entry_points=available,
+                reason="copy-failed",
+            )
+
+        reachable_names = self.entry_reachable_function_names(
+            scoped_ast,
+            selected_copy_function,
+        )
+        scoped_ast.functions = [
+            function
+            for function in getattr(scoped_ast, "functions", []) or []
+            if function is selected_copy_function
+            or getattr(function, "name", None) in reachable_names
+        ]
+        for _stage_type, stage in scoped_ast.stages.items():
+            stage.local_functions = [
+                function
+                for function in getattr(stage, "local_functions", []) or []
+                if getattr(function, "name", None) in reachable_names
+            ]
+        return scoped_ast
+
+    def entry_reachable_function_names(self, ast, entry_function):
+        functions = list(getattr(ast, "functions", []) or [])
+        for _stage_type, stage in getattr(ast, "stages", {}).items():
+            functions.extend(getattr(stage, "local_functions", []) or [])
+        functions_by_name = {}
+        for function in functions:
+            name = getattr(function, "name", None)
+            if name:
+                functions_by_name.setdefault(name, []).append(function)
+
+        reachable_names = set()
+        pending = [entry_function]
+        visited = set()
+        while pending:
+            function = pending.pop()
+            if id(function) in visited:
+                continue
+            visited.add(id(function))
+            for node in self.walk_ast(getattr(function, "body", [])):
+                if not isinstance(node, FunctionCallNode):
+                    continue
+                name = self.function_call_name(node)
+                if not name or name in reachable_names:
+                    continue
+                candidates = functions_by_name.get(name, ())
+                if not candidates:
+                    continue
+                reachable_names.add(name)
+                pending.extend(candidates)
+        return reachable_names
 
     def generate_stage(self, ast, shader_type):
         """Generate HLSL source for a single requested shader stage."""
@@ -6394,8 +6568,38 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return None
 
     def generate_compute_numthreads(self, execution_config=None):
-        x, y, z = compute_local_size(execution_config)
+        x, y, z = self.validate_hlsl_compute_workgroup_size(
+            compute_local_size(execution_config)
+        )
         return f"[numthreads({x}, {y}, {z})]\n"
+
+    def validate_hlsl_compute_workgroup_size(self, values):
+        resolved = []
+        for value in values:
+            text = str(value).strip()
+            if not re.fullmatch(r"[+-]?[0-9]+", text):
+                return tuple(values)
+            resolved.append(int(text))
+        if any(value <= 0 for value in resolved):
+            raise DirectXWorkgroupSizeError(
+                "DirectX compute workgroup dimensions must be positive integers",
+                workgroup_size=resolved,
+                reason="non-positive-dimension",
+            )
+        if resolved[0] > 1024 or resolved[1] > 1024 or resolved[2] > 64:
+            raise DirectXWorkgroupSizeError(
+                "DirectX compute workgroup dimensions exceed HLSL limits "
+                "(x <= 1024, y <= 1024, z <= 64)",
+                workgroup_size=resolved,
+                reason="dimension-limit-exceeded",
+            )
+        if resolved[0] * resolved[1] * resolved[2] > 1024:
+            raise DirectXWorkgroupSizeError(
+                "DirectX compute workgroup size must not exceed 1024 threads",
+                workgroup_size=resolved,
+                reason="thread-count-limit-exceeded",
+            )
+        return tuple(resolved)
 
     def generate_stage_numthreads(self, func, shader_type, execution_config=None):
         if shader_type not in {"mesh", "task", "amplification", "object"}:
@@ -13491,6 +13695,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return f"({num_workgroups} * {workgroup_size})"
         return None
 
+    def hlsl_project_compute_vector3_expression(self, expression, target_type):
+        normalized_type = str(target_type).strip()
+        match = re.fullmatch(r"(?P<scalar>u?int)(?P<width>[123]?)", normalized_type)
+        if match is None:
+            return expression
+        width = int(match.group("width") or "1")
+        if width == 1:
+            return f"{normalized_type}(({expression}).x)"
+        if width == 2:
+            return f"{normalized_type}(({expression}).xy)"
+        if normalized_type == "uint3":
+            return expression
+        return f"{normalized_type}({expression})"
+
     def hlsl_compute_value_builtin_parameter_prologue(
         self, parameter, param_type, semantic, func, execution_config=None
     ):
@@ -13536,6 +13754,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if self.hlsl_compute_parameter_unused(func, parameter_name):
                 return self.HLSL_COMPUTE_DROP_PARAMETER
             return None
+
+        expression = self.hlsl_project_compute_vector3_expression(expression, base_type)
 
         local_name = self.hlsl_declaration_identifier_name(parameter_name)
         self.local_variable_types[local_name] = base_type

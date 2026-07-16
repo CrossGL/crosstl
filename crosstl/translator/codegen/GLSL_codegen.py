@@ -343,6 +343,19 @@ class OpenGLTemplateTypeError(ValueError):
         self.enclosing_generated_type = enclosing_type
 
 
+class OpenGLWorkgroupSizeError(ValueError):
+    """Raised when an OpenGL compute workgroup size is not representable."""
+
+    project_diagnostic_code = "project.translate.workgroup-size-invalid"
+    missing_capabilities = ("execution.workgroup-size-specialization",)
+    check_kind = "execution-specialization"
+
+    def __init__(self, message, *, workgroup_size, reason):
+        super().__init__(message)
+        self.workgroup_size = tuple(workgroup_size)
+        self.reason = reason
+
+
 class OpenGLEntryPointSelectionError(ValueError):
     """Raised when a requested standalone OpenGL entry cannot be selected."""
 
@@ -8005,10 +8018,40 @@ class GLSLCodeGen:
         return code
 
     def generate_compute_layout(self, execution_config=None):
-        x, y, z = compute_local_size(execution_config)
+        x, y, z = self.validate_glsl_compute_workgroup_size(
+            compute_local_size(execution_config)
+        )
         return (
             f"layout(local_size_x = {x}, local_size_y = {y}, local_size_z = {z}) in;\n"
         )
+
+    def validate_glsl_compute_workgroup_size(self, values):
+        resolved = []
+        for value in values:
+            text = str(value).strip()
+            if not re.fullmatch(r"[+-]?[0-9]+", text):
+                return tuple(values)
+            resolved.append(int(text))
+        if any(value <= 0 for value in resolved):
+            raise OpenGLWorkgroupSizeError(
+                "OpenGL compute workgroup dimensions must be positive integers",
+                workgroup_size=resolved,
+                reason="non-positive-dimension",
+            )
+        if resolved[0] > 1024 or resolved[1] > 1024 or resolved[2] > 64:
+            raise OpenGLWorkgroupSizeError(
+                "OpenGL compute workgroup dimensions exceed portable limits "
+                "(x <= 1024, y <= 1024, z <= 64)",
+                workgroup_size=resolved,
+                reason="dimension-limit-exceeded",
+            )
+        if resolved[0] * resolved[1] * resolved[2] > 1024:
+            raise OpenGLWorkgroupSizeError(
+                "OpenGL compute workgroup size must not exceed 1024 invocations",
+                workgroup_size=resolved,
+                reason="invocation-count-limit-exceeded",
+            )
+        return tuple(resolved)
 
     def generate_stage_layout(self, shader_type, func, stage_layout_qualifiers=None):
         if shader_type == "fragment":

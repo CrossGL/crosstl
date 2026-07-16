@@ -1053,7 +1053,6 @@ def test_translate_project_reports_missing_selected_opengl_entry(tmp_path):
     "target",
     (
         "cuda",
-        "directx",
         "hip",
         "metal",
         "mojo",
@@ -20328,6 +20327,7 @@ def test_translate_project_emits_closed_portability_report_schema(tmp_path):
         "specializationConstants",
         "specializationMaterialization",
         "entryPoint",
+        "execution",
     }
     assert artifact["requiredCapabilities"] == []
     assert set(artifact["sourceHash"]) == project_pipeline.REPORT_HASH_FIELDS
@@ -53132,3 +53132,629 @@ def test_translate_project_reports_unresolved_metal_value_template_default(tmp_p
     assert {item["code"] for item in validation["diagnostics"]}.isdisjoint(
         {"project.validate.invalid-report"}
     )
+
+
+def _write_workgroup_size_metal_fixture(
+    repo,
+    *,
+    value_type="uint3",
+    entry_points=("main",),
+    consume=True,
+):
+    if value_type == "uint":
+        value_expression = "group_size"
+    elif value_type == "uint2":
+        value_expression = "group_size.x + group_size.y"
+    else:
+        value_expression = "group_size.x + group_size.y + group_size.z"
+    if not consume:
+        value_expression = "1u"
+
+    kernels = []
+    for binding, entry_point in enumerate(entry_points):
+        kernels.append(textwrap.dedent(f"""
+                kernel void {entry_point}(
+                    device uint* output [[buffer({binding})]],
+                    {value_type} group_size [[threads_per_threadgroup]]) {{
+                    output[0] = {value_expression};
+                }}
+                """).strip())
+    (repo / "workgroup_size.metal").write_text(
+        "#include <metal_stdlib>\nusing namespace metal;\n\n"
+        + "\n\n".join(kernels)
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _reflected_workgroup_size(artifact_path, target):
+    reflection = reflect_target_host_interface(artifact_path, target=target)
+    compute_entry = next(
+        entry for entry in reflection["entryPoints"] if entry.get("stage") == "compute"
+    )
+    execution_config = compute_entry["executionConfig"]
+    if target == "directx":
+        return execution_config["numthreads"]
+    return [
+        execution_config["local_size_x"],
+        execution_config["local_size_y"],
+        execution_config["local_size_z"],
+    ]
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+@pytest.mark.parametrize(
+    ("value_type", "target_projection"),
+    [
+        (
+            "uint",
+            {
+                "directx": "uint group_size = uint((uint3(32, 8, 4)).x);",
+                "opengl": "uint group_size = uint(gl_WorkGroupSize.x);",
+            },
+        ),
+        (
+            "uint2",
+            {
+                "directx": "uint2 group_size = uint2((uint3(32, 8, 4)).xy);",
+                "opengl": "uvec2 group_size = uvec2(gl_WorkGroupSize.xy);",
+            },
+        ),
+        (
+            "uint3",
+            {
+                "directx": "uint3 group_size = uint3(32, 8, 4);",
+                "opengl": "gl_WorkGroupSize.x",
+            },
+        ),
+    ],
+    ids=["scalar", "vector2", "vector3"],
+)
+def test_translate_project_specializes_consumed_metal_workgroup_size(
+    tmp_path,
+    target,
+    value_type,
+    target_projection,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_workgroup_size_metal_fixture(repo, value_type=value_type)
+    config = project_api.ProjectConfig(
+        root=repo,
+        targets=[target],
+        output_dir="out",
+        workgroup_size=[32, 8, 4],
+    )
+
+    report = translate_project(config, format_output=False, validate=True)
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["project"]["workgroupSize"] == [32, 8, 4]
+    assert payload["project"]["variantWorkgroupSizes"] == {}
+    artifact = payload["artifacts"][0]
+    execution = artifact["execution"]
+    assert set(execution) == {
+        "workgroupSize",
+        "sourceEntryPoints",
+        "provenance",
+        "identity",
+    }
+    assert execution["workgroupSize"] == [32, 8, 4]
+    assert execution["sourceEntryPoints"] == ["main"]
+    assert execution["provenance"] == {
+        "kind": "project-config",
+        "path": "project.workgroup_size",
+    }
+    assert execution["identity"]["algorithm"] == "sha256"
+    assert re.fullmatch(r"[0-9a-f]{64}", execution["identity"]["value"])
+
+    artifact_path = repo / artifact["path"]
+    generated = artifact_path.read_text(encoding="utf-8")
+    if target == "directx":
+        assert "[numthreads(32, 8, 4)]" in generated
+        assert_directx_compute_validates_if_available(generated, tmp_path)
+    else:
+        assert (
+            "layout(local_size_x = 32, local_size_y = 8, local_size_z = 4) in;"
+            in generated
+        )
+        assert_compute_glsl_validates_if_available(generated, tmp_path)
+    assert target_projection[target] in generated
+    assert _reflected_workgroup_size(artifact_path, target) == [32, 8, 4]
+
+    repeated = translate_project(config, format_output=False).to_json()
+    assert repeated["artifacts"][0]["execution"]["identity"] == execution["identity"]
+
+    report_path = repo / "workgroup-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert validation["success"] is True
+    runtime_artifact = build_runtime_artifact_manifest(report_path)["artifacts"][0]
+    assert runtime_artifact["execution"] == execution
+    assert runtime_artifact["dispatch"]["workgroups"][0]["workgroupSize"] == [
+        32,
+        8,
+        4,
+    ]
+
+
+def test_validate_project_report_rejects_stale_workgroup_execution_identity(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_workgroup_size_metal_fixture(repo)
+    config = project_api.ProjectConfig(
+        root=repo,
+        targets=["directx"],
+        output_dir="out",
+        workgroup_size=[32, 8, 4],
+    )
+    payload = translate_project(config, format_output=False).to_json()
+    payload["artifacts"][0]["execution"]["workgroupSize"] = [32, 4, 8]
+    payload["artifacts"][0]["execution"]["provenance"]["path"] = "project.dispatch_size"
+    report_path = repo / "stale-execution-report.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = validate_project_report(report_path)
+
+    assert validation["success"] is False
+    diagnostic = next(
+        item
+        for item in validation["diagnostics"]
+        if item["code"] == "project.validate.invalid-report"
+    )
+    assert (
+        "execution.identity must match the execution contract" in diagnostic["message"]
+    )
+    assert (
+        "execution.provenance.path must be project.workgroup_size"
+        in diagnostic["message"]
+    )
+    assert (
+        "execution.workgroupSize must match project.workgroupSize"
+        in diagnostic["message"]
+    )
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_translate_project_requires_consumed_metal_workgroup_size(tmp_path, target):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_workgroup_size_metal_fixture(repo, value_type="uint")
+
+    payload = translate_project(
+        repo,
+        targets=[target],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.workgroup-size-required"
+    assert diagnostic["checkKind"] == "execution-specialization"
+    assert diagnostic["location"]["file"] == "workgroup_size.metal"
+    assert diagnostic["missingCapabilities"] == [
+        "execution.workgroup-size-specialization"
+    ]
+    assert diagnostic["details"]["executionSpecialization"] == {
+        "reason": "consumed-source-value-unconfigured",
+        "sourceEntryPoints": ["main"],
+    }
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_translate_project_requires_direct_crossgl_workgroup_size_use(
+    tmp_path,
+    target,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "workgroup_size.cgl").write_text(
+        textwrap.dedent("""
+            shader DirectWorkgroupSizeUse {
+                compute {
+                    void main() {
+                        uint width = gl_WorkGroupSize.x;
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=[target],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.workgroup-size-required"
+    assert diagnostic["details"]["executionSpecialization"] == {
+        "reason": "consumed-source-value-unconfigured",
+        "sourceEntryPoints": ["main"],
+    }
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_translate_project_ordinary_metal_uses_single_translation_path(
+    tmp_path,
+    monkeypatch,
+    target,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "ordinary.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            kernel void ordinary(device uint* output [[buffer(0)]],
+                                 uint index [[thread_position_in_grid]]) {
+                output[index] = index;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    translate_calls = []
+    existing_translate = project_pipeline.translate
+
+    def record_translate(*args, **kwargs):
+        translate_calls.append((args, kwargs))
+        return existing_translate(*args, **kwargs)
+
+    def reject_specialization_path(**_kwargs):
+        raise AssertionError("ordinary Metal input entered execution specialization")
+
+    monkeypatch.setattr(project_pipeline, "translate", record_translate)
+    monkeypatch.setattr(
+        project_pipeline,
+        "_crossgl_ast_for_project_target",
+        reject_specialization_path,
+    )
+
+    payload = project_pipeline.translate_project(
+        repo,
+        targets=[target],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert len(translate_calls) == 1
+    assert "execution" not in payload["artifacts"][0]
+
+
+@pytest.mark.parametrize(
+    "workgroup_size",
+    [
+        [0, 1, 1],
+        [-1, 1, 1],
+        [1, 1],
+        [1, 1, 1, 1],
+        ["32", 1, 1],
+        [True, 1, 1],
+    ],
+    ids=["zero", "negative", "short", "long", "string", "boolean"],
+)
+def test_project_config_rejects_malformed_workgroup_size(tmp_path, workgroup_size):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    with pytest.raises(ValueError, match="workgroup_size"):
+        project_api.ProjectConfig(root=repo, workgroup_size=workgroup_size)
+
+
+def test_project_config_rejects_conflicting_variant_workgroup_sizes(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    with pytest.raises(ValueError, match="variant workgroup sizes conflict"):
+        project_api.ProjectConfig(
+            root=repo,
+            variants={"tile": {"workgroup_size": [32, 8, 4]}},
+            variant_workgroup_sizes={"tile": [32, 4, 8]},
+        )
+
+
+def test_load_project_config_records_project_and_variant_workgroup_sizes(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            workgroup_size = [32, 8, 4]
+
+            [project.variants.tile]
+            MODE = "fast"
+            workgroup_size = [32, 4, 8]
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    config = load_project_config(repo)
+
+    assert config.workgroup_size == (32, 8, 4)
+    assert config.variants == {"tile": {"MODE": "fast"}}
+    assert config.variant_workgroup_sizes == {"tile": (32, 4, 8)}
+    payload = scan_project(config).to_report().to_json()
+    assert payload["project"]["workgroupSize"] == [32, 8, 4]
+    assert payload["project"]["variantWorkgroupSizes"] == {"tile": [32, 4, 8]}
+
+
+@pytest.mark.parametrize(
+    ("target", "reason"),
+    [
+        ("directx", "thread-count-limit-exceeded"),
+        ("opengl", "invocation-count-limit-exceeded"),
+    ],
+)
+def test_translate_project_reports_target_workgroup_size_limit(
+    tmp_path,
+    target,
+    reason,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_workgroup_size_metal_fixture(repo)
+    config = project_api.ProjectConfig(
+        root=repo,
+        workgroup_size=[1024, 2, 1],
+    )
+
+    payload = translate_project(
+        config,
+        targets=[target],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.workgroup-size-invalid"
+    assert diagnostic["location"]["file"] == "workgroup_size.metal"
+    assert diagnostic["details"]["executionSpecialization"] == {
+        "reason": reason,
+        "sourceEntryPoints": ["main"],
+        "workgroupSize": [1024, 2, 1],
+    }
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_translate_project_rejects_conflicting_source_workgroup_size(
+    tmp_path,
+    target,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "kernel.cgl").write_text(
+        textwrap.dedent("""
+            shader ConflictingWorkgroupSize {
+                compute {
+                    @ stage_entry
+                    @ numthreads(8, 4, 1)
+                    void main(uint3 group_size @gl_WorkGroupSize) {
+                        uint value = group_size.x;
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+    config = project_api.ProjectConfig(
+        root=repo,
+        workgroup_size=[32, 8, 4],
+    )
+
+    payload = translate_project(
+        config,
+        targets=[target],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == "project.translate.workgroup-size-conflict"
+    assert diagnostic["details"]["executionSpecialization"] == {
+        "reason": "project-source-conflict",
+        "sourceEntryPoints": ["main"],
+        "sourceWorkgroupSize": [8, 4, 1],
+        "workgroupSize": [32, 8, 4],
+    }
+    assert not (repo / payload["artifacts"][0]["path"]).exists()
+
+
+def test_translate_project_emits_distinct_workgroup_size_variants(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_workgroup_size_metal_fixture(repo)
+    config = project_api.ProjectConfig(
+        root=repo,
+        targets=["directx", "opengl"],
+        output_dir="out",
+        variants={
+            "tile_a": {"workgroup_size": [32, 8, 4]},
+            "tile_b": {"workgroup_size": [32, 2, 8]},
+        },
+    )
+
+    report = translate_project(config, format_output=False)
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 4
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["project"]["variants"] == {"tile_a": {}, "tile_b": {}}
+    assert payload["project"]["variantWorkgroupSizes"] == {
+        "tile_a": [32, 8, 4],
+        "tile_b": [32, 2, 8],
+    }
+    assert {
+        tuple(artifact["execution"]["workgroupSize"])
+        for artifact in payload["artifacts"]
+    } == {
+        (32, 8, 4),
+        (32, 2, 8),
+    }
+    assert all(artifact["defines"] == {} for artifact in payload["artifacts"])
+    assert len({artifact["path"] for artifact in payload["artifacts"]}) == 4
+    assert (
+        len(
+            {
+                artifact["execution"]["identity"]["value"]
+                for artifact in payload["artifacts"]
+            }
+        )
+        == 4
+    )
+    assert {
+        (
+            artifact["variant"],
+            artifact["execution"]["provenance"]["path"],
+        )
+        for artifact in payload["artifacts"]
+    } == {
+        ("tile_a", "project.variants.tile_a.workgroup_size"),
+        ("tile_b", "project.variants.tile_b.workgroup_size"),
+    }
+
+    report_path = repo / "variant-report.json"
+    report.write_json(report_path)
+    assert validate_project_report(report_path)["success"] is True
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_translate_project_rejects_unproven_multi_entry_workgroup_size(
+    tmp_path,
+    target,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_workgroup_size_metal_fixture(
+        repo,
+        value_type="uint",
+        entry_points=("first", "second"),
+    )
+    config = project_api.ProjectConfig(
+        root=repo,
+        workgroup_size=[32, 8, 4],
+    )
+
+    payload = translate_project(
+        config,
+        targets=[target],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == ("project.translate.workgroup-size-entry-ambiguous")
+    assert diagnostic["checkKind"] == "execution-specialization"
+    assert diagnostic["details"]["executionSpecialization"] == {
+        "reason": "aggregate-entry-size-unproven",
+        "sourceEntryPoints": ["first", "second"],
+        "workgroupSize": [32, 8, 4],
+    }
+    assert "Select one entry point" in diagnostic["message"]
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_translate_project_allows_entry_scoped_workgroup_size_specialization(
+    tmp_path,
+    target,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_workgroup_size_metal_fixture(
+        repo,
+        value_type="uint",
+        entry_points=("first", "second"),
+    )
+    config = project_api.ProjectConfig(
+        root=repo,
+        entry_points={"workgroup_size.metal": "second"},
+        workgroup_size=[32, 8, 4],
+    )
+
+    payload = translate_project(
+        config,
+        targets=[target],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["provenance"]["pipeline"] == "entry-scoped-translate"
+    assert artifact["execution"]["sourceEntryPoints"] == ["second"]
+    assert artifact["execution"]["workgroupSize"] == [32, 8, 4]
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    if target == "directx":
+        assert_directx_compute_validates_if_available(generated, tmp_path)
+    else:
+        assert_compute_glsl_validates_if_available(generated, tmp_path)
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_translate_project_accepts_shared_source_workgroup_size_for_multi_entry(
+    tmp_path,
+    target,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "shared.cgl").write_text(
+        textwrap.dedent("""
+            shader SharedWorkgroupSize {
+                compute first {
+                    @ stage_entry
+                    @ numthreads(32, 8, 4)
+                    void first(uint3 group_size @gl_WorkGroupSize) {
+                        uint value = group_size.x;
+                    }
+                }
+
+                compute second {
+                    @ stage_entry
+                    @ numthreads(32, 8, 4)
+                    void second(uint3 group_size @gl_WorkGroupSize) {
+                        uint value = group_size.y;
+                    }
+                }
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(
+        repo,
+        targets=[target],
+        output_dir="out",
+        format_output=False,
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact["execution"]["workgroupSize"] == [32, 8, 4]
+    assert artifact["execution"]["sourceEntryPoints"] == ["first", "second"]
+    assert artifact["execution"]["provenance"]["kind"] == "source"
+    report_path = repo / "shared-source-report.json"
+    report.write_json(report_path)
+    assert validate_project_report(report_path)["success"] is True

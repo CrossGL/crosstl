@@ -947,6 +947,7 @@ configuration contract is intentionally small:
    output_dir = "crosstl-out"
    include_dirs = ["shaders/include"]
    external_corpus_manifest = "external-corpus.json"
+   workgroup_size = [32, 8, 4]
 
    [project.sources]
    "legacy/**/*.shader" = "cgl"
@@ -969,6 +970,7 @@ configuration contract is intentionally small:
 
    [project.variants.debug]
    USE_FAST_PATH = "0"
+   workgroup_size = [32, 4, 8]
 
    [project.specialization_constants]
    useFastPath = true
@@ -1030,6 +1032,46 @@ the selected variant override, project value, or source default and fails closed
 without emitting HLSL when a required value is missing, conflicting, or
 incompatible with the source type.
 
+``project.workgroup_size`` defines one concrete local workgroup size as exactly
+three positive integers in X, Y, Z order. A named variant can override it with
+``project.variants.<name>.workgroup_size``. Workgroup-size entries are execution
+metadata, not preprocessor defines. They therefore do not enter the artifact
+define map, while each named size still produces its own variant path and
+deterministic execution identity.
+
+For DirectX and OpenGL project translation, a consumed Metal
+``[[threads_per_threadgroup]]`` parameter requires this concrete configuration
+or equivalent concrete source execution metadata. Translation emits
+``[numthreads(x, y, z)]`` and the matching OpenGL local-size declaration from
+the same canonical value. A scalar source parameter observes ``.x``, a
+two-component parameter observes ``.xy``, and a three-component parameter
+retains all components. Missing, malformed, non-positive, target-limit-
+exceeding, or conflicting values fail the artifact with an
+``execution-specialization`` diagnostic instead of using a default local size.
+
+One configured size cannot establish the contract for an aggregate artifact
+containing several runtime-sized compute entries. Such an artifact is accepted
+only when concrete source metadata proves that every emitted entry shares the
+same size. Otherwise translation requires an entry-point selection so each
+standalone artifact can be specialized independently. This prevents a validly
+compiled declaration from applying the wrong host dispatch contract to other
+entries in the same source file.
+
+Successful artifact records include an ``execution`` object with the canonical
+``workgroupSize``, affected ``sourceEntryPoints``, configuration or source
+``provenance``, and a SHA-256 ``identity``. Report validation recomputes that
+identity, and runtime artifact manifests preserve the execution object alongside
+reflected target dispatch metadata. Workgroup size is independent of subgroup
+width; the project pipeline does not infer or record a subgroup requirement from
+any workgroup dimension.
+
+For example, the host code at pinned MLX commit
+``4367c73b60541ddd5a266ce4644fd93d20223b6e`` selects GEMV tile parameters per
+entry and dispatches ``(32, BN, BM)``. That is evidence for distinct per-entry
+workgroup variants. The leading ``32`` remains the X workgroup dimension and is
+not evidence of a required subgroup width. This repository example does not
+change the backend-neutral configuration contract.
+
 The pinned MLX project-porting gate applies this contract to
 ``mlx/backend/metal/kernels/rms_norm.metal`` at commit
 ``4367c73b60541ddd5a266ce4644fd93d20223b6e``. Its DirectX project declares two
@@ -1040,8 +1082,8 @@ DXC on Windows. Its unconfigured OpenGL project checks deferred
 ``layout(constant_id = 20)`` emission and validates generated OpenGL SPIR-V on
 Linux. This proves translation and native compilation only; it does not claim
 RMSNorm numerical runtime parity or full MLX test-suite support. Numerical
-execution additionally requires the entry-point workgroup-size specialization
-contract tracked in ``CrossGL/crosstl#1750``.
+execution also requires host dispatch values to match each compiled artifact's
+workgroup-size contract.
 
 ``source_roots`` limits discovery to selected directories. ``include`` and
 ``exclude`` use shell-style patterns against repository-relative paths. Project
@@ -1354,7 +1396,8 @@ Project reports are JSON documents with:
   source-root status records and status counts, include/exclude
   patterns, targets, output directory, source override map, include
   directories, include-directory status records and status counts, define and
-  variant maps, project and per-variant specialization constant maps,
+  variant maps, project and per-variant specialization constant maps, project
+  and per-variant workgroup sizes,
   per-variant define and specialization constant counts, and counts for source
   roots, include patterns, exclude patterns, source overrides, include
   directories, defines, variants, and project specialization constants.
@@ -1430,6 +1473,11 @@ Project reports are JSON documents with:
   state, effective values, and value provenance, plus
   ``specializationMaterialization`` metadata that distinguishes native deferred
   specialization from a concrete CrossGL variant.
+  Artifacts with a concrete workgroup-size contract carry an ``execution``
+  record with canonical dimensions, source entry points, provenance, and a
+  deterministic identity. Full report validation rejects malformed dimensions,
+  unknown variant provenance, or an identity that does not match the artifact
+  source, target, variant, entries, and dimensions.
   Successful artifact records in full reports must include file-level
   source-map anchors. Generated CrossGL artifacts also include a
   compiler-compatible ``source-remap`` sidecar with a file-level

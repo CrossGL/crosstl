@@ -57,6 +57,7 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLSpecializationConstantError,
     OpenGLStructConstructionError,
     OpenGLWorkgroupPointerError,
+    OpenGLWorkgroupSizeError,
 )
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
@@ -2454,6 +2455,93 @@ def test_glsl_threads_per_grid_parameter_uses_native_dispatch_extent():
     assert "void main()" in generated
     assert "uint row_count = (gl_NumWorkGroups * gl_WorkGroupSize).y;" in generated
     assert "gsize" not in generated
+
+
+@pytest.mark.parametrize(
+    ("value_type", "value_expression", "expected_declaration"),
+    [
+        (
+            "uint",
+            "lsize",
+            "uint lsize = uint(gl_WorkGroupSize.x);",
+        ),
+        (
+            "uint2",
+            "lsize.x + lsize.y",
+            "uvec2 lsize = uvec2(gl_WorkGroupSize.xy);",
+        ),
+        (
+            "uint3",
+            "lsize.x + lsize.y + lsize.z",
+            None,
+        ),
+    ],
+    ids=["scalar", "vector2", "vector3"],
+)
+def test_glsl_compute_workgroup_size_projects_declared_source_shape(
+    tmp_path,
+    value_type,
+    value_expression,
+    expected_declaration,
+):
+    shader = f"""
+    shader WorkgroupShape {{
+        compute {{
+            @ stage_entry
+            @ numthreads(32, 8, 4)
+            void main({value_type} lsize @gl_WorkGroupSize) {{
+                uint value = {value_expression};
+            }}
+        }}
+    }}
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "layout(local_size_x = 32, local_size_y = 8, local_size_z = 4) in;"
+        in generated_code
+    )
+    if expected_declaration is None:
+        assert "uvec3 lsize" not in generated_code
+        assert "gl_WorkGroupSize.x" in generated_code
+    else:
+        assert expected_declaration in generated_code
+    assert_glsl_compute_validates_if_available(
+        generated_code,
+        tmp_path,
+        f"workgroup_shape_{value_type}",
+    )
+
+
+@pytest.mark.parametrize(
+    ("size", "reason"),
+    [
+        ((0, 1, 1), "non-positive-dimension"),
+        ((1025, 1, 1), "dimension-limit-exceeded"),
+        ((1024, 2, 1), "invocation-count-limit-exceeded"),
+    ],
+)
+def test_glsl_compute_workgroup_size_rejects_invalid_target_dimensions(size, reason):
+    x, y, z = size
+    shader = f"""
+    shader InvalidWorkgroupSize {{
+        compute {{
+            @ stage_entry
+            @ numthreads({x}, {y}, {z})
+            void main() {{ }}
+        }}
+    }}
+    """
+
+    with pytest.raises(OpenGLWorkgroupSizeError) as exc_info:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    assert exc_info.value.project_diagnostic_code == (
+        "project.translate.workgroup-size-invalid"
+    )
+    assert exc_info.value.workgroup_size == size
+    assert exc_info.value.reason == reason
 
 
 def test_glsl_hlsl_graphics_builtin_parameter_aliases_to_glsl_builtins():

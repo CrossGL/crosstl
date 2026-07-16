@@ -52,6 +52,7 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXCompileTimeGlobalError,
     DirectXComplexCompoundAssignmentError,
     DirectXCooperativeMatrixUnsupportedError,
+    DirectXEntryPointSelectionError,
     DirectXForInIterableError,
     DirectXMappedOverloadError,
     DirectXMinimumPrecisionIntegerArithmeticError,
@@ -65,6 +66,7 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXUnionLayoutError,
     DirectXUnresolvedSourceTypeError,
     DirectXWorkgroupPointerError,
+    DirectXWorkgroupSizeError,
     HLSLCodeGen,
 )
 from crosstl.translator.lexer import Lexer
@@ -5299,6 +5301,142 @@ def test_hlsl_compute_workgroup_size_parameter_lowers_to_numthreads_constant():
     assert ": threads_per_grid" not in generated_code
     assert not re.search(r"\bgl_[A-Z]", generated_code)
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
+@pytest.mark.parametrize(
+    ("value_type", "value_expression", "expected_declaration"),
+    [
+        (
+            "uint",
+            "lsize",
+            "uint lsize = uint((uint3(32, 8, 4)).x);",
+        ),
+        (
+            "uint2",
+            "lsize.x + lsize.y",
+            "uint2 lsize = uint2((uint3(32, 8, 4)).xy);",
+        ),
+        (
+            "uint3",
+            "lsize.x + lsize.y + lsize.z",
+            "uint3 lsize = uint3(32, 8, 4);",
+        ),
+    ],
+    ids=["scalar", "vector2", "vector3"],
+)
+def test_hlsl_compute_workgroup_size_projects_declared_source_shape(
+    tmp_path,
+    value_type,
+    value_expression,
+    expected_declaration,
+):
+    shader = f"""
+    shader WorkgroupShape {{
+        compute {{
+            @ stage_entry
+            @ numthreads(32, 8, 4)
+            void main(RWStructuredBuffer<uint> output @buffer(0),
+                      {value_type} lsize @gl_WorkGroupSize) {{
+                output[0] = {value_expression};
+            }}
+        }}
+    }}
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "[numthreads(32, 8, 4)]" in generated_code
+    assert expected_declaration in generated_code
+    assert "gl_WorkGroupSize" not in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated_code, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("size", "reason"),
+    [
+        ((0, 1, 1), "non-positive-dimension"),
+        ((1025, 1, 1), "dimension-limit-exceeded"),
+        ((1024, 2, 1), "thread-count-limit-exceeded"),
+    ],
+)
+def test_hlsl_compute_workgroup_size_rejects_invalid_target_dimensions(size, reason):
+    x, y, z = size
+    shader = f"""
+    shader InvalidWorkgroupSize {{
+        compute {{
+            @ stage_entry
+            @ numthreads({x}, {y}, {z})
+            void main() {{ }}
+        }}
+    }}
+    """
+
+    with pytest.raises(DirectXWorkgroupSizeError) as exc_info:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    assert exc_info.value.project_diagnostic_code == (
+        "project.translate.workgroup-size-invalid"
+    )
+    assert exc_info.value.workgroup_size == size
+    assert exc_info.value.reason == reason
+
+
+DIRECTX_ENTRY_SCOPED_COMPUTE_SOURCE = """
+shader DirectXEntryScopedCompute {
+    uint selected_helper(uint value) {
+        return value + 1u;
+    }
+
+    uint unrelated_helper(uint value) {
+        return value * 9u;
+    }
+
+    compute first {
+        @ numthreads(8, 1, 1)
+        void main(RWStructuredBuffer<uint> output @buffer(0),
+                  uint group_size @gl_WorkGroupSize) {
+            output[0] = unrelated_helper(group_size);
+        }
+    }
+
+    compute second {
+        @ numthreads(32, 8, 4)
+        void main(RWStructuredBuffer<uint> output @buffer(0),
+                  uint group_size @gl_WorkGroupSize) {
+            output[0] = selected_helper(group_size);
+        }
+    }
+}
+"""
+
+
+def test_hlsl_entry_scoped_generation_keeps_selected_execution_contract(tmp_path):
+    ast = parse_code(tokenize_code(DIRECTX_ENTRY_SCOPED_COMPUTE_SOURCE))
+
+    generated = HLSLCodeGen().generate_entry(ast, "second")
+
+    assert generated.count("[numthreads(") == 1
+    assert "[numthreads(32, 8, 4)]" in generated
+    assert "uint group_size = uint((uint3(32, 8, 4)).x);" in generated
+    assert "selected_helper" in generated
+    assert "unrelated_helper" not in generated
+    assert generated.count("RWStructuredBuffer<uint>") == 1
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_entry_scoped_generation_reports_available_entries():
+    ast = parse_code(tokenize_code(DIRECTX_ENTRY_SCOPED_COMPUTE_SOURCE))
+
+    with pytest.raises(
+        DirectXEntryPointSelectionError,
+        match="source entry point 'missing' was not found",
+    ) as error:
+        HLSLCodeGen().generate_entry(ast, "missing")
+
+    assert error.value.reason == "not-found"
+    assert error.value.entry_point == "missing"
+    assert error.value.available_entry_points == ("first", "second")
 
 
 def test_hlsl_compute_unused_value_builtin_parameters_are_dropped():
