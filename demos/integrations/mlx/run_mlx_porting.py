@@ -210,13 +210,24 @@ GEMV_DIRECTX_EXPECTED_ENTRY_POINTS = (
     *(f"CSMain_{index}" for index in range(2, GEMV_EXPECTED_ENTRY_POINT_COUNT + 1)),
 )
 GEMV_DIRECTX_COMPILER_ENTRY_POINTS = ("CSMain", "CSMain_85", "CSMain_113")
-GEMV_DIRECTX_EXPECTED_NUMTHREADS = (1, 1, 1)
+GEMV_WORKGROUP_SIZE_RULE = (32, "BN", "BM")
+GEMV_REPORT_WORKGROUP_SIZE_RULE = tuple(
+    str(component) for component in GEMV_WORKGROUP_SIZE_RULE
+)
+GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES = (
+    (32, 1, 1),
+    (32, 1, 4),
+    (32, 1, 8),
+    (32, 2, 1),
+    (32, 4, 1),
+    (32, 8, 1),
+    (32, 16, 1),
+)
 GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_MESSAGE = (
     "attribute 'numthreads' ignored without accompanying shader attribute "
     "[-Wmisplaced-attributes]"
 )
-GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_SOURCE = "[numthreads(1, 1, 1)]"
-GEMV_DIRECTX_EXPECTED_WARNING_COUNT_PER_CLASS = GEMV_EXPECTED_ENTRY_POINT_COUNT
+GEMV_DIRECTX_EXPECTED_LIBRARY_WARNING_COUNT = GEMV_EXPECTED_ENTRY_POINT_COUNT
 GEMV_OPENGL_TRANSLATION_TIMEOUT_SECONDS = 900
 GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE = (
     "project.translate.opengl-workgroup-pointer-unsupported"
@@ -240,12 +251,8 @@ GEMV_OPENGL_EXPECTED_POINTER_EVIDENCE = {
     "reason": "unprovable-view-access",
 }
 GEMV_OPENGL_BACKING_RANGE_ISSUE = "https://github.com/CrossGL/crosstl/issues/1671"
-GEMV_OPENGL_WORKGROUP_SIZE_ISSUE = "https://github.com/CrossGL/crosstl/issues/1750"
 GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE = "https://github.com/CrossGL/crosstl/issues/1786"
-GEMV_OPENGL_EXECUTION_TRACKED_ISSUES = (
-    GEMV_OPENGL_WORKGROUP_SIZE_ISSUE,
-    GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE,
-)
+GEMV_OPENGL_EXECUTION_TRACKED_ISSUES = (GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE,)
 GEMV_DIRECTX_EXECUTION_TRACKED_ISSUES = GEMV_OPENGL_EXECUTION_TRACKED_ISSUES
 GEMV_OPENGL_FRONTIER_TRACKED_ISSUES = (
     GEMV_OPENGL_BACKING_RANGE_ISSUE,
@@ -737,6 +744,7 @@ def _write_project_config(
     metal_source_options: Mapping[str, int] | None = None,
     metal_target_options: Mapping[str, Mapping[str, int]] | None = None,
     entry_points: Mapping[str, str] | None = None,
+    workgroup_size_rules: Mapping[str, Sequence[str | int]] | None = None,
 ) -> None:
     include_values = [include] if isinstance(include, str) else list(include)
     include_list = ", ".join(json.dumps(value) for value in include_values)
@@ -762,6 +770,12 @@ def _write_project_config(
         lines.append("[project.specialization_constants]")
         for selector, value in specialization_constants.items():
             lines.append(f"{json.dumps(str(selector))} = {json.dumps(value)}")
+        lines.append("")
+    if workgroup_size_rules:
+        lines.append("[project.workgroup_size_rules]")
+        for source, components in workgroup_size_rules.items():
+            rule = ", ".join(json.dumps(component) for component in components)
+            lines.append(f"{json.dumps(source)} = [{rule}]")
         lines.append("")
     if metal_source_options or metal_target_options:
         lines.append("[project.source_options.metal]")
@@ -3549,6 +3563,213 @@ def _bare_value_discard_statements(source: str) -> list[str]:
     ]
 
 
+def _require_gemv_project_workgroup_size_rule(
+    payload: Mapping[str, Any], *, target: str
+) -> None:
+    project = payload.get("project")
+    expected_rules = {
+        MLX_GEMV_SOURCE: list(GEMV_REPORT_WORKGROUP_SIZE_RULE),
+    }
+    _require(
+        isinstance(project, Mapping)
+        and project.get("workgroupSizeRules") == expected_rules
+        and project.get("workgroupSizeRuleCount") == 1,
+        f"{target} GEMV report did not retain the exact workgroup-size rule",
+    )
+
+
+def _is_sha256_contract_identity(value: Any) -> bool:
+    return (
+        isinstance(value, Mapping)
+        and value.get("algorithm") == "sha256"
+        and isinstance(value.get("value"), str)
+        and re.fullmatch(r"[0-9a-f]{64}", value["value"]) is not None
+    )
+
+
+def _gemv_directx_execution_evidence(
+    artifact: Mapping[str, Any],
+    specializations: Sequence[Any],
+    compute_entries: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    host_materializations: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for record in specializations:
+        _require(
+            isinstance(record, Mapping),
+            "DirectX GEMV materialization records must be objects",
+        )
+        if "hostName" not in record:
+            continue
+        host_name = record.get("hostName")
+        materialized_name = record.get("materializedName")
+        _require(
+            isinstance(host_name, str)
+            and bool(host_name)
+            and isinstance(materialized_name, str)
+            and bool(materialized_name),
+            "DirectX GEMV host materialization identity is incomplete",
+        )
+        identity = (host_name, materialized_name)
+        _require(
+            identity not in host_materializations,
+            "DirectX GEMV host materialization identities must be unique",
+        )
+        host_materializations[identity] = record
+    _require(
+        len(host_materializations) == GEMV_EXPECTED_ENTRY_POINT_COUNT,
+        "DirectX GEMV must retain exactly 224 host-named materializations",
+    )
+
+    execution = artifact.get("execution")
+    execution_entries = (
+        execution.get("entryPoints") if isinstance(execution, Mapping) else None
+    )
+    _require(
+        isinstance(execution_entries, list)
+        and len(execution_entries) == GEMV_EXPECTED_ENTRY_POINT_COUNT,
+        "DirectX GEMV report must contain exactly 224 execution entries",
+    )
+    rule_path = f"project.workgroup_size_rules[{json.dumps(MLX_GEMV_SOURCE)}]"
+    _require(
+        execution.get("provenance")
+        == {
+            "kind": "materialized-template-rule",
+            "path": rule_path,
+        }
+        and _is_sha256_contract_identity(execution.get("identity")),
+        "DirectX GEMV execution provenance or identity changed",
+    )
+
+    report_entries_by_identity: dict[tuple[str, str], Mapping[str, Any]] = {}
+    report_entries_by_target: dict[str, Mapping[str, Any]] = {}
+    report_workgroup_size_counts: Counter[tuple[int, int, int]] = Counter()
+    for entry in execution_entries:
+        _require(
+            isinstance(entry, Mapping),
+            "DirectX GEMV execution entries must be objects",
+        )
+        source_entry = entry.get("sourceEntryPoint")
+        materialized_entry = entry.get("materializedEntryPoint")
+        target_entry = entry.get("targetEntryPoint")
+        _require(
+            isinstance(source_entry, str)
+            and bool(source_entry)
+            and isinstance(materialized_entry, str)
+            and bool(materialized_entry)
+            and isinstance(target_entry, str)
+            and bool(target_entry),
+            "DirectX GEMV execution entry identity is incomplete",
+        )
+        materialization_identity = (source_entry, materialized_entry)
+        _require(
+            materialization_identity not in report_entries_by_identity,
+            "DirectX GEMV execution materialization identities must be unique",
+        )
+        _require(
+            target_entry not in report_entries_by_target,
+            "DirectX GEMV execution target identities must be unique",
+        )
+        host_record = host_materializations.get(materialization_identity)
+        _require(
+            host_record is not None,
+            "DirectX GEMV execution entry has no matching host/materialized identity",
+        )
+        entry_materialization = entry.get("materialization")
+        _require(
+            isinstance(entry_materialization, Mapping)
+            and entry_materialization.get("hostName") == source_entry
+            and entry_materialization.get("materializedName") == materialized_entry
+            and entry_materialization.get("name") == host_record.get("name"),
+            "DirectX GEMV execution entry materialization identity changed",
+        )
+        parameters = entry.get("parameters")
+        parameter_sources = entry.get("parameterSources")
+        _require(
+            isinstance(parameters, Mapping)
+            and parameters == host_record.get("parameters")
+            and isinstance(parameter_sources, Mapping)
+            and parameter_sources == host_record.get("parameterSources"),
+            "DirectX GEMV execution parameters lost materialization provenance",
+        )
+        rule = entry.get("rule")
+        _require(
+            isinstance(rule, Mapping)
+            and rule.get("components") == list(GEMV_REPORT_WORKGROUP_SIZE_RULE)
+            and rule.get("sourcePattern") == MLX_GEMV_SOURCE
+            and rule.get("path") == rule_path,
+            "DirectX GEMV execution entry workgroup-size rule changed",
+        )
+        try:
+            resolved_size = (
+                32,
+                int(str(parameters["BN"])),
+                int(str(parameters["BM"])),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise PortingCheckError(
+                "DirectX GEMV execution entry lacks integral BN/BM parameters"
+            ) from exc
+        _require(
+            entry.get("workgroupSize") == list(resolved_size)
+            and _is_sha256_contract_identity(entry.get("identity")),
+            "DirectX GEMV execution entry workgroup-size contract changed",
+        )
+        report_entries_by_identity[materialization_identity] = entry
+        report_entries_by_target[target_entry] = entry
+        report_workgroup_size_counts[resolved_size] += 1
+
+    _require(
+        set(report_entries_by_identity) == set(host_materializations),
+        "DirectX GEMV execution entries must join every host materialization by identity",
+    )
+    source_entry_points = execution.get("sourceEntryPoints")
+    _require(
+        isinstance(source_entry_points, list)
+        and len(source_entry_points) == GEMV_EXPECTED_ENTRY_POINT_COUNT
+        and len(set(source_entry_points)) == GEMV_EXPECTED_ENTRY_POINT_COUNT
+        and set(source_entry_points)
+        == {identity[0] for identity in report_entries_by_identity},
+        "DirectX GEMV execution source identities changed",
+    )
+
+    generated_entries_by_target = {
+        str(entry["targetEntryPoint"]): entry for entry in compute_entries
+    }
+    _require(
+        len(generated_entries_by_target) == GEMV_EXPECTED_ENTRY_POINT_COUNT
+        and set(generated_entries_by_target) == set(report_entries_by_target),
+        "DirectX GEMV generated target entries do not match report identities",
+    )
+    for target_entry, report_entry in report_entries_by_target.items():
+        generated_size = generated_entries_by_target[target_entry]["workgroupSize"]
+        _require(
+            generated_size == tuple(report_entry["workgroupSize"]),
+            "DirectX GEMV generated numthreads declaration does not match its "
+            f"report entry contract: {target_entry}",
+        )
+
+    resolved_sizes = tuple(sorted(report_workgroup_size_counts))
+    _require(
+        resolved_sizes == GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES,
+        "DirectX GEMV resolved workgroup-size set changed",
+    )
+    return {
+        "hostNamedMaterializationCount": len(host_materializations),
+        "reportExecutionEntryCount": len(report_entries_by_identity),
+        "executionIdentityJoinCount": len(report_entries_by_identity),
+        "generatedTargetEntryIdentityCount": len(generated_entries_by_target),
+        "generatedNumthreadsContractCount": len(generated_entries_by_target),
+        "resolvedWorkgroupSizes": [list(size) for size in resolved_sizes],
+        "resolvedWorkgroupSizeCounts": [
+            {
+                "workgroupSize": list(size),
+                "entryCount": report_workgroup_size_counts[size],
+            }
+            for size in resolved_sizes
+        ],
+    }
+
+
 def _check_gemv_directx_compiler_frontier(
     mlx_root: Path,
     work_dir: Path,
@@ -3579,6 +3800,9 @@ def _check_gemv_directx_compiler_frontier(
         include=MLX_GEMV_SOURCE,
         targets=("directx",),
         output_dir=_relpath(output_dir, mlx_root),
+        workgroup_size_rules={
+            MLX_GEMV_SOURCE: GEMV_WORKGROUP_SIZE_RULE,
+        },
         metal_source_options={
             "max_template_specializations": GEMV_MAX_TEMPLATE_SPECIALIZATIONS,
             "max_template_materialization_work": GEMV_MAX_TEMPLATE_MATERIALIZATION_WORK,
@@ -3616,6 +3840,7 @@ def _check_gemv_directx_compiler_frontier(
         payload.get("kind") == "crosstl-project-portability-report",
         "DirectX GEMV translation report kind changed",
     )
+    _require_gemv_project_workgroup_size_rule(payload, target="DirectX")
     summary = payload.get("summary", {})
     _require(
         isinstance(summary, Mapping)
@@ -3717,24 +3942,27 @@ def _check_gemv_directx_compiler_frontier(
     )
 
     generated = generated_path.read_text(encoding="utf-8")
-    compute_entries = re.findall(
-        r"(?m)^[ \t]*\[numthreads\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)\]"
-        r"\s*\r?\n[ \t]*void[ \t]+(CSMain(?:_\d+)?)[ \t]*\(",
-        generated,
+    compute_entry_pattern = re.compile(
+        r"(?m)^[ \t]*(?P<source_expression>"
+        r"\[numthreads\(\s*(?P<x>\d+)\s*,\s*(?P<y>\d+)\s*,\s*"
+        r"(?P<z>\d+)\s*\)\])[ \t]*\r?\n"
+        r"[ \t]*void[ \t]+(?P<target_entry>CSMain(?:_\d+)?)[ \t]*\("
     )
-    entry_points = [entry for *_dimensions, entry in compute_entries]
+    compute_entries = [
+        {
+            "sourceExpression": match.group("source_expression"),
+            "workgroupSize": tuple(
+                int(match.group(component)) for component in ("x", "y", "z")
+            ),
+            "targetEntryPoint": match.group("target_entry"),
+        }
+        for match in compute_entry_pattern.finditer(generated)
+    ]
+    entry_points = [str(entry["targetEntryPoint"]) for entry in compute_entries]
     _require(
         len(compute_entries) == GEMV_EXPECTED_ENTRY_POINT_COUNT
         and len(set(entry_points)) == GEMV_EXPECTED_ENTRY_POINT_COUNT,
         "DirectX GEMV artifact compute-entry count changed",
-    )
-    _require(
-        all(
-            tuple(int(value) for value in dimensions)
-            == GEMV_DIRECTX_EXPECTED_NUMTHREADS
-            for *dimensions, _entry in compute_entries
-        ),
-        "DirectX GEMV emitted numthreads directives changed",
     )
     _require(
         all(
@@ -3746,6 +3974,11 @@ def _check_gemv_directx_compiler_frontier(
     _require(
         entry_points == list(GEMV_DIRECTX_EXPECTED_ENTRY_POINTS),
         "DirectX GEMV artifact export set changed",
+    )
+    execution_evidence = _gemv_directx_execution_evidence(
+        artifact,
+        specializations,
+        compute_entries,
     )
     residue = re.search(
         r"BinaryOpNode|IdentifierNode|LiteralNode|PrimitiveType|"
@@ -3854,13 +4087,12 @@ def _check_gemv_directx_compiler_frontier(
         for diagnostic in library_diagnostics
     )
     expected_library_diagnostic_counts = Counter(
-        {
-            (
-                "warning",
-                GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_MESSAGE,
-                GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_SOURCE,
-            ): GEMV_DIRECTX_EXPECTED_WARNING_COUNT_PER_CLASS,
-        }
+        (
+            "warning",
+            GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_MESSAGE,
+            str(entry["sourceExpression"]),
+        )
+        for entry in compute_entries
     )
     _require(
         library_diagnostic_counts == expected_library_diagnostic_counts,
@@ -3868,6 +4100,23 @@ def _check_gemv_directx_compiler_frontier(
     )
     library_output_hash = _sha256(library_output_path)
     library_output_size = library_output_path.stat().st_size
+    warning_source_counts = Counter(
+        str(entry["sourceExpression"]) for entry in compute_entries
+    )
+    source_expression_by_size = {
+        tuple(entry["workgroupSize"]): str(entry["sourceExpression"])
+        for entry in compute_entries
+    }
+    library_allowed_warnings = [
+        {
+            "classification": "library-profile-numthreads-ignored",
+            "severity": "warning",
+            "message": GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_MESSAGE,
+            "sourceExpression": source_expression_by_size[size],
+            "count": warning_source_counts[source_expression_by_size[size]],
+        }
+        for size in GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES
+    ]
 
     return {
         "name": "gemv-directx-compiler-frontier",
@@ -3878,6 +4127,7 @@ def _check_gemv_directx_compiler_frontier(
         "sourceSizeBytes": MLX_GEMV_SOURCE_SIZE_BYTES,
         "target": "directx",
         "artifactStatus": "translated",
+        "artifactPackaging": "single-aggregate-artifact",
         "artifact": _relpath(generated_path, mlx_root),
         "artifactHash": {"algorithm": "sha256", "value": generated_hash},
         "artifactSizeBytes": generated_size,
@@ -3889,6 +4139,10 @@ def _check_gemv_directx_compiler_frontier(
         "templateMaterializationStatus": "materialized",
         "templateSpecializationCount": GEMV_EXPECTED_SPECIALIZATION_COUNT,
         "unsupportedSpecializationCount": 0,
+        "workgroupSizeRule": list(GEMV_WORKGROUP_SIZE_RULE),
+        "reportWorkgroupSizeRule": list(GEMV_REPORT_WORKGROUP_SIZE_RULE),
+        "reportWorkgroupSizeRuleCount": 1,
+        **execution_evidence,
         "materializationResidueCount": 0,
         "bareValueDiscardCount": 0,
         "computeEntryPointCount": GEMV_EXPECTED_ENTRY_POINT_COUNT,
@@ -3913,20 +4167,13 @@ def _check_gemv_directx_compiler_frontier(
             "outputHash": {"algorithm": "sha256", "value": library_output_hash},
             "outputSizeBytes": library_output_size,
             "allowedWarningCounts": {
-                "libraryNumthreads": GEMV_DIRECTX_EXPECTED_WARNING_COUNT_PER_CLASS,
+                "libraryNumthreads": GEMV_DIRECTX_EXPECTED_LIBRARY_WARNING_COUNT,
             },
             "unusedValueWarningCount": 0,
             "stdout": _relpath(library_result.stdout_path, mlx_root),
             "stderr": _relpath(library_result.stderr_path, mlx_root),
         },
-        "libraryAllowedWarnings": [
-            {
-                "message": GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_MESSAGE,
-                "sourceExpression": GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_SOURCE,
-                "count": GEMV_DIRECTX_EXPECTED_WARNING_COUNT_PER_CLASS,
-                "trackedIssue": GEMV_OPENGL_WORKGROUP_SIZE_ISSUE,
-            },
-        ],
+        "libraryAllowedWarnings": library_allowed_warnings,
         "libraryUnusedValueWarningCount": 0,
         "compilerCoveredEntryPointCount": GEMV_EXPECTED_ENTRY_POINT_COUNT,
         "uncompiledEntryPointCount": 0,
@@ -3934,10 +4181,13 @@ def _check_gemv_directx_compiler_frontier(
         "libraryCodeGenerationScope": "all-exported-functions",
         "wholeArtifactSemanticValidityClaimed": False,
         "libraryExecutionSemanticsEstablished": False,
-        "observedNumthreadsDirective": "[numthreads(1, 1, 1)]",
+        "observedNumthreadsDirectives": [
+            source_expression_by_size[size]
+            for size in GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES
+        ],
         "numthreadsDirectiveCount": GEMV_EXPECTED_ENTRY_POINT_COUNT,
-        "numthreadsContractEstablished": False,
-        "exactWorkgroupSizeEstablished": False,
+        "numthreadsContractEstablished": True,
+        "exactWorkgroupSizeEstablished": True,
         "requiredWaveSize": 32,
         "requiredWaveSizeEstablished": False,
         "executionContractBlockedBy": list(GEMV_DIRECTX_EXECUTION_TRACKED_ISSUES),
@@ -3967,6 +4217,9 @@ def _check_gemv_opengl_frontier(
         include=MLX_GEMV_SOURCE,
         targets=("opengl",),
         output_dir=_relpath(output_dir, mlx_root),
+        workgroup_size_rules={
+            MLX_GEMV_SOURCE: GEMV_WORKGROUP_SIZE_RULE,
+        },
         metal_source_options={
             "max_template_specializations": GEMV_MAX_TEMPLATE_SPECIALIZATIONS,
             "max_template_materialization_work": GEMV_MAX_TEMPLATE_MATERIALIZATION_WORK,
@@ -4005,6 +4258,7 @@ def _check_gemv_opengl_frontier(
         payload.get("kind") == "crosstl-project-portability-report",
         "OpenGL GEMV translation report kind changed",
     )
+    _require_gemv_project_workgroup_size_rule(payload, target="OpenGL")
     summary = payload.get("summary", {})
     _require(
         isinstance(summary, Mapping)
@@ -4154,6 +4408,10 @@ def _check_gemv_opengl_frontier(
         "nativeValidationStatus": "not-run-no-artifact",
         "templateMaterializationStatus": "materialized",
         "templateSpecializationCount": GEMV_EXPECTED_SPECIALIZATION_COUNT,
+        "workgroupSizeRule": list(GEMV_WORKGROUP_SIZE_RULE),
+        "reportWorkgroupSizeRule": list(GEMV_REPORT_WORKGROUP_SIZE_RULE),
+        "reportWorkgroupSizeRuleCount": 1,
+        "workgroupSizeRuleConfigured": True,
         "diagnosticCode": GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE,
         "missingCapability": GEMV_OPENGL_EXPECTED_MISSING_CAPABILITY,
         "workgroupPointer": dict(GEMV_OPENGL_EXPECTED_POINTER_EVIDENCE),
@@ -4166,6 +4424,8 @@ def _check_gemv_opengl_frontier(
         "maxTemplateMaterializationWork": GEMV_MAX_TEMPLATE_MATERIALIZATION_WORK,
         "runtimeExecutionAttempted": False,
         "runtimeIntegrationIncluded": False,
+        "runnableArtifactClaimed": False,
+        "numericalParityClaimed": False,
         "runtimeParityClaimed": False,
     }
 

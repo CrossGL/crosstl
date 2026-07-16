@@ -1,6 +1,7 @@
 import hashlib
 import importlib.util
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -3076,6 +3077,12 @@ def _prepare_gemv_opengl_frontier_check(module, tmp_path):
     source_hash = {"algorithm": "sha256", "value": module.MLX_GEMV_SHA256}
     report = {
         "kind": "crosstl-project-portability-report",
+        "project": {
+            "workgroupSizeRules": {
+                module.MLX_GEMV_SOURCE: list(module.GEMV_REPORT_WORKGROUP_SIZE_RULE),
+            },
+            "workgroupSizeRuleCount": 1,
+        },
         "summary": {
             "unitCount": 1,
             "skippedCount": 0,
@@ -3214,6 +3221,10 @@ def test_gemv_opengl_frontier_accepts_exact_pinned_failure(
         "nativeValidationStatus": "not-run-no-artifact",
         "templateMaterializationStatus": "materialized",
         "templateSpecializationCount": 225,
+        "workgroupSizeRule": [32, "BN", "BM"],
+        "reportWorkgroupSizeRule": ["32", "BN", "BM"],
+        "reportWorkgroupSizeRuleCount": 1,
+        "workgroupSizeRuleConfigured": True,
         "diagnosticCode": module.GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE,
         "missingCapability": module.GEMV_OPENGL_EXPECTED_MISSING_CAPABILITY,
         "workgroupPointer": module.GEMV_OPENGL_EXPECTED_POINTER_EVIDENCE,
@@ -3221,18 +3232,18 @@ def test_gemv_opengl_frontier_accepts_exact_pinned_failure(
         "accessRangeStatus": "unprovable",
         "trackedIssues": [
             "https://github.com/CrossGL/crosstl/issues/1671",
-            "https://github.com/CrossGL/crosstl/issues/1750",
             "https://github.com/CrossGL/crosstl/issues/1786",
         ],
         "translationBlockedBy": ["https://github.com/CrossGL/crosstl/issues/1671"],
         "executionContractBlockedBy": [
-            "https://github.com/CrossGL/crosstl/issues/1750",
             "https://github.com/CrossGL/crosstl/issues/1786",
         ],
         "maxTemplateSpecializations": 4096,
         "maxTemplateMaterializationWork": 2097152,
         "runtimeExecutionAttempted": False,
         "runtimeIntegrationIncluded": False,
+        "runnableArtifactClaimed": False,
+        "numericalParityClaimed": False,
         "runtimeParityClaimed": False,
     }
     assert [name for name, _command, _kwargs in commands] == [
@@ -3245,6 +3256,8 @@ def test_gemv_opengl_frontier_accepts_exact_pinned_failure(
     config = (paths[2] / "gemv-opengl-frontier.toml").read_text(encoding="utf-8")
     assert f'include = ["{module.MLX_GEMV_SOURCE}"]' in config
     assert 'targets = ["opengl"]' in config
+    assert "[project.workgroup_size_rules]" in config
+    assert f'"{module.MLX_GEMV_SOURCE}" = [32, "BN", "BM"]' in config
     assert "max_template_specializations = 4096" in config
     assert "max_template_materialization_work = 2097152" in config
 
@@ -3270,6 +3283,25 @@ def test_gemv_opengl_frontier_rejects_wrong_diagnostic(
     assert [name for name, _command, _kwargs in commands] == [
         "translate-gemv-opengl-frontier"
     ]
+
+
+def test_gemv_opengl_frontier_rejects_missing_report_workgroup_rule(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_harness()
+    paths, report_path, _artifact_path = _prepare_gemv_opengl_frontier_check(
+        module, tmp_path
+    )
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["project"]["workgroupSizeRules"] = {}
+    report["project"]["workgroupSizeRuleCount"] = 0
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    commands = []
+    _stub_gemv_opengl_frontier(module, monkeypatch, commands, report_path)
+
+    with pytest.raises(module.PortingCheckError, match="exact workgroup-size rule"):
+        module._check_gemv_opengl_frontier(*paths, "python")
 
 
 def test_gemv_opengl_frontier_rejects_emitted_artifact(
@@ -3364,22 +3396,97 @@ def test_gemv_opengl_frontier_flag_replaces_toolchain_flag():
         module.parse_args(["--mlx-root", "/tmp/mlx", "--require-opengl-gemv-toolchain"])
 
 
-def _gemv_directx_frontier_source(
-    module,
-    *,
-    replace_entry=None,
-):
-    entry_points = ["CSMain", *(f"CSMain_{index}" for index in range(2, 225))]
+def _test_contract_identity(value):
+    return {
+        "algorithm": "sha256",
+        "value": hashlib.sha256(value.encode("utf-8")).hexdigest(),
+    }
+
+
+def _gemv_directx_contract_fixture(module):
+    rule_path = f'project.workgroup_size_rules["{module.MLX_GEMV_SOURCE}"]'
+    host_records = []
+    execution_entries = []
+    sizes = module.GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES
+    target_entries = list(module.GEMV_DIRECTX_EXPECTED_ENTRY_POINTS)
+    target_indexes = {name: index for index, name in enumerate(target_entries)}
+    for source_index, target_entry in enumerate(reversed(target_entries)):
+        target_index = target_indexes[target_entry]
+        workgroup_size = sizes[target_index % len(sizes)]
+        source_entry = f"gemv_host_{source_index:03d}"
+        materialized_entry = f"gemv_materialized_{source_index:03d}"
+        parameters = {
+            "BM": str(workgroup_size[2]),
+            "BN": str(workgroup_size[1]),
+            "T": "float",
+        }
+        parameter_sources = {name: "source-instantiation" for name in parameters}
+        record = {
+            "name": "GEMVKernel",
+            "hostName": source_entry,
+            "materializedName": materialized_entry,
+            "parameters": parameters,
+            "parameterSources": parameter_sources,
+        }
+        entry = {
+            "sourceEntryPoint": source_entry,
+            "materializedEntryPoint": materialized_entry,
+            "targetEntryPoint": target_entry,
+            "workgroupSize": list(workgroup_size),
+            "rule": {
+                "components": list(module.GEMV_REPORT_WORKGROUP_SIZE_RULE),
+                "sourcePattern": module.MLX_GEMV_SOURCE,
+                "path": rule_path,
+            },
+            "parameters": parameters,
+            "parameterSources": parameter_sources,
+            "materialization": {
+                "name": record["name"],
+                "hostName": source_entry,
+                "materializedName": materialized_entry,
+            },
+        }
+        entry["identity"] = _test_contract_identity(
+            f"{source_entry}:{materialized_entry}:{target_entry}:{workgroup_size}"
+        )
+        host_records.append(record)
+        execution_entries.append(entry)
+    execution = {
+        "sourceEntryPoints": [entry["sourceEntryPoint"] for entry in execution_entries],
+        "entryPoints": execution_entries,
+        "provenance": {
+            "kind": "materialized-template-rule",
+            "path": rule_path,
+        },
+        "identity": _test_contract_identity("gemv-directx-execution"),
+    }
+    helper_record = {
+        "name": "GEMVKernel::run",
+        "materializedName": "gemv_helper_materialization",
+        "parameters": {"BM": "1", "BN": "1", "T": "float"},
+        "parameterSources": {
+            "BM": "call-site",
+            "BN": "call-site",
+            "T": "call-site",
+        },
+    }
+    return [helper_record, *host_records], execution
+
+
+def _gemv_directx_frontier_source(module, *, replace_entry=None):
+    entry_points = list(module.GEMV_DIRECTX_EXPECTED_ENTRY_POINTS)
     if replace_entry is not None:
         old_entry, new_entry = replace_entry
         entry_points[entry_points.index(old_entry)] = new_entry
+    sizes = module.GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES
     return "\n".join(
         (
-            "[numthreads(1, 1, 1)]\n"
+            f"[numthreads({size[0]}, {size[1]}, {size[2]})]\n"
             + f"void {entry_point}(uint3 lid : SV_GroupThreadID) {{\n"
             + "}\n"
         )
-        for entry_point in entry_points
+        for index, entry_point in enumerate(entry_points)
+        for size in (sizes[index % len(sizes)],)
     )
 
 
@@ -3425,8 +3532,15 @@ def _prepare_gemv_directx_frontier_check(
     source_hash = {"algorithm": "sha256", "value": module.MLX_GEMV_SHA256}
     generated_hash = hashlib.sha256(generated.encode("utf-8")).hexdigest()
     relative_artifact_path = artifact_path.relative_to(mlx_root).as_posix()
+    specializations, execution = _gemv_directx_contract_fixture(module)
     report = {
         "kind": "crosstl-project-portability-report",
+        "project": {
+            "workgroupSizeRules": {
+                module.MLX_GEMV_SOURCE: list(module.GEMV_REPORT_WORKGROUP_SIZE_RULE),
+            },
+            "workgroupSizeRuleCount": 1,
+        },
         "summary": {
             "unitCount": 1,
             "skippedCount": 0,
@@ -3469,12 +3583,10 @@ def _prepare_gemv_directx_frontier_check(
                 "templateMaterialization": {
                     "status": "materialized",
                     "specializationCount": module.GEMV_EXPECTED_SPECIALIZATION_COUNT,
-                    "specializations": [
-                        {"materializedName": f"specialization_{index}"}
-                        for index in range(module.GEMV_EXPECTED_SPECIALIZATION_COUNT)
-                    ],
+                    "specializations": specializations,
                     "unsupported": [],
                 },
+                "execution": execution,
             }
         ],
     }
@@ -3541,15 +3653,21 @@ def _stub_gemv_directx_frontier(
                             "    ^~~",
                         )
                     )
-                for line_number in range(
-                    1, module.GEMV_DIRECTX_EXPECTED_WARNING_COUNT_PER_CLASS + 1
+                numthreads_source_lines = re.findall(
+                    r"(?m)^[ \t]*(\[numthreads\([^\r\n]+\)\])[ \t]*$",
+                    generated,
+                )
+                assert len(numthreads_source_lines) == (
+                    module.GEMV_DIRECTX_EXPECTED_LIBRARY_WARNING_COUNT
+                )
+                for line_number, source_line in enumerate(
+                    numthreads_source_lines, start=1
                 ):
                     warnings.extend(
                         (
                             "C:/generated/gemv.hlsl:"
                             f"{line_number}:2: warning: {numthreads_message}",
-                            "    "
-                            f"{module.GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_SOURCE}",
+                            f"    {source_line}",
                             "     ^",
                         )
                     )
@@ -3614,6 +3732,7 @@ def test_gemv_directx_compiler_frontier_accepts_exact_pinned_artifact(
     assert result["sourceHash"] == module.MLX_GEMV_SHA256
     assert result["sourceSizeBytes"] == module.MLX_GEMV_SOURCE_SIZE_BYTES
     assert result["artifactStatus"] == "translated"
+    assert result["artifactPackaging"] == "single-aggregate-artifact"
     assert (
         result["artifactHash"]["value"]
         == hashlib.sha256(generated.encode("utf-8")).hexdigest()
@@ -3625,6 +3744,21 @@ def test_gemv_directx_compiler_frontier_accepts_exact_pinned_artifact(
     }
     assert result["templateSpecializationCount"] == 225
     assert result["unsupportedSpecializationCount"] == 0
+    assert result["hostNamedMaterializationCount"] == 224
+    assert result["reportExecutionEntryCount"] == 224
+    assert result["executionIdentityJoinCount"] == 224
+    assert result["generatedTargetEntryIdentityCount"] == 224
+    assert result["generatedNumthreadsContractCount"] == 224
+    assert result["workgroupSizeRule"] == [32, "BN", "BM"]
+    assert result["reportWorkgroupSizeRule"] == ["32", "BN", "BM"]
+    assert result["reportWorkgroupSizeRuleCount"] == 1
+    assert result["resolvedWorkgroupSizes"] == [
+        list(size) for size in module.GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES
+    ]
+    assert result["resolvedWorkgroupSizeCounts"] == [
+        {"workgroupSize": list(size), "entryCount": 32}
+        for size in module.GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES
+    ]
     assert result["materializationResidueCount"] == 0
     assert result["bareValueDiscardCount"] == 0
     assert result["computeEntryPointCount"] == 224
@@ -3647,14 +3781,13 @@ def test_gemv_directx_compiler_frontier_accepts_exact_pinned_artifact(
     assert result["libraryCompilerRun"]["unusedValueWarningCount"] == 0
     assert result["libraryAllowedWarnings"] == [
         {
-            "message": (
-                "attribute 'numthreads' ignored without accompanying shader "
-                "attribute [-Wmisplaced-attributes]"
-            ),
-            "sourceExpression": "[numthreads(1, 1, 1)]",
-            "count": 224,
-            "trackedIssue": "https://github.com/CrossGL/crosstl/issues/1750",
-        },
+            "classification": "library-profile-numthreads-ignored",
+            "severity": "warning",
+            "message": module.GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_MESSAGE,
+            "sourceExpression": f"[numthreads({size[0]}, {size[1]}, {size[2]})]",
+            "count": 32,
+        }
+        for size in module.GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES
     ]
     assert result["libraryUnusedValueWarningCount"] == 0
     assert result["compilerCoveredEntryPointCount"] == 224
@@ -3663,9 +3796,12 @@ def test_gemv_directx_compiler_frontier_accepts_exact_pinned_artifact(
     assert result["libraryCodeGenerationScope"] == "all-exported-functions"
     assert result["wholeArtifactSemanticValidityClaimed"] is False
     assert result["libraryExecutionSemanticsEstablished"] is False
-    assert result["observedNumthreadsDirective"] == "[numthreads(1, 1, 1)]"
-    assert result["numthreadsContractEstablished"] is False
-    assert result["exactWorkgroupSizeEstablished"] is False
+    assert result["observedNumthreadsDirectives"] == [
+        f"[numthreads({size[0]}, {size[1]}, {size[2]})]"
+        for size in module.GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES
+    ]
+    assert result["numthreadsContractEstablished"] is True
+    assert result["exactWorkgroupSizeEstablished"] is True
     assert result["requiredWaveSize"] == 32
     assert result["requiredWaveSizeEstablished"] is False
     assert result["executionContractBlockedBy"] == list(
@@ -3710,8 +3846,77 @@ def test_gemv_directx_compiler_frontier_accepts_exact_pinned_artifact(
     )
     assert f'include = ["{module.MLX_GEMV_SOURCE}"]' in config
     assert 'targets = ["directx"]' in config
+    assert "[project.workgroup_size_rules]" in config
+    assert f'"{module.MLX_GEMV_SOURCE}" = [32, "BN", "BM"]' in config
     assert "max_template_specializations = 4096" in config
     assert "max_template_materialization_work = 2097152" in config
+
+
+def test_gemv_directx_execution_join_is_independent_of_report_list_order(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_harness()
+    paths, report_path, artifact_path, generated = _prepare_gemv_directx_frontier_check(
+        module, tmp_path, monkeypatch
+    )
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    artifact = report["artifacts"][0]
+    artifact["templateMaterialization"]["specializations"].reverse()
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    _stub_gemv_directx_frontier(
+        module, monkeypatch, [], report_path, artifact_path, generated
+    )
+
+    result = module._check_gemv_directx_compiler_frontier(*paths, "python")
+
+    assert result["executionIdentityJoinCount"] == 224
+    assert result["generatedNumthreadsContractCount"] == 224
+
+
+def test_gemv_directx_compiler_frontier_rejects_missing_execution_entry(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_harness()
+    paths, report_path, artifact_path, generated = _prepare_gemv_directx_frontier_check(
+        module, tmp_path, monkeypatch
+    )
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    execution = report["artifacts"][0]["execution"]
+    execution["entryPoints"].pop()
+    execution["sourceEntryPoints"].pop()
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    _stub_gemv_directx_frontier(
+        module, monkeypatch, [], report_path, artifact_path, generated
+    )
+
+    with pytest.raises(module.PortingCheckError, match="exactly 224 execution entries"):
+        module._check_gemv_directx_compiler_frontier(*paths, "python")
+
+
+def test_gemv_directx_compiler_frontier_rejects_numthreads_contract_drift(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_harness()
+    generated = _gemv_directx_frontier_source(module).replace(
+        "[numthreads(32, 1, 1)]",
+        "[numthreads(32, 2, 1)]",
+        1,
+    )
+    paths, report_path, artifact_path, generated = _prepare_gemv_directx_frontier_check(
+        module, tmp_path, monkeypatch, generated=generated
+    )
+    _stub_gemv_directx_frontier(
+        module, monkeypatch, [], report_path, artifact_path, generated
+    )
+
+    with pytest.raises(
+        module.PortingCheckError,
+        match="numthreads declaration does not match.*CSMain",
+    ):
+        module._check_gemv_directx_compiler_frontier(*paths, "python")
 
 
 def test_gemv_directx_compiler_frontier_rejects_wrong_source_hash(
@@ -5282,15 +5487,26 @@ def test_gemv_directx_gap_records_full_compiler_coverage_without_runtime_claims(
         "project_diagnostic_count": 0,
         "max_template_specializations": 4096,
         "max_template_materialization_work": 2097152,
+        "workgroup_size_rule": [32, "BN", "BM"],
+        "report_workgroup_size_rule": ["32", "BN", "BM"],
     }
     assert status["materialization"] == {
         "status": "materialized",
         "specialization_count": 225,
+        "host_named_specialization_count": 224,
         "unsupported_specialization_count": 0,
         "unresolved_residue_count": 0,
         "bare_value_discard_count": 0,
+        "report_execution_entry_count": 224,
+        "execution_identity_join": "hostName/materializedName",
     }
     assert status["artifact"]["compute_entry_count"] == 224
+    assert status["artifact"]["packaging"] == "single-aggregate-artifact"
+    assert status["artifact"]["generated_target_entry_identity_count"] == 224
+    assert status["artifact"]["generated_numthreads_contract_count"] == 224
+    assert status["artifact"]["resolved_workgroup_sizes"] == [
+        list(size) for size in module.GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES
+    ]
     assert status["artifact"]["provenance"] == {
         "intermediate": "crossgl",
         "pipeline": "single-file-translate",
@@ -5314,12 +5530,21 @@ def test_gemv_directx_gap_records_full_compiler_coverage_without_runtime_claims(
     assert set(compiler["allowed_warnings"]) == {"library_numthreads"}
     library_warning = compiler["allowed_warnings"]["library_numthreads"]
     assert library_warning["count"] == 224
-    assert library_warning["tracked_by"] == module.GEMV_OPENGL_WORKGROUP_SIZE_ISSUE
+    assert library_warning["classification"] == ("library-profile-numthreads-ignored")
+    assert library_warning["source_expressions"] == [
+        f"[numthreads({size[0]}, {size[1]}, {size[2]})]"
+        for size in module.GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES
+    ]
+    assert "tracked_by" not in library_warning
     assert compiler["whole_artifact_semantic_validity_claimed"] is False
     assert status["execution_contracts"] == {
-        "observed_numthreads_directive": "[numthreads(1, 1, 1)]",
-        "numthreads_contract_established": False,
-        "exact_workgroup_size_established": False,
+        "workgroup_size_rule": [32, "BN", "BM"],
+        "resolved_workgroup_sizes": [
+            list(size) for size in module.GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES
+        ],
+        "generated_entry_contract_count": 224,
+        "numthreads_contract_established": True,
+        "exact_workgroup_size_established": True,
         "required_wave_size": 32,
         "required_wave_size_established": False,
         "library_execution_semantics_established": False,
@@ -5335,8 +5560,11 @@ def test_gemv_directx_gap_records_full_compiler_coverage_without_runtime_claims(
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
     assert "--require-directx-gemv-compiler-frontier" in readme
     assert "A second `lib_6_6` invocation exports and code-generates all 224" in readme
-    assert "Any unused-value warning or other diagnostic fails the gate" in readme
-    assert "It does not establish workgroup or wave semantics" in readme
+    assert "Any unused-value warning, error, or other diagnostic fails the gate" in (
+        readme
+    )
+    assert "This establishes exact workgroup-size specialization" in readme
+    assert "It does not establish wave semantics" in readme
 
 
 def test_gemv_opengl_gap_records_strict_expected_frontier():
@@ -5361,6 +5589,8 @@ def test_gemv_opengl_gap_records_strict_expected_frontier():
         "emitted_target_file_count": 0,
         "max_template_specializations": 4096,
         "max_template_materialization_work": 2097152,
+        "workgroup_size_rule": [32, "BN", "BM"],
+        "report_workgroup_size_rule": ["32", "BN", "BM"],
     }
     assert status["materialization"] == {
         "status": "materialized",
@@ -5391,8 +5621,10 @@ def test_gemv_opengl_gap_records_strict_expected_frontier():
     assert status["translation_blocked_by"] == [module.GEMV_OPENGL_BACKING_RANGE_ISSUE]
     assert status["execution_contracts"] == {
         "workgroup_size_specialization": {
-            "status": "not-established",
-            "blocked_by": module.GEMV_OPENGL_WORKGROUP_SIZE_ISSUE,
+            "status": "configured-in-project-report",
+            "rule": [32, "BN", "BM"],
+            "report_rule": ["32", "BN", "BM"],
+            "emitted_artifact_contract_claimed": False,
         },
         "subgroup_width_specialization": {
             "status": "not-established",
@@ -5402,6 +5634,8 @@ def test_gemv_opengl_gap_records_strict_expected_frontier():
     assert status["blocked_by"] == list(module.GEMV_OPENGL_FRONTIER_TRACKED_ISSUES)
     assert status["runtime_execution_attempted"] is False
     assert status["runtime_integration_included"] is False
+    assert status["runnable_artifact_claimed"] is False
+    assert status["numerical_parity_claimed"] is False
     assert status["runtime_parity_claimed"] is False
     assert module.GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE in gaps["tracked_issues"]
 
@@ -5413,6 +5647,7 @@ def test_gemv_opengl_gap_records_strict_expected_frontier():
     assert "relative index `59`, reaching element `67`" in readme
     assert "highest valid element index is `63`" in readme
     assert "attempts no native compiler" in readme
+    assert "does not claim an emitted or runnable GEMV artifact" in readme
 
 
 def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatch):

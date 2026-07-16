@@ -215,24 +215,49 @@
       "failed_count": 0,
       "project_diagnostic_count": 0,
       "max_template_specializations": 4096,
-      "max_template_materialization_work": 2097152
+      "max_template_materialization_work": 2097152,
+      "workgroup_size_rule": [
+        32,
+        "BN",
+        "BM"
+      ],
+      "report_workgroup_size_rule": [
+        "32",
+        "BN",
+        "BM"
+      ]
     },
     "materialization": {
       "status": "materialized",
       "specialization_count": 225,
+      "host_named_specialization_count": 224,
       "unsupported_specialization_count": 0,
       "unresolved_residue_count": 0,
-      "bare_value_discard_count": 0
+      "bare_value_discard_count": 0,
+      "report_execution_entry_count": 224,
+      "execution_identity_join": "hostName/materializedName"
     },
     "artifact": {
       "status": "translated",
+      "packaging": "single-aggregate-artifact",
       "provenance": {
         "intermediate": "crossgl",
         "pipeline": "single-file-translate"
       },
       "generated_hash_verification": "report-sha256-matches-emitted-bytes",
       "generated_size_verification": "report-size-matches-emitted-bytes",
-      "compute_entry_count": 224
+      "compute_entry_count": 224,
+      "generated_target_entry_identity_count": 224,
+      "generated_numthreads_contract_count": 224,
+      "resolved_workgroup_sizes": [
+        [32, 1, 1],
+        [32, 1, 4],
+        [32, 1, 8],
+        [32, 2, 1],
+        [32, 4, 1],
+        [32, 8, 1],
+        [32, 16, 1]
+      ]
     },
     "compiler": {
       "name": "dxc",
@@ -257,29 +282,49 @@
       },
       "allowed_warnings": {
         "library_numthreads": {
+          "classification": "library-profile-numthreads-ignored",
           "message": "attribute 'numthreads' ignored without accompanying shader attribute [-Wmisplaced-attributes]",
-          "source_expression": "[numthreads(1, 1, 1)]",
+          "source_expressions": [
+            "[numthreads(32, 1, 1)]",
+            "[numthreads(32, 1, 4)]",
+            "[numthreads(32, 1, 8)]",
+            "[numthreads(32, 2, 1)]",
+            "[numthreads(32, 4, 1)]",
+            "[numthreads(32, 8, 1)]",
+            "[numthreads(32, 16, 1)]"
+          ],
           "profile": "lib_6_6",
-          "count": 224,
-          "tracked_by": "https://github.com/CrossGL/crosstl/issues/1750"
+          "count": 224
         }
       },
       "whole_artifact_semantic_validity_claimed": false
     },
     "execution_contracts": {
-      "observed_numthreads_directive": "[numthreads(1, 1, 1)]",
-      "numthreads_contract_established": false,
-      "exact_workgroup_size_established": false,
+      "workgroup_size_rule": [
+        32,
+        "BN",
+        "BM"
+      ],
+      "resolved_workgroup_sizes": [
+        [32, 1, 1],
+        [32, 1, 4],
+        [32, 1, 8],
+        [32, 2, 1],
+        [32, 4, 1],
+        [32, 8, 1],
+        [32, 16, 1]
+      ],
+      "generated_entry_contract_count": 224,
+      "numthreads_contract_established": true,
+      "exact_workgroup_size_established": true,
       "required_wave_size": 32,
       "required_wave_size_established": false,
       "library_execution_semantics_established": false,
       "blocked_by": [
-        "https://github.com/CrossGL/crosstl/issues/1750",
         "https://github.com/CrossGL/crosstl/issues/1786"
       ]
     },
     "tracked_issues": [
-      "https://github.com/CrossGL/crosstl/issues/1750",
       "https://github.com/CrossGL/crosstl/issues/1786"
     ],
     "runtime_execution_attempted": false,
@@ -300,7 +345,17 @@
       "failed_count": 1,
       "emitted_target_file_count": 0,
       "max_template_specializations": 4096,
-      "max_template_materialization_work": 2097152
+      "max_template_materialization_work": 2097152,
+      "workgroup_size_rule": [
+        32,
+        "BN",
+        "BM"
+      ],
+      "report_workgroup_size_rule": [
+        "32",
+        "BN",
+        "BM"
+      ]
     },
     "materialization": {
       "status": "materialized",
@@ -342,8 +397,18 @@
     ],
     "execution_contracts": {
       "workgroup_size_specialization": {
-        "status": "not-established",
-        "blocked_by": "https://github.com/CrossGL/crosstl/issues/1750"
+        "status": "configured-in-project-report",
+        "rule": [
+          32,
+          "BN",
+          "BM"
+        ],
+        "report_rule": [
+          "32",
+          "BN",
+          "BM"
+        ],
+        "emitted_artifact_contract_claimed": false
       },
       "subgroup_width_specialization": {
         "status": "not-established",
@@ -352,11 +417,12 @@
     },
     "blocked_by": [
       "https://github.com/CrossGL/crosstl/issues/1671",
-      "https://github.com/CrossGL/crosstl/issues/1750",
       "https://github.com/CrossGL/crosstl/issues/1786"
     ],
     "runtime_execution_attempted": false,
     "runtime_integration_included": false,
+    "runnable_artifact_claimed": false,
+    "numerical_parity_claimed": false,
     "runtime_parity_claimed": false
   },
   "rms_norm_specialization_status": {

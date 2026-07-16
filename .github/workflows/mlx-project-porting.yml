@@ -231,8 +231,13 @@ jobs:
           from demos.integrations.mlx.run_mlx_porting import (
               GEMV_DIRECTX_COMPILER_ENTRY_POINTS,
               GEMV_DIRECTX_EXPECTED_ENTRY_POINTS,
+              GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_MESSAGE,
+              GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES,
+              GEMV_OPENGL_BACKING_RANGE_ISSUE,
+              GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE,
               GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE,
-              GEMV_OPENGL_WORKGROUP_SIZE_ISSUE,
+              GEMV_REPORT_WORKGROUP_SIZE_RULE,
+              GEMV_WORKGROUP_SIZE_RULE,
               MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS,
               MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES,
               MLX_GEMV_SHA256,
@@ -249,6 +254,11 @@ jobs:
           )
           directx_frontier_count = len(directx_frontier_sources)
           directx_entry_point_count = sum(directx_entry_point_counts.values())
+          gemv_workgroup_size_rule = list(GEMV_WORKGROUP_SIZE_RULE)
+          gemv_report_workgroup_size_rule = list(GEMV_REPORT_WORKGROUP_SIZE_RULE)
+          gemv_resolved_workgroup_sizes = list(
+              GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES
+          )
           opengl_frontier_sources = set(MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES)
           opengl_frontier_count = len(opengl_frontier_sources)
           required_opengl_promotions = {
@@ -416,9 +426,21 @@ jobs:
                   or gemv_directx["sourceHash"] != MLX_GEMV_SHA256
                   or gemv_directx["sourceSizeBytes"] != MLX_GEMV_SOURCE_SIZE_BYTES
                   or gemv_directx["artifactStatus"] != "translated"
+                  or gemv_directx["artifactPackaging"]
+                  != "single-aggregate-artifact"
                   or gemv_directx["projectDiagnosticCount"] != 0
                   or gemv_directx["templateSpecializationCount"] != 225
+                  or gemv_directx["hostNamedMaterializationCount"] != 224
                   or gemv_directx["unsupportedSpecializationCount"] != 0
+                  or gemv_directx["workgroupSizeRule"]
+                  != gemv_workgroup_size_rule
+                  or gemv_directx["reportWorkgroupSizeRule"]
+                  != gemv_report_workgroup_size_rule
+                  or gemv_directx["reportWorkgroupSizeRuleCount"] != 1
+                  or gemv_directx["reportExecutionEntryCount"] != 224
+                  or gemv_directx["executionIdentityJoinCount"] != 224
+                  or gemv_directx["generatedTargetEntryIdentityCount"] != 224
+                  or gemv_directx["generatedNumthreadsContractCount"] != 224
                   or gemv_directx["materializationResidueCount"] != 0
                   or gemv_directx["bareValueDiscardCount"] != 0
                   or gemv_directx["computeEntryPointCount"] != 224
@@ -431,6 +453,22 @@ jobs:
                   or gemv_directx["artifactSizeBytes"] <= 0
               ):
                   raise SystemExit("DirectX GEMV project-artifact evidence is incomplete")
+              resolved_size_counts = {
+                  tuple(item["workgroupSize"]): item["entryCount"]
+                  for item in gemv_directx["resolvedWorkgroupSizeCounts"]
+              }
+              if (
+                  len(gemv_directx["resolvedWorkgroupSizeCounts"])
+                  != len(gemv_resolved_workgroup_sizes)
+                  or gemv_directx["resolvedWorkgroupSizes"]
+                  != [list(size) for size in gemv_resolved_workgroup_sizes]
+                  or set(resolved_size_counts) != set(gemv_resolved_workgroup_sizes)
+                  or sum(resolved_size_counts.values()) != 224
+                  or any(count <= 0 for count in resolved_size_counts.values())
+              ):
+                  raise SystemExit(
+                      "DirectX GEMV resolved workgroup-size evidence is incomplete"
+                  )
               if (
                   gemv_directx["entryProfile"] != "cs_6_0"
                   or gemv_directx["entryProfileCompilerEntryPoints"]
@@ -453,11 +491,29 @@ jobs:
               ):
                   raise SystemExit("DirectX GEMV compiler coverage is incomplete")
               library_warnings = gemv_directx["libraryAllowedWarnings"]
+              expected_warning_counts = {
+                  f"[numthreads({size[0]}, {size[1]}, {size[2]})]": (
+                      resolved_size_counts[size]
+                  )
+                  for size in gemv_resolved_workgroup_sizes
+              }
+              observed_warning_counts = {}
+              for warning in library_warnings:
+                  source_expression = warning["sourceExpression"]
+                  if (
+                      warning["classification"]
+                      != "library-profile-numthreads-ignored"
+                      or warning["severity"] != "warning"
+                      or warning["message"]
+                      != GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_MESSAGE
+                      or source_expression in observed_warning_counts
+                  ):
+                      raise SystemExit(
+                          "DirectX GEMV compiler warning classification changed"
+                      )
+                  observed_warning_counts[source_expression] = warning["count"]
               if (
-                  len(library_warnings) != 1
-                  or library_warnings[0]["count"] != 224
-                  or library_warnings[0]["trackedIssue"]
-                  != GEMV_OPENGL_WORKGROUP_SIZE_ISSUE
+                  observed_warning_counts != expected_warning_counts
                   or library_run["allowedWarningCounts"]
                   != {"libraryNumthreads": 224}
               ):
@@ -465,22 +521,62 @@ jobs:
               if (
                   gemv_directx["wholeArtifactSemanticValidityClaimed"] is not False
                   or gemv_directx["libraryExecutionSemanticsEstablished"] is not False
-                  or gemv_directx["numthreadsContractEstablished"] is not False
-                  or gemv_directx["exactWorkgroupSizeEstablished"] is not False
+                  or gemv_directx["observedNumthreadsDirectives"]
+                  != list(expected_warning_counts)
+                  or gemv_directx["numthreadsDirectiveCount"] != 224
+                  or gemv_directx["numthreadsContractEstablished"] is not True
+                  or gemv_directx["exactWorkgroupSizeEstablished"] is not True
                   or gemv_directx["requiredWaveSize"] != 32
                   or gemv_directx["requiredWaveSizeEstablished"] is not False
                   or gemv_directx["executionContractBlockedBy"]
-                  != [
-                      GEMV_OPENGL_WORKGROUP_SIZE_ISSUE,
-                      GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE,
-                  ]
+                  != [GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE]
                   or gemv_directx["runtimeExecutionAttempted"] is not False
+                  or gemv_directx["runtimeIntegrationIncluded"] is not False
                   or gemv_directx["numericalParityClaimed"] is not False
                   or gemv_directx["runtimeParityClaimed"] is not False
               ):
                   raise SystemExit("DirectX GEMV execution non-claims changed")
           elif "gemv-directx-compiler-frontier" in checks:
               raise SystemExit("DirectX GEMV compiler frontier ran outside Windows")
+          expected_opengl_gemv = os.environ["RUNNER_OS"] == "Linux"
+          if scope["openglGemvFrontierRequired"] is not expected_opengl_gemv:
+              raise SystemExit("OpenGL GEMV frontier scope is incorrect")
+          if expected_opengl_gemv:
+              gemv_opengl = checks["gemv-opengl-frontier"]
+              if (
+                  gemv_opengl["status"] != "blocked-as-expected"
+                  or gemv_opengl["source"] != MLX_GEMV_SOURCE
+                  or gemv_opengl["sourceHash"] != MLX_GEMV_SHA256
+                  or gemv_opengl["artifactStatus"] != "failed"
+                  or gemv_opengl["artifactEmitted"] is not False
+                  or gemv_opengl["emittedTargetFileCount"] != 0
+                  or gemv_opengl["nativeValidationAttempted"] is not False
+                  or gemv_opengl["workgroupSizeRule"]
+                  != gemv_workgroup_size_rule
+                  or gemv_opengl["reportWorkgroupSizeRule"]
+                  != gemv_report_workgroup_size_rule
+                  or gemv_opengl["reportWorkgroupSizeRuleCount"] != 1
+                  or gemv_opengl["workgroupSizeRuleConfigured"] is not True
+                  or gemv_opengl["diagnosticCode"]
+                  != GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE
+                  or gemv_opengl["translationBlockedBy"]
+                  != [GEMV_OPENGL_BACKING_RANGE_ISSUE]
+                  or gemv_opengl["executionContractBlockedBy"]
+                  != [GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE]
+                  or gemv_opengl["trackedIssues"]
+                  != [
+                      GEMV_OPENGL_BACKING_RANGE_ISSUE,
+                      GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE,
+                  ]
+                  or gemv_opengl["runtimeExecutionAttempted"] is not False
+                  or gemv_opengl["runtimeIntegrationIncluded"] is not False
+                  or gemv_opengl["runnableArtifactClaimed"] is not False
+                  or gemv_opengl["numericalParityClaimed"] is not False
+                  or gemv_opengl["runtimeParityClaimed"] is not False
+              ):
+                  raise SystemExit("OpenGL GEMV fail-closed evidence is incomplete")
+          elif "gemv-opengl-frontier" in checks:
+              raise SystemExit("OpenGL GEMV frontier ran outside Linux")
           opengl = checks["opengl-frontier"]
           if set(opengl["sources"]) != opengl_frontier_sources:
               raise SystemExit("OpenGL toolchain frontier sources are incomplete")

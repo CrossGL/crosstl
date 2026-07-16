@@ -2198,7 +2198,16 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "source artifact and compute entry" in mlx_porting
     assert 'checks["gemv-directx-compiler-frontier"]' in mlx_porting
     assert "GEMV_DIRECTX_EXPECTED_ENTRY_POINTS" in mlx_porting
+    assert "GEMV_WORKGROUP_SIZE_RULE" in mlx_porting
+    assert "GEMV_REPORT_WORKGROUP_SIZE_RULE" in mlx_porting
+    assert "GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES" in mlx_porting
     assert 'gemv_directx["entryProfile"] != "cs_6_0"' in mlx_porting
+    assert 'gemv_directx["artifactPackaging"]' in mlx_porting
+    assert 'gemv_directx["hostNamedMaterializationCount"] != 224' in mlx_porting
+    assert 'gemv_directx["reportExecutionEntryCount"] != 224' in mlx_porting
+    assert 'gemv_directx["executionIdentityJoinCount"] != 224' in mlx_porting
+    assert 'gemv_directx["generatedTargetEntryIdentityCount"] != 224' in mlx_porting
+    assert 'gemv_directx["generatedNumthreadsContractCount"] != 224' in mlx_porting
     assert 'gemv_directx["bareValueDiscardCount"] != 0' in mlx_porting
     assert 'gemv_directx["entryProfileDiagnosticCount"] != 0' in mlx_porting
     assert 'gemv_directx["entryProfileUnusedValueWarningCount"] != 0' in mlx_porting
@@ -2206,8 +2215,21 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert 'gemv_directx["libraryProfile"] != "lib_6_6"' in mlx_porting
     assert 'gemv_directx["libraryExportCount"] != 224' in mlx_porting
     assert 'gemv_directx["compilerCoveredEntryPointCount"] != 224' in mlx_porting
+    assert "DirectX GEMV resolved workgroup-size evidence is incomplete" in (
+        mlx_porting
+    )
+    assert "library-profile-numthreads-ignored" in mlx_porting
+    assert "DirectX GEMV compiler warning classification changed" in mlx_porting
     assert "DirectX GEMV compiler warning evidence changed" in mlx_porting
     assert "DirectX GEMV execution non-claims changed" in mlx_porting
+    assert "GEMV_OPENGL_WORKGROUP_SIZE_ISSUE" not in mlx_porting
+    assert 'gemv_directx["numthreadsContractEstablished"] is not True' in mlx_porting
+    assert 'gemv_directx["exactWorkgroupSizeEstablished"] is not True' in mlx_porting
+    assert 'checks["gemv-opengl-frontier"]' in mlx_porting
+    assert 'scope["openglGemvFrontierRequired"]' in mlx_porting
+    assert 'gemv_opengl["workgroupSizeRuleConfigured"] is not True' in mlx_porting
+    assert 'gemv_opengl["runnableArtifactClaimed"] is not False' in mlx_porting
+    assert "OpenGL GEMV fail-closed evidence is incomplete" in mlx_porting
     assert 'checks["reference-accessor-lvalue-identity"]' in mlx_porting
     assert "reference accessor proof accounting is incomplete" in mlx_porting
     assert "reference accessor {target} storage evidence is incomplete" in mlx_porting

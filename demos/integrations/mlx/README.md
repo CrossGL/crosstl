@@ -143,16 +143,19 @@ The current harness verifies:
   run the kernels or establish runtime parity;
 - full project materialization of pinned `gemv.metal` for DirectX. The gate
   requires 225 materialized specializations, no unsupported materializations or
-  unresolved residue, no bare pure value-discard statements, one HLSL artifact,
-  and exactly 224 compute entries. DXC compiles `CSMain`, `CSMain_85`, and
-  `CSMain_113` under `cs_6_0` with zero diagnostics, then compiles all 224
-  functions in one `lib_6_6` invocation with an exact export set. The library
-  compile permits only its explicitly tracked `numthreads` warning class;
+  unresolved residue, no bare pure value-discard statements, one aggregate HLSL
+  artifact, and exactly 224 host-named report execution entries joined by
+  materialization identity. Every generated target entry and `numthreads`
+  declaration must match its report contract. DXC compiles `CSMain`,
+  `CSMain_85`, and `CSMain_113` under `cs_6_0` with zero diagnostics, then
+  compiles all 224 functions in one `lib_6_6` invocation with an exact export
+  set and exact profile-warning classification;
 - full project materialization of pinned `gemv.metal` for OpenGL as a strict
-  expected frontier. All 225 source specializations must materialize, after
-  which translation must report the exact tracked workgroup-pointer diagnostic
-  in one failed artifact record and emit no target file. This check performs no
-  native validation or runtime execution;
+  expected frontier. The project and report must retain the GEMV workgroup-size
+  rule, and all 225 source specializations must materialize, after which
+  translation must report the exact tracked workgroup-pointer diagnostic in one
+  failed artifact record and emit no target file. This check performs no native
+  validation or runtime execution;
 - on Linux CI, full project materialization and translation of `gemv.metal` to
   Vulkan produces 225 specializations and 224 `GLCompute` entry points. The
   generated artifact passes both `spirv-as` and `spirv-val` for `vulkan1.1`
@@ -415,29 +418,43 @@ source size 5,383 bytes before translation. The project report must contain one
 clean translated artifact, all 225 materializations with no unsupported
 records, no unresolved materialization residue, and no standalone pure
 value-discard statements such as `lid;`. Its generated SHA-256 and byte count
-are checked against the emitted HLSL. The artifact must expose the exact set
-`CSMain`, `CSMain_2`, ..., `CSMain_224`. DXC compiles representative scalar,
+are checked against the emitted HLSL. Project configuration sets
+`[project.workgroup_size_rules]` for `gemv.metal` to `[32, "BN", "BM"]`; the
+report must retain the normalized `["32", "BN", "BM"]` rule. Exactly 224 of the
+225 materializations must be host-named, and exactly 224 report execution
+entries must join those records by `(hostName, materializedName)` identity. The
+artifact must expose the exact target set `CSMain`, `CSMain_2`, ...,
+`CSMain_224`, independently of report or materialization list order.
+
+The resolved report sizes must be exactly `[32, 1, 1]`, `[32, 1, 4]`,
+`[32, 1, 8]`, `[32, 2, 1]`, `[32, 4, 1]`, `[32, 8, 1]`, and `[32, 16, 1]`.
+For every target entry, the emitted `numthreads` declaration must equal that
+entry's report contract. This establishes exact workgroup-size specialization
+for the generated aggregate artifact. DXC compiles representative scalar,
 complex/Wave, and gather/constant-pointer paths (`CSMain`, `CSMain_85`, and
 `CSMain_113`) with `cs_6_0`; all three invocations must produce zero diagnostics.
 A second `lib_6_6` invocation exports and code-generates all 224 functions in
 one DXIL library.
 
 The library compile admits exactly 224 `numthreads ignored without accompanying
-shader attribute` warnings caused by using a library profile. Any unused-value
-warning or other diagnostic fails the gate. [#1750](https://github.com/CrossGL/crosstl/issues/1750)
-tracks the unresolved workgroup-size contract represented by the emitted
-`[numthreads(1, 1, 1)]`; [#1786](https://github.com/CrossGL/crosstl/issues/1786)
-tracks the required 32-lane wave-size specialization. Library compilation proves
-that DXC accepts and code-generates every exported function. It does not
-establish workgroup or wave semantics, runtime execution, numerical parity, or
-whole-kernel semantic validity.
+shader attribute` warnings caused by using a library profile. The gate derives
+the expected warning source-line counts from the seven generated `numthreads`
+forms and requires exact severity, message, source expression, and count
+matches. Any unused-value warning, error, or other diagnostic fails the gate.
+[#1786](https://github.com/CrossGL/crosstl/issues/1786) tracks the required
+32-lane wave-size specialization. Library compilation proves that DXC accepts
+and code-generates every exported function. It does not establish wave
+semantics, runtime execution, numerical parity, or whole-kernel semantic
+validity.
 
 The separate pinned `gemv.metal` OpenGL frontier uses the same 4,096
 specialization limit and 2,097,152-item materialization work budget. It requires
 SHA-256 `c34db77e61c1fea01f7f5d319a0bec1029a253e54d66bbce9009f32fe828ce9f`,
 one source unit, one failed artifact record, zero translated artifacts, zero
 emitted target files, and all 225 specializations materialized with no
-unsupported records. The required diagnostic is
+unsupported records. Its project configuration and report must retain the exact
+`[32, "BN", "BM"]` workgroup-size rule, so workgroup-size configuration is not
+an execution blocker. The required diagnostic is
 `project.translate.opengl-workgroup-pointer-unsupported` with capability
 `opengl.workgroup-pointer-lowering`; it must retain function
 `GEMVKernel_float_1_8_1_32_4_4_0__run`, parameter and backing `tgp_memory`,
@@ -448,13 +465,13 @@ produces base offset `8`, which is in bounds. The later guarded reduction can
 add relative index `59`, reaching element `67`; the 64-element backing's highest
 valid element index is `63`.
 [#1671](https://github.com/CrossGL/crosstl/issues/1671) tracks backing and range
-propagation. Exact workgroup-size specialization and required subgroup-width
-specialization remain tracked by
-[#1750](https://github.com/CrossGL/crosstl/issues/1750) and
-[#1786](https://github.com/CrossGL/crosstl/issues/1786), respectively. Because
-translation emits no GLSL artifact, this frontier attempts no native compiler
-or runtime validation and makes no runtime or numerical-parity claim. Compiler
-acceptance alone would not prove those execution contracts.
+propagation and remains the translation blocker.
+[#1786](https://github.com/CrossGL/crosstl/issues/1786) remains the execution
+blocker for required subgroup-width specialization. Because translation emits
+no GLSL artifact, this frontier does not claim an emitted or runnable GEMV
+artifact, attempts no native compiler or runtime validation, and makes no
+runtime or numerical-parity claim. Configuring the workgroup-size rule alone
+does not prove the unavailable generated-artifact execution contract.
 
 CrossGL/crosstl#1672 tracks owner-dependent
 `constexpr` helper calls in quantized struct static members.
