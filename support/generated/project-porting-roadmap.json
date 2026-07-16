@@ -2310,6 +2310,102 @@
     },
     {
       "category": "project",
+      "description": "Evaluate per-source workgroup-size rules for each materialized entry and preserve the resulting target execution contract in generated project artifacts and reports.",
+      "id": "project.workgroup_size_specialization",
+      "name": "Per-entry workgroup size specialization",
+      "support": {
+        "cuda": {
+          "evidence": [
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_rejects_unsupported_target"
+          ],
+          "notes": "Configured per-entry workgroup-size specialization fails closed before target code generation with the deterministic project.translate.workgroup-size-rule-unsupported-target diagnostic and no CUDA artifact output; mixed-target translation retains supported artifacts, and report validation preserves the structured failure without treating the report as malformed. This support covers fail-closed shader/kernel artifact and dispatch-contract handling only; runtime execution and numerical parity are not claimed.",
+          "status": "validated_rejection"
+        },
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rules_emit_directx_library_and_opengl_entries",
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_reuses_one_materialized_ast_per_target",
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_join_is_independent_of_record_order",
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_rejects_invalid_expressions",
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_rejects_invalid_materialization_joins",
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_reports_target_limits",
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_report_rejects_rehashed_parameter_tampering",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_compute_workgroup_size_projects_declared_source_shape"
+          ],
+          "notes": "Per-source [project.workgroup_size_rules] expressions are evaluated against each materialized entry's template parameters and joined by deterministic entry identity rather than materialization record order. DirectX emits one HLSL library artifact with independent numthreads values per entry, while execution metadata, source-to-target identities, provenance, and report validation preserve each dispatch contract. This support covers generated shader/kernel artifacts and reported dispatch contracts only; runtime execution and numerical parity are not claimed.",
+          "status": "supported"
+        },
+        "hip": {
+          "evidence": [
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_rejects_unsupported_target"
+          ],
+          "notes": "Configured per-entry workgroup-size specialization fails closed before target code generation with the deterministic project.translate.workgroup-size-rule-unsupported-target diagnostic and no HIP artifact output; mixed-target translation retains supported artifacts, and report validation preserves the structured failure without treating the report as malformed. This support covers fail-closed shader/kernel artifact and dispatch-contract handling only; runtime execution and numerical parity are not claimed.",
+          "status": "validated_rejection"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_rejects_unsupported_target"
+          ],
+          "notes": "Configured per-entry workgroup-size specialization fails closed before target code generation with the deterministic project.translate.workgroup-size-rule-unsupported-target diagnostic and no Metal artifact output; mixed-target translation retains supported artifacts, and report validation preserves the structured failure without treating the report as malformed. This support covers fail-closed shader/kernel artifact and dispatch-contract handling only; runtime execution and numerical parity are not claimed.",
+          "status": "validated_rejection"
+        },
+        "mojo": {
+          "evidence": [
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_rejects_unsupported_target"
+          ],
+          "notes": "Configured per-entry workgroup-size specialization fails closed before target code generation with the deterministic project.translate.workgroup-size-rule-unsupported-target diagnostic and no Mojo artifact output; mixed-target translation retains supported artifacts, and report validation preserves the structured failure without treating the report as malformed. This support covers fail-closed shader/kernel artifact and dispatch-contract handling only; runtime execution and numerical parity are not claimed.",
+          "status": "validated_rejection"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rules_emit_directx_library_and_opengl_entries",
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_report_rejects_missing_opengl_split",
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_reuses_one_materialized_ast_per_target",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_compute_workgroup_size_projects_declared_source_shape",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_entry_scoped_generation_keeps_only_selected_interface_and_helpers"
+          ],
+          "notes": "Per-source [project.workgroup_size_rules] expressions are evaluated against each materialized entry's template parameters and joined by deterministic entry identity rather than materialization record order. OpenGL splits materialized entries into deterministic standalone GLSL artifacts with runnable main entry points and entry-specific local-size layouts, while execution metadata, provenance, and report validation preserve each dispatch contract and reject missing splits. This support covers generated shader/kernel artifacts and reported dispatch contracts only; runtime execution and numerical parity are not claimed.",
+          "status": "supported"
+        },
+        "rust": {
+          "evidence": [
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_rejects_unsupported_target"
+          ],
+          "notes": "Configured per-entry workgroup-size specialization fails closed before target code generation with the deterministic project.translate.workgroup-size-rule-unsupported-target diagnostic and no Rust artifact output; mixed-target translation retains supported artifacts, and report validation preserves the structured failure without treating the report as malformed. This support covers fail-closed shader/kernel artifact and dispatch-contract handling only; runtime execution and numerical parity are not claimed.",
+          "status": "validated_rejection"
+        },
+        "slang": {
+          "evidence": [
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_rejects_unsupported_target"
+          ],
+          "notes": "Configured per-entry workgroup-size specialization fails closed before target code generation with the deterministic project.translate.workgroup-size-rule-unsupported-target diagnostic and no Slang artifact output; mixed-target translation retains supported artifacts, and report validation preserves the structured failure without treating the report as malformed. This support covers fail-closed shader/kernel artifact and dispatch-contract handling only; runtime execution and numerical parity are not claimed.",
+          "status": "validated_rejection"
+        },
+        "vulkan": {
+          "evidence": [
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_rejects_unsupported_target"
+          ],
+          "notes": "Configured per-entry workgroup-size specialization fails closed before target code generation with the deterministic project.translate.workgroup-size-rule-unsupported-target diagnostic and no Vulkan artifact output; mixed-target translation retains supported artifacts, and report validation preserves the structured failure without treating the report as malformed. This support covers fail-closed shader/kernel artifact and dispatch-contract handling only; runtime execution and numerical parity are not claimed.",
+          "status": "validated_rejection"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_rejects_unsupported_target"
+          ],
+          "notes": "Configured per-entry workgroup-size specialization fails closed before target code generation with the deterministic project.translate.workgroup-size-rule-unsupported-target diagnostic and no WebGL artifact output; mixed-target translation retains supported artifacts, and report validation preserves the structured failure without treating the report as malformed. This support covers fail-closed shader/kernel artifact and dispatch-contract handling only; runtime execution and numerical parity are not claimed.",
+          "status": "validated_rejection"
+        },
+        "wgsl": {
+          "evidence": [
+            "tests/test_translator/test_project_workgroup_rules.py::def test_project_workgroup_rule_rejects_unsupported_target"
+          ],
+          "notes": "Configured per-entry workgroup-size specialization fails closed before target code generation with the deterministic project.translate.workgroup-size-rule-unsupported-target diagnostic and no WGSL artifact output; mixed-target translation retains supported artifacts, and report validation preserves the structured failure without treating the report as malformed. This support covers fail-closed shader/kernel artifact and dispatch-contract handling only; runtime execution and numerical parity are not claimed.",
+          "status": "validated_rejection"
+        }
+      }
+    },
+    {
+      "category": "project",
       "description": "Validate report metadata, artifact records, failed artifacts, translated artifact existence, optional external toolchain availability, and opt-in toolchain smoke failures for project outputs.",
       "id": "project.validation_hooks",
       "name": "Optional validation hooks",
@@ -9765,7 +9861,7 @@
         "validated_rejection": 0
       }
     },
-    "feature_count": 29,
+    "feature_count": 30,
     "status_counts": {
       "cuda": {
         "diagnostic": 1,
@@ -9773,12 +9869,12 @@
         "supported": 27,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 1
+        "validated_rejection": 2
       },
       "directx": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 28,
+        "supported": 29,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -9789,7 +9885,7 @@
         "supported": 27,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 1
+        "validated_rejection": 2
       },
       "metal": {
         "diagnostic": 1,
@@ -9797,7 +9893,7 @@
         "supported": 27,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 1
+        "validated_rejection": 2
       },
       "mojo": {
         "diagnostic": 1,
@@ -9805,12 +9901,12 @@
         "supported": 27,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 1
+        "validated_rejection": 2
       },
       "opengl": {
         "diagnostic": 1,
         "partial": 0,
-        "supported": 28,
+        "supported": 29,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -9821,7 +9917,7 @@
         "supported": 27,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 1
+        "validated_rejection": 2
       },
       "slang": {
         "diagnostic": 1,
@@ -9829,7 +9925,7 @@
         "supported": 27,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 1
+        "validated_rejection": 2
       },
       "vulkan": {
         "diagnostic": 1,
@@ -9837,7 +9933,7 @@
         "supported": 27,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 1
+        "validated_rejection": 2
       },
       "webgl": {
         "diagnostic": 1,
@@ -9845,7 +9941,7 @@
         "supported": 27,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 1
+        "validated_rejection": 2
       },
       "wgsl": {
         "diagnostic": 1,
@@ -9853,7 +9949,7 @@
         "supported": 27,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 1
+        "validated_rejection": 2
       }
     }
   },

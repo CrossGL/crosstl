@@ -187,6 +187,71 @@ def test_generated_target_only_backend_aliases_are_visible_as_target_aliases():
     assert backends["wgsl"]["target_aliases"] == ["webgpu"]
 
 
+def test_project_workgroup_size_specialization_support_is_target_scoped():
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    features = {feature["id"]: feature for feature in matrix["features"]}
+    feature = features["project.workgroup_size_specialization"]
+    backend_ids = {backend["id"] for backend in matrix["backends"]}
+    supported_targets = {"directx", "opengl"}
+    rejection_evidence = (
+        "tests/test_translator/test_project_workgroup_rules.py::def "
+        "test_project_workgroup_rule_rejects_unsupported_target"
+    )
+
+    assert feature["category"] == "project"
+    assert feature["name"] == "Per-entry workgroup size specialization"
+    assert set(feature["support"]) == backend_ids
+    assert {
+        backend_id
+        for backend_id, support in feature["support"].items()
+        if support["status"] == "supported"
+    } == supported_targets
+
+    directx = feature["support"]["directx"]
+    assert "[project.workgroup_size_rules]" in directx["notes"]
+    assert "independent numthreads values per entry" in directx["notes"]
+    assert (
+        "tests/test_translator/test_codegen/test_directx_codegen.py::def "
+        "test_hlsl_compute_workgroup_size_projects_declared_source_shape"
+    ) in directx["evidence"]
+
+    opengl = feature["support"]["opengl"]
+    assert "standalone GLSL artifacts with runnable main entry points" in (
+        opengl["notes"]
+    )
+    assert (
+        "tests/test_translator/test_project_workgroup_rules.py::def "
+        "test_project_workgroup_rule_report_rejects_missing_opengl_split"
+    ) in opengl["evidence"]
+    assert (
+        "tests/test_translator/test_codegen/test_GLSL_codegen.py::def "
+        "test_glsl_compute_workgroup_size_projects_declared_source_shape"
+    ) in opengl["evidence"]
+
+    for backend_id, support in feature["support"].items():
+        assert "shader/kernel artifact" in support["notes"]
+        assert "runtime execution and numerical parity are not claimed" in (
+            support["notes"]
+        )
+        if backend_id in supported_targets:
+            assert support["status"] == "supported"
+            assert (
+                "tests/test_translator/test_project_workgroup_rules.py::def "
+                "test_project_workgroup_rules_emit_directx_library_and_opengl_entries"
+            ) in support["evidence"]
+        else:
+            assert support["status"] == "validated_rejection"
+            assert rejection_evidence in support["evidence"]
+            assert (
+                "project.translate.workgroup-size-rule-unsupported-target"
+                in support["notes"]
+            )
+
+
 def test_project_report_inspection_is_first_class_support_feature():
     matrix = json.loads(
         (ROOT / "support" / "generated" / "support-matrix.json").read_text(
