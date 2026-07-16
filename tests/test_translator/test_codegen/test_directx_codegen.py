@@ -40268,6 +40268,86 @@ def test_hlsl_workgroup_pointer_nested_helpers_specialize_by_backing_identity(
     assert_directx_compute_validates_if_available(generated, tmp_path)
 
 
+def test_hlsl_workgroup_pointer_static_nullable_calls_preserve_specialization(
+    tmp_path,
+):
+    shader = """
+    shader StaticNullableWorkgroupPointer {
+        void ignore(threadgroup float* values) {
+            if (false) {
+                values[0] = 1.0;
+            }
+        }
+
+        void write(threadgroup float* values) {
+            values[0] = 2.0;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup float storage[1];
+                ignore((1 == 1) ? nullptr : storage);
+                write((1 == 1) ? storage : nullptr);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    ignore = "ignore__crosstl_workgroup_values_main_storage_1"
+    write = "write__crosstl_workgroup_values_main_storage_1"
+    assert f"void {ignore}(int values_offset)" in generated
+    assert f"void {write}(int values_offset)" in generated
+    assert f"{ignore}(int(0));" in generated
+    assert f"{write}(int(0));" in generated
+    assert "main_storage[uint(values_offset)] = 2.0;" in generated
+    assert "__crossgl_aggregate_conditional" not in generated
+    assert "nullptr" not in generated
+    assert "float*" not in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "observation",
+    [
+        pytest.param("values[0] = 1.0;", id="indexed-access"),
+        pytest.param("bool is_null = values == nullptr;", id="pointer-comparison"),
+    ],
+)
+def test_hlsl_workgroup_pointer_static_null_selection_rejects_observation(
+    observation,
+):
+    shader = f"""
+    shader ObservedNullWorkgroupPointer {{
+        void observe(threadgroup float* values) {{
+            {observation}
+        }}
+
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {{
+                threadgroup float storage[1];
+                observe((1 == 1) ? nullptr : storage);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        DirectXWorkgroupPointerError,
+        match="statically selected null workgroup pointer.*parameter is observed",
+    ) as excinfo:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert excinfo.value.function_name == "observe"
+    assert excinfo.value.parameter_name == "values"
+    assert excinfo.value.reason == "null-pointer-observed"
+
+
 def test_hlsl_workgroup_pointer_variants_preserve_lexical_shadowing(tmp_path):
     shader = """
     shader WorkgroupPointerShadowing {

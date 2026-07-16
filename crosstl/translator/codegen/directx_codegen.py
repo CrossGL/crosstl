@@ -10473,6 +10473,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             node=expression if not isinstance(expression, str) else None,
         )
 
+    def hlsl_null_pointer_expression(self, expression):
+        if isinstance(expression, str):
+            return expression.strip() == "nullptr"
+        if isinstance(expression, (IdentifierNode, VariableNode)):
+            return str(getattr(expression, "name", "")).strip() == "nullptr"
+        return False
+
     def hlsl_resource_pointer_binding(self, expression):
         if expression is None:
             return None
@@ -10549,7 +10556,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if condition is not None:
                 selected = expression.true_expr if condition else expression.false_expr
-                return self.hlsl_resource_pointer_binding(selected)
+                binding = self.hlsl_resource_pointer_binding(selected)
+                if binding is not None:
+                    return binding
+                if self.hlsl_null_pointer_expression(selected):
+                    alternate = (
+                        expression.false_expr if condition else expression.true_expr
+                    )
+                    binding = self.hlsl_resource_pointer_binding(alternate)
+                    if binding is not None and binding.get("kind") == "workgroup-pointer":
+                        binding["selected_null"] = True
+                        return binding
+                return None
             true_binding = self.hlsl_resource_pointer_binding(expression.true_expr)
             false_binding = self.hlsl_resource_pointer_binding(expression.false_expr)
             if (
@@ -23929,9 +23947,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if condition is None:
                 return None
             selected = expression.true_expr if condition else expression.false_expr
-            return self.hlsl_static_workgroup_pointer_binding(
+            binding = self.hlsl_static_workgroup_pointer_binding(
                 selected, aliases, constants
             )
+            if binding is not None:
+                return binding
+            if self.hlsl_null_pointer_expression(selected):
+                alternate = expression.false_expr if condition else expression.true_expr
+                binding = self.hlsl_static_workgroup_pointer_binding(
+                    alternate, aliases, constants
+                )
+                if binding is not None:
+                    binding["selected_null"] = True
+                    return binding
+            return None
 
         if isinstance(expression, UnaryOpNode) and expression.op == "&":
             operand = expression.operand
@@ -24035,12 +24064,29 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             node=node,
         )
 
+    def hlsl_workgroup_pointer_null_observation_error(
+        self, *, function_name, parameter_name, node
+    ):
+        raise self.hlsl_workgroup_pointer_error(
+            "DirectX cannot lower statically selected null workgroup pointer "
+            f"argument for '{function_name}.{parameter_name}' because the "
+            "parameter is observed on the reachable path",
+            function_name=function_name,
+            parameter_name=parameter_name,
+            reason="null-pointer-observed",
+            node=node,
+        )
+
     def hlsl_validate_workgroup_pointer_access_ranges(
-        self, calls_by_caller, direct_ranges
+        self, calls_by_caller, direct_ranges, direct_observations
     ):
         required_ranges = {
             function_name: dict(ranges)
             for function_name, ranges in direct_ranges.items()
+        }
+        required_observations = {
+            function_name: set(parameters)
+            for function_name, parameters in direct_observations.items()
         }
         unprovable = {function_name: set() for function_name in direct_ranges}
 
@@ -24101,23 +24147,40 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         callee_unprovable = parameter_name in unprovable.get(
                             callee_name, set()
                         )
-                        if callee_range is None and not callee_unprovable:
+                        callee_observed = parameter_name in required_observations.get(
+                            callee_name, set()
+                        )
+                        if (
+                            callee_range is None
+                            and not callee_unprovable
+                            and not callee_observed
+                        ):
                             continue
 
-                        offset_range = self.hlsl_private_pointer_interval(
-                            binding.get("offset", 0),
-                            call.get("intervals", {}),
-                            call.get("constants", {}),
-                        )
                         composed_range = None
-                        if not callee_unprovable and offset_range is not None:
-                            composed_range = (
-                                offset_range[0] + callee_range[0],
-                                offset_range[1] + callee_range[1],
+                        if callee_range is not None:
+                            offset_range = self.hlsl_private_pointer_interval(
+                                binding.get("offset", 0),
+                                call.get("intervals", {}),
+                                call.get("constants", {}),
                             )
+                            if not callee_unprovable and offset_range is not None:
+                                composed_range = (
+                                    offset_range[0] + callee_range[0],
+                                    offset_range[1] + callee_range[1],
+                                )
 
                         if binding.get("root_kind") == "parameter":
                             root = binding.get("root")
+                            if callee_observed:
+                                caller_observations = required_observations.setdefault(
+                                    caller_name, set()
+                                )
+                                if root not in caller_observations:
+                                    caller_observations.add(root)
+                                    changed = True
+                            if callee_range is None and not callee_unprovable:
+                                continue
                             if composed_range is None:
                                 function_unprovable = unprovable.setdefault(
                                     caller_name, set()
@@ -24130,6 +24193,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                             continue
 
                         if binding.get("root_kind") == "concrete":
+                            if binding.get("selected_null") and callee_observed:
+                                self.hlsl_workgroup_pointer_null_observation_error(
+                                    function_name=callee_name,
+                                    parameter_name=parameter_name,
+                                    node=call["node"],
+                                )
+                            if callee_range is None and not callee_unprovable:
+                                continue
                             self.hlsl_workgroup_pointer_access_error(
                                 function_name=callee_name,
                                 parameter_name=parameter_name,
@@ -24360,17 +24431,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         calls_by_caller = {function_name: [] for function_name in functions_by_name}
         entry_intervals = self.hlsl_workgroup_pointer_entry_intervals(ast)
         direct_ranges = {}
+        direct_observations = {}
         for function_name, function in functions_by_name.items():
-            direct_ranges[function_name] = self.hlsl_analyze_workgroup_pointer_function(
-                function,
-                pointer_parameters,
-                pointer_parameter_indices,
-                calls_by_caller[function_name],
-                entry_intervals.get(function_name, {}),
+            direct_ranges[function_name], direct_observations[function_name] = (
+                self.hlsl_analyze_workgroup_pointer_function(
+                    function,
+                    pointer_parameters,
+                    pointer_parameter_indices,
+                    calls_by_caller[function_name],
+                    entry_intervals.get(function_name, {}),
+                )
             )
 
         self.hlsl_validate_workgroup_pointer_access_ranges(
-            calls_by_caller, direct_ranges
+            calls_by_caller, direct_ranges, direct_observations
         )
 
         variants = {function_name: set() for function_name in pointer_parameters}
@@ -24475,6 +24549,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         constants = self.visible_literal_int_constants(function)
         intervals = dict(intervals or {})
         direct_ranges = {}
+        direct_observations = set()
         initial_aliases = {
             name: dict(binding)
             for name, binding in self.hlsl_global_groupshared_pointer_aliases.items()
@@ -24497,9 +24572,26 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "access": "read_write",
             }
 
+        def record_observation(binding, source, parameter_name=None):
+            if binding is None or binding.get("kind") != "workgroup-pointer":
+                return
+            if binding.get("selected_null"):
+                self.hlsl_workgroup_pointer_null_observation_error(
+                    function_name=function_name,
+                    parameter_name=(
+                        parameter_name or binding.get("root") or "workgroup_pointer"
+                    ),
+                    node=source,
+                )
+            if binding.get("root_kind") == "parameter":
+                root = binding.get("root")
+                if root is not None:
+                    direct_observations.add(root)
+
         def record_access(binding, index_expression, source):
             if binding is None or binding.get("kind") != "workgroup-pointer":
                 return
+            record_observation(binding, source)
             offset_range = self.hlsl_private_pointer_interval(
                 binding.get("offset", 0), intervals, constants
             )
@@ -24551,6 +24643,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 if isinstance(operand, ArrayAccessNode):
                     visit(operand.index, aliases, control_depth)
                     return
+            if isinstance(value, UnaryOpNode) and value.op == "*":
+                binding = self.hlsl_static_workgroup_pointer_binding(
+                    value.operand, aliases, constants
+                )
+                if binding is not None:
+                    record_observation(binding, value)
+                    return
             if isinstance(value, ArrayAccessNode):
                 binding = self.hlsl_static_workgroup_pointer_binding(
                     value.array, aliases, constants
@@ -24561,18 +24660,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return
             if isinstance(value, VariableNode):
                 initial_value = getattr(value, "initial_value", None)
-                visit(initial_value, aliases, control_depth)
                 initial_binding = self.hlsl_static_workgroup_pointer_binding(
                     initial_value, aliases, constants
                 )
-                aliases.pop(value.name, None)
                 storage_binding = (
                     self.hlsl_groupshared_pointer_bindings_by_declaration.get(id(value))
                 )
+                pointer_declaration = self.hlsl_workgroup_pointer_declaration(
+                    value, aliases
+                )
+                if storage_binding is None and not pointer_declaration:
+                    visit(initial_value, aliases, control_depth)
+                aliases.pop(value.name, None)
                 if storage_binding is not None:
                     aliases[value.name] = dict(storage_binding)
                     return
-                if not self.hlsl_workgroup_pointer_declaration(value, aliases):
+                if not pointer_declaration:
                     return
                 if initial_binding is None:
                     raise self.hlsl_workgroup_pointer_error(
@@ -24619,13 +24722,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if isinstance(value, AssignmentNode):
                 target = getattr(value, "target", getattr(value, "left", None))
                 assigned = getattr(value, "value", getattr(value, "right", None))
-                visit(assigned, aliases, control_depth)
                 if not isinstance(target, (str, IdentifierNode, VariableNode)):
+                    visit(assigned, aliases, control_depth)
                     visit(target, aliases, control_depth)
                     return
                 target_name = self.expression_name(target)
                 current = aliases.get(target_name)
                 if current is None or current.get("kind") != "workgroup-pointer":
+                    visit(assigned, aliases, control_depth)
                     visit(target, aliases, control_depth)
                     return
                 operator = self.map_operator(
@@ -24690,11 +24794,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 callee_name = self.hlsl_resolved_function_call_name(
                     value, pointer_parameters
                 )
+                pointer_argument_indices = set()
                 if callee_name is not None:
                     bindings = {}
                     for index, parameter_name in pointer_parameter_indices[
                         callee_name
                     ].items():
+                        pointer_argument_indices.add(index)
                         argument = arguments[index] if index < len(arguments) else None
                         binding = self.hlsl_static_workgroup_pointer_binding(
                             argument, aliases, constants
@@ -24738,11 +24844,23 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                             "intervals": intervals,
                         }
                     )
-                for argument in arguments:
+                for index, argument in enumerate(arguments):
+                    if index in pointer_argument_indices:
+                        continue
                     visit(argument, aliases, control_depth)
                 return
             if isinstance(value, IfNode):
-                visit(getattr(value, "condition", None), aliases, control_depth)
+                condition = getattr(value, "condition", None)
+                visit(condition, aliases, control_depth)
+                condition_value = self.literal_int_value(condition, constants)
+                if condition_value is not None:
+                    selected = (
+                        getattr(value, "then_branch", None)
+                        if condition_value
+                        else getattr(value, "else_branch", None)
+                    )
+                    visit(selected, dict(aliases), control_depth + 1)
+                    return
                 visit(
                     getattr(value, "then_branch", None),
                     dict(aliases),
@@ -24753,6 +24871,23 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     dict(aliases),
                     control_depth + 1,
                 )
+                return
+            if isinstance(value, TernaryOpNode):
+                binding = self.hlsl_static_workgroup_pointer_binding(
+                    value, aliases, constants
+                )
+                if binding is not None:
+                    record_observation(binding, value)
+                    visit(value.condition, aliases, control_depth)
+                    return
+                condition_value = self.literal_int_value(value.condition, constants)
+                visit(value.condition, aliases, control_depth)
+                if condition_value is not None:
+                    selected = value.true_expr if condition_value else value.false_expr
+                    visit(selected, aliases, control_depth)
+                    return
+                visit(value.true_expr, aliases, control_depth)
+                visit(value.false_expr, aliases, control_depth)
                 return
             if isinstance(value, ForNode):
                 loop_aliases = dict(aliases)
@@ -24791,6 +24926,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         reason="assignment-operator-unsupported",
                         node=value,
                     )
+            if isinstance(value, IdentifierNode):
+                binding = self.hlsl_static_workgroup_pointer_binding(
+                    value, aliases, constants
+                )
+                if binding is not None:
+                    record_observation(binding, value)
+                return
             if not hasattr(value, "__dict__"):
                 return
             for key, child in vars(value).items():
@@ -24799,7 +24941,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 visit(child, aliases, control_depth)
 
         visit(getattr(function, "body", []), initial_aliases)
-        return direct_ranges
+        return direct_ranges, direct_observations
 
     def collect_private_pointer_array_size_hints(self, ast):
         functions = self.collect_functions(ast)
@@ -30680,8 +30822,26 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         func_name = self.function_call_name(expr)
         args = list(getattr(expr, "arguments", getattr(expr, "args", [])) or [])
         parameter_types = self.function_parameter_types.get(func_name) or []
+        workgroup_pointer_func_name = func_name
+        workgroup_pointer_indices = (
+            self.function_hlsl_workgroup_pointer_parameter_indices.get(
+                workgroup_pointer_func_name, {}
+            )
+        )
+        if not workgroup_pointer_indices:
+            materialized_name = self.hlsl_materialized_function_name(func_name)
+            materialized_indices = (
+                self.function_hlsl_workgroup_pointer_parameter_indices.get(
+                    materialized_name, {}
+                )
+            )
+            if materialized_indices:
+                workgroup_pointer_func_name = materialized_name
+                workgroup_pointer_indices = materialized_indices
         aggregate_arguments = {}
         for index, arg in enumerate(args):
+            if index in workgroup_pointer_indices:
+                continue
             argument_type = (
                 parameter_types[index] if index < len(parameter_types) else None
             )
@@ -30716,6 +30876,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         changed_indices = set()
 
         for index, arg in enumerate(args):
+            if index in workgroup_pointer_indices:
+                rendered_args.append("")
+                continue
             argument_type = (
                 parameter_types[index] if index < len(parameter_types) else None
             )
@@ -30752,12 +30915,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
         specialized_func_name = generic_function_call_name(self, func_name, args)
         callee = specialized_func_name or self.hlsl_function_call_name(func_name)
+        workgroup_callee = self.hlsl_workgroup_pointer_call_name(func_name, args)
+        if workgroup_callee is not None:
+            callee = workgroup_callee
         rendered_call_args = self.generate_call_arguments_from_rendered(
             func_name,
             args,
             rendered_args,
             private_pointer_func_name=func_name,
-            workgroup_pointer_func_name=func_name,
+            workgroup_pointer_func_name=workgroup_pointer_func_name,
         )
         return argument_code, f"{callee}({', '.join(rendered_call_args)})"
 
