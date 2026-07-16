@@ -39,6 +39,30 @@ def _write_two_entry_fixture(repo):
     )
 
 
+def _write_ordinary_two_entry_fixture(repo):
+    shader_dir = repo / "shaders"
+    shader_dir.mkdir(parents=True)
+    (shader_dir / "ordinary.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            kernel void first(
+                device uint* output [[buffer(0)]],
+                uint3 group_size [[threads_per_threadgroup]]) {
+                output[0] = group_size.x;
+            }
+
+            kernel void second(
+                device uint* output [[buffer(0)]],
+                uint3 group_size [[threads_per_threadgroup]]) {
+                output[0] = group_size.y;
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+
+
 def _rule_config(repo, *, targets=("directx", "opengl"), output_dir="out"):
     return project_api.ProjectConfig(
         root=repo,
@@ -229,6 +253,195 @@ def test_project_workgroup_rules_emit_directx_library_and_opengl_entries(tmp_pat
         == 4
     )
     assert all(artifact["execution"] is not None for artifact in runtime["artifacts"])
+
+
+def test_project_workgroup_size_materializes_each_host_named_entry(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_two_entry_fixture(repo)
+    size = [8, 4, 2]
+    report = project_api.translate_project(
+        project_api.ProjectConfig(
+            root=repo,
+            targets=["directx", "opengl"],
+            output_dir="out",
+            workgroup_size=size,
+        ),
+        format_output=False,
+        validate=True,
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 3
+    assert payload["summary"]["failedCount"] == 0
+    directx = next(
+        artifact for artifact in payload["artifacts"] if artifact["target"] == "directx"
+    )
+    opengl = [
+        artifact for artifact in payload["artifacts"] if artifact["target"] == "opengl"
+    ]
+    assert directx["execution"]["sourceEntryPoints"] == [
+        "tile_large",
+        "tile_small",
+    ]
+    assert len(directx["execution"]["entryPoints"]) == 2
+    assert len(opengl) == 2
+    assert all(len(artifact["execution"]["entryPoints"]) == 1 for artifact in opengl)
+
+    for artifact in payload["artifacts"]:
+        execution = artifact["execution"]
+        assert "workgroupSize" not in execution
+        assert execution["provenance"] == {
+            "kind": "project-config",
+            "path": "project.workgroup_size",
+        }
+        assert all(entry["workgroupSize"] == size for entry in execution["entryPoints"])
+        assert all("rule" not in entry for entry in execution["entryPoints"])
+        generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+        if artifact["target"] == "directx":
+            assert generated.count("[numthreads(8, 4, 2)]") == 2
+        else:
+            assert (
+                "layout(local_size_x = 8, local_size_y = 4, local_size_z = 2) in;"
+                in generated
+            )
+
+    report_path = repo / "project-report.json"
+    report.write_json(report_path)
+    assert project_api.validate_project_report(report_path)["success"] is True
+
+
+def test_project_workgroup_size_variants_keep_host_entry_identities_and_replay(
+    tmp_path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_two_entry_fixture(repo)
+    expected_sizes = {
+        "tile_a": [16, 4, 2],
+        "tile_b": [32, 2, 1],
+    }
+    config = project_api.ProjectConfig(
+        root=repo,
+        targets=["directx", "opengl"],
+        output_dir="out",
+        variants={
+            name: {"workgroup_size": size} for name, size in expected_sizes.items()
+        },
+    )
+
+    report = project_api.translate_project(
+        config,
+        format_output=False,
+        validate=True,
+    )
+    payload = report.to_json()
+
+    assert payload["summary"]["translatedCount"] == 6
+    assert payload["summary"]["failedCount"] == 0
+    assert len({artifact["path"] for artifact in payload["artifacts"]}) == 6
+    assert (
+        sum(artifact["target"] == "directx" for artifact in payload["artifacts"]) == 2
+    )
+    assert sum(artifact["target"] == "opengl" for artifact in payload["artifacts"]) == 4
+
+    entry_identities = []
+    execution_identities = []
+    for artifact in payload["artifacts"]:
+        variant = artifact["variant"]
+        size = expected_sizes[variant]
+        execution = artifact["execution"]
+        assert execution["provenance"] == {
+            "kind": "project-variant",
+            "path": f"project.variants.{variant}.workgroup_size",
+            "variant": variant,
+        }
+        expected_entry_count = 2 if artifact["target"] == "directx" else 1
+        assert len(execution["entryPoints"]) == expected_entry_count
+        assert all(entry["workgroupSize"] == size for entry in execution["entryPoints"])
+        assert all("rule" not in entry for entry in execution["entryPoints"])
+        entry_identities.extend(
+            entry["identity"]["value"] for entry in execution["entryPoints"]
+        )
+        execution_identities.append(execution["identity"]["value"])
+
+        generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+        if artifact["target"] == "directx":
+            attribute = f"[numthreads({size[0]}, {size[1]}, {size[2]})]"
+            assert generated.count(attribute) == 2
+        else:
+            assert (
+                "layout(local_size_x = "
+                f"{size[0]}, local_size_y = {size[1]}, local_size_z = {size[2]}) in;"
+            ) in generated
+
+    assert len(entry_identities) == len(set(entry_identities)) == 8
+    assert len(execution_identities) == len(set(execution_identities)) == 6
+    baseline_identities = {
+        artifact["path"]: (
+            artifact["execution"]["identity"],
+            [entry["identity"] for entry in artifact["execution"]["entryPoints"]],
+        )
+        for artifact in payload["artifacts"]
+    }
+    repeated = project_api.translate_project(config, format_output=False).to_json()
+    assert {
+        artifact["path"]: (
+            artifact["execution"]["identity"],
+            [entry["identity"] for entry in artifact["execution"]["entryPoints"]],
+        )
+        for artifact in repeated["artifacts"]
+    } == baseline_identities
+
+    report_path = repo / "variant-report.json"
+    report.write_json(report_path)
+    assert project_api.validate_project_report(report_path)["success"] is True
+    runtime = project_api.build_runtime_artifact_manifest(report_path)
+    assert runtime["summary"]["artifactCount"] == 6
+    assert (
+        sum(artifact["dispatch"]["workgroupCount"] for artifact in runtime["artifacts"])
+        == 8
+    )
+
+
+def test_project_workgroup_size_keeps_ordinary_multi_entry_aggregate_closed(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_ordinary_two_entry_fixture(repo)
+    payload = project_api.translate_project(
+        project_api.ProjectConfig(
+            root=repo,
+            targets=["directx", "opengl"],
+            output_dir="out",
+            workgroup_size=[8, 4, 2],
+        ),
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 2
+    assert all(artifact["status"] == "failed" for artifact in payload["artifacts"])
+    assert all(
+        "templateMaterialization" not in artifact for artifact in payload["artifacts"]
+    )
+    diagnostics = [
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == "project.translate.workgroup-size-entry-ambiguous"
+    ]
+    assert {diagnostic["target"] for diagnostic in diagnostics} == {
+        "directx",
+        "opengl",
+    }
+    assert all(
+        diagnostic["details"]["executionSpecialization"]
+        == {
+            "reason": "aggregate-entry-size-unproven",
+            "sourceEntryPoints": ["first", "second"],
+            "workgroupSize": [8, 4, 2],
+        }
+        for diagnostic in diagnostics
+    )
 
 
 def test_project_workgroup_rule_report_rejects_missing_opengl_split(tmp_path):
@@ -545,6 +758,55 @@ def test_project_workgroup_rule_report_rejects_rehashed_parameter_tampering(tmp_
     assert validation["success"] is False
     invalid = _diagnostic(validation, "project.validate.invalid-report")
     assert "must match its template materialization" in invalid["message"]
+
+
+def test_project_workgroup_rule_report_rejects_constant_provenance_rehash(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_two_entry_fixture(repo)
+    config = project_api.ProjectConfig(
+        root=repo,
+        targets=["directx"],
+        output_dir="out",
+        workgroup_size=[8, 4, 2],
+        workgroup_size_rules={
+            "shaders/tiled.metal": ["32", "BN", "BM"],
+        },
+    )
+    payload = project_api.translate_project(config, format_output=False).to_json()
+    artifact = payload["artifacts"][0]
+    execution = artifact["execution"]
+    execution["provenance"] = {
+        "kind": "project-config",
+        "path": "project.workgroup_size",
+    }
+    for entry in execution["entryPoints"]:
+        entry.pop("rule")
+        entry["workgroupSize"] = [8, 4, 2]
+        entry["identity"] = project_pipeline._workgroup_rule_entry_identity(
+            source=artifact["source"],
+            source_hash=artifact["sourceHash"],
+            target=artifact["target"],
+            variant=None,
+            entry=entry,
+        )
+    execution["identity"] = project_pipeline._workgroup_rule_execution_identity(
+        source=artifact["source"],
+        source_hash=artifact["sourceHash"],
+        target=artifact["target"],
+        variant=None,
+        source_entry_points=execution["sourceEntryPoints"],
+        entry_points=execution["entryPoints"],
+        provenance=execution["provenance"],
+    )
+    report_path = repo / "constant-provenance.json"
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    validation = project_api.validate_project_report(report_path)
+
+    assert validation["success"] is False
+    invalid = _diagnostic(validation, "project.validate.invalid-report")
+    assert "provenance.kind must be materialized-template-rule" in invalid["message"]
 
 
 @pytest.mark.parametrize(

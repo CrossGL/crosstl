@@ -9478,13 +9478,12 @@ def _target_entry_points_for_crossgl_stages(
     return result
 
 
-def _workgroup_rule_materialization_join(
+def _workgroup_materialization_join(
     *,
     stages: Sequence[Any],
     materialization: Mapping[str, Any] | None,
-    rule_path: str,
-    rule_components: Sequence[str],
-    source_pattern: str,
+    missing_message: str,
+    contract_details: Mapping[str, Any],
 ) -> list[tuple[Any, Mapping[str, Any]]]:
     specializations = (
         materialization.get("specializations")
@@ -9493,14 +9492,10 @@ def _workgroup_rule_materialization_join(
     )
     if not isinstance(specializations, list):
         raise ProjectWorkgroupSizeError(
-            "Per-entry workgroup-size rules require template materialization records.",
+            missing_message,
             code="project.translate.workgroup-size-materialization-invalid",
             reason="materialization-records-missing",
-            rule_details={
-                "path": rule_path,
-                "sourcePattern": source_pattern,
-                "components": list(rule_components),
-            },
+            rule_details=contract_details,
         )
 
     host_records: list[tuple[int, Mapping[str, Any]]] = []
@@ -9611,12 +9606,18 @@ def _project_workgroup_rule_execution_metadata(
     if configured is None:
         return None
     source_pattern, components, provenance = configured
-    joined = _workgroup_rule_materialization_join(
+    joined = _workgroup_materialization_join(
         stages=stages,
         materialization=materialization,
-        rule_path=str(provenance["path"]),
-        rule_components=components,
-        source_pattern=source_pattern,
+        missing_message=(
+            "Per-entry workgroup-size rules require template materialization "
+            "records."
+        ),
+        contract_details={
+            "path": provenance["path"],
+            "sourcePattern": source_pattern,
+            "components": list(components),
+        },
     )
     target_entry_points = _target_entry_points_for_crossgl_stages(ast, target, stages)
     entries: list[dict[str, Any]] = []
@@ -9766,6 +9767,141 @@ def _project_workgroup_rule_execution_metadata(
     return execution
 
 
+def _has_host_named_template_materializations(
+    materialization: Mapping[str, Any] | None,
+) -> bool:
+    specializations = (
+        materialization.get("specializations")
+        if isinstance(materialization, Mapping)
+        else None
+    )
+    return any(
+        isinstance(record, Mapping) and _is_non_empty_string(record.get("hostName"))
+        for record in _record_sequence(specializations)
+    )
+
+
+def _project_materialized_workgroup_execution_metadata(
+    *,
+    ast: Any,
+    stages: Sequence[Any],
+    unit: ProjectTranslationUnit,
+    target: str,
+    variant: str | None,
+    materialization: Mapping[str, Any] | None,
+    workgroup_size: Sequence[int],
+    provenance: Mapping[str, Any],
+    source_sizes: Mapping[str, tuple[int, int, int]],
+) -> dict[str, Any] | None:
+    if not _has_host_named_template_materializations(materialization):
+        return None
+
+    joined = _workgroup_materialization_join(
+        stages=stages,
+        materialization=materialization,
+        missing_message=(
+            "Per-entry constant workgroup-size specialization requires template "
+            "materialization records."
+        ),
+        contract_details={
+            "path": provenance["path"],
+            "workgroupSize": list(workgroup_size),
+        },
+    )
+    target_entry_points = _target_entry_points_for_crossgl_stages(ast, target, stages)
+    entries: list[dict[str, Any]] = []
+    for stage, record in joined:
+        function = getattr(stage, "entry_point", None)
+        materialized_entry = str(getattr(function, "name", "main"))
+        host_name = str(record["hostName"])
+        parameters = record.get("parameters")
+        parameter_sources = record.get("parameterSources")
+        if (
+            not isinstance(parameters, Mapping)
+            or not isinstance(parameter_sources, Mapping)
+            or set(parameters) != set(parameter_sources)
+        ):
+            raise ProjectWorkgroupSizeError(
+                f"Materialization '{host_name}' has incomplete parameter provenance.",
+                code="project.translate.workgroup-size-materialization-invalid",
+                reason="parameter-provenance-invalid",
+                source_entry_points=(host_name,),
+                workgroup_size=workgroup_size,
+                materialization_details={
+                    "hostName": host_name,
+                    "materializedName": record.get("materializedName"),
+                },
+            )
+
+        source_size = source_sizes.get(materialized_entry)
+        if source_size is not None and tuple(source_size) != tuple(workgroup_size):
+            raise ProjectWorkgroupSizeError(
+                f"Configured workgroup size for '{host_name}' conflicts with "
+                "concrete source execution metadata.",
+                code="project.translate.workgroup-size-conflict",
+                reason="project-source-conflict",
+                source_entry_points=(host_name,),
+                workgroup_size=workgroup_size,
+                source_workgroup_size=source_size,
+                materialization_details={
+                    "hostName": host_name,
+                    "materializedName": record.get("materializedName"),
+                },
+            )
+
+        _set_crossgl_stage_workgroup_size(stage, workgroup_size)
+        entry = {
+            "sourceEntryPoint": host_name,
+            "materializedEntryPoint": str(record["materializedName"]),
+            "targetEntryPoint": target_entry_points.get(materialized_entry, "main"),
+            "workgroupSize": list(workgroup_size),
+            "parameters": {
+                str(name): str(value) for name, value in sorted(parameters.items())
+            },
+            "parameterSources": {
+                str(name): str(value)
+                for name, value in sorted(parameter_sources.items())
+            },
+            "materialization": {
+                "name": str(record.get("name", "")),
+                "hostName": host_name,
+                "materializedName": str(record["materializedName"]),
+            },
+        }
+        entry["identity"] = _workgroup_rule_entry_identity(
+            source=unit.relative_path,
+            source_hash=unit.source_hash,
+            target=target,
+            variant=variant,
+            entry=entry,
+        )
+        entries.append(entry)
+
+    entries.sort(
+        key=lambda entry: (
+            entry["sourceEntryPoint"],
+            entry["materializedEntryPoint"],
+            entry["targetEntryPoint"],
+        )
+    )
+    source_entry_points = [str(entry["sourceEntryPoint"]) for entry in entries]
+    execution = {
+        "sourceEntryPoints": source_entry_points,
+        "entryPoints": entries,
+        "provenance": dict(provenance),
+    }
+    execution["identity"] = _workgroup_rule_execution_identity(
+        source=unit.relative_path,
+        source_hash=unit.source_hash,
+        target=target,
+        variant=variant,
+        source_entry_points=source_entry_points,
+        entry_points=entries,
+        provenance=provenance,
+    )
+    return execution
+
+
 def _wave_size_attribute(attribute: Any) -> bool:
     name = str(getattr(attribute, "name", "")).strip().lower()
     if name.startswith("hlsl_"):
@@ -9839,12 +9975,18 @@ def _project_subgroup_width_rule_execution_metadata(
         return None
     source_pattern, expression, provenance = configured
     try:
-        joined = _workgroup_rule_materialization_join(
+        joined = _workgroup_materialization_join(
             stages=stages,
             materialization=materialization,
-            rule_path=str(provenance["path"]),
-            rule_components=(expression,),
-            source_pattern=source_pattern,
+            missing_message=(
+                "Per-entry subgroup-width rules require template materialization "
+                "records."
+            ),
+            contract_details={
+                "path": provenance["path"],
+                "sourcePattern": source_pattern,
+                "expression": expression,
+            },
         )
     except ProjectWorkgroupSizeError as exc:
         raise ProjectSubgroupWidthError(
@@ -21557,6 +21699,26 @@ def _project_workgroup_execution_metadata(
             source_location=source_location,
         )
 
+    if (
+        configured_size is not None
+        and configured_provenance is not None
+        and selected_entry_point is None
+        and len(source_entry_points) > 1
+    ):
+        materialized_execution = _project_materialized_workgroup_execution_metadata(
+            ast=ast,
+            stages=stages,
+            unit=unit,
+            target=target,
+            variant=variant,
+            materialization=template_materialization,
+            workgroup_size=configured_size,
+            provenance=configured_provenance,
+            source_sizes=source_sizes,
+        )
+        if materialized_execution is not None:
+            return materialized_execution
+
     source_size = next(iter(distinct_source_sizes), None)
     source_proves_shared_size = bool(source_entry_points) and (
         set(source_sizes) == set(source_entry_points)
@@ -21901,14 +22063,14 @@ def _opengl_workgroup_split_specs(
     unit: ProjectTranslationUnit,
     variant: str | None,
 ) -> list[tuple[str, str, dict[str, Any]]]:
-    rule_entries = [
+    execution_entries = [
         dict(entry)
         for entry in _record_sequence(execution.get("entryPoints"))
         if isinstance(entry, Mapping)
     ]
-    if rule_entries:
+    if execution_entries:
         specs = []
-        for entry in rule_entries:
+        for entry in execution_entries:
             source_entry = str(entry["sourceEntryPoint"])
             materialized_entry = str(entry["materializedEntryPoint"])
             split_entry = dict(entry)
@@ -40004,6 +40166,21 @@ def _artifact_rule_execution_contract_reasons(
         record.get("variant") if _is_non_empty_string(record.get("variant")) else None
     )
     source_hash = record.get("sourceHash")
+    provenance = execution.get("provenance")
+    provenance_kind = (
+        provenance.get("kind") if isinstance(provenance, Mapping) else None
+    )
+    expected_constant_size = None
+    if provenance_kind == "project-config" and isinstance(project, Mapping):
+        expected_constant_size = project.get("workgroupSize")
+    elif (
+        provenance_kind == "project-variant"
+        and isinstance(project, Mapping)
+        and variant is not None
+    ):
+        variant_sizes = project.get("variantWorkgroupSizes")
+        if isinstance(variant_sizes, Mapping):
+            expected_constant_size = variant_sizes.get(variant)
     project_rules = (
         project.get("workgroupSizeRules") if isinstance(project, Mapping) else None
     )
@@ -40027,6 +40204,23 @@ def _artifact_rule_execution_contract_reasons(
                     pattern, str(source)
                 ),
             )
+    rule_execution = selected_rule_pattern is not None
+    constant_execution = not rule_execution and provenance_kind in {
+        "project-config",
+        "project-variant",
+    }
+    if constant_execution:
+        expected_field = (
+            "project.workgroupSize"
+            if provenance_kind == "project-config"
+            else f"project.variantWorkgroupSizes.{variant}"
+        )
+        reasons.extend(
+            _workgroup_size_contract_reasons(
+                expected_field,
+                expected_constant_size,
+            )
+        )
 
     materialization = record.get("templateMaterialization")
     specializations = (
@@ -40082,12 +40276,24 @@ def _artifact_rule_execution_contract_reasons(
                 f"{entry_prefix}.workgroupSize", workgroup_size
             )
         )
+        if (
+            constant_execution
+            and isinstance(expected_constant_size, list)
+            and isinstance(workgroup_size, list)
+            and workgroup_size != expected_constant_size
+        ):
+            expected_field = (
+                "project.workgroupSize"
+                if provenance_kind == "project-config"
+                else f"project.variantWorkgroupSizes.{variant}"
+            )
+            reasons.append(f"{entry_prefix}.workgroupSize must match {expected_field}")
         rule = entry.get("rule")
         rule_prefix = f"{entry_prefix}.rule"
         components: list[str] | None = None
-        if not isinstance(rule, Mapping):
+        if rule_execution and not isinstance(rule, Mapping):
             reasons.append(f"{rule_prefix} must be an object")
-        else:
+        elif rule_execution:
             reasons.extend(
                 _unsupported_mapping_field_reasons(
                     rule_prefix,
@@ -40131,6 +40337,11 @@ def _artifact_rule_execution_contract_reasons(
                         f"{rule_prefix}.components must match "
                         "project.workgroupSizeRules"
                     )
+        elif constant_execution and "rule" in entry:
+            reasons.append(
+                f"{rule_prefix} must be omitted for project or variant constant "
+                "per-entry execution"
+            )
 
         parameters = entry.get("parameters")
         parameter_reasons = _string_mapping_contract_reasons(
@@ -40326,7 +40537,6 @@ def _artifact_rule_execution_contract_reasons(
             f"{execution_prefix}.sourceEntryPoints must be sorted and unique"
         )
 
-    provenance = execution.get("provenance")
     provenance_prefix = f"{execution_prefix}.provenance"
     if not isinstance(provenance, Mapping):
         reasons.append(f"{provenance_prefix} must be an object")
@@ -40338,26 +40548,66 @@ def _artifact_rule_execution_contract_reasons(
                 REPORT_ARTIFACT_EXECUTION_PROVENANCE_FIELDS,
             )
         )
-        if provenance.get("kind") != "materialized-template-rule":
+        if rule_execution:
+            if provenance_kind != "materialized-template-rule":
+                reasons.append(
+                    f"{provenance_prefix}.kind must be materialized-template-rule "
+                    "when the source matches a project workgroup-size rule"
+                )
+            else:
+                expected_provenance_path = _mapping_key_path(
+                    f"project.{WORKGROUP_SIZE_RULES_CONFIG_KEY}",
+                    selected_rule_pattern,
+                )
+                if provenance.get("path") != expected_provenance_path:
+                    reasons.append(
+                        f"{provenance_prefix}.path must match the selected project "
+                        "rule"
+                    )
+                if "variant" in provenance:
+                    reasons.append(
+                        f"{provenance_prefix}.variant is not allowed for rule "
+                        "provenance"
+                    )
+        elif provenance_kind not in {"project-config", "project-variant"}:
             reasons.append(
-                f"{provenance_prefix}.kind must be materialized-template-rule"
+                f"{provenance_prefix}.kind must be project-config or "
+                "project-variant for constant per-entry execution"
             )
-        expected_provenance_path = (
-            _mapping_key_path(
-                f"project.{WORKGROUP_SIZE_RULES_CONFIG_KEY}",
-                selected_rule_pattern,
-            )
-            if selected_rule_pattern is not None
-            else None
-        )
-        if provenance.get("path") != expected_provenance_path:
-            reasons.append(
-                f"{provenance_prefix}.path must match the selected project rule"
-            )
-        if "variant" in provenance:
-            reasons.append(
-                f"{provenance_prefix}.variant is not allowed for rule provenance"
-            )
+        elif provenance_kind == "project-config":
+            if provenance.get("path") != f"project.{WORKGROUP_SIZE_CONFIG_KEY}":
+                reasons.append(
+                    f"{provenance_prefix}.path must be "
+                    f"project.{WORKGROUP_SIZE_CONFIG_KEY} for project-config "
+                    "provenance"
+                )
+            if "variant" in provenance:
+                reasons.append(
+                    f"{provenance_prefix}.variant is not allowed for "
+                    "project-config provenance"
+                )
+        else:
+            if variant is None:
+                reasons.append(
+                    f"{prefix}.variant is required for project-variant provenance"
+                )
+            else:
+                expected_path = (
+                    f"{_mapping_key_path('project.variants', str(variant))}."
+                    f"{WORKGROUP_SIZE_CONFIG_KEY}"
+                )
+                if provenance.get("path") != expected_path:
+                    reasons.append(
+                        f"{provenance_prefix}.path must be {expected_path} for "
+                        "project-variant provenance"
+                    )
+            provenance_variant = provenance.get("variant")
+            if not _is_non_empty_string(provenance_variant):
+                reasons.append(f"{provenance_prefix}.variant must be a string")
+            elif provenance_variant != variant:
+                reasons.append(
+                    f"{provenance_prefix}.variant must match {prefix}.variant"
+                )
 
     if target == "opengl":
         if len(raw_entries) != 1 or target_entries != ["main"]:
