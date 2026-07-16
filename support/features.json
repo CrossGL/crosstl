@@ -7213,14 +7213,19 @@
       "name": "Entry-scoped project artifacts",
       "description": "Select one materialized source entry and emit an independently loadable artifact with deterministic identity, path, provenance, and reflected interface metadata.",
       "support": {
-        "directx": {
-          "status": "supported",
-          "notes": "Project configuration selects one materialized compute entry and emits an independently loadable HLSL artifact at a deterministic entry path. The artifact records deterministic source-to-target entry identity, the selected execution contract, reflected compute entry and resources, source maps, and entry-scoped translation provenance. Evidence is limited to generation, project reporting, reflection, and available compiler validation; runtime execution and numerical parity are not claimed.",
-          "evidence": [
-            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_entry_scoped_generation_keeps_selected_execution_contract",
-            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_entry_scoped_generation_reports_available_entries",
-            "tests/test_translator/test_project_translation.py::def test_translate_project_allows_entry_scoped_workgroup_size_specialization"
-          ]
+    "directx": {
+      "status": "supported",
+      "notes": "Project configuration selects one materialized compute entry and emits an independently loadable HLSL artifact at a deterministic entry path. The artifact retains only reachable helpers, resources, constants, and execution state; preserves explicit registers and spaces; and records source-to-target entry identity, the selected execution contract, reflected interface, source maps, validation, profile, and entry-scoped provenance. The pinned MLX arangeuint32 proof compiles the standalone CSMain artifact with DXC and verifies exact Direct3D 12 readback on Windows CI.",
+      "evidence": [
+        "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_entry_scoped_generation_keeps_selected_execution_contract",
+        "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_entry_scoped_generation_reports_available_entries",
+        "tests/test_translator/test_directx_entry_packaging.py::def test_selected_directx_compute_is_standalone_and_replayable",
+        "tests/test_translator/test_directx_entry_packaging.py::def test_directx_project_preserves_aggregate_output_without_selection",
+        "tests/test_translator/test_directx_entry_packaging.py::def test_translate_project_cli_packages_materialized_directx_entry",
+        "tests/test_translator/test_directx_entry_packaging.py::def test_directx_entry_selection_failures_are_structured_and_write_no_file",
+        "tests/test_translator/test_project_translation.py::def test_translate_project_allows_entry_scoped_workgroup_size_specialization",
+        "tests/test_translator/test_native_runtime_drivers.py::def test_directx_compute_runtime_executes_translated_pinned_mlx_arange_on_device"
+      ]
         },
         "opengl": {
           "status": "supported",

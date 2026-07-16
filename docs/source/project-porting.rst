@@ -197,8 +197,8 @@ Vulkan smoke checks validate binary ``.spv`` artifacts with ``spirv-val`` and
 assemble textual ``.spvasm`` artifacts with ``spirv-as -o`` pointed at the
 platform null device.
 
-Entry-Scoped OpenGL Artifacts
------------------------------
+Entry-Scoped Compute Artifacts
+------------------------------
 
 Repositories can request a standalone artifact for one materialized source
 entry by adding a repository-relative selector table to ``crosstl.toml``:
@@ -208,18 +208,25 @@ entry by adding a repository-relative selector table to ``crosstl.toml``:
    [project]
    include = ["kernels/arange.metal"]
    include_dirs = ["."]
-   targets = ["opengl"]
+   targets = ["directx", "opengl"]
    output_dir = "crosstl-out"
 
    [project.entry_points]
    "kernels/arange.metal" = "arangeuint32"
 
-For OpenGL compute output, the selected source entry is emitted as target entry
-``main``. A source such as ``kernels/arange.metal`` produces
-``crosstl-out/opengl/kernels/arange/arangeuint32.glsl``. The portability report
-records the source entry, target entry, and reflected stage on the artifact;
-embedded validation records carry the same identity. Runtime artifact manifests
-then reflect only the selected stage interface from that standalone output.
+For DirectX compute output, the selected source entry is emitted as target entry
+``CSMain``. A source such as ``kernels/arange.metal`` produces
+``crosstl-out/directx/kernels/arange/arangeuint32.hlsl``. The standalone HLSL
+retains only the selected entry's reachable helpers, resources, constants, and
+execution contract. Explicit registers and spaces remain unchanged, while
+runtime-loader metadata records the selected ``cs_6_0`` entry profile.
+
+For OpenGL compute output, the same selection produces
+``crosstl-out/opengl/kernels/arange/arangeuint32.glsl`` with target entry
+``main``. For both targets, the portability report records the source entry,
+target entry, and reflected stage on the artifact; embedded validation records
+carry the same identity. Runtime artifact manifests then reflect only the
+selected stage interface from that standalone output.
 
 Selection is exact after source materialization. Missing or ambiguous entries
 fail with structured diagnostics and no target file. Targets that do not yet
