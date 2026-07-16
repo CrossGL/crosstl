@@ -17011,6 +17011,15 @@ complex64_t crossgl_complex64_mod_assign(
             return left["source"]
         return plan.common_type
 
+    def glsl_source_pointee_type(self, pointer_type):
+        pointer_type = self.type_name_string(pointer_type)
+        if not pointer_type:
+            return None
+        pointer_type = pointer_type.rstrip()
+        if not pointer_type.endswith(("*", "&")):
+            return None
+        return pointer_type[:-1].rstrip()
+
     def glsl_binary_operand_conversion_types(
         self,
         left_type,
@@ -17045,6 +17054,12 @@ complex64_t crossgl_complex64_mod_assign(
                 )
             if binding is not None and binding.get("element_type") is not None:
                 return binding["element_type"]
+
+            pointee_type = self.glsl_source_pointee_type(
+                self.glsl_source_expression_type(expression.operand)
+            )
+            if pointee_type is not None:
+                return pointee_type
 
         operand_type = self.glsl_source_expression_type(expression.operand)
         converted_type = self.glsl_unary_operand_conversion_type(expression)
@@ -18972,6 +18987,17 @@ complex64_t crossgl_complex64_mod_assign(
             and "IdentifierNode" in str(expression.__class__)
         ):
             return True
+        if (
+            isinstance(expression, UnaryOpNode)
+            and self.map_operator(expression.op) == "*"
+        ):
+            return (
+                self.generate_glsl_private_pointer_view_access(
+                    expression.operand,
+                    access_expression=expression,
+                )
+                is not None
+            )
         if isinstance(expression, MemberAccessNode):
             return self.glsl_stable_update_target(expression.object)
         if isinstance(expression, ArrayAccessNode):

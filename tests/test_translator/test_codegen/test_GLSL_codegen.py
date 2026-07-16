@@ -4678,6 +4678,138 @@ def test_glsl_private_scalar_pointer_preserves_zero_access_writeback(tmp_path):
     )
 
 
+def test_glsl_metal_pointer_assignment_preserves_lowered_destination_types(tmp_path):
+    metal_source = tmp_path / "pointer_destination_types.metal"
+    metal_source.write_text(
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        inline void update_signed(thread int* value, uint source) {
+            *value = source >> 23;
+            *value += source;
+        }
+
+        inline void update_unsigned(thread uint* value, int source) {
+            *value = source;
+            *value += source;
+        }
+
+        inline void update_signed_vector(thread int2* value, uint2 source) {
+            *value = source;
+            *value += source;
+        }
+
+        inline void update_unsigned_vector(thread uint2* value, int2 source) {
+            *value = source;
+            *value += source;
+        }
+
+        inline void update_narrow(thread short* value, ushort source) {
+            *value = source;
+            *value += source;
+        }
+
+        inline void update_narrow_vector(thread short2* value, ushort2 source) {
+            *value = source;
+            *value += source;
+        }
+
+        kernel void compute(
+            device int* signed_output [[buffer(0)]],
+            device uint* unsigned_output [[buffer(1)]]) {
+            int signed_value = 0;
+            uint unsigned_value = 0u;
+            int2 signed_vector = int2(0);
+            uint2 unsigned_vector = uint2(0u);
+            short narrow_value = short(0);
+            short2 narrow_vector = short2(0);
+            update_signed(&signed_value, 7u);
+            update_unsigned(&unsigned_value, -2);
+            update_signed_vector(&signed_vector, uint2(3u));
+            update_unsigned_vector(&unsigned_vector, int2(-4));
+            update_narrow(&narrow_value, ushort(5u));
+            update_narrow_vector(&narrow_vector, ushort2(6u));
+            signed_output[0] = signed_value + signed_vector.x
+                + int(narrow_value) + int(narrow_vector.x);
+            unsigned_output[0] = unsigned_value + unsigned_vector.x;
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(
+        str(metal_source),
+        backend="opengl",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "void update_signed(inout int value, uint source)" in generated
+    assert "value = int((source >> 23));" in generated
+    assert "value = int((uint(value) + source));" in generated
+    assert "void update_unsigned(inout uint value, int source)" in generated
+    assert "value = uint(source);" in generated
+    assert "value = (value + uint(source));" in generated
+    assert "void update_signed_vector(inout ivec2 value, uvec2 source)" in generated
+    assert "value = ivec2(source);" in generated
+    assert "value = ivec2((uvec2(value) + source));" in generated
+    assert "void update_unsigned_vector(inout uvec2 value, ivec2 source)" in generated
+    assert "value = uvec2(source);" in generated
+    assert "value = (value + uvec2(source));" in generated
+    assert "void update_narrow(inout int value, uint source)" in generated
+    assert "value = bitfieldExtract(int(source), 0, 16);" in generated
+    assert "value = bitfieldExtract((value + int(source)), 0, 16);" in generated
+    assert "void update_narrow_vector(inout ivec2 value, uvec2 source)" in generated
+    assert "value = bitfieldExtract(ivec2(source), 0, 16);" in generated
+    assert "value = bitfieldExtract((value + ivec2(source)), 0, 16);" in generated
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "metal_pointer_destination_types",
+    )
+
+
+def test_glsl_metal_pointer_assignment_reports_unsafe_destination_conversion(
+    tmp_path,
+):
+    metal_source = tmp_path / "unsafe_pointer_destination.metal"
+    metal_source.write_text(
+        """
+        #include <metal_stdlib>
+        using namespace metal;
+
+        inline void unsafe_store(thread int* destination, uint2 source) {
+            *destination = source;
+        }
+
+        kernel void compute(device int* output [[buffer(0)]]) {
+            int value = 0;
+            unsafe_store(&value, uint2(1u));
+            output[0] = value;
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OpenGLScalarConversionError) as exc_info:
+        crosstl.translate(
+            str(metal_source),
+            backend="opengl",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.opengl-scalar-conversion-unsupported"
+    )
+    assert diagnostic.missing_capabilities == ("opengl.scalar-conversion-lowering",)
+    assert diagnostic.source_type == "uvec2"
+    assert diagnostic.target_type == "int"
+    assert diagnostic.reason == "vector-to-scalar"
+
+
 def test_glsl_private_pointer_emits_distinct_scalar_and_array_forms(tmp_path):
     code = """
     shader MixedPrivatePointerShapes {
