@@ -107,6 +107,28 @@ def test_evaluate_literal_integer_conditional_accepts_boolean_literal():
     assert evaluate_literal_int_expression(expression) == 4
 
 
+@pytest.mark.parametrize(
+    ("expression", "constants", "expected"),
+    (
+        ("2 + 2", {}, 4),
+        ("(WIDTH * 2) - 1", {"WIDTH": 3}, 5),
+        ("-5 / 2", {}, -2),
+        ("-5 % 2", {}, -1),
+        ("(3 << 2) | 1", {}, 13),
+    ),
+)
+def test_evaluate_literal_integer_text_expression(expression, constants, expected):
+    assert evaluate_literal_int_expression(expression, constants) == expected
+
+
+@pytest.mark.parametrize(
+    "expression",
+    ("unknown + 1", "make_size()", "[1, 2]", "2.5 + 1"),
+)
+def test_evaluate_literal_integer_text_expression_rejects_non_integer_forms(expression):
+    assert evaluate_literal_int_expression(expression) is None
+
+
 def test_evaluate_literal_integer_unsigned_arithmetic_is_not_folded_as_signed():
     unsigned_one = ConstructorNode(PrimitiveType("uint"), [int_literal(1)])
     expression = TernaryOpNode(

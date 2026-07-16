@@ -248,7 +248,7 @@ shader ExternalValidatorTextureResources {
         vec4 main(FSInput input) @ gl_FragColor {
             int lod = 0;
             ivec2 pixel = ivec2(input.uv * 16.0);
-            ivec2 offset = ivec2(1, -1);
+            const ivec2 offset = ivec2(1, -1);
             int component = int(input.uv.x);
             vec4 base = texture(colorMap, linearSampler, input.uv);
             vec4 biased = texture(colorMap, linearSampler, input.uv, 0.25);
@@ -311,7 +311,7 @@ shader ExternalValidatorShadowTextures {
 
     fragment {
         vec4 main(FSInput input) @ gl_FragColor {
-            ivec2 offset = ivec2(1, 0);
+            const ivec2 offset = ivec2(1, 0);
             float base = textureCompare(
                 shadowMap,
                 compareSampler,
@@ -1942,9 +1942,10 @@ def test_mixed_glsl_specialization_constants_lower_for_target_codegen():
     shader_ast = _glsl_specialization_constant_ast()
 
     glsl = GLSLCodeGen().generate(shader_ast)
-    assert "layout(constant_id" not in glsl
-    assert "CrossGL fallback: OpenGL source validation cannot preserve" in glsl
-    assert "const int arraySize = 5;" in glsl
+    assert "layout(constant_id = 16) const int arraySize = 5;" in glsl
+    assert "layout(constant_id = 17) const bool spBool = true;" in glsl
+    assert "layout(constant_id = 18) const float spFloat = 3.14;" in glsl
+    assert "CrossGL fallback" not in glsl
     foo_prototype = "void foo(vec4 p[arraySize]);"
     foo_definition = "void foo(vec4 p[arraySize]) {"
     assert glsl.count(foo_prototype) == 1
@@ -1960,7 +1961,7 @@ def test_mixed_glsl_specialization_constants_lower_for_target_codegen():
     assert "Metal does not support double specialization constant" in metal
     assert "constant double spDouble" not in metal
     assert "thread VertexOutput& output" in metal
-    assert "constant int gl_MaxImageUnits = 8;" in metal
+    assert metal.count("constant int gl_MaxImageUnits = 8;") == 1
     assert "Metal vertex entry points require a position output" in metal
     assert "float4 __crossgl_position [[position]];" in metal
 
@@ -1981,14 +1982,32 @@ def test_mixed_glsl_specialization_constants_opengl_validates_with_glslangvalida
     tmp_path,
 ):
     glslang = _require_tool("glslangValidator")
+    spirv_val = _require_tool("spirv-val")
     shader_path = tmp_path / "specialization_constants.vert"
+    spirv_path = tmp_path / "specialization_constants.spv"
 
     shader_path.write_text(
         GLSLCodeGen().generate(_glsl_specialization_constant_ast()),
         encoding="utf-8",
     )
 
-    _run_validator([glslang, "-S", "vert", str(shader_path)])
+    _run_validator(
+        [
+            glslang,
+            "-G",
+            "--target-env",
+            "opengl",
+            "--target-env",
+            "spirv1.3",
+            "--auto-map-locations",
+            "-S",
+            "vert",
+            str(shader_path),
+            "-o",
+            str(spirv_path),
+        ]
+    )
+    _run_validator([spirv_val, "--target-env", "spv1.3", str(spirv_path)])
 
 
 def test_mixed_glsl_specialization_constants_metal_output_compiles_with_xcrun_metal(
@@ -2325,7 +2344,7 @@ def test_generated_hlsl_texture_resource_intrinsics_compile_with_dxc(tmp_path):
         "colorMap.SampleBias(linearSampler, input.uv, 0.25)",
         "colorMap.SampleLevel(linearSampler, input.uv, lod)",
         "colorMap.SampleGrad(linearSampler, input.uv, input.ddxValue, input.ddyValue)",
-        "colorMap.Sample(linearSampler, input.uv, offset)",
+        "colorMap.Sample(linearSampler, input.uv, int2(1, -1))",
         "colorMap.Load(int3(pixel, lod))",
         "colorMap.Load(int3((pixel + offset), lod))",
         "component == 0 ? colorMap.GatherRed(linearSampler, input.uv)",
@@ -2381,14 +2400,14 @@ def test_generated_hlsl_shadow_texture_intrinsics_compile_with_dxc(tmp_path):
         ),
         "tex.SampleCmp(cmp, uv, depth)",
         "shadowMap.SampleCmp(compareSampler, input.uv, input.depth)",
-        "shadowMap.SampleCmp(compareSampler, input.uv, input.depth, offset)",
+        "shadowMap.SampleCmp(compareSampler, input.uv, input.depth, int2(1, 0))",
         (
             "shadowMap.SampleCmp(compareSampler, "
             "input.projected.xy / input.projected.z, input.depth)"
         ),
         (
             "shadowMap.SampleCmp(compareSampler, "
-            "input.projected.xy / input.projected.z, input.depth, offset)"
+            "input.projected.xy / input.projected.z, input.depth, int2(1, 0))"
         ),
         "shadowMap.GatherCmp(compareSampler, input.uv, input.depth)",
         "shadowMap.GatherCmp(compareSampler, input.uv, input.depth, offset)",
@@ -4254,7 +4273,7 @@ def test_generated_glsl_parameter_image_atomic_specialization_validates_with_gls
     )
     assert "imageAtomicAdd(image, pixel, value)" not in code
     assert "imageAtomicAdd(counters, pixel, value)" in code
-    assert "addCounter__glsl_image_counters(ivec2(0, 1), 2u)" in code
+    assert "addCounter_glsl_image_counters(ivec2(0, 1), 2u)" in code
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator([glslang, "-S", "comp", str(shader_path)])
@@ -4273,11 +4292,11 @@ def test_generated_glsl_array_element_image_specialization_validates_with_glslan
         "compute",
     )
     assert "layout(r32ui, binding = 0) uniform uimage2D counters[2];" in code
-    assert "int queryElement__glsl_image_counters_0()" in code
+    assert "int queryElement_glsl_image_counters_0()" in code
     assert "return imageSize(counters[0]).x;" in code
-    assert "int queryElement__glsl_image_counters()" not in code
+    assert "int queryElement_glsl_image_counters()" not in code
     assert "return imageSize(counters).x;" not in code
-    assert "return queryElement__glsl_image_counters_0();" in code
+    assert "return queryElement_glsl_image_counters_0();" in code
     assert "imageStore(counters[1], ivec2(0, 0), uvec4(uint(" in code
     shader_path.write_text(code, encoding="utf-8")
 
@@ -4295,22 +4314,22 @@ def test_generated_glsl_dynamic_image_array_helper_validates_with_glslangvalidat
         "compute",
     )
     assert "layout(r32ui, binding = 0) uniform uimage2D counters[2];" in code
-    assert "int queryElement__glsl_image_counters_0()" in code
-    assert "int queryElement__glsl_image_counters_1()" in code
-    assert "int queryViaDynamic__glsl_images_counters(int layer)" in code
+    assert "int queryElement_glsl_image_counters_0()" in code
+    assert "int queryElement_glsl_image_counters_1()" in code
+    assert "int queryViaDynamic_glsl_images_counters(int layer)" in code
     assert "switch (layer)" in code
-    assert "return queryElement__glsl_image_counters_0();" in code
-    assert "return queryElement__glsl_image_counters_1();" in code
-    assert "int queryViaInitializer__glsl_images_counters(int layer)" in code
+    assert "return queryElement_glsl_image_counters_0();" in code
+    assert "return queryElement_glsl_image_counters_1();" in code
+    assert "int queryViaInitializer_glsl_images_counters(int layer)" in code
     assert "int count;\n    switch (layer)" in code
-    assert "count = queryElement__glsl_image_counters_0();" in code
-    assert "count = queryElement__glsl_image_counters_1();" in code
-    assert "int queryViaAssignment__glsl_images_counters(int layer)" in code
-    assert "void storeViaExpression__glsl_images_counters(int layer)" in code
-    assert "storeElement__glsl_image_counters_0(" in code
-    assert "storeElement__glsl_image_counters_1(" in code
-    assert "storeElement__glsl_image_counters_layer" not in code
-    assert "queryElement__glsl_image_counters_layer" not in code
+    assert "count = queryElement_glsl_image_counters_0();" in code
+    assert "count = queryElement_glsl_image_counters_1();" in code
+    assert "int queryViaAssignment_glsl_images_counters(int layer)" in code
+    assert "void storeViaExpression_glsl_images_counters(int layer)" in code
+    assert "storeElement_glsl_image_counters_0(" in code
+    assert "storeElement_glsl_image_counters_1(" in code
+    assert "storeElement_glsl_image_counters_layer" not in code
+    assert "queryElement_glsl_image_counters_layer" not in code
     assert "return imageSize(counters[layer]).x;" not in code
     assert "return queryElement(counters[layer]);" not in code
     shader_path.write_text(code, encoding="utf-8")
@@ -4337,10 +4356,10 @@ def test_generated_glsl_advanced_image_array_specialization_validates_with_glsla
         "layout(rgba16f, binding = 6) uniform imageCubeArray cubeLayerImages[2];"
         in code
     )
-    assert "return touchMS__glsl_image_msImages_1(pixel, sampleIndex, value);" in code
-    assert "return bumpMS__glsl_image_msCounters_1(pixel, sampleIndex, value);" in code
-    assert "return touchCube__glsl_image_cubeImages_1(coord, value);" in code
-    assert "return touchCubeLayer__glsl_image_cubeLayerImages_1(coord, value);" in code
+    assert "return touchMS_glsl_image_msImages_1(pixel, sampleIndex, value);" in code
+    assert "return bumpMS_glsl_image_msCounters_1(pixel, sampleIndex, value);" in code
+    assert "return touchCube_glsl_image_cubeImages_1(coord, value);" in code
+    assert "return touchCubeLayer_glsl_image_cubeLayerImages_1(coord, value);" in code
     assert "imageAtomicAdd(msCounters[1], pixel, sampleIndex, value)" in code
     shader_path.write_text(code, encoding="utf-8")
 
@@ -4367,19 +4386,19 @@ def test_generated_glsl_dynamic_advanced_image_array_helper_validates_with_glsla
         in code
     )
     assert "switch (layer)" in code
-    assert "return touchMS__glsl_image_msImages_0(pixel, sampleIndex, value);" in code
-    assert "return touchMS__glsl_image_msImages_1(pixel, sampleIndex, value);" in code
-    assert "return bumpMS__glsl_image_msCounters_0(pixel, sampleIndex, value);" in code
-    assert "return bumpMS__glsl_image_msCounters_1(pixel, sampleIndex, value);" in code
-    assert "return touchCube__glsl_image_cubeImages_0(coord, value);" in code
-    assert "return touchCube__glsl_image_cubeImages_1(coord, value);" in code
-    assert "return touchCubeLayer__glsl_image_cubeLayerImages_0(coord, value);" in code
-    assert "return touchCubeLayer__glsl_image_cubeLayerImages_1(coord, value);" in code
+    assert "return touchMS_glsl_image_msImages_0(pixel, sampleIndex, value);" in code
+    assert "return touchMS_glsl_image_msImages_1(pixel, sampleIndex, value);" in code
+    assert "return bumpMS_glsl_image_msCounters_0(pixel, sampleIndex, value);" in code
+    assert "return bumpMS_glsl_image_msCounters_1(pixel, sampleIndex, value);" in code
+    assert "return touchCube_glsl_image_cubeImages_0(coord, value);" in code
+    assert "return touchCube_glsl_image_cubeImages_1(coord, value);" in code
+    assert "return touchCubeLayer_glsl_image_cubeLayerImages_0(coord, value);" in code
+    assert "return touchCubeLayer_glsl_image_cubeLayerImages_1(coord, value);" in code
     assert "return touchMS(msImages[layer], pixel, sampleIndex, value);" not in code
     assert "return bumpMS(msCounters[layer], pixel, sampleIndex, value);" not in code
     assert "return touchCube(cubeImages[layer], coord, value);" not in code
     assert "return touchCubeLayer(cubeLayerImages[layer], coord, value);" not in code
-    assert "touchMS__glsl_image_msImages_layer" not in code
+    assert "touchMS_glsl_image_msImages_layer" not in code
     assert "imageLoad(msImages[layer], pixel, sampleIndex)" not in code
     shader_path.write_text(code, encoding="utf-8")
 

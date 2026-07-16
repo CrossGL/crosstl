@@ -2,6 +2,7 @@ import os
 import re
 import shutil
 import subprocess
+from pathlib import Path
 from typing import List
 
 import pytest
@@ -21,6 +22,7 @@ from crosstl.translator.ast import (
     CooperativeMatrixOpNode,
     CooperativeMatrixType,
     ExecutionModel,
+    ForInNode,
     FunctionCallNode,
     FunctionNode,
     GenericParameterNode,
@@ -43,12 +45,23 @@ from crosstl.translator.ast import (
     create_legacy_shader_node,
 )
 from crosstl.translator.codegen.directx_codegen import (
+    DirectXAggregateConditionalError,
     DirectXAtomicFenceLoweringError,
+    DirectXBooleanCompoundAssignmentError,
+    DirectXBooleanOrderedIntrinsicError,
+    DirectXCompileTimeGlobalError,
     DirectXCooperativeMatrixUnsupportedError,
+    DirectXForInIterableError,
+    DirectXMappedOverloadError,
+    DirectXMinimumPrecisionIntegerArithmeticError,
     DirectXPrivatePointerParameterError,
     DirectXResourcePointerArrayError,
+    DirectXResourcePointerParameterError,
     DirectXSemanticArraySizeError,
+    DirectXSpecializationConstantError,
+    DirectXTextureOffsetError,
     DirectXTrailingZeroBuiltinError,
+    DirectXUnionLayoutError,
     DirectXUnresolvedSourceTypeError,
     DirectXWorkgroupPointerError,
     HLSLCodeGen,
@@ -60,6 +73,7 @@ from tests.test_backend.test_SPIRV.test_codegen import (
 )
 from tests.test_translator.test_project_translation import (
     assert_directx_compute_validates_if_available,
+    assert_materialized_aggregate_conditional_hlsl,
 )
 
 
@@ -248,6 +262,516 @@ def test_hlsl_standard_math_constant_metal_proxy_compute_validates(tmp_path):
     assert "M_PI_F" not in generated
     HLSLParser(HLSLLexer(generated).tokenize()).parse()
     assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_union_storage_aliases_exact_bytes_and_side_effects(tmp_path):
+    source = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    union rbits {
+        uint2 val;
+        uchar4 bytes[2];
+    };
+
+    struct Holder {
+        rbits values[2];
+    };
+
+    uint next_index(thread uint& calls) {
+        uint current = calls;
+        calls += 1u;
+        return current;
+    }
+
+    kernel void union_roundtrip(device uint* output [[buffer(0)]]) {
+        Holder holder;
+        holder.values[0].val = uint2(0x04030201u, 0u);
+        holder.values[1].val = uint2(9u, 10u);
+        uint calls = 0u;
+        output[0] = holder.values[next_index(calls)].bytes[0][0];
+        calls = 0u;
+        holder.values[next_index(calls)].bytes[1] = uchar4(5u, 6u, 7u, 8u);
+        output[1] = holder.values[0].val.y;
+        output[2] = calls;
+        calls = 0u;
+        holder.values[0].bytes[0][next_index(calls)] = 9u;
+        output[3] = holder.values[0].val.x;
+    }
+    """
+    shader_path = tmp_path / "union-roundtrip.metal"
+    shader_path.write_text(source, encoding="utf-8")
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "struct rbits {\n    uint2 CrossGLUnionStorage;\n};" in generated
+    assert "uint2 val;" not in generated
+    assert "uint4 bytes[2];" not in generated
+    assert "word & 0xffu" in generated
+    assert "(word >> 24u) & 0xffu" in generated
+    assert "((value.w & 0xffu) << 24u)" in generated
+    assert (
+        "holder.values[next_index(calls)].CrossGLUnionStorage[1] = "
+        "__crossgl_union_pack_u8x4(uint4(5u, 6u, 7u, 8u));"
+    ) in generated
+    assert generated.count("holder.values[next_index(calls)].CrossGLUnionStorage") == 2
+    assert "output[1] = holder.values[0].CrossGLUnionStorage.y;" in generated
+    assert (
+        "__crossgl_union_set_u8x4_lane("
+        "holder.values[0].CrossGLUnionStorage[0], next_index(calls), 9u);"
+    ) in generated
+
+    source_word = 0x04030201
+    assert tuple((source_word >> shift) & 0xFF for shift in (0, 8, 16, 24)) == (
+        1,
+        2,
+        3,
+        4,
+    )
+    packed_word = sum(
+        value << shift for value, shift in zip((5, 6, 7, 8), (0, 8, 16, 24))
+    )
+    assert packed_word == 0x08070605
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_union_float_uint_alias_uses_native_bitcasts(tmp_path):
+    shader_path = tmp_path / "float-word-union.metal"
+    shader_path.write_text(
+        """
+        using FloatWord = union {
+            float value;
+            uint32_t word;
+        };
+
+        uint float_word(float value) {
+            FloatWord bits;
+            bits.value = value;
+            return bits.word;
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "uint CrossGLUnionStorage;" in generated
+    assert "bits.CrossGLUnionStorage = asuint(value);" in generated
+    assert "return bits.CrossGLUnionStorage;" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+
+
+@pytest.mark.parametrize(
+    ("declaration", "reason"),
+    [
+        (
+            "union BadSize { uint2 words; uint word; };",
+            "member-size-mismatch",
+        ),
+        (
+            "struct Pair { uint2 words; }; union Nested { uint2 words; Pair pair; };",
+            "member-shape-unsupported",
+        ),
+        (
+            "union Padded { uint3 words; uchar4 bytes[4]; };",
+            "member-storage-shape-mismatch",
+        ),
+        (
+            "union WeakAlignment { uint words[2]; uchar4 bytes[2]; };",
+            "aggregate-alignment-unsupported",
+        ),
+    ],
+    ids=["size", "nested-aggregate", "vector-padding", "alignment"],
+)
+def test_hlsl_metal_union_unsupported_layouts_are_structured_diagnostics(
+    tmp_path, declaration, reason
+):
+    shader_path = tmp_path / f"union-{reason}.metal"
+    shader_path.write_text(declaration, encoding="utf-8")
+
+    with pytest.raises(DirectXUnionLayoutError) as error:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    assert error.value.project_diagnostic_code == (
+        "project.translate.directx-union-layout-unsupported"
+    )
+    assert error.value.missing_capabilities == ("directx.union-storage-aliasing",)
+    assert error.value.reason == reason
+    assert error.value.union_name
+
+
+def test_hlsl_specialization_and_file_scope_constants_preserve_contracts(tmp_path):
+    source = """
+    shader DirectXSpecializationDefaults {
+        struct LookupConfig {
+            uint base;
+            uint2 bias;
+        };
+
+        const int ordinary = 9;
+        const int width @constant_id(19) = 4;
+        constant bool use_fast @function_constant(20) = true;
+        constant int mode @constant_id(21) = 2;
+        constant float scale @function_constant(22) = 0.5;
+        constant int tableRows = 2;
+        constant uint scalarValue = 3u;
+        constant uint2 laneBias = uint2(5u, 7u);
+        constant LookupConfig config = LookupConfig(11u, uint2(13u, 17u));
+        constant uint rotations[tableRows][4] = {
+            {19u, 23u, 29u, 31u},
+            {37u, 41u, 43u, 47u}
+        };
+        constant sampler2D lookupTexture @binding(2);
+        constant float runtimeScale @location(3);
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<uint> output @ binding(0)) {
+                float value = use_fast ? scale + float(mode + width + ordinary) : 0.0;
+                output[0] = scalarValue + laneBias.y + config.base
+                    + config.bias.x + rotations[1][2] + uint(value);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert "static const int ordinary = 9;" in generated
+    assert "static const int width = 4;" in generated
+    assert "static const bool use_fast = true;" in generated
+    assert "static const int mode = 2;" in generated
+    assert "static const float scale = 0.5;" in generated
+    assert "static const int tableRows = 2;" in generated
+    assert "static const uint scalarValue = 3u;" in generated
+    assert "static const uint2 laneBias = uint2(5u, 7u);" in generated
+    assert "static const LookupConfig config = {11u, uint2(13u, 17u)};" in generated
+    assert (
+        "static const uint rotations[tableRows][4] = "
+        "{{19u, 23u, 29u, 31u}, {37u, 41u, 43u, 47u}};" in generated
+    )
+    for constant_id in (19, 20, 21, 22):
+        assert (
+            f"DirectX specialization constant id {constant_id} fixed to its default"
+            in generated
+        )
+    assert "config.bias.x" in generated
+    assert "rotations[1][2]" in generated
+    assert "uint rotations[4][tableRows]" not in generated
+    assert "uint rotations[tableRows][4];" not in generated
+    assert "Texture2D lookupTexture : register(t2);" in generated
+    assert "float runtimeScale;" in generated
+    assert "static const Texture2D lookupTexture" not in generated
+    assert "static const float runtimeScale" not in generated
+    assert "bool use_fast;" not in generated
+    assert "int mode;" not in generated
+    assert "float scale;" not in generated
+    assert "$Globals" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_omits_unreferenced_empty_compile_time_values_and_rejects_uses():
+    source = """
+    shader EmptyCompileTimeValue {
+        struct Logger {
+        };
+
+        constant Logger logger = Logger("scope", "category");
+
+        compute {
+            void main() {
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert "Logger logger" not in generated
+
+    referenced_source = source.replace(
+        "void main() {\n            }",
+        "void main() {\n                Logger value = logger;\n            }",
+    )
+    with pytest.raises(DirectXCompileTimeGlobalError) as exc_info:
+        HLSLCodeGen().generate(crosstl.translator.parse(referenced_source))
+
+    diagnostic = exc_info.value
+    assert diagnostic.reason == "unrepresentable-value-type"
+    assert diagnostic.detail == "empty struct type 'Logger'"
+
+
+def test_hlsl_metal_function_constant_defaults_use_compile_time_constants(tmp_path):
+    source = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    constant bool use_fast [[function_constant(20)]] = true;
+    constant int mode [[function_constant(21)]] = 2;
+    constant float scale [[function_constant(22)]] = 0.5;
+
+    kernel void write_value(
+        device float* output [[buffer(0)]],
+        uint index [[thread_position_in_grid]]) {
+        output[index] = use_fast ? scale + float(mode) : 0.0;
+    }
+    """
+    shader_path = tmp_path / "defaulted_function_constants.metal"
+    shader_path.write_text(source, encoding="utf-8")
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "static const bool use_fast = true;" in generated
+    assert "static const int mode = 2;" in generated
+    assert "static const float scale = 0.5;" in generated
+    assert "bool use_fast;" not in generated
+    assert "int mode;" not in generated
+    assert "float scale;" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+
+
+def test_hlsl_invalid_compile_time_values_fail_before_global_emission(
+    monkeypatch,
+):
+    source = """
+    shader RequiredDirectXSpecialization {
+        float runtime_state;
+        constant bool has_w @function_constant(20);
+    }
+    """
+    ast = crosstl.translator.parse(source)
+    source_location = {"line": 4, "column": 23}
+    ast.global_variables[1].source_location = source_location
+    codegen = HLSLCodeGen()
+
+    def fail_if_global_emission_starts(*_args, **_kwargs):
+        pytest.fail("ordinary HLSL global emission started before validation")
+
+    monkeypatch.setattr(
+        codegen,
+        "reserve_explicit_global_resource_registers",
+        fail_if_global_emission_starts,
+    )
+
+    with pytest.raises(DirectXSpecializationConstantError) as excinfo:
+        codegen.generate(ast)
+
+    diagnostic = excinfo.value
+    assert (
+        diagnostic.project_diagnostic_code
+        == "project.translate.directx-specialization-constant-unsupported"
+    )
+    assert diagnostic.missing_capabilities == (
+        "directx.specialization-constant-variant",
+    )
+    assert diagnostic.constant_name == "has_w"
+    assert diagnostic.constant_id == 20
+    assert diagnostic.constant_type == "bool"
+    assert diagnostic.reason == "missing-required-value"
+    assert diagnostic.source_location == source_location
+    assert "has_w" in str(diagnostic)
+    assert "id 20" in str(diagnostic)
+    assert "no concrete/default value" in str(diagnostic)
+
+    invalid_initializers = (
+        (
+            "float runtimeScale; constant float invalidScale = runtimeScale;",
+            "runtime-value",
+            "runtimeScale",
+        ),
+        (
+            "float buildScale() { return 2.0; } "
+            "constant float invalidScale = buildScale();",
+            "function-call",
+            "buildScale",
+        ),
+    )
+    for declaration, reason, detail in invalid_initializers:
+        invalid_ast = crosstl.translator.parse(
+            f"shader InvalidCompileTimeGlobal {{ {declaration} }}"
+        )
+        invalid = next(
+            node for node in invalid_ast.global_variables if node.name == "invalidScale"
+        )
+        invalid.source_location = source_location
+
+        with pytest.raises(DirectXCompileTimeGlobalError) as exc_info:
+            HLSLCodeGen().generate(invalid_ast)
+
+        compile_time_diagnostic = exc_info.value
+        assert compile_time_diagnostic.project_diagnostic_code == (
+            "project.translate.directx-compile-time-global-invalid"
+        )
+        assert compile_time_diagnostic.missing_capabilities == (
+            "directx.compile-time-global-initializer",
+        )
+        assert compile_time_diagnostic.variable_name == "invalidScale"
+        assert compile_time_diagnostic.detail == detail
+        assert compile_time_diagnostic.reason == reason
+        assert compile_time_diagnostic.source_location == source_location
+
+
+@pytest.mark.parametrize(
+    ("declarations", "reason", "constant_id", "conflicting_value"),
+    [
+        (
+            "constant int mode @function_constant(3) @constant_id(4) = 1;",
+            "conflicting-id",
+            3,
+            4,
+        ),
+        (
+            """
+            constant bool use_fast @function_constant(7) = true;
+            constant int mode @constant_id(7) = 1;
+            """,
+            "conflicting-id-type",
+            7,
+            "bool",
+        ),
+        (
+            """
+            constant bool use_fast @function_constant(9) = true;
+            constant bool use_safe @constant_id(9) = false;
+            """,
+            "duplicate-id",
+            9,
+            "use_fast",
+        ),
+        (
+            """
+            constant bool mode @function_constant(10) = true;
+            constant int mode @constant_id(11) = 1;
+            """,
+            "duplicate-name",
+            11,
+            10,
+        ),
+    ],
+    ids=["metadata", "type", "duplicate-id", "duplicate-name"],
+)
+def test_hlsl_specialization_constant_conflicts_are_structured(
+    declarations, reason, constant_id, conflicting_value
+):
+    source = f"""
+    shader ConflictingDirectXSpecialization {{
+        {declarations}
+    }}
+    """
+    ast = crosstl.translator.parse(source)
+    source_location = {"line": 4, "column": 13}
+    ast.global_variables[-1].source_location = source_location
+
+    with pytest.raises(DirectXSpecializationConstantError) as excinfo:
+        HLSLCodeGen().generate(ast)
+
+    diagnostic = excinfo.value
+    assert diagnostic.reason == reason
+    assert diagnostic.constant_id == constant_id
+    assert diagnostic.source_location == source_location
+    if reason == "conflicting-id":
+        assert diagnostic.conflicting_id == conflicting_value
+    elif reason == "duplicate-id":
+        assert diagnostic.conflicting_name == conflicting_value
+    elif reason == "duplicate-name":
+        assert diagnostic.constant_name == "mode"
+        assert diagnostic.constant_type == "int"
+        assert diagnostic.conflicting_name == "mode"
+        assert diagnostic.conflicting_id == conflicting_value
+        assert diagnostic.conflicting_type == "bool"
+    else:
+        assert diagnostic.constant_type == "int"
+        assert diagnostic.conflicting_type == conflicting_value
+        assert diagnostic.conflicting_name == "use_fast"
+
+
+def test_hlsl_specialization_constant_rejects_incompatible_type():
+    source = """
+    shader InvalidDirectXSpecializationType {
+        constant vec2 offsets @function_constant(8) = vec2(1.0);
+    }
+    """
+    ast = crosstl.translator.parse(source)
+    source_location = {"line": 3, "column": 23}
+    ast.global_variables[0].source_location = source_location
+
+    with pytest.raises(DirectXSpecializationConstantError) as excinfo:
+        HLSLCodeGen().generate(ast)
+
+    diagnostic = excinfo.value
+    assert diagnostic.constant_name == "offsets"
+    assert diagnostic.constant_id == 8
+    assert diagnostic.constant_type == "float2"
+    assert diagnostic.reason == "incompatible-type"
+    assert diagnostic.source_location == source_location
+
+
+@pytest.mark.skipif(shutil.which("dxc") is None, reason="dxc is not available")
+def test_hlsl_specialization_constants_do_not_create_globals_cbuffer(tmp_path):
+    source = """
+    shader DirectXSpecializationNative {
+        constant bool use_fast @function_constant(20) = true;
+        constant int mode @constant_id(21) = 2;
+        constant float scale @function_constant(22) = 0.5;
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<float> output @ binding(0)) {
+                output[0] = use_fast ? scale + float(mode) : 0.0;
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+    hlsl_path = tmp_path / "specialization_constants.hlsl"
+    dxil_path = tmp_path / "specialization_constants.dxil"
+    listing_path = tmp_path / "specialization_constants.ll"
+    hlsl_path.write_text(generated, encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            shutil.which("dxc"),
+            "-T",
+            "cs_6_0",
+            "-E",
+            "CSMain",
+            str(hlsl_path),
+            "-Fo",
+            str(dxil_path),
+            "-Fc",
+            str(listing_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "$Globals" not in listing_path.read_text(encoding="utf-8")
 
 
 def test_hlsl_type_node_renders_expression_generic_arguments():
@@ -872,7 +1396,40 @@ def test_hlsl_codegen_lowers_fixed_struct_array_return_to_carrier_struct():
     assert "ComplexValue[2]" not in generated
 
 
-def test_hlsl_codegen_lowers_bool_division_and_modulo_through_uint():
+def test_hlsl_codegen_lowers_fixed_array_value_locals_and_indexing():
+    shader = """
+    shader FixedArrayValueLocals {
+        struct Record {
+            uint value;
+        };
+
+        bool[2] make_flags(bool x) {
+            return {x, !x};
+        }
+
+        Record[2] make_records(uint x) {
+            return {Record(x), Record(x + 1u)};
+        }
+
+        uint read_values(uint index) {
+            bool flags[2] = make_flags(index != 0u);
+            Record records[2] = make_records(index);
+            return uint(flags[index & 1u]) + records[index & 1u].value;
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "bool2 flags = make_flags((index != 0u));" in generated
+    assert "bool flags[2] = make_flags" not in generated
+    assert "CrossGLFixedArray_Record_2 records = make_records(index);" in generated
+    assert "Record records[2] = make_records" not in generated
+    assert "flags[(index & 1u)]" in generated
+    assert "CrossGLFixedArray_Record_2_read(records, (index & 1u)).value" in generated
+
+
+def test_hlsl_codegen_lowers_bool_arithmetic_and_compound_assignments(tmp_path):
     ast = ShaderNode(
         "BoolArithmetic",
         ExecutionModel.COMPUTE_KERNEL,
@@ -924,6 +1481,251 @@ def test_hlsl_codegen_lowers_bool_division_and_modulo_through_uint():
     assert "return ((((x) ? 1u : 0u) % ((y) ? 1u : 0u)) != 0u);" in generated
     assert "return (x / y);" not in generated
     assert "return (x % y);" not in generated
+
+    compound_source = """
+    shader BoolCompoundArithmetic {
+        struct BoolState {
+            bool value;
+            bool2 lanes;
+        };
+
+        int nextIndex(inout int calls) {
+            int current = calls;
+            calls += 1;
+            return current;
+        }
+
+        bool nextValue(inout int calls, bool value) {
+            calls += 1;
+            return value;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<uint> output @ binding(0)) {
+                bool scalar = true;
+                bool2 lanes = bool2(true, false);
+                BoolState state;
+                state.value = true;
+                state.lanes = lanes;
+                bool values[4];
+                values[0] = true;
+                BoolState states[4];
+                states[0].value = true;
+                int index = 0;
+                int calls = 0;
+                uchar narrow = uchar(2u);
+                uint numeric = 3u;
+
+                scalar *= nextValue(calls, true);
+                scalar >>= 1;
+                state.value += numeric;
+                values[nextIndex(calls)] *= nextValue(calls, true);
+                states[index].value *= nextValue(index, true);
+                lanes <<= bool2(true, false);
+                scalar *= narrow;
+                scalar -= false;
+                scalar /= true;
+                scalar %= true;
+                scalar <<= 1;
+                numeric *= 2u;
+                numeric >>= 1u;
+
+                output[0] = uint(scalar) + uint(state.value) + uint(values[0])
+                    + uint(states[0].value) + uint(lanes.x) + numeric + uint(calls);
+            }
+        }
+    }
+    """
+    compound_generated = HLSLCodeGen().generate(
+        crosstl.translator.parse(compound_source)
+    )
+
+    assert (
+        "int __crossgl_bool_compound_lhs = int(scalar);\n"
+        "    int __crossgl_bool_compound_rhs = int(nextValue(calls, true));\n"
+        "    scalar = ((__crossgl_bool_compound_lhs * "
+        "__crossgl_bool_compound_rhs) != 0);"
+    ) in compound_generated
+    assert (
+        "int __crossgl_bool_compound_lhs_ = int(scalar);\n"
+        "    int __crossgl_bool_compound_rhs_ = int(1);\n"
+        "    scalar = ((__crossgl_bool_compound_lhs_ >> "
+        "__crossgl_bool_compound_rhs_) != 0);"
+    ) in compound_generated
+    assert (
+        "uint __crossgl_bool_compound_lhs__ = uint(state.value);\n"
+        "    uint __crossgl_bool_compound_rhs__ = uint(numeric);\n"
+        "    state.value = ((__crossgl_bool_compound_lhs__ + "
+        "__crossgl_bool_compound_rhs__) != 0u);"
+    ) in compound_generated
+    assert (
+        "int __crossgl_bool_compound_index = int(nextIndex(calls));\n"
+        "    int __crossgl_bool_compound_lhs___ = "
+        "int(values[__crossgl_bool_compound_index]);\n"
+        "    int __crossgl_bool_compound_rhs___ = int(nextValue(calls, true));\n"
+        "    values[__crossgl_bool_compound_index] = "
+        "((__crossgl_bool_compound_lhs___ * "
+        "__crossgl_bool_compound_rhs___) != 0);"
+    ) in compound_generated
+    assert (
+        "int __crossgl_bool_compound_index_ = int(index);\n"
+        "    int __crossgl_bool_compound_lhs____ = "
+        "int(states[__crossgl_bool_compound_index_].value);\n"
+        "    int __crossgl_bool_compound_rhs____ = int(nextValue(index, true));\n"
+        "    states[__crossgl_bool_compound_index_].value = "
+        "((__crossgl_bool_compound_lhs____ * "
+        "__crossgl_bool_compound_rhs____) != 0);"
+    ) in compound_generated
+    assert (
+        "int2 __crossgl_bool_compound_lhs_____ = int2(lanes);\n"
+        "    int2 __crossgl_bool_compound_rhs_____ = "
+        "int2(bool2(true, false));\n"
+        "    lanes = ((__crossgl_bool_compound_lhs_____ << "
+        "__crossgl_bool_compound_rhs_____) != int2(0, 0));"
+    ) in compound_generated
+    assert (
+        "int __crossgl_bool_compound_lhs______ = int(scalar);\n"
+        "    int __crossgl_bool_compound_rhs______ = int(narrow);\n"
+        "    scalar = ((__crossgl_bool_compound_lhs______ * "
+        "__crossgl_bool_compound_rhs______) != 0);"
+    ) in compound_generated
+    assert compound_generated.count("nextIndex(calls)") == 1
+    assert compound_generated.count("nextValue(calls, true)") == 2
+    assert compound_generated.count("nextValue(index, true)") == 1
+    for lowered_operator in ("-", "/", "%", "<<"):
+        assert re.search(
+            rf"__crossgl_bool_compound_lhs_+ {re.escape(lowered_operator)} "
+            r"__crossgl_bool_compound_rhs_+",
+            compound_generated,
+        )
+    assert "numeric *= 2u;" in compound_generated
+    assert "numeric >>= 1u;" in compound_generated
+    for invalid_bool_compound in (
+        "scalar *=",
+        "scalar -=",
+        "scalar /=",
+        "scalar %=",
+        "scalar <<=",
+        "scalar >>=",
+        "state.value +=",
+        "values[nextIndex(calls)] *=",
+        "states[index].value *=",
+        "lanes <<=",
+    ):
+        assert invalid_bool_compound not in compound_generated
+    HLSLParser(HLSLLexer(compound_generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(compound_generated, tmp_path)
+
+    metal_source = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    bool power_bool(bool base, bool exp) {
+        bool result = true;
+        while (exp) {
+            if (exp & 1) {
+                result *= base;
+            }
+            exp >>= 1;
+            base *= base;
+        }
+        return result;
+    }
+
+    kernel void compute_bool_power(
+        device uint* output [[buffer(0)]],
+        uint index [[thread_position_in_grid]]) {
+        bool base = bool(output[index]);
+        output[index] = uint(power_bool(base, true));
+    }
+    """
+    metal_path = tmp_path / "bool-arithmetic.metal"
+    metal_path.write_text(metal_source, encoding="utf-8")
+    metal_generated = crosstl.translate(
+        str(metal_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "if (exp & 1)" in metal_generated
+    assert metal_generated.count("int __crossgl_bool_compound_lhs") == 3
+    assert metal_generated.count("int __crossgl_bool_compound_rhs") == 3
+    assert "result *= base" not in metal_generated
+    assert "exp >>= 1" not in metal_generated
+    assert "base *= base" not in metal_generated
+    HLSLParser(HLSLLexer(metal_generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(metal_generated, tmp_path)
+
+    expression_codegen = HLSLCodeGen()
+    expression_codegen.local_variable_types["flag"] = "bool"
+    expression_assignment = AssignmentNode(
+        IdentifierNode("flag"),
+        LiteralNode(True, PrimitiveType("bool")),
+        "*=",
+        source_location=("bool.cgl", 8, 12),
+    )
+    with pytest.raises(DirectXBooleanCompoundAssignmentError) as exc_info:
+        expression_codegen.generate_expression(expression_assignment)
+    assert exc_info.value.project_diagnostic_code == (
+        "project.translate.directx-boolean-compound-assignment-unrepresentable"
+    )
+    assert exc_info.value.reason == "statement-context-required"
+    assert exc_info.value.operation_type == "int"
+    assert exc_info.value.source_location == ("bool.cgl", 8, 12)
+
+    matrix_codegen = HLSLCodeGen()
+    matrix_codegen.local_variable_types["mask"] = "bool2x2"
+    matrix_assignment = AssignmentNode(
+        IdentifierNode("mask"),
+        IdentifierNode("mask"),
+        "*=",
+        source_location=("bool.cgl", 10, 5),
+    )
+    with pytest.raises(DirectXBooleanCompoundAssignmentError) as exc_info:
+        matrix_codegen.generate_assignment(matrix_assignment, statement_context=True)
+    assert exc_info.value.reason == "target-shape-unrepresentable"
+    assert exc_info.value.source_location == ("bool.cgl", 10, 5)
+
+    unstable_codegen = HLSLCodeGen()
+    unstable_codegen.struct_member_types["BoolState"] = {"value": "bool"}
+    unstable_codegen.function_return_types["selectState"] = "BoolState"
+    unstable_assignment = AssignmentNode(
+        MemberAccessNode(FunctionCallNode(IdentifierNode("selectState"), []), "value"),
+        LiteralNode(True, PrimitiveType("bool")),
+        "*=",
+        source_location=("bool.cgl", 12, 9),
+    )
+    with pytest.raises(DirectXBooleanCompoundAssignmentError) as exc_info:
+        unstable_codegen.generate_assignment(
+            unstable_assignment, statement_context=True
+        )
+    assert exc_info.value.reason == "unstable-assignment-target"
+    assert exc_info.value.source_location == ("bool.cgl", 12, 9)
+
+    fixed_array_source = """
+    shader BoolCompoundFixedArray {
+        struct BoolRecord {
+            bool value;
+        };
+
+        BoolRecord[2] makeRecords() {
+            BoolRecord first;
+            BoolRecord second;
+            return {first, second};
+        }
+
+        void update(int index) {
+            BoolRecord records[2] = makeRecords();
+            records[index].value *= true;
+        }
+    }
+    """
+    with pytest.raises(DirectXBooleanCompoundAssignmentError) as exc_info:
+        HLSLCodeGen().generate(crosstl.translator.parse(fixed_array_source))
+    assert exc_info.value.reason == ("dynamic-fixed-array-writeback-unrepresentable")
 
 
 def test_hlsl_codegen_lowers_complex64_binary_operators_to_helpers():
@@ -1002,6 +1804,21 @@ def test_hlsl_codegen_lowers_complex64_binary_operators_to_helpers():
                 ),
             ),
             FunctionNode(
+                "short_divide_complex",
+                complex_type,
+                [
+                    ParameterNode("x", PrimitiveType("short")),
+                    ParameterNode("y", complex_type),
+                ],
+                BlockNode(
+                    [
+                        ReturnNode(
+                            BinaryOpNode(IdentifierNode("x"), "/", IdentifierNode("y"))
+                        )
+                    ]
+                ),
+            ),
+            FunctionNode(
                 "greater_complex",
                 PrimitiveType("bool"),
                 [
@@ -1051,10 +1868,11 @@ def test_hlsl_codegen_lowers_complex64_binary_operators_to_helpers():
     assert "return __crossgl_complex64_add(x, y);" in generated
     assert "return __crossgl_complex64_div(x, y);" in generated
     assert "return __crossgl_complex64_mod(x, y);" in generated
-    assert (
-        "return __crossgl_complex64_div(__crossgl_complex64_make(x, 0.0), y);"
-        in generated
+    real_divide = (
+        "return __crossgl_complex64_div(" "__crossgl_complex64_make(x, 0.0), y);"
     )
+    assert generated.count(real_divide) == 2
+    assert "complex64_t short_divide_complex(min16int x, complex64_t y)" in generated
     assert "return __crossgl_complex64_greater(x, y);" in generated
     assert "return __crossgl_complex64_negate(x);" in generated
     assert "return __crossgl_complex64_make(asfloat(0x7fc00000), 0.0);" in generated
@@ -1101,6 +1919,52 @@ def test_hlsl_codegen_lowers_generic_int64_vector_type_names():
     assert "vec<int64" not in generated
     assert "int64_t2 make_loc(int64_t x, int64_t y)" in generated
     assert "return int64_t2(x, y);" in generated
+
+
+def test_hlsl_codegen_maps_canonical_64_bit_vector_aliases(tmp_path):
+    shader = """
+    shader Canonical64BitVectors {
+        i64vec2 signedPair(i64vec2 value) {
+            return i64vec2(value.y, value.x);
+        }
+
+        u64vec4 unsignedQuad(u64vec4 value) {
+            return u64vec4(value.w, value.z, value.y, value.x);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<int64_t> output @ binding(0)) {
+                i64vec3 signedValues = i64vec3(1, 2, 3);
+                u64vec3 unsignedValues = u64vec3(4, 5, 6);
+                i64vec2 pair = signedPair(signedValues.xy);
+                u64vec4 quad = unsignedQuad(
+                    u64vec4(unsignedValues, uint64_t(7))
+                );
+                output[0] = pair.x + int64_t(quad.x);
+            }
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    for source_type in (
+        "i64vec2",
+        "i64vec3",
+        "i64vec4",
+        "u64vec2",
+        "u64vec3",
+        "u64vec4",
+    ):
+        assert source_type not in generated
+    assert "int64_t2 signedPair(int64_t2 value)" in generated
+    assert "uint64_t4 unsignedQuad(uint64_t4 value)" in generated
+    assert "int64_t3 signedValues = int64_t3(1, 2, 3);" in generated
+    assert "uint64_t3 unsignedValues = uint64_t3(4, 5, 6);" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
 
 
 def test_hlsl_codegen_casts_64_bit_resource_indices_for_dxc():
@@ -1279,6 +2143,55 @@ def test_hlsl_codegen_lowers_canonical_relative_shuffle_wave_ops():
     assert "WaveReadLaneAt(down, (WaveGetLaneIndex() - uint(1u)))" in generated
     assert "WaveReadLaneAt(up, (WaveGetLaneIndex() ^ uint(2u)))" in generated
     assert "WaveShuffle" not in generated
+
+
+def test_hlsl_user_call_wave_arguments_are_not_probed_as_texture_calls(monkeypatch):
+    code = """
+    shader HLSLUserCallWaveArguments {
+        struct complex64_t {
+            float real;
+            float imag;
+        };
+
+        complex64_t makeComplex(float real, float imag) {
+            complex64_t value;
+            value.real = real;
+            value.imag = imag;
+            return value;
+        }
+
+        complex64_t shuffled(float real, float imag, uint delta) {
+            return makeComplex(
+                WaveShuffleDown(real, delta),
+                WaveShuffleDown(imag, delta));
+        }
+
+        compute {
+            void main() {
+                complex64_t value = shuffled(1.0, 2.0, 1u);
+            }
+        }
+    }
+    """
+    codegen = HLSLCodeGen()
+    original_validator = codegen.validate_query_lod_coordinate_argument
+
+    def reject_user_function_texture_probe(func_name, args):
+        if func_name == "makeComplex":
+            pytest.fail("ordinary user function was probed as a texture operation")
+        return original_validator(func_name, args)
+
+    monkeypatch.setattr(
+        codegen,
+        "validate_query_lod_coordinate_argument",
+        reject_user_function_texture_probe,
+    )
+
+    generated = codegen.generate(crosstl.translator.parse(code))
+
+    assert "WaveReadLaneAt(real, (WaveGetLaneIndex() + uint(delta)))" in generated
+    assert "WaveReadLaneAt(imag, (WaveGetLaneIndex() + uint(delta)))" in generated
+    assert "requires float result context, got complex64_t" not in generated
 
 
 def test_hlsl_codegen_lowers_canonical_shuffle_and_fill_up_wave_op(tmp_path):
@@ -3411,6 +4324,304 @@ def test_hlsl_fixed_width_scalar_aliases_map_to_valid_hlsl_scalars():
         assert invalid_token not in generated_code
 
 
+def test_hlsl_minimum_precision_integer_division_and_remainder_widen_operands():
+    shader = """
+    shader MinimumPrecisionIntegerArithmetic {
+        short signedDivide(short lhs, short rhs) {
+            return lhs / rhs;
+        }
+
+        short signedRemainder(short lhs, short rhs) {
+            return lhs % rhs;
+        }
+
+        ushort unsignedDivide(ushort lhs, ushort rhs) {
+            return lhs / rhs;
+        }
+
+        ushort unsignedRemainder(ushort lhs, ushort rhs) {
+            return lhs % rhs;
+        }
+
+        int promotedRemainder(short lhs, short rhs) {
+            return lhs % rhs;
+        }
+
+        int inferredQuotient(short lhs, short rhs) {
+            auto quotient = lhs / rhs;
+            return quotient;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "return min16int((int(lhs) / int(rhs)));" in generated_code
+    assert "return min16int((int(lhs) % int(rhs)));" in generated_code
+    assert "return min16uint((uint(lhs) / uint(rhs)));" in generated_code
+    assert "return min16uint((uint(lhs) % uint(rhs)));" in generated_code
+    assert "int promotedRemainder(min16int lhs, min16int rhs)" in generated_code
+    assert "return (int(lhs) % int(rhs));" in generated_code
+    assert "int quotient = (int(lhs) / int(rhs));" in generated_code
+
+
+def test_hlsl_minimum_precision_integer_vector_and_nested_operations():
+    shader = """
+    shader MinimumPrecisionIntegerVectorArithmetic {
+        short2 dividePair(short2 lhs, short2 rhs) {
+            return lhs / rhs;
+        }
+
+        ushort3 remainderTriple(ushort3 lhs, ushort3 rhs) {
+            return lhs % rhs;
+        }
+
+        short2 dividePairByScalar(short2 lhs, short rhs) {
+            return lhs / rhs;
+        }
+
+        short2 constructPair(short lhs, short rhs) {
+            return short2(lhs / rhs, lhs % rhs);
+        }
+
+        int nested(short lhs, short rhs) {
+            return (lhs / rhs) * 2 + (lhs % rhs);
+        }
+
+        short nestedNarrow(short lhs, short rhs) {
+            return (lhs / rhs) + 1;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "return min16int2((int2(lhs) / int2(rhs)));" in generated_code
+    assert "return min16uint3((uint3(lhs) % uint3(rhs)));" in generated_code
+    assert "return min16int2((int2(lhs) / int(rhs)));" in generated_code
+    assert (
+        "return min16int2((int(lhs) / int(rhs)), (int(lhs) % int(rhs)));"
+        in generated_code
+    )
+    assert "((int(lhs) / int(rhs)) * 2)" in generated_code
+    assert "(int(lhs) % int(rhs))" in generated_code
+    assert "min16int((int(lhs) / int(rhs)))" not in generated_code
+    assert "return min16int(((int(lhs) / int(rhs)) + 1));" in generated_code
+
+
+def test_hlsl_minimum_precision_integer_compound_assignments_preserve_evaluation():
+    shader = """
+    shader MinimumPrecisionIntegerCompoundArithmetic {
+        short nextDivisor(short value) {
+            return value;
+        }
+
+        short divideCalls(short lhs, short rhs) {
+            return nextDivisor(lhs) / nextDivisor(rhs);
+        }
+
+        void update(
+            short signedValue,
+            short signedDivisor,
+            ushort unsignedValue,
+            ushort unsignedDivisor
+        ) {
+            signedValue /= nextDivisor(signedDivisor);
+            signedValue %= signedDivisor;
+            unsignedValue /= unsignedDivisor;
+            unsignedValue %= unsignedDivisor;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "signedValue = min16int((int(signedValue) / "
+        "int(nextDivisor(signedDivisor))));" in generated_code
+    )
+    assert (
+        "signedValue = min16int((int(signedValue) % int(signedDivisor)));"
+        in generated_code
+    )
+    assert (
+        "unsignedValue = min16uint((uint(unsignedValue) / "
+        "uint(unsignedDivisor)));" in generated_code
+    )
+    assert (
+        "unsignedValue = min16uint((uint(unsignedValue) % "
+        "uint(unsignedDivisor)));" in generated_code
+    )
+    assert generated_code.count("nextDivisor(signedDivisor)") == 1
+    assert generated_code.count("nextDivisor(lhs)") == 1
+    assert generated_code.count("nextDivisor(rhs)") == 1
+    assert "signedValue /=" not in generated_code
+    assert "signedValue %=" not in generated_code
+
+
+def test_hlsl_minimum_precision_integer_lowering_leaves_legal_operations_unchanged():
+    shader = """
+    shader MinimumPrecisionIntegerNoOpCases {
+        int signedDivide(int lhs, int rhs) {
+            return lhs / rhs;
+        }
+
+        uint unsignedRemainder(uint lhs, uint rhs) {
+            return lhs % rhs;
+        }
+
+        float floatingDivide(short lhs, float rhs) {
+            return lhs / rhs;
+        }
+
+        short signedAdd(short lhs, short rhs) {
+            return lhs + rhs;
+        }
+
+        void signedCompound(int lhs, int rhs) {
+            lhs /= rhs;
+            lhs %= rhs;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "return (lhs / rhs);" in generated_code
+    assert "return (lhs % rhs);" in generated_code
+    assert "float floatingDivide(min16int lhs, float rhs)" in generated_code
+    assert "return (lhs + rhs);" in generated_code
+    assert "lhs /= rhs;" in generated_code
+    assert "lhs %= rhs;" in generated_code
+    assert "int(lhs)" not in generated_code
+    assert "uint(lhs)" not in generated_code
+
+
+def test_hlsl_minimum_precision_integer_compute_validates_if_available(tmp_path):
+    shader = """
+    shader MinimumPrecisionIntegerNativeCompute {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<int> output @ binding(0)) {
+                short signedValue = short(-123);
+                short signedDivisor = short(7);
+                ushort unsignedValue = ushort(65000u);
+                ushort unsignedDivisor = ushort(31u);
+                short2 signedPair = short2(-123, 456);
+                short2 pairDivisor = short2(7, 11);
+
+                signedValue /= signedDivisor;
+                signedValue %= signedDivisor;
+                unsignedValue /= unsignedDivisor;
+                unsignedValue %= unsignedDivisor;
+                signedPair = signedPair / pairDivisor;
+
+                output[0] = signedValue / signedDivisor;
+                output[1] = signedValue % signedDivisor;
+                output[2] = unsignedValue / unsignedDivisor;
+                output[3] = unsignedValue % unsignedDivisor;
+                output[4] = signedPair.x;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "signedValue = min16int((int(signedValue) / int(signedDivisor)));" in (
+        generated_code
+    )
+    assert "signedPair = min16int2((int2(signedPair) / int2(pairDivisor)));" in (
+        generated_code
+    )
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated_code, tmp_path)
+
+
+def test_hlsl_minimum_precision_integer_vector_width_mismatch_is_diagnostic():
+    shader = """
+    shader MinimumPrecisionIntegerWidthMismatch {
+        short2 divide(short2 lhs, short3 rhs) {
+            return lhs / rhs;
+        }
+    }
+    """
+
+    with pytest.raises(
+        DirectXMinimumPrecisionIntegerArithmeticError,
+        match="vector widths 2 and 3",
+    ) as exc_info:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    assert exc_info.value.project_diagnostic_code == (
+        "project.translate.directx-minimum-precision-integer-arithmetic-unsupported"
+    )
+    assert exc_info.value.operator == "/"
+    assert exc_info.value.left_type == "min16int2"
+    assert exc_info.value.right_type == "min16int3"
+    assert exc_info.value.context == "binary expression"
+    assert exc_info.value.reason == "incompatible-vector-widths"
+
+
+def test_hlsl_minimum_precision_compound_side_effecting_target_is_diagnostic():
+    shader = """
+    shader MinimumPrecisionIntegerCompoundTarget {
+        short values[4];
+
+        int nextIndex() {
+            return 0;
+        }
+
+        void update(short divisor) {
+            values[nextIndex()] /= divisor;
+        }
+    }
+    """
+
+    with pytest.raises(
+        DirectXMinimumPrecisionIntegerArithmeticError,
+        match="assignment target would need to be evaluated more than once",
+    ) as exc_info:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    assert exc_info.value.operator == "/"
+    assert exc_info.value.left_type == "min16int"
+    assert exc_info.value.right_type == "min16int"
+    assert exc_info.value.context == "compound assignment"
+    assert exc_info.value.reason == "side-effecting-assignment-target"
+
+
+def test_hlsl_minimum_precision_compound_rejects_rhs_that_can_change_target():
+    shader = """
+    shader MinimumPrecisionIntegerCompoundRhsTarget {
+        short values[4];
+
+        short advanceIndex(inout int index, short divisor) {
+            index += 1;
+            return divisor;
+        }
+
+        void update(int index, short divisor) {
+            values[index] /= advanceIndex(index, divisor);
+        }
+    }
+    """
+
+    with pytest.raises(
+        DirectXMinimumPrecisionIntegerArithmeticError,
+        match="right operand may change the storage selected",
+    ) as exc_info:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    assert exc_info.value.operator == "/"
+    assert exc_info.value.left_type == "min16int"
+    assert exc_info.value.right_type == "min16int"
+    assert exc_info.value.expected_type == "min16int"
+    assert exc_info.value.context == "compound assignment"
+    assert exc_info.value.reason == "rhs-may-change-assignment-target"
+
+
 def test_hlsl_fixed_width_scalar_array_aliases_map_in_aggregate_declarations():
     shader = """
     shader AliasArrayAggregateSmoke {
@@ -4272,14 +5483,14 @@ def test_hlsl_metal_constant_array_helpers_preserve_resource_parameters(tmp_path
     assert "RWStructuredBuffer<int64_t> result : register(u1);" in generated_code
     assert (
         "void read_stride(StructuredBuffer<int64_t> strides, "
-        "RWStructuredBuffer<int64_t> result)" in generated_code
+        "RWStructuredBuffer<int64_t> result, int64_t result_offset)" in generated_code
     )
     assert (
         "void forward_stride(StructuredBuffer<int64_t> strides, "
-        "RWStructuredBuffer<int64_t> result)" in generated_code
+        "RWStructuredBuffer<int64_t> result, int64_t result_offset)" in generated_code
     )
-    assert "read_stride(strides, result);" in generated_code
-    assert "forward_stride(strides, result);" in generated_code
+    assert "read_stride(strides, result, int64_t(result_offset));" in generated_code
+    assert "forward_stride(strides, result, int64_t(0));" in generated_code
     assert "int64_t strides[3]" not in generated_code
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
 
@@ -4393,6 +5604,43 @@ def test_hlsl_metal_resource_pointer_offsets_apply_to_buffer_helpers(tmp_path):
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
 
 
+def test_hlsl_boolean_resource_pointer_offsets_bypass_value_compound_lowering(
+    tmp_path,
+):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void read_bool_offset(
+        const device bool* sourceValues [[buffer(0)]],
+        device uint* resultValues [[buffer(1)]],
+        constant int64_t& stride [[buffer(2)]]) {
+      const device bool* current_in = sourceValues;
+      current_in += stride;
+      resultValues[0] = uint(*current_in);
+    }
+    """
+    shader_path = tmp_path / "bool_pointer_offset.metal"
+    shader_path.write_text(shader)
+
+    generated_code = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "int64_t current_in_offset = int64_t(0);" in generated_code
+    assert "current_in_offset += int64_t(read_bool_offset_stride);" in generated_code
+    assert (
+        "resultValues[0] = uint(sourceValues[uint(current_in_offset)]);"
+        in generated_code
+    )
+    assert "current_in +=" not in generated_code
+    HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated_code, tmp_path)
+
+
 def test_hlsl_metal_resource_pointer_dereferences_lower_to_buffer_indices(tmp_path):
     shader = """
     #include <metal_stdlib>
@@ -4451,6 +5699,299 @@ def test_hlsl_metal_resource_pointer_dereferences_lower_to_buffer_indices(tmp_pa
             capture_output=True,
             text=True,
         )
+
+
+def test_hlsl_metal_const_auto_pointer_aliases_use_backing_element_type(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void auto_aliases(
+        const constant int64_t* sourceValues [[buffer(0)]],
+        device int64_t* resultValues [[buffer(1)]]) {
+      const auto* direct = sourceValues;
+      const constant auto* shifted = sourceValues + 3;
+      const auto* nested = shifted + 2;
+      resultValues[0] = direct[0];
+      resultValues[1] = shifted[1];
+      resultValues[2] = nested[3];
+    }
+    """
+    shader_path = tmp_path / "const_auto_pointer_aliases.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "int64_t direct_offset = int64_t(0);" in generated
+    assert "int64_t shifted_offset = int64_t(3);" in generated
+    assert "int64_t nested_offset = int64_t((shifted_offset + 2));" in generated
+    assert "sourceValues[uint(direct_offset)]" in generated
+    assert "sourceValues[uint((shifted_offset + 1))]" in generated
+    assert "sourceValues[uint((nested_offset + 3))]" in generated
+    assert "auto*" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_const_auto_pointer_alias_preserves_readonly_access(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void write_through_const_auto(device float* values [[buffer(0)]]) {
+      const auto* reader = values;
+      const auto* nested = reader + 1;
+      *nested = 1.0f;
+    }
+    """
+    shader_path = tmp_path / "const_auto_pointer_readonly.metal"
+    shader_path.write_text(shader)
+
+    with pytest.raises(ValueError, match="does not provide writable storage"):
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+
+def test_hlsl_metal_explicit_pointer_alias_type_mismatch_still_rejects(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    kernel void explicit_mismatch(
+        const device int64_t* sourceValues [[buffer(0)]],
+        device float* resultValues [[buffer(1)]]) {
+      const device float* mismatch = sourceValues;
+      resultValues[0] = mismatch[0];
+    }
+    """
+    shader_path = tmp_path / "explicit_pointer_alias_mismatch.metal"
+    shader_path.write_text(shader)
+
+    with pytest.raises(
+        ValueError,
+        match="changes element type from int64_t to float",
+    ):
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+
+def test_hlsl_storage_pointer_element_argument_lowers_to_resource_offset_pair():
+    shader = """
+    shader StoragePointerElementArgument {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            float read_at(const device float* values, uint relative) {
+                return values[relative];
+            }
+
+            void main(
+                StructuredBuffer<float> src @binding(0),
+                RWStructuredBuffer<float> dst @binding(1),
+                uvec3 gid @gl_GlobalInvocationID
+            ) {
+                dst[gid.x] = read_at(&src[gid.x], 2u);
+            }
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "float read_at(StructuredBuffer<float> values, int64_t values_offset, "
+        "uint relative)" in generated
+    )
+    assert "return values[uint((values_offset + relative))];" in generated
+    assert "read_at(src, int64_t(gid.x), 2u)" in generated
+    assert "&src[" not in generated
+    assert "float* values" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+
+
+def test_hlsl_storage_pointer_offsets_compose_through_nested_helpers():
+    shader = """
+    shader NestedStoragePointerElementArgument {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            float leaf(const device float* values, uint relative) {
+                return values[relative];
+            }
+
+            float middle(const device float* values, uint inner) {
+                return leaf(&values[inner], 1u);
+            }
+
+            void main(
+                StructuredBuffer<float> src @binding(0),
+                RWStructuredBuffer<float> dst @binding(1),
+                uvec3 gid @gl_GlobalInvocationID
+            ) {
+                dst[gid.x] = middle(&src[gid.x], 2u);
+            }
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "float middle(StructuredBuffer<float> values, int64_t values_offset, "
+        "uint inner)" in generated
+    )
+    assert "leaf(values, int64_t((values_offset + inner)), 1u)" in generated
+    assert "middle(src, int64_t(gid.x), 2u)" in generated
+    assert "return values[uint((values_offset + relative))];" in generated
+    assert "&values[" not in generated
+    assert "&src[" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+
+
+def test_hlsl_storage_pointer_element_argument_preserves_writable_access():
+    shader = """
+    shader WritableStoragePointerElementArgument {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void store_at(device float* values, uint relative, float value) {
+                values[relative] = value;
+            }
+
+            void main(
+                RWStructuredBuffer<float> dst @binding(0),
+                uvec3 gid @gl_GlobalInvocationID
+            ) {
+                store_at(&dst[gid.x], 3u, 7.0);
+            }
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "void store_at(RWStructuredBuffer<float> values, int64_t values_offset, "
+        "uint relative, float value)" in generated
+    )
+    assert "values[uint((values_offset + relative))] = value;" in generated
+    assert "store_at(dst, int64_t(gid.x), 3u, 7.0);" in generated
+    assert "&dst[" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+
+
+def test_hlsl_storage_pointer_element_argument_rejects_readonly_write_root():
+    shader = """
+    shader ReadonlyStoragePointerElementArgument {
+        compute {
+            void store_at(device float* values) {
+                values[0] = 1.0;
+            }
+
+            void main(StructuredBuffer<float> src @binding(0)) {
+                store_at(&src[2]);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(DirectXResourcePointerParameterError) as excinfo:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    diagnostic = excinfo.value
+    assert diagnostic.function_name == "store_at"
+    assert diagnostic.parameter_name == "values"
+    assert diagnostic.address_space == "device"
+    assert diagnostic.expected_access == "read_write"
+    assert diagnostic.actual_access == "read"
+    assert diagnostic.reason == "access-mismatch"
+
+
+def test_hlsl_storage_pointer_parameter_rejects_read_through_writeonly_contract():
+    shader = """
+    shader WriteonlyStoragePointerRead {
+        compute {
+            float read_at(writeonly device float* values) {
+                return values[0];
+            }
+
+            void main(RWStructuredBuffer<float> dst @binding(0)) {
+                float value = read_at(dst);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(DirectXResourcePointerParameterError) as excinfo:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    diagnostic = excinfo.value
+    assert diagnostic.function_name == "read_at"
+    assert diagnostic.parameter_name == "values"
+    assert diagnostic.expected_access == "read"
+    assert diagnostic.actual_access == "write"
+    assert diagnostic.reason == "read-through-writeonly-pointer"
+
+
+def test_hlsl_storage_pointer_element_argument_rejects_element_type_mismatch():
+    shader = """
+    shader StoragePointerElementTypeMismatch {
+        compute {
+            float read_at(const device float* values) {
+                return values[0];
+            }
+
+            void main(StructuredBuffer<uint> src @binding(0)) {
+                float value = read_at(&src[2]);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(DirectXResourcePointerParameterError) as excinfo:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    diagnostic = excinfo.value
+    assert diagnostic.function_name == "read_at"
+    assert diagnostic.parameter_name == "values"
+    assert diagnostic.reason == "element-type-mismatch"
+
+
+def test_hlsl_storage_pointer_parameter_rejects_pointer_to_pointer():
+    shader = """
+    shader StoragePointerToPointer {
+        compute {
+            float read_at(const device float* * values) {
+                return values[0][0];
+            }
+
+            void main(StructuredBuffer<float> src @binding(0)) {
+                float value = src[0];
+            }
+        }
+    }
+    """
+
+    with pytest.raises(DirectXResourcePointerParameterError) as excinfo:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    diagnostic = excinfo.value
+    assert diagnostic.function_name == "read_at"
+    assert diagnostic.parameter_name == "values"
+    assert diagnostic.reason == "unsupported-pointee-type"
 
 
 def test_hlsl_readonly_resource_pointer_root_can_advance(tmp_path):
@@ -4522,8 +6063,14 @@ def test_hlsl_metal_fixed_device_pointer_array_lowers_to_bounded_offsets(tmp_pat
     )
 
     assert "int64_t rows_offsets[4];" in generated
-    assert "rows_offsets[uint(i)] = int64_t((i * row_stride));" in generated
-    assert "output[i] = input[uint(rows_offsets[uint(i)])];" in generated
+    assert (
+        "rows_offsets[uint(i)] = int64_t((input_offset + (i * row_stride)));"
+        in generated
+    )
+    assert (
+        "output[uint((output_offset + i))] = input[uint(rows_offsets[uint(i)])];"
+        in generated
+    )
     assert "rows_offsets[uint((4 - 1))]" in generated
     assert "float* rows" not in generated
     assert "input +" not in generated
@@ -7358,6 +8905,94 @@ def test_directx_layout_nonuniform_descriptor_array_overlap_relocates_registers(
     assert "nonuniform(descriptor)" not in generated_code
 
 
+def test_directx_relocatable_resource_allocator_bounds_range_inspections():
+    resource_count = 512
+    integer_type = PrimitiveType("int")
+    resources = []
+    for index in range(resource_count):
+        space = 7 + index % 2
+        resources.append(
+            VariableNode(
+                f"resource_{index}",
+                ArrayType(
+                    NamedType("RWStructuredBuffer<int>"),
+                    LiteralNode(2, integer_type),
+                ),
+                attributes=[
+                    AttributeNode("buffer", [LiteralNode(0, integer_type)]),
+                    AttributeNode("space", [LiteralNode(space, integer_type)]),
+                ],
+                annotations={
+                    "directx.relocatable_binding": True,
+                    "directx.binding_provenance": (
+                        f"stage-entry parameter entry_{index}.resource"
+                    ),
+                },
+            )
+        )
+
+    codegen = HLSLCodeGen()
+    allocator = codegen.new_directx_resource_register_allocator()
+    codegen.reserve_explicit_global_resource_registers(resources, allocator)
+
+    expected_ranges = [(start, start + 1) for start in range(0, 512, 2)]
+    assert [record[:2] for record in allocator[("u", "space7")]] == expected_ranges
+    assert [record[:2] for record in allocator[("u", "space8")]] == expected_ranges
+    assert allocator.relocation_cursors == {
+        ("u", "space7"): 512,
+        ("u", "space8"): 512,
+    }
+    assert allocator[("u", "space7")][-1][2:] == (
+        "resource_510",
+        "stage-entry parameter entry_510.resource",
+    )
+    assert allocator[("u", "space8")][-1][2:] == (
+        "resource_511",
+        "stage-entry parameter entry_511.resource",
+    )
+    assert allocator.range_inspection_count <= resource_count * 10
+
+
+def test_directx_sorted_resource_allocator_preserves_conflict_provenance_order():
+    codegen = HLSLCodeGen()
+    allocator = codegen.new_directx_resource_register_allocator()
+    codegen.reserve_resource_register_range(
+        allocator,
+        "t",
+        10,
+        2,
+        "reservedFirst",
+        "space3",
+        provenance="first declaration",
+    )
+    codegen.reserve_resource_register_range(
+        allocator,
+        "t",
+        0,
+        2,
+        "reservedSecond",
+        "space3",
+        provenance="second declaration",
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        codegen.reserve_resource_register_range(
+            allocator,
+            "t",
+            1,
+            10,
+            "overlapping",
+            "space3",
+            provenance="conflicting declaration",
+        )
+
+    assert str(exc_info.value) == (
+        "Conflicting DirectX resource binding for 'overlapping': "
+        "t1-t10, space3 overlaps 'reservedFirst' t10-t11, space3 "
+        "(overlapping: conflicting declaration; reservedFirst: first declaration)"
+    )
+
+
 def test_hlsl_auto_registers_skip_later_explicit_global_bindings():
     code = """
     shader LateExplicitBindings {
@@ -8769,6 +10404,264 @@ def test_for_in_statement_lowers_to_counted_loop():
     assert "ForInNode(" not in generated_code
 
 
+def test_for_in_fixed_arrays_materialize_once_and_preserve_element_types():
+    shader = """
+    shader FixedArrayForIn {
+        struct Pair {
+            uint first;
+            uint second;
+        };
+
+        int selectRow(inout uint calls) {
+            calls += 1u;
+            return int(calls & 1u);
+        }
+
+        uint helper() {
+            uint calls = 0u;
+            uint[2] scalars = {1u, 2u};
+            uvec2[2] vectors = {uvec2(3u, 4u), uvec2(5u, 6u)};
+            Pair[2] pairs = {Pair(7u, 8u), Pair(9u, 10u)};
+            uint[2][4] rotations = {
+                {13u, 15u, 26u, 6u},
+                {17u, 29u, 16u, 24u}
+            };
+            uint total = 0u;
+            for scalar in scalars {
+                total += scalar;
+            }
+            for vectorValue in vectors {
+                total += vectorValue.x;
+            }
+            for pairValue in pairs {
+                total += pairValue.first;
+            }
+            for rowValue in rotations {
+                for component in rowValue {
+                    total += component;
+                    break;
+                }
+                break;
+            }
+            for rotation in rotations[selectRow(calls)] {
+                if (rotation == 29u) {
+                    continue;
+                }
+                total += rotation;
+                if (total > 100u) {
+                    return total;
+                }
+            }
+            return total + calls;
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "uint scalar_crossgl_iterable[2] = scalars;" in generated_code
+    assert "uint scalar = scalar_crossgl_iterable[" in generated_code
+    assert "uint2 vectorValue_crossgl_iterable[2] = vectors;" in generated_code
+    assert "uint2 vectorValue = vectorValue_crossgl_iterable[" in generated_code
+    assert "Pair pairValue_crossgl_iterable[2] = pairs;" in generated_code
+    assert "Pair pairValue = pairValue_crossgl_iterable[" in generated_code
+    assert "uint rowValue_crossgl_iterable[2][4] = rotations;" in generated_code
+    assert "uint rowValue[4] = rowValue_crossgl_iterable[" in generated_code
+    assert "uint component_crossgl_iterable[4] = rowValue;" in generated_code
+    assert "uint component = component_crossgl_iterable[" in generated_code
+    assert (
+        "uint rotation_crossgl_iterable[4] = rotations[selectRow(calls)];"
+        in generated_code
+    )
+    assert "uint rotation = rotation_crossgl_iterable[" in generated_code
+    assert generated_code.count("rotations[selectRow(calls)]") == 1
+    assert "(rotations[selectRow(calls)])[" not in generated_code
+    assert "rotation_crossgl_index < 4" in generated_code
+    assert "continue;" in generated_code
+    assert generated_code.count("break;") == 2
+    assert "return total;" in generated_code
+
+
+def test_for_in_reduced_side_effecting_subarray_selector_is_evaluated_once():
+    shader = """
+    shader FixedArrayForInSingleEvaluation {
+        int selectRow(inout uint calls) {
+            calls += 1u;
+            return int(calls & 1u);
+        }
+
+        uint helper() {
+            uint calls = 0u;
+            uint[2][4] rotations = {
+                {13u, 15u, 26u, 6u},
+                {17u, 29u, 16u, 24u}
+            };
+            uint total = 0u;
+            for rotation in rotations[selectRow(calls)] {
+                total += rotation;
+            }
+            return total + calls;
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    materialization = "uint rotation_crossgl_iterable[4] = rotations[selectRow(calls)];"
+    assert materialization in generated_code
+    assert generated_code.count("selectRow(calls)") == 1
+    assert "uint rotation = rotation_crossgl_iterable[" in generated_code
+    assert "rotation_crossgl_index < 4" in generated_code
+
+
+def test_for_in_fixed_array_expression_extent_is_resolved():
+    shader = """
+    shader FixedArrayExpressionExtent {
+        void helper() {
+            uint[(2 + 2)] values = {1u, 2u, 3u, 4u};
+            for value in values {
+                uint copy = value;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "uint value_crossgl_iterable[(2 + 2)] = values;" in generated_code
+    assert "value_crossgl_index < 4" in generated_code
+
+
+@pytest.mark.parametrize(
+    ("declaration", "iterable", "expected_type", "reason"),
+    (
+        ("uint[] values", "values", "uint[]", "unknown-extent"),
+        ("Iterator values", "values", "Iterator", "not-fixed-array"),
+        ("float values", "values", "float", "not-fixed-array"),
+        (None, "missing", None, "unresolved-iterable-type"),
+    ),
+)
+def test_for_in_unknown_or_user_defined_iterables_are_structured_diagnostics(
+    declaration, iterable, expected_type, reason
+):
+    struct = "struct Iterator { int value; };" if expected_type == "Iterator" else ""
+    parameters = declaration or ""
+    shader = f"""
+    shader UnsupportedForIn {{
+        {struct}
+        void helper({parameters}) {{
+            for value in {iterable} {{
+                return;
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(DirectXForInIterableError) as exc_info:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.directx-for-in-iterable-unsupported"
+    )
+    assert diagnostic.missing_capabilities == ("directx.fixed-array-for-in-lowering",)
+    assert diagnostic.pattern == "value"
+    assert diagnostic.iterable_type == expected_type
+    assert diagnostic.reason == reason
+
+
+def test_for_in_mutable_reference_binding_is_structured_diagnostic():
+    shader = """
+    shader MutableReferenceForIn {
+        void helper() {
+            uint[2] values = {1u, 2u};
+            for value in values {
+                value += 1u;
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(shader)
+    loop = next(
+        node for node in HLSLCodeGen().walk_ast(ast) if isinstance(node, ForInNode)
+    )
+    loop.binding_type = ReferenceType(PrimitiveType("uint"), is_mutable=True)
+
+    with pytest.raises(DirectXForInIterableError) as exc_info:
+        HLSLCodeGen().generate(ast)
+
+    diagnostic = exc_info.value
+    assert diagnostic.binding_type == "uint&"
+    assert diagnostic.reason == "mutable-reference-binding"
+
+
+def test_for_in_immutable_reference_binding_lowers_to_const_value():
+    shader = """
+    shader ImmutableReferenceForIn {
+        void helper() {
+            uint[2] values = {1u, 2u};
+            for value in values {
+                uint copy = value;
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(shader)
+    loop = next(
+        node for node in HLSLCodeGen().walk_ast(ast) if isinstance(node, ForInNode)
+    )
+    loop.binding_type = ReferenceType(PrimitiveType("uint"), is_mutable=False)
+
+    generated_code = HLSLCodeGen().generate(ast)
+
+    assert "const uint value = value_crossgl_iterable[" in generated_code
+
+
+def test_for_in_empty_fixed_array_omits_unreachable_loop_body():
+    shader = """
+    shader EmptyFixedArrayForIn {
+        void helper() {
+            uint[0] values;
+            for value in values {
+                uint unreachable = value;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "uint values[0];" in generated_code
+    assert "crossgl_iterable" not in generated_code
+    assert "unreachable" not in generated_code
+
+
+def test_for_in_side_effecting_empty_array_is_structured_diagnostic():
+    shader = """
+    shader SideEffectingEmptyFixedArrayForIn {
+        int selectRow(inout uint calls) {
+            calls += 1u;
+            return 0;
+        }
+
+        void helper() {
+            uint calls = 0u;
+            uint[1][0] rows;
+            for value in rows[selectRow(calls)] {
+                return;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(DirectXForInIterableError) as exc_info:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.iterable_type == "uint[0]"
+    assert diagnostic.reason == "side-effecting-empty-array"
+
+
 def test_for_in_range_statement_lowers_to_counted_loop():
     shader = """
     shader ForInRangeNodeSmoke {
@@ -9726,6 +11619,278 @@ def test_hlsl_forward_declares_helper_overloads_before_definitions():
         assert generated_code.index(declaration) < first_definition
     assert "float3 rgb = linearToSrgb(linear_.rgb);" in generated_code
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
+
+
+def test_hlsl_renames_collapsed_bfloat_overloads_and_rewrites_nested_calls(
+    tmp_path,
+):
+    shader = """
+    shader MappedBFloatOverloads {
+        float16 adjust(float16 value) {
+            return value + float16(1.0);
+        }
+
+        bfloat16_t adjust(bfloat16_t value) {
+            return bfloat16_t(float(value) + 2.0);
+        }
+
+        float16 callHalf(float16 value) {
+            return adjust(adjust(value));
+        }
+
+        bfloat16_t callBFloat(bfloat16_t value) {
+            return adjust(adjust(value));
+        }
+
+        bfloat16_t callConstructed() {
+            return adjust(bfloat16_t(3.0));
+        }
+
+        bfloat16_t callExpression(bfloat16_t left, bfloat16_t right) {
+            return adjust(left + right);
+        }
+
+        bfloat16_t callElement(bfloat16_t values[2], int index) {
+            return adjust(values[index]);
+        }
+
+        bfloat16_t callInferred() {
+            auto value = bfloat16_t(6.0);
+            return adjust(value);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                float16 first = callHalf(float16(1.0));
+                float16 second = callBFloat(bfloat16_t(2.0));
+                float16 third = callConstructed();
+                float16 fourth = callExpression(
+                    bfloat16_t(4.0), bfloat16_t(5.0));
+                float16 fifth = callInferred();
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "half adjust_float16(half value)" in generated_code
+    assert "half adjust_bfloat16_t(half value)" in generated_code
+    assert "return adjust_float16(adjust_float16(value));" in generated_code
+    assert "return adjust_bfloat16_t(adjust_bfloat16_t(value));" in generated_code
+    assert "return adjust_bfloat16_t(half(3.0));" in generated_code
+    assert "return adjust_bfloat16_t((left + right));" in generated_code
+    assert "return adjust_bfloat16_t(values[index]);" in generated_code
+    assert "return adjust_bfloat16_t(value);" in generated_code
+    assert "half adjust(half value)" not in generated_code
+    assert_directx_compute_validates_if_available(generated_code, tmp_path)
+
+
+def test_hlsl_renames_collapsed_fixed_width_integer_overloads(tmp_path):
+    shader = """
+    shader MappedIntegerOverloads {
+        int widen(int8_t value) {
+            return int(value) + 8;
+        }
+
+        int widen(int32_t value) {
+            return value + 32;
+        }
+
+        int callByte(int8_t value) {
+            return widen(value);
+        }
+
+        int callInt(int32_t value) {
+            return widen(value);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                int byteValue = callByte(int8_t(1));
+                int intValue = callInt(int32_t(2));
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "int widen_int8_t(int value)" in generated_code
+    assert "int widen_int32_t(int value)" in generated_code
+    assert "return widen_int8_t(value);" in generated_code
+    assert "return widen_int32_t(value);" in generated_code
+    assert_directx_compute_validates_if_available(generated_code, tmp_path)
+
+
+def test_hlsl_preserves_overload_names_when_mapped_signatures_remain_distinct(
+    tmp_path,
+):
+    shader = """
+    shader DistinctMappedOverloads {
+        int select(int value) {
+            return value;
+        }
+
+        float select(float value) {
+            return value;
+        }
+
+        int callInt() {
+            return select(1);
+        }
+
+        float callFloat() {
+            return select(2.0);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                int selectedInt = callInt();
+                float selectedFloat = callFloat();
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "int select(int value)" in generated_code
+    assert "float select(float value)" in generated_code
+    assert "return select(1);" in generated_code
+    assert "return select(2.0);" in generated_code
+    assert "select_int" not in generated_code
+    assert_directx_compute_validates_if_available(generated_code, tmp_path)
+
+
+def test_hlsl_mapped_overload_names_avoid_existing_declarations(tmp_path):
+    shader = """
+    shader HygienicMappedOverloads {
+        const int adjust_bfloat16_t = 7;
+
+        float16 adjust(float16 value) {
+            return value + float16(adjust_bfloat16_t);
+        }
+
+        bfloat16_t adjust(bfloat16_t value) {
+            return value;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                float16 value = adjust(float16(1.0));
+                float16 narrowValue = adjust(bfloat16_t(2.0));
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "static const int adjust_bfloat16_t = 7;" in generated_code
+    assert "half adjust_float16(half value)" in generated_code
+    assert "half adjust_bfloat16_t_2(half value)" in generated_code
+    assert "half value = adjust_float16(half(1.0));" in generated_code
+    assert "half narrowValue = adjust_bfloat16_t_2(half(2.0));" in generated_code
+    assert_directx_compute_validates_if_available(generated_code, tmp_path)
+
+
+def test_hlsl_reports_resource_overloads_with_collapsed_emitted_signatures():
+    shader = """
+    shader ResourceMappedOverloads {
+        float16 readValue(StructuredBuffer<float16> values, float16 fallback) {
+            return values[0] + fallback;
+        }
+
+        bfloat16_t readValue(
+            StructuredBuffer<float16> values,
+            bfloat16_t fallback
+        ) {
+            return bfloat16_t(values[0]) + fallback;
+        }
+    }
+    """
+
+    with pytest.raises(DirectXMappedOverloadError) as exc_info:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.function_name == "readValue"
+    assert diagnostic.reason == "resource-parameter-collision"
+    assert diagnostic.argument_types == ()
+    assert diagnostic.candidates == (
+        "readValue(StructuredBuffer<float16>, bfloat16_t) -> bfloat16_t",
+        "readValue(StructuredBuffer<float16>, float16) -> float16",
+    )
+
+
+def test_hlsl_reports_ambiguous_call_after_overload_type_mapping():
+    shader = """
+    shader AmbiguousMappedOverloads {
+        float16 select(float16 value) {
+            return value;
+        }
+
+        bfloat16_t select(bfloat16_t value) {
+            return value;
+        }
+
+        float16 choose() {
+            return select(1);
+        }
+    }
+    """
+
+    with pytest.raises(DirectXMappedOverloadError) as exc_info:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.directx-mapped-overload-ambiguous"
+    )
+    assert diagnostic.function_name == "select"
+    assert diagnostic.argument_types == ("int",)
+    assert diagnostic.reason == "call-binding-ambiguous"
+    assert diagnostic.candidates == (
+        "select(float16) -> float16",
+        "select(bfloat16_t) -> bfloat16_t",
+    )
+
+
+def test_hlsl_mapped_overload_ambiguity_reaches_project_report(tmp_path):
+    from crosstl.project import translate_project
+
+    source = """
+    shader AmbiguousMappedOverloads {
+        float16 select(float16 value) {
+            return value;
+        }
+
+        bfloat16_t select(bfloat16_t value) {
+            return value;
+        }
+
+        float16 choose() {
+            return select(1);
+        }
+    }
+    """
+    source_path = tmp_path / "ambiguous-overloads.cgl"
+    source_path.write_text(source, encoding="utf-8")
+
+    payload = translate_project(tmp_path, targets=["directx"]).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    assert len(payload["diagnostics"]) == 1
+    diagnostic = payload["diagnostics"][0]
+    assert diagnostic["code"] == ("project.translate.directx-mapped-overload-ambiguous")
+    assert diagnostic["missingCapabilities"] == ["directx.mapped-overload-resolution"]
+    assert "select(int)" in diagnostic["message"]
 
 
 def test_hlsl_orders_late_array_helper_overloads_before_caller(tmp_path):
@@ -20866,7 +23031,7 @@ def test_directx_texture_bias_variants_use_sample_bias():
                     colorMap,
                     linearSampler,
                     input.uv,
-                    input.offset,
+                    ivec2(1, -1),
                     input.bias
                 );
                 return biased + offsetBiased;
@@ -20879,7 +23044,7 @@ def test_directx_texture_bias_variants_use_sample_bias():
 
     assert "colorMap.SampleBias(linearSampler, input.uv, input.bias)" in generated_code
     assert (
-        "colorMap.SampleBias(linearSampler, input.uv, input.bias, input.offset)"
+        "colorMap.SampleBias(linearSampler, input.uv, input.bias, int2(1, -1))"
         in generated_code
     )
     assert "colorMap.Sample(linearSampler, input.uv, input.bias)" not in generated_code
@@ -25988,7 +28153,7 @@ def test_directx_texture_sample_offset_variants_use_sample_offsets():
                     input.lod,
                     input.ddx,
                     input.ddy,
-                    input.offset
+                    ivec2(1, -1)
                 ) + offsetOps(
                     colorMap,
                     layerMap,
@@ -25998,7 +28163,7 @@ def test_directx_texture_sample_offset_variants_use_sample_offsets():
                     input.lod,
                     input.ddx,
                     input.ddy,
-                    input.offset
+                    ivec2(1, -1)
                 );
             }
         }
@@ -26017,43 +28182,327 @@ def test_directx_texture_sample_offset_variants_use_sample_offsets():
         "float4 implicitOffsetOps(Texture2D tex, SamplerState texSampler, float2 uv, float lod, float2 ddx, float2 ddy, int2 offset)"
         in generated_code
     )
-    assert "float4 plain = tex.Sample(texSampler, uv, offset);" in generated_code
+    assert "float4 plain = tex.Sample(texSampler, uv, int2(1, -1));" in generated_code
     assert (
-        "float4 lodSample = tex.SampleLevel(texSampler, uv, lod, offset);"
+        "float4 lodSample = tex.SampleLevel(texSampler, uv, lod, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float4 gradSample = tex.SampleGrad(texSampler, uv, ddx, ddy, offset);"
+        "float4 gradSample = tex.SampleGrad(texSampler, uv, ddx, ddy, int2(1, -1));"
         in generated_code
     )
     assert (
         "float4 offsetOps(Texture2D tex, Texture2DArray layers, SamplerState s, float2 uv, float3 uvLayer, float lod, float2 ddx, float2 ddy, int2 offset)"
         in generated_code
     )
-    assert "float4 plain = tex.Sample(s, uv, offset);" in generated_code
-    assert "float4 lodSample = tex.SampleLevel(s, uv, lod, offset);" in generated_code
+    assert "float4 plain = tex.Sample(s, uv, int2(1, -1));" in generated_code
     assert (
-        "float4 gradSample = tex.SampleGrad(s, uv, ddx, ddy, offset);" in generated_code
+        "float4 lodSample = tex.SampleLevel(s, uv, lod, int2(1, -1));" in generated_code
     )
     assert (
-        "float4 arrayLod = layers.SampleLevel(s, uvLayer, lod, offset);"
+        "float4 gradSample = tex.SampleGrad(s, uv, ddx, ddy, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float4 arrayGrad = layers.SampleGrad(s, uvLayer, ddx, ddy, offset);"
+        "float4 arrayLod = layers.SampleLevel(s, uvLayer, lod, int2(1, -1));"
         in generated_code
     )
     assert (
-        "implicitOffsetOps(colorMap, colorMapSampler, input.uv, input.lod, input.ddx, input.ddy, input.offset)"
+        "float4 arrayGrad = layers.SampleGrad(s, uvLayer, ddx, ddy, int2(1, -1));"
         in generated_code
     )
     assert (
-        "offsetOps(colorMap, layerMap, linearSampler, input.uv, input.uvLayer, input.lod, input.ddx, input.ddy, input.offset)"
+        "implicitOffsetOps(colorMap, colorMapSampler, input.uv, input.lod, input.ddx, input.ddy, int2(1, -1))"
+        in generated_code
+    )
+    assert (
+        "offsetOps(colorMap, layerMap, linearSampler, input.uv, input.uvLayer, input.lod, input.ddx, input.ddy, int2(1, -1))"
         in generated_code
     )
     assert "textureOffset(" not in generated_code
     assert "textureLodOffset(" not in generated_code
     assert "textureGradOffset(" not in generated_code
+
+
+def test_directx_texture_sample_offsets_fold_local_and_helper_constants():
+    shader = """
+    shader StaticTextureOffsets {
+        const int OFFSET_X = 2;
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        vec4 sampleWithOffset(
+            sampler2D tex,
+            sampler s,
+            vec2 uv,
+            vec2 ddx,
+            vec2 ddy,
+            ivec2 propagatedOffset
+        ) {
+            const ivec2 localOffset = ivec2(OFFSET_X, -1);
+            vec4 plain = textureOffset(tex, s, uv, localOffset);
+            vec4 gradient = textureGradOffset(
+                tex,
+                s,
+                uv,
+                ddx,
+                ddy,
+                propagatedOffset
+            );
+            return plain + gradient;
+        }
+
+        fragment {
+            vec4 main(
+                vec2 uv @ TEXCOORD0,
+                vec2 ddx @ TEXCOORD1,
+                vec2 ddy @ TEXCOORD2
+            ) @ gl_FragColor {
+                return sampleWithOffset(
+                    colorMap,
+                    linearSampler,
+                    uv,
+                    ddx,
+                    ddy,
+                    ivec2(OFFSET_X, -1)
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "tex.Sample(s, uv, int2(2, -1))" in generated_code
+    assert "tex.SampleGrad(s, uv, ddx, ddy, int2(2, -1))" in generated_code
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "offset = ivec2(2, 2);",
+        "offset.x = 2;",
+    ],
+)
+def test_directx_texture_offset_proof_rejects_mutated_parameters(mutation):
+    shader = f"""
+    shader MutatedTextureOffset {{
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        vec4 sampleOffset(vec2 uv, ivec2 offset, bool change) {{
+            if (change) {{
+                {mutation}
+            }}
+            return textureOffset(colorMap, linearSampler, uv, offset);
+        }}
+
+        fragment {{
+            vec4 main(
+                vec2 uv @ TEXCOORD0,
+                bool change @ TEXCOORD1
+            ) @ gl_FragColor {{
+                return sampleOffset(uv, ivec2(1, -1), change);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(DirectXTextureOffsetError) as error:
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "fragment")
+
+    diagnostic = error.value
+    assert diagnostic.blocking_expression == "offset"
+    assert diagnostic.function_name == "sampleOffset"
+    assert diagnostic.reason == "runtime-offset-requires-immediate"
+
+
+def test_directx_texture_offset_proof_rejects_transitively_mutated_parameters():
+    shader = """
+    shader TransitivelyMutatedTextureOffset {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        void replaceOffset(inout ivec2 offset) {
+            offset = ivec2(2, 2);
+        }
+
+        vec4 sampleOffset(vec2 uv, ivec2 offset) {
+            replaceOffset(offset);
+            return textureOffset(colorMap, linearSampler, uv, offset);
+        }
+
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return sampleOffset(uv, ivec2(1, -1));
+            }
+        }
+    }
+    """
+
+    with pytest.raises(DirectXTextureOffsetError) as error:
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "fragment")
+
+    diagnostic = error.value
+    assert diagnostic.blocking_expression == "offset"
+    assert diagnostic.function_name == "sampleOffset"
+    assert diagnostic.reason == "runtime-offset-requires-immediate"
+
+
+def test_directx_texture_offset_proof_ignores_callee_local_parameter_mutation():
+    shader = """
+    shader LocallyMutatedTextureOffset {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        void replaceLocalOffset(ivec2 offset) {
+            offset = ivec2(2, 2);
+        }
+
+        vec4 sampleOffset(vec2 uv, ivec2 offset) {
+            replaceLocalOffset(offset);
+            return textureOffset(colorMap, linearSampler, uv, offset);
+        }
+
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return sampleOffset(uv, ivec2(1, -1));
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "return colorMap.Sample(linearSampler, uv, int2(1, -1));" in generated
+
+
+@pytest.mark.parametrize(
+    ("resource", "fields", "expression", "operation", "target_method"),
+    [
+        (
+            "sampler1D colorMap;",
+            "float u; int offset;",
+            "textureOffset(colorMap, textureSampler, input.u, input.offset)",
+            "textureOffset",
+            "Texture1D.Sample",
+        ),
+        (
+            "sampler2DArray colorMap;",
+            "vec3 uvLayer; vec2 ddx; vec2 ddy; ivec2 offset;",
+            "textureGradOffset(colorMap, textureSampler, input.uvLayer, input.ddx, input.ddy, input.offset)",
+            "textureGradOffset",
+            "Texture2DArray.SampleGrad",
+        ),
+        (
+            "sampler2D colorMap;",
+            "vec3 uvq; float lod; ivec2 offset;",
+            "textureProjLodOffset(colorMap, textureSampler, input.uvq, input.lod, input.offset)",
+            "textureProjLodOffset",
+            "Texture2D.SampleLevel",
+        ),
+        (
+            "sampler2DShadow colorMap;",
+            "vec2 uv; float depth; ivec2 offset;",
+            "vec4(textureCompareOffset(colorMap, textureSampler, input.uv, input.depth, input.offset))",
+            "textureCompareOffset",
+            "Texture2D.SampleCmp",
+        ),
+        (
+            "sampler2DArrayShadow colorMap;",
+            "vec4 uvLayerQ; float depth; ivec2 offset;",
+            "vec4(textureCompareProjOffset(colorMap, textureSampler, input.uvLayerQ, input.depth, input.offset))",
+            "textureCompareProjOffset",
+            "Texture2DArray.SampleCmp",
+        ),
+    ],
+)
+def test_directx_runtime_texture_offsets_report_operation_context(
+    resource, fields, expression, operation, target_method
+):
+    shader = f"""
+    shader RuntimeTextureOffset {{
+        {resource}
+        sampler textureSampler;
+
+        struct FSInput {{
+            {fields}
+        }};
+
+        fragment {{
+            vec4 main(FSInput input) @ gl_FragColor {{
+                return {expression};
+            }}
+        }}
+    }}
+    """
+    ast = crosstl.translator.parse(shader)
+    codegen = HLSLCodeGen()
+    call = next(
+        node
+        for node in codegen.walk_ast(ast)
+        if isinstance(node, FunctionCallNode)
+        and codegen.function_call_name(node) == operation
+    )
+    source_location = {"line": 11, "column": 24}
+    call.source_location = source_location
+
+    with pytest.raises(DirectXTextureOffsetError) as error:
+        codegen.generate_stage(ast, "fragment")
+
+    diagnostic = error.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.directx-texture-offset-immediate-required"
+    )
+    assert diagnostic.missing_capabilities == (
+        "directx.runtime-texture-offset-lowering",
+    )
+    assert diagnostic.operation == operation
+    assert diagnostic.target_method == target_method
+    assert diagnostic.blocking_expression == "input.offset"
+    assert diagnostic.function_name == "main"
+    assert diagnostic.reason == "runtime-offset-requires-immediate"
+    assert diagnostic.source_location == source_location
+    assert diagnostic.operation_context == {
+        "sourceOperation": operation,
+        "targetMethod": target_method,
+        "function": "main",
+        "blockingExpression": "input.offset",
+        "reason": "runtime-offset-requires-immediate",
+    }
+
+
+def test_directx_static_texture_offset_out_of_range_fails_closed():
+    shader = """
+    shader OutOfRangeTextureOffset {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                return textureOffset(
+                    colorMap,
+                    linearSampler,
+                    uv,
+                    ivec2(8, -1)
+                );
+            }
+        }
+    }
+    """
+
+    with pytest.raises(DirectXTextureOffsetError) as error:
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "fragment")
+
+    diagnostic = error.value
+    assert diagnostic.reason == "immediate-offset-out-of-range"
+    assert diagnostic.blocking_expression == "ivec2(8, -1)"
+    assert "resolves to (8, -1)" in str(diagnostic)
+    assert "between -8 and 7" in str(diagnostic)
 
 
 def test_directx_cube_texture_sample_offsets_emit_diagnostics_without_samplers():
@@ -26221,12 +28670,12 @@ def test_directx_direct_stage_sample_offsets_and_texel_fetch_offset_use_input_me
 
         fragment {
             vec4 main(FSInput input) @ gl_FragColor {
-                vec4 plain = textureOffset(colorMap, linearSampler, input.uv, input.offset);
-                vec4 lodSample = textureLodOffset(colorMap, linearSampler, input.uv, input.lod, input.offset);
-                vec4 gradSample = textureGradOffset(colorMap, linearSampler, input.uv, input.ddx, input.ddy, input.offset);
-                vec4 arrayPlain = textureOffset(layerMap, linearSampler, input.uvLayer, input.offset);
-                vec4 arrayLod = textureLodOffset(layerMap, linearSampler, input.uvLayer, input.lod, input.offset);
-                vec4 arrayGrad = textureGradOffset(layerMap, linearSampler, input.uvLayer, input.ddx, input.ddy, input.offset);
+                vec4 plain = textureOffset(colorMap, linearSampler, input.uv, ivec2(1, -1));
+                vec4 lodSample = textureLodOffset(colorMap, linearSampler, input.uv, input.lod, ivec2(1, -1));
+                vec4 gradSample = textureGradOffset(colorMap, linearSampler, input.uv, input.ddx, input.ddy, ivec2(1, -1));
+                vec4 arrayPlain = textureOffset(layerMap, linearSampler, input.uvLayer, ivec2(1, -1));
+                vec4 arrayLod = textureLodOffset(layerMap, linearSampler, input.uvLayer, input.lod, ivec2(1, -1));
+                vec4 arrayGrad = textureGradOffset(layerMap, linearSampler, input.uvLayer, input.ddx, input.ddy, ivec2(1, -1));
                 vec4 fetched = texelFetchOffset(colorMap, input.pixel, int(input.lod), input.offset);
                 vec4 fetchedLayer = texelFetchOffset(layerMap, input.pixelLayer, int(input.lod), input.offset);
                 return plain + lodSample + gradSample + arrayPlain + arrayLod + arrayGrad + fetched + fetchedLayer;
@@ -26243,27 +28692,27 @@ def test_directx_direct_stage_sample_offsets_and_texel_fetch_offset_use_input_me
     assert "Texture2DArray layerMap : register(t1);" in generated_code
     assert "SamplerState linearSampler : register(s0);" in generated_code
     assert (
-        "float4 plain = colorMap.Sample(linearSampler, input.uv, input.offset);"
+        "float4 plain = colorMap.Sample(linearSampler, input.uv, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float4 lodSample = colorMap.SampleLevel(linearSampler, input.uv, input.lod, input.offset);"
+        "float4 lodSample = colorMap.SampleLevel(linearSampler, input.uv, input.lod, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float4 gradSample = colorMap.SampleGrad(linearSampler, input.uv, input.ddx, input.ddy, input.offset);"
+        "float4 gradSample = colorMap.SampleGrad(linearSampler, input.uv, input.ddx, input.ddy, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float4 arrayPlain = layerMap.Sample(linearSampler, input.uvLayer, input.offset);"
+        "float4 arrayPlain = layerMap.Sample(linearSampler, input.uvLayer, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float4 arrayLod = layerMap.SampleLevel(linearSampler, input.uvLayer, input.lod, input.offset);"
+        "float4 arrayLod = layerMap.SampleLevel(linearSampler, input.uvLayer, input.lod, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float4 arrayGrad = layerMap.SampleGrad(linearSampler, input.uvLayer, input.ddx, input.ddy, input.offset);"
+        "float4 arrayGrad = layerMap.SampleGrad(linearSampler, input.uvLayer, input.ddx, input.ddy, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -26345,7 +28794,7 @@ def test_directx_projected_texture_variants_use_sample_projection():
                         input.xyzq,
                         input.ddx,
                         input.ddy,
-                        input.offset
+                        ivec2(1, -1)
                     );
             }
         }
@@ -26385,11 +28834,11 @@ def test_directx_projected_texture_variants_use_sample_projection():
         in generated_code
     )
     assert (
-        "float4 projectedOffset = tex.Sample(s, uvq.xy / uvq.z, offset);"
+        "float4 projectedOffset = tex.Sample(s, uvq.xy / uvq.z, int2(1, -1));"
         in generated_code
     )
     assert (
-        "float4 projectedOffsetBias = tex.SampleBias(s, uvq.xy / uvq.z, 0.5, offset);"
+        "float4 projectedOffsetBias = tex.SampleBias(s, uvq.xy / uvq.z, 0.5, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -26397,7 +28846,7 @@ def test_directx_projected_texture_variants_use_sample_projection():
         in generated_code
     )
     assert (
-        "float4 projectedLodOffset = tex.SampleLevel(s, uvq.xy / uvq.z, 3.0, offset);"
+        "float4 projectedLodOffset = tex.SampleLevel(s, uvq.xy / uvq.z, 3.0, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -26405,7 +28854,7 @@ def test_directx_projected_texture_variants_use_sample_projection():
         in generated_code
     )
     assert (
-        "float4 projectedGradOffset = tex.SampleGrad(s, uvq.xy / uvq.z, ddx, ddy, offset);"
+        "float4 projectedGradOffset = tex.SampleGrad(s, uvq.xy / uvq.z, ddx, ddy, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -26413,7 +28862,7 @@ def test_directx_projected_texture_variants_use_sample_projection():
         in generated_code
     )
     assert (
-        "projectedOps(colorMap, volumeMap, linearSampler, input.uvq, input.uvqw, input.xyzq, input.ddx, input.ddy, input.offset)"
+        "projectedOps(colorMap, volumeMap, linearSampler, input.uvq, input.uvqw, input.xyzq, input.ddx, input.ddy, int2(1, -1))"
         in generated_code
     )
     assert "textureProj(" not in generated_code
@@ -26443,13 +28892,13 @@ def test_directx_projected_1d_texture_variants_use_sample_projection():
             vec4 main(FSInput input) @ gl_FragColor {
                 vec4 projected = textureProj(lineMap, input.uq);
                 vec4 biased = textureProj(lineMap, linearSampler, input.uxwq, 0.5);
-                vec4 offset = textureProjOffset(lineMap, linearSampler, input.uq, input.offset);
+                vec4 offset = textureProjOffset(lineMap, linearSampler, input.uq, 1);
                 vec4 lodOffset = textureProjLodOffset(
                     lineMap,
                     linearSampler,
                     input.uq,
                     input.lod,
-                    input.offset
+                    1
                 );
                 vec4 gradOffset = textureProjGradOffset(
                     lineMap,
@@ -26457,7 +28906,7 @@ def test_directx_projected_1d_texture_variants_use_sample_projection():
                     input.uq,
                     input.ddx,
                     input.ddy,
-                    input.offset
+                    1
                 );
                 return projected + biased + offset + lodOffset + gradOffset;
             }
@@ -26481,15 +28930,15 @@ def test_directx_projected_1d_texture_variants_use_sample_projection():
         in generated_code
     )
     assert (
-        "float4 offset = lineMap.Sample(linearSampler, input.uq.x / input.uq.y, input.offset);"
+        "float4 offset = lineMap.Sample(linearSampler, input.uq.x / input.uq.y, 1);"
         in generated_code
     )
     assert (
-        "float4 lodOffset = lineMap.SampleLevel(linearSampler, input.uq.x / input.uq.y, input.lod, input.offset);"
+        "float4 lodOffset = lineMap.SampleLevel(linearSampler, input.uq.x / input.uq.y, input.lod, 1);"
         in generated_code
     )
     assert (
-        "float4 gradOffset = lineMap.SampleGrad(linearSampler, input.uq.x / input.uq.y, input.ddx, input.ddy, input.offset);"
+        "float4 gradOffset = lineMap.SampleGrad(linearSampler, input.uq.x / input.uq.y, input.ddx, input.ddy, 1);"
         in generated_code
     )
     assert "unsupported DirectX projected texture" not in generated_code
@@ -26521,11 +28970,11 @@ def test_directx_direct_projected_texture_stage_input_members():
                 vec4 projected = textureProj(colorMap, linearSampler, input.uvq);
                 vec4 projectedBias = textureProj(colorMap, linearSampler, input.uvqw, 0.25);
                 vec4 volumeProjected = textureProj(volumeMap, linearSampler, input.xyzq);
-                vec4 projectedOffset = textureProjOffset(colorMap, linearSampler, input.uvq, input.offset);
+                vec4 projectedOffset = textureProjOffset(colorMap, linearSampler, input.uvq, ivec2(1, -1));
                 vec4 projectedLod = textureProjLod(colorMap, linearSampler, input.uvq, input.lod);
-                vec4 projectedLodOffset = textureProjLodOffset(colorMap, linearSampler, input.uvq, input.lod, input.offset);
+                vec4 projectedLodOffset = textureProjLodOffset(colorMap, linearSampler, input.uvq, input.lod, ivec2(1, -1));
                 vec4 projectedGrad = textureProjGrad(colorMap, linearSampler, input.uvq, input.ddx, input.ddy);
-                vec4 projectedGradOffset = textureProjGradOffset(colorMap, linearSampler, input.uvq, input.ddx, input.ddy, input.offset);
+                vec4 projectedGradOffset = textureProjGradOffset(colorMap, linearSampler, input.uvq, input.ddx, input.ddy, ivec2(1, -1));
                 return projected
                     + projectedBias
                     + volumeProjected
@@ -26559,7 +29008,7 @@ def test_directx_direct_projected_texture_stage_input_members():
         in generated_code
     )
     assert (
-        "float4 projectedOffset = colorMap.Sample(linearSampler, input.uvq.xy / input.uvq.z, input.offset);"
+        "float4 projectedOffset = colorMap.Sample(linearSampler, input.uvq.xy / input.uvq.z, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -26567,7 +29016,7 @@ def test_directx_direct_projected_texture_stage_input_members():
         in generated_code
     )
     assert (
-        "float4 projectedLodOffset = colorMap.SampleLevel(linearSampler, input.uvq.xy / input.uvq.z, input.lod, input.offset);"
+        "float4 projectedLodOffset = colorMap.SampleLevel(linearSampler, input.uvq.xy / input.uvq.z, input.lod, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -26575,7 +29024,7 @@ def test_directx_direct_projected_texture_stage_input_members():
         in generated_code
     )
     assert (
-        "float4 projectedGradOffset = colorMap.SampleGrad(linearSampler, input.uvq.xy / input.uvq.z, input.ddx, input.ddy, input.offset);"
+        "float4 projectedGradOffset = colorMap.SampleGrad(linearSampler, input.uvq.xy / input.uvq.z, input.ddx, input.ddy, int2(1, -1));"
         in generated_code
     )
     assert "unsupported DirectX projected texture" not in generated_code
@@ -26604,11 +29053,11 @@ def test_directx_direct_projected_array_texture_stage_input_members():
         fragment {
             vec4 main(FSInput input) @ gl_FragColor {
                 vec4 projected = textureProj(layerMap, linearSampler, input.uvLayerQ);
-                vec4 projectedOffset = textureProjOffset(layerMap, linearSampler, input.uvLayerQ, input.offset);
+                vec4 projectedOffset = textureProjOffset(layerMap, linearSampler, input.uvLayerQ, ivec2(1, -1));
                 vec4 projectedLod = textureProjLod(layerMap, linearSampler, input.uvLayerQ, input.lod);
-                vec4 projectedLodOffset = textureProjLodOffset(layerMap, linearSampler, input.uvLayerQ, input.lod, input.offset);
+                vec4 projectedLodOffset = textureProjLodOffset(layerMap, linearSampler, input.uvLayerQ, input.lod, ivec2(1, -1));
                 vec4 projectedGrad = textureProjGrad(layerMap, linearSampler, input.uvLayerQ, input.ddx, input.ddy);
-                vec4 projectedGradOffset = textureProjGradOffset(layerMap, linearSampler, input.uvLayerQ, input.ddx, input.ddy, input.offset);
+                vec4 projectedGradOffset = textureProjGradOffset(layerMap, linearSampler, input.uvLayerQ, input.ddx, input.ddy, ivec2(1, -1));
                 return projected + projectedOffset + projectedLod + projectedLodOffset + projectedGrad + projectedGradOffset;
             }
         }
@@ -26627,7 +29076,7 @@ def test_directx_direct_projected_array_texture_stage_input_members():
         in generated_code
     )
     assert (
-        f"float4 projectedOffset = layerMap.Sample(linearSampler, {projected_coord}, input.offset);"
+        f"float4 projectedOffset = layerMap.Sample(linearSampler, {projected_coord}, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -26635,7 +29084,7 @@ def test_directx_direct_projected_array_texture_stage_input_members():
         in generated_code
     )
     assert (
-        f"float4 projectedLodOffset = layerMap.SampleLevel(linearSampler, {projected_coord}, input.lod, input.offset);"
+        f"float4 projectedLodOffset = layerMap.SampleLevel(linearSampler, {projected_coord}, input.lod, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -26643,7 +29092,7 @@ def test_directx_direct_projected_array_texture_stage_input_members():
         in generated_code
     )
     assert (
-        f"float4 projectedGradOffset = layerMap.SampleGrad(linearSampler, {projected_coord}, input.ddx, input.ddy, input.offset);"
+        f"float4 projectedGradOffset = layerMap.SampleGrad(linearSampler, {projected_coord}, input.ddx, input.ddy, int2(1, -1));"
         in generated_code
     )
     assert "unsupported DirectX projected texture" not in generated_code
@@ -26671,11 +29120,11 @@ def test_directx_implicit_projected_array_texture_stage_input_members_generate_s
         fragment {
             vec4 main(FSInput input) @ gl_FragColor {
                 vec4 projected = textureProj(layerMap, input.uvLayerQ);
-                vec4 projectedOffset = textureProjOffset(layerMap, input.uvLayerQ, input.offset);
+                vec4 projectedOffset = textureProjOffset(layerMap, input.uvLayerQ, ivec2(1, -1));
                 vec4 projectedLod = textureProjLod(layerMap, input.uvLayerQ, input.lod);
-                vec4 projectedLodOffset = textureProjLodOffset(layerMap, input.uvLayerQ, input.lod, input.offset);
+                vec4 projectedLodOffset = textureProjLodOffset(layerMap, input.uvLayerQ, input.lod, ivec2(1, -1));
                 vec4 projectedGrad = textureProjGrad(layerMap, input.uvLayerQ, input.ddx, input.ddy);
-                vec4 projectedGradOffset = textureProjGradOffset(layerMap, input.uvLayerQ, input.ddx, input.ddy, input.offset);
+                vec4 projectedGradOffset = textureProjGradOffset(layerMap, input.uvLayerQ, input.ddx, input.ddy, ivec2(1, -1));
                 return projected + projectedOffset + projectedLod + projectedLodOffset + projectedGrad + projectedGradOffset;
             }
         }
@@ -26694,7 +29143,7 @@ def test_directx_implicit_projected_array_texture_stage_input_members_generate_s
         in generated_code
     )
     assert (
-        f"float4 projectedOffset = layerMap.Sample(layerMapSampler, {projected_coord}, input.offset);"
+        f"float4 projectedOffset = layerMap.Sample(layerMapSampler, {projected_coord}, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -26702,7 +29151,7 @@ def test_directx_implicit_projected_array_texture_stage_input_members_generate_s
         in generated_code
     )
     assert (
-        f"float4 projectedLodOffset = layerMap.SampleLevel(layerMapSampler, {projected_coord}, input.lod, input.offset);"
+        f"float4 projectedLodOffset = layerMap.SampleLevel(layerMapSampler, {projected_coord}, input.lod, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -26710,7 +29159,7 @@ def test_directx_implicit_projected_array_texture_stage_input_members_generate_s
         in generated_code
     )
     assert (
-        f"float4 projectedGradOffset = layerMap.SampleGrad(layerMapSampler, {projected_coord}, input.ddx, input.ddy, input.offset);"
+        f"float4 projectedGradOffset = layerMap.SampleGrad(layerMapSampler, {projected_coord}, input.ddx, input.ddy, int2(1, -1));"
         in generated_code
     )
     assert "unsupported DirectX projected texture" not in generated_code
@@ -26761,7 +29210,7 @@ def test_directx_projected_array_texture_resource_arrays_forward_samplers():
                     input.lod,
                     input.ddx,
                     input.ddy,
-                    input.offset
+                    ivec2(1, -1)
                 );
             }
         }
@@ -26784,7 +29233,7 @@ def test_directx_projected_array_texture_resource_arrays_forward_samplers():
         in generated_code
     )
     assert (
-        f"float4 dynamicOffset = maps[layer].Sample(samplers[layer], {projected_coord}, offset);"
+        f"float4 dynamicOffset = maps[layer].Sample(samplers[layer], {projected_coord}, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -26792,7 +29241,7 @@ def test_directx_projected_array_texture_resource_arrays_forward_samplers():
         in generated_code
     )
     assert (
-        f"float4 dynamicLodOffset = maps[layer].SampleLevel(samplers[layer], {projected_coord}, lod, offset);"
+        f"float4 dynamicLodOffset = maps[layer].SampleLevel(samplers[layer], {projected_coord}, lod, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -26800,11 +29249,11 @@ def test_directx_projected_array_texture_resource_arrays_forward_samplers():
         in generated_code
     )
     assert (
-        f"float4 dynamicGradOffset = maps[layer].SampleGrad(samplers[layer], {projected_coord}, ddx, ddy, offset);"
+        f"float4 dynamicGradOffset = maps[layer].SampleGrad(samplers[layer], {projected_coord}, ddx, ddy, int2(1, -1));"
         in generated_code
     )
     assert (
-        "projectedLeaf(layerMaps, linearSamplers, input.layer, input.uvLayerQ, input.lod, input.ddx, input.ddy, input.offset)"
+        "projectedLeaf(layerMaps, linearSamplers, input.layer, input.uvLayerQ, input.lod, input.ddx, input.ddy, int2(1, -1))"
         in generated_code
     )
     assert "unsupported DirectX projected texture" not in generated_code
@@ -26852,7 +29301,7 @@ def test_directx_implicit_projected_array_texture_resource_arrays_thread_sampler
                     input.lod,
                     input.ddx,
                     input.ddy,
-                    input.offset
+                    ivec2(1, -1)
                 );
             }
         }
@@ -26875,7 +29324,7 @@ def test_directx_implicit_projected_array_texture_resource_arrays_thread_sampler
         in generated_code
     )
     assert (
-        f"float4 dynamicOffset = maps[layer].Sample(mapsSampler, {projected_coord}, offset);"
+        f"float4 dynamicOffset = maps[layer].Sample(mapsSampler, {projected_coord}, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -26883,7 +29332,7 @@ def test_directx_implicit_projected_array_texture_resource_arrays_thread_sampler
         in generated_code
     )
     assert (
-        f"float4 dynamicLodOffset = maps[layer].SampleLevel(mapsSampler, {projected_coord}, lod, offset);"
+        f"float4 dynamicLodOffset = maps[layer].SampleLevel(mapsSampler, {projected_coord}, lod, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -26891,11 +29340,11 @@ def test_directx_implicit_projected_array_texture_resource_arrays_thread_sampler
         in generated_code
     )
     assert (
-        f"float4 dynamicGradOffset = maps[layer].SampleGrad(mapsSampler, {projected_coord}, ddx, ddy, offset);"
+        f"float4 dynamicGradOffset = maps[layer].SampleGrad(mapsSampler, {projected_coord}, ddx, ddy, int2(1, -1));"
         in generated_code
     )
     assert (
-        "projectedLeaf(layerMaps, layerMapsSampler, input.layer, input.uvLayerQ, input.lod, input.ddx, input.ddy, input.offset)"
+        "projectedLeaf(layerMaps, layerMapsSampler, input.layer, input.uvLayerQ, input.lod, input.ddx, input.ddy, int2(1, -1))"
         in generated_code
     )
     assert "unsupported DirectX projected texture" not in generated_code
@@ -27056,7 +29505,7 @@ def test_directx_projected_shadow_compare_variants_use_sample_cmp_projection():
                     input.lod,
                     input.ddx,
                     input.ddy,
-                    input.offset
+                    ivec2(1, -1)
                 );
                 float explicitValue = projectedShadow(
                     shadowMap,
@@ -27067,7 +29516,7 @@ def test_directx_projected_shadow_compare_variants_use_sample_cmp_projection():
                     input.lod,
                     input.ddx,
                     input.ddy,
-                    input.offset
+                    ivec2(1, -1)
                 );
                 float arrayValue = projectedArrayShadow(
                     shadowArray,
@@ -27077,7 +29526,7 @@ def test_directx_projected_shadow_compare_variants_use_sample_cmp_projection():
                     input.lod,
                     input.ddx,
                     input.ddy,
-                    input.offset
+                    ivec2(1, -1)
                 );
                 return vec4(implicitValue + explicitValue + arrayValue);
             }
@@ -27125,7 +29574,7 @@ def test_directx_projected_shadow_compare_variants_use_sample_cmp_projection():
         in generated_code
     )
     assert (
-        "float offsetProjected = tex.SampleCmp(s, uvq.xy / uvq.z, depth, offset);"
+        "float offsetProjected = tex.SampleCmp(s, uvq.xy / uvq.z, depth, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -27145,11 +29594,11 @@ def test_directx_projected_shadow_compare_variants_use_sample_cmp_projection():
         in generated_code
     )
     assert (
-        "implicitProjectedShadow(shadowMap, shadowMapSampler, input.uvq, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
+        "implicitProjectedShadow(shadowMap, shadowMapSampler, input.uvq, input.depth, input.lod, input.ddx, input.ddy, int2(1, -1))"
         in generated_code
     )
     assert (
-        "projectedShadow(shadowMap, compareSampler, input.uvq, input.uvqw, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
+        "projectedShadow(shadowMap, compareSampler, input.uvq, input.uvqw, input.depth, input.lod, input.ddx, input.ddy, int2(1, -1))"
         in generated_code
     )
     assert (
@@ -27161,7 +29610,7 @@ def test_directx_projected_shadow_compare_variants_use_sample_cmp_projection():
         in generated_code
     )
     assert (
-        "float offsetProjected = tex.SampleCmp(s, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, offset);"
+        "float offsetProjected = tex.SampleCmp(s, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -27181,7 +29630,7 @@ def test_directx_projected_shadow_compare_variants_use_sample_cmp_projection():
         in generated_code
     )
     assert (
-        "projectedArrayShadow(shadowArray, compareSampler, input.uvLayerQ, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
+        "projectedArrayShadow(shadowArray, compareSampler, input.uvLayerQ, input.depth, input.lod, input.ddx, input.ddy, int2(1, -1))"
         in generated_code
     )
     assert "textureCompareProj" not in generated_code
@@ -27207,7 +29656,7 @@ def test_directx_direct_projected_shadow_compare_stage_input_members():
         fragment {
             vec4 main(FSInput input) @ gl_FragColor {
                 float planar = textureCompareProj(shadowMap, compareSampler, input.uvq, input.depth);
-                float planarOffset = textureCompareProjOffset(shadowMap, compareSampler, input.uvqw, input.depth, input.offset);
+                float planarOffset = textureCompareProjOffset(shadowMap, compareSampler, input.uvqw, input.depth, ivec2(1, -1));
                 float arrayGrad = textureCompareProjGrad(shadowArray, compareSampler, input.uvLayerQ, input.depth, input.ddx, input.ddy);
                 return vec4(planar + planarOffset + arrayGrad);
             }
@@ -27227,7 +29676,7 @@ def test_directx_direct_projected_shadow_compare_stage_input_members():
         in generated_code
     )
     assert (
-        "float planarOffset = shadowMap.SampleCmp(compareSampler, input.uvqw.xy / input.uvqw.w, input.depth, input.offset);"
+        "float planarOffset = shadowMap.SampleCmp(compareSampler, input.uvqw.xy / input.uvqw.w, input.depth, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -27308,7 +29757,7 @@ def test_directx_projected_shadow_compare_resource_arrays_forward_comparison_sam
                     input.lod,
                     input.ddx,
                     input.ddy,
-                    input.offset
+                    ivec2(1, -1)
                 );
             }
         }
@@ -27329,7 +29778,7 @@ def test_directx_projected_shadow_compare_resource_arrays_forward_comparison_sam
         in generated_code
     )
     assert (
-        "float planarOffset = shadowMaps[1].SampleCmp(shadowSamplers[1], uvq.xy / uvq.z, depth, offset);"
+        "float planarOffset = shadowMaps[1].SampleCmp(shadowSamplers[1], uvq.xy / uvq.z, depth, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -27345,7 +29794,7 @@ def test_directx_projected_shadow_compare_resource_arrays_forward_comparison_sam
         in generated_code
     )
     assert (
-        "float arrayOffset = shadowArrays[layer].SampleCmp(shadowSamplers[layer], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, offset);"
+        "float arrayOffset = shadowArrays[layer].SampleCmp(shadowSamplers[layer], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -27361,7 +29810,7 @@ def test_directx_projected_shadow_compare_resource_arrays_forward_comparison_sam
         in generated_code
     )
     assert (
-        "projectedWrapper(shadowMaps, shadowArrays, shadowSamplers, input.layer, input.uvq, input.uvLayerQ, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
+        "projectedWrapper(shadowMaps, shadowArrays, shadowSamplers, input.layer, input.uvq, input.uvLayerQ, input.depth, input.lod, input.ddx, input.ddy, int2(1, -1))"
         in generated_code
     )
     assert "textureCompareProj" not in generated_code
@@ -27433,7 +29882,7 @@ def test_directx_implicit_projected_shadow_compare_resource_arrays_thread_sample
                     input.lod,
                     input.ddx,
                     input.ddy,
-                    input.offset
+                    ivec2(1, -1)
                 );
             }
         }
@@ -27457,7 +29906,7 @@ def test_directx_implicit_projected_shadow_compare_resource_arrays_thread_sample
         in generated_code
     )
     assert (
-        "float planarOffset = shadowMaps[1].SampleCmp(shadowMapsSampler, uvq.xy / uvq.z, depth, offset);"
+        "float planarOffset = shadowMaps[1].SampleCmp(shadowMapsSampler, uvq.xy / uvq.z, depth, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -27473,7 +29922,7 @@ def test_directx_implicit_projected_shadow_compare_resource_arrays_thread_sample
         in generated_code
     )
     assert (
-        "float arrayOffset = shadowArrays[layer].SampleCmp(shadowArraysSampler, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, offset);"
+        "float arrayOffset = shadowArrays[layer].SampleCmp(shadowArraysSampler, float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -27489,7 +29938,7 @@ def test_directx_implicit_projected_shadow_compare_resource_arrays_thread_sample
         in generated_code
     )
     assert (
-        "projectedWrapper(shadowMaps, shadowMapsSampler, shadowArrays, shadowArraysSampler, input.layer, input.uvq, input.uvLayerQ, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
+        "projectedWrapper(shadowMaps, shadowMapsSampler, shadowArrays, shadowArraysSampler, input.layer, input.uvq, input.uvLayerQ, input.depth, input.lod, input.ddx, input.ddy, int2(1, -1))"
         in generated_code
     )
     assert "SamplerComparisonState shadowMapsSampler[" not in generated_code
@@ -27563,7 +30012,7 @@ def test_directx_unsized_projected_shadow_compare_arrays_infer_transitive_consta
                     input.lod,
                     input.ddx,
                     input.ddy,
-                    input.offset
+                    ivec2(1, -1)
                 );
                 float singleShadow = textureCompare(afterShadow, afterSampler, input.uvq.xy, input.depth);
                 return vec4(arrayShadow + singleShadow);
@@ -27588,7 +30037,7 @@ def test_directx_unsized_projected_shadow_compare_arrays_infer_transitive_consta
         in generated_code
     )
     assert (
-        "float planarLow = shadowMaps[1].SampleCmp(shadowSamplers[1], uvq.xy / uvq.z, depth, offset);"
+        "float planarLow = shadowMaps[1].SampleCmp(shadowSamplers[1], uvq.xy / uvq.z, depth, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -27596,7 +30045,7 @@ def test_directx_unsized_projected_shadow_compare_arrays_infer_transitive_consta
         in generated_code
     )
     assert (
-        "float arrayLow = shadowArrays[3].SampleCmp(shadowSamplers[3], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, offset);"
+        "float arrayLow = shadowArrays[3].SampleCmp(shadowSamplers[3], float3(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z), depth, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -27608,7 +30057,7 @@ def test_directx_unsized_projected_shadow_compare_arrays_infer_transitive_consta
         in generated_code
     )
     assert (
-        "shadowMid(shadowMaps, shadowArrays, shadowSamplers, input.uvq, input.uvLayerQ, input.depth, input.lod, input.ddx, input.ddy, input.offset)"
+        "shadowMid(shadowMaps, shadowArrays, shadowSamplers, input.uvq, input.uvLayerQ, input.depth, input.lod, input.ddx, input.ddy, int2(1, -1))"
         in generated_code
     )
     assert (
@@ -28663,9 +31112,9 @@ def test_directx_shadow_gather_compare_offsets_use_comparison_samplers():
 
         fragment {
             vec4 main(FSInput input) @ gl_FragColor {
-                return implicitShadow(shadowMap, input.uv, input.depth, input.offset)
-                    + gatherShadow(shadowMap, compareSampler, input.uv, input.depth, input.offset)
-                    + gatherShadowArray(shadowArray, compareSampler, input.uvLayer, input.depth, input.offset)
+                return implicitShadow(shadowMap, input.uv, input.depth, ivec2(1, -1))
+                    + gatherShadow(shadowMap, compareSampler, input.uv, input.depth, ivec2(1, -1))
+                    + gatherShadowArray(shadowArray, compareSampler, input.uvLayer, input.depth, ivec2(1, -1))
                     + gatherCubeShadowArray(cubeShadowArray, compareSampler, input.cubeLayer, input.depth);
             }
         }
@@ -28687,7 +31136,7 @@ def test_directx_shadow_gather_compare_offsets_use_comparison_samplers():
     )
     assert "float4 gathered = tex.GatherCmp(texSampler, uv, depth);" in generated_code
     assert (
-        "float compared = tex.SampleCmp(texSampler, uv, depth, offset);"
+        "float compared = tex.SampleCmp(texSampler, uv, depth, int2(1, -1));"
         in generated_code
     )
     assert (
@@ -28699,29 +31148,30 @@ def test_directx_shadow_gather_compare_offsets_use_comparison_samplers():
         "float4 offsetGathered = tex.GatherCmp(s, uv, depth, offset);" in generated_code
     )
     assert (
-        "float offsetCompared = tex.SampleCmp(s, uv, depth, offset);" in generated_code
+        "float offsetCompared = tex.SampleCmp(s, uv, depth, int2(1, -1));"
+        in generated_code
     )
     assert (
         "float4 gatherShadowArray(Texture2DArray tex, SamplerComparisonState s, float3 uvLayer, float depth, int2 offset)"
         in generated_code
     )
     assert "tex.GatherCmp(s, uvLayer, depth, offset)" in generated_code
-    assert "tex.SampleCmp(s, uvLayer, depth, offset)" in generated_code
+    assert "tex.SampleCmp(s, uvLayer, depth, int2(1, -1))" in generated_code
     assert (
         "float4 gatherCubeShadowArray(TextureCubeArray tex, SamplerComparisonState s, float4 cubeLayer, float depth)"
         in generated_code
     )
     assert "return tex.GatherCmp(s, cubeLayer, depth);" in generated_code
     assert (
-        "implicitShadow(shadowMap, shadowMapSampler, input.uv, input.depth, input.offset)"
+        "implicitShadow(shadowMap, shadowMapSampler, input.uv, input.depth, int2(1, -1))"
         in generated_code
     )
     assert (
-        "gatherShadow(shadowMap, compareSampler, input.uv, input.depth, input.offset)"
+        "gatherShadow(shadowMap, compareSampler, input.uv, input.depth, int2(1, -1))"
         in generated_code
     )
     assert (
-        "gatherShadowArray(shadowArray, compareSampler, input.uvLayer, input.depth, input.offset)"
+        "gatherShadowArray(shadowArray, compareSampler, input.uvLayer, input.depth, int2(1, -1))"
         in generated_code
     )
     assert (
@@ -28794,7 +31244,7 @@ def test_directx_1d_shadow_compare_offsets_use_hlsl_sample_cmp_offsets_from_docs
                     input.lod,
                     input.ddx,
                     input.ddy,
-                    input.offset
+                    1
                 ) + compareLineArray(
                     shadowLines,
                     compareSampler,
@@ -28803,7 +31253,7 @@ def test_directx_1d_shadow_compare_offsets_use_hlsl_sample_cmp_offsets_from_docs
                     input.lod,
                     input.ddx,
                     input.ddy,
-                    input.offset
+                    1
                 );
             }
         }
@@ -28821,7 +31271,7 @@ def test_directx_1d_shadow_compare_offsets_use_hlsl_sample_cmp_offsets_from_docs
         "float compareLine(Texture1D tex, SamplerComparisonState s, float u, float depth, float lod, float ddx, float ddy, int offset)"
         in generated_code
     )
-    assert "float basic = tex.SampleCmp(s, u, depth, offset);" in generated_code
+    assert "float basic = tex.SampleCmp(s, u, depth, 1);" in generated_code
     assert (
         "float level = tex.SampleCmpLevel(s, u, depth, lod, offset);" in generated_code
     )
@@ -28833,7 +31283,7 @@ def test_directx_1d_shadow_compare_offsets_use_hlsl_sample_cmp_offsets_from_docs
         "float compareLineArray(Texture1DArray tex, SamplerComparisonState s, float2 uLayer, float depth, float lod, float ddx, float ddy, int offset)"
         in generated_code
     )
-    assert "tex.SampleCmp(s, uLayer, depth, offset)" in generated_code
+    assert "tex.SampleCmp(s, uLayer, depth, 1)" in generated_code
     assert "tex.SampleCmpLevel(s, uLayer, depth, lod, offset)" in generated_code
     assert "tex.SampleCmpGrad(s, uLayer, depth, ddx, ddy, offset)" in generated_code
     assert "textureCompareOffset(" not in generated_code
@@ -28963,7 +31413,7 @@ def test_directx_implicit_shadow_gather_compare_offsets_cover_arrays_and_cube_ar
 
         fragment {
             vec4 main(FSInput input) @ gl_FragColor {
-                return implicitArray(shadowArray, input.uvLayer, input.depth, input.offset)
+                return implicitArray(shadowArray, input.uvLayer, input.depth, ivec2(1, -1))
                     + implicitCubeArray(cubeShadowArray, input.cubeLayer, input.depth);
             }
         }
@@ -28986,14 +31436,14 @@ def test_directx_implicit_shadow_gather_compare_offsets_cover_arrays_and_cube_ar
     )
     assert "tex.GatherCmp(texSampler, uvLayer, depth)" in generated_code
     assert "tex.GatherCmp(texSampler, uvLayer, depth, offset)" in generated_code
-    assert "tex.SampleCmp(texSampler, uvLayer, depth, offset)" in generated_code
+    assert "tex.SampleCmp(texSampler, uvLayer, depth, int2(1, -1))" in generated_code
     assert (
         "float4 implicitCubeArray(TextureCubeArray tex, SamplerComparisonState texSampler, float4 cubeLayer, float depth)"
         in generated_code
     )
     assert "return tex.GatherCmp(texSampler, cubeLayer, depth);" in generated_code
     assert (
-        "implicitArray(shadowArray, shadowArraySampler, input.uvLayer, input.depth, input.offset)"
+        "implicitArray(shadowArray, shadowArraySampler, input.uvLayer, input.depth, int2(1, -1))"
         in generated_code
     )
     assert (
@@ -35918,7 +38368,7 @@ def test_directx_texture_projection_with_offset_and_bias():
             vec4 main(FSInput input) @ gl_FragColor {
                 vec4 basic = textureProj(colorMap, linearSampler, input.uvq);
                 vec4 biased = textureProj(colorMap, linearSampler, input.uvqw, 0.5);
-                vec4 withOffset = textureProjOffset(colorMap, linearSampler, input.uvq, input.offset);
+                vec4 withOffset = textureProjOffset(colorMap, linearSampler, input.uvq, ivec2(1, -1));
                 vec4 withLod = textureProjLod(colorMap, linearSampler, input.uvq, 2.0);
                 vec4 withGrad = textureProjGrad(colorMap, linearSampler, input.uvq, input.ddx, input.ddy);
                 return basic + biased + withOffset + withLod + withGrad;
@@ -36881,7 +39331,7 @@ def test_directx_texture_proj_emits_perspective_divide_and_sample():
                     colorMap,
                     linearSampler,
                     input.projCoord,
-                    input.offset
+                    ivec2(1, -1)
                 );
                 return projected + projLod + projOffset;
             }
@@ -36902,7 +39352,7 @@ def test_directx_texture_proj_emits_perspective_divide_and_sample():
         in generated_code
     )
     assert (
-        "colorMap.Sample(linearSampler, input.projCoord.xy / input.projCoord.z, input.offset)"
+        "colorMap.Sample(linearSampler, input.projCoord.xy / input.projCoord.z, int2(1, -1))"
         in generated_code
     )
     assert "textureProj(" not in generated_code
@@ -36984,7 +39434,7 @@ def test_directx_texture_proj_grad_emits_perspective_divide_and_sample_grad():
                     input.projCoord,
                     input.ddx,
                     input.ddy,
-                    input.offset
+                    ivec2(1, -1)
                 );
                 return projGrad + projGradOffset;
             }
@@ -37001,7 +39451,7 @@ def test_directx_texture_proj_grad_emits_perspective_divide_and_sample_grad():
         in generated_code
     )
     assert (
-        "colorMap.SampleGrad(linearSampler, input.projCoord.xy / input.projCoord.z, input.ddx, input.ddy, input.offset)"
+        "colorMap.SampleGrad(linearSampler, input.projCoord.xy / input.projCoord.z, input.ddx, input.ddy, int2(1, -1))"
         in generated_code
     )
     assert "textureProjGrad(" not in generated_code
@@ -37973,6 +40423,453 @@ def test_hlsl_private_scalar_pointer_accepts_proven_zero_loop_index():
     assert "float observed = mean;" in generated
     assert "x[i]" not in generated
     assert "float*" not in generated
+
+
+def test_hlsl_aggregate_conditional_initializer_preserves_selected_branch(tmp_path):
+    shader = """
+    shader AggregateConditionalInitializer {
+        struct Payload {
+            float value;
+        };
+
+        bool choose(inout uint calls) {
+            calls += 1u;
+            return calls == 1u;
+        }
+
+        Payload make_left(inout uint calls) {
+            calls += 10u;
+            Payload result = { 1.0 };
+            return result;
+        }
+
+        Payload make_right(inout uint calls) {
+            calls += 100u;
+            Payload result = { 2.0 };
+            return result;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                uint calls = 0u;
+                Payload selected = choose(calls)
+                    ? make_left(calls)
+                    : make_right(calls);
+                float observed = selected.value + float(calls);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Payload selected;" in generated
+    assert "if (choose(calls)) {" in generated
+    assert "selected = make_left(calls);" in generated
+    assert "selected = make_right(calls);" in generated
+    assert generated.count("choose(calls)") == 1
+    assert generated.count("make_left(calls)") == 1
+    assert generated.count("make_right(calls)") == 1
+    assert "? make_left" not in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_reverse_materialized_aggregate_conditionals_validate(tmp_path):
+    fixture = (
+        Path(__file__).resolve().parents[2] / "fixtures" / "metal_aggregate_conditional"
+    )
+    shader_path = fixture / "materialized_select.metal"
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+        include_paths=[str(fixture)],
+    )
+
+    assert_materialized_aggregate_conditional_hlsl(generated)
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_const_aggregate_conditional_uses_mutable_control_flow_local(tmp_path):
+    shader = """
+    shader ConstAggregateConditionalInitializer {
+        struct Payload {
+            float value;
+        };
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                Payload left = { 1.0 };
+                Payload right = { 2.0 };
+                bool use_left = true;
+                const Payload selected = use_left ? left : right;
+                float observed = selected.value;
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Payload selected;" in generated
+    assert "const Payload selected;" not in generated
+    assert "selected = left;" in generated
+    assert "selected = right;" in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_aggregate_conditional_ignores_stale_scalar_expression_context(tmp_path):
+    shader = """
+    shader AggregateConditionalScalarContext {
+        struct Bits {
+            uint2 first;
+            uint2 second;
+        };
+
+        Bits make_bits(uint2 first, uint2 second) {
+            Bits result = { first, second };
+            return result;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                bool drop = false;
+                Bits bits = make_bits(
+                    uint2(tid.x, 0u),
+                    uint2(tid.y, drop ? 0u : tid.y)
+                );
+                uint observed = bits.second.y;
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "(drop ? 0u : tid.y)" in generated
+    assert "Bits bits = make_bits(" in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_aggregate_conditional_assignment_and_return_use_control_flow(
+    tmp_path,
+):
+    shader = """
+    shader AggregateConditionalAssignmentReturn {
+        struct Payload {
+            float value;
+        };
+
+        Payload select_value(bool use_left, Payload left, Payload right) {
+            return use_left ? left : right;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                Payload left = { 1.0 };
+                Payload right = { 2.0 };
+                Payload selected = left;
+                bool use_left = true;
+                selected = use_left ? left : right;
+                Payload returned = select_value(use_left, left, right);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "if (use_left) {\n        return left;" in generated
+    assert "} else {\n        return right;" in generated
+    assert "if (use_left) {\n        selected = left;" in generated
+    assert "} else {\n        selected = right;" in generated
+    assert "use_left ? left : right" not in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_aggregate_conditional_call_argument_is_materialized(tmp_path):
+    shader = """
+    shader AggregateConditionalCallArgument {
+        struct Payload {
+            float value;
+        };
+
+        float consume(Payload payload) {
+            return payload.value;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                Payload left = { 1.0 };
+                Payload right = { 2.0 };
+                bool use_left = true;
+                float observed = consume(use_left ? left : right);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    temporary = re.search(
+        r"Payload (__crossgl_aggregate_conditional_\d+);",
+        generated,
+    )
+    assert temporary is not None
+    temporary_name = temporary.group(1)
+    assert f"{temporary_name} = left;" in generated
+    assert f"{temporary_name} = right;" in generated
+    assert f"float observed = consume({temporary_name});" in generated
+    assert "consume((use_left ? left : right))" not in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_fixed_array_conditional_copies_only_the_selected_array(tmp_path):
+    shader = """
+    shader FixedArrayConditional {
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                float left[2] = { 1.0, 2.0 };
+                float right[2] = { 3.0, 4.0 };
+                bool use_left = true;
+                float selected[2] = use_left ? left : right;
+                float observed = selected[0] + selected[1];
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "float selected[2];" in generated
+    assert "if (use_left) {" in generated
+    assert "selected[0] = left[0];" in generated
+    assert "selected[1] = left[1];" in generated
+    assert "selected[0] = right[0];" in generated
+    assert "selected[1] = right[1];" in generated
+    assert "selected = left" not in generated
+    assert "selected = right" not in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_nested_aggregate_conditional_uses_whole_value_assignment(tmp_path):
+    shader = """
+    shader NestedAggregateConditional {
+        struct Inner {
+            float value;
+        };
+
+        struct Outer {
+            Inner inner;
+            float weights[2];
+        };
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                Inner first_inner = { 1.0 };
+                Inner second_inner = { 2.0 };
+                Outer left;
+                left.inner = first_inner;
+                left.weights[0] = 3.0;
+                left.weights[1] = 4.0;
+                Outer right;
+                right.inner = second_inner;
+                right.weights[0] = 5.0;
+                right.weights[1] = 6.0;
+                bool use_left = true;
+                Outer selected = use_left ? left : right;
+                float observed = selected.inner.value + selected.weights[0];
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Outer selected;" in generated
+    assert "selected = left;" in generated
+    assert "selected = right;" in generated
+    assert "use_left ? left : right" not in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_aggregate_conditional_reports_unsafe_call_argument_order():
+    shader = """
+    shader AggregateConditionalCallOrder {
+        struct Payload {
+            float value;
+        };
+
+        float observe(float first, Payload payload) {
+            return first + payload.value;
+        }
+
+        float side_effect() {
+            return 1.0;
+        }
+
+        float read(bool use_left, Payload left, Payload right) {
+            return observe(side_effect(), use_left ? left : right);
+        }
+    }
+    """
+
+    with pytest.raises(DirectXAggregateConditionalError) as excinfo:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = excinfo.value
+    assert (
+        diagnostic.project_diagnostic_code
+        == "project.translate.directx-aggregate-conditional-unsupported"
+    )
+    assert diagnostic.missing_capabilities == (
+        "directx.aggregate-conditional-lowering",
+    )
+    assert diagnostic.aggregate_type == "Payload"
+    assert diagnostic.target == "HLSL"
+    assert diagnostic.context == "call-argument"
+    assert diagnostic.reason == "sibling-evaluation-order"
+
+
+def test_hlsl_aggregate_conditional_reports_unsupported_nested_call_argument():
+    shader = """
+    shader AggregateConditionalNestedCallArgument {
+        struct Payload {
+            float value;
+        };
+
+        float consume(float value) {
+            return value;
+        }
+
+        float read(bool use_left, Payload left, Payload right) {
+            return consume((use_left ? left : right).value);
+        }
+    }
+    """
+
+    with pytest.raises(DirectXAggregateConditionalError) as excinfo:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    diagnostic = excinfo.value
+    assert diagnostic.aggregate_type == "Payload"
+    assert diagnostic.target == "HLSL"
+    assert diagnostic.context == "expression"
+    assert diagnostic.reason == "statement-context-required"
+
+
+def test_hlsl_boolean_min_max_preserve_ordered_semantics(tmp_path):
+    shader = """
+    shader BooleanMinMax {
+        compute {
+            bool scalarMin(bool left, bool right) {
+                return min(left, right);
+            }
+
+            bool scalarMax(bool left, bool right) {
+                return max(left, right);
+            }
+
+            bvec3 vectorMin(bvec3 left, bvec3 right) {
+                return min(left, right);
+            }
+
+            bvec3 vectorMax(bvec3 left, bvec3 right) {
+                return max(left, right);
+            }
+
+            float numericMin(float left, float right) {
+                return min(left, right);
+            }
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "return ((left) && (right));" in generated
+    assert "return ((left) || (right));" in generated
+    assert "return and(left, right);" in generated
+    assert "return or(left, right);" in generated
+    assert "return min(left, right);" in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_boolean_min_max_respect_user_defined_functions():
+    shader = """
+    shader BooleanMinShadow {
+        compute {
+            bool min(bool left, bool right) {
+                return left;
+            }
+
+            bool callMin(bool left, bool right) {
+                return min(left, right);
+            }
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "bool min(bool left, bool right)" in generated
+    assert "return min(left, right);" in generated
+    assert "return ((left) && (right));" not in generated
+
+
+def test_hlsl_boolean_min_max_reports_unrepresentable_operand_shapes():
+    shader = """
+    shader BooleanMinMismatch {
+        compute {
+            bvec2 invalidMin(bvec2 left, bvec3 right) {
+                return min(left, right);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(DirectXBooleanOrderedIntrinsicError) as exc_info:
+        generate_code(parse_code(tokenize_code(shader)))
+
+    assert exc_info.value.project_diagnostic_code == (
+        "project.translate.directx-boolean-ordered-intrinsic-unrepresentable"
+    )
+    assert exc_info.value.operation == "min"
+    assert exc_info.value.operand_types == ("bool2", "bool3")
+    assert exc_info.value.reason == "operand-type-mismatch"
+
+    expression_codegen = HLSLCodeGen()
+    expression_codegen.local_variable_types.update({"left": "bool2", "right": "bool3"})
+    call = FunctionCallNode(
+        IdentifierNode("min"),
+        [IdentifierNode("left"), IdentifierNode("right")],
+        source_location=("boolean-order.cgl", 7, 16),
+    )
+    with pytest.raises(DirectXBooleanOrderedIntrinsicError) as located_exc_info:
+        expression_codegen.generate_expression(call)
+    assert located_exc_info.value.source_location == (
+        "boolean-order.cgl",
+        7,
+        16,
+    )
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import bisect
 import fnmatch
 import functools
@@ -23,10 +24,15 @@ from types import SimpleNamespace
 from typing import Any, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 from crosstl._crosstl import translate
+from crosstl.glsl_builtins import GLSL_BUILTIN_INT_LIMITS
 from crosstl.project.host_reflection import (
     empty_host_interface_record,
     host_interface_record,
     reflect_target_host_interface,
+)
+from crosstl.project.integral_literals import (
+    CFamilyIntegralLiteralError,
+    parse_c_family_integral_literal,
 )
 from crosstl.translator.codegen import (
     backend_names,
@@ -48,6 +54,8 @@ RUNTIME_ADAPTER_PLAN_KIND = "crosstl-runtime-adapter-plan"
 RUNTIME_ADAPTER_PACKAGE_KIND = "crosstl-runtime-adapter-package"
 RUNTIME_ADAPTER_DESCRIPTOR_KIND = "crosstl-runtime-adapter-descriptor"
 RUNTIME_LOADER_MANIFEST_KIND = "crosstl-runtime-loader-manifest"
+RUNTIME_VARIANT_REGISTRY_KIND = "crosstl-runtime-variant-registry"
+RUNTIME_VARIANT_LOOKUP_KIND = "crosstl-runtime-variant-lookup"
 RUNTIME_HOST_LOADER_SCAFFOLDS_KIND = "crosstl-runtime-host-loader-scaffolds"
 RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_KIND = (
     "crosstl-runtime-host-loader-scaffolds-inspection"
@@ -79,6 +87,7 @@ RUNTIME_PACKAGE_INSPECTION_SCOPE = "runtime-package-readiness-inspection"
 RUNTIME_ADAPTER_PLAN_SCOPE = "runtime-adapter-integration-planning"
 RUNTIME_ADAPTER_PACKAGE_SCOPE = "runtime-adapter-descriptor-package"
 RUNTIME_LOADER_MANIFEST_SCOPE = "runtime-loader-metadata-contract"
+RUNTIME_VARIANT_REGISTRY_SCOPE = "exact-runtime-variant-selection"
 RUNTIME_HOST_LOADER_SCAFFOLDS_SCOPE = "host-loader-scaffold-generation"
 RUNTIME_HOST_LOADER_SCAFFOLDS_INSPECTION_SCOPE = (
     "host-loader-scaffold-readiness-inspection"
@@ -141,6 +150,26 @@ RUNTIME_LOADER_MANIFEST_NON_GOALS = (
     "device-execution",
     "runtime-framework-generation",
     "target-sdk-installation",
+)
+RUNTIME_VARIANT_REGISTRY_NON_GOALS = (
+    "ambiguous-best-match-selection",
+    "host-runtime-dispatch",
+    "target-compilation",
+    "deferred-compilation-execution",
+)
+RUNTIME_VARIANT_KEY_PREFIX = "crosstl-rvk1:"
+RUNTIME_VARIANT_KEY_ENCODING = "base64url-canonical-json-v1"
+RUNTIME_VARIANT_KEY_FIELDS = frozenset(
+    (
+        "sourceUnit",
+        "sourceEntry",
+        "target",
+        "targetProfile",
+        "typeArguments",
+        "valueArguments",
+        "specializationConstants",
+        "defines",
+    )
 )
 RUNTIME_HOST_LOADER_SCAFFOLDS_NON_GOALS = (
     "host-code-rewriting",
@@ -326,6 +355,7 @@ RUNTIME_ARTIFACT_MANIFEST_TARGET_FIELDS = frozenset(
         "variantCount",
         "entryPointCount",
         "resourceBindingCount",
+        "specializationConstantCount",
         "parameterBlockCount",
         "dispatchMetadataCount",
         "artifacts",
@@ -341,6 +371,9 @@ RUNTIME_ARTIFACT_MANIFEST_ARTIFACT_FIELDS = frozenset(
         "stage",
         "variant",
         "defines",
+        "entryPoint",
+        "templateMaterialization",
+        "specializationMaterialization",
         "sourceHash",
         "sourceSizeBytes",
         "hash",
@@ -351,6 +384,7 @@ RUNTIME_ARTIFACT_MANIFEST_ARTIFACT_FIELDS = frozenset(
         "hostInterface",
         "entryPoints",
         "resourceBindings",
+        "specializationConstants",
         "parameterBlocks",
         "dispatch",
         "validation",
@@ -403,6 +437,7 @@ RUNTIME_BINDING_MANIFEST_TARGET_FIELDS = frozenset(
         "entryCount",
         "resourceBindingCount",
         "scalarConstantCount",
+        "specializationConstantCount",
         "dispatchDimensionCount",
         "artifacts",
         "entries",
@@ -425,6 +460,7 @@ RUNTIME_BINDING_MANIFEST_ENTRY_FIELDS = frozenset(
         "resourceBindings",
         "bufferMutability",
         "scalarConstants",
+        "specializationConstants",
         "dispatchDimensions",
         "validation",
         "diagnostics",
@@ -474,6 +510,13 @@ RUNTIME_PACKAGE_ARTIFACT_FIELDS = frozenset(
         "stage",
         "variant",
         "defines",
+        "entryPoint",
+        "templateMaterialization",
+        "specializationMaterialization",
+        "specializationConstants",
+        "provenance",
+        "sourceHash",
+        "sourceSizeBytes",
         "hash",
         "sizeBytes",
         "sourceRemap",
@@ -563,9 +606,11 @@ RUNTIME_HOST_INTERFACE_FIELDS = frozenset(
         "entryPointCount",
         "resourceCount",
         "constantCount",
+        "specializationConstantCount",
         "entryPoints",
         "resources",
         "constants",
+        "specializationConstants",
         "diagnostics",
         "diagnosticRecords",
     )
@@ -608,11 +653,19 @@ RUNTIME_PACKAGE_INSPECTION_BINDING_FIELDS = frozenset(
         "target",
         "artifact",
         "packagePath",
+        "source",
         "sourcePath",
         "sourceBackend",
         "stage",
         "variant",
         "defines",
+        "entryPoint",
+        "templateMaterialization",
+        "specializationMaterialization",
+        "specializationConstants",
+        "provenance",
+        "sourceHash",
+        "sourceSizeBytes",
         "hash",
         "sizeBytes",
         "sourceRemap",
@@ -665,11 +718,21 @@ RUNTIME_ADAPTER_PLAN_ADAPTER_FIELDS = frozenset(
         "binding",
         "artifact",
         "packagePath",
+        "source",
         "sourcePath",
         "sourceBackend",
         "stage",
         "variant",
         "defines",
+        "entryPoint",
+        "templateMaterialization",
+        "specializationMaterialization",
+        "specializationConstants",
+        "provenance",
+        "sourceHash",
+        "sourceSizeBytes",
+        "hash",
+        "sizeBytes",
         "sourceRemap",
         "hostInterface",
         "requiredTools",
@@ -814,11 +877,21 @@ RUNTIME_LOADER_MANIFEST_LOAD_UNIT_FIELDS = frozenset(
         "adapterKind",
         "artifactFormat",
         "packagePath",
+        "source",
         "sourcePath",
         "sourceBackend",
         "stage",
         "variant",
         "defines",
+        "entryPoint",
+        "templateMaterialization",
+        "specializationMaterialization",
+        "specializationConstants",
+        "provenance",
+        "sourceHash",
+        "sourceSizeBytes",
+        "hash",
+        "sizeBytes",
         "sourceRemap",
         "hostInterface",
         "requiredTools",
@@ -838,6 +911,57 @@ RUNTIME_LOADER_MANIFEST_LOAD_STEP_FIELDS = frozenset(
         "command",
         "hostInterfaceStatus",
         "metadata",
+    )
+)
+RUNTIME_VARIANT_REGISTRY_FIELDS = frozenset(
+    (
+        "schemaVersion",
+        "kind",
+        "success",
+        "status",
+        "scope",
+        "nonGoals",
+        "source",
+        "keySchema",
+        "summary",
+        "targets",
+        "variants",
+        "lookup",
+        "inputInspection",
+        "registryHash",
+        "diagnosticCounts",
+        "diagnostics",
+    )
+)
+RUNTIME_VARIANT_REGISTRY_RECORD_FIELDS = frozenset(
+    (
+        "key",
+        "status",
+        "source",
+        "target",
+        "variant",
+        "arguments",
+        "defines",
+        "specializationConstants",
+        "bindingInterface",
+        "artifact",
+        "provenance",
+        "lookup",
+        "blockers",
+    )
+)
+RUNTIME_VARIANT_LOOKUP_FIELDS = frozenset(
+    (
+        "schemaVersion",
+        "kind",
+        "success",
+        "status",
+        "match",
+        "requestedKey",
+        "record",
+        "availableKeys",
+        "diagnosticCounts",
+        "diagnostics",
     )
 )
 RUNTIME_HOST_LOADER_SCAFFOLDS_FIELDS = frozenset(
@@ -1256,6 +1380,8 @@ REPORT_PROJECT_FIELDS = frozenset(
         "outputDir",
         "sourceOverrides",
         "sourceOverrideCount",
+        "entryPointSelections",
+        "entryPointSelectionCount",
         "sourceOptions",
         "sourceOptionCount",
         "includeDirs",
@@ -1267,6 +1393,10 @@ REPORT_PROJECT_FIELDS = frozenset(
         "variants",
         "variantCount",
         "variantDefineCounts",
+        "specializationConstants",
+        "specializationConstantCount",
+        "variantSpecializationConstants",
+        "variantSpecializationConstantCounts",
         "selectedVariants",
         "externalCorpusManifest",
     )
@@ -1280,6 +1410,10 @@ REPORT_INCLUDE_DIR_STATUS_FIELDS = frozenset(
 SOURCE_OPTION_PATTERNS_KEY = "source_patterns"
 TARGET_SOURCE_OPTIONS_KEY = "target_options"
 TEMPLATE_VARIANTS_SOURCE_OPTION = "template_variants"
+SPECIALIZATION_CONSTANTS_CONFIG_KEY = "specialization_constants"
+DEFERRED_SPECIALIZATION_TARGETS = frozenset(
+    ("cgl", "crossgl", "metal", "opengl", "vulkan")
+)
 METAL_TEMPLATE_SPECIALIZATION_LIMIT_OPTION = "max_template_specializations"
 METAL_TEMPLATE_SPECIALIZATION_LIMIT_SOURCE_OPTION = (
     "template_specialization_limit_source"
@@ -1487,8 +1621,11 @@ REPORT_ARTIFACT_FIELDS = frozenset(
         "generatedSizeBytes",
         "sourceMap",
         "sourceRemap",
+        "specializationConstants",
+        "specializationMaterialization",
         "templateMaterialization",
         "requiredCapabilities",
+        "entryPoint",
     )
 )
 WEBGL_PROJECT_STAGE_LABEL_BY_GLSLANG = {
@@ -1519,6 +1656,7 @@ REPORT_ARTIFACT_INCLUDE_DEPENDENCY_PROCESSING_FIELDS = frozenset(
 )
 REPORT_HASH_FIELDS = frozenset(("algorithm", "value"))
 REPORT_ARTIFACT_PROVENANCE_FIELDS = frozenset(("pipeline", "intermediate"))
+REPORT_ARTIFACT_ENTRY_POINT_FIELDS = frozenset(("source", "target", "stage"))
 REPORT_ARTIFACT_SOURCE_REMAP_FIELDS = frozenset(
     (
         "schemaVersion",
@@ -1681,6 +1819,7 @@ VALIDATION_ARTIFACT_FIELDS = frozenset(
         "generatedSizeStatus",
         "sourceMapStatus",
         "sourceRemapStatus",
+        "entryPoint",
     )
 )
 VALIDATION_SUMMARY_FIELDS = frozenset(
@@ -1710,6 +1849,7 @@ VALIDATION_TOOLCHAIN_RUN_FIELDS = frozenset(
         "status",
         "stdout",
         "stderr",
+        "entryPoint",
     )
 )
 VALIDATION_TOOLCHAIN_RUN_CHECK_KINDS = frozenset(("artifact", "tool-availability"))
@@ -1743,7 +1883,10 @@ COMPILER_SOURCE_REMAP_PAYLOAD_FIELDS = frozenset(
 COMPILER_SOURCE_REMAP_MAPPING_FIELDS = frozenset(("generated", "original"))
 COMPILER_SOURCE_REMAP_SPAN_FIELDS = frozenset(SOURCE_MAP_SPAN_FIELDS)
 REPORT_GENERATOR_PIPELINE = "project-porting"
-REPORT_ARTIFACT_PROVENANCE_PIPELINES = ("single-file-translate",)
+REPORT_ARTIFACT_PROVENANCE_PIPELINES = (
+    "single-file-translate",
+    "entry-scoped-translate",
+)
 REPORT_ARTIFACT_PROVENANCE_INTERMEDIATES = ("crossgl",)
 REPORT_MIGRATION_SCOPE = "shader-kernel-translation"
 REPORT_MIGRATION_NON_GOALS = (
@@ -3246,6 +3389,37 @@ def _normalize_source_options_for_backend(
     return normalized
 
 
+def _specialization_selector_key(value: Any, *, field_name: str) -> str:
+    if isinstance(value, int) and not isinstance(value, bool):
+        if value < 0:
+            raise ValueError(f"{field_name} numeric ids must be non-negative")
+        return str(value)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} keys must be source names or numeric ids")
+    key = value.strip()
+    if key.isdigit():
+        return str(int(key))
+    return key
+
+
+def _as_specialization_value_mapping(
+    value: Any, *, field_name: str
+) -> dict[str, bool | int | float | str]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_name} must be a table")
+    result: dict[str, bool | int | float | str] = {}
+    for raw_key, item in value.items():
+        key = _specialization_selector_key(raw_key, field_name=field_name)
+        if not isinstance(item, (bool, int, float, str)):
+            raise ValueError(
+                f"{field_name}.{key} must be a boolean, integer, float, or string"
+            )
+        result[key] = item
+    return result
+
+
 def _variant_defines(variants: Mapping[str, Any]) -> dict[str, dict[str, str]]:
     result: dict[str, dict[str, str]] = {}
     for name, value in variants.items():
@@ -3257,8 +3431,36 @@ def _variant_defines(variants: Mapping[str, Any]) -> dict[str, dict[str, str]]:
         if not isinstance(value, Mapping):
             raise ValueError(f"crosstl.toml [{variant_path}] must be a table")
         result[name] = _as_str_mapping(
-            value, field_name=f"crosstl.toml [{variant_path}]"
+            {
+                key: item
+                for key, item in value.items()
+                if key != SPECIALIZATION_CONSTANTS_CONFIG_KEY
+            },
+            field_name=f"crosstl.toml [{variant_path}]",
         )
+    return result
+
+
+def _variant_specialization_constants(
+    variants: Mapping[str, Any],
+) -> dict[str, dict[str, bool | int | float | str]]:
+    result: dict[str, dict[str, bool | int | float | str]] = {}
+    for name, value in variants.items():
+        if (
+            not isinstance(name, str)
+            or not name.strip()
+            or not isinstance(value, Mapping)
+        ):
+            continue
+        variant_path = _mapping_key_path("project.variants", name)
+        specializations = _as_specialization_value_mapping(
+            value.get(SPECIALIZATION_CONSTANTS_CONFIG_KEY),
+            field_name=(
+                f"crosstl.toml [{variant_path}.{SPECIALIZATION_CONSTANTS_CONFIG_KEY}]"
+            ),
+        )
+        if specializations:
+            result[name] = specializations
     return result
 
 
@@ -3269,6 +3471,16 @@ def _variant_define_counts(variants: Mapping[str, Any]) -> dict[str, int]:
             continue
         counts[name] = len(defines)
     return dict(sorted(counts.items()))
+
+
+def _variant_specialization_constant_counts(
+    variants: Mapping[str, Any],
+) -> dict[str, int]:
+    return {
+        name: len(values)
+        for name, values in sorted(variants.items())
+        if _is_non_empty_string(name) and isinstance(values, Mapping)
+    }
 
 
 def _normalized_targets(targets: Sequence[str] | str) -> list[str]:
@@ -6870,10 +7082,15 @@ class ProjectConfig:
     targets: Sequence[str] | str = ()
     output_dir: str | os.PathLike[str] = DEFAULT_OUTPUT_DIR
     source_overrides: Mapping[str, str] = field(default_factory=dict)
+    entry_points: Mapping[str, str] = field(default_factory=dict)
     include_dirs: Sequence[str] | str = ()
     defines: Mapping[str, str] = field(default_factory=dict)
     source_options: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
-    variants: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    variants: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
+    specialization_constants: Mapping[str, Any] = field(default_factory=dict)
+    variant_specialization_constants: Mapping[str, Mapping[str, Any]] = field(
+        default_factory=dict
+    )
     selected_variants: Sequence[str] | str = ()
     external_corpus_manifest: str | os.PathLike[str] | None = None
 
@@ -6937,6 +7154,18 @@ class ProjectConfig:
                 )
             ),
         )
+        if not isinstance(self.entry_points, Mapping):
+            raise ValueError("ProjectConfig.entry_points must be a mapping")
+        object.__setattr__(
+            self,
+            "entry_points",
+            _normalize_project_relative_path_mapping(
+                _as_non_empty_str_mapping(
+                    self.entry_points,
+                    field_name="ProjectConfig.entry_points",
+                )
+            ),
+        )
         if not isinstance(self.defines, Mapping):
             raise ValueError("ProjectConfig.defines must be a mapping")
         object.__setattr__(
@@ -6954,6 +7183,7 @@ class ProjectConfig:
         if not isinstance(self.variants, Mapping):
             raise ValueError("ProjectConfig.variants must be a mapping")
         variants: dict[str, dict[str, str]] = {}
+        nested_variant_specializations: dict[str, dict[str, Any]] = {}
         for name, defines in self.variants.items():
             if not isinstance(name, str) or not name.strip():
                 raise ValueError(
@@ -6961,11 +7191,69 @@ class ProjectConfig:
                 )
             if not isinstance(defines, Mapping):
                 raise ValueError(f"ProjectConfig.variants.{name} must be a mapping")
+            nested_variant_specializations[name] = _as_specialization_value_mapping(
+                defines.get(SPECIALIZATION_CONSTANTS_CONFIG_KEY),
+                field_name=(
+                    f"ProjectConfig.variants.{name}."
+                    f"{SPECIALIZATION_CONSTANTS_CONFIG_KEY}"
+                ),
+            )
             variants[name] = _as_str_mapping(
-                defines,
+                {
+                    key: value
+                    for key, value in defines.items()
+                    if key != SPECIALIZATION_CONSTANTS_CONFIG_KEY
+                },
                 field_name=f"ProjectConfig.variants.{name}",
             )
         object.__setattr__(self, "variants", variants)
+        object.__setattr__(
+            self,
+            "specialization_constants",
+            _as_specialization_value_mapping(
+                self.specialization_constants,
+                field_name="ProjectConfig.specialization_constants",
+            ),
+        )
+        if not isinstance(self.variant_specialization_constants, Mapping):
+            raise ValueError(
+                "ProjectConfig.variant_specialization_constants must be a mapping"
+            )
+        explicit_variant_specializations: dict[str, dict[str, Any]] = {}
+        for name, values in self.variant_specialization_constants.items():
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError(
+                    "ProjectConfig.variant_specialization_constants keys must be "
+                    "non-empty strings"
+                )
+            explicit_variant_specializations[name] = _as_specialization_value_mapping(
+                values,
+                field_name=f"ProjectConfig.variant_specialization_constants.{name}",
+            )
+            variants.setdefault(name, {})
+        merged_variant_specializations: dict[str, dict[str, Any]] = {}
+        for name in sorted(set(variants) | set(explicit_variant_specializations)):
+            nested = nested_variant_specializations.get(name, {})
+            explicit = explicit_variant_specializations.get(name, {})
+            conflicts = [
+                key
+                for key in nested.keys() & explicit.keys()
+                if nested[key] != explicit[key]
+            ]
+            if conflicts:
+                raise ValueError(
+                    "ProjectConfig variant specialization constants conflict for "
+                    f"{name}: {', '.join(sorted(conflicts))}"
+                )
+            values = {**nested, **explicit}
+            if values:
+                merged_variant_specializations[name] = values
+        object.__setattr__(self, "variants", variants)
+        object.__setattr__(
+            self,
+            "variant_specialization_constants",
+            merged_variant_specializations,
+        )
         if self.external_corpus_manifest is not None:
             external_corpus_manifest = _path_string_arg(
                 self.external_corpus_manifest,
@@ -7418,6 +7706,21 @@ def _scan_pattern_diagnostics(config: ProjectConfig) -> list[ProjectDiagnostic]:
                 missing_capabilities=["source.override"],
             )
         )
+    for pattern in config.entry_points:
+        if _is_repository_relative_glob(pattern):
+            continue
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code="project.config.entry-point-pattern-outside-project",
+                message=(
+                    f"Configured entry-point selection pattern '{pattern}' is not "
+                    "repository-relative."
+                ),
+                location=location,
+                missing_capabilities=["artifact.entry-point-selection"],
+            )
+        )
     if config.source_overrides:
         register_default_sources()
         discover_backend_plugins()
@@ -7616,6 +7919,8 @@ class ProjectPortabilityReport:
                 "outputDir": str(self.config.output_path),
                 "sourceOverrides": dict(sorted(self.config.source_overrides.items())),
                 "sourceOverrideCount": len(self.config.source_overrides),
+                "entryPointSelections": dict(sorted(self.config.entry_points.items())),
+                "entryPointSelectionCount": len(self.config.entry_points),
                 "sourceOptions": {
                     name: dict(sorted(options.items()))
                     for name, options in sorted(self.config.source_options.items())
@@ -7635,6 +7940,23 @@ class ProjectPortabilityReport:
                 },
                 "variantCount": len(self.config.variants),
                 "variantDefineCounts": _variant_define_counts(self.config.variants),
+                "specializationConstants": dict(
+                    sorted(self.config.specialization_constants.items())
+                ),
+                "specializationConstantCount": len(
+                    self.config.specialization_constants
+                ),
+                "variantSpecializationConstants": {
+                    name: dict(sorted(values.items()))
+                    for name, values in sorted(
+                        self.config.variant_specialization_constants.items()
+                    )
+                },
+                "variantSpecializationConstantCounts": (
+                    _variant_specialization_constant_counts(
+                        self.config.variant_specialization_constants
+                    )
+                ),
                 "selectedVariants": list(self.config.selected_variants),
                 "externalCorpusManifest": self.config.external_corpus_manifest,
             },
@@ -7770,9 +8092,17 @@ def load_project_config(
         project.get("source_options"),
         field_name="crosstl.toml [project.source_options]",
     )
+    entry_points = _as_non_empty_str_mapping(
+        project.get("entry_points"),
+        field_name="crosstl.toml [project.entry_points]",
+    )
     variants = project.get("variants", {})
     if not isinstance(variants, Mapping):
         raise ValueError("crosstl.toml [project.variants] must be a table")
+    specialization_constants = _as_specialization_value_mapping(
+        project.get(SPECIALIZATION_CONSTANTS_CONFIG_KEY),
+        field_name=(f"crosstl.toml [project.{SPECIALIZATION_CONSTANTS_CONFIG_KEY}]"),
+    )
     output_dir = _as_optional_non_empty_str(
         project.get("output_dir"),
         field_name="crosstl.toml project.output_dir",
@@ -7808,12 +8138,15 @@ def load_project_config(
         targets=_as_str_list(project.get("targets"), field_name="project.targets"),
         output_dir=_normalize_project_relative_path(output_dir or DEFAULT_OUTPUT_DIR),
         source_overrides=_normalize_project_relative_path_mapping(sources),
+        entry_points=_normalize_project_relative_path_mapping(entry_points),
         include_dirs=_normalize_project_relative_paths(
             _as_str_list(project.get("include_dirs"), field_name="project.include_dirs")
         ),
         defines=defines,
         source_options=source_options,
         variants=_variant_defines(variants),
+        specialization_constants=specialization_constants,
+        variant_specialization_constants=_variant_specialization_constants(variants),
         selected_variants=_as_str_list(
             project.get("selected_variants"),
             field_name="project.selected_variants",
@@ -7827,6 +8160,43 @@ def _override_for_path(relative_path: str, config: ProjectConfig) -> str | None:
         if fnmatch.fnmatch(relative_path, _normalize_project_relative_path(pattern)):
             return backend
     return None
+
+
+def _entry_point_selector_priority(pattern: str, relative_path: str) -> tuple:
+    normalized = _normalize_project_relative_path(pattern)
+    wildcard_count = sum(normalized.count(character) for character in "*?[")
+    return (
+        normalized == relative_path,
+        -wildcard_count,
+        len(normalized),
+        normalized,
+    )
+
+
+def _entry_point_from_mapping(
+    relative_path: str,
+    entry_points: Mapping[str, str],
+) -> str | None:
+    normalized_path = _normalize_project_relative_path(relative_path)
+    matches = [
+        (pattern, entry_point)
+        for pattern, entry_point in entry_points.items()
+        if fnmatch.fnmatch(
+            normalized_path,
+            _normalize_project_relative_path(pattern),
+        )
+    ]
+    if not matches:
+        return None
+    _pattern, entry_point = max(
+        matches,
+        key=lambda item: _entry_point_selector_priority(item[0], normalized_path),
+    )
+    return entry_point
+
+
+def _entry_point_for_path(relative_path: str, config: ProjectConfig) -> str | None:
+    return _entry_point_from_mapping(relative_path, config.entry_points)
 
 
 def _iter_scan_candidates(config: ProjectConfig) -> list[Path]:
@@ -7889,6 +8259,29 @@ def _config_with_expanded_native_directive_variants(
         config,
         variants={**dict(config.variants), **new_variants},
     )
+
+
+def _entry_point_selection_diagnostics(
+    config: ProjectConfig,
+    units: Sequence[ProjectTranslationUnit],
+) -> list[ProjectDiagnostic]:
+    unit_paths = [unit.relative_path for unit in units]
+    return [
+        ProjectDiagnostic(
+            severity="error",
+            code="project.config.entry-point-pattern-unmatched",
+            message=(
+                f"Configured entry-point selection pattern '{pattern}' does not "
+                "match a discovered translation unit."
+            ),
+            location=_config_location(config),
+            missing_capabilities=["artifact.entry-point-selection"],
+            details={"pattern": pattern, "entryPoint": entry_point},
+        )
+        for pattern, entry_point in config.entry_points.items()
+        if _is_repository_relative_glob(pattern)
+        and not any(fnmatch.fnmatch(path, pattern) for path in unit_paths)
+    ]
 
 
 def scan_project(
@@ -8012,6 +8405,7 @@ def scan_project(
     diagnostics.extend(
         _external_corpus_source_backend_mismatch_diagnostics(scan_config, units)
     )
+    diagnostics.extend(_entry_point_selection_diagnostics(scan_config, units))
     if not units:
         diagnostics.append(
             ProjectDiagnostic(
@@ -8038,6 +8432,7 @@ def _artifact_path(
     variant: str | None = None,
     *,
     preserve_source_suffix: bool = False,
+    entry_point: str | None = None,
 ) -> Path:
     base = config.output_path / target
     if variant is not None:
@@ -8046,6 +8441,7 @@ def _artifact_path(
         unit.relative_path,
         target,
         preserve_source_suffix=preserve_source_suffix,
+        entry_point=entry_point,
     )
 
 
@@ -8054,9 +8450,19 @@ def _artifact_relative_path(
     target: str,
     *,
     preserve_source_suffix: bool = False,
+    entry_point: str | None = None,
 ) -> Path:
     extension = _artifact_target_extension(target)
     relative = PurePosixPath(source.replace("\\", "/"))
+    if entry_point is not None:
+        entry_segment = _variant_output_segment(entry_point)
+        if preserve_source_suffix:
+            entry_base = relative
+        elif relative.suffix:
+            entry_base = relative.with_suffix("")
+        else:
+            entry_base = PurePosixPath(f"{relative.as_posix()}.entries")
+        return Path((entry_base / f"{entry_segment}{extension}").as_posix())
     if preserve_source_suffix:
         if relative.suffix:
             return Path(f"{relative.as_posix()}{extension}")
@@ -8185,6 +8591,43 @@ def _variant_define_sources(
     return sources
 
 
+def _variant_specialization_values(
+    config: ProjectConfig,
+    variant: str | None,
+) -> dict[str, tuple[Any, dict[str, Any]]]:
+    values = {
+        selector: (
+            value,
+            {
+                "kind": "project-config",
+                "path": f"project.{SPECIALIZATION_CONSTANTS_CONFIG_KEY}.{selector}",
+                "selector": selector,
+                "selectorKind": "id" if selector.isdigit() else "name",
+            },
+        )
+        for selector, value in config.specialization_constants.items()
+    }
+    if variant is None:
+        return values
+    for selector, value in config.variant_specialization_constants.get(
+        variant, {}
+    ).items():
+        values[selector] = (
+            value,
+            {
+                "kind": "project-variant",
+                "path": (
+                    f"project.variants.{variant}."
+                    f"{SPECIALIZATION_CONSTANTS_CONFIG_KEY}.{selector}"
+                ),
+                "selector": selector,
+                "selectorKind": "id" if selector.isdigit() else "name",
+                "variant": variant,
+            },
+        )
+    return values
+
+
 def _selected_variant_names(variants: Sequence[str] | str | None) -> list[str] | None:
     if variants is None:
         return None
@@ -8229,6 +8672,11 @@ def _config_with_selected_variants(
     return replace(
         config,
         variants={name: config.variants[name] for name in selected},
+        variant_specialization_constants={
+            name: config.variant_specialization_constants[name]
+            for name in selected
+            if name in config.variant_specialization_constants
+        },
         selected_variants=tuple(selected),
     )
 
@@ -15750,6 +16198,7 @@ def _project_template_materialization_for_artifact(
             preprocessor,
             preprocessed,
         )
+        preprocessed = preprocessor._elide_stateless_compile_time_globals(preprocessed)
         templates = preprocessor._find_template_functions(preprocessed)
     except Exception:  # noqa: BLE001
         if fail_closed:
@@ -16149,6 +16598,7 @@ def _project_template_materialization_for_artifact(
         materialized,
         work_budget=explicit_work_budget,
     )
+    materialized = preprocessor._elide_stateless_compile_time_globals(materialized)
     discovered_struct_specializations = (
         set(preprocessor._materialized_struct_specializations)
         - existing_struct_specializations
@@ -16416,6 +16866,7 @@ def _project_template_materialization_for_artifact(
             materialized = preprocessor._apply_text_replacements(
                 materialized, explicit_replacements
             )
+    materialized = preprocessor._elide_stateless_compile_time_globals(materialized)
     materialized = preprocessor._lower_struct_member_functions(materialized)
     # Keep alias wrappers intact while compile-time callbacks infer their
     # argument types; canonicalize only after member lowering has consumed them.
@@ -16430,6 +16881,7 @@ def _project_template_materialization_for_artifact(
                 work_budget=explicit_work_budget,
             )
         )
+        materialized = preprocessor._elide_stateless_compile_time_globals(materialized)
         materialized = preprocessor._lower_struct_member_functions(materialized)
     materialized = _inline_metal_concrete_using_template_aliases(
         preprocessor,
@@ -17128,14 +17580,46 @@ def _opengl_complex_arithmetic_failure_details(
     return dict(sorted(details.items()))
 
 
+def _boolean_ordered_intrinsic_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) not in {
+        "project.translate.directx-boolean-ordered-intrinsic-unrepresentable",
+        "project.translate.opengl-boolean-ordered-intrinsic-unrepresentable",
+        "project.translate.webgl-boolean-ordered-intrinsic-unrepresentable",
+    }:
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    intrinsic = {}
+    operation = getattr(exc, "operation", None)
+    operand_types = getattr(exc, "operand_types", None)
+    reason = getattr(exc, "reason", None)
+    if _is_non_empty_string(operation):
+        intrinsic["operation"] = operation
+    if operand_types:
+        intrinsic["operandTypes"] = [str(value) for value in operand_types]
+    if _is_non_empty_string(reason):
+        intrinsic["reason"] = reason
+    if intrinsic:
+        details["booleanOrderedIntrinsic"] = dict(sorted(intrinsic.items()))
+    return dict(sorted(details.items()))
+
+
 def _opengl_struct_construction_failure_details(
     exc: Exception,
     unit: ProjectTranslationUnit,
     artifact_path: str | None,
 ) -> dict[str, Any]:
-    if _translation_failure_diagnostic_code(exc) != (
-        "project.translate.opengl-struct-construction-unsupported"
-    ):
+    if _translation_failure_diagnostic_code(exc) not in {
+        "project.translate.opengl-struct-construction-unsupported",
+        "project.translate.webgl-struct-construction-unsupported",
+    }:
         return {}
 
     details: dict[str, Any] = {
@@ -17645,6 +18129,70 @@ def _metal_struct_method_call_failure_details(
     return dict(sorted(details.items()))
 
 
+def _metal_constructor_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.metal-constructor-unrepresentable"
+    ):
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    constructor = {}
+    owner = getattr(exc, "owner", None)
+    argument_types = getattr(exc, "argument_types", None)
+    candidates = getattr(exc, "candidates", None)
+    reason = getattr(exc, "reason", None)
+    if _is_non_empty_string(owner):
+        constructor["owner"] = owner
+    if argument_types:
+        constructor["argumentTypes"] = [str(value) for value in argument_types]
+    if candidates:
+        constructor["candidates"] = [str(value) for value in candidates]
+    if _is_non_empty_string(reason):
+        constructor["reason"] = reason
+    if constructor:
+        details["metalConstructor"] = dict(sorted(constructor.items()))
+    return dict(sorted(details.items()))
+
+
+def _metal_stateless_global_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.metal-stateless-global-unsafe"
+    ):
+        return {}
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    stateless_global = {}
+    fields = {
+        "globalName": getattr(exc, "global_name", None),
+        "typeName": getattr(exc, "type_name", None),
+        "methodName": getattr(exc, "method_name", None),
+        "reason": getattr(exc, "reason", None),
+        "blockingUse": getattr(exc, "blocking_use", None),
+        "effect": getattr(exc, "effect", None),
+        "suggestedAction": getattr(exc, "suggested_action", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            stateless_global[name] = value
+    if stateless_global:
+        details["statelessGlobal"] = dict(sorted(stateless_global.items()))
+    return dict(sorted(details.items()))
+
+
 def _translation_failure_details(
     exc: Exception,
     target: str,
@@ -17660,6 +18208,7 @@ def _translation_failure_details(
         **_opengl_aggregate_initializer_failure_details(exc, unit, artifact_path),
         **_opengl_scalar_conversion_failure_details(exc, unit, artifact_path),
         **_opengl_complex_arithmetic_failure_details(exc, unit, artifact_path),
+        **_boolean_ordered_intrinsic_failure_details(exc, unit, artifact_path),
         **_opengl_struct_construction_failure_details(exc, unit, artifact_path),
         **_opengl_fixed_array_resource_failure_details(exc, unit, artifact_path),
         **_opengl_resource_memory_qualifier_failure_details(exc, unit, artifact_path),
@@ -17676,6 +18225,8 @@ def _translation_failure_details(
         **_generic_member_call_failure_details(exc, unit, artifact_path),
         **_metal_struct_method_failure_details(exc, unit, artifact_path),
         **_metal_struct_method_call_failure_details(exc, unit, artifact_path),
+        **_metal_constructor_failure_details(exc, unit, artifact_path),
+        **_metal_stateless_global_failure_details(exc, unit, artifact_path),
         **_metal_static_constant_failure_details(exc, unit, artifact_path),
         **_metal_sizeof_failure_details(exc, unit, artifact_path),
         **_metal_template_argument_failure_details(exc, unit, artifact_path),
@@ -18159,6 +18710,1103 @@ def _translation_failure_location(
     )
 
 
+_SPECIALIZATION_CONSTANT_ID_MAX = 0x7FFFFFFF
+_METAL_FUNCTION_CONSTANT_ID_MAX = 0xFFFF
+
+
+def _specialization_attribute_id_max(attribute: str) -> int:
+    if attribute == "function_constant":
+        return _METAL_FUNCTION_CONSTANT_ID_MAX
+    return _SPECIALIZATION_CONSTANT_ID_MAX
+
+
+@dataclass(frozen=True)
+class _SpecializationIdValue:
+    constant_id: int | None
+    spelling: str | None
+    reason: str | None = None
+    parsed_value: int | None = None
+
+
+@dataclass(frozen=True)
+class _ProjectSpecializationAttribute:
+    name: str
+    constant_id: int | None
+    spelling: str | None
+    maximum_id: int
+    reason: str | None = None
+    parsed_value: int | None = None
+
+
+@dataclass(frozen=True)
+class _ProjectSpecializationSource:
+    location: SourceLocation
+    attributes: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True)
+class _ProjectSpecializationDeclaration:
+    name: str
+    constant_id: int | None
+    id_spelling: str | None
+    source_type: str
+    attribute: str
+    has_default: bool
+    default_value: Any
+    location: SourceLocation
+
+
+class ProjectSpecializationError(ValueError):
+    """A project specialization contract blocked target generation."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        diagnostics: Sequence[ProjectDiagnostic],
+    ) -> None:
+        super().__init__(message)
+        self.diagnostics = tuple(diagnostics)
+
+
+def _specialization_id_value(
+    value: Any,
+    *,
+    source_spelling: str | None = None,
+    maximum_id: int = _SPECIALIZATION_CONSTANT_ID_MAX,
+) -> _SpecializationIdValue:
+    value = _runtime_host_interface_json_value(value)
+    if isinstance(value, bool):
+        spelling = (
+            source_spelling.strip() if source_spelling is not None else str(value)
+        )
+        return _SpecializationIdValue(None, spelling, "invalid-literal")
+    if isinstance(value, int):
+        spelling = (
+            source_spelling.strip() if source_spelling is not None else str(value)
+        )
+        if source_spelling is None:
+            parsed_value = value
+        else:
+            try:
+                parsed_value = parse_c_family_integral_literal(spelling)
+            except CFamilyIntegralLiteralError as exc:
+                signed_value = None
+                if exc.reason == "negative":
+                    try:
+                        signed_value = -parse_c_family_integral_literal(spelling[1:])
+                    except CFamilyIntegralLiteralError:
+                        pass
+                return _SpecializationIdValue(None, spelling, exc.reason, signed_value)
+    elif isinstance(value, str) or source_spelling is not None:
+        spelling = (
+            source_spelling.strip()
+            if source_spelling is not None
+            else str(value).strip()
+        )
+        try:
+            parsed_value = parse_c_family_integral_literal(spelling)
+        except CFamilyIntegralLiteralError as exc:
+            signed_value = None
+            if exc.reason == "negative":
+                try:
+                    signed_value = -parse_c_family_integral_literal(spelling[1:])
+                except CFamilyIntegralLiteralError:
+                    pass
+            return _SpecializationIdValue(None, spelling, exc.reason, signed_value)
+    else:
+        return _SpecializationIdValue(None, None, "invalid-literal")
+
+    if parsed_value < 0:
+        return _SpecializationIdValue(None, spelling, "negative", parsed_value)
+    if parsed_value > maximum_id:
+        return _SpecializationIdValue(None, spelling, "out-of-range", parsed_value)
+    return _SpecializationIdValue(parsed_value, spelling, parsed_value=parsed_value)
+
+
+def _specialization_int_value(value: Any) -> int | None:
+    return _specialization_id_value(value).constant_id
+
+
+def _specialization_scalar_literal(value: Any) -> Any:
+    value = _runtime_host_interface_json_value(value)
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    lowered = text.lower()
+    if lowered in {"true", "false"}:
+        return lowered == "true"
+    numeric = text
+    if numeric.lower().endswith(("u", "f", "h")):
+        numeric = numeric[:-1]
+    try:
+        return int(numeric, 0)
+    except ValueError:
+        pass
+    try:
+        return float(numeric)
+    except ValueError:
+        return text
+
+
+def _specialization_attribute_records(
+    node: Any,
+) -> list[_ProjectSpecializationAttribute]:
+    values: list[_ProjectSpecializationAttribute] = []
+    for attribute in getattr(node, "attributes", []) or []:
+        name = str(getattr(attribute, "name", "")).strip().lower().replace("-", "_")
+        if name not in {"function_constant", "constant_id"}:
+            continue
+        arguments = (
+            getattr(attribute, "arguments", None)
+            or getattr(attribute, "args", None)
+            or []
+        )
+        maximum_id = _specialization_attribute_id_max(name)
+        parsed = _specialization_id_value(
+            arguments[0] if arguments else "", maximum_id=maximum_id
+        )
+        values.append(
+            _ProjectSpecializationAttribute(
+                name=name,
+                constant_id=parsed.constant_id,
+                spelling=parsed.spelling,
+                maximum_id=maximum_id,
+                reason=parsed.reason,
+                parsed_value=parsed.parsed_value,
+            )
+        )
+    for layout_name in ("layout", "interface_layout"):
+        layout = getattr(node, layout_name, None)
+        if not isinstance(layout, Mapping):
+            continue
+        for key, value in layout.items():
+            if str(key).strip().lower() == "constant_id":
+                maximum_id = _specialization_attribute_id_max("constant_id")
+                parsed = _specialization_id_value(value, maximum_id=maximum_id)
+                values.append(
+                    _ProjectSpecializationAttribute(
+                        name="constant_id",
+                        constant_id=parsed.constant_id,
+                        spelling=parsed.spelling,
+                        maximum_id=maximum_id,
+                        reason=parsed.reason,
+                        parsed_value=parsed.parsed_value,
+                    )
+                )
+    return values
+
+
+def _specialization_attribute_values(node: Any) -> list[tuple[str, int | None]]:
+    return [
+        (attribute.name, attribute.constant_id)
+        for attribute in _specialization_attribute_records(node)
+    ]
+
+
+def _specialization_ast_declaration_items(ast: Any) -> Iterator[tuple[Any, Any, bool]]:
+    seen: set[int] = set()
+    for group_name in ("global_variables", "global_vars", "constants", "constant"):
+        for item in getattr(ast, group_name, []) or []:
+            if id(item) in seen:
+                continue
+            seen.add(id(item))
+            node = getattr(item, "left", None)
+            if node is not None and _is_non_empty_string(getattr(node, "name", None)):
+                yield node, getattr(item, "right", None), True
+                continue
+            if not _is_non_empty_string(getattr(item, "name", None)):
+                continue
+            if hasattr(item, "initial_value"):
+                default_value = getattr(item, "initial_value")
+                yield item, default_value, default_value is not None
+            elif hasattr(item, "value"):
+                default_value = getattr(item, "value")
+                yield item, default_value, default_value is not None
+            else:
+                yield item, None, False
+
+
+def _specialization_source_attributes(
+    statement: str,
+) -> list[tuple[int, int, str, str]]:
+    attributes: list[tuple[int, int, str, str]] = []
+    attribute_pattern = re.compile(
+        r"\b(?P<name>function_constant|constant_id)\s*\(\s*"
+        r"(?P<spelling>[^)]*?)\s*\)",
+        re.IGNORECASE,
+    )
+    for match in attribute_pattern.finditer(statement):
+        attributes.append(
+            (
+                match.start(),
+                match.end(),
+                match.group("name").lower(),
+                match.group("spelling").strip(),
+            )
+        )
+
+    layout_pattern = re.compile(r"\blayout\s*\((?P<body>[^)]*)\)", re.IGNORECASE)
+    assignment_pattern = re.compile(
+        r"\bconstant_id\s*=\s*(?P<spelling>[^,]*?)(?=\s*(?:,|$))",
+        re.IGNORECASE,
+    )
+    for layout_match in layout_pattern.finditer(statement):
+        body = layout_match.group("body")
+        for assignment in assignment_pattern.finditer(body):
+            start = layout_match.start("body") + assignment.start()
+            end = layout_match.start("body") + assignment.end()
+            attributes.append(
+                (
+                    start,
+                    end,
+                    "constant_id",
+                    assignment.group("spelling").strip(),
+                )
+            )
+    return sorted(attributes, key=lambda attribute: attribute[0])
+
+
+def _specialization_statement_source(
+    unit: ProjectTranslationUnit,
+    source: str,
+    *,
+    name: str,
+    used_offsets: set[int],
+) -> _ProjectSpecializationSource:
+    identifier = re.compile(rf"\b{re.escape(name)}\b")
+    for statement in re.finditer(r"[^;{}]{0,4096};", source, re.DOTALL):
+        if not identifier.search(statement.group(0)):
+            continue
+        source_attributes = _specialization_source_attributes(statement.group(0))
+        if not source_attributes:
+            continue
+        first_start, first_end, _attribute, _spelling = source_attributes[0]
+        offset = statement.start() + first_start
+        if offset in used_offsets:
+            continue
+        used_offsets.add(offset)
+        return _ProjectSpecializationSource(
+            location=_source_location_at_offset(
+                unit, source, offset, first_end - first_start
+            ),
+            attributes=tuple(
+                (attribute, spelling)
+                for _start, _end, attribute, spelling in source_attributes
+            ),
+        )
+    return _ProjectSpecializationSource(SourceLocation(file=unit.relative_path))
+
+
+def _specialization_attributes_with_source_spelling(
+    attributes: Sequence[_ProjectSpecializationAttribute],
+    source_attributes: Sequence[tuple[str, str]],
+) -> list[_ProjectSpecializationAttribute]:
+    if [attribute.name for attribute in attributes] != [
+        attribute for attribute, _spelling in source_attributes
+    ]:
+        return list(attributes)
+
+    values: list[_ProjectSpecializationAttribute] = []
+    for attribute, (_source_attribute, source_spelling) in zip(
+        attributes, source_attributes
+    ):
+        parsed = _specialization_id_value(
+            (
+                attribute.constant_id
+                if attribute.constant_id is not None
+                else attribute.spelling
+            ),
+            source_spelling=source_spelling,
+            maximum_id=attribute.maximum_id,
+        )
+        values.append(
+            _ProjectSpecializationAttribute(
+                name=attribute.name,
+                constant_id=parsed.constant_id,
+                spelling=parsed.spelling,
+                maximum_id=attribute.maximum_id,
+                reason=parsed.reason,
+                parsed_value=parsed.parsed_value,
+            )
+        )
+    return values
+
+
+def _specialization_invalid_id_message(
+    name: str,
+    *,
+    reason: str,
+    spelling: str | None,
+    parsed_value: int | None,
+    maximum_id: int,
+) -> str:
+    rendered = repr(spelling) if spelling is not None else "<missing>"
+    if reason == "negative":
+        return f"Specialization constant '{name}' id {rendered} must be non-negative."
+    if reason == "out-of-range":
+        return (
+            f"Specialization constant '{name}' id {rendered} resolves to "
+            f"{parsed_value}, exceeding the maximum supported id "
+            f"{maximum_id}."
+        )
+    if reason == "invalid-octal-digit":
+        return (
+            f"Specialization constant '{name}' id {rendered} is not valid octal; "
+            "a leading-zero id may contain only digits 0 through 7."
+        )
+    if reason == "invalid-digit-separator":
+        return (
+            f"Specialization constant '{name}' id {rendered} has an invalid digit "
+            "separator; separators must appear between digits."
+        )
+    if reason == "invalid-suffix":
+        return (
+            f"Specialization constant '{name}' id {rendered} has an unsupported "
+            "integer suffix."
+        )
+    if reason == "invalid-digit":
+        return (
+            f"Specialization constant '{name}' id {rendered} contains a digit that "
+            "is invalid for its base."
+        )
+    if reason == "unsupported-expression":
+        return (
+            f"Specialization constant '{name}' id {rendered} must be one C-family "
+            "integral literal; constant expressions are not supported."
+        )
+    if reason == "conflicting-ids":
+        return f"Specialization constant '{name}' carries conflicting numeric ids."
+    return (
+        f"Specialization constant '{name}' requires one non-negative C-family "
+        "integral literal id."
+    )
+
+
+def _project_specialization_declarations(
+    unit: ProjectTranslationUnit,
+    ast: Any,
+    source: str,
+) -> tuple[list[_ProjectSpecializationDeclaration], list[ProjectDiagnostic]]:
+    declarations: list[_ProjectSpecializationDeclaration] = []
+    diagnostics: list[ProjectDiagnostic] = []
+    used_offsets: set[int] = set()
+    for node, default_value, has_default in _specialization_ast_declaration_items(ast):
+        attributes = _specialization_attribute_records(node)
+        if not attributes:
+            continue
+        name = str(getattr(node, "name"))
+        source_context = _specialization_statement_source(
+            unit,
+            source,
+            name=name,
+            used_offsets=used_offsets,
+        )
+        attributes = _specialization_attributes_with_source_spelling(
+            attributes, source_context.attributes
+        )
+        canonical_ids = {
+            attribute.constant_id
+            for attribute in attributes
+            if attribute.constant_id is not None
+        }
+        invalid_attribute = next(
+            (attribute for attribute in attributes if attribute.reason is not None),
+            None,
+        )
+        valid_id = invalid_attribute is None and len(canonical_ids) == 1
+        constant_id = next(iter(canonical_ids)) if valid_id else None
+        if not valid_id:
+            reason = (
+                invalid_attribute.reason
+                if invalid_attribute is not None
+                else "conflicting-ids"
+            )
+            spelling = (
+                invalid_attribute.spelling
+                if invalid_attribute is not None
+                else attributes[0].spelling
+            )
+            parsed_value = (
+                invalid_attribute.parsed_value
+                if invalid_attribute is not None
+                else None
+            )
+            maximum_id = (
+                invalid_attribute.maximum_id
+                if invalid_attribute is not None
+                else min(attribute.maximum_id for attribute in attributes)
+            )
+            diagnostics.append(
+                ProjectDiagnostic(
+                    severity="error",
+                    code="project.translate.specialization-constant-id-invalid",
+                    message=_specialization_invalid_id_message(
+                        name,
+                        reason=reason,
+                        spelling=spelling,
+                        parsed_value=parsed_value,
+                        maximum_id=maximum_id,
+                    ),
+                    location=source_context.location,
+                    source_backend=unit.source_backend,
+                    missing_capabilities=["specialization.constant.identity"],
+                    details={
+                        "name": name,
+                        "reason": reason,
+                        "id": parsed_value,
+                        "idSpelling": spelling,
+                        "idSpellings": [
+                            attribute.spelling
+                            for attribute in attributes
+                            if attribute.spelling is not None
+                        ],
+                        "canonicalIds": sorted(canonical_ids),
+                        "attributes": [attribute.name for attribute in attributes],
+                        "minimumId": 0,
+                        "maximumId": maximum_id,
+                    },
+                )
+            )
+        builtin_default = (
+            GLSL_BUILTIN_INT_LIMITS.get(name)
+            if unit.source_backend == "opengl"
+            else None
+        )
+        source_type = (
+            _runtime_host_interface_type_name(getattr(node, "var_type", None))
+            or _runtime_host_interface_type_name(getattr(node, "vtype", None))
+            or _runtime_host_interface_type_name(getattr(node, "const_type", None))
+            or ("int" if builtin_default is not None else None)
+            or "unknown"
+        )
+        if not has_default and builtin_default is not None:
+            default_value = builtin_default
+            has_default = True
+        declarations.append(
+            _ProjectSpecializationDeclaration(
+                name=name,
+                constant_id=constant_id,
+                id_spelling=attributes[0].spelling,
+                source_type=source_type,
+                attribute=attributes[0].name,
+                has_default=has_default,
+                default_value=(
+                    _specialization_scalar_literal(default_value)
+                    if has_default
+                    else None
+                ),
+                location=source_context.location,
+            )
+        )
+
+    by_id: dict[int, _ProjectSpecializationDeclaration] = {}
+    for declaration in declarations:
+        if declaration.constant_id is None:
+            continue
+        previous = by_id.get(declaration.constant_id)
+        if previous is None:
+            by_id[declaration.constant_id] = declaration
+            continue
+        diagnostics.append(
+            ProjectDiagnostic(
+                severity="error",
+                code="project.translate.specialization-constant-id-duplicate",
+                message=(
+                    f"Specialization constant id {declaration.constant_id} is used by "
+                    f"both '{previous.name}' and '{declaration.name}'."
+                ),
+                location=declaration.location,
+                source_backend=unit.source_backend,
+                missing_capabilities=["specialization.constant.identity"],
+                details={
+                    "id": declaration.constant_id,
+                    "idSpelling": declaration.id_spelling,
+                    "name": declaration.name,
+                    "previousName": previous.name,
+                    "previousIdSpelling": previous.id_spelling,
+                    "previousLocation": previous.location.to_json(),
+                },
+            )
+        )
+    return declarations, diagnostics
+
+
+def _normalized_specialization_type(source_type: str) -> str:
+    value = " ".join(source_type.strip().lower().replace("metal::", "").split())
+    for qualifier in ("const ", "constant ", "constexpr "):
+        if value.startswith(qualifier):
+            value = value[len(qualifier) :]
+    return value
+
+
+def _specialization_value_for_type(
+    value: Any, source_type: str
+) -> tuple[bool, Any, str | None]:
+    value = _specialization_scalar_literal(value)
+    normalized_type = _normalized_specialization_type(source_type)
+    if normalized_type in {"bool", "boolean"}:
+        if isinstance(value, bool):
+            return True, value, None
+        return False, value, "expected a boolean"
+
+    signed_types = {
+        "char",
+        "short",
+        "int",
+        "long",
+        "long long",
+        "int8_t",
+        "int16_t",
+        "int32_t",
+        "int64_t",
+        "i8",
+        "i16",
+        "i32",
+        "i64",
+    }
+    unsigned_types = {
+        "uchar",
+        "ushort",
+        "uint",
+        "ulong",
+        "ulong long",
+        "unsigned char",
+        "unsigned short",
+        "unsigned int",
+        "unsigned long",
+        "unsigned long long",
+        "uint8_t",
+        "uint16_t",
+        "uint32_t",
+        "uint64_t",
+        "u8",
+        "u16",
+        "u32",
+        "u64",
+        "size_t",
+    }
+    if normalized_type in signed_types | unsigned_types:
+        if not isinstance(value, int) or isinstance(value, bool):
+            return False, value, "expected an integer"
+        if normalized_type in unsigned_types and value < 0:
+            return False, value, "expected a non-negative integer"
+        return True, value, None
+
+    if normalized_type in {"half", "float", "double", "f16", "f32", "f64"}:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return False, value, "expected a finite numeric value"
+        converted = float(value)
+        if not math.isfinite(converted):
+            return False, value, "expected a finite numeric value"
+        return True, converted, None
+    return False, value, f"unsupported source type '{source_type}'"
+
+
+def _specialization_diagnostic(
+    declaration: _ProjectSpecializationDeclaration,
+    unit: ProjectTranslationUnit,
+    target: str,
+    variant: str | None,
+    *,
+    code: str,
+    message: str,
+    details: Mapping[str, Any] = (),
+) -> ProjectDiagnostic:
+    return ProjectDiagnostic(
+        severity="error",
+        code=code,
+        message=message,
+        location=declaration.location,
+        target=target,
+        source_backend=unit.source_backend,
+        variant=variant,
+        missing_capabilities=["specialization.constant.materialization"],
+        details=details if isinstance(details, Mapping) else {},
+    )
+
+
+def _resolved_project_specialization_constants(
+    config: ProjectConfig,
+    unit: ProjectTranslationUnit,
+    declarations: Sequence[_ProjectSpecializationDeclaration],
+    *,
+    target: str,
+    variant: str | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any], list[ProjectDiagnostic]]:
+    configured = _variant_specialization_values(config, variant)
+    deferred = target in DEFERRED_SPECIALIZATION_TARGETS
+    diagnostics: list[ProjectDiagnostic] = []
+    records: list[dict[str, Any]] = []
+    for declaration in declarations:
+        selectors = [declaration.name]
+        if declaration.constant_id is not None:
+            selectors.append(str(declaration.constant_id))
+        matches = [
+            (selector, configured[selector])
+            for selector in selectors
+            if selector in configured
+        ]
+        resolved_matches: list[tuple[str, Any, dict[str, Any]]] = []
+        for selector, (raw_value, provenance) in matches:
+            valid, value, reason = _specialization_value_for_type(
+                raw_value, declaration.source_type
+            )
+            if not valid:
+                diagnostics.append(
+                    _specialization_diagnostic(
+                        declaration,
+                        unit,
+                        target,
+                        variant,
+                        code="project.translate.specialization-value-type-incompatible",
+                        message=(
+                            f"Configured value for specialization constant "
+                            f"'{declaration.name}' is incompatible with source type "
+                            f"{declaration.source_type}: {reason}."
+                        ),
+                        details={
+                            "name": declaration.name,
+                            "id": declaration.constant_id,
+                            "sourceType": declaration.source_type,
+                            "selector": selector,
+                            "configuredValue": raw_value,
+                            "provenance": provenance,
+                        },
+                    )
+                )
+                continue
+            resolved_matches.append((selector, value, provenance))
+
+        if len({value for _selector, value, _provenance in resolved_matches}) > 1:
+            diagnostics.append(
+                _specialization_diagnostic(
+                    declaration,
+                    unit,
+                    target,
+                    variant,
+                    code="project.translate.specialization-value-conflict",
+                    message=(
+                        f"Specialization constant '{declaration.name}' has conflicting "
+                        "configured values by name and numeric id."
+                    ),
+                    details={
+                        "name": declaration.name,
+                        "id": declaration.constant_id,
+                        "matches": [
+                            {
+                                "selector": selector,
+                                "value": value,
+                                "provenance": provenance,
+                            }
+                            for selector, value, provenance in resolved_matches
+                        ],
+                    },
+                )
+            )
+            resolved_matches = []
+
+        selected_match = next(
+            (match for match in resolved_matches if match[0] == declaration.name),
+            resolved_matches[0] if resolved_matches else None,
+        )
+        record: dict[str, Any] = {
+            "name": declaration.name,
+            "id": declaration.constant_id,
+            "kind": (
+                "function-constant"
+                if declaration.attribute == "function_constant"
+                else "specialization-constant"
+            ),
+            "sourceType": declaration.source_type,
+            "dtype": declaration.source_type,
+            "required": not declaration.has_default,
+            "overridden": selected_match is not None,
+            "overrideStatus": (
+                "overridden" if selected_match is not None else "not-overridden"
+            ),
+            "deferred": deferred,
+            "source": f"{unit.source_backend}.{declaration.attribute}",
+            "sourceLocation": declaration.location.to_json(),
+        }
+        if declaration.id_spelling is not None and (
+            declaration.constant_id is None
+            or declaration.id_spelling != str(declaration.constant_id)
+        ):
+            record["idSpelling"] = declaration.id_spelling
+        if declaration.has_default:
+            record["defaultValue"] = declaration.default_value
+            record["default"] = declaration.default_value
+        if selected_match is not None:
+            _selector, concrete_value, provenance = selected_match
+            record["concreteValue"] = concrete_value
+            record["value"] = concrete_value
+            record["status"] = "override"
+            record["valueProvenance"] = dict(provenance)
+        elif not deferred and declaration.has_default:
+            valid, concrete_value, reason = _specialization_value_for_type(
+                declaration.default_value, declaration.source_type
+            )
+            if valid:
+                record["concreteValue"] = concrete_value
+                record["value"] = concrete_value
+                record["status"] = "materialized-default"
+                record["valueProvenance"] = {
+                    "kind": "source-default",
+                    "path": f"{unit.relative_path}:{declaration.location.line}",
+                }
+            else:
+                diagnostics.append(
+                    _specialization_diagnostic(
+                        declaration,
+                        unit,
+                        target,
+                        variant,
+                        code="project.translate.specialization-default-not-concrete",
+                        message=(
+                            f"Default for specialization constant "
+                            f"'{declaration.name}' cannot be materialized for {target}: "
+                            f"{reason}."
+                        ),
+                        details={
+                            "name": declaration.name,
+                            "id": declaration.constant_id,
+                            "sourceType": declaration.source_type,
+                            "defaultValue": declaration.default_value,
+                        },
+                    )
+                )
+                record["status"] = "invalid-default"
+        elif not deferred:
+            diagnostics.append(
+                _specialization_diagnostic(
+                    declaration,
+                    unit,
+                    target,
+                    variant,
+                    code="project.translate.specialization-value-required",
+                    message=(
+                        f"Target {target} cannot defer required specialization "
+                        f"constant '{declaration.name}' (id {declaration.constant_id}); "
+                        "configure a concrete value by source name or numeric id."
+                    ),
+                    details={
+                        "name": declaration.name,
+                        "id": declaration.constant_id,
+                        "sourceType": declaration.source_type,
+                    },
+                )
+            )
+            record["status"] = "missing-required"
+        elif declaration.has_default:
+            record["status"] = "defaulted"
+            record["valueProvenance"] = {
+                "kind": "source-default",
+                "path": f"{unit.relative_path}:{declaration.location.line}",
+            }
+        else:
+            record["status"] = "required"
+            record["valueProvenance"] = {"kind": "runtime-override-required"}
+        records.append(record)
+
+    status = "deferred" if deferred else "concrete"
+    if any(diagnostic.severity == "error" for diagnostic in diagnostics):
+        status = "failed"
+    metadata = {
+        "status": status,
+        "mode": "deferred" if deferred else "concrete-crossgl-variant",
+        "targetSupportsDeferredSpecialization": deferred,
+        "constantCount": len(records),
+        "requiredCount": sum(bool(record.get("required")) for record in records),
+        "overriddenCount": sum(bool(record.get("overridden")) for record in records),
+        "concreteCount": sum("concreteValue" in record for record in records),
+        "source": "shared-crossgl-specialization",
+    }
+    return records, metadata, diagnostics
+
+
+def _source_location_from_specialization_record(
+    record: Mapping[str, Any], unit: ProjectTranslationUnit
+) -> SourceLocation:
+    location = record.get("sourceLocation")
+    if not isinstance(location, Mapping):
+        return SourceLocation(file=unit.relative_path)
+    return SourceLocation(
+        file=str(location.get("file") or unit.relative_path),
+        line=max(1, int(location.get("line", 1))),
+        column=max(1, int(location.get("column", 1))),
+        offset=max(0, int(location.get("offset", 0))),
+        length=max(0, int(location.get("length", 0))),
+        end_line=max(1, int(location.get("endLine", location.get("line", 1)))),
+        end_column=max(1, int(location.get("endColumn", location.get("column", 1)))),
+        end_offset=max(0, int(location.get("endOffset", 0))),
+    )
+
+
+def _crossgl_specialization_literal(value: Any, source_type: str) -> str:
+    normalized_type = _normalized_specialization_type(source_type)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return (
+            f"{value}u" if normalized_type.startswith(("u", "unsigned")) else str(value)
+        )
+    if isinstance(value, float):
+        text = repr(value)
+        return text if "." in text or "e" in text.lower() else f"{text}.0"
+    return str(value)
+
+
+def _canonicalize_specialization_statement_ids(statement: str, constant_id: int) -> str:
+    function_attribute = re.compile(
+        r"(?P<prefix>\b(?:function_constant|constant_id)\s*\(\s*)"
+        r"(?P<spelling>[^)]*?)(?P<suffix>\s*\))",
+        re.IGNORECASE,
+    )
+    layout_attribute = re.compile(
+        r"(?P<prefix>\bconstant_id\s*=\s*)"
+        r"(?P<spelling>[^,)]*?)(?P<suffix>\s*(?=,|\)))",
+        re.IGNORECASE,
+    )
+
+    def canonicalize(match: re.Match[str]) -> str:
+        try:
+            parsed = parse_c_family_integral_literal(match.group("spelling"))
+        except CFamilyIntegralLiteralError:
+            return match.group(0)
+        if parsed != constant_id:
+            return match.group(0)
+        return f"{match.group('prefix')}{constant_id}{match.group('suffix')}"
+
+    canonical = function_attribute.sub(canonicalize, statement)
+    return layout_attribute.sub(canonicalize, canonical)
+
+
+def _canonicalize_project_specialization_ids(
+    source: str, records: Sequence[Mapping[str, Any]]
+) -> str:
+    statements = list(re.finditer(r"[^;{}]{0,4096};", source, re.DOTALL))
+    used_statement_offsets: set[int] = set()
+    replacements: list[tuple[int, int, str]] = []
+    for record in records:
+        name = record.get("name")
+        constant_id = record.get("id")
+        if not _is_non_empty_string(name) or not (
+            isinstance(constant_id, int) and not isinstance(constant_id, bool)
+        ):
+            continue
+        identifier = re.compile(rf"\b{re.escape(str(name))}\b")
+        for statement in statements:
+            if statement.start() in used_statement_offsets:
+                continue
+            text = statement.group(0)
+            if not identifier.search(text) or not _specialization_source_attributes(
+                text
+            ):
+                continue
+            used_statement_offsets.add(statement.start())
+            canonical = _canonicalize_specialization_statement_ids(text, constant_id)
+            if canonical != text:
+                replacements.append((statement.start(), statement.end(), canonical))
+            break
+
+    canonical_source = source
+    for start, end, replacement in reversed(replacements):
+        canonical_source = (
+            canonical_source[:start] + replacement + canonical_source[end:]
+        )
+    return canonical_source
+
+
+def _materialize_crossgl_specialization_constants(
+    source: str,
+    records: Sequence[Mapping[str, Any]],
+    *,
+    unit: ProjectTranslationUnit,
+    target: str,
+    variant: str | None,
+) -> str:
+    cgl_spec = SOURCE_REGISTRY.get("cgl")
+    if cgl_spec is None:
+        raise ProjectSpecializationError(
+            "CrossGL parser is unavailable for specialization materialization.",
+            diagnostics=(
+                ProjectDiagnostic(
+                    severity="error",
+                    code="project.translate.specialization-intermediate-unavailable",
+                    message=(
+                        "CrossGL parser is unavailable for specialization "
+                        "materialization."
+                    ),
+                    location=SourceLocation(file=unit.relative_path),
+                    target=target,
+                    source_backend=unit.source_backend,
+                    variant=variant,
+                    missing_capabilities=["specialization.constant.materialization"],
+                ),
+            ),
+        )
+    try:
+        ast = cgl_spec.parse(source)
+    except Exception as exc:
+        raise ProjectSpecializationError(
+            f"CrossGL specialization intermediate could not be parsed: {exc}",
+            diagnostics=(
+                ProjectDiagnostic(
+                    severity="error",
+                    code="project.translate.specialization-intermediate-invalid",
+                    message=(
+                        "CrossGL specialization intermediate could not be parsed: "
+                        f"{exc}"
+                    ),
+                    location=SourceLocation(file=unit.relative_path),
+                    target=target,
+                    source_backend=unit.source_backend,
+                    variant=variant,
+                    missing_capabilities=["specialization.constant.materialization"],
+                ),
+            ),
+        ) from exc
+    shared_declarations, _diagnostics = _project_specialization_declarations(
+        unit, ast, source
+    )
+    shared_by_id = {
+        declaration.constant_id: declaration
+        for declaration in shared_declarations
+        if declaration.constant_id is not None
+    }
+    materialized = source
+    for record in records:
+        if "concreteValue" not in record:
+            continue
+        name = str(record.get("name") or "")
+        constant_id = record.get("id")
+        declaration = shared_by_id.get(constant_id)
+        if declaration is None or declaration.name != name:
+            diagnostic = ProjectDiagnostic(
+                severity="error",
+                code="project.translate.specialization-intermediate-mismatch",
+                message=(
+                    f"Shared CrossGL intermediate did not preserve specialization "
+                    f"constant '{name}' with id {constant_id}."
+                ),
+                location=_source_location_from_specialization_record(record, unit),
+                target=target,
+                source_backend=unit.source_backend,
+                variant=variant,
+                missing_capabilities=["specialization.constant.identity"],
+            )
+            raise ProjectSpecializationError(
+                diagnostic.message, diagnostics=(diagnostic,)
+            )
+        attribute_pattern = (
+            r"@(?:function_constant|constant_id)\s*\(\s*"
+            rf"{re.escape(declaration.id_spelling or str(constant_id))}\s*\)"
+        )
+        statement_pattern = re.compile(
+            rf"^(?P<indent>[ \t]*)(?P<body>"
+            rf"(?=[^;{{}}]*\b{re.escape(name)}\b)"
+            rf"(?=[^;{{}}]*{attribute_pattern})[^;{{}}]*);",
+            re.MULTILINE | re.DOTALL | re.IGNORECASE,
+        )
+        replacement = (
+            rf"\g<indent>const {declaration.source_type} {name} = "
+            + _crossgl_specialization_literal(
+                record.get("concreteValue"), declaration.source_type
+            )
+            + ";"
+        )
+        materialized, replacement_count = statement_pattern.subn(
+            replacement, materialized, count=1
+        )
+        if replacement_count != 1:
+            diagnostic = ProjectDiagnostic(
+                severity="error",
+                code="project.translate.specialization-intermediate-mismatch",
+                message=(
+                    f"Shared CrossGL declaration for specialization constant "
+                    f"'{name}' could not be materialized."
+                ),
+                location=_source_location_from_specialization_record(record, unit),
+                target=target,
+                source_backend=unit.source_backend,
+                variant=variant,
+                missing_capabilities=["specialization.constant.materialization"],
+            )
+            raise ProjectSpecializationError(
+                diagnostic.message, diagnostics=(diagnostic,)
+            )
+    try:
+        cgl_spec.parse(materialized)
+    except Exception as exc:
+        diagnostic = ProjectDiagnostic(
+            severity="error",
+            code="project.translate.specialization-materialization-invalid",
+            message=f"Materialized CrossGL specialization variant is invalid: {exc}",
+            location=SourceLocation(file=unit.relative_path),
+            target=target,
+            source_backend=unit.source_backend,
+            variant=variant,
+            missing_capabilities=["specialization.constant.materialization"],
+        )
+        raise ProjectSpecializationError(
+            diagnostic.message, diagnostics=(diagnostic,)
+        ) from exc
+    return materialized
+
+
+def _project_specialization_metadata_for_input(
+    config: ProjectConfig,
+    unit: ProjectTranslationUnit,
+    input_path: Path,
+    *,
+    target: str,
+    variant: str | None,
+    include_paths: Sequence[str],
+    defines: Mapping[str, str],
+    source_options: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None, list[ProjectDiagnostic]]:
+    source = input_path.read_text(encoding="utf-8", errors="replace")
+    if not re.search(r"\b(?:function_constant|constant_id)\b", source):
+        return [], None, []
+    source_spec = SOURCE_REGISTRY.get(unit.source_backend)
+    if source_spec is None:
+        return [], None, []
+    ast = source_spec.parse(
+        source,
+        file_path=str(input_path),
+        include_paths=include_paths,
+        defines=defines,
+        source_options=source_options,
+    )
+    try:
+        diagnostic_source = unit.path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        diagnostic_source = source
+    declarations, declaration_diagnostics = _project_specialization_declarations(
+        unit, ast, diagnostic_source
+    )
+    declaration_diagnostics = [
+        replace(diagnostic, target=target, variant=variant)
+        for diagnostic in declaration_diagnostics
+    ]
+    if not declarations:
+        return [], None, declaration_diagnostics
+    records, metadata, resolution_diagnostics = (
+        _resolved_project_specialization_constants(
+            config,
+            unit,
+            declarations,
+            target=target,
+            variant=variant,
+        )
+    )
+    diagnostics = [*declaration_diagnostics, *resolution_diagnostics]
+    if any(diagnostic.severity == "error" for diagnostic in diagnostics):
+        metadata["status"] = "failed"
+    return records, metadata, diagnostics
+
+
 def translate_project(
     config_or_root: ProjectConfig | str | os.PathLike[str],
     *,
@@ -18191,10 +19839,13 @@ def translate_project(
             targets=config.targets,
             output_dir=output_dir,
             source_overrides=config.source_overrides,
+            entry_points=config.entry_points,
             include_dirs=config.include_dirs,
             defines=config.defines,
             source_options=config.source_options,
             variants=config.variants,
+            specialization_constants=config.specialization_constants,
+            variant_specialization_constants=(config.variant_specialization_constants),
             selected_variants=config.selected_variants,
             external_corpus_manifest=config.external_corpus_manifest,
         )
@@ -18225,6 +19876,7 @@ def translate_project(
     preserve_source_suffix = _artifact_source_suffix_pairs(scan.units, selected_targets)
 
     for unit in scan.units:
+        selected_entry_point = _entry_point_for_path(unit.relative_path, config)
         required_capabilities = _required_capabilities_for_unit(unit)
         source_supports_defines = _source_frontend_supports_lexer_keyword(
             unit.source_backend, "defines"
@@ -18266,6 +19918,7 @@ def translate_project(
                     variant,
                     preserve_source_suffix=(unit.relative_path, target)
                     in preserve_source_suffix,
+                    entry_point=selected_entry_point,
                 )
                 artifact = {
                     "source": unit.relative_path,
@@ -18294,7 +19947,11 @@ def translate_project(
                     "sourceHash": dict(unit.source_hash),
                     "sourceSizeBytes": unit.source_size_bytes,
                     "provenance": {
-                        "pipeline": "single-file-translate",
+                        "pipeline": (
+                            "entry-scoped-translate"
+                            if selected_entry_point is not None
+                            else "single-file-translate"
+                        ),
                         "intermediate": (
                             "crossgl"
                             if unit.source_backend not in {"cgl", "crossgl"}
@@ -18304,6 +19961,13 @@ def translate_project(
                     },
                     "requiredCapabilities": list(required_capabilities),
                 }
+                if selected_entry_point is not None:
+                    artifact["entryPoint"] = {
+                        "source": selected_entry_point,
+                        "target": (
+                            "main" if target == "opengl" else selected_entry_point
+                        ),
+                    }
                 if variant is not None:
                     artifact["variant"] = variant
                 if output_dir_blocked:
@@ -18373,7 +20037,9 @@ def translate_project(
                 try:
                     output_path.parent.mkdir(parents=True, exist_ok=True)
                     translation_input_path = unit.path
+                    translation_source_backend = unit.source_backend
                     translation_defines: Mapping[str, str] = defines
+                    translation_include_paths: Sequence[str] = include_paths
                     translation_source_options: Mapping[str, Any] = source_options
                     if template_materialization is not None:
                         template_temp_dir = tempfile.TemporaryDirectory(
@@ -18391,14 +20057,126 @@ def translate_project(
                         translation_source_options = (
                             template_materialization.source_options
                         )
+                    (
+                        specialization_constants,
+                        specialization_materialization,
+                        specialization_diagnostics,
+                    ) = _project_specialization_metadata_for_input(
+                        config,
+                        unit,
+                        translation_input_path,
+                        target=target,
+                        variant=variant,
+                        include_paths=include_paths,
+                        defines=translation_defines,
+                        source_options=translation_source_options,
+                    )
+                    if specialization_constants:
+                        artifact["specializationConstants"] = specialization_constants
+                    if specialization_materialization is not None:
+                        artifact["specializationMaterialization"] = (
+                            specialization_materialization
+                        )
+                    if any(
+                        diagnostic.severity == "error"
+                        for diagnostic in specialization_diagnostics
+                    ):
+                        raise ProjectSpecializationError(
+                            specialization_diagnostics[0].message,
+                            diagnostics=specialization_diagnostics,
+                        )
+                    diagnostics.extend(specialization_diagnostics)
+                    if specialization_constants:
+                        specialization_source = translation_input_path.read_text(
+                            encoding="utf-8", errors="replace"
+                        )
+                        canonical_specialization_source = (
+                            _canonicalize_project_specialization_ids(
+                                specialization_source, specialization_constants
+                            )
+                        )
+                        if canonical_specialization_source != specialization_source:
+                            source_parent = str(translation_input_path.parent)
+                            if template_temp_dir is None:
+                                template_temp_dir = tempfile.TemporaryDirectory(
+                                    prefix="crosstl-specialization-"
+                                )
+                            canonical_path = (
+                                Path(template_temp_dir.name)
+                                / f"{translation_input_path.stem}.canonical"
+                                f"{translation_input_path.suffix}"
+                            )
+                            canonical_path.write_text(
+                                canonical_specialization_source, encoding="utf-8"
+                            )
+                            translation_input_path = canonical_path
+                            translation_include_paths = tuple(
+                                dict.fromkeys(
+                                    (
+                                        source_parent,
+                                        str(unit.path.parent),
+                                        *include_paths,
+                                    )
+                                )
+                            )
+                    if (
+                        specialization_constants
+                        and specialization_materialization is not None
+                        and specialization_materialization.get("mode")
+                        == "concrete-crossgl-variant"
+                    ):
+                        crossgl_kwargs: dict[str, Any] = {
+                            "backend": "cgl",
+                            "format_output": False,
+                            "source_backend": unit.source_backend,
+                            "include_paths": translation_include_paths,
+                            "defines": translation_defines,
+                        }
+                        if translation_source_options:
+                            crossgl_kwargs["source_options"] = (
+                                translation_source_options
+                            )
+                        crossgl_source = translate(
+                            str(translation_input_path), **crossgl_kwargs
+                        )
+                        materialized_crossgl = (
+                            _materialize_crossgl_specialization_constants(
+                                crossgl_source,
+                                specialization_constants,
+                                unit=unit,
+                                target=target,
+                                variant=variant,
+                            )
+                        )
+                        if template_temp_dir is None:
+                            template_temp_dir = tempfile.TemporaryDirectory(
+                                prefix="crosstl-specialization-"
+                            )
+                        specialized_path = (
+                            Path(template_temp_dir.name)
+                            / f"{Path(unit.relative_path).stem}.specialized.cgl"
+                        )
+                        specialized_path.write_text(
+                            materialized_crossgl, encoding="utf-8"
+                        )
+                        translation_input_path = specialized_path
+                        translation_source_backend = "cgl"
+                        translation_defines = (
+                            defines if unit.source_backend in {"cgl", "crossgl"} else {}
+                        )
+                        translation_source_options = {
+                            "strict_function_bodies": unit.source_backend != "mojo"
+                        }
                     translate_kwargs: dict[str, Any] = {
                         "backend": target,
                         "save_shader": str(output_path),
                         "format_output": format_output,
-                        "source_backend": unit.source_backend,
-                        "include_paths": include_paths,
+                        "source_backend": translation_source_backend,
+                        "include_paths": translation_include_paths,
                         "defines": translation_defines,
                     }
+                    if selected_entry_point is not None:
+                        translate_kwargs["entry_point"] = selected_entry_point
                     if translation_source_options:
                         translate_kwargs["source_options"] = translation_source_options
                     generated_source = translate(
@@ -18425,6 +20203,23 @@ def translate_project(
                         _remove_artifact_output_files(output_path)
                         artifact_records = [artifact]
                     else:
+                        if selected_entry_point is not None:
+                            reflected = reflect_target_host_interface(
+                                output_path,
+                                target=target,
+                            )
+                            reflected_entries = reflected.get("entryPoints", [])
+                            if len(reflected_entries) != 1:
+                                raise ValueError(
+                                    "Entry-scoped target artifact must expose exactly "
+                                    "one reflected entry point"
+                                )
+                            reflected_entry = reflected_entries[0]
+                            artifact["entryPoint"] = {
+                                "source": selected_entry_point,
+                                "target": reflected_entry.get("name"),
+                                "stage": reflected_entry.get("stage"),
+                            }
                         artifact["generatedHash"] = _source_hash(output_path)
                         artifact["generatedSizeBytes"] = output_path.stat().st_size
                         artifact["sourceMap"] = _artifact_source_map(
@@ -18443,6 +20238,17 @@ def translate_project(
                             _generated_placeholder_diagnostics(artifact_records, config)
                         )
                     diagnostics.extend(unresolved_construct_diagnostics)
+                except ProjectSpecializationError as exc:
+                    failure_message = str(exc)
+                    artifact["status"] = "failed"
+                    artifact["error"] = failure_message
+                    artifact.pop("generatedHash", None)
+                    artifact.pop("generatedSizeBytes", None)
+                    artifact.pop("sourceMap", None)
+                    artifact.pop("sourceRemap", None)
+                    _remove_artifact_output_files(output_path)
+                    artifact_records = [artifact]
+                    diagnostics.extend(exc.diagnostics)
                 except Exception as exc:  # noqa: BLE001
                     # Project translation reports per-artifact failures so one bad
                     # unit does not hide the rest of the repository's migration state.
@@ -19969,6 +21775,8 @@ def _validate_artifacts(
             artifact_check["sourceBackend"] = artifact["sourceBackend"]
         if artifact.get("stage") is not None:
             artifact_check["stage"] = artifact["stage"]
+        if isinstance(artifact.get("entryPoint"), Mapping):
+            artifact_check["entryPoint"] = dict(artifact["entryPoint"])
         artifact_checks.append(artifact_check)
 
     for toolchain in toolchains:
@@ -20973,7 +22781,11 @@ def _runtime_manifest_source_host_interface(
     host_interface = _runtime_host_interface_from_ast(
         ast, parser=parser_name or "", source="source-artifact"
     )
-    if host_interface["entryPointCount"] == 0 and host_interface["resourceCount"] == 0:
+    if (
+        host_interface["entryPointCount"] == 0
+        and host_interface["resourceCount"] == 0
+        and host_interface.get("specializationConstantCount", 0) == 0
+    ):
         return None
     target = artifact.get("target")
     if _is_non_empty_string(target) and _normalized_targets([str(target)])[0] == "wgsl":
@@ -21017,9 +22829,156 @@ def _runtime_manifest_host_interface(
     root_path: Path | None, artifact: Mapping[str, Any]
 ) -> dict[str, Any] | None:
     reflected = _runtime_manifest_reflected_host_interface(root_path, artifact)
-    if isinstance(reflected, Mapping):
-        return dict(reflected)
-    return _runtime_manifest_source_host_interface(root_path, artifact)
+    source_interface = _runtime_manifest_source_host_interface(root_path, artifact)
+    base = reflected if isinstance(reflected, Mapping) else source_interface
+    if not isinstance(base, Mapping):
+        return None
+    return _runtime_manifest_merge_specialization_constants(
+        base,
+        source_interface=source_interface,
+        artifact=artifact,
+    )
+
+
+def _runtime_specialization_constant_identity(
+    constant: Mapping[str, Any],
+) -> tuple[str, Any] | None:
+    constant_id = constant.get("id", constant.get("constantId"))
+    if constant_id is not None and not isinstance(constant_id, bool):
+        return "id", constant_id
+    name = constant.get("name")
+    if _is_non_empty_string(name):
+        return "name", name
+    return None
+
+
+def _runtime_merge_specialization_constant_records(
+    *record_groups: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    positions: dict[tuple[str, Any], int] = {}
+    for group in record_groups:
+        for constant in group:
+            if not isinstance(constant, Mapping):
+                continue
+            payload = dict(constant)
+            identity = _runtime_specialization_constant_identity(payload)
+            if identity is None:
+                continue
+            position = positions.get(identity)
+            if position is None:
+                positions[identity] = len(records)
+                records.append(payload)
+                continue
+            records[position] = {**records[position], **payload}
+    return records
+
+
+def _runtime_manifest_merge_specialization_constants(
+    host_interface: Mapping[str, Any],
+    *,
+    source_interface: Mapping[str, Any] | None,
+    artifact: Mapping[str, Any],
+) -> dict[str, Any]:
+    reflected_constants = [
+        dict(constant)
+        for constant in _record_sequence(host_interface.get("specializationConstants"))
+        if isinstance(constant, Mapping)
+    ]
+    source_constants = [
+        dict(constant)
+        for constant in _record_sequence(
+            source_interface.get("specializationConstants")
+            if isinstance(source_interface, Mapping)
+            else []
+        )
+        if isinstance(constant, Mapping)
+    ]
+    artifact_constants = [
+        dict(constant)
+        for constant in _record_sequence(artifact.get("specializationConstants"))
+        if isinstance(constant, Mapping)
+    ]
+    specialization_constants = _runtime_merge_specialization_constant_records(
+        reflected_constants,
+        source_constants,
+        artifact_constants,
+    )
+    if not specialization_constants:
+        return dict(host_interface)
+    source_contracts = {
+        identity: constant
+        for constant in _runtime_merge_specialization_constant_records(
+            source_constants,
+            artifact_constants,
+        )
+        if (identity := _runtime_specialization_constant_identity(constant)) is not None
+    }
+    for constant in specialization_constants:
+        identity = _runtime_specialization_constant_identity(constant)
+        contract = source_contracts.get(identity) if identity is not None else None
+        if not isinstance(contract, Mapping) or contract.get("required") is not True:
+            continue
+        if "default" in contract or "defaultValue" in contract:
+            continue
+        constant.pop("default", None)
+        constant.pop("defaultValue", None)
+
+    specialization_names = {
+        str(constant.get("name"))
+        for constant in specialization_constants
+        if _is_non_empty_string(constant.get("name"))
+    }
+    resources = [
+        dict(resource)
+        for resource in _record_sequence(host_interface.get("resources"))
+        if isinstance(resource, Mapping)
+        and resource.get("name") not in specialization_names
+    ]
+    constants = [
+        dict(constant)
+        for constant in _record_sequence(host_interface.get("constants"))
+        if isinstance(constant, Mapping)
+        and constant.get("name") not in specialization_names
+    ]
+    diagnostic_records = []
+    for diagnostic in _record_sequence(host_interface.get("diagnosticRecords")):
+        if not isinstance(diagnostic, Mapping):
+            continue
+        details = diagnostic.get("details")
+        resource = details.get("resource") if isinstance(details, Mapping) else None
+        conflicting = (
+            details.get("conflictingResource") if isinstance(details, Mapping) else None
+        )
+        if resource in specialization_names or conflicting in specialization_names:
+            continue
+        diagnostic_records.append(dict(diagnostic))
+    status = str(host_interface.get("status") or "ready")
+    if status in {"ambiguous", "incomplete", "unavailable"} and not diagnostic_records:
+        status = "ready"
+    return host_interface_record(
+        status=status,
+        source=str(host_interface.get("source") or "compiled-artifact"),
+        parser=(
+            str(host_interface.get("parser"))
+            if _is_non_empty_string(host_interface.get("parser"))
+            else None
+        ),
+        artifact_format=(
+            str(host_interface.get("artifactFormat"))
+            if _is_non_empty_string(host_interface.get("artifactFormat"))
+            else None
+        ),
+        entry_points=[
+            dict(entry_point)
+            for entry_point in _record_sequence(host_interface.get("entryPoints"))
+            if isinstance(entry_point, Mapping)
+        ],
+        resources=resources,
+        constants=constants,
+        specialization_constants=specialization_constants,
+        diagnostics=diagnostic_records,
+    )
 
 
 def _runtime_manifest_group_key(value: Any) -> str:
@@ -21199,6 +23158,10 @@ def _runtime_manifest_summary(
             len(_record_sequence(artifact.get("resourceBindings")))
             for artifact in artifacts
         ),
+        "specializationConstantCount": sum(
+            len(_record_sequence(artifact.get("specializationConstants")))
+            for artifact in artifacts
+        ),
         "parameterBlockCount": sum(
             len(_record_sequence(artifact.get("parameterBlocks")))
             for artifact in artifacts
@@ -21292,6 +23255,18 @@ def _runtime_manifest_resources(
         dict(resource)
         for resource in _record_sequence(host_interface.get("resources"))
         if isinstance(resource, Mapping)
+    ]
+
+
+def _runtime_manifest_specialization_constants(
+    host_interface: Mapping[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if not isinstance(host_interface, Mapping):
+        return []
+    return [
+        dict(constant)
+        for constant in _record_sequence(host_interface.get("specializationConstants"))
+        if isinstance(constant, Mapping)
     ]
 
 
@@ -21549,6 +23524,7 @@ def _runtime_manifest_status(
     host_interface: Mapping[str, Any] | None,
     entry_points: Sequence[Mapping[str, Any]],
     resource_bindings: Sequence[Mapping[str, Any]],
+    specialization_constants: Sequence[Mapping[str, Any]],
     parameter_blocks: Sequence[Mapping[str, Any]],
     dispatch: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -21557,6 +23533,7 @@ def _runtime_manifest_status(
             "hostInterface": "unavailable",
             "entryPoints": "unavailable",
             "resourceBindings": "unavailable",
+            "specializationConstants": "unavailable",
             "parameterBlocks": "unavailable",
             "dispatch": dispatch.get("status", "unavailable"),
         }
@@ -21578,6 +23555,9 @@ def _runtime_manifest_status(
         "hostInterface": host_interface.get("status", "unavailable"),
         "entryPoints": "available" if entry_points else "unavailable",
         "resourceBindings": resource_binding_status,
+        "specializationConstants": (
+            "available" if specialization_constants else "not-applicable"
+        ),
         "parameterBlocks": parameter_block_status,
         "dispatch": dispatch.get("status", "unavailable"),
     }
@@ -21594,6 +23574,9 @@ def _runtime_manifest_artifact(
     host_interface = _runtime_manifest_host_interface(root_path, artifact)
     entry_points = _runtime_manifest_entry_points(host_interface)
     resource_bindings = _runtime_manifest_resource_bindings(host_interface)
+    specialization_constants = _runtime_manifest_specialization_constants(
+        host_interface
+    )
     parameter_blocks = _runtime_manifest_parameter_blocks(resource_bindings)
     dispatch = _runtime_manifest_dispatch(entry_points)
     diagnostics = _runtime_manifest_artifact_diagnostics(
@@ -21621,6 +23604,21 @@ def _runtime_manifest_artifact(
             if isinstance(artifact.get("defines"), Mapping)
             else {}
         ),
+        "entryPoint": (
+            dict(artifact.get("entryPoint"))
+            if isinstance(artifact.get("entryPoint"), Mapping)
+            else None
+        ),
+        "templateMaterialization": (
+            dict(artifact.get("templateMaterialization"))
+            if isinstance(artifact.get("templateMaterialization"), Mapping)
+            else None
+        ),
+        "specializationMaterialization": (
+            dict(artifact.get("specializationMaterialization"))
+            if isinstance(artifact.get("specializationMaterialization"), Mapping)
+            else None
+        ),
         "sourceHash": artifact.get("sourceHash"),
         "sourceSizeBytes": artifact.get("sourceSizeBytes"),
         "hash": artifact.get("generatedHash"),
@@ -21643,6 +23641,7 @@ def _runtime_manifest_artifact(
         "hostInterface": host_interface,
         "entryPoints": entry_points,
         "resourceBindings": resource_bindings,
+        "specializationConstants": specialization_constants,
         "parameterBlocks": parameter_blocks,
         "dispatch": dispatch,
         "validation": validation,
@@ -21652,6 +23651,7 @@ def _runtime_manifest_artifact(
             host_interface=host_interface,
             entry_points=entry_points,
             resource_bindings=resource_bindings,
+            specialization_constants=specialization_constants,
             parameter_blocks=parameter_blocks,
             dispatch=dispatch,
         ),
@@ -21700,6 +23700,10 @@ def _runtime_manifest_target(
         ),
         "resourceBindingCount": sum(
             len(_record_sequence(artifact.get("resourceBindings")))
+            for artifact in target_manifest_artifacts
+        ),
+        "specializationConstantCount": sum(
+            len(_record_sequence(artifact.get("specializationConstants")))
             for artifact in target_manifest_artifacts
         ),
         "parameterBlockCount": sum(
@@ -21947,6 +23951,8 @@ def _runtime_binding_define_constants(
 
 
 def _runtime_binding_source_constant_payload(constant: Any) -> dict[str, Any] | None:
+    if _specialization_attribute_values(constant):
+        return None
     name = getattr(constant, "name", None)
     if not _is_non_empty_string(name):
         return None
@@ -22023,6 +24029,17 @@ def _runtime_binding_scalar_constants(
             if isinstance(constant, Mapping):
                 constants.append(dict(constant))
     return constants
+
+
+def _runtime_binding_specialization_constants(
+    artifact: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    records = _record_sequence(artifact.get("specializationConstants"))
+    if not records:
+        host_interface = artifact.get("hostInterface")
+        if isinstance(host_interface, Mapping):
+            records = _record_sequence(host_interface.get("specializationConstants"))
+    return [dict(record) for record in records if isinstance(record, Mapping)]
 
 
 def _runtime_binding_resource_mutability(binding: Mapping[str, Any]) -> str:
@@ -22211,6 +24228,7 @@ def _runtime_binding_manifest_entries(
             entry_points = [None]
         resource_bindings = _runtime_binding_resource_bindings(artifact)
         scalar_constants = _runtime_binding_scalar_constants(root_path, artifact)
+        specialization_constants = _runtime_binding_specialization_constants(artifact)
         for index, entry_point in enumerate(entry_points):
             entries.append(
                 {
@@ -22242,6 +24260,9 @@ def _runtime_binding_manifest_entries(
                     ),
                     "scalarConstants": [
                         dict(constant) for constant in scalar_constants
+                    ],
+                    "specializationConstants": [
+                        dict(constant) for constant in specialization_constants
                     ],
                     "dispatchDimensions": _runtime_binding_dispatch_dimensions(
                         artifact, entry_point
@@ -22281,6 +24302,10 @@ def _runtime_binding_manifest_summary(
         "scalarConstantCount": sum(
             len(_record_sequence(entry.get("scalarConstants"))) for entry in entries
         ),
+        "specializationConstantCount": sum(
+            len(_record_sequence(entry.get("specializationConstants")))
+            for entry in entries
+        ),
         "dispatchDimensionCount": sum(
             1
             for entry in entries
@@ -22311,6 +24336,10 @@ def _runtime_binding_manifest_target(
         ),
         "scalarConstantCount": sum(
             len(_record_sequence(entry.get("scalarConstants")))
+            for entry in target_entries
+        ),
+        "specializationConstantCount": sum(
+            len(_record_sequence(entry.get("specializationConstants")))
             for entry in target_entries
         ),
         "dispatchDimensionCount": sum(
@@ -22757,6 +24786,33 @@ def _runtime_package_artifact_payload(
             if isinstance(artifact.get("defines"), Mapping)
             else {}
         ),
+        "entryPoint": (
+            dict(artifact.get("entryPoint"))
+            if isinstance(artifact.get("entryPoint"), Mapping)
+            else None
+        ),
+        "templateMaterialization": (
+            dict(artifact.get("templateMaterialization"))
+            if isinstance(artifact.get("templateMaterialization"), Mapping)
+            else None
+        ),
+        "specializationMaterialization": (
+            dict(artifact.get("specializationMaterialization"))
+            if isinstance(artifact.get("specializationMaterialization"), Mapping)
+            else None
+        ),
+        "specializationConstants": [
+            dict(constant)
+            for constant in _record_sequence(artifact.get("specializationConstants"))
+            if isinstance(constant, Mapping)
+        ],
+        "provenance": (
+            dict(artifact.get("provenance"))
+            if isinstance(artifact.get("provenance"), Mapping)
+            else {}
+        ),
+        "sourceHash": artifact.get("sourceHash"),
+        "sourceSizeBytes": artifact.get("sourceSizeBytes"),
         "hash": artifact.get("hash"),
         "sizeBytes": artifact.get("sizeBytes"),
         "sourceRemap": source_remap_payload,
@@ -22902,6 +24958,37 @@ def build_runtime_package(
                         if isinstance(artifact.get("defines"), Mapping)
                         else {}
                     ),
+                    "entryPoint": (
+                        dict(artifact.get("entryPoint"))
+                        if isinstance(artifact.get("entryPoint"), Mapping)
+                        else None
+                    ),
+                    "templateMaterialization": (
+                        dict(artifact.get("templateMaterialization"))
+                        if isinstance(artifact.get("templateMaterialization"), Mapping)
+                        else None
+                    ),
+                    "specializationMaterialization": (
+                        dict(artifact.get("specializationMaterialization"))
+                        if isinstance(
+                            artifact.get("specializationMaterialization"), Mapping
+                        )
+                        else None
+                    ),
+                    "specializationConstants": [
+                        dict(constant)
+                        for constant in _record_sequence(
+                            artifact.get("specializationConstants")
+                        )
+                        if isinstance(constant, Mapping)
+                    ],
+                    "provenance": (
+                        dict(artifact.get("provenance"))
+                        if isinstance(artifact.get("provenance"), Mapping)
+                        else {}
+                    ),
+                    "sourceHash": artifact.get("sourceHash"),
+                    "sourceSizeBytes": artifact.get("sourceSizeBytes"),
                     "hash": artifact.get("hash"),
                     "sizeBytes": artifact.get("sizeBytes"),
                     "sourceRemap": None,
@@ -23645,6 +25732,8 @@ def _runtime_host_interface_resource_kind(node: Any) -> str | None:
 
 
 def _runtime_host_interface_resource_from_node(node: Any) -> dict[str, Any] | None:
+    if _specialization_attribute_values(node):
+        return None
     if _is_non_empty_string(getattr(node, "interface_block", None)):
         return None
     kind = _runtime_host_interface_resource_kind(node)
@@ -23802,17 +25891,62 @@ def _runtime_host_interface_resources(ast: Any) -> list[dict[str, Any]]:
     return resources
 
 
+def _runtime_host_interface_specialization_constants(
+    ast: Any, *, parser: str
+) -> list[dict[str, Any]]:
+    constants = []
+    for node, default_value, has_default in _specialization_ast_declaration_items(ast):
+        attributes = _specialization_attribute_values(node)
+        if not attributes:
+            continue
+        ids = {constant_id for _attribute, constant_id in attributes}
+        constant_id = next(iter(ids)) if len(ids) == 1 else None
+        attribute = attributes[0][0]
+        source_type = (
+            _runtime_host_interface_type_name(getattr(node, "var_type", None))
+            or _runtime_host_interface_type_name(getattr(node, "vtype", None))
+            or _runtime_host_interface_type_name(getattr(node, "const_type", None))
+            or "unknown"
+        )
+        payload = {
+            "name": getattr(node, "name", None),
+            "id": constant_id,
+            "kind": (
+                "function-constant"
+                if attribute == "function_constant"
+                else "specialization-constant"
+            ),
+            "dtype": source_type,
+            "sourceType": source_type,
+            "required": not has_default,
+            "overridden": False,
+            "overrideStatus": "not-overridden",
+            "status": "defaulted" if has_default else "required",
+            "source": f"{parser}.{attribute}",
+        }
+        if has_default:
+            value = _specialization_scalar_literal(default_value)
+            payload["default"] = value
+            payload["defaultValue"] = value
+        constants.append(payload)
+    return constants
+
+
 def _runtime_host_interface_from_ast(
     ast: Any, parser: str, *, source: str = "package-artifact"
 ) -> dict[str, Any]:
     entry_points = _runtime_host_interface_entry_points(ast)
     resources = _runtime_host_interface_resources(ast)
+    specialization_constants = _runtime_host_interface_specialization_constants(
+        ast, parser=parser
+    )
     return host_interface_record(
         status="ready",
         source=source,
         parser=parser,
         entry_points=entry_points,
         resources=resources,
+        specialization_constants=specialization_constants,
     )
 
 
@@ -23982,6 +26116,13 @@ def _runtime_package_artifact_host_interface(
             for constant in _record_sequence(host_interface.get("constants"))
             if isinstance(constant, Mapping)
         ],
+        specialization_constants=[
+            dict(constant)
+            for constant in _record_sequence(
+                host_interface.get("specializationConstants")
+            )
+            if isinstance(constant, Mapping)
+        ],
         diagnostics=[
             diagnostic
             for diagnostic in _record_sequence(host_interface.get("diagnostics"))
@@ -24059,6 +26200,7 @@ def _runtime_package_inspection_host_interface(
         if (
             host_interface["entryPointCount"] == 0
             and host_interface["resourceCount"] == 0
+            and host_interface.get("specializationConstantCount", 0) == 0
         ):
             return _runtime_host_interface_empty(
                 "unavailable",
@@ -24155,7 +26297,11 @@ def _runtime_package_inspection_host_interface(
             ),
         )
     host_interface = _runtime_host_interface_from_ast(ast, parser=parser_name or "")
-    if host_interface["entryPointCount"] == 0 and host_interface["resourceCount"] == 0:
+    if (
+        host_interface["entryPointCount"] == 0
+        and host_interface["resourceCount"] == 0
+        and host_interface.get("specializationConstantCount", 0) == 0
+    ):
         return _runtime_host_interface_empty(
             "unavailable",
             parser=parser_name,
@@ -24203,6 +26349,7 @@ def _runtime_package_inspection_binding(
         "target": artifact.get("target"),
         "artifact": artifact.get("id"),
         "packagePath": artifact.get("packagePath"),
+        "source": artifact.get("source"),
         "sourcePath": artifact.get("sourcePath"),
         "sourceBackend": artifact.get("sourceBackend"),
         "stage": artifact.get("stage"),
@@ -24212,6 +26359,33 @@ def _runtime_package_inspection_binding(
             if isinstance(artifact.get("defines"), Mapping)
             else {}
         ),
+        "entryPoint": (
+            dict(artifact.get("entryPoint"))
+            if isinstance(artifact.get("entryPoint"), Mapping)
+            else None
+        ),
+        "templateMaterialization": (
+            dict(artifact.get("templateMaterialization"))
+            if isinstance(artifact.get("templateMaterialization"), Mapping)
+            else None
+        ),
+        "specializationMaterialization": (
+            dict(artifact.get("specializationMaterialization"))
+            if isinstance(artifact.get("specializationMaterialization"), Mapping)
+            else None
+        ),
+        "specializationConstants": [
+            dict(constant)
+            for constant in _record_sequence(artifact.get("specializationConstants"))
+            if isinstance(constant, Mapping)
+        ],
+        "provenance": (
+            dict(artifact.get("provenance"))
+            if isinstance(artifact.get("provenance"), Mapping)
+            else {}
+        ),
+        "sourceHash": artifact.get("sourceHash"),
+        "sourceSizeBytes": artifact.get("sourceSizeBytes"),
         "hash": artifact.get("hash"),
         "sizeBytes": artifact.get("sizeBytes"),
         "sourceRemap": source_remap,
@@ -24422,6 +26596,7 @@ def _runtime_adapter_entry(binding: Mapping[str, Any]) -> dict[str, Any]:
         "binding": binding.get("id"),
         "artifact": binding.get("artifact"),
         "packagePath": binding.get("packagePath"),
+        "source": binding.get("source"),
         "sourcePath": binding.get("sourcePath"),
         "sourceBackend": binding.get("sourceBackend"),
         "stage": binding.get("stage"),
@@ -24431,6 +26606,35 @@ def _runtime_adapter_entry(binding: Mapping[str, Any]) -> dict[str, Any]:
             if isinstance(binding.get("defines"), Mapping)
             else {}
         ),
+        "entryPoint": (
+            dict(binding.get("entryPoint"))
+            if isinstance(binding.get("entryPoint"), Mapping)
+            else None
+        ),
+        "templateMaterialization": (
+            dict(binding.get("templateMaterialization"))
+            if isinstance(binding.get("templateMaterialization"), Mapping)
+            else None
+        ),
+        "specializationMaterialization": (
+            dict(binding.get("specializationMaterialization"))
+            if isinstance(binding.get("specializationMaterialization"), Mapping)
+            else None
+        ),
+        "specializationConstants": [
+            dict(constant)
+            for constant in _record_sequence(binding.get("specializationConstants"))
+            if isinstance(constant, Mapping)
+        ],
+        "provenance": (
+            dict(binding.get("provenance"))
+            if isinstance(binding.get("provenance"), Mapping)
+            else {}
+        ),
+        "sourceHash": binding.get("sourceHash"),
+        "sourceSizeBytes": binding.get("sourceSizeBytes"),
+        "hash": binding.get("hash"),
+        "sizeBytes": binding.get("sizeBytes"),
         "sourceRemap": (
             {
                 "packagePath": source_remap.get("packagePath"),
@@ -25563,6 +27767,7 @@ def _runtime_loader_manifest_load_unit(
         "adapterKind": adapter.get("adapterKind"),
         "artifactFormat": adapter.get("artifactFormat"),
         "packagePath": package_path,
+        "source": adapter.get("source"),
         "sourcePath": adapter.get("sourcePath"),
         "sourceBackend": adapter.get("sourceBackend"),
         "stage": adapter.get("stage"),
@@ -25572,6 +27777,35 @@ def _runtime_loader_manifest_load_unit(
             if isinstance(adapter.get("defines"), Mapping)
             else {}
         ),
+        "entryPoint": (
+            dict(adapter.get("entryPoint"))
+            if isinstance(adapter.get("entryPoint"), Mapping)
+            else None
+        ),
+        "templateMaterialization": (
+            dict(adapter.get("templateMaterialization"))
+            if isinstance(adapter.get("templateMaterialization"), Mapping)
+            else None
+        ),
+        "specializationMaterialization": (
+            dict(adapter.get("specializationMaterialization"))
+            if isinstance(adapter.get("specializationMaterialization"), Mapping)
+            else None
+        ),
+        "specializationConstants": [
+            dict(constant)
+            for constant in _record_sequence(adapter.get("specializationConstants"))
+            if isinstance(constant, Mapping)
+        ],
+        "provenance": (
+            dict(adapter.get("provenance"))
+            if isinstance(adapter.get("provenance"), Mapping)
+            else {}
+        ),
+        "sourceHash": adapter.get("sourceHash"),
+        "sourceSizeBytes": adapter.get("sourceSizeBytes"),
+        "hash": adapter.get("hash"),
+        "sizeBytes": adapter.get("sizeBytes"),
         "sourceRemap": _runtime_loader_manifest_source_remap(
             adapter.get("sourceRemap")
         ),
@@ -25752,6 +27986,2004 @@ def build_runtime_loader_manifest(
             if isinstance(adapter_plan.get("diagnostics"), list)
             else []
         ),
+    }
+
+
+_RUNTIME_VARIANT_INPUT_LOCATION = "runtime-variant-input.json"
+_RUNTIME_VARIANT_UNRESOLVED = "@unresolved"
+_RUNTIME_VARIANT_PACKAGE_REQUIRED_ARTIFACT_FIELDS = frozenset(
+    (
+        "id",
+        "status",
+        "source",
+        "sourcePath",
+        "packagePath",
+        "target",
+        "sourceBackend",
+        "stage",
+        "variant",
+        "defines",
+        "hash",
+        "sizeBytes",
+        "sourceRemap",
+        "hostInterface",
+    )
+)
+_RUNTIME_VARIANT_LOADER_REQUIRED_UNIT_FIELDS = frozenset(
+    (
+        "id",
+        "target",
+        "adapterKind",
+        "artifactFormat",
+        "packagePath",
+        "sourcePath",
+        "sourceBackend",
+        "stage",
+        "variant",
+        "defines",
+        "sourceRemap",
+        "hostInterface",
+        "requiredTools",
+        "hostResponsibilities",
+        "loadSteps",
+        "blockers",
+        "validation",
+    )
+)
+
+
+def _runtime_variant_canonical_json(value: Any) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=True,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _runtime_variant_normalize_json(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _runtime_variant_normalize_json(item)
+            for key, item in sorted(value.items(), key=lambda item: str(item[0]))
+        }
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_runtime_variant_normalize_json(item) for item in value]
+    return value
+
+
+def _runtime_variant_json_contract_reasons(prefix: str, value: Any) -> list[str]:
+    if value is None or isinstance(value, (bool, int, str)):
+        return []
+    if isinstance(value, float):
+        return [] if math.isfinite(value) else [f"{prefix} must be finite"]
+    if isinstance(value, Mapping):
+        reasons: list[str] = []
+        for key, item in value.items():
+            if not _is_non_empty_string(key):
+                reasons.append(f"{prefix} keys must be non-empty strings")
+                continue
+            reasons.extend(
+                _runtime_variant_json_contract_reasons(
+                    f"{prefix}.{key}",
+                    item,
+                )
+            )
+        return reasons
+    if isinstance(value, list):
+        reasons = []
+        for index, item in enumerate(value):
+            reasons.extend(
+                _runtime_variant_json_contract_reasons(
+                    f"{prefix}[{index}]",
+                    item,
+                )
+            )
+        return reasons
+    return [f"{prefix} must contain only JSON values"]
+
+
+def _runtime_variant_scalar_contract_reasons(prefix: str, value: Any) -> list[str]:
+    if value is None or isinstance(value, (bool, int, str)):
+        return []
+    if isinstance(value, float) and math.isfinite(value):
+        return []
+    return [f"{prefix} must be a finite JSON scalar"]
+
+
+def _runtime_variant_mapping_contract_reasons(
+    prefix: str,
+    value: Any,
+    *,
+    scalar_values: bool = False,
+    string_values: bool = False,
+) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+    reasons: list[str] = []
+    for key, item in value.items():
+        if not _is_non_empty_string(key):
+            reasons.append(f"{prefix} keys must be non-empty strings")
+            continue
+        item_prefix = f"{prefix}.{key}"
+        if string_values:
+            if not isinstance(item, str):
+                reasons.append(f"{item_prefix} must be a string")
+        elif scalar_values:
+            reasons.extend(_runtime_variant_scalar_contract_reasons(item_prefix, item))
+        else:
+            reasons.extend(_runtime_variant_json_contract_reasons(item_prefix, item))
+    return reasons
+
+
+def _runtime_variant_key_specialization_contract_reasons(
+    prefix: str,
+    values: Any,
+) -> list[str]:
+    if not isinstance(values, list):
+        return [f"{prefix} must be a list"]
+    reasons: list[str] = []
+    identities: set[tuple[str, Any]] = set()
+    for index, value in enumerate(values):
+        item_prefix = f"{prefix}[{index}]"
+        if not isinstance(value, Mapping):
+            reasons.append(f"{item_prefix} must be an object")
+            continue
+        unsupported = sorted(set(value) - {"id", "name", "value"})
+        if unsupported:
+            reasons.append(
+                f"{item_prefix} contains unsupported fields: "
+                f"{', '.join(unsupported)}"
+            )
+        constant_id = value.get("id")
+        name = value.get("name")
+        if constant_id is not None and (
+            not isinstance(constant_id, int)
+            or isinstance(constant_id, bool)
+            or constant_id < 0
+        ):
+            reasons.append(f"{item_prefix}.id must be a non-negative integer or null")
+        if name is not None and not _is_non_empty_string(name):
+            reasons.append(f"{item_prefix}.name must be a non-empty string or null")
+        if constant_id is None and not _is_non_empty_string(name):
+            reasons.append(f"{item_prefix} must identify the constant by id or name")
+        reasons.extend(
+            _runtime_variant_scalar_contract_reasons(
+                f"{item_prefix}.value", value.get("value")
+            )
+        )
+        identity = (
+            ("id", constant_id) if constant_id is not None else ("name", str(name))
+        )
+        if identity in identities:
+            reasons.append(
+                f"{item_prefix} duplicates specialization identity {identity}"
+            )
+        identities.add(identity)
+    return reasons
+
+
+def _runtime_variant_key_payload_contract_reasons(value: Any) -> list[str]:
+    if not isinstance(value, Mapping):
+        return ["variant key payload must be an object"]
+    reasons = _unsupported_mapping_field_reasons(
+        "variant key payload",
+        value,
+        RUNTIME_VARIANT_KEY_FIELDS,
+    )
+    missing = sorted(RUNTIME_VARIANT_KEY_FIELDS - set(value))
+    if missing:
+        reasons.append("variant key payload is missing fields: " + ", ".join(missing))
+    source_unit = value.get("sourceUnit")
+    if not _is_non_empty_string(source_unit):
+        reasons.append("variant key payload.sourceUnit must be a non-empty string")
+    elif source_unit != _RUNTIME_VARIANT_UNRESOLVED and not _is_report_identity_path(
+        source_unit
+    ):
+        reasons.append(
+            "variant key payload.sourceUnit must be a stable relative POSIX path"
+        )
+    if not _is_non_empty_string(value.get("sourceEntry")):
+        reasons.append("variant key payload.sourceEntry must be a non-empty string")
+    target = value.get("target")
+    if not _is_non_empty_string(target):
+        reasons.append("variant key payload.target must be a non-empty string")
+    elif _normalized_targets([str(target)])[0] != target:
+        reasons.append("variant key payload.target must use its canonical backend name")
+    profile = value.get("targetProfile")
+    if profile is not None and not _is_non_empty_string(profile):
+        reasons.append(
+            "variant key payload.targetProfile must be a non-empty string or null"
+        )
+    reasons.extend(
+        _runtime_variant_mapping_contract_reasons(
+            "variant key payload.typeArguments",
+            value.get("typeArguments"),
+            string_values=True,
+        )
+    )
+    reasons.extend(
+        _runtime_variant_mapping_contract_reasons(
+            "variant key payload.valueArguments",
+            value.get("valueArguments"),
+            scalar_values=True,
+        )
+    )
+    reasons.extend(
+        _runtime_variant_key_specialization_contract_reasons(
+            "variant key payload.specializationConstants",
+            value.get("specializationConstants"),
+        )
+    )
+    reasons.extend(
+        _runtime_variant_mapping_contract_reasons(
+            "variant key payload.defines",
+            value.get("defines"),
+            string_values=True,
+        )
+    )
+    return sorted(set(reasons))
+
+
+def _runtime_variant_normalized_key_specializations(
+    values: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    normalized = [
+        {
+            "id": value.get("id"),
+            "name": value.get("name"),
+            "value": _runtime_variant_normalize_json(value.get("value")),
+        }
+        for value in values
+    ]
+    return sorted(
+        normalized,
+        key=lambda item: (
+            item.get("id") is None,
+            item.get("id") if item.get("id") is not None else 0,
+            str(item.get("name") or ""),
+            _runtime_variant_canonical_json(item.get("value")),
+        ),
+    )
+
+
+def encode_runtime_variant_key(
+    source_unit: str,
+    source_entry: str,
+    target: str,
+    *,
+    target_profile: str | None = None,
+    type_arguments: Mapping[str, str] | None = None,
+    value_arguments: Mapping[str, Any] | None = None,
+    specialization_constants: Sequence[Mapping[str, Any]] = (),
+    defines: Mapping[str, str] | None = None,
+) -> str:
+    """Encode one exact runtime variant identity as a canonical URL-safe key."""
+
+    normalized_target = (
+        _normalized_targets([target])[0] if _is_non_empty_string(target) else target
+    )
+    payload = {
+        "sourceUnit": source_unit,
+        "sourceEntry": source_entry,
+        "target": normalized_target,
+        "targetProfile": target_profile,
+        "typeArguments": dict(sorted((type_arguments or {}).items())),
+        "valueArguments": {
+            key: _runtime_variant_normalize_json(value)
+            for key, value in sorted((value_arguments or {}).items())
+        },
+        "specializationConstants": _runtime_variant_normalized_key_specializations(
+            specialization_constants
+        ),
+        "defines": dict(sorted((defines or {}).items())),
+    }
+    reasons = _runtime_variant_key_payload_contract_reasons(payload)
+    if reasons:
+        raise ValueError("Invalid runtime variant key: " + "; ".join(reasons))
+    encoded = base64.urlsafe_b64encode(
+        _runtime_variant_canonical_json(payload).encode("utf-8")
+    ).decode("ascii")
+    return RUNTIME_VARIANT_KEY_PREFIX + encoded.rstrip("=")
+
+
+def decode_runtime_variant_key(key: str) -> dict[str, Any]:
+    """Decode and validate a canonical runtime variant key."""
+
+    if not isinstance(key, str) or not key.startswith(RUNTIME_VARIANT_KEY_PREFIX):
+        raise ValueError(
+            f"Runtime variant key must start with {RUNTIME_VARIANT_KEY_PREFIX}"
+        )
+    encoded = key[len(RUNTIME_VARIANT_KEY_PREFIX) :]
+    if not encoded:
+        raise ValueError("Runtime variant key payload must not be empty")
+    padding = "=" * (-len(encoded) % 4)
+    try:
+        decoded = base64.b64decode(
+            encoded + padding,
+            altchars=b"-_",
+            validate=True,
+        ).decode("utf-8")
+        payload = json.loads(decoded)
+    except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError("Runtime variant key payload is invalid") from exc
+    reasons = _runtime_variant_key_payload_contract_reasons(payload)
+    if reasons:
+        raise ValueError("Invalid runtime variant key: " + "; ".join(reasons))
+    canonical = encode_runtime_variant_key(
+        payload["sourceUnit"],
+        payload["sourceEntry"],
+        payload["target"],
+        target_profile=payload["targetProfile"],
+        type_arguments=payload["typeArguments"],
+        value_arguments=payload["valueArguments"],
+        specialization_constants=payload["specializationConstants"],
+        defines=payload["defines"],
+    )
+    if key != canonical:
+        raise ValueError("Runtime variant key is not canonically encoded")
+    return payload
+
+
+def _runtime_variant_diagnostic(
+    code: str,
+    message: str,
+    *,
+    severity: str = "error",
+    source: Any = None,
+    target: Any = None,
+    variant: Any = None,
+    details: Mapping[str, Any] | None = None,
+) -> ProjectDiagnostic:
+    source_path = (
+        str(source)
+        if _is_non_empty_string(source) and _is_report_identity_path(str(source))
+        else _RUNTIME_VARIANT_INPUT_LOCATION
+    )
+    return ProjectDiagnostic(
+        severity=severity,
+        code=code,
+        message=message,
+        location=SourceLocation(file=source_path),
+        target=str(target) if _is_non_empty_string(target) else None,
+        variant=str(variant) if _is_non_empty_string(variant) else None,
+        check_kind="runtime-variant-registry",
+        details=details or {},
+    )
+
+
+def _runtime_variant_registry_load_input(
+    path: Path,
+) -> tuple[Mapping[str, Any], list[ProjectDiagnostic]]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        return {}, [
+            _runtime_variant_diagnostic(
+                "project.runtime-variant-registry.input-read-failed",
+                f"Runtime variant registry input could not be read: {exc.strerror or 'I/O error'}.",
+            )
+        ]
+    except json.JSONDecodeError as exc:
+        return {}, [
+            ProjectDiagnostic(
+                severity="error",
+                code="project.runtime-variant-registry.input-json-invalid",
+                message="Runtime variant registry input is not valid JSON.",
+                location=SourceLocation(
+                    file=_RUNTIME_VARIANT_INPUT_LOCATION,
+                    line=exc.lineno,
+                    column=exc.colno,
+                ),
+                check_kind="runtime-variant-registry",
+                details={"line": exc.lineno, "column": exc.colno},
+            )
+        ]
+    if not isinstance(payload, Mapping):
+        return {}, [
+            _runtime_variant_diagnostic(
+                "project.runtime-variant-registry.input-invalid",
+                "Runtime variant registry input must be a JSON object.",
+            )
+        ]
+    return payload, []
+
+
+def _runtime_variant_closed_record_reasons(
+    prefix: str,
+    value: Mapping[str, Any],
+    *,
+    allowed: frozenset[str],
+    required: frozenset[str],
+) -> list[str]:
+    reasons = _unsupported_mapping_field_reasons(prefix, value, allowed)
+    missing = sorted(required - set(value))
+    if missing:
+        reasons.append(f"{prefix} is missing fields: {', '.join(missing)}")
+    return reasons
+
+
+def _runtime_variant_specialization_input_contract_reasons(
+    prefix: str,
+    value: Any,
+) -> list[str]:
+    if not isinstance(value, list):
+        return [f"{prefix} must be a list"]
+    reasons: list[str] = []
+    identities: set[tuple[str, Any]] = set()
+    for index, constant in enumerate(value):
+        item_prefix = f"{prefix}[{index}]"
+        if not isinstance(constant, Mapping):
+            reasons.append(f"{item_prefix} must be an object")
+            continue
+        reasons.extend(_runtime_variant_json_contract_reasons(item_prefix, constant))
+        constant_id = constant.get("id", constant.get("constantId"))
+        name = constant.get("name")
+        if constant_id is not None and (
+            not isinstance(constant_id, int)
+            or isinstance(constant_id, bool)
+            or constant_id < 0
+        ):
+            reasons.append(f"{item_prefix}.id must be a non-negative integer or null")
+            constant_id = None
+        if name is not None and not _is_non_empty_string(name):
+            reasons.append(f"{item_prefix}.name must be a non-empty string or null")
+            name = None
+        identity = (
+            ("id", constant_id)
+            if constant_id is not None
+            else ("name", name) if name is not None else None
+        )
+        if identity is None:
+            reasons.append(f"{item_prefix} must identify the constant by id or name")
+        elif identity in identities:
+            reasons.append(
+                f"{item_prefix} duplicates specialization identity {identity}"
+            )
+        else:
+            identities.add(identity)
+    return reasons
+
+
+def _runtime_variant_host_interface_contract_reasons(
+    prefix: str,
+    value: Any,
+) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+    reasons = _runtime_variant_closed_record_reasons(
+        prefix,
+        value,
+        allowed=RUNTIME_HOST_INTERFACE_FIELDS,
+        required=RUNTIME_HOST_INTERFACE_FIELDS,
+    )
+    if not _is_non_empty_string(value.get("status")):
+        reasons.append(f"{prefix}.status must be a non-empty string")
+    if not _is_non_empty_string(value.get("source")):
+        reasons.append(f"{prefix}.source must be a non-empty string")
+    for field_name in ("parser", "artifactFormat"):
+        field_value = value.get(field_name)
+        if field_value is not None and not _is_non_empty_string(field_value):
+            reasons.append(f"{prefix}.{field_name} must be a string or null")
+    for field_name in (
+        "entryPoints",
+        "resources",
+        "constants",
+        "specializationConstants",
+        "diagnostics",
+        "diagnosticRecords",
+    ):
+        records = value.get(field_name)
+        if not isinstance(records, list):
+            reasons.append(f"{prefix}.{field_name} must be a list")
+            continue
+        reasons.extend(
+            _runtime_variant_json_contract_reasons(f"{prefix}.{field_name}", records)
+        )
+    for count_field, records_field in (
+        ("entryPointCount", "entryPoints"),
+        ("resourceCount", "resources"),
+        ("constantCount", "constants"),
+        ("specializationConstantCount", "specializationConstants"),
+    ):
+        count = value.get(count_field)
+        records = value.get(records_field)
+        if not _is_non_negative_int(count):
+            reasons.append(f"{prefix}.{count_field} must be a non-negative integer")
+        elif isinstance(records, list) and count != len(records):
+            reasons.append(f"{prefix}.{count_field} must match {records_field}")
+    entry_points = value.get("entryPoints")
+    if isinstance(entry_points, list):
+        for index, entry_point in enumerate(entry_points):
+            entry_prefix = f"{prefix}.entryPoints[{index}]"
+            if not isinstance(entry_point, Mapping):
+                continue
+            reasons.extend(
+                _runtime_variant_closed_record_reasons(
+                    entry_prefix,
+                    entry_point,
+                    allowed=RUNTIME_HOST_INTERFACE_ENTRY_POINT_FIELDS,
+                    required=RUNTIME_HOST_INTERFACE_ENTRY_POINT_FIELDS,
+                )
+            )
+            if not _is_non_empty_string(entry_point.get("name")):
+                reasons.append(f"{entry_prefix}.name must be a non-empty string")
+            stage = entry_point.get("stage")
+            if stage is not None and not _is_non_empty_string(stage):
+                reasons.append(f"{entry_prefix}.stage must be a string or null")
+            if not isinstance(entry_point.get("executionConfig"), Mapping):
+                reasons.append(f"{entry_prefix}.executionConfig must be an object")
+    reasons.extend(
+        _runtime_variant_specialization_input_contract_reasons(
+            f"{prefix}.specializationConstants",
+            value.get("specializationConstants"),
+        )
+    )
+    return reasons
+
+
+def _runtime_variant_entry_point_contract_reasons(prefix: str, value: Any) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object or null"]
+    reasons = _unsupported_mapping_field_reasons(
+        prefix, value, REPORT_ARTIFACT_ENTRY_POINT_FIELDS
+    )
+    for field_name in ("source", "target"):
+        if not _is_non_empty_string(value.get(field_name)):
+            reasons.append(f"{prefix}.{field_name} must be a non-empty string")
+    if "stage" in value and not _is_non_empty_string(value.get("stage")):
+        reasons.append(f"{prefix}.stage must be a non-empty string")
+    return reasons
+
+
+def _runtime_variant_common_record_contract_reasons(
+    prefix: str,
+    value: Mapping[str, Any],
+    *,
+    require_source: bool,
+    require_hash: bool,
+    allow_null_host_interface: bool,
+) -> list[str]:
+    reasons: list[str] = []
+    source = value.get("source")
+    if require_source and not _is_non_empty_string(source):
+        reasons.append(f"{prefix}.source must be a non-empty string")
+    elif _is_non_empty_string(source) and not _is_report_identity_path(source):
+        reasons.append(f"{prefix}.source must be a stable relative POSIX path")
+    package_path = value.get("packagePath")
+    if not _is_non_empty_string(package_path):
+        reasons.append(f"{prefix}.packagePath must be a non-empty string")
+    elif not _is_report_identity_path(package_path):
+        reasons.append(f"{prefix}.packagePath must be a stable relative POSIX path")
+    target = value.get("target")
+    if not _is_non_empty_string(target):
+        reasons.append(f"{prefix}.target must be a non-empty string")
+    elif _normalized_targets([str(target)])[0] != target:
+        reasons.append(f"{prefix}.target must use its canonical backend name")
+    if not _is_non_empty_string(value.get("sourceBackend")):
+        reasons.append(f"{prefix}.sourceBackend must be a non-empty string")
+    stage = value.get("stage")
+    if stage is not None and not _is_non_empty_string(stage):
+        reasons.append(f"{prefix}.stage must be a non-empty string or null")
+    variant = value.get("variant")
+    if variant is not None and not _is_non_empty_string(variant):
+        reasons.append(f"{prefix}.variant must be a non-empty string or null")
+    reasons.extend(
+        _runtime_variant_mapping_contract_reasons(
+            f"{prefix}.defines", value.get("defines"), string_values=True
+        )
+    )
+    reasons.extend(
+        _runtime_variant_entry_point_contract_reasons(
+            f"{prefix}.entryPoint", value.get("entryPoint")
+        )
+    )
+    host_interface = value.get("hostInterface")
+    if host_interface is not None or not allow_null_host_interface:
+        reasons.extend(
+            _runtime_variant_host_interface_contract_reasons(
+                f"{prefix}.hostInterface", host_interface
+            )
+        )
+    artifact_hash = value.get("hash")
+    if artifact_hash is None and not require_hash:
+        pass
+    elif not isinstance(artifact_hash, Mapping):
+        reasons.append(f"{prefix}.hash must be a sha256 hash object")
+    else:
+        reasons.extend(
+            _hash_contract_reasons(
+                f"{prefix}.hash",
+                artifact_hash,
+                require_closed_fields=True,
+            )
+        )
+    size_bytes = value.get("sizeBytes")
+    if size_bytes is not None and not _is_non_negative_int(size_bytes):
+        reasons.append(f"{prefix}.sizeBytes must be a non-negative integer or null")
+    for field_name in ("templateMaterialization", "specializationMaterialization"):
+        field_value = value.get(field_name)
+        if field_value is not None and not isinstance(field_value, Mapping):
+            reasons.append(f"{prefix}.{field_name} must be an object or null")
+        elif isinstance(field_value, Mapping):
+            reasons.extend(
+                _runtime_variant_json_contract_reasons(
+                    f"{prefix}.{field_name}", field_value
+                )
+            )
+    provenance = value.get("provenance")
+    if provenance is not None and not isinstance(provenance, Mapping):
+        reasons.append(f"{prefix}.provenance must be an object or null")
+    elif isinstance(provenance, Mapping):
+        reasons.extend(
+            _runtime_variant_json_contract_reasons(f"{prefix}.provenance", provenance)
+        )
+    specialization_constants = value.get("specializationConstants")
+    if specialization_constants is not None:
+        reasons.extend(
+            _runtime_variant_specialization_input_contract_reasons(
+                f"{prefix}.specializationConstants",
+                specialization_constants,
+            )
+        )
+    source_hash = value.get("sourceHash")
+    if source_hash is not None:
+        reasons.extend(
+            _hash_contract_reasons(
+                f"{prefix}.sourceHash",
+                source_hash,
+                require_closed_fields=True,
+            )
+        )
+    source_size = value.get("sourceSizeBytes")
+    if source_size is not None and not _is_non_negative_int(source_size):
+        reasons.append(
+            f"{prefix}.sourceSizeBytes must be a non-negative integer or null"
+        )
+    return reasons
+
+
+def _runtime_variant_registry_input_contract_reasons(
+    payload: Mapping[str, Any],
+) -> list[str]:
+    reasons: list[str] = []
+    if payload.get("schemaVersion") != REPORT_SCHEMA_VERSION:
+        reasons.append(f"input.schemaVersion must be {REPORT_SCHEMA_VERSION}")
+    kind = payload.get("kind")
+    if kind not in {RUNTIME_PACKAGE_KIND, RUNTIME_LOADER_MANIFEST_KIND}:
+        reasons.append(
+            "input.kind must be "
+            f"{RUNTIME_PACKAGE_KIND} or {RUNTIME_LOADER_MANIFEST_KIND}"
+        )
+        return sorted(set(reasons))
+    allowed_fields = (
+        RUNTIME_PACKAGE_FIELDS
+        if kind == RUNTIME_PACKAGE_KIND
+        else RUNTIME_LOADER_MANIFEST_FIELDS
+    )
+    reasons.extend(_unsupported_mapping_field_reasons("input", payload, allowed_fields))
+    if payload.get("success") is not True:
+        reasons.append("input.success must be true")
+    project = payload.get("project")
+    if not isinstance(project, Mapping):
+        reasons.append("input.project must be an object")
+    else:
+        targets = project.get("targets")
+        if not isinstance(targets, list) or not all(
+            _is_non_empty_string(target) for target in targets
+        ):
+            reasons.append("input.project.targets must be a list of strings")
+        elif targets != _normalized_targets(targets):
+            reasons.append(
+                "input.project.targets must be unique canonical backend names"
+            )
+    collection_name = "artifacts" if kind == RUNTIME_PACKAGE_KIND else "loadUnits"
+    records = payload.get(collection_name)
+    if not isinstance(records, list):
+        reasons.append(f"input.{collection_name} must be a list")
+        return sorted(set(reasons))
+    allowed_record_fields = (
+        RUNTIME_PACKAGE_ARTIFACT_FIELDS
+        if kind == RUNTIME_PACKAGE_KIND
+        else RUNTIME_LOADER_MANIFEST_LOAD_UNIT_FIELDS
+    )
+    required_record_fields = (
+        _RUNTIME_VARIANT_PACKAGE_REQUIRED_ARTIFACT_FIELDS
+        if kind == RUNTIME_PACKAGE_KIND
+        else _RUNTIME_VARIANT_LOADER_REQUIRED_UNIT_FIELDS
+    )
+    for index, record in enumerate(records):
+        prefix = f"input.{collection_name}[{index}]"
+        if not isinstance(record, Mapping):
+            reasons.append(f"{prefix} must be an object")
+            continue
+        reasons.extend(
+            _runtime_variant_closed_record_reasons(
+                prefix,
+                record,
+                allowed=allowed_record_fields,
+                required=required_record_fields,
+            )
+        )
+        if not _is_non_empty_string(record.get("id")):
+            reasons.append(f"{prefix}.id must be a non-empty string")
+        if kind == RUNTIME_PACKAGE_KIND and record.get("status") != "packaged":
+            reasons.append(f"{prefix}.status must be packaged")
+        reasons.extend(
+            _runtime_variant_common_record_contract_reasons(
+                prefix,
+                record,
+                require_source=kind == RUNTIME_PACKAGE_KIND,
+                require_hash=kind == RUNTIME_PACKAGE_KIND,
+                allow_null_host_interface=kind == RUNTIME_PACKAGE_KIND,
+            )
+        )
+        if kind == RUNTIME_LOADER_MANIFEST_KIND:
+            blockers = record.get("blockers")
+            validation = record.get("validation")
+            if not isinstance(blockers, list) or not all(
+                isinstance(blocker, Mapping) for blocker in blockers
+            ):
+                reasons.append(f"{prefix}.blockers must be a list of objects")
+            if not isinstance(validation, Mapping) or not isinstance(
+                validation.get("loadReady"), bool
+            ):
+                reasons.append(f"{prefix}.validation.loadReady must be a boolean")
+            elif isinstance(blockers, list) and bool(blockers) == validation.get(
+                "loadReady"
+            ):
+                reasons.append(
+                    f"{prefix}.validation.loadReady must be false exactly when "
+                    "blockers are present"
+                )
+    return sorted(set(reasons))
+
+
+def _runtime_variant_payload_hash(value: Any) -> dict[str, str]:
+    encoded = _runtime_variant_canonical_json(value).encode("utf-8")
+    return {
+        "algorithm": "sha256",
+        "value": hashlib.sha256(encoded).hexdigest(),
+    }
+
+
+def _runtime_variant_key_schema() -> dict[str, Any]:
+    return {
+        "version": 1,
+        "encoding": RUNTIME_VARIANT_KEY_ENCODING,
+        "prefix": RUNTIME_VARIANT_KEY_PREFIX,
+        "matching": "exact",
+        "defaulting": "none",
+        "unresolvedToken": _RUNTIME_VARIANT_UNRESOLVED,
+        "fields": [
+            "sourceUnit",
+            "sourceEntry",
+            "target",
+            "targetProfile",
+            "typeArguments",
+            "valueArguments",
+            "specializationConstants",
+            "defines",
+        ],
+    }
+
+
+def _runtime_variant_template_scalar(value: Any) -> tuple[bool, Any]:
+    if isinstance(value, (bool, int, float)) and not isinstance(value, str):
+        return True, value
+    if not isinstance(value, str):
+        return False, value
+    text = value.strip()
+    lowered = text.lower()
+    if lowered in {"true", "false"}:
+        return True, lowered == "true"
+    integer_match = re.fullmatch(
+        r"(?P<sign>[+-]?)(?P<number>0[xX][0-9A-Fa-f]+|0[bB][01]+|[0-9]+)"
+        r"(?P<suffix>[uUlL]*)",
+        text,
+    )
+    if integer_match is not None:
+        number = integer_match.group("number")
+        base = (
+            16
+            if number.lower().startswith("0x")
+            else 2 if number.lower().startswith("0b") else 10
+        )
+        parsed = int(number, base)
+        if integer_match.group("sign") == "-":
+            parsed = -parsed
+        return True, parsed
+    if re.fullmatch(
+        r"[+-]?(?:[0-9]+\.[0-9]*|\.[0-9]+|[0-9]+)" r"(?:[eE][+-]?[0-9]+)?(?:[fFhH])?",
+        text,
+    ):
+        return True, float(re.sub(r"[fFhH]$", "", text))
+    return False, text
+
+
+def _runtime_variant_template_specializations(
+    record: Mapping[str, Any],
+) -> list[Mapping[str, Any]]:
+    materialization = record.get("templateMaterialization")
+    if not isinstance(materialization, Mapping):
+        return []
+    return [
+        specialization
+        for specialization in _record_sequence(materialization.get("specializations"))
+        if isinstance(specialization, Mapping)
+        and _is_non_empty_string(specialization.get("name"))
+    ]
+
+
+def _runtime_variant_arguments(
+    record: Mapping[str, Any],
+    *,
+    source_entry: str | None,
+    target_entry: str | None,
+) -> tuple[dict[str, str], dict[str, Any], dict[str, Any] | None]:
+    specializations = _runtime_variant_template_specializations(record)
+    matches = [
+        specialization
+        for specialization in specializations
+        if specialization.get("name") == source_entry
+        and (
+            target_entry
+            in {
+                specialization.get("hostName"),
+                specialization.get("materializedName"),
+                specialization.get("name"),
+            }
+            or len(specializations) == 1
+        )
+    ]
+    if not matches and len(specializations) == 1:
+        matches = specializations
+    specialization = matches[0] if len(matches) == 1 else None
+    if specialization is None:
+        return {}, {}, None
+
+    parameters = specialization.get("parameters")
+    parameter_kinds = specialization.get("parameterKinds")
+    kinds = parameter_kinds if isinstance(parameter_kinds, Mapping) else {}
+    type_arguments: dict[str, str] = {}
+    value_arguments: dict[str, Any] = {}
+    if isinstance(parameters, Mapping):
+        for parameter, value in sorted(parameters.items()):
+            if not _is_non_empty_string(parameter):
+                continue
+            kind = kinds.get(parameter)
+            scalar, scalar_value = _runtime_variant_template_scalar(value)
+            if kind == "value" or (kind is None and scalar):
+                value_arguments[str(parameter)] = scalar_value
+            else:
+                type_arguments[str(parameter)] = str(value)
+    provenance = {
+        "source": specialization.get("source"),
+        "parameterSources": (
+            dict(sorted(specialization.get("parameterSources", {}).items()))
+            if isinstance(specialization.get("parameterSources"), Mapping)
+            else {}
+        ),
+    }
+    return type_arguments, value_arguments, provenance
+
+
+def _runtime_variant_interface_entries(
+    record: Mapping[str, Any],
+) -> list[Mapping[str, Any]]:
+    host_interface = record.get("hostInterface")
+    if not isinstance(host_interface, Mapping):
+        return []
+    entries = [
+        entry
+        for entry in _record_sequence(host_interface.get("entryPoints"))
+        if isinstance(entry, Mapping) and _is_non_empty_string(entry.get("name"))
+    ]
+    return sorted(entries, key=_runtime_variant_canonical_json)
+
+
+def _runtime_variant_entry_contexts(
+    record: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    interface_entries = _runtime_variant_interface_entries(record)
+    explicit = record.get("entryPoint")
+    if isinstance(explicit, Mapping) and _is_non_empty_string(explicit.get("source")):
+        target_entry = explicit.get("target")
+        interface_entry = next(
+            (entry for entry in interface_entries if entry.get("name") == target_entry),
+            None,
+        )
+        if interface_entry is None and len(interface_entries) == 1:
+            interface_entry = interface_entries[0]
+        return [
+            {
+                "sourceEntry": str(explicit.get("source")),
+                "targetEntry": (
+                    str(target_entry)
+                    if _is_non_empty_string(target_entry)
+                    else (
+                        str(interface_entry.get("name"))
+                        if isinstance(interface_entry, Mapping)
+                        else None
+                    )
+                ),
+                "entryPoint": interface_entry,
+                "stage": (
+                    explicit.get("stage")
+                    if _is_non_empty_string(explicit.get("stage"))
+                    else (
+                        interface_entry.get("stage")
+                        if isinstance(interface_entry, Mapping)
+                        else record.get("stage")
+                    )
+                ),
+                "nameProvenance": "explicit-source-target-entry-point",
+            }
+        ]
+
+    template_specializations = _runtime_variant_template_specializations(record)
+    if template_specializations:
+        contexts = []
+        for specialization in template_specializations:
+            target_entry = (
+                specialization.get("hostName")
+                or specialization.get("materializedName")
+                or specialization.get("name")
+            )
+            interface_entry = next(
+                (
+                    entry
+                    for entry in interface_entries
+                    if entry.get("name") == target_entry
+                ),
+                None,
+            )
+            if (
+                interface_entry is None
+                and len(interface_entries) == 1
+                and len(template_specializations) == 1
+            ):
+                interface_entry = interface_entries[0]
+                target_entry = interface_entry.get("name")
+            contexts.append(
+                {
+                    "sourceEntry": specialization.get("name"),
+                    "targetEntry": target_entry,
+                    "entryPoint": interface_entry,
+                    "stage": (
+                        interface_entry.get("stage")
+                        if isinstance(interface_entry, Mapping)
+                        else record.get("stage")
+                    ),
+                    "nameProvenance": "template-materialization",
+                }
+            )
+        return contexts
+
+    if interface_entries:
+        return [
+            {
+                "sourceEntry": entry.get("name"),
+                "targetEntry": entry.get("name"),
+                "entryPoint": entry,
+                "stage": entry.get("stage") or record.get("stage"),
+                "nameProvenance": "identity-interface-entry-point",
+            }
+            for entry in interface_entries
+        ]
+    return [
+        {
+            "sourceEntry": None,
+            "targetEntry": None,
+            "entryPoint": None,
+            "stage": record.get("stage"),
+            "nameProvenance": "unresolved",
+        }
+    ]
+
+
+def _runtime_variant_target_profile(
+    record: Mapping[str, Any],
+    context: Mapping[str, Any],
+) -> str | None:
+    target_entry = context.get("targetEntry")
+    for step in _record_sequence(record.get("loadSteps")):
+        if not isinstance(step, Mapping):
+            continue
+        metadata = step.get("metadata")
+        if not isinstance(metadata, Mapping):
+            continue
+        entry_profiles = metadata.get("entryProfiles")
+        for entry_profile in _record_sequence(entry_profiles):
+            if not isinstance(entry_profile, Mapping):
+                continue
+            if entry_profile.get("entry") == target_entry and _is_non_empty_string(
+                entry_profile.get("profile")
+            ):
+                return str(entry_profile["profile"])
+        command_input = metadata.get("commandInput")
+        if isinstance(command_input, Mapping):
+            if command_input.get("entryPoint") == target_entry and _is_non_empty_string(
+                command_input.get("shaderModel")
+            ):
+                return str(command_input["shaderModel"])
+    target = record.get("target")
+    entry_point = context.get("entryPoint")
+    if target == "directx":
+        profile_entry = dict(entry_point) if isinstance(entry_point, Mapping) else {}
+        if not _is_non_empty_string(
+            profile_entry.get("stage")
+        ) and _is_non_empty_string(context.get("stage")):
+            profile_entry["stage"] = context["stage"]
+        profile = _directx_dxc_profile_for_entry_record(profile_entry)
+        return str(profile) if _is_non_empty_string(profile) else None
+    return None
+
+
+def _runtime_variant_constant_value(
+    constant: Mapping[str, Any],
+) -> tuple[bool, Any, str | None]:
+    for field_name in ("concreteValue", "value", "defaultValue", "default"):
+        if field_name in constant:
+            value = constant.get(field_name)
+            if value is None:
+                continue
+            if not _runtime_variant_scalar_contract_reasons("value", value):
+                return True, _runtime_variant_normalize_json(value), field_name
+            return False, value, field_name
+    return False, None, None
+
+
+def _runtime_variant_blocker(
+    code: str,
+    message: str,
+    *,
+    details: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "code": code,
+        "message": message,
+        "details": _runtime_variant_normalize_json(details or {}),
+    }
+
+
+def _runtime_variant_specialization_records(
+    record: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    host_interface = record.get("hostInterface")
+    reflected = (
+        [
+            constant
+            for constant in _record_sequence(
+                host_interface.get("specializationConstants")
+            )
+            if isinstance(constant, Mapping)
+        ]
+        if isinstance(host_interface, Mapping)
+        else []
+    )
+    source = [
+        constant
+        for constant in _record_sequence(record.get("specializationConstants"))
+        if isinstance(constant, Mapping)
+    ]
+    merged = _runtime_merge_specialization_constant_records(reflected, source)
+    normalized: list[dict[str, Any]] = []
+    key_records: list[dict[str, Any]] = []
+    blockers: list[dict[str, Any]] = []
+    identities: dict[tuple[str, Any], dict[str, Any]] = {}
+    for constant in merged:
+        name = constant.get("name")
+        constant_id = constant.get("id", constant.get("constantId"))
+        if constant_id is not None and (
+            not isinstance(constant_id, int)
+            or isinstance(constant_id, bool)
+            or constant_id < 0
+        ):
+            blockers.append(
+                _runtime_variant_blocker(
+                    "project.runtime-variant-registry.specialization-id-invalid",
+                    "Specialization constant IDs must be non-negative integers.",
+                    details={"name": name, "id": constant_id},
+                )
+            )
+            constant_id = None
+        if not _is_non_empty_string(name):
+            name = None
+        identity = (
+            ("id", constant_id)
+            if constant_id is not None
+            else ("name", name) if name is not None else None
+        )
+        if identity is None:
+            blockers.append(
+                _runtime_variant_blocker(
+                    "project.runtime-variant-registry.specialization-identity-missing",
+                    "A specialization constant is missing both its ID and name.",
+                )
+            )
+            continue
+        has_value, value, value_source = _runtime_variant_constant_value(constant)
+        if not has_value:
+            blockers.append(
+                _runtime_variant_blocker(
+                    "project.runtime-variant-registry.specialization-value-missing",
+                    "Exact variant selection requires a concrete or default "
+                    "specialization value.",
+                    details={"name": name, "id": constant_id},
+                )
+            )
+            value = None
+        payload = {
+            "id": constant_id,
+            "name": name,
+            "kind": constant.get("kind") or "specialization-constant",
+            "dtype": constant.get("dtype") or constant.get("sourceType"),
+            "value": _runtime_variant_normalize_json(value),
+            "valueSource": value_source,
+            "required": bool(constant.get("required")),
+            "status": constant.get("status"),
+            "source": constant.get("source"),
+            "runtimeRole": "pipeline-specialization",
+        }
+        previous = identities.get(identity)
+        if previous is not None:
+            blockers.append(
+                _runtime_variant_blocker(
+                    "project.runtime-variant-registry.specialization-identity-duplicate",
+                    "Specialization constant identity is duplicated.",
+                    details={"identity": list(identity)},
+                )
+            )
+        identities[identity] = payload
+        normalized.append(payload)
+        key_records.append({"id": constant_id, "name": name, "value": payload["value"]})
+    normalized.sort(
+        key=lambda item: (
+            item.get("id") is None,
+            item.get("id") if item.get("id") is not None else 0,
+            str(item.get("name") or ""),
+        )
+    )
+    return (
+        normalized,
+        _runtime_variant_normalized_key_specializations(key_records),
+        blockers,
+    )
+
+
+def _runtime_variant_record_applies_to_entry(
+    value: Mapping[str, Any], target_entry: str | None
+) -> bool:
+    metadata = value.get("metadata")
+    if not isinstance(metadata, Mapping) or target_entry is None:
+        return True
+    names: list[str] = []
+    for field_name in ("entryPoint", "entry_point"):
+        entry = metadata.get(field_name)
+        if _is_non_empty_string(entry):
+            names.append(str(entry))
+    for field_name in ("entryPoints", "entry_points"):
+        entries = metadata.get(field_name)
+        if isinstance(entries, list):
+            names.extend(str(entry) for entry in entries if _is_non_empty_string(entry))
+    return not names or target_entry in names
+
+
+def _runtime_variant_binding_interface(
+    record: Mapping[str, Any],
+    context: Mapping[str, Any],
+    specialization_constants: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    host_interface = record.get("hostInterface")
+    host = host_interface if isinstance(host_interface, Mapping) else {}
+    target_entry = context.get("targetEntry")
+    resources = [
+        _runtime_variant_normalize_json(resource)
+        for resource in _record_sequence(host.get("resources"))
+        if isinstance(resource, Mapping)
+        and _runtime_variant_record_applies_to_entry(resource, target_entry)
+    ]
+    constants = [
+        _runtime_variant_normalize_json(constant)
+        for constant in _record_sequence(host.get("constants"))
+        if isinstance(constant, Mapping)
+        and _runtime_variant_record_applies_to_entry(constant, target_entry)
+    ]
+    entry_point = context.get("entryPoint")
+    normalized_entry_point = (
+        _runtime_variant_normalize_json(entry_point)
+        if isinstance(entry_point, Mapping)
+        else None
+    )
+    normalized_specializations = [dict(item) for item in specialization_constants]
+    return {
+        "status": host.get("status") or "not-inspected",
+        "source": host.get("source"),
+        "parser": host.get("parser"),
+        "artifactFormat": host.get("artifactFormat") or record.get("artifactFormat"),
+        "entryPoint": normalized_entry_point,
+        "entryPointCount": 1 if normalized_entry_point is not None else 0,
+        "resources": sorted(resources, key=_runtime_variant_canonical_json),
+        "resourceCount": len(resources),
+        "constants": sorted(constants, key=_runtime_variant_canonical_json),
+        "constantCount": len(constants),
+        "specializationConstants": normalized_specializations,
+        "specializationConstantCount": len(normalized_specializations),
+        "diagnostics": sorted(
+            str(diagnostic)
+            for diagnostic in _record_sequence(host.get("diagnostics"))
+            if _is_non_empty_string(diagnostic)
+        ),
+        "diagnosticRecords": sorted(
+            (
+                _runtime_variant_normalize_json(diagnostic)
+                for diagnostic in _record_sequence(host.get("diagnosticRecords"))
+                if isinstance(diagnostic, Mapping)
+            ),
+            key=_runtime_variant_canonical_json,
+        ),
+    }
+
+
+def _runtime_variant_input_blockers(
+    record: Mapping[str, Any],
+    *,
+    stale_codes: Sequence[str] = (),
+) -> list[dict[str, Any]]:
+    blockers = [
+        _runtime_variant_blocker(
+            str(blocker.get("code") or blocker.get("kind") or "input-blocked"),
+            str(blocker.get("message") or "Runtime loader input is blocked."),
+            details={
+                key: value
+                for key, value in blocker.items()
+                if key not in {"code", "kind", "message"}
+            },
+        )
+        for blocker in _record_sequence(record.get("blockers"))
+        if isinstance(blocker, Mapping)
+    ]
+    for code in sorted(set(stale_codes)):
+        blockers.append(
+            _runtime_variant_blocker(
+                code,
+                "Runtime package inspection found stale or invalid packaged input.",
+                details={"artifact": record.get("id")},
+            )
+        )
+    return blockers
+
+
+def _runtime_variant_candidate(
+    record: Mapping[str, Any],
+    context: Mapping[str, Any],
+    *,
+    input_kind: str,
+    stale_codes: Sequence[str] = (),
+) -> dict[str, Any]:
+    source_unit = record.get("source")
+    source_entry = context.get("sourceEntry")
+    target_entry = context.get("targetEntry")
+    target = str(record.get("target"))
+    target_profile = _runtime_variant_target_profile(record, context)
+    type_arguments, value_arguments, template_provenance = _runtime_variant_arguments(
+        record,
+        source_entry=source_entry,
+        target_entry=target_entry,
+    )
+    specialization_constants, key_specializations, specialization_blockers = (
+        _runtime_variant_specialization_records(record)
+    )
+    blockers = [
+        *_runtime_variant_input_blockers(record, stale_codes=stale_codes),
+        *specialization_blockers,
+    ]
+    if not _is_non_empty_string(source_unit):
+        blockers.append(
+            _runtime_variant_blocker(
+                "project.runtime-variant-registry.source-unit-missing",
+                "Runtime variant source unit metadata is missing.",
+            )
+        )
+    if not _is_non_empty_string(source_entry):
+        blockers.append(
+            _runtime_variant_blocker(
+                "project.runtime-variant-registry.source-entry-missing",
+                "Runtime variant source entry metadata is missing.",
+            )
+        )
+    if not _is_non_empty_string(target_entry):
+        blockers.append(
+            _runtime_variant_blocker(
+                "project.runtime-variant-registry.target-entry-missing",
+                "Runtime variant target entry point metadata is missing.",
+            )
+        )
+    host_interface = record.get("hostInterface")
+    interface_status = (
+        host_interface.get("status")
+        if isinstance(host_interface, Mapping)
+        else "not-inspected"
+    )
+    if interface_status != "ready":
+        blockers.append(
+            _runtime_variant_blocker(
+                "project.runtime-variant-registry.interface-blocked",
+                "Runtime variant binding interface is not ready.",
+                details={"status": interface_status},
+            )
+        )
+    artifact_hash = record.get("hash")
+    if not isinstance(artifact_hash, Mapping):
+        blockers.append(
+            _runtime_variant_blocker(
+                "project.runtime-variant-registry.artifact-hash-missing",
+                "Runtime variant artifact hash metadata is missing.",
+            )
+        )
+    blockers = sorted(
+        {
+            _runtime_variant_canonical_json(blocker): blocker for blocker in blockers
+        }.values(),
+        key=_runtime_variant_canonical_json,
+    )
+    status = "stale" if stale_codes else "blocked" if blockers else "ready"
+    key = encode_runtime_variant_key(
+        (
+            str(source_unit)
+            if _is_non_empty_string(source_unit)
+            else _RUNTIME_VARIANT_UNRESOLVED
+        ),
+        (
+            str(source_entry)
+            if _is_non_empty_string(source_entry)
+            else _RUNTIME_VARIANT_UNRESOLVED
+        ),
+        target,
+        target_profile=target_profile,
+        type_arguments=type_arguments,
+        value_arguments=value_arguments,
+        specialization_constants=key_specializations,
+        defines=(
+            record.get("defines") if isinstance(record.get("defines"), Mapping) else {}
+        ),
+    )
+    source_remap = record.get("sourceRemap")
+    catalog_entry = _runtime_adapter_catalog_entry(target)
+    artifact_format = record.get("artifactFormat")
+    if not _is_non_empty_string(artifact_format) and isinstance(
+        host_interface, Mapping
+    ):
+        artifact_format = host_interface.get("artifactFormat")
+    if not _is_non_empty_string(artifact_format):
+        artifact_format = catalog_entry.get("artifactFormat")
+    artifact_id = record.get("artifact") or record.get("id")
+    return {
+        "key": key,
+        "status": status,
+        "source": {
+            "unit": source_unit,
+            "backend": record.get("sourceBackend"),
+            "entry": source_entry,
+        },
+        "target": {
+            "backend": target,
+            "profile": target_profile,
+            "stage": context.get("stage"),
+            "entryPoint": target_entry,
+        },
+        "variant": record.get("variant"),
+        "arguments": {
+            "types": type_arguments,
+            "values": value_arguments,
+        },
+        "defines": dict(sorted(record.get("defines", {}).items())),
+        "specializationConstants": specialization_constants,
+        "bindingInterface": _runtime_variant_binding_interface(
+            record, context, specialization_constants
+        ),
+        "artifact": {
+            "id": artifact_id,
+            "path": _runtime_loader_optional_package_path(record.get("packagePath")),
+            "format": artifact_format,
+            "hash": (
+                _runtime_variant_normalize_json(artifact_hash)
+                if isinstance(artifact_hash, Mapping)
+                else None
+            ),
+            "sizeBytes": record.get("sizeBytes"),
+        },
+        "provenance": {
+            "inputKind": input_kind,
+            "artifactId": artifact_id,
+            "sourceHash": (
+                _runtime_variant_normalize_json(record.get("sourceHash"))
+                if isinstance(record.get("sourceHash"), Mapping)
+                else None
+            ),
+            "sourceSizeBytes": record.get("sourceSizeBytes"),
+            "translation": (
+                _runtime_variant_normalize_json(record.get("provenance"))
+                if isinstance(record.get("provenance"), Mapping)
+                else {}
+            ),
+            "entryPointNames": context.get("nameProvenance"),
+            "templateArguments": template_provenance,
+            "sourceRemap": (
+                _runtime_variant_normalize_json(source_remap)
+                if isinstance(source_remap, Mapping)
+                else None
+            ),
+        },
+        "lookup": {"mode": "exact", "eligible": status == "ready"},
+        "blockers": blockers,
+    }
+
+
+def _runtime_variant_package_candidates(
+    path: Path,
+    payload: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    inspection = inspect_runtime_package(path)
+    bindings = [
+        binding
+        for binding in _record_sequence(inspection.get("bindings"))
+        if isinstance(binding, Mapping)
+    ]
+    artifacts = [
+        artifact
+        for artifact in _record_sequence(payload.get("artifacts"))
+        if isinstance(artifact, Mapping)
+    ]
+    candidates: list[dict[str, Any]] = []
+    for index, artifact in enumerate(artifacts):
+        binding = bindings[index] if index < len(bindings) else None
+        merged = dict(artifact)
+        stale_codes: list[str] = []
+        if isinstance(binding, Mapping):
+            if isinstance(binding.get("hostInterface"), Mapping):
+                merged["hostInterface"] = dict(binding["hostInterface"])
+            stale_codes.extend(
+                str(code)
+                for code in _record_sequence(binding.get("diagnostics"))
+                if _is_non_empty_string(code)
+            )
+        else:
+            stale_codes.append(
+                "project.runtime-variant-registry.package-inspection-record-missing"
+            )
+        for context in _runtime_variant_entry_contexts(merged):
+            candidates.append(
+                _runtime_variant_candidate(
+                    merged,
+                    context,
+                    input_kind=RUNTIME_PACKAGE_KIND,
+                    stale_codes=stale_codes,
+                )
+            )
+    summary = inspection.get("summary")
+    summary_mapping = summary if isinstance(summary, Mapping) else {}
+    return candidates, {
+        "kind": RUNTIME_PACKAGE_INSPECTION_KIND,
+        "success": bool(inspection.get("success")),
+        "verifiedArtifactCount": summary_mapping.get("verifiedArtifactCount", 0),
+        "failedArtifactCount": summary_mapping.get("failedArtifactCount", 0),
+        "readyBindingCount": summary_mapping.get("readyBindingCount", 0),
+        "failedBindingCount": summary_mapping.get("failedBindingCount", 0),
+    }
+
+
+def _runtime_variant_loader_candidates(
+    payload: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    candidates = []
+    for load_unit in _record_sequence(payload.get("loadUnits")):
+        if not isinstance(load_unit, Mapping):
+            continue
+        for context in _runtime_variant_entry_contexts(load_unit):
+            candidates.append(
+                _runtime_variant_candidate(
+                    load_unit,
+                    context,
+                    input_kind=RUNTIME_LOADER_MANIFEST_KIND,
+                )
+            )
+    inspection = payload.get("packageInspection")
+    inspection_mapping = inspection if isinstance(inspection, Mapping) else {}
+    return candidates, {
+        "kind": inspection_mapping.get("kind") or RUNTIME_PACKAGE_INSPECTION_KIND,
+        "success": bool(inspection_mapping.get("success")),
+        "readyBindingCount": inspection_mapping.get("readyBindingCount", 0),
+        "failedBindingCount": inspection_mapping.get("failedBindingCount", 0),
+    }
+
+
+def _runtime_variant_registry_empty_payload(
+    *,
+    source_kind: Any,
+    source_schema_version: Any,
+    diagnostics: Sequence[ProjectDiagnostic],
+) -> dict[str, Any]:
+    key_schema = _runtime_variant_key_schema()
+    variants: dict[str, Any] = {}
+    registry_hash = _runtime_variant_payload_hash(
+        {
+            "schemaVersion": REPORT_SCHEMA_VERSION,
+            "keySchema": key_schema,
+            "variants": variants,
+        }
+    )
+    return {
+        "schemaVersion": REPORT_SCHEMA_VERSION,
+        "kind": RUNTIME_VARIANT_REGISTRY_KIND,
+        "success": False,
+        "status": "failed",
+        "scope": RUNTIME_VARIANT_REGISTRY_SCOPE,
+        "nonGoals": list(RUNTIME_VARIANT_REGISTRY_NON_GOALS),
+        "source": {
+            "kind": source_kind if _is_non_empty_string(source_kind) else None,
+            "schemaVersion": source_schema_version,
+        },
+        "keySchema": key_schema,
+        "summary": {
+            "targetCount": 0,
+            "candidateCount": 0,
+            "variantCount": 0,
+            "readyVariantCount": 0,
+            "blockedVariantCount": 0,
+            "staleVariantCount": 0,
+            "duplicateKeyCount": 0,
+            "conflictingKeyCount": 0,
+            "rejectedCandidateCount": 0,
+        },
+        "targets": [],
+        "variants": variants,
+        "lookup": {
+            "mode": "exact",
+            "defaulting": "none",
+            "availableKeys": [],
+            "readyKeys": [],
+            "blockedKeys": [],
+        },
+        "inputInspection": None,
+        "registryHash": registry_hash,
+        "diagnosticCounts": _diagnostic_counts(diagnostics),
+        "diagnostics": [diagnostic.to_json() for diagnostic in diagnostics],
+    }
+
+
+def _runtime_variant_record_comparison_payload(record: Mapping[str, Any]) -> Any:
+    return _runtime_variant_normalize_json(record)
+
+
+def _runtime_variant_registry_target(
+    target: str,
+    variants: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    records = [
+        record
+        for record in variants.values()
+        if record.get("target", {}).get("backend") == target
+    ]
+    keys = sorted(record.get("key") for record in records)
+    return {
+        "target": target,
+        "variantCount": len(records),
+        "readyVariantCount": sum(record.get("status") == "ready" for record in records),
+        "blockedVariantCount": sum(
+            record.get("status") == "blocked" for record in records
+        ),
+        "staleVariantCount": sum(record.get("status") == "stale" for record in records),
+        "keys": keys,
+    }
+
+
+def _runtime_variant_lookup_registry_contract_reasons(
+    registry: Mapping[str, Any],
+) -> list[str]:
+    reasons = _unsupported_mapping_field_reasons(
+        "runtime variant registry",
+        registry,
+        RUNTIME_VARIANT_REGISTRY_FIELDS,
+    )
+    missing = sorted(RUNTIME_VARIANT_REGISTRY_FIELDS - set(registry))
+    if missing:
+        reasons.append(
+            "runtime variant registry is missing fields: " + ", ".join(missing)
+        )
+
+    key_schema = registry.get("keySchema")
+    expected_key_schema = _runtime_variant_key_schema()
+    if key_schema != expected_key_schema:
+        reasons.append("runtime variant registry.keySchema is not canonical")
+
+    variants = registry.get("variants")
+    if not isinstance(variants, Mapping):
+        reasons.append("runtime variant registry.variants must be an object")
+        return sorted(set(reasons))
+
+    expected_hash = _runtime_variant_payload_hash(
+        {
+            "schemaVersion": REPORT_SCHEMA_VERSION,
+            "keySchema": expected_key_schema,
+            "variants": variants,
+        }
+    )
+    if registry.get("registryHash") != expected_hash:
+        reasons.append(
+            "runtime variant registry.registryHash does not match its variants"
+        )
+
+    for key, record in variants.items():
+        prefix = f"runtime variant registry.variants[{key!r}]"
+        try:
+            decode_runtime_variant_key(key)
+        except ValueError as exc:
+            reasons.append(f"{prefix} uses an invalid canonical key: {exc}")
+            continue
+        if not isinstance(record, Mapping):
+            reasons.append(f"{prefix} must be an object")
+            continue
+        reasons.extend(
+            _unsupported_mapping_field_reasons(
+                prefix,
+                record,
+                RUNTIME_VARIANT_REGISTRY_RECORD_FIELDS,
+            )
+        )
+        missing_record_fields = sorted(
+            RUNTIME_VARIANT_REGISTRY_RECORD_FIELDS - set(record)
+        )
+        if missing_record_fields:
+            reasons.append(
+                f"{prefix} is missing fields: " + ", ".join(missing_record_fields)
+            )
+        if record.get("key") != key:
+            reasons.append(f"{prefix}.key must match its registry key")
+
+        status = record.get("status")
+        if status not in {"ready", "blocked", "stale"}:
+            reasons.append(f"{prefix}.status must be ready, blocked, or stale")
+        lookup = record.get("lookup")
+        if not isinstance(lookup, Mapping):
+            reasons.append(f"{prefix}.lookup must be an object")
+        elif lookup.get("eligible") is not (status == "ready"):
+            reasons.append(f"{prefix}.lookup.eligible must match record readiness")
+
+        source = record.get("source")
+        target = record.get("target")
+        arguments = record.get("arguments")
+        defines = record.get("defines")
+        constants = record.get("specializationConstants")
+        if not all(
+            isinstance(value, Mapping) for value in (source, target, arguments, defines)
+        ) or not isinstance(constants, list):
+            reasons.append(f"{prefix} cannot reconstruct its canonical identity")
+            continue
+        type_arguments = arguments.get("types")
+        value_arguments = arguments.get("values")
+        if (
+            not isinstance(type_arguments, Mapping)
+            or not isinstance(value_arguments, Mapping)
+            or not all(isinstance(constant, Mapping) for constant in constants)
+        ):
+            reasons.append(f"{prefix} cannot reconstruct its canonical identity")
+            continue
+        try:
+            expected_key = encode_runtime_variant_key(
+                source.get("unit"),
+                source.get("entry"),
+                target.get("backend"),
+                target_profile=target.get("profile"),
+                type_arguments=type_arguments,
+                value_arguments=value_arguments,
+                specialization_constants=constants,
+                defines=defines,
+            )
+        except (TypeError, ValueError) as exc:
+            reasons.append(f"{prefix} has an invalid canonical identity: {exc}")
+            continue
+        if expected_key != key:
+            reasons.append(f"{prefix} identity does not match its canonical key")
+    return sorted(set(reasons))
+
+
+def build_runtime_variant_registry(
+    manifest_path: str | os.PathLike[str],
+) -> dict[str, Any]:
+    """Build a deterministic exact-lookup registry from a package or loader manifest."""
+
+    path = _filesystem_path_arg(
+        manifest_path, field_name="Runtime package or loader manifest path"
+    )
+    payload, diagnostics = _runtime_variant_registry_load_input(path)
+    if diagnostics:
+        return _runtime_variant_registry_empty_payload(
+            source_kind=None,
+            source_schema_version=None,
+            diagnostics=diagnostics,
+        )
+    reasons = _runtime_variant_registry_input_contract_reasons(payload)
+    if reasons:
+        diagnostic = _runtime_variant_diagnostic(
+            "project.runtime-variant-registry.input-schema-invalid",
+            "Runtime variant registry input does not satisfy the package or loader schema.",
+            details={"reasons": reasons},
+        )
+        return _runtime_variant_registry_empty_payload(
+            source_kind=payload.get("kind"),
+            source_schema_version=payload.get("schemaVersion"),
+            diagnostics=[diagnostic],
+        )
+
+    input_kind = str(payload.get("kind"))
+    if input_kind == RUNTIME_PACKAGE_KIND:
+        candidates, input_inspection = _runtime_variant_package_candidates(
+            path, payload
+        )
+    else:
+        candidates, input_inspection = _runtime_variant_loader_candidates(payload)
+    candidates = sorted(
+        candidates,
+        key=lambda record: (
+            str(record.get("key") or ""),
+            _runtime_variant_canonical_json(record),
+        ),
+    )
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for candidate in candidates:
+        groups.setdefault(str(candidate["key"]), []).append(candidate)
+
+    variants: dict[str, dict[str, Any]] = {}
+    duplicate_key_count = 0
+    conflicting_key_count = 0
+    rejected_candidate_count = 0
+    registry_diagnostics: list[ProjectDiagnostic] = []
+    for key, records in sorted(groups.items()):
+        if len(records) == 1:
+            variants[key] = records[0]
+            continue
+        rejected_candidate_count += len(records)
+        comparison_payloads = {
+            _runtime_variant_canonical_json(
+                _runtime_variant_record_comparison_payload(record)
+            )
+            for record in records
+        }
+        conflict = len(comparison_payloads) > 1
+        if conflict:
+            conflicting_key_count += 1
+            code = "project.runtime-variant-registry.conflicting-key"
+            message = "Multiple runtime records map one key to conflicting artifacts or metadata."
+        else:
+            duplicate_key_count += 1
+            code = "project.runtime-variant-registry.duplicate-key"
+            message = "The runtime variant input contains a duplicate canonical key."
+        registry_diagnostics.append(
+            _runtime_variant_diagnostic(
+                code,
+                message,
+                details={
+                    "key": key,
+                    "recordCount": len(records),
+                    "artifactIds": sorted(
+                        str(record.get("artifact", {}).get("id") or "")
+                        for record in records
+                    ),
+                },
+            )
+        )
+
+    for key, record in sorted(variants.items()):
+        for blocker in record.get("blockers", []):
+            stale = record.get("status") == "stale"
+            registry_diagnostics.append(
+                _runtime_variant_diagnostic(
+                    str(
+                        blocker.get("code")
+                        or "project.runtime-variant-registry.blocked"
+                    ),
+                    str(blocker.get("message") or "Runtime variant is blocked."),
+                    severity="error" if stale else "warning",
+                    source=record.get("source", {}).get("unit"),
+                    target=record.get("target", {}).get("backend"),
+                    variant=record.get("variant"),
+                    details={
+                        "key": key,
+                        **(
+                            blocker.get("details")
+                            if isinstance(blocker.get("details"), Mapping)
+                            else {}
+                        ),
+                    },
+                )
+            )
+    registry_diagnostics = sorted(
+        registry_diagnostics,
+        key=lambda diagnostic: (
+            diagnostic.code,
+            diagnostic.message,
+            _runtime_variant_canonical_json(diagnostic.details),
+        ),
+    )
+    variants = {key: variants[key] for key in sorted(variants)}
+    ready_keys = sorted(
+        key for key, record in variants.items() if record.get("status") == "ready"
+    )
+    blocked_keys = sorted(
+        key for key, record in variants.items() if record.get("status") != "ready"
+    )
+    stale_variant_count = sum(
+        record.get("status") == "stale" for record in variants.values()
+    )
+    blocked_variant_count = sum(
+        record.get("status") == "blocked" for record in variants.values()
+    )
+    has_error = any(
+        diagnostic.severity == "error" for diagnostic in registry_diagnostics
+    )
+    success = not has_error
+    if not success:
+        status = "failed"
+    elif blocked_variant_count and not ready_keys:
+        status = "blocked"
+    elif blocked_variant_count:
+        status = "partial"
+    else:
+        status = "ready"
+    target_names = sorted(
+        {
+            str(record.get("target", {}).get("backend"))
+            for record in variants.values()
+            if _is_non_empty_string(record.get("target", {}).get("backend"))
+        }
+    )
+    key_schema = _runtime_variant_key_schema()
+    registry_hash = _runtime_variant_payload_hash(
+        {
+            "schemaVersion": REPORT_SCHEMA_VERSION,
+            "keySchema": key_schema,
+            "variants": variants,
+        }
+    )
+    return {
+        "schemaVersion": REPORT_SCHEMA_VERSION,
+        "kind": RUNTIME_VARIANT_REGISTRY_KIND,
+        "success": success,
+        "status": status,
+        "scope": RUNTIME_VARIANT_REGISTRY_SCOPE,
+        "nonGoals": list(RUNTIME_VARIANT_REGISTRY_NON_GOALS),
+        "source": {
+            "kind": input_kind,
+            "schemaVersion": payload.get("schemaVersion"),
+        },
+        "keySchema": key_schema,
+        "summary": {
+            "targetCount": len(target_names),
+            "candidateCount": len(candidates),
+            "variantCount": len(variants),
+            "readyVariantCount": len(ready_keys),
+            "blockedVariantCount": blocked_variant_count,
+            "staleVariantCount": stale_variant_count,
+            "duplicateKeyCount": duplicate_key_count,
+            "conflictingKeyCount": conflicting_key_count,
+            "rejectedCandidateCount": rejected_candidate_count,
+        },
+        "targets": [
+            _runtime_variant_registry_target(target, variants)
+            for target in target_names
+        ],
+        "variants": variants,
+        "lookup": {
+            "mode": "exact",
+            "defaulting": "none",
+            "availableKeys": sorted(variants),
+            "readyKeys": ready_keys,
+            "blockedKeys": blocked_keys,
+        },
+        "inputInspection": input_inspection,
+        "registryHash": registry_hash,
+        "diagnosticCounts": _diagnostic_counts(registry_diagnostics),
+        "diagnostics": [diagnostic.to_json() for diagnostic in registry_diagnostics],
+    }
+
+
+def lookup_runtime_variant(
+    registry: Mapping[str, Any],
+    key: str,
+) -> dict[str, Any]:
+    """Perform one exact registry lookup without defaults or best-match logic."""
+
+    diagnostics: list[ProjectDiagnostic] = []
+    if not isinstance(registry, Mapping):
+        diagnostics.append(
+            _runtime_variant_diagnostic(
+                "project.runtime-variant-registry.lookup-registry-invalid",
+                "Runtime variant lookup requires a registry object.",
+            )
+        )
+        variants: Mapping[str, Any] = {}
+        requested_key = key if isinstance(key, str) else ""
+    elif (
+        registry.get("schemaVersion") != REPORT_SCHEMA_VERSION
+        or registry.get("kind") != RUNTIME_VARIANT_REGISTRY_KIND
+    ):
+        diagnostics.append(
+            _runtime_variant_diagnostic(
+                "project.runtime-variant-registry.lookup-registry-schema-invalid",
+                "Runtime variant lookup requires a schema-v1 runtime variant registry.",
+            )
+        )
+        variants = {}
+        requested_key = key if isinstance(key, str) else ""
+    else:
+        requested_key = key if isinstance(key, str) else ""
+        registry_reasons = _runtime_variant_lookup_registry_contract_reasons(registry)
+        if registry_reasons:
+            diagnostics.append(
+                _runtime_variant_diagnostic(
+                    "project.runtime-variant-registry.lookup-registry-invalid",
+                    "Runtime variant lookup rejected an invalid or modified registry.",
+                    details={"reasons": registry_reasons},
+                )
+            )
+            variants = {}
+        else:
+            variants = registry["variants"]
+            try:
+                decode_runtime_variant_key(requested_key)
+            except ValueError as exc:
+                diagnostics.append(
+                    _runtime_variant_diagnostic(
+                        "project.runtime-variant-registry.lookup-key-invalid",
+                        str(exc),
+                        details={"requestedKey": requested_key},
+                    )
+                )
+    record = variants.get(requested_key) if not diagnostics else None
+    available_keys = sorted(str(candidate) for candidate in variants)
+    if record is None and not diagnostics:
+        diagnostics.append(
+            _runtime_variant_diagnostic(
+                "project.runtime-variant-registry.variant-not-found",
+                "No runtime variant exactly matches the requested key.",
+                details={
+                    "requestedKey": requested_key,
+                    "availableKeys": available_keys,
+                },
+            )
+        )
+    elif isinstance(record, Mapping) and record.get("status") != "ready":
+        diagnostics.append(
+            _runtime_variant_diagnostic(
+                "project.runtime-variant-registry.variant-blocked",
+                "The exact runtime variant exists but is not lookup-ready.",
+                details={
+                    "requestedKey": requested_key,
+                    "status": record.get("status"),
+                    "blockers": record.get("blockers", []),
+                },
+            )
+        )
+    success = isinstance(record, Mapping) and record.get("status") == "ready"
+    status = "ready" if success else "blocked" if record is not None else "not-found"
+    if diagnostics and diagnostics[0].code.endswith(("invalid", "schema-invalid")):
+        status = "invalid"
+    return {
+        "schemaVersion": REPORT_SCHEMA_VERSION,
+        "kind": RUNTIME_VARIANT_LOOKUP_KIND,
+        "success": success,
+        "status": status,
+        "match": "exact" if record is not None else None,
+        "requestedKey": requested_key,
+        "record": dict(record) if isinstance(record, Mapping) else None,
+        "availableKeys": available_keys,
+        "diagnosticCounts": _diagnostic_counts(diagnostics),
+        "diagnostics": [diagnostic.to_json() for diagnostic in diagnostics],
     }
 
 
@@ -32048,6 +36280,8 @@ def _inspection_failed_artifact(artifact: Mapping[str, Any]) -> dict[str, Any]:
         failed["sourceBackend"] = artifact.get("sourceBackend")
     if "variant" in artifact:
         failed["variant"] = artifact.get("variant")
+    if isinstance(artifact.get("entryPoint"), Mapping):
+        failed["entryPoint"] = dict(artifact["entryPoint"])
     if "error" in artifact:
         failed["error"] = artifact.get("error")
     for field_name in (
@@ -32895,11 +37129,14 @@ def _project_config_for_scan_validation(
         return None
 
     source_overrides = project.get("sourceOverrides")
+    entry_point_selections = project.get("entryPointSelections", {})
     defines = project.get("defines")
     source_options = project.get("sourceOptions", {})
     if not _valid_non_empty_string_mapping(
         source_overrides
     ) or not _valid_string_mapping(defines):
+        return None
+    if not _valid_non_empty_string_mapping(entry_point_selections):
         return None
     if not _valid_source_options_mapping(source_options):
         return None
@@ -32912,6 +37149,22 @@ def _project_config_for_scan_validation(
         if not _is_non_empty_string(name) or not _valid_string_mapping(variant_defines):
             return None
         variants[name] = dict(variant_defines)
+
+    specialization_constants = project.get("specializationConstants", {})
+    if _specialization_value_mapping_contract_reasons(
+        "project.specializationConstants", specialization_constants
+    ):
+        return None
+    raw_variant_specializations = project.get("variantSpecializationConstants", {})
+    if _variant_specialization_mapping_contract_reasons(
+        "project.variantSpecializationConstants", raw_variant_specializations
+    ):
+        return None
+    variant_specializations = {
+        str(name): dict(values)
+        for name, values in raw_variant_specializations.items()
+        if isinstance(values, Mapping)
+    }
 
     output_dir = project.get("outputDir")
     if not isinstance(output_dir, str):
@@ -32940,6 +37193,7 @@ def _project_config_for_scan_validation(
         targets=tuple(targets),
         output_dir=_normalize_project_relative_path(output_dir),
         source_overrides=_normalize_project_relative_path_mapping(source_overrides),
+        entry_points=_normalize_project_relative_path_mapping(entry_point_selections),
         include_dirs=tuple(_normalize_project_relative_paths(include_dirs)),
         defines=dict(defines),
         source_options={
@@ -32948,6 +37202,8 @@ def _project_config_for_scan_validation(
             if isinstance(options, Mapping)
         },
         variants=variants,
+        specialization_constants=dict(specialization_constants),
+        variant_specialization_constants=variant_specializations,
         selected_variants=tuple(selected_variants),
         external_corpus_manifest=external_corpus_manifest,
     )
@@ -33113,6 +37369,65 @@ ArtifactIdentity = Tuple[str, str, str, Optional[str]]
 DeclaredArtifact = Tuple[int, Mapping[str, Any]]
 
 
+def _artifact_entry_point_source(record: Mapping[str, Any]) -> str | None:
+    entry_point = record.get("entryPoint")
+    if not isinstance(entry_point, Mapping):
+        return None
+    source = entry_point.get("source")
+    return str(source) if _is_non_empty_string(source) else None
+
+
+def _configured_entry_point_for_artifact(
+    record: Mapping[str, Any],
+    project: Mapping[str, Any] | None,
+) -> str | None:
+    source_path = record.get("source")
+    selections = (
+        project.get("entryPointSelections") if isinstance(project, Mapping) else None
+    )
+    if not _is_non_empty_string(source_path) or not isinstance(selections, Mapping):
+        return None
+    valid_selections = {
+        str(pattern): str(value)
+        for pattern, value in selections.items()
+        if _is_non_empty_string(pattern) and _is_non_empty_string(value)
+    }
+    return _entry_point_from_mapping(str(source_path), valid_selections)
+
+
+def _artifact_entry_point_contract_reasons(
+    prefix: str,
+    record: Mapping[str, Any],
+    *,
+    project: Mapping[str, Any] | None,
+) -> list[str]:
+    entry_point = record.get("entryPoint")
+    configured = _configured_entry_point_for_artifact(record, project)
+    if entry_point is None:
+        if configured is not None:
+            return [
+                f"{prefix}.entryPoint must be recorded when the source matches "
+                "project.entryPointSelections"
+            ]
+        return []
+    if not isinstance(entry_point, Mapping):
+        return [f"{prefix}.entryPoint must be an object"]
+    reasons = _unsupported_mapping_field_reasons(
+        f"{prefix}.entryPoint", entry_point, REPORT_ARTIFACT_ENTRY_POINT_FIELDS
+    )
+    for field_name in ("source", "target"):
+        if not _is_non_empty_string(entry_point.get(field_name)):
+            reasons.append(f"{prefix}.entryPoint.{field_name} must be a string")
+    if "stage" in entry_point and not _is_non_empty_string(entry_point.get("stage")):
+        reasons.append(f"{prefix}.entryPoint.stage must be a string")
+
+    if configured is not None and entry_point.get("source") != configured:
+        reasons.append(
+            f"{prefix}.entryPoint.source must match project.entryPointSelections"
+        )
+    return reasons
+
+
 def _artifact_identity(record: Mapping[str, Any]) -> ArtifactIdentity | None:
     source = record.get("source")
     target = record.get("target")
@@ -33143,6 +37458,7 @@ def _expected_artifact_identity(
     *,
     preserve_source_suffix: bool = False,
     stage: str | None = None,
+    entry_point: str | None = None,
 ) -> ArtifactIdentity | None:
     normalized_target = _normalized_targets([target])[0]
     output_base = project_output_path / normalized_target
@@ -33152,6 +37468,7 @@ def _expected_artifact_identity(
         source,
         normalized_target,
         preserve_source_suffix=preserve_source_suffix,
+        entry_point=entry_point,
     )
     if normalized_target == "webgl" and stage in WEBGL_PROJECT_GLSLANG_STAGE_BY_LABEL:
         expected_relative = _webgl_stage_relative_path(expected_relative, stage)
@@ -33194,6 +37511,28 @@ def _webgl_expected_stages_from_artifacts(
     )
 
 
+def _expected_entry_points_from_artifacts(
+    artifacts: Sequence[Mapping[str, Any]],
+    source: str,
+    target: str,
+    variant: str | None,
+) -> tuple[str | None, ...]:
+    entry_points = {
+        entry_point
+        for artifact in artifacts
+        if isinstance(artifact, Mapping)
+        and artifact.get("source") == source
+        and _is_non_empty_string(artifact.get("target"))
+        and _normalized_targets([str(artifact["target"])])[0] == target
+        and _artifact_variant_identity(artifact) == variant
+        for entry_point in (_artifact_entry_point_source(artifact),)
+        if entry_point is not None
+    }
+    if not entry_points:
+        return (None,)
+    return tuple(sorted(entry_points))
+
+
 def _expected_artifact_identities(
     root_path: Path,
     project_output_path: Path,
@@ -33215,21 +37554,25 @@ def _expected_artifact_identities(
             continue
         for target in _normalized_targets(targets):
             for variant in variants:
-                for stage in _webgl_expected_stages_from_artifacts(
+                for entry_point in _expected_entry_points_from_artifacts(
                     artifacts, source, target, variant
                 ):
-                    identity = _expected_artifact_identity(
-                        root_path,
-                        project_output_path,
-                        source,
-                        target,
-                        variant,
-                        preserve_source_suffix=(source, target)
-                        in preserve_source_suffix,
-                        stage=stage,
-                    )
-                    if identity is not None:
-                        expected_identities.add(identity)
+                    for stage in _webgl_expected_stages_from_artifacts(
+                        artifacts, source, target, variant
+                    ):
+                        identity = _expected_artifact_identity(
+                            root_path,
+                            project_output_path,
+                            source,
+                            target,
+                            variant,
+                            preserve_source_suffix=(source, target)
+                            in preserve_source_suffix,
+                            stage=stage,
+                            entry_point=entry_point,
+                        )
+                        if identity is not None:
+                            expected_identities.add(identity)
     return expected_identities
 
 
@@ -34306,6 +38649,16 @@ def _project_config_for_include_validation(
             for name, variant_defines in raw_variants.items()
             if _is_non_empty_string(name) and _valid_string_mapping(variant_defines)
         }
+    specialization_constants = project.get("specializationConstants", {})
+    if _specialization_value_mapping_contract_reasons(
+        "project.specializationConstants", specialization_constants
+    ):
+        specialization_constants = {}
+    raw_variant_specializations = project.get("variantSpecializationConstants", {})
+    if _variant_specialization_mapping_contract_reasons(
+        "project.variantSpecializationConstants", raw_variant_specializations
+    ):
+        raw_variant_specializations = {}
     output_dir = project.get("outputDir", DEFAULT_OUTPUT_DIR)
     if not isinstance(output_dir, str):
         output_dir = DEFAULT_OUTPUT_DIR
@@ -34314,6 +38667,12 @@ def _project_config_for_include_validation(
         include_dirs=tuple(_normalize_project_relative_paths(include_dirs)),
         defines=dict(defines),
         variants=variants,
+        specialization_constants=dict(specialization_constants),
+        variant_specialization_constants={
+            str(name): dict(values)
+            for name, values in raw_variant_specializations.items()
+            if isinstance(values, Mapping)
+        },
         selected_variants=tuple(
             name
             for name in project.get("selectedVariants", [])
@@ -35080,6 +39439,43 @@ def _variant_mapping_contract_reasons(prefix: str, value: Any) -> list[str]:
         else:
             variant_prefix = _mapping_key_path(prefix, variant_name)
         reasons.extend(_string_mapping_contract_reasons(variant_prefix, defines))
+    return reasons
+
+
+def _specialization_value_mapping_contract_reasons(
+    prefix: str, value: Any
+) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+    reasons = []
+    for selector, item in value.items():
+        if not _is_non_empty_string(selector):
+            reasons.append(f"{prefix} keys must be source names or numeric ids")
+            continue
+        if selector.isdigit() and selector != str(int(selector)):
+            reasons.append(f"{prefix} numeric ids must use canonical decimal form")
+        if not isinstance(item, (bool, int, float, str)):
+            reasons.append(
+                f"{_mapping_key_path(prefix, selector)} must be a JSON scalar"
+            )
+    return reasons
+
+
+def _variant_specialization_mapping_contract_reasons(
+    prefix: str, value: Any
+) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+    reasons = []
+    for variant, constants in value.items():
+        if not _is_non_empty_string(variant):
+            reasons.append(f"{prefix} keys must be non-empty variant names")
+            variant_prefix = prefix
+        else:
+            variant_prefix = _mapping_key_path(prefix, variant)
+        reasons.extend(
+            _specialization_value_mapping_contract_reasons(variant_prefix, constants)
+        )
     return reasons
 
 
@@ -36001,6 +40397,33 @@ def _project_metadata_contract_reasons(
                 f"({_value_mismatch_context(source_override_count, len(source_overrides))})"
             )
 
+    entry_point_selections = project.get("entryPointSelections")
+    entry_point_selections_are_mapping = isinstance(entry_point_selections, Mapping)
+    if _optional_project_field(
+        project, "entryPointSelections", required=require_full_metadata
+    ):
+        reasons.extend(
+            _non_empty_string_mapping_contract_reasons(
+                "project.entryPointSelections", entry_point_selections
+            )
+        )
+    if _optional_project_field(
+        project, "entryPointSelectionCount", required=require_full_metadata
+    ):
+        count = project.get("entryPointSelectionCount")
+        if not _is_non_negative_int(count):
+            reasons.append(
+                "project.entryPointSelectionCount must be a non-negative integer"
+            )
+        elif entry_point_selections_are_mapping and count != len(
+            entry_point_selections
+        ):
+            reasons.append(
+                "project.entryPointSelectionCount must match "
+                "project.entryPointSelections "
+                f"({_value_mismatch_context(count, len(entry_point_selections))})"
+            )
+
     source_options = project.get("sourceOptions")
     source_options_is_mapping = isinstance(source_options, Mapping)
     if _optional_project_field(
@@ -36061,6 +40484,73 @@ def _project_metadata_contract_reasons(
             reasons.append(
                 "project.variantDefineCounts must map variant names to "
                 "non-negative integers"
+            )
+
+    specialization_constants = project.get("specializationConstants")
+    specialization_constants_are_mapping = isinstance(specialization_constants, Mapping)
+    if _optional_project_field(
+        project, "specializationConstants", required=require_full_metadata
+    ):
+        reasons.extend(
+            _specialization_value_mapping_contract_reasons(
+                "project.specializationConstants", specialization_constants
+            )
+        )
+    if _optional_project_field(
+        project, "specializationConstantCount", required=require_full_metadata
+    ):
+        count = project.get("specializationConstantCount")
+        if not _is_non_negative_int(count):
+            reasons.append(
+                "project.specializationConstantCount must be a non-negative integer"
+            )
+        elif specialization_constants_are_mapping and count != len(
+            specialization_constants
+        ):
+            reasons.append(
+                "project.specializationConstantCount must match "
+                "project.specializationConstants "
+                f"({_value_mismatch_context(count, len(specialization_constants))})"
+            )
+
+    variant_specializations = project.get("variantSpecializationConstants")
+    variant_specializations_are_mapping = isinstance(variant_specializations, Mapping)
+    if _optional_project_field(
+        project,
+        "variantSpecializationConstants",
+        required=require_full_metadata,
+    ):
+        reasons.extend(
+            _variant_specialization_mapping_contract_reasons(
+                "project.variantSpecializationConstants",
+                variant_specializations,
+            )
+        )
+        if variant_specializations_are_mapping and variants_is_mapping:
+            unknown_variants = sorted(set(variant_specializations) - set(variants))
+            if unknown_variants:
+                reasons.append(
+                    "project.variantSpecializationConstants keys must be listed "
+                    "in project.variants"
+                )
+    if _optional_project_field(
+        project,
+        "variantSpecializationConstantCounts",
+        required=require_full_metadata,
+    ):
+        counts = project.get("variantSpecializationConstantCounts")
+        if variant_specializations_are_mapping:
+            reasons.extend(
+                _mapping_field_contract_reasons(
+                    "project.variantSpecializationConstantCounts",
+                    counts,
+                    _variant_specialization_constant_counts(variant_specializations),
+                    "project.variantSpecializationConstants",
+                )
+            )
+        elif not isinstance(counts, Mapping):
+            reasons.append(
+                "project.variantSpecializationConstantCounts must be an object"
             )
 
     if _optional_project_field(
@@ -36344,6 +40834,9 @@ def _validation_artifact_contract_reasons(
                 require_registered=True,
             )
         )
+    reasons.extend(
+        _artifact_entry_point_contract_reasons(prefix, artifact, project=None)
+    )
     identity = _artifact_identity(artifact)
     if (
         identity is not None
@@ -36373,6 +40866,24 @@ def _validation_artifact_contract_reasons(
         reasons.append(
             f"{prefix}.sourceBackend must match "
             f"report.artifacts[{referenced_artifact[0]}].sourceBackend"
+        )
+    if (
+        "entryPoint" not in artifact
+        and referenced_artifact is not None
+        and isinstance(referenced_artifact[1].get("entryPoint"), Mapping)
+    ):
+        reasons.append(
+            f"{prefix}.entryPoint must be recorded when "
+            f"report.artifacts[{referenced_artifact[0]}].entryPoint is recorded"
+        )
+    if (
+        "entryPoint" in artifact
+        and referenced_artifact is not None
+        and artifact.get("entryPoint") != referenced_artifact[1].get("entryPoint")
+    ):
+        reasons.append(
+            f"{prefix}.entryPoint must match "
+            f"report.artifacts[{referenced_artifact[0]}].entryPoint"
         )
     source_hash_status = artifact.get("sourceHashStatus")
     if require_status_fields and "sourceHashStatus" not in artifact:
@@ -36637,6 +41148,7 @@ def _toolchain_run_contract_reasons(
                 require_registered=True,
             )
         )
+    reasons.extend(_artifact_entry_point_contract_reasons(prefix, run, project=None))
     identity = _artifact_identity(run)
     if (
         identity is not None
@@ -36666,6 +41178,24 @@ def _toolchain_run_contract_reasons(
         reasons.append(
             f"{prefix}.sourceBackend must match "
             f"report.artifacts[{referenced_artifact[0]}].sourceBackend"
+        )
+    if (
+        "entryPoint" not in run
+        and referenced_artifact is not None
+        and isinstance(referenced_artifact[1].get("entryPoint"), Mapping)
+    ):
+        reasons.append(
+            f"{prefix}.entryPoint must be recorded when "
+            f"report.artifacts[{referenced_artifact[0]}].entryPoint is recorded"
+        )
+    if (
+        "entryPoint" in run
+        and referenced_artifact is not None
+        and run.get("entryPoint") != referenced_artifact[1].get("entryPoint")
+    ):
+        reasons.append(
+            f"{prefix}.entryPoint must match "
+            f"report.artifacts[{referenced_artifact[0]}].entryPoint"
         )
     if (
         referenced_artifact is not None
@@ -38870,6 +43400,7 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                         normalized_target,
                         preserve_source_suffix=(source, normalized_target)
                         in preserve_source_suffix,
+                        entry_point=_artifact_entry_point_source(artifact),
                     )
                     if normalized_target == "webgl" and _is_non_empty_string(
                         artifact.get("stage")
@@ -38911,6 +43442,13 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                 reasons.append(
                     f"artifacts[{index}].status must be translated or failed"
                 )
+            reasons.extend(
+                _artifact_entry_point_contract_reasons(
+                    f"artifacts[{index}]",
+                    artifact,
+                    project=project if isinstance(project, Mapping) else None,
+                )
+            )
             if "error" in artifact or (has_summary and status == "failed"):
                 if not _is_non_empty_string(artifact.get("error")):
                     reasons.append(f"artifacts[{index}].error must be a string")
@@ -39367,6 +43905,8 @@ def _run_toolchain_smoke(
                     run["stage"] = artifact["stage"]
                 if artifact.get("variant") is not None:
                     run["variant"] = artifact["variant"]
+                if isinstance(artifact.get("entryPoint"), Mapping):
+                    run["entryPoint"] = dict(artifact["entryPoint"])
                 runs.append(run)
                 if returncode != 0:
                     break
@@ -39395,7 +43935,17 @@ def _toolchain_smoke_commands(
         )
         if stages:
             return [
-                ([tools[0], "--stdin", "-S", stage], "artifact") for stage in stages
+                (
+                    _glslang_validation_command(
+                        target,
+                        tools[0],
+                        stage,
+                        artifact_path,
+                        artifact=artifact,
+                    ),
+                    "artifact",
+                )
+                for stage in stages
             ]
     if target == "vulkan" and artifact_path.suffix.lower() == ".spvasm":
         return _vulkan_spirv_assembly_smoke_commands(
@@ -39426,7 +43976,13 @@ def _toolchain_smoke_command(
         )
     if target in {"opengl", "webgl"}:
         return (
-            [tools[0], "--stdin", "-S", _glslang_stage(artifact_path, artifact)],
+            _glslang_validation_command(
+                target,
+                tools[0],
+                _glslang_stage(artifact_path, artifact),
+                artifact_path,
+                artifact=artifact,
+            ),
             "artifact",
         )
     if target == "vulkan":
@@ -39439,6 +43995,45 @@ def _toolchain_smoke_command(
     if availability_command is None:
         return None
     return list(availability_command), "tool-availability"
+
+
+def _glslang_validation_command(
+    target: str,
+    tool: str,
+    stage: str,
+    artifact_path: Path,
+    *,
+    artifact: Mapping[str, Any] | None = None,
+) -> list[str]:
+    command = [tool, "--stdin", "-S", stage]
+    if target != "opengl" or not _opengl_artifact_uses_specialization_constants(
+        artifact_path, artifact
+    ):
+        return command
+    return [
+        *command,
+        "--target-env",
+        "opengl",
+        "--target-env",
+        "spirv1.3",
+        "--auto-map-locations",
+        "-o",
+        os.devnull,
+    ]
+
+
+def _opengl_artifact_uses_specialization_constants(
+    artifact_path: Path, artifact: Mapping[str, Any] | None = None
+) -> bool:
+    if artifact is not None:
+        specialization_constants = artifact.get("specializationConstants")
+        if isinstance(specialization_constants, list) and specialization_constants:
+            return True
+    try:
+        source = artifact_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return GLSLANG_SPECIALIZATION_CONSTANT_RE.search(source) is not None
 
 
 def _vulkan_spirv_assembly_smoke_commands(
@@ -39930,6 +44525,9 @@ GLSLANG_GENERATED_STAGE_COMMENT_RE = re.compile(
 GLSLANG_STAGE_GUARD_RE = re.compile(
     r"^\s*#\s*(?:if|ifdef)\s+" r"(GL_[A-Z0-9_]+(?:_SHADER|_SHADER_EXT))\b",
     re.IGNORECASE | re.MULTILINE,
+)
+GLSLANG_SPECIALIZATION_CONSTANT_RE = re.compile(
+    r"\blayout\s*\(\s*constant_id\s*=", re.IGNORECASE
 )
 GLSLANG_STAGE_GUARD_LINE_RE = re.compile(
     r"^\s*#\s*(?:if|ifdef)\s+(GL_[A-Z0-9_]+(?:_SHADER|_SHADER_EXT))\b",

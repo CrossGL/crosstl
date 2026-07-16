@@ -1,4 +1,5 @@
 import ast
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -6,10 +7,14 @@ from pathlib import Path
 import pytest
 
 import crosstl.translator
-from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
+from crosstl.translator.codegen.directx_codegen import (
+    DirectXTextureOffsetError,
+    HLSLCodeGen,
+)
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
+from crosstl.translator.codegen.webgl_codegen import WebGLCodeGen
 
 HELPER_RANGE_SHADER = """
 shader RangeForInValidation {
@@ -39,6 +44,127 @@ shader FragmentRangeValidation {
 """
 
 
+GLSL_FIXED_ARRAY_FOR_IN_COMPUTE_SHADER = """
+shader GLSLFixedArrayForInValidation {
+    struct Pair {
+        uint first;
+        uint second;
+    };
+
+    constant uint[2][4] rotations = {
+        {13u, 15u, 26u, 6u},
+        {17u, 29u, 16u, 24u}
+    };
+
+    compute {
+        void main() {
+            int row = 1;
+            uint[2] scalars = {1u, 2u};
+            uvec2[2] vectors = {uvec2(3u, 4u), uvec2(5u, 6u)};
+            Pair[2] pairs = {Pair(7u, 8u), Pair(9u, 10u)};
+            uint total = 0u;
+            for scalar in scalars {
+                total += scalar;
+            }
+            for vectorValue in vectors {
+                total += vectorValue.x;
+            }
+            for pairValue in pairs {
+                total += pairValue.first;
+            }
+            for rowValue in rotations {
+                total += rowValue[0];
+                break;
+            }
+            for rotation in rotations[row] {
+                if (rotation == 29u) {
+                    continue;
+                }
+                total += rotation;
+            }
+        }
+    }
+}
+"""
+
+
+GLSL_PARTIAL_VECTOR_INITIALIZER_COMPUTE_SHADER = """
+shader GLSLPartialVectorInitializerValidation {
+    uint supplied(uint value) {
+        return value;
+    }
+
+    uint2 suppliedPair(uint value) {
+        return uint2(value, value + 1u);
+    }
+
+    compute {
+        void main() {
+            uint2 key = uint2(1u, 2u);
+            uint4 ks = uint4(
+                key.x,
+                key.y,
+                key.x ^ key.y ^ 0x1BD11BDA
+            );
+            uint4 mixed = uint4(suppliedPair(4u), supplied(6u));
+            int4 signedValues = int4(1, 2, 3);
+            float4 floatValues = float4(1.0, 2.0, 3.0);
+            bool4 boolValues = bool4(true, false, true);
+            uint folded = ks.w + mixed.w + uint(signedValues.w);
+            folded += uint(floatValues.w) + uint(boolValues.w);
+        }
+    }
+}
+"""
+
+
+GLSL_RESERVED_IDENTIFIER_COMPUTE_SHADER = r"""
+shader GLSLReservedIdentifierValidation {
+    cbuffer gl_Settings @binding(2) {
+        int bias__value;
+    };
+
+    int gl_read__pair(constant int[2] source__values, int __offset) {
+        return source__values[__offset] + bias__value;
+    }
+
+    compute {
+        @stage_entry
+        void main(
+            StructuredBuffer<int> values__buffer @binding(0),
+            RWStructuredBuffer<int> result__buffer @binding(1)
+        ) {
+            result__buffer[0] = gl_read__pair(values__buffer, 0);
+        }
+    }
+}
+"""
+
+
+WEBGL_RESERVED_IDENTIFIER_VERTEX_SHADER = r"""
+shader WebGLReservedIdentifierValidation {
+    float gl_helper(float __arg, float _arg) {
+        float local__value = __arg;
+        float local_value = _arg;
+        return local__value + local_value;
+    }
+
+    vertex {
+        vec4 main(
+            vec3 position__value @ POSITION,
+            vec3 position_value @ NORMAL
+        ) @ gl_Position {
+            float result__value = gl_helper(
+                position__value.x,
+                position_value.x
+            );
+            return vec4(position__value + vec3(result__value), 1.0);
+        }
+    }
+}
+"""
+
+
 METAL_FUNCTION_CONSTANT_FRAGMENT_SHADER = """
 shader MetalFunctionConstantValidation {
     bool useFast @function_constant(0) = true;
@@ -51,6 +177,22 @@ shader MetalFunctionConstantValidation {
             float value = useFast ? scale : 0.0;
             return vec4(value + float(mode) + float(flags), 0.0, 0.0, 1.0);
         }
+    }
+}
+"""
+
+
+METAL_TO_OPENGL_FUNCTION_CONSTANT_SOURCE = """\
+#include <metal_stdlib>
+using namespace metal;
+
+constant bool has_w [[function_constant(20)]];
+constant int mode [[function_constant(21)]] = 2;
+constant float scale [[function_constant(22)]] = 0.5f;
+
+kernel void use_specialization_constants() {
+    if (has_w) {
+        float value = float(mode) * scale;
     }
 }
 """
@@ -214,6 +356,80 @@ shader HLSLWaveIntrinsicsValidation {
             folded = folded + asuint(floatXor);
             folded = folded + readLane + firstLane + quadX;
             folded = folded + (quadAny ? value : 0u) + (quadAll ? value : 0u);
+        }
+    }
+}
+"""
+
+
+HLSL_FIXED_ARRAY_FOR_IN_COMPUTE_SHADER = """
+shader HLSLFixedArrayForInValidation {
+    struct Pair {
+        uint first;
+        uint second;
+    };
+
+    int selectRow(inout uint calls) {
+        calls += 1u;
+        return int(calls & 1u);
+    }
+
+    compute {
+        void main() {
+            uint calls = 0u;
+            uint[2] scalars = {1u, 2u};
+            uvec2[2] vectors = {uvec2(3u, 4u), uvec2(5u, 6u)};
+            Pair[2] pairs = {{7u, 8u}, {9u, 10u}};
+            uint[2][4] rotations = {
+                {13u, 15u, 26u, 6u},
+                {17u, 29u, 16u, 24u}
+            };
+            uint total = 0u;
+            for scalar in scalars {
+                total += scalar;
+            }
+            for vectorValue in vectors {
+                total += vectorValue.x;
+            }
+            for pairValue in pairs {
+                total += pairValue.first;
+            }
+            for rowValue in rotations {
+                total += rowValue[0];
+                break;
+            }
+            for rotation in rotations[selectRow(calls)] {
+                if (rotation == 29u) {
+                    continue;
+                }
+                total += rotation;
+            }
+        }
+    }
+}
+"""
+
+
+HLSL_FIXED_ARRAY_VALUE_LOCAL_COMPUTE_SHADER = """
+shader HLSLFixedArrayValueLocalValidation {
+    struct Record {
+        uint value;
+    };
+
+    bool[2] divide_mod(bool x, bool y) {
+        return {x / y, x % y};
+    }
+
+    Record[2] make_records(uint value) {
+        return {Record(value), Record(value + 1u)};
+    }
+
+    compute {
+        void main() {
+            bool flags[2] = divide_mod(true, true);
+            Record records[2] = make_records(4u);
+            uint selected = uint(flags[0]);
+            uint total = selected + records[selected].value;
         }
     }
 }
@@ -2387,6 +2603,39 @@ shader ComputeStageValidation {
         void main() {
             int value = 1;
             uint unsignedValue = 7u;
+        }
+    }
+}
+"""
+
+
+HLSL_STORAGE_POINTER_ELEMENT_COMPUTE_SHADER = """
+shader StoragePointerElementValidation {
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+        float read_at(const device float* values, uint relative) {
+            return values[relative];
+        }
+
+        float read_nested(const device float* values, uint inner) {
+            return read_at(&values[inner], 1u);
+        }
+
+        void store_at(device float* values, uint relative, float value) {
+            values[relative] = value;
+        }
+
+        void main(
+            StructuredBuffer<float> src @binding(0),
+            RWStructuredBuffer<float> dst @binding(1),
+            uvec3 gid @gl_GlobalInvocationID
+        ) {
+            store_at(
+                &dst[gid.x],
+                2u,
+                read_nested(&src[gid.x], 3u)
+            );
         }
     }
 }
@@ -5568,6 +5817,11 @@ shader ShadowGatherCompareOffsetValidation {
 """
 
 
+STATIC_SHADOW_GATHER_COMPARE_OFFSET_FRAGMENT_SHADER = (
+    SHADOW_GATHER_COMPARE_OFFSET_FRAGMENT_SHADER.replace("input.offset", "ivec2(1, -1)")
+)
+
+
 SHADOW_COMPARE_LOD_GRAD_FRAGMENT_SHADER = """
 shader ShadowCompareLodGradValidation {
     sampler2DShadow shadowMap;
@@ -6687,12 +6941,66 @@ shader TransitiveShadowedConstIndexValidation {
 """
 
 
+METAL_CONDITIONAL_TYPED_RESOURCE_POINTER_ALIAS_SOURCE = """\
+#include <metal_stdlib>
+using namespace metal;
+
+kernel void read_alias(
+    const device int* values [[buffer(0)]],
+    device int* results [[buffer(1)]]) {
+    bool flag = values[0] != 0;
+    const device int* shifted = values + (flag ? 2u : 1u);
+    results[0] = shifted[1];
+}
+"""
+
+
+METAL_MATERIALIZED_TYPED_RESOURCE_TEMPLATE_SOURCE = """\
+#include <metal_stdlib>
+using namespace metal;
+
+template <typename T, int Width = 4>
+T add_bias(T value, uint bias = 1u) {
+    return value + T(Width) + T(bias);
+}
+
+template <typename T, int Width = 4>
+[[kernel]] void copy_values(
+    const device T* values [[buffer(0)]],
+    device T* results [[buffer(1)]],
+    uint gid [[thread_position_in_grid]],
+    uint lid [[thread_position_in_threadgroup]]) {
+    threadgroup T scratch[Width];
+    scratch[lid] = add_bias<T, Width>(values[gid]);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    results[gid] = scratch[lid];
+}
+
+template [[host_name("copy_float")]] [[kernel]]
+decltype(copy_values<float>) copy_values<float>;
+"""
+
+
 def run_validator(command):
     result = subprocess.run(command, capture_output=True, text=True)
     diagnostics = f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     if result.returncode != 0 and "missing Metal Toolchain" in diagnostics:
         pytest.skip("macOS Metal toolchain is not installed")
     assert result.returncode == 0, f"{' '.join(command)} failed\n" f"{diagnostics}"
+    return result
+
+
+def run_glslang_validator(command):
+    result = run_validator(command)
+    diagnostics = f"{result.stdout}\n{result.stderr}".lower()
+    reserved_diagnostics = (
+        "identifiers containing consecutive underscores",
+        'identifiers starting with "gl_" are reserved',
+    )
+    assert not any(
+        diagnostic in diagnostics for diagnostic in reserved_diagnostics
+    ), diagnostics
+    return result
 
 
 def validate_spirv_shader_source(
@@ -11456,6 +11764,115 @@ def test_generated_glsl_fragment_smoke_validates_with_glslang(tmp_path):
     run_validator([glslang, "-S", "frag", str(source)])
 
 
+def test_generated_glsl_fixed_array_for_in_validates_with_glslang_and_spirv_val(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    spirv_val = shutil.which("spirv-val")
+    if glslang is None or spirv_val is None:
+        pytest.skip("glslangValidator and spirv-val are required")
+
+    source = tmp_path / "fixed_array_for_in.comp"
+    output = tmp_path / "fixed_array_for_in.spv"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(GLSL_FIXED_ARRAY_FOR_IN_COMPUTE_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-V", "-S", "comp", str(source), "-o", str(output)])
+    run_validator([spirv_val, str(output)])
+
+
+def test_generated_glsl_partial_vector_initializers_validate_with_glslang_and_spirv_val(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    spirv_val = shutil.which("spirv-val")
+    if glslang is None or spirv_val is None:
+        pytest.skip("glslangValidator and spirv-val are required")
+
+    source = tmp_path / "partial_vector_initializers.comp"
+    output = tmp_path / "partial_vector_initializers.spv"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(GLSL_PARTIAL_VECTOR_INITIALIZER_COMPUTE_SHADER),
+        "compute",
+    )
+    assert "uvec4 ks = uvec4(key.x, key.y, ((key.x ^ key.y) ^ 466688986), 0u);" in code
+    assert "uvec4 mixed = uvec4(suppliedPair(4u), supplied(6u), 0u);" in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            glslang,
+            "-G",
+            "--target-env",
+            "opengl",
+            "--target-env",
+            "spirv1.3",
+            "-S",
+            "comp",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+    run_validator([spirv_val, "--target-env", "spv1.3", str(output)])
+
+
+def test_generated_glsl_reserved_identifiers_validate_without_warnings(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    spirv_val = shutil.which("spirv-val")
+    if glslang is None or spirv_val is None:
+        pytest.skip("glslangValidator and spirv-val are required")
+
+    source = tmp_path / "reserved_identifiers.comp"
+    output = tmp_path / "reserved_identifiers.spv"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(GLSL_RESERVED_IDENTIFIER_COMPUTE_SHADER),
+        "compute",
+    )
+    assert "__" not in code
+    assert "crossgl_gl_read_pair_glsl_source_values_values_buffer_int_2_read" in code
+    source.write_text(code, encoding="utf-8")
+
+    run_glslang_validator(
+        [
+            glslang,
+            "-G",
+            "--target-env",
+            "opengl",
+            "--target-env",
+            "spirv1.3",
+            "-S",
+            "comp",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+    run_validator([spirv_val, "--target-env", "spv1.3", str(output)])
+
+
+def test_generated_webgl_reserved_identifiers_validate_without_warnings(tmp_path):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "reserved_identifiers.vert"
+    code = WebGLCodeGen().generate_stage(
+        crosstl.translator.parse(WEBGL_RESERVED_IDENTIFIER_VERTEX_SHADER),
+        "vertex",
+    )
+    assert "__" not in code
+    assert "float crossgl_gl_helper(float arg, float _arg)" in code
+    source.write_text(code, encoding="utf-8")
+
+    run_glslang_validator([glslang, "-S", "vert", str(source)])
+
+
 def test_generated_glsl_fragment_switch_match_case_scope_validates_with_glslang(
     tmp_path,
 ):
@@ -11840,6 +12257,163 @@ def test_generated_glsl_compute_stage_validates_with_glslang(tmp_path):
     source.write_text(code, encoding="utf-8")
 
     run_validator([glslang, "-S", "comp", str(source)])
+
+
+def test_translated_metal_function_constants_validate_as_opengl_spirv13(tmp_path):
+    glslang = shutil.which("glslangValidator")
+    spirv_val = shutil.which("spirv-val")
+    if glslang is None or spirv_val is None:
+        pytest.skip("glslangValidator and spirv-val are not installed")
+
+    metal_source = tmp_path / "function_constants.metal"
+    glsl_source = tmp_path / "function_constants.comp"
+    spirv_output = tmp_path / "function_constants.spv"
+    metal_source.write_text(
+        METAL_TO_OPENGL_FUNCTION_CONSTANT_SOURCE,
+        encoding="utf-8",
+    )
+    code = crosstl.translate(
+        str(metal_source),
+        backend="opengl",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert (
+        "/* CrossGL specialization metadata: name=has_w; constant_id=20; "
+        "required_override=true; encoding_default=false */"
+    ) in code
+    assert "layout(constant_id = 20) const bool has_w = false;" in code
+    assert "layout(constant_id = 21) const int mode = 2;" in code
+    assert "layout(constant_id = 22) const float scale = 0.5;" in code
+    assert not re.search(
+        r"\buniform\s+(?:bool|int|float)\s+(?:has_w|mode|scale)\b", code
+    )
+    glsl_source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            glslang,
+            "-G",
+            "--target-env",
+            "opengl",
+            "--target-env",
+            "spirv1.3",
+            "-S",
+            "comp",
+            str(glsl_source),
+            "-o",
+            str(spirv_output),
+        ]
+    )
+    run_validator([spirv_val, "--target-env", "spv1.3", str(spirv_output)])
+
+    spirv_dis = shutil.which("spirv-dis")
+    if spirv_dis is None:
+        return
+    disassembly = subprocess.run(
+        [spirv_dis, str(spirv_output)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert disassembly.returncode == 0, disassembly.stderr
+    named_ids = {
+        name: result_id
+        for result_id, name in re.findall(
+            r'OpName\s+(%\w+)\s+"([^"]+)"', disassembly.stdout
+        )
+    }
+    for name, specialization_id in (("has_w", 20), ("mode", 21), ("scale", 22)):
+        result_id = named_ids[name]
+        assert (
+            f"OpDecorate {result_id} SpecId {specialization_id}" in disassembly.stdout
+        )
+    assert re.search(
+        rf"{re.escape(named_ids['has_w'])}\s+=\s+OpSpecConstantFalse\b",
+        disassembly.stdout,
+    )
+    assert re.search(
+        rf"{re.escape(named_ids['mode'])}\s+=\s+OpSpecConstant\b",
+        disassembly.stdout,
+    )
+    assert re.search(
+        rf"{re.escape(named_ids['scale'])}\s+=\s+OpSpecConstant\b",
+        disassembly.stdout,
+    )
+
+
+def test_translated_metal_conditional_typed_resource_pointer_alias_validates_with_glslang(
+    tmp_path,
+):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    metal_source = tmp_path / "conditional_typed_resource_pointer_alias.metal"
+    source = tmp_path / "conditional_typed_resource_pointer_alias.comp"
+    metal_source.write_text(
+        METAL_CONDITIONAL_TYPED_RESOURCE_POINTER_ALIAS_SOURCE,
+        encoding="utf-8",
+    )
+    code = crosstl.translate(
+        str(metal_source),
+        backend="opengl",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "(flag ? 2u : 1u)" in code
+    assert "shifted_offset" in code
+    assert "int*" not in code
+    assert "int *" not in code
+    assert "(values + flag) ?" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "comp", str(source)])
+
+
+def test_translated_metal_materialized_template_validates_with_glslang(tmp_path):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    metal_source = tmp_path / "materialized_typed_resource_template.metal"
+    source = tmp_path / "materialized_typed_resource_template.comp"
+    output = tmp_path / "materialized_typed_resource_template.spv"
+    metal_source.write_text(
+        METAL_MATERIALIZED_TYPED_RESOURCE_TEMPLATE_SOURCE,
+        encoding="utf-8",
+    )
+    code = crosstl.translate(
+        str(metal_source),
+        backend="opengl",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "float add_bias_float_4(float value, uint bias)" in code
+    assert "shared float copy_float_scratch[4];" in code
+    assert re.search(r"\b(?:T|Width)\b", code) is None
+    assert "template <" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            glslang,
+            "-G",
+            "--target-env",
+            "opengl",
+            "-S",
+            "comp",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+    spirv_val = shutil.which("spirv-val")
+    if spirv_val is not None:
+        run_validator([spirv_val, "--target-env", "spv1.0", str(output)])
 
 
 def test_generated_glsl_wave_intrinsics_compute_validates_with_glslang(tmp_path):
@@ -12478,17 +13052,32 @@ def test_generated_hlsl_fragment_texture_projection_validates_with_dxc(
     )
 
 
-def test_generated_hlsl_fragment_shadow_gather_compare_offset_validates_with_dxc(
+def test_generated_hlsl_fragment_shadow_gather_compare_runtime_offset_fails_closed():
+    with pytest.raises(DirectXTextureOffsetError) as error:
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(SHADOW_GATHER_COMPARE_OFFSET_FRAGMENT_SHADER),
+            "fragment",
+        )
+
+    diagnostic = error.value
+    assert diagnostic.operation == "textureCompareOffset"
+    assert diagnostic.target_method == "Texture2D.SampleCmp"
+    assert diagnostic.blocking_expression == "offset"
+    assert diagnostic.function_name == "gatherShadow"
+    assert diagnostic.reason == "runtime-offset-requires-immediate"
+
+
+def test_generated_hlsl_fragment_static_shadow_gather_compare_offset_validates_with_dxc(
     tmp_path,
 ):
     dxc = shutil.which("dxc")
     if dxc is None:
         pytest.skip("dxc is not installed")
 
-    source = tmp_path / "fragment_shadow_gather_compare_offset.hlsl"
-    output = tmp_path / "fragment_shadow_gather_compare_offset.dxil"
+    source = tmp_path / "fragment_static_shadow_gather_compare_offset.hlsl"
+    output = tmp_path / "fragment_static_shadow_gather_compare_offset.dxil"
     code = HLSLCodeGen().generate_stage(
-        crosstl.translator.parse(SHADOW_GATHER_COMPARE_OFFSET_FRAGMENT_SHADER),
+        crosstl.translator.parse(STATIC_SHADOW_GATHER_COMPARE_OFFSET_FRAGMENT_SHADER),
         "fragment",
     )
     source.write_text(code, encoding="utf-8")
@@ -12552,6 +13141,230 @@ def test_generated_hlsl_compute_stage_validates_with_dxc(tmp_path):
     code = HLSLCodeGen().generate_stage(
         crosstl.translator.parse(COMPUTE_STAGE_SHADER), "compute"
     )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_fixed_array_for_in_validates_with_dxc(tmp_path):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "fixed_array_for_in.hlsl"
+    output = tmp_path / "fixed_array_for_in.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(HLSL_FIXED_ARRAY_FOR_IN_COMPUTE_SHADER),
+        "compute",
+    )
+    assert code.count("rotations[selectRow(calls)]") == 1
+    assert "uint rotation_crossgl_iterable[4]" in code
+    assert "uint2 vectorValue = vectorValue_crossgl_iterable[" in code
+    assert "Pair pairValue = pairValue_crossgl_iterable[" in code
+    assert "uint rowValue[4] = rowValue_crossgl_iterable[" in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_fixed_array_value_locals_validate_with_dxc(tmp_path):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "fixed_array_value_locals.hlsl"
+    output = tmp_path / "fixed_array_value_locals.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(HLSL_FIXED_ARRAY_VALUE_LOCAL_COMPUTE_SHADER),
+        "compute",
+    )
+    assert "bool2 flags = divide_mod(true, true);" in code
+    assert "bool flags[2] = divide_mod" not in code
+    assert "CrossGLFixedArray_Record_2 records = make_records(4u);" in code
+    assert "Record records[2] = make_records" not in code
+    assert "CrossGLFixedArray_Record_2_read(records, selected).value" in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_storage_pointer_element_helpers_validate_with_dxc(tmp_path):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "storage_pointer_element_helpers.hlsl"
+    output = tmp_path / "storage_pointer_element_helpers.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(HLSL_STORAGE_POINTER_ELEMENT_COMPUTE_SHADER),
+        "compute",
+    )
+    assert "&src[" not in code
+    assert "&dst[" not in code
+    assert "float* values" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_translated_metal_typed_resource_auto_pointer_alias_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    metal_source = tmp_path / "typed_resource_auto_pointer_alias.metal"
+    source = tmp_path / "typed_resource_auto_pointer_alias.hlsl"
+    output = tmp_path / "typed_resource_auto_pointer_alias.dxil"
+    metal_source.write_text(
+        """
+#include <metal_stdlib>
+using namespace metal;
+
+kernel void read_alias(
+    const device int* values [[buffer(0)]],
+    device int* results [[buffer(1)]]) {
+    const auto* shifted = values + 2u;
+    results[0] = shifted[1];
+}
+""",
+        encoding="utf-8",
+    )
+    code = crosstl.translate(
+        str(metal_source),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "StructuredBuffer<int> values : register(t0);" in code
+    assert "RWStructuredBuffer<int> results : register(u1);" in code
+    assert "int64_t shifted_offset = int64_t(2u);" in code
+    assert "values[uint((shifted_offset + 1))]" in code
+    assert "auto" not in code
+    assert "int*" not in code
+    assert "int *" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_translated_metal_union_storage_aliasing_validates_with_dxc(tmp_path):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    metal_source = tmp_path / "union_storage_aliasing.metal"
+    source = tmp_path / "union_storage_aliasing.hlsl"
+    output = tmp_path / "union_storage_aliasing.dxil"
+    metal_source.write_text(
+        """
+#include <metal_stdlib>
+using namespace metal;
+
+union rbits {
+    uint2 val;
+    uchar4 bytes[2];
+};
+
+kernel void union_storage(
+    device uint* results [[buffer(0)]]) {
+    rbits bits;
+    bits.val = uint2(0x04030201u, 0x08070605u);
+    results[0] = bits.bytes[0][0];
+    results[1] = bits.bytes[1][3];
+    bits.bytes[0] = uchar4(9u, 10u, 11u, 12u);
+    results[2] = bits.val.x;
+}
+""",
+        encoding="utf-8",
+    )
+    code = crosstl.translate(
+        str(metal_source),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "uint2 CrossGLUnionStorage;" in code
+    assert "uint2 val;" not in code
+    assert "uint4 bytes[2];" not in code
+    assert "__crossgl_union_unpack_u8x4" in code
+    assert "__crossgl_union_pack_u8x4" in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_translated_metal_conditional_typed_resource_pointer_alias_validates_with_dxc(
+    tmp_path,
+):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    metal_source = tmp_path / "conditional_typed_resource_pointer_alias.metal"
+    source = tmp_path / "conditional_typed_resource_pointer_alias.hlsl"
+    output = tmp_path / "conditional_typed_resource_pointer_alias.dxil"
+    metal_source.write_text(
+        METAL_CONDITIONAL_TYPED_RESOURCE_POINTER_ALIAS_SOURCE,
+        encoding="utf-8",
+    )
+    code = crosstl.translate(
+        str(metal_source),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "(flag ? 2u : 1u)" in code
+    assert "shifted_offset" in code
+    assert "int*" not in code
+    assert "int *" not in code
+    assert "(values + flag) ?" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_translated_metal_materialized_template_validates_with_dxc(tmp_path):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    metal_source = tmp_path / "materialized_typed_resource_template.metal"
+    source = tmp_path / "materialized_typed_resource_template.hlsl"
+    output = tmp_path / "materialized_typed_resource_template.dxil"
+    metal_source.write_text(
+        METAL_MATERIALIZED_TYPED_RESOURCE_TEMPLATE_SOURCE,
+        encoding="utf-8",
+    )
+    code = crosstl.translate(
+        str(metal_source),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    assert "float add_bias_float_4(float value, uint bias)" in code
+    assert "groupshared float copy_float_scratch[4];" in code
+    assert re.search(r"\b(?:T|Width)\b", code) is None
+    assert "template <" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

@@ -25,8 +25,8 @@ Use the project pipeline as an audit-first migration workflow:
    diagnostics before writing translated artifacts.
 2. Add or refine ``crosstl.toml`` so repository-relative source roots,
    include/exclude patterns, source overrides, include directories, defines,
-   named variants, output directory, targets, and optional external corpus
-   manifest are explicit.
+   named variants, optional entry-point selections, output directory, targets,
+   and optional external corpus manifest are explicit.
 3. Run ``translate-project`` into a separate output directory and keep the
    generated portability report with the translated artifacts.
 4. Run ``validate-project`` on the generated report. Use the JSON output for
@@ -105,6 +105,10 @@ Use these report fields to decide the next action:
    * - ``artifactMatrix``
      - Confirm the expected unit, target, and named-variant artifact plan before
        translation, then identify missing or extra artifacts after translation.
+   * - ``project.entryPointSelections`` and ``artifacts[].entryPoint``
+     - Confirm that a requested materialized source entry was packaged under its
+       deterministic entry path and identify the reflected target entry and
+       stage.
    * - ``validation``
      - Check current source hashes and byte sizes, generated artifact hashes
        and byte sizes, source maps, source remaps, optional toolchain
@@ -178,6 +182,7 @@ error diagnostics.
 ``--validate`` records artifact existence, source and generated hash checks,
 source-map and source-remap status, and configured toolchain availability
 without invoking external compiler tools.
+
 Embedded toolchain availability records name the configured validation hook
 tools for each target; paths and availability remain environment-specific.
 ``--run-toolchains`` implies artifact validation and records any available
@@ -191,6 +196,36 @@ builtins, defaulting to compute for generic ``.glsl`` outputs.
 Vulkan smoke checks validate binary ``.spv`` artifacts with ``spirv-val`` and
 assemble textual ``.spvasm`` artifacts with ``spirv-as -o`` pointed at the
 platform null device.
+
+Entry-Scoped OpenGL Artifacts
+-----------------------------
+
+Repositories can request a standalone artifact for one materialized source
+entry by adding a repository-relative selector table to ``crosstl.toml``:
+
+.. code-block:: toml
+
+   [project]
+   include = ["kernels/arange.metal"]
+   include_dirs = ["."]
+   targets = ["opengl"]
+   output_dir = "crosstl-out"
+
+   [project.entry_points]
+   "kernels/arange.metal" = "arangeuint32"
+
+For OpenGL compute output, the selected source entry is emitted as target entry
+``main``. A source such as ``kernels/arange.metal`` produces
+``crosstl-out/opengl/kernels/arange/arangeuint32.glsl``. The portability report
+records the source entry, target entry, and reflected stage on the artifact;
+embedded validation records carry the same identity. Runtime artifact manifests
+then reflect only the selected stage interface from that standalone output.
+
+Selection is exact after source materialization. Missing or ambiguous entries
+fail with structured diagnostics and no target file. Targets that do not yet
+implement standalone entry generation also fail explicitly instead of pruning
+an aggregate artifact. When ``project.entry_points`` is absent, project
+translation keeps the existing aggregate output path and behavior.
 
 Project scan, report, and translation commands also accept repeatable
 ``--source-root``, ``--include-dir``, ``--define``, and ``--source-override``
@@ -386,10 +421,15 @@ document derived from the validated portability report and runtime artifact
 metadata. Each entry is backend-neutral and includes ``sourceFile``,
 ``sourceBackend``, ``targetBackend``, ``artifactPath``, ``entryPoint``,
 ``resourceBindings``, ``bufferMutability``, ``scalarConstants``,
-``dispatchDimensions``, ``sourceProvenance``, and ``validation``. Resource
-bindings include set/binding coordinates, access, and derived mutability.
+``specializationConstants``, ``dispatchDimensions``, ``sourceProvenance``, and
+``validation``. Resource bindings include set/binding coordinates, access, and
+derived mutability.
 Dispatch dimensions record reflected workgroup size data when available while
 leaving workgroup, global, and grid counts unset for host code to provide.
+Reflection, runtime artifact manifests, and runtime binding manifests keep
+function and specialization constants in dedicated ``specializationConstants``
+records with their own counts. They are not reported as ``resources`` or
+``resourceBindings``, nor as ordinary ``constants`` or ``scalarConstants``.
 
 Build a deterministic runtime handoff package from a runtime artifact manifest:
 
@@ -662,6 +702,46 @@ diagnostics and runtime-reference review actions forward, and it remains a
 metadata contract only: it does not rewrite host application code, execute
 device code, generate runtime framework code, or install target SDKs.
 
+Build a deterministic runtime variant registry from either a ready runtime
+package or loader manifest:
+
+.. code-block:: bash
+
+   crosstl runtime-variant-registry \
+     crosstl-runtime-package/runtime-loader-manifest.json \
+     --output runtime-variant-registry.json
+
+Runtime variant registries emit a schema-v1
+``crosstl-runtime-variant-registry`` JSON document. Each ``variants`` entry is
+indexed by a canonical ``crosstl-rvk1:`` key: URL-safe base64 without padding
+over canonical JSON containing the source unit and source entry, target and
+target profile, type and value template arguments, specialization constant
+IDs and values, and defines. Key fields are sorted before encoding, registry
+records and target summaries are ordered by key, and ``registryHash`` covers
+the key schema and records. Equivalent input records therefore produce the
+same registry regardless of package or loader record order.
+
+Each registry record preserves source and target names separately and maps the
+exact key to the target artifact path, format, hash and byte size, target entry
+point, binding resources and ordinary constants, pipeline specialization
+constants, and translation and source provenance. Inputs use closed package
+and loader field sets. Malformed schemas fail before records are emitted;
+duplicate keys and keys with conflicting artifacts or metadata are diagnosed
+and rejected. Package inspection hash or size failures remain explicit
+``stale`` records, and loader blockers remain ``blocked`` records. Both are
+listed as available exact keys but have ``lookup.eligible`` set to false.
+
+The public ``build_runtime_variant_registry`` API builds the document,
+``encode_runtime_variant_key`` and ``decode_runtime_variant_key`` expose the
+key contract, and ``lookup_runtime_variant`` performs exact lookup with the
+available keys included in not-found diagnostics. Lookup validates the closed
+registry schema, ``registryHash``, canonical key-to-record identity, and record
+eligibility before returning a ready artifact. Modified or malformed registry
+records fail as invalid rather than participating in selection. This slice has
+no implicit defaults or best-match behavior. Target compilation, deferred
+compilation, host runtime dispatch, and device execution remain host-runtime
+work for later slices; the registry does not simulate them.
+
 Build deterministic host loader scaffold metadata from a runtime loader
 manifest:
 
@@ -866,11 +946,78 @@ configuration contract is intentionally small:
    [project.variants.debug]
    USE_FAST_PATH = "0"
 
+   [project.specialization_constants]
+   useFastPath = true
+   "2" = 16
+
+   [project.variants.debug.specialization_constants]
+   useFastPath = false
+   "2" = 8
+
 An explicit ``--config`` path may be absolute or repository-relative. Relative
 config paths are resolved against the repository root passed to the command, not
 against the shell's current working directory. When ``--config`` is provided,
 the referenced file must exist; otherwise the command exits with an error
 instead of silently falling back to default scan settings.
+
+Function and specialization constant values are configured under
+``[project.specialization_constants]``. Each key selects a source declaration
+by its exact name or by a quoted, non-negative numeric ID such as ``"2"``.
+Configured values are checked against the declaration's scalar source type. If
+both selectors address the same declaration, their values must agree; a
+name/id conflict fails the artifact instead of choosing one silently.
+
+Source ``function_constant`` and ``constant_id`` identifiers use C-family
+integral literal rules. Decimal, leading-zero octal, hexadecimal, and binary
+forms are accepted, together with apostrophe digit separators and the standard
+``u``/``l``/``ll`` integer suffix combinations supported by the source
+frontend. IDs are normalized before duplicate checks, configuration lookup,
+reflection, or target emission. Metal ``function_constant`` indices use the
+native inclusive range ``0`` through ``65535``; GLSL ``constant_id`` values use
+``0`` through ``2147483647``. Consequently, ``1``, ``01``, and ``0x1`` all
+select the canonical configuration key ``"1"`` and collide if used by separate
+declarations. A non-canonical source form is retained as ``idSpelling`` beside
+the numeric ``id`` in artifact specialization records. Invalid digits, negative
+values, constant expressions, and values outside the applicable source range
+produce ``project.translate.specialization-constant-id-invalid`` with the source
+span, original spelling, and a structured reason.
+
+``[project.variants.<name>.specialization_constants]`` applies after the
+project-level table and overrides the same selector for that named variant.
+Artifact ``specializationConstants`` records retain the effective value and
+``valueProvenance`` with the project or variant configuration path, selector,
+selector kind, and variant name. Using a name in one table and the corresponding
+ID in another still creates two matches, so different values fail as a
+conflicting contract rather than relying on table precedence.
+
+A declaration without a source initializer is required; one with an initializer
+has a source default. Explicit project or variant values override source
+defaults. Targets with native specialization retain required declarations for
+the host runtime to provide, while targets without it must receive a concrete
+configured value or a materializable source default.
+
+OpenGL defers specialization natively as
+``layout(constant_id = N) const ...`` and does not lower these declarations to
+uniforms or resources. A required declaration without a source default receives
+only an encoding initializer needed for valid GLSL; its report record remains
+``required`` and the host must provide the value before execution. DirectX
+instead materializes a concrete CrossGL variant before HLSL generation. It uses
+the selected variant override, project value, or source default and fails closed
+without emitting HLSL when a required value is missing, conflicting, or
+incompatible with the source type.
+
+The pinned MLX project-porting gate applies this contract to
+``mlx/backend/metal/kernels/rms_norm.metal`` at commit
+``4367c73b60541ddd5a266ce4644fd93d20223b6e``. Its DirectX project declares two
+named variants, selecting ``has_w=false`` by declaration name and ``"20"=true``
+by numeric ID. The gate checks report provenance and concrete materialization,
+then compiles a reflected compute entry from each generated HLSL artifact with
+DXC on Windows. Its unconfigured OpenGL project checks deferred
+``layout(constant_id = 20)`` emission and validates generated OpenGL SPIR-V on
+Linux. This proves translation and native compilation only; it does not claim
+RMSNorm numerical runtime parity or full MLX test-suite support. Numerical
+execution additionally requires the entry-point workgroup-size specialization
+contract tracked in ``CrossGL/crosstl#1750``.
 
 ``source_roots`` limits discovery to selected directories. ``include`` and
 ``exclude`` use shell-style patterns against repository-relative paths. Project
@@ -912,6 +1059,19 @@ whole-source ``source instantiations x template declarations`` Cartesian
 estimate, and repeated scans of progressively expanded source text are not work
 items merely because the text was scanned again.
 
+Direct ``translate()`` calls from Metal to template-hostile targets use the
+same reachable-specialization preparation as one-unit project translation.
+Explicit instantiations, ``host_name`` attributes, template defaults, include
+paths, defines, and materialization budgets are therefore applied before
+DirectX or OpenGL code generation. If a reachable declaration still requires
+template arguments, direct translation raises a ``ValueError`` carrying the
+``project.translate.template-materialization-unsupported`` diagnostic code,
+missing-capability list, materialization metadata, and source location instead
+of returning an artifact with unresolved target resource types. Metal,
+CrossGL, and already-preprocessed source paths retain their existing behavior.
+This contract does not infer variants for which the source supplies no concrete
+evidence, and it is not a full-corpus or runtime-parity claim.
+
 During project translation, Metal template-member inference preserves a
 generic pointer template parameter as a pointer rather than reducing it to its
 pointee type. For a parameter such as ``Pointer src``, a bare tracked pointer,
@@ -930,6 +1090,39 @@ minus a pointer, or address-taking outside a proven ``&base[index]`` shape
 fails closed with ``project.translate.metal-struct-method``. Addressed-element
 indices must also be known integral expressions without unsupported calls,
 assignments, side effects, nested subscripts, or ambiguous expression forms.
+
+Concrete pointee comparisons resolve visible non-template ``using`` and
+``typedef`` chains at the method declaration and call site before deciding
+whether two pointer types are compatible. Declaration order, nested shadowing,
+and sibling scopes are preserved. Forward references, alias cycles, and chains
+whose equivalence cannot be proved remain failed bindings; they are not treated
+as matching merely because their unresolved spelling is the same.
+
+For DirectX, a supported storage-pointer helper parameter is emitted as a
+``StructuredBuffer`` or ``RWStructuredBuffer`` resource together with a signed
+element offset. Passing ``&buffer[index]``, a previously rebased alias, or an
+alias forwarded through another supported helper composes that offset without
+emitting HLSL pointer syntax or mutating the resource handle. The generated
+helper applies the offset to every indexed load or store. Element-type
+changes, insufficient read or write access, pointer-to-pointer parameters, and
+arguments without a concrete structured-buffer root fail with
+``project.translate.directx-resource-pointer-parameter-unsupported`` rather
+than producing an invalid call.
+
+A local read-only ``auto*`` alias whose initializer resolves to a concrete
+``StructuredBuffer`` or ``RWStructuredBuffer`` root deduces its element type
+from that backing resource before DirectX alias lowering. Direct and nested
+aliases retain the accumulated signed element offset and read-only contract.
+Explicit pointee types remain authoritative: incompatible declared element
+types are rejected rather than being replaced with the backing type.
+
+Metal reverse translation preserves conditional and assignment expressions as
+lower-precedence operands when serializing binary and postfix expressions. For
+resource-backed pointer aliases, a dynamic offset such as
+``buffer + (enabled ? first : second)`` therefore retains the conditional as
+the offset expression before DirectX or OpenGL resource-plus-offset lowering.
+This guarantees expression-tree preservation for the translated artifact; it
+does not provide host dispatch, resource binding, or numerical runtime parity.
 
 The contract applies generally to Metal sources handled by project translation.
 The pinned MLX ``BaseMMAFrag::load(&(src[index]))`` call shape is a focused
@@ -1117,10 +1310,11 @@ skipped. Inspection samples for missing and present-but-undiscovered entries
 retain repository, commit, and source URL metadata when the manifest provides
 those provenance fields.
 
-Project reports include configured define and variant names and values, and
-artifact records include the applied define map used for that translation
-attempt. Review reports before sharing them outside the repository if those
-values include private build metadata. Compact inspection summaries list
+Project reports include configured define, variant, and specialization constant
+selectors and values, and artifact records include the applied define map used
+for that translation attempt. Review reports before sharing them outside the
+repository if those values include private build metadata. Compact inspection
+summaries list
 configured define names, deterministic define fingerprints, variant names,
 per-variant define counts, variant define names, and deterministic per-variant
 define fingerprints without printing define values.
@@ -1136,9 +1330,10 @@ Project reports are JSON documents with:
   source-root status records and status counts, include/exclude
   patterns, targets, output directory, source override map, include
   directories, include-directory status records and status counts, define and
-  variant maps, per-variant define counts, and counts for source roots,
-  include patterns, exclude patterns, source overrides, include directories,
-  defines, and variants.
+  variant maps, project and per-variant specialization constant maps,
+  per-variant define and specialization constant counts, and counts for source
+  roots, include patterns, exclude patterns, source overrides, include
+  directories, defines, variants, and project specialization constants.
 - ``summary``: total unit/artifact/diagnostic/source-map counts plus rollups by
   unit source backend, unit file extension, skipped reason, skipped file
   extension, unit source override, skipped source override, artifact source
@@ -1206,6 +1401,11 @@ Project reports are JSON documents with:
   ``includePathProcessing`` metadata to match active include-directory records,
   registered source frontend support, and summary rollups including
   named-variant rollups.
+  Artifacts with function or specialization constant declarations also carry
+  dedicated ``specializationConstants`` records for identity, required/default
+  state, effective values, and value provenance, plus
+  ``specializationMaterialization`` metadata that distinguishes native deferred
+  specialization from a concrete CrossGL variant.
   Successful artifact records in full reports must include file-level
   source-map anchors. Generated CrossGL artifacts also include a
   compiler-compatible ``source-remap`` sidecar with a file-level

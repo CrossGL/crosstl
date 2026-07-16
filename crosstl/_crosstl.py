@@ -45,6 +45,17 @@ STDOUT_OUTPUT_PATH = "-"
 CLI_PROG = "crosstl"
 
 
+class EntryPointSelectionUnsupportedError(ValueError):
+    """Raised when a target cannot emit an independently loadable entry."""
+
+    project_diagnostic_code = "project.translate.entry-point-target-unsupported"
+    missing_capabilities = ("artifact.entry-point-selection",)
+
+    def __init__(self, message, *, entry_point=None):
+        super().__init__(message)
+        self.entry_point = entry_point
+
+
 def _non_negative_int(value):
     try:
         parsed = int(value)
@@ -104,6 +115,7 @@ def translate(
     include_paths: Optional[Sequence[str]] = None,
     defines: Optional[Mapping[str, str]] = None,
     source_options: Optional[Mapping[str, Any]] = None,
+    entry_point: Optional[str] = None,
 ) -> str:
     """Translate a shader file to another language.
 
@@ -120,6 +132,8 @@ def translate(
             Defaults to None.
         source_options (Mapping[str, object], optional): Source parser-specific
             lexer options. Defaults to None.
+        entry_point (str, optional): Emit one independently loadable source entry
+            when the target backend supports entry-scoped generation.
 
     Returns:
         str: The translated shader code
@@ -154,6 +168,14 @@ def translate(
         )
 
     shader_code = _read_shader_source(file_path, source_spec.name)
+
+    if entry_point is not None and normalized_backend in {"cgl", "crossgl"}:
+        selected_entry_point = _validated_entry_point(entry_point)
+        raise EntryPointSelectionUnsupportedError(
+            "Entry-scoped artifact generation is not supported for the CrossGL "
+            "intermediate target",
+            entry_point=selected_entry_point,
+        )
 
     if source_spec.name == "metal" and normalized_backend not in {
         "cgl",
@@ -190,7 +212,7 @@ def translate(
             codegen = get_codegen(requested_backend)
             lower_default_arguments(ast)
             validate_pointer_reinterpretation_target(ast, normalized_backend)
-            generated_code = codegen.generate(ast)
+            generated_code = _generate_target_code(codegen, ast, entry_point)
     else:
         if normalized_backend in ["cgl", "crossgl"]:
             if not source_spec.reverse_codegen_factory:
@@ -238,7 +260,7 @@ def translate(
             codegen = get_codegen(requested_backend)
             lower_default_arguments(cgl_ast)
             validate_pointer_reinterpretation_target(cgl_ast, normalized_backend)
-            generated_code = codegen.generate(cgl_ast)
+            generated_code = _generate_target_code(codegen, cgl_ast, entry_point)
 
     if (
         format_output
@@ -254,6 +276,26 @@ def translate(
             file.write(generated_code)
 
     return generated_code
+
+
+def _generate_target_code(codegen, ast, entry_point):
+    if entry_point is None:
+        return codegen.generate(ast)
+    entry_point = _validated_entry_point(entry_point)
+    generate_entry = getattr(codegen, "generate_entry", None)
+    if not callable(generate_entry):
+        raise EntryPointSelectionUnsupportedError(
+            "Entry-scoped artifact generation is not supported for the requested "
+            "target backend",
+            entry_point=entry_point,
+        )
+    return generate_entry(ast, entry_point)
+
+
+def _validated_entry_point(entry_point):
+    if not isinstance(entry_point, str) or not entry_point.strip():
+        raise ValueError("entry_point must be a non-empty string")
+    return entry_point.strip()
 
 
 def _derive_single_file_output(input_path, backend):
@@ -2203,6 +2245,85 @@ def _run_runtime_loader_manifest(args):
         )
     elif args.format == "text":
         _write_text_payload(_format_runtime_loader_manifest(payload), args.output)
+    else:
+        _write_json_payload(payload, args.output)
+    return 0 if payload["success"] else 1
+
+
+def _format_runtime_variant_registry(payload):
+    lines = ["Runtime variant registry"]
+    for header_line in (
+        _format_payload_schema_version(payload, "Registry schema version"),
+        _format_payload_kind(payload, "Registry kind"),
+        _format_payload_hash(payload, "registryHash", "Registry hash"),
+    ):
+        if header_line:
+            lines.append(header_line)
+    lines.append(f"Status: {payload.get('status', 'failed')}")
+
+    source = payload.get("source")
+    if isinstance(source, Mapping) and isinstance(source.get("kind"), str):
+        lines.append(f"Input kind: {source['kind']}")
+    scope = payload.get("scope")
+    if isinstance(scope, str) and scope:
+        lines.append(f"Registry scope: {scope}")
+    key_schema = payload.get("keySchema")
+    if isinstance(key_schema, Mapping):
+        lines.append(
+            "Lookup: "
+            f"{key_schema.get('matching', 'exact')}; "
+            f"defaulting: {key_schema.get('defaulting', 'none')}"
+        )
+
+    summary = payload.get("summary")
+    if isinstance(summary, Mapping):
+        lines.append(
+            "Summary: "
+            f"{summary.get('targetCount', 0)} targets, "
+            f"{summary.get('variantCount', 0)} variants, "
+            f"{summary.get('readyVariantCount', 0)} ready, "
+            f"{summary.get('blockedVariantCount', 0)} blocked, "
+            f"{summary.get('staleVariantCount', 0)} stale, "
+            f"{summary.get('rejectedCandidateCount', 0)} rejected"
+        )
+
+    targets = payload.get("targets", [])
+    if targets:
+        lines.append("Runtime variant targets:")
+        for target in targets:
+            if not isinstance(target, Mapping):
+                continue
+            lines.append(
+                "- "
+                f"{target.get('target', 'unknown')}: "
+                f"{target.get('variantCount', 0)} variants, "
+                f"{target.get('readyVariantCount', 0)} ready, "
+                f"{target.get('blockedVariantCount', 0)} blocked, "
+                f"{target.get('staleVariantCount', 0)} stale"
+            )
+
+    diagnostics = payload.get("diagnostics", [])
+    if diagnostics:
+        lines.append("Diagnostics:")
+        for diagnostic in diagnostics:
+            if isinstance(diagnostic, Mapping):
+                lines.append(_format_project_diagnostic_line(diagnostic))
+    return "\n".join(lines) + "\n"
+
+
+def _run_runtime_variant_registry(args):
+    from .project import build_runtime_variant_registry
+
+    payload = build_runtime_variant_registry(args.manifest)
+    if args.format == "sarif":
+        _write_json_payload(
+            _format_project_diagnostics_sarif(
+                payload, tool_name="CrossTL runtime variant registry"
+            ),
+            args.output,
+        )
+    elif args.format == "text":
+        _write_text_payload(_format_runtime_variant_registry(payload), args.output)
     else:
         _write_json_payload(payload, args.output)
     return 0 if payload["success"] else 1
@@ -6954,6 +7075,24 @@ def _build_parser():
     )
     runtime_loader_parser.set_defaults(func=_run_runtime_loader_manifest)
 
+    runtime_variant_registry_parser = subparsers.add_parser(
+        "runtime-variant-registry",
+        help="Build an exact runtime variant registry from a package or loader manifest",
+    )
+    runtime_variant_registry_parser.add_argument(
+        "manifest", help="Ready runtime package or loader manifest JSON"
+    )
+    runtime_variant_registry_parser.add_argument(
+        "--format",
+        choices=("json", "text", "sarif"),
+        default="json",
+        help="Runtime variant registry output format",
+    )
+    runtime_variant_registry_parser.add_argument(
+        "--output", "-o", help="Write runtime variant registry; use '-' for stdout"
+    )
+    runtime_variant_registry_parser.set_defaults(func=_run_runtime_variant_registry)
+
     host_loader_scaffold_parser = subparsers.add_parser(
         "scaffold-host-loaders",
         help="Build host loader scaffold metadata from a runtime loader manifest",
@@ -7171,6 +7310,7 @@ def _use_legacy_cli(argv):
         "plan-runtime-adapters",
         "materialize-runtime-adapters",
         "runtime-loader-manifest",
+        "runtime-variant-registry",
         "scaffold-host-loaders",
         "inspect-host-loader-scaffolds",
         "plan-host-loader-consumption",

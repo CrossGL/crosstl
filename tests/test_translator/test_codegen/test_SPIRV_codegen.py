@@ -28809,13 +28809,31 @@ class TestVulkanSPIRVCodeGen:
             spv_code,
         )
         assert u64_vector is not None
-        function_u64_ptr = spirv_pointer_type(spv_code, u64_type.group(1), "Function")
-        out_var = spirv_named_variable(spv_code, "out_", storage_class="Function")
-        assert re.search(
-            rf"%\d+ = OpAccessChain {re.escape(function_u64_ptr)} "
-            rf"{re.escape(out_var)} %\d+",
+        component_helper_type = re.search(
+            rf"(%\d+) = OpTypeFunction {re.escape(u64_type.group(1))} "
+            rf"{re.escape(u64_vector.group(1))} %\d+\b",
             spv_code,
         )
+        assert component_helper_type is not None
+        component_helper = re.search(
+            rf"(%\d+) = OpFunction {re.escape(u64_type.group(1))} None "
+            rf"{re.escape(component_helper_type.group(1))}\b",
+            spv_code,
+        )
+        assert component_helper is not None
+        out_var = spirv_named_variable(spv_code, "out_", storage_class="Function")
+        out_values = re.findall(
+            rf"(%\d+) = OpLoad {re.escape(u64_vector.group(1))} "
+            rf"{re.escape(out_var)}\b",
+            spv_code,
+        )
+        component_calls = re.findall(
+            rf"%\d+ = OpFunctionCall {re.escape(u64_type.group(1))} "
+            rf"{re.escape(component_helper.group(1))} (%\d+) %\d+\b",
+            spv_code,
+        )
+        assert component_calls == out_values
+        assert len(component_calls) == 2
         assert "Unknown type u64vec2" not in spv_code
         assert "WARNING" not in spv_code
         assert_spirv_stores_use_matching_value_types(spv_code)
@@ -34076,7 +34094,9 @@ class TestSpirvShaderValidation:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
-    def test_metal_symbolic_local_array_reports_structured_extent_error(self, tmp_path):
+    def test_metal_symbolic_local_array_fails_during_template_materialization(
+        self, tmp_path
+    ):
         source_path = tmp_path / "symbolic_local_array.metal"
         source_path.write_text(
             """
@@ -34096,10 +34116,10 @@ class TestSpirvShaderValidation:
         )
 
         with pytest.raises(
-            UnsupportedSPIRVFeatureError,
+            ValueError,
             match=(
-                "SPIR-V requires a concrete fixed-array extent for local variable "
-                "values; could not resolve 'extent'"
+                "Template-hostile target 'vulkan' requires concrete template "
+                "arguments.*symbolic_local_array missing extent"
             ),
         ) as exc_info:
             crosstl.translate(
@@ -34108,8 +34128,21 @@ class TestSpirvShaderValidation:
                 format_output=False,
             )
 
-        assert exc_info.value.feature == "unresolved fixed array extent"
-        assert exc_info.value.missing_capabilities == ("spirv.fixed_array_extent",)
+        assert exc_info.value.project_diagnostic_code == (
+            "project.translate.template-materialization-unsupported"
+        )
+        assert exc_info.value.missing_capabilities == ("template.specialization",)
+        assert exc_info.value.metadata["status"] == "unsupported"
+        unresolved_entries = [
+            record
+            for record in exc_info.value.metadata["unsupported"]
+            if record["name"] == "symbolic_local_array"
+        ]
+        assert len(unresolved_entries) == 1
+        assert unresolved_entries[0]["missingParameters"] == ["extent"]
+        assert unresolved_entries[0]["requiredSignature"] == (
+            "symbolic_local_array<extent>"
+        )
 
     def test_metal_simdgroup_matrix_reports_structured_spirv_error(self, tmp_path):
         source_path = tmp_path / "simdgroup_matrix.metal"

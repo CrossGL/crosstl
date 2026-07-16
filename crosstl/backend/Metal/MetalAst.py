@@ -110,6 +110,66 @@ class CallableTypeAliasNode(TypeAliasNode):
         )
 
 
+class ConstructorInitializerNode(ASTNode):
+    """One Metal constructor member/base initializer."""
+
+    def __init__(
+        self,
+        target,
+        arguments=None,
+        *,
+        style="paren",
+        source_location=None,
+    ):
+        self.target = target
+        self.arguments = list(arguments or [])
+        self.style = style
+        self.source_location = source_location
+
+    def __repr__(self):
+        return (
+            "ConstructorInitializerNode("
+            f"target={self.target!r}, arguments={self.arguments}, "
+            f"style={self.style!r})"
+        )
+
+
+class ConstructorNode(ASTNode):
+    """An explicit Metal struct/class constructor contract."""
+
+    def __init__(
+        self,
+        owner_name,
+        params,
+        body,
+        *,
+        initializers=None,
+        qualifiers=None,
+        template_parameters=None,
+        template_parameter_defaults=None,
+        declaration_kind="definition",
+        source_location=None,
+    ):
+        self.owner_name = owner_name
+        self.name = owner_name
+        self.params = list(params or [])
+        self.body = body
+        self.initializers = list(initializers or [])
+        self.qualifiers = list(qualifiers or [])
+        self.template_parameters = list(template_parameters or [])
+        self.template_parameter_defaults = dict(template_parameter_defaults or {})
+        self.generics = [name for _kind, name in self.template_parameters if name]
+        self.declaration_kind = declaration_kind
+        self.source_location = source_location
+
+    def __repr__(self):
+        return (
+            "ConstructorNode("
+            f"owner_name={self.owner_name!r}, params={self.params}, "
+            f"initializers={self.initializers}, body={self.body})"
+        )
+
+
 _COMMON_NODES = (
     ASTNode,
     ArrayAccessNode,
@@ -124,6 +184,8 @@ _COMMON_NODES = (
     CallableTypeAliasNode,
     ConstantBufferNode,
     ContinueNode,
+    ConstructorInitializerNode,
+    ConstructorNode,
     DeleteNode,
     DesignatedInitializerNode,
     DiscardNode,

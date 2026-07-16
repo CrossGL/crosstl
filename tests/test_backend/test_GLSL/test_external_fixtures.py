@@ -1837,6 +1837,16 @@ def test_parse_glslang_layout_only_builtin_spec_constant_fixture():
     assert builtin.layout == {"constant_id": "24"}
 
 
+def test_codegen_glslang_layout_only_builtin_spec_constant_fixture():
+    fixture = EXTERNAL_FIXTURES[0]
+
+    ast = parse_glsl(fixture.code, fixture.shader_type)
+    crossgl = GLSLToCrossGLConverter().generate(ast)
+
+    assert "const int gl_MaxImageUnits @constant_id(24) = 8;" in crossgl
+    parse_crossgl(crossgl)
+
+
 def test_codegen_vulkan_samples_fragment_stage_preserved_by_default_converter():
     fixture = next(
         item

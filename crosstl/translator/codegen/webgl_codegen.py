@@ -10,14 +10,60 @@ from ..ast import (
     TernaryOpNode,
 )
 from .array_utils import format_c_style_array_declaration
-from .GLSL_codegen import GLSLCodeGen
+from .GLSL_codegen import (
+    GLSLCodeGen,
+    OpenGLArithmeticConversionError,
+    OpenGLBooleanCompoundAssignmentError,
+    OpenGLBooleanOrderedIntrinsicError,
+    OpenGLStructConstructionError,
+)
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
+
+
+class WebGLArithmeticConversionError(OpenGLArithmeticConversionError):
+    """Raised when source arithmetic has no faithful GLSL ES conversion plan."""
+
+    project_diagnostic_code = "project.translate.webgl-arithmetic-conversion-invalid"
+    missing_capabilities = ("webgl.arithmetic-conversion-lowering",)
+
+
+class WebGLBooleanCompoundAssignmentError(OpenGLBooleanCompoundAssignmentError):
+    """Raised when a boolean compound assignment cannot be lowered safely."""
+
+    project_diagnostic_code = (
+        "project.translate.webgl-boolean-compound-assignment-invalid"
+    )
+    missing_capabilities = ("webgl.boolean-compound-assignment-lowering",)
+
+
+class WebGLBooleanOrderedIntrinsicError(OpenGLBooleanOrderedIntrinsicError):
+    """Raised when boolean min/max operands have no faithful GLSL ES lowering."""
+
+    project_diagnostic_code = (
+        "project.translate.webgl-boolean-ordered-intrinsic-unrepresentable"
+    )
+    missing_capabilities = ("webgl.boolean-ordered-intrinsic-lowering",)
+
+
+class WebGLStructConstructionError(OpenGLStructConstructionError):
+    """Raised when a source structure conversion has no faithful GLSL ES form."""
+
+    project_diagnostic_code = "project.translate.webgl-struct-construction-unsupported"
+    missing_capabilities = ("webgl.struct-conversion-construction",)
 
 
 class WebGLCodeGen(GLSLCodeGen):
     """Generate WebGL 2.0 compatible GLSL ES output from CrossGL ASTs."""
 
+    GLSL_TARGET_DISPLAY_NAME = "WebGL"
+    GLSL_ARITHMETIC_CONVERSION_ERROR = WebGLArithmeticConversionError
+    GLSL_BOOLEAN_COMPOUND_ASSIGNMENT_ERROR = WebGLBooleanCompoundAssignmentError
+    GLSL_BOOLEAN_ORDERED_INTRINSIC_ERROR = WebGLBooleanOrderedIntrinsicError
+    GLSL_STRUCT_CONSTRUCTION_ERROR = WebGLStructConstructionError
+    GLSL_SUPPORTED_ARITHMETIC_INTEGER_WIDTHS = frozenset({32})
+    GLSL_SUPPORTED_ARITHMETIC_FLOATING_WIDTHS = frozenset({32})
     BUILTIN_INTERFACE_BLOCK_NAMES = {"gl_PerVertex"}
+    GLSL_RESERVED_IDENTIFIER_PREFIXES = ("gl_", "webgl_", "_webgl_")
     UNSUPPORTED_VERTEX_OUTPUT_BUILTINS = {"gl_ClipDistance", "gl_CullDistance"}
     UNSUPPORTED_STAGE_NAMES = (
         {
@@ -117,6 +163,20 @@ class WebGLCodeGen(GLSLCodeGen):
                 f"'{base_type}'"
             )
         return mapped_type
+
+    def glsl_apply_narrow_integer_contract(self, generated, value_type):
+        contract = self.glsl_narrow_integer_contract(value_type)
+        if contract is None:
+            return generated
+        bits = int(contract["bits"])
+        if contract["signed"]:
+            shift = 32 - bits
+            return f"(({generated} << {shift}) >> {shift})"
+
+        mask = f"{(1 << bits) - 1}u"
+        if contract["width"] > 1:
+            mask = f"{contract['mapped']}({mask})"
+        return f"({generated} & {mask})"
 
     def map_image_base_type_with_format(self, vtype, node=None):
         if self.is_storage_image_type(vtype):
@@ -302,16 +362,7 @@ class WebGLCodeGen(GLSLCodeGen):
         return True
 
     def webgl_unique_dynamic_sampler_temp_name(self):
-        used_names = set(self.local_variable_types)
-        used_names.update(self.current_identifier_aliases.values())
-        used_names.update(self.current_stage_declared_names())
-        base_name = "crossgl_dynamic_sampler_value"
-        name = base_name
-        suffix = 1
-        while name in used_names:
-            suffix += 1
-            name = f"{base_name}_{suffix}"
-        return name
+        return self.glsl_synthetic_local_identifier("crossgl_dynamic_sampler_value")
 
     def webgl_render_expression_with_replacement(
         self,

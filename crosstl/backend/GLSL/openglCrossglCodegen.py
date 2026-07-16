@@ -2,6 +2,8 @@
 
 import re
 
+from crosstl.glsl_builtins import GLSL_BUILTIN_INT_LIMITS
+
 from .OpenglAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -1609,6 +1611,18 @@ class GLSLToCrossGLConverter:
             return False
         return bool(getattr(var, "qualifiers", None) or getattr(var, "layout", None))
 
+    def builtin_specialization_constant_declaration(self, var):
+        if getattr(var, "vtype", ""):
+            return None
+        layout = getattr(var, "layout", None) or {}
+        if not self.layout_has_key(layout, "constant_id"):
+            return None
+        default = GLSL_BUILTIN_INT_LIMITS.get(getattr(var, "name", ""))
+        if default is None:
+            return None
+        attributes = self.variable_layout_attribute_suffix(var)
+        return f"const int {var.name}{attributes} = {default}"
+
     def qualifier_only_builtin_qualifiers(self, node):
         qualifiers_by_name = {}
         for var in getattr(node, "global_variables", []) or []:
@@ -2693,6 +2707,12 @@ class GLSLToCrossGLConverter:
             if self.is_buffer_reference_forward_declaration(global_var):
                 continue
             if self.is_anonymous_ssbo_member_variable(global_var):
+                continue
+            builtin_specialization = self.builtin_specialization_constant_declaration(
+                global_var
+            )
+            if builtin_specialization is not None:
+                result += self.indent_str + builtin_specialization + ";\n"
                 continue
             structured_buffer_decl = self.structured_buffer_declaration(global_var)
             if structured_buffer_decl is not None:

@@ -4,6 +4,18 @@ import re
 from copy import deepcopy
 from types import SimpleNamespace
 
+from ...glsl_builtins import GLSL_BUILTIN_INT_LIMITS
+from ..arithmetic_conversions import (
+    ArithmeticScalarKind,
+    ArithmeticType,
+    UnrepresentableArithmeticConversion,
+    arithmetic_type,
+    arithmetic_type_name,
+    narrow_integer_shape,
+    promoted_integer_type_name,
+    resolve_arithmetic_conversion,
+    target_arithmetic_type,
+)
 from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
@@ -14,6 +26,7 @@ from ..ast import (
     BinaryOpNode,
     BlockNode,
     BreakNode,
+    CastNode,
     ConstructorNode,
     ContinueNode,
     CooperativeMatrixOpNode,
@@ -24,6 +37,7 @@ from ..ast import (
     ForNode,
     FunctionCallNode,
     IdentifierNode,
+    IdentifierPatternNode,
     IfNode,
     LiteralNode,
     LoopNode,
@@ -41,9 +55,11 @@ from ..ast import (
     ReferenceType,
     ResourceMemoryQualifierNode,
     ReturnNode,
+    StageMap,
     StructMemberNode,
     StructNode,
     SwitchNode,
+    SwizzleNode,
     TernaryOpNode,
     UnaryOpNode,
     VariableNode,
@@ -51,6 +67,12 @@ from ..ast import (
     WhileNode,
 )
 from ..standard_constants import render_standard_math_constant
+from ..structure_conversions import (
+    ScalarKind,
+    StructureConversionKind,
+    StructureFieldValue,
+    registered_scalar_to_structure_conversion,
+)
 from ..validation import (
     IMAGE_RESOURCE_INTRINSIC_NAMES,
     INTEGER_COORDINATE_INTRINSIC_NAMES,
@@ -79,6 +101,7 @@ from .array_utils import (
     parse_array_type,
     split_array_type_suffix,
 )
+from .boolean_intrinsics import is_boolean_type, ordered_boolean_minmax_width
 from .constant_ordering import partition_constants_by_struct_dependency
 from .enum_utils import (
     collect_enum_struct_variant_fields,
@@ -94,16 +117,11 @@ from .enum_utils import (
     collect_struct_payload_enums,
     enum_struct_fields,
     enum_value_expression,
-    generate_enum_constants,
     generate_enum_constructor_call,
     generate_enum_constructor_expression,
-    generate_enum_constructor_functions,
-    generate_enum_structs,
-    generate_generic_enum_constants,
-    generate_generic_enum_constructor_functions,
-    generate_generic_enum_structs,
     generic_enum_specialized_fields,
     generic_enum_specialized_type_name,
+    generic_enum_specialized_variant_fields,
     generic_type_parts,
     infer_enum_constructor_type,
     sanitize_type_name,
@@ -124,7 +142,6 @@ from .generic_struct_utils import (
     collect_generic_struct_definitions,
     collect_generic_struct_specialization_member_types,
     collect_generic_struct_specializations,
-    generate_generic_structs,
     generate_struct_constructor_expression,
     generic_struct_specialized_fields,
     generic_struct_specialized_type_name,
@@ -326,6 +343,28 @@ class OpenGLTemplateTypeError(ValueError):
         self.enclosing_generated_type = enclosing_type
 
 
+class OpenGLEntryPointSelectionError(ValueError):
+    """Raised when a requested standalone OpenGL entry cannot be selected."""
+
+    project_diagnostic_code = "project.translate.opengl-entry-point-unavailable"
+    missing_capabilities = ("artifact.entry-point-selection",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        entry_point=None,
+        available_entry_points=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.entry_point = entry_point
+        self.available_entry_points = tuple(available_entry_points or ())
+        self.reason = reason
+        self.source_location = source_location
+
+
 class OpenGLMappedOverloadError(ValueError):
     """Raised when source overload binding cannot survive GLSL type mapping."""
 
@@ -417,6 +456,31 @@ class OpenGLScalarConversionError(ValueError):
         self.source_location = source_location
 
 
+class OpenGLArithmeticConversionError(ValueError):
+    """Raised when source arithmetic has no faithful GLSL conversion plan."""
+
+    project_diagnostic_code = "project.translate.opengl-arithmetic-conversion-invalid"
+    missing_capabilities = ("opengl.arithmetic-conversion-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        operator=None,
+        operand_types=None,
+        attempted_common_type=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.operator = operator
+        self.operand_types = tuple(operand_types or ())
+        self.attempted_common_type = attempted_common_type
+        self.common_type = attempted_common_type
+        self.reason = reason
+        self.source_location = source_location
+
+
 class OpenGLBooleanCompoundAssignmentError(ValueError):
     """Raised when a boolean compound assignment cannot be lowered safely."""
 
@@ -439,6 +503,30 @@ class OpenGLBooleanCompoundAssignmentError(ValueError):
         self.operator = operator
         self.target = target
         self.target_type = target_type
+        self.reason = reason
+        self.source_location = source_location
+
+
+class OpenGLBooleanOrderedIntrinsicError(ValueError):
+    """Raised when boolean min/max operands have no faithful GLSL lowering."""
+
+    project_diagnostic_code = (
+        "project.translate.opengl-boolean-ordered-intrinsic-unrepresentable"
+    )
+    missing_capabilities = ("opengl.boolean-ordered-intrinsic-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        operation=None,
+        operand_types=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.operation = operation
+        self.operand_types = tuple(operand_types or ())
         self.reason = reason
         self.source_location = source_location
 
@@ -663,6 +751,34 @@ class OpenGLReferenceParameterError(ValueError):
         self.source_location = source_location
 
 
+class OpenGLSpecializationConstantError(ValueError):
+    """Raised when a specialization constant has no faithful GLSL contract."""
+
+    project_diagnostic_code = "project.translate.opengl-specialization-constant-invalid"
+    missing_capabilities = ("opengl.specialization-constant-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        constant_name=None,
+        specialization_id=None,
+        constant_type=None,
+        conflicting_name=None,
+        conflicting_id=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.constant_name = constant_name
+        self.specialization_id = specialization_id
+        self.constant_type = constant_type
+        self.conflicting_name = conflicting_name
+        self.conflicting_id = conflicting_id
+        self.reason = reason
+        self.source_location = source_location
+
+
 class OpenGLGlobalInitializerError(ValueError):
     """Raised when a runtime-dependent global initializer cannot be lowered."""
 
@@ -683,6 +799,54 @@ class OpenGLGlobalInitializerError(ValueError):
         self.variable_name = variable_name
         self.dependencies = tuple(sorted(dependencies or ()))
         self.cycle = tuple(cycle or ())
+        self.reason = reason
+        self.source_location = source_location
+
+
+class OpenGLCompileTimeGlobalError(ValueError):
+    """Raised when immutable global data has no GLSL constant expression."""
+
+    project_diagnostic_code = "project.translate.opengl-compile-time-global-invalid"
+    missing_capabilities = ("opengl.compile-time-global-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        variable_name=None,
+        expression_kind=None,
+        detail=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.variable_name = variable_name
+        self.expression_kind = expression_kind
+        self.detail = detail
+        self.reason = reason
+        self.source_location = source_location
+
+
+class OpenGLForInIterableError(ValueError):
+    """Raised when a CrossGL for-in binding has no faithful GLSL lowering."""
+
+    project_diagnostic_code = "project.translate.opengl-for-in-iterable-unsupported"
+    missing_capabilities = ("opengl.fixed-array-for-in-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        pattern=None,
+        iterable_type=None,
+        binding_type=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.pattern = pattern
+        self.iterable_type = iterable_type
+        self.binding_type = binding_type
         self.reason = reason
         self.source_location = source_location
 
@@ -785,6 +949,13 @@ class OpenGLCooperativeMatrixError(ValueError):
 class GLSLCodeGen:
     """Emit GLSL source from the shared CrossGL translator AST."""
 
+    GLSL_TARGET_DISPLAY_NAME = "OpenGL"
+    GLSL_ARITHMETIC_CONVERSION_ERROR = OpenGLArithmeticConversionError
+    GLSL_BOOLEAN_COMPOUND_ASSIGNMENT_ERROR = OpenGLBooleanCompoundAssignmentError
+    GLSL_BOOLEAN_ORDERED_INTRINSIC_ERROR = OpenGLBooleanOrderedIntrinsicError
+    GLSL_STRUCT_CONSTRUCTION_ERROR = OpenGLStructConstructionError
+    GLSL_SUPPORTED_ARITHMETIC_INTEGER_WIDTHS = frozenset({32, 64})
+    GLSL_SUPPORTED_ARITHMETIC_FLOATING_WIDTHS = frozenset({32, 64})
     OPENGL_DESCRIPTOR_SET_BINDING_STRIDE = 1024
     METAL_ONLY_SYSTEM_INCLUDES = frozenset(
         {
@@ -1120,6 +1291,8 @@ class GLSLCodeGen:
     GLSL_PRECISION_QUALIFIERS = {"lowp", "mediump", "highp"}
     GLSL_PARAMETER_QUALIFIERS = {"out", "inout"}
     GLSL_RESERVED_IDENTIFIERS = {"active", "input", "output"}
+    GLSL_RESERVED_IDENTIFIER_PREFIXES = ("gl_",)
+    GLSL_BUILTIN_INTERFACE_BLOCK_NAMES = {"gl_PerVertex"}
     COMPOUND_ASSIGNMENT_BINARY_OPERATORS = {
         "+=": "+",
         "-=": "-",
@@ -1133,7 +1306,6 @@ class GLSLCodeGen:
         "|=": "|",
     }
     GLSL_BFLOAT16_ALIASES = {"bfloat", "bfloat16", "bfloat16_t"}
-    GLSL_REGISTERED_SCALAR_STRUCT_CONVERSIONS = {"complex64_t"}
     GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS = {
         "clamp",
         "floatBitsToInt",
@@ -1615,6 +1787,12 @@ class GLSLCodeGen:
         self.glsl_interface_block_names_by_qualifier = {}
         self.global_variable_types = {}
         self.glsl_global_identifier_names = set()
+        self.glsl_module_identifier_names = {}
+        self.glsl_module_generated_identifier_names = {}
+        self.glsl_module_used_identifier_names = set()
+        self.glsl_type_identifier_names = {}
+        self.glsl_generic_enum_constructor_names = {}
+        self.glsl_compile_time_global_node_ids = set()
         self.glsl_runtime_global_initializer_node_ids = set()
         self.glsl_stage_runtime_global_initializers = {}
         self.global_type_aliases = {}
@@ -1661,6 +1839,7 @@ class GLSLCodeGen:
         self.current_glsl_private_pointer_function_name = None
         self.literal_int_constants = {}
         self.glsl_specialization_constant_names = set()
+        self.glsl_global_specialization_constants = []
         self.literal_int_vector_constants = {}
         self.literal_int_vector_array_constants = {}
         self.current_compile_time_int_constants = {}
@@ -1679,6 +1858,7 @@ class GLSLCodeGen:
         self.stage_entry_resource_declaration_names = set()
         self.stage_entry_constant_value_cbuffer_names = set()
         self.current_identifier_aliases = {}
+        self.current_glsl_local_identifier_names = {}
         self.glsl_hoisted_shared_declarations = []
         self.glsl_hoisted_shared_aliases_by_declaration = {}
         self.glsl_hoisted_shared_declaration_ids = set()
@@ -1720,6 +1900,7 @@ class GLSLCodeGen:
         self.local_variable_types = {}
         self.local_variable_source_types = {}
         self.required_glsl_complex64_helpers = set()
+        self.required_glsl_boolean_order_helpers = set()
         self.current_structured_buffer_array_parameters = {}
         self.current_structured_buffer_counter_parameters = {}
         self.struct_member_types = {}
@@ -2230,6 +2411,143 @@ class GLSLCodeGen:
     def generate(self, ast):
         """Generate complete GLSL source for a CrossGL AST."""
         return self.generate_program(ast)
+
+    def generate_entry(self, ast, entry_point):
+        """Generate one independently loadable GLSL stage entry artifact."""
+        scoped_ast = self.entry_scoped_ast(ast, entry_point)
+        return self.generate_program(scoped_ast)
+
+    def entry_scoped_ast(self, ast, entry_point):
+        if not isinstance(entry_point, str) or not entry_point.strip():
+            raise OpenGLEntryPointSelectionError(
+                "OpenGL entry-point selection requires a non-empty source entry name",
+                entry_point=entry_point,
+                reason="invalid-name",
+            )
+        entry_point = entry_point.strip()
+        stage_entry_types = self.combined_stage_entry_types()
+        entries = collect_stage_entry_records(ast, None, stage_entry_types)
+        available = sorted(
+            {
+                str(getattr(function, "name", ""))
+                for _entry_id, _stage_name, function in entries
+                if getattr(function, "name", None)
+            }
+        )
+        matches = [
+            (entry_id, stage_name, function)
+            for entry_id, stage_name, function in entries
+            if getattr(function, "name", None) == entry_point
+        ]
+        if not matches:
+            raise OpenGLEntryPointSelectionError(
+                f"OpenGL source entry point '{entry_point}' was not found",
+                entry_point=entry_point,
+                available_entry_points=available,
+                reason="not-found",
+            )
+        if len(matches) != 1:
+            raise OpenGLEntryPointSelectionError(
+                f"OpenGL source entry point '{entry_point}' is ambiguous",
+                entry_point=entry_point,
+                available_entry_points=available,
+                reason="ambiguous",
+            )
+
+        _selected_id, selected_stage_name, selected_function = matches[0]
+        selected_stage = next(
+            (
+                (stage_type, stage)
+                for stage_type, stage in getattr(ast, "stages", {}).items()
+                if getattr(stage, "entry_point", None) is selected_function
+            ),
+            None,
+        )
+        scoped_ast = deepcopy(ast)
+        selected_copy_function = None
+        scoped_ast.functions = [
+            function
+            for function in getattr(scoped_ast, "functions", []) or []
+            if function_stage_name(function) not in stage_entry_types
+            or (
+                selected_stage is None
+                and function_stage_name(function) == selected_stage_name
+                and getattr(function, "name", None) == entry_point
+            )
+        ]
+        selected_stages = StageMap()
+        if selected_stage is not None:
+            stage_type, stage = selected_stage
+            selected_stage_copy = deepcopy(stage)
+            selected_stages.append(stage_type, selected_stage_copy)
+            selected_copy_function = selected_stage_copy.entry_point
+        else:
+            selected_copy_function = next(
+                (
+                    function
+                    for function in scoped_ast.functions
+                    if function_stage_name(function) == selected_stage_name
+                    and getattr(function, "name", None) == entry_point
+                ),
+                None,
+            )
+        scoped_ast.stages = selected_stages
+        if selected_copy_function is None:
+            raise OpenGLEntryPointSelectionError(
+                f"OpenGL source entry point '{entry_point}' could not be copied",
+                entry_point=entry_point,
+                available_entry_points=available,
+                reason="copy-failed",
+            )
+
+        reachable_names = self.entry_reachable_function_names(
+            scoped_ast,
+            selected_copy_function,
+        )
+        scoped_ast.functions = [
+            function
+            for function in getattr(scoped_ast, "functions", []) or []
+            if function is selected_copy_function
+            or getattr(function, "name", None) in reachable_names
+        ]
+        for _stage_type, stage in scoped_ast.stages.items():
+            stage.local_functions = [
+                function
+                for function in getattr(stage, "local_functions", []) or []
+                if getattr(function, "name", None) in reachable_names
+            ]
+        return scoped_ast
+
+    def entry_reachable_function_names(self, ast, entry_function):
+        functions = list(getattr(ast, "functions", []) or [])
+        for _stage_type, stage in getattr(ast, "stages", {}).items():
+            functions.extend(getattr(stage, "local_functions", []) or [])
+        functions_by_name = {}
+        for function in functions:
+            name = getattr(function, "name", None)
+            if name:
+                functions_by_name.setdefault(name, []).append(function)
+
+        reachable_names = set()
+        pending = [entry_function]
+        visited = set()
+        while pending:
+            function = pending.pop()
+            if id(function) in visited:
+                continue
+            visited.add(id(function))
+            for node in self.walk_ast(getattr(function, "body", [])):
+                if not isinstance(node, FunctionCallNode):
+                    continue
+                name = self.function_call_name(node)
+                if not name or name in reachable_names:
+                    continue
+                candidates = functions_by_name.get(name, ())
+                if not candidates:
+                    continue
+                reachable_names.add(name)
+                pending.extend(candidates)
+        return reachable_names
 
     def generate_stage(self, ast, shader_type):
         """Generate GLSL source for a single requested shader stage."""
@@ -3118,10 +3436,7 @@ class GLSLCodeGen:
                             )
                         )
                     ],
-                    "code": generate_generic_structs(
-                        self,
-                        {specialization["type_name"]: specialization},
-                    ),
+                    "code": self.generate_glsl_generic_struct(specialization),
                 }
             )
 
@@ -3134,7 +3449,7 @@ class GLSLCodeGen:
                         self.mapped_type_dependency_name(field_type)
                         for _field_name, field_type in fields
                     ],
-                    "code": generate_enum_structs(self, [enum]),
+                    "code": self.generate_glsl_payload_enum_struct(enum),
                 }
             )
 
@@ -3149,16 +3464,163 @@ class GLSLCodeGen:
                             specialization,
                         )
                     ],
-                    "code": generate_generic_enum_structs(
-                        self,
-                        {type_text: specialization},
-                    ),
+                    "code": self.generate_glsl_generic_enum_struct(specialization),
                 }
             )
 
         code = ""
         for entry in self.order_struct_declaration_entries(entries):
             code += entry["code"]
+        return code
+
+    def generate_glsl_enum_constants(self, enums, qualifier="const"):
+        lines = []
+        for enum in enums or ():
+            next_value = 0
+            for variant in getattr(enum, "variants", ()) or ():
+                if getattr(variant, "value", None) is None:
+                    value = str(next_value)
+                    next_value += 1
+                else:
+                    value = self.generate_expression(variant.value)
+                    literal_value = self.literal_int_value(variant.value)
+                    next_value = literal_value + 1 if literal_value is not None else 0
+                path = f"{enum.name}::{variant.name}"
+                name = self.enum_variant_constants[path]
+                lines.append(f"{qualifier} int {name} = {value};")
+        return "\n".join(lines) + ("\n\n" if lines else "")
+
+    def generate_glsl_generic_enum_constants(self, definitions, qualifier="const"):
+        lines = []
+        for name, definition in sorted((definitions or {}).items()):
+            next_value = 0
+            for variant in getattr(definition["enum"], "variants", ()) or ():
+                if getattr(variant, "value", None) is None:
+                    value = str(next_value)
+                    next_value += 1
+                else:
+                    value = self.generate_expression(variant.value)
+                    literal_value = self.literal_int_value(variant.value)
+                    next_value = literal_value + 1 if literal_value is not None else 0
+                path = f"{name}::{variant.name}"
+                constant_name = self.enum_variant_constants[path]
+                lines.append(f"{qualifier} int {constant_name} = {value};")
+        return "\n".join(lines) + ("\n\n" if lines else "")
+
+    def generate_glsl_struct_like_declaration(self, source_name, fields):
+        type_name = self.glsl_type_identifier_name(source_name)
+        code = f"struct {type_name} {{\n"
+        for field_name, field_type in fields:
+            member_name = self.glsl_struct_member_name(source_name, field_name)
+            declaration = format_c_style_array_declaration(
+                self.map_type(field_type), member_name
+            )
+            code += f"    {declaration};\n"
+        return f"{code}}};\n\n"
+
+    def generate_glsl_generic_struct(self, specialization):
+        fields = generic_struct_specialized_fields(
+            self.type_name_string,
+            specialization,
+        )
+        return self.generate_glsl_struct_like_declaration(
+            specialization["struct_name"], fields
+        )
+
+    def generate_glsl_payload_enum_struct(self, enum):
+        fields = [("variant", "int"), *(enum_struct_fields(enum) or [])]
+        return self.generate_glsl_struct_like_declaration(enum.name, fields)
+
+    def generate_glsl_generic_enum_struct(self, specialization):
+        fields = [
+            ("variant", "int"),
+            *generic_enum_specialized_fields(self, specialization),
+        ]
+        return self.generate_glsl_struct_like_declaration(
+            specialization["struct_name"], fields
+        )
+
+    def glsl_enum_default_value(self, field_type):
+        return self.default_value_expression_for_type(
+            field_type
+        ) or self.primitive_default_value_expression(field_type)
+
+    def generate_glsl_enum_constructor_function(
+        self,
+        source_type_name,
+        constructor_name,
+        constant_name,
+        all_fields,
+        variant_fields,
+    ):
+        target_type = self.glsl_type_identifier_name(source_type_name)
+        params = ", ".join(
+            f"{self.map_type(field_type)} payload{index}"
+            for index, (_field_name, field_type) in enumerate(variant_fields)
+        )
+        variant_member = self.glsl_struct_member_name(source_type_name, "variant")
+        code = f"{target_type} {constructor_name}({params}) {{\n"
+        code += f"    {target_type} result;\n"
+        code += f"    result.{variant_member} = {constant_name};\n"
+        active_fields = {field_name for field_name, _field_type in variant_fields}
+        for field_name, field_type in all_fields:
+            if field_name in active_fields:
+                continue
+            member_name = self.glsl_struct_member_name(source_type_name, field_name)
+            code += (
+                f"    result.{member_name} = "
+                f"{self.glsl_enum_default_value(field_type)};\n"
+            )
+        for index, (field_name, _field_type) in enumerate(variant_fields):
+            member_name = self.glsl_struct_member_name(source_type_name, field_name)
+            code += f"    result.{member_name} = payload{index};\n"
+        code += "    return result;\n"
+        return f"{code}}}\n\n"
+
+    def generate_glsl_enum_constructor_functions(self, enums):
+        code = ""
+        for enum in enums or ():
+            all_fields = enum_struct_fields(enum) or []
+            for variant in getattr(enum, "variants", ()) or ():
+                path = f"{enum.name}::{variant.name}"
+                variant_fields = list(
+                    self.enum_struct_variant_fields.get(enum.name, {})
+                    .get(variant.name, {})
+                    .items()
+                )
+                code += self.generate_glsl_enum_constructor_function(
+                    enum.name,
+                    self.enum_variant_constructors[path],
+                    self.enum_variant_constants[path],
+                    all_fields,
+                    variant_fields,
+                )
+        return code
+
+    def generate_glsl_generic_enum_constructor_functions(self, specializations):
+        code = ""
+        for type_text, specialization in sorted((specializations or {}).items()):
+            all_fields = generic_enum_specialized_fields(self, specialization)
+            definition = specialization["definition"]
+            for variant in getattr(definition["enum"], "variants", ()) or ():
+                variant_fields = generic_enum_specialized_variant_fields(
+                    self,
+                    specialization,
+                    variant.name,
+                )
+                constructor_name = self.glsl_generic_enum_constructor_names[
+                    (type_text, variant.name)
+                ]
+                constant_name = self.enum_variant_constants[
+                    f"{definition['name']}::{variant.name}"
+                ]
+                code += self.generate_glsl_enum_constructor_function(
+                    specialization["struct_name"],
+                    constructor_name,
+                    constant_name,
+                    all_fields,
+                    variant_fields,
+                )
         return code
 
     def default_value_expression_for_type(self, type_value):
@@ -3179,12 +3641,13 @@ class GLSLCodeGen:
         return f"{base_type}({', '.join(field_defaults)})"
 
     def default_value_struct_field_types(self, type_name):
-        member_types = self.struct_member_types.get(type_name)
+        source_type_name = self.glsl_source_type_identifier_name(type_name)
+        member_types = self.struct_member_types.get(source_type_name)
         if member_types is not None:
             return list(member_types.values())
 
         for enum in self.struct_payload_enums:
-            if enum.name != type_name:
+            if enum.name != source_type_name:
                 continue
             fields = enum_struct_fields(enum) or []
             return ["int"] + [field_type for _field_name, field_type in fields]
@@ -3241,6 +3704,12 @@ class GLSLCodeGen:
         self.glsl_global_identifier_names = self.collect_glsl_global_identifier_names(
             ast, target_stage
         )
+        self.glsl_module_identifier_names = {}
+        self.glsl_module_generated_identifier_names = {}
+        self.glsl_module_used_identifier_names = set()
+        self.glsl_type_identifier_names = {}
+        self.glsl_generic_enum_constructor_names = {}
+        self.glsl_compile_time_global_node_ids = set()
         self.glsl_runtime_global_initializer_node_ids = set()
         self.glsl_stage_runtime_global_initializers = {}
         self.function_sampler_parameter_indices = (
@@ -3295,6 +3764,7 @@ class GLSLCodeGen:
         self.current_glsl_private_pointer_variant = {}
         self.current_glsl_private_pointer_base_names = {}
         self.current_glsl_private_pointer_function_name = None
+        self.glsl_global_specialization_constants = []
         self.function_image_access_requirements = (
             collect_function_image_access_requirements(
                 functions,
@@ -3307,15 +3777,22 @@ class GLSLCodeGen:
         self.function_structured_buffer_access_requirements = (
             self.collect_function_structured_buffer_access_requirements(functions)
         )
-        self.literal_int_constants = collect_literal_int_constants(
-            getattr(ast, "constants", [])
-        )
+        constants = list(getattr(ast, "constants", []) or [])
         self.glsl_specialization_constant_names = {
             node.name
-            for node in getattr(ast, "constants", []) or []
+            for node in constants + list(getattr(ast, "global_variables", []) or [])
             if getattr(node, "name", None)
-            and self.glsl_specialization_constant_id(node) is not None
+            and self.glsl_specialization_constant_attributes(node)
         }
+        # Constants derived from a specialization default remain runtime-dependent.
+        self.literal_int_constants = collect_literal_int_constants(
+            [
+                node
+                for node in constants
+                if getattr(node, "name", None)
+                not in self.glsl_specialization_constant_names
+            ]
+        )
         self.literal_int_vector_constants = (
             self.collect_literal_int_vector_constants_from_variables(
                 getattr(ast, "global_variables", []),
@@ -3348,6 +3825,7 @@ class GLSLCodeGen:
         self.stage_entry_resource_declaration_names = set()
         self.stage_entry_constant_value_cbuffer_names = set()
         self.current_identifier_aliases = {}
+        self.current_glsl_local_identifier_names = {}
         self.glsl_hoisted_shared_declarations = []
         self.glsl_hoisted_shared_aliases_by_declaration = {}
         self.glsl_hoisted_shared_declaration_ids = set()
@@ -3385,6 +3863,7 @@ class GLSLCodeGen:
         self.local_variable_types = {}
         self.local_variable_source_types = {}
         self.required_glsl_complex64_helpers = set()
+        self.required_glsl_boolean_order_helpers = set()
         self.current_structured_buffer_array_parameters = {}
         self.current_structured_buffer_counter_parameters = {}
         self.current_structured_buffer_access_parameters = {}
@@ -3537,6 +4016,7 @@ class GLSLCodeGen:
                 self.generic_enum_struct_definitions
             ),
         }
+        self.prepare_glsl_specialization_constants(ast)
         (
             self.resource_array_size_hints,
             self.function_resource_array_size_hints,
@@ -3552,13 +4032,18 @@ class GLSLCodeGen:
         emitted_functions = self.glsl_emitted_functions_for_shared_lowering(
             ast, target_stage
         )
+        identifier_functions = [
+            func for func in emitted_functions if not generic_function_parameters(func)
+        ] + list(generic_function_specializations.values())
+        self.prepare_glsl_program_identifier_names(
+            ast,
+            structs,
+            identifier_functions,
+            target_stage,
+        )
+        self.prepare_glsl_enum_identifier_names()
         self.prepare_glsl_mapped_function_overloads(
-            [
-                func
-                for func in emitted_functions
-                if not generic_function_parameters(func)
-            ]
-            + list(generic_function_specializations.values()),
+            identifier_functions,
             reserved_names=self.glsl_overload_reserved_names(ast),
         )
         self.function_private_pointer_array_size_hints = (
@@ -3600,13 +4085,11 @@ class GLSLCodeGen:
                 code += f"{line}\n"
         if extra_lines:
             code += "\n".join(extra_lines) + "\n"
-        code += generate_enum_constants(
-            self,
+        code += self.generate_glsl_enum_constants(
             self.plain_enums + self.struct_payload_enums,
             qualifier="const",
         )
-        code += generate_generic_enum_constants(
-            self,
+        code += self.generate_glsl_generic_enum_constants(
             self.generic_enum_struct_definitions,
             qualifier="const",
         )
@@ -3616,12 +4099,21 @@ class GLSLCodeGen:
             )
         )
         code += self.generate_constants(ast, leading_constants)
+        code += self.generate_glsl_global_specialization_constants()
         code += self.generate_glsl_wave_helpers(ast, target_stage)
 
-        global_vars = [
+        all_global_vars = [
             node
             for node in list(getattr(ast, "global_variables", []) or [])
             if not self.is_elided_glsl_type_alias_global(node)
+        ]
+        specialization_global_ids = {
+            id(node) for node in self.glsl_global_specialization_constants
+        }
+        global_vars = [
+            node
+            for node in all_global_vars
+            if id(node) not in specialization_global_ids
         ]
         empty_struct_global_ids = self.collect_glsl_empty_struct_global_ids(global_vars)
         runtime_initialized_global_vars = [
@@ -3660,11 +4152,13 @@ class GLSLCodeGen:
             global_vars + stage_local_resource_vars + stage_resource_params
         )
         self.global_variable_types = self.collect_global_variable_types(
-            global_vars
+            self.glsl_global_specialization_constants
+            + global_vars
             + stage_local_resource_vars
             + stage_local_interface_vars
             + stage_resource_params
         )
+        self.prepare_glsl_compile_time_globals(ast, global_vars)
         self.glsl_buffer_block_struct_names = (
             self.collect_glsl_buffer_block_struct_names(resource_declaration_nodes)
         )
@@ -3888,9 +4382,8 @@ class GLSLCodeGen:
 
         code += self.generate_ordered_data_struct_declarations(data_struct_nodes)
         code += self.generate_constants(ast, struct_dependent_constants)
-        code += generate_enum_constructor_functions(self, self.struct_payload_enums)
-        code += generate_generic_enum_constructor_functions(
-            self,
+        code += self.generate_glsl_enum_constructor_functions(self.struct_payload_enums)
+        code += self.generate_glsl_generic_enum_constructor_functions(
             self.generic_enum_specializations,
         )
 
@@ -3908,11 +4401,14 @@ class GLSLCodeGen:
             )
 
             if hasattr(node, "name"):
-                var_name = node.name
+                source_var_name = node.name
             elif hasattr(node, "variable_name"):
-                var_name = node.variable_name
+                source_var_name = node.variable_name
             else:
-                var_name = f"var{index}"
+                source_var_name = f"var{index}"
+            var_name = self.glsl_global_declaration_identifier_name(
+                node, source_var_name
+            )
 
             if self.is_glsl_buffer_block_variable(node, vtype):
                 self.record_glsl_buffer_block_variable(var_name, node, vtype)
@@ -3962,7 +4458,7 @@ class GLSLCodeGen:
             if mapped_type == "sampler":
                 self.explicit_resource_binding_index(node)
                 self.sampler_variables.add(var_name)
-                if self.should_preserve_sampler_resource(var_name):
+                if self.should_preserve_sampler_resource(source_var_name):
                     binding_namespace = "sampler binding"
                     resource_binding = self.opengl_resource_binding_for_declaration(
                         node,
@@ -3994,6 +4490,10 @@ class GLSLCodeGen:
                 continue
             if self.is_structured_buffer_type(vtype):
                 self.record_structured_buffer_access_metadata(var_name, vtype, node)
+                if source_var_name != var_name:
+                    self.record_structured_buffer_access_metadata(
+                        source_var_name, vtype, node
+                    )
                 binding_namespace = "buffer binding"
                 resource_binding = self.opengl_resource_binding_for_declaration(
                     node,
@@ -4051,6 +4551,10 @@ class GLSLCodeGen:
                 self.glsl_uniform_block_variable_types[var_name] = (
                     self.constant_buffer_element_type(vtype)
                 )
+                if source_var_name != var_name:
+                    self.glsl_uniform_block_variable_types[source_var_name] = (
+                        self.constant_buffer_element_type(vtype)
+                    )
                 binding_namespace = "uniform buffer binding"
                 resource_binding = self.opengl_resource_binding_for_declaration(
                     node,
@@ -4082,9 +4586,15 @@ class GLSLCodeGen:
                 continue
             if self.is_opaque_resource_type(mapped_type):
                 self.texture_variable_types[var_name] = mapped_type
+                if source_var_name != var_name:
+                    self.texture_variable_types[source_var_name] = mapped_type
                 fixed_array_size = self.glsl_resource_array_size_value(array_size)
                 if fixed_array_size is not None:
                     self.resource_variable_array_sizes[var_name] = fixed_array_size
+                    if source_var_name != var_name:
+                        self.resource_variable_array_sizes[source_var_name] = (
+                            fixed_array_size
+                        )
                 record_explicit_image_metadata(
                     var_name,
                     node,
@@ -4092,6 +4602,14 @@ class GLSLCodeGen:
                     image_formats=self.image_variable_formats,
                     image_accesses=self.image_variable_accesses,
                 )
+                if source_var_name != var_name:
+                    record_explicit_image_metadata(
+                        source_var_name,
+                        node,
+                        self.attribute_value_to_string,
+                        image_formats=self.image_variable_formats,
+                        image_accesses=self.image_variable_accesses,
+                    )
             declaration = format_c_style_array_declaration(
                 f"{mapped_type}{array_suffix}", var_name
             )
@@ -4147,6 +4665,10 @@ class GLSLCodeGen:
                 self.glsl_uniform_block_variable_types[var_name] = str(
                     self.resource_base_type(vtype)
                 )
+                if source_var_name != var_name:
+                    self.glsl_uniform_block_variable_types[source_var_name] = str(
+                        self.resource_base_type(vtype)
+                    )
                 binding_namespace = "uniform buffer binding"
                 resource_binding = self.opengl_resource_binding_for_declaration(
                     node,
@@ -4210,7 +4732,7 @@ class GLSLCodeGen:
             self.prepare_glsl_resource_function_specializations(ast)
         finally:
             self.enforce_concrete_glsl_types = previous_enforce_concrete_glsl_types
-        complex_helper_insertion_index = len(code)
+        generated_helper_insertion_index = len(code)
         functions = getattr(ast, "functions", [])
         deferred_top_level_helpers_by_stage = (
             self.collect_stage_deferred_top_level_helpers(ast, functions, target_stage)
@@ -4451,12 +4973,15 @@ class GLSLCodeGen:
                     stage_code = f"// {stage_name.title()} Shader\n" + stage_code
                     code += self.wrap_stage_guard(stage_code, stage_name)
 
-        complex_helpers = self.generate_glsl_complex64_helpers()
-        if complex_helpers:
+        generated_helpers = (
+            self.generate_glsl_boolean_order_helpers()
+            + self.generate_glsl_complex64_helpers()
+        )
+        if generated_helpers:
             code = (
-                code[:complex_helper_insertion_index]
-                + complex_helpers
-                + code[complex_helper_insertion_index:]
+                code[:generated_helper_insertion_index]
+                + generated_helpers
+                + code[generated_helper_insertion_index:]
             )
         self.validate_glsl_function_call_graph()
         code = self.ensure_glsl_version_supports_generated_layouts(code)
@@ -5894,8 +6419,15 @@ class GLSLCodeGen:
         clone._glsl_storage_pointer_aliases = storage_pointer_aliases
         clone._glsl_storage_pointer_bound_indices = tuple(storage_pointer_bound_indices)
 
+        target_name = self.glsl_generated_module_identifier(
+            ("resource-specialization", key),
+            clone.name,
+        )
+        self.glsl_function_target_names[id(clone)] = target_name
+        self.register_glsl_function_target_metadata(target_name, clone)
+
         self.glsl_resource_function_specializations[key] = clone
-        self.glsl_resource_function_call_names[key] = clone.name
+        self.glsl_resource_function_call_names[key] = target_name
         self.glsl_resource_specialized_source_names.add(func_name)
         return clone
 
@@ -6018,26 +6550,89 @@ class GLSLCodeGen:
         for node in (
             getattr(ast, "constants", []) or [] if constants is None else constants
         ):
-            name = getattr(node, "name", None)
-            if not name:
-                continue
-
-            const_type = getattr(node, "const_type", getattr(node, "vtype", "float"))
-            value = getattr(node, "value", None)
-            value_code = self.generate_constant_expression(value, const_type)
-            constant_id = self.glsl_specialization_constant_id(node)
-            declaration = format_c_style_array_declaration(
-                self.map_type(const_type), name
-            )
-            if constant_id is not None:
-                code += (
-                    "/* CrossGL fallback: OpenGL source validation cannot preserve "
-                    f"specialization constant id {constant_id} for "
-                    f"'{name}'; using the default literal. */\n"
-                )
-            code += f"const {declaration} = {value_code};\n"
+            code += self.generate_glsl_constant_declaration(node)
 
         return f"{code}\n" if code else ""
+
+    def generate_glsl_global_specialization_constants(self):
+        code = "".join(
+            self.generate_glsl_constant_declaration(node)
+            for node in self.glsl_global_specialization_constants
+        )
+        return f"{code}\n" if code else ""
+
+    def generate_glsl_constant_declaration(self, node):
+        name = self.glsl_specialization_constant_name(node)
+        if not name:
+            return ""
+
+        const_type = self.glsl_specialization_constant_type(node)
+        mapped_type = self.map_type(const_type)
+        declaration = format_c_style_array_declaration(mapped_type, name)
+        constant_id = self.glsl_specialization_constant_id(node)
+        value = self.glsl_specialization_constant_value(node)
+        builtin_declaration = self.glsl_builtin_specialization_constant_declaration(
+            node,
+            name=name,
+            const_type=const_type,
+            constant_id=constant_id,
+            value=value,
+        )
+        if builtin_declaration is not None:
+            return builtin_declaration
+        metadata = ""
+        layout = ""
+        if constant_id is not None:
+            self.validate_glsl_specialization_constant_type(node, const_type)
+            layout = f"layout(constant_id = {constant_id}) "
+            if value is None:
+                value_code = self.zero_value_expression(const_type)
+                metadata = (
+                    "/* CrossGL specialization metadata: "
+                    f"name={name}; constant_id={constant_id}; "
+                    "required_override=true; "
+                    f"encoding_default={value_code} */\n"
+                )
+            else:
+                value_code = self.generate_constant_expression(value, const_type)
+        else:
+            value_code = self.generate_constant_expression(value, const_type)
+
+        return f"{metadata}{layout}const {declaration} = {value_code};\n"
+
+    def glsl_builtin_specialization_constant_declaration(
+        self,
+        node,
+        *,
+        name,
+        const_type,
+        constant_id,
+        value,
+    ):
+        default = GLSL_BUILTIN_INT_LIMITS.get(name)
+        if default is None or constant_id is None:
+            return None
+        self.validate_glsl_specialization_constant_type(node, const_type)
+        if self.map_type(const_type) != "int":
+            raise OpenGLSpecializationConstantError(
+                f"OpenGL built-in specialization constant '{name}' must use int",
+                constant_name=name,
+                specialization_id=constant_id,
+                constant_type=self.type_name_string(const_type),
+                reason="builtin-type-mismatch",
+                source_location=self.glsl_specialization_constant_source_location(node),
+            )
+        if value is not None and evaluate_literal_int_expression(value) != default:
+            raise OpenGLSpecializationConstantError(
+                f"OpenGL built-in specialization constant '{name}' must retain "
+                f"its implicit default {default}",
+                constant_name=name,
+                specialization_id=constant_id,
+                constant_type=self.type_name_string(const_type),
+                reason="builtin-default-mismatch",
+                source_location=self.glsl_specialization_constant_source_location(node),
+            )
+        return f"layout(constant_id = {constant_id}) {name};\n"
 
     def glsl_constant_layout_prefix(self, node):
         constant_id = self.glsl_specialization_constant_id(node)
@@ -6045,29 +6640,217 @@ class GLSLCodeGen:
             return ""
         return f"layout(constant_id = {constant_id}) "
 
-    def glsl_specialization_constant_id(self, node):
-        constant_id = None
+    def glsl_specialization_constant_attributes(self, node):
+        attributes = []
         for attr in getattr(node, "attributes", []) or []:
             attr_name = getattr(attr, "name", None)
             if not attr_name:
                 continue
             normalized = str(attr_name).lower().replace("-", "_")
-            if normalized.startswith("glsl_"):
-                normalized = normalized[len("glsl_") :]
-            if normalized != "constant_id":
-                continue
-            arguments = getattr(attr, "arguments", []) or []
+            for prefix in ("glsl_", "metal_", "msl_"):
+                if normalized.startswith(prefix):
+                    normalized = normalized[len(prefix) :]
+                    break
+            if normalized in {"constant_id", "function_constant"}:
+                attributes.append(attr)
+        return attributes
+
+    def glsl_specialization_constant_name(self, node):
+        name = getattr(node, "name", getattr(node, "variable_name", None))
+        if name in GLSL_BUILTIN_INT_LIMITS:
+            return name
+        if not self.glsl_module_used_identifier_names:
+            return name
+        return self.glsl_global_identifier_name(name)
+
+    def glsl_specialization_constant_type(self, node):
+        return getattr(
+            node,
+            "const_type",
+            getattr(node, "var_type", getattr(node, "vtype", "float")),
+        )
+
+    def glsl_specialization_constant_value(self, node):
+        if hasattr(node, "const_type"):
+            return getattr(node, "value", None)
+        return getattr(node, "initial_value", getattr(node, "value", None))
+
+    def glsl_specialization_constant_source_location(self, node, attr=None):
+        return getattr(attr, "source_location", None) or getattr(
+            node, "source_location", None
+        )
+
+    def glsl_specialization_constant_integer_id(self, value):
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, UnaryOpNode) and getattr(value, "op", None) in {"+", "-"}:
+            operand = self.glsl_specialization_constant_integer_id(value.operand)
+            if operand is None:
+                return None
+            return operand if value.op == "+" else -operand
+
+        value_text = self.attribute_value_to_string(value)
+        if value_text is None:
+            return None
+        try:
+            return int(str(value_text).strip(), 0)
+        except ValueError:
+            return None
+
+    def glsl_specialization_constant_id(self, node):
+        constant_id = None
+        name = self.glsl_specialization_constant_name(node) or "<unnamed>"
+        for attr in self.glsl_specialization_constant_attributes(node):
+            arguments = getattr(attr, "arguments", getattr(attr, "args", [])) or []
             if len(arguments) != 1:
-                continue
-            value = self.attribute_value_to_string(arguments[0])
+                raise OpenGLSpecializationConstantError(
+                    f"OpenGL specialization constant '{name}' requires one "
+                    "non-negative integer id",
+                    constant_name=name,
+                    reason="invalid-id",
+                    source_location=self.glsl_specialization_constant_source_location(
+                        node, attr
+                    ),
+                )
+            value = self.glsl_specialization_constant_integer_id(arguments[0])
+            if value is None:
+                source = self.attribute_value_to_string(arguments[0])
+                raise OpenGLSpecializationConstantError(
+                    f"OpenGL specialization constant '{name}' requires a concrete "
+                    f"integer id, got {source or '<missing>'}",
+                    constant_name=name,
+                    reason="invalid-id",
+                    source_location=self.glsl_specialization_constant_source_location(
+                        node, attr
+                    ),
+                )
+            if value < 0:
+                raise OpenGLSpecializationConstantError(
+                    f"OpenGL specialization constant '{name}' requires a "
+                    f"non-negative id, got {value}",
+                    constant_name=name,
+                    specialization_id=value,
+                    reason="negative-id",
+                    source_location=self.glsl_specialization_constant_source_location(
+                        node, attr
+                    ),
+                )
+            if value > 0x7FFFFFFF:
+                raise OpenGLSpecializationConstantError(
+                    f"OpenGL specialization constant '{name}' id {value} exceeds "
+                    "the signed 32-bit GLSL constant_id range",
+                    constant_name=name,
+                    specialization_id=value,
+                    reason="id-out-of-range",
+                    source_location=self.glsl_specialization_constant_source_location(
+                        node, attr
+                    ),
+                )
             if constant_id is not None and constant_id != value:
-                name = getattr(node, "name", "<unnamed>")
-                raise ValueError(
+                raise OpenGLSpecializationConstantError(
                     "Conflicting OpenGL specialization constant ids for "
-                    f"'{name}': {constant_id} differs from {value}"
+                    f"'{name}': {constant_id} differs from {value}",
+                    constant_name=name,
+                    specialization_id=value,
+                    reason="conflicting-id",
+                    source_location=self.glsl_specialization_constant_source_location(
+                        node, attr
+                    ),
                 )
             constant_id = value
         return constant_id
+
+    def validate_glsl_specialization_constant_type(self, node, const_type):
+        name = self.glsl_specialization_constant_name(node) or "<unnamed>"
+        source_type = self.type_name_string(const_type)
+        mapped_type = self.map_type(const_type)
+        normalized_source = str(source_type or "").lower().replace(" ", "")
+        scalar_types = {
+            "bool",
+            "int",
+            "uint",
+            "float",
+            "double",
+            "int64_t",
+            "uint64_t",
+        }
+        invalid_atomic = "atomic<" in normalized_source or normalized_source.startswith(
+            "atomic_"
+        )
+        if (
+            mapped_type in scalar_types
+            and not isinstance(const_type, ReferenceType)
+            and not invalid_atomic
+        ):
+            return
+
+        raise OpenGLSpecializationConstantError(
+            f"OpenGL specialization constant '{name}' cannot use non-scalar "
+            f"type '{source_type}'",
+            constant_name=name,
+            specialization_id=self.glsl_specialization_constant_id(node),
+            constant_type=source_type,
+            reason="unsupported-type",
+            source_location=self.glsl_specialization_constant_source_location(node),
+        )
+
+    def prepare_glsl_specialization_constants(self, ast):
+        constants = list(getattr(ast, "constants", []) or [])
+        globals_ = list(getattr(ast, "global_variables", []) or [])
+        declarations = [
+            node
+            for node in constants + globals_
+            if self.glsl_specialization_constant_attributes(node)
+        ]
+        used_ids = {}
+        used_names = {}
+        for node in declarations:
+            constant_id = self.glsl_specialization_constant_id(node)
+            const_type = self.glsl_specialization_constant_type(node)
+            self.validate_glsl_specialization_constant_type(node, const_type)
+            name = self.glsl_specialization_constant_name(node) or "<unnamed>"
+            previous = used_names.get(name)
+            if previous is not None and previous is not node:
+                previous_id = self.glsl_specialization_constant_id(previous)
+                raise OpenGLSpecializationConstantError(
+                    f"Duplicate OpenGL specialization constant name '{name}' "
+                    f"for ids {previous_id} and {constant_id}",
+                    constant_name=name,
+                    specialization_id=constant_id,
+                    constant_type=self.type_name_string(const_type),
+                    conflicting_name=name,
+                    conflicting_id=previous_id,
+                    reason="duplicate-name",
+                    source_location=self.glsl_specialization_constant_source_location(
+                        node
+                    ),
+                )
+            previous = used_ids.get(constant_id)
+            if previous is not None and previous is not node:
+                previous_name = (
+                    self.glsl_specialization_constant_name(previous) or "<unnamed>"
+                )
+                raise OpenGLSpecializationConstantError(
+                    f"Duplicate OpenGL specialization constant id {constant_id} "
+                    f"for '{previous_name}' and '{name}'",
+                    constant_name=name,
+                    specialization_id=constant_id,
+                    constant_type=self.type_name_string(const_type),
+                    conflicting_name=previous_name,
+                    reason="duplicate-id",
+                    source_location=self.glsl_specialization_constant_source_location(
+                        node
+                    ),
+                )
+            used_ids[constant_id] = node
+            used_names[name] = node
+
+        global_ids = {id(node) for node in globals_}
+        self.glsl_global_specialization_constants = [
+            node for node in declarations if id(node) in global_ids
+        ]
 
     def generate_constant_expression(self, expr, expected_type=None):
         value_code = self.generate_expression_with_expected(expr, expected_type)
@@ -6113,6 +6896,18 @@ class GLSLCodeGen:
         ):
             return {entry_id: "main" for entry_id, _stage_name, _func in entries}
 
+        def target_names(assigned_names):
+            return {
+                entry_id: (
+                    name
+                    if name == "main"
+                    else self.glsl_generated_module_identifier(
+                        ("stage-wrapper", entry_id), name
+                    )
+                )
+                for entry_id, name in assigned_names.items()
+            }
+
         stage_names = {stage_name for _entry_id, stage_name, _func in entries}
         if len(entries) > 1 and len(stage_names) == 1 and "main" not in used_names:
             first_entry_id, _first_stage_name, _first_func = entries[0]
@@ -6121,13 +6916,15 @@ class GLSLCodeGen:
                 used_names | {"main"},
                 lambda stage_name, _func: f"{stage_name}_main",
             )
-            return {first_entry_id: "main", **assigned_names}
+            return target_names({first_entry_id: "main", **assigned_names})
 
-        return assign_stage_entry_names(
-            entries,
-            used_names,
-            lambda stage_name, _func: f"{stage_name}_main",
-            single_entry_default="main",
+        return target_names(
+            assign_stage_entry_names(
+                entries,
+                used_names,
+                lambda stage_name, _func: f"{stage_name}_main",
+                single_entry_default="main",
+            )
         )
 
     def validate_stage_main_helper_conflict(self, ast, target_stage):
@@ -6316,20 +7113,11 @@ class GLSLCodeGen:
     def unique_stage_entry_constant_value_identifier(
         self, base_name, used_names, fallback
     ):
-        candidate_base = sanitize_type_name(base_name or fallback)
-        if not candidate_base:
-            candidate_base = sanitize_type_name(fallback)
-        if not candidate_base:
-            candidate_base = "EntryConstant"
-        if candidate_base[0].isdigit():
-            candidate_base = f"Entry_{candidate_base}"
-
-        candidate = candidate_base
-        suffix = 2
-        while candidate in used_names or candidate in self.GLSL_RESERVED_IDENTIFIERS:
-            candidate = f"{candidate_base}_{suffix}"
-            suffix += 1
-        return candidate
+        candidate_base = self.glsl_sanitized_identifier_base(
+            base_name,
+            fallback=fallback or "EntryConstant",
+        )
+        return self.glsl_unique_identifier(candidate_base, used_names)
 
     def unique_stage_entry_constant_value_block_name(self, block_name, used_names):
         return self.unique_stage_entry_constant_value_identifier(
@@ -6346,16 +7134,23 @@ class GLSLCodeGen:
         parameter_member_name_counts=None,
         force_block_qualified=False,
     ):
-        parameter_name = sanitize_type_name(parameter_name or "value")
+        source_parameter_name = parameter_name or "value"
+        parameter_name = self.glsl_sanitized_identifier_base(
+            source_parameter_name,
+            fallback="value",
+        )
         if (
             not force_block_qualified
             and parameter_name
-            and parameter_name not in self.GLSL_RESERVED_IDENTIFIERS
+            and not self.glsl_identifier_requires_escape(parameter_name)
             and parameter_name not in used_names
-            and (parameter_member_name_counts or {}).get(parameter_name, 0) == 1
+            and (parameter_member_name_counts or {}).get(source_parameter_name, 0) == 1
         ):
             return parameter_name
-        block_name = sanitize_type_name(block_name or "Entry_Value_Args")
+        block_name = self.glsl_sanitized_identifier_base(
+            block_name,
+            fallback="Entry_Value_Args",
+        )
         base_name = "_".join(
             part for part in (block_name, parameter_name or "value") if part
         )
@@ -6366,15 +7161,19 @@ class GLSLCodeGen:
         )
 
     def stage_entry_constant_value_parameter_block_name(self, func, parameter_name):
-        function_name = sanitize_type_name(getattr(func, "name", None) or "entry")
-        parameter_name = sanitize_type_name(parameter_name or "value")
+        function_name = self.glsl_sanitized_identifier_base(
+            getattr(func, "name", None),
+            fallback="entry",
+        )
+        parameter_name = self.glsl_sanitized_identifier_base(
+            parameter_name,
+            fallback="value",
+        )
         block_name = "_".join(
             part for part in (function_name, parameter_name, "Args") if part
         )
         if not block_name:
             block_name = "Entry_Value_Args"
-        if block_name[0].isdigit():
-            block_name = f"Entry_{block_name}"
         return block_name
 
     def generate_cbuffers(self, ast, target_stage=None):
@@ -6474,20 +7273,22 @@ class GLSLCodeGen:
             layout = self.glsl_resource_layout_prefix(
                 "std140", binding=resource_binding
             )
+            block_name = self.glsl_module_identifier_name(node.name)
             if isinstance(node, StructNode):
-                code += f"{layout} uniform {node.name} {{\n"
+                code += f"{layout} uniform {block_name} {{\n"
                 members = getattr(node, "members", [])
                 for member in members:
+                    member_name = self.glsl_global_identifier_name(member.name)
                     if isinstance(member, ArrayNode):
                         element_type = getattr(
                             member, "element_type", getattr(member, "vtype", "float")
                         )
                         if member.size:
-                            code += f"    {self.map_type(element_type)} {member.name}[{member.size}];\n"
+                            code += f"    {self.map_type(element_type)} {member_name}[{member.size}];\n"
                         else:
                             # Dynamic arrays in uniform blocks need special handling in GLSL
                             code += (
-                                f"    {self.map_type(element_type)} {member.name}[];\n"
+                                f"    {self.map_type(element_type)} {member_name}[];\n"
                             )
                     else:
                         if hasattr(member, "member_type"):
@@ -6497,25 +7298,26 @@ class GLSLCodeGen:
                                 getattr(member, "vtype", "float")
                             )
                         declaration = format_c_style_array_declaration(
-                            member_type, member.name
+                            member_type, member_name
                         )
                         code += f"    {declaration};\n"
                 code += "};\n"
             elif hasattr(node, "name") and hasattr(
                 node, "members"
             ):  # CbufferNode handling
-                code += f"{layout} uniform {node.name} {{\n"
+                code += f"{layout} uniform {block_name} {{\n"
                 for member in node.members:
+                    member_name = self.glsl_global_identifier_name(member.name)
                     if isinstance(member, ArrayNode):
                         element_type = getattr(
                             member, "element_type", getattr(member, "vtype", "float")
                         )
                         if member.size:
-                            code += f"    {self.map_type(element_type)} {member.name}[{member.size}];\n"
+                            code += f"    {self.map_type(element_type)} {member_name}[{member.size}];\n"
                         else:
                             # Dynamic arrays in uniform blocks need special handling in GLSL
                             code += (
-                                f"    {self.map_type(element_type)} {member.name}[];\n"
+                                f"    {self.map_type(element_type)} {member_name}[];\n"
                             )
                     else:
                         if hasattr(member, "member_type"):
@@ -6525,7 +7327,7 @@ class GLSLCodeGen:
                                 getattr(member, "vtype", "float")
                             )
                         declaration = format_c_style_array_declaration(
-                            member_type, member.name
+                            member_type, member_name
                         )
                         code += f"    {declaration};\n"
                 code += "};\n"
@@ -8210,6 +9012,8 @@ class GLSLCodeGen:
         previous_local_variable_types = self.local_variable_types
         previous_local_variable_source_types = self.local_variable_source_types
         previous_identifier_aliases = self.current_identifier_aliases
+        previous_local_identifier_names = self.current_glsl_local_identifier_names
+        previous_synthetic_local_names = self.current_glsl_synthetic_local_names
         previous_type_aliases = self.current_type_aliases
         previous_generic_function_substitutions = (
             self.current_generic_function_substitutions
@@ -8226,6 +9030,10 @@ class GLSLCodeGen:
         self.local_variable_types = {}
         self.local_variable_source_types = {}
         self.current_identifier_aliases = dict(self.current_identifier_aliases)
+        self.prepare_glsl_local_identifier_names(func)
+        self.current_glsl_synthetic_local_names = set(
+            self.current_glsl_local_identifier_names.values()
+        )
         self.current_type_aliases = dict(self.global_type_aliases)
         self.current_generic_function_substitutions = (
             getattr(func, "_generic_substitutions", {}) or {}
@@ -8315,7 +9123,8 @@ class GLSLCodeGen:
             )
             if buffer_array is not None:
                 expanded_names = [
-                    f"{p.name}_{index}" for index in range(buffer_array["count"])
+                    self.glsl_synthetic_local_identifier(f"{p.name}_{index}")
+                    for index in range(buffer_array["count"])
                 ]
                 buffer_info = {
                     **buffer_array,
@@ -8323,7 +9132,7 @@ class GLSLCodeGen:
                 }
                 if self.structured_buffer_requires_counter(buffer_array["base_type"]):
                     counter_names = [
-                        f"{p.name}Counter_{index}"
+                        self.glsl_synthetic_local_identifier(f"{p.name}Counter_{index}")
                         for index in range(buffer_array["count"])
                     ]
                     buffer_info["counter_expanded_names"] = counter_names
@@ -8339,6 +9148,8 @@ class GLSLCodeGen:
                         )
                     )
                 for counter_name in buffer_info.get("counter_expanded_names", []):
+                    self.local_variable_types[counter_name] = "uint[]"
+                    self.local_variable_source_types[counter_name] = "uint[]"
                     params.append(
                         format_c_style_array_declaration("uint[]", counter_name)
                     )
@@ -8399,6 +9210,8 @@ class GLSLCodeGen:
             if self.structured_buffer_requires_counter(raw_param_type):
                 counter_name = self.structured_buffer_counter_parameter_name(p.name)
                 self.current_structured_buffer_counter_parameters[p.name] = counter_name
+                self.local_variable_types[counter_name] = "uint[]"
+                self.local_variable_source_types[counter_name] = "uint[]"
                 params.append(format_c_style_array_declaration("uint[]", counter_name))
 
         if shader_type == "compute":
@@ -8416,6 +9229,8 @@ class GLSLCodeGen:
             self.local_variable_types = previous_local_variable_types
             self.local_variable_source_types = previous_local_variable_source_types
             self.current_identifier_aliases = previous_identifier_aliases
+            self.current_glsl_local_identifier_names = previous_local_identifier_names
+            self.current_glsl_synthetic_local_names = previous_synthetic_local_names
             self.current_type_aliases = previous_type_aliases
             self.current_generic_function_substitutions = (
                 previous_generic_function_substitutions
@@ -8529,7 +9344,6 @@ class GLSLCodeGen:
         previous_resource_aliases = self.current_resource_aliases
         previous_workgroup_pointer_aliases = self.current_glsl_workgroup_pointer_aliases
         previous_storage_pointer_aliases = self.current_glsl_storage_pointer_aliases
-        previous_synthetic_local_names = self.current_glsl_synthetic_local_names
         previous_workgroup_pointer_scope_depth = self.glsl_workgroup_pointer_scope_depth
         previous_image_format_parameters = self.current_image_format_parameters
         previous_image_access_parameters = self.current_image_access_parameters
@@ -8573,8 +9387,11 @@ class GLSLCodeGen:
         self.current_glsl_storage_pointer_aliases = {
             name: dict(binding) for name, binding in storage_pointer_aliases.items()
         }
-        self.current_glsl_synthetic_local_names = (
+        self.current_glsl_synthetic_local_names = set(
             self.collect_glsl_function_local_identifier_names(func)
+        )
+        self.current_glsl_synthetic_local_names.update(
+            self.current_glsl_local_identifier_names.values()
         )
         self.glsl_workgroup_pointer_scope_depth = 0
         self.current_image_format_parameters = {
@@ -8676,6 +9493,7 @@ class GLSLCodeGen:
         self.current_stage_entry_type = previous_stage_entry_type
         self.local_variable_types = previous_local_variable_types
         self.current_identifier_aliases = previous_identifier_aliases
+        self.current_glsl_local_identifier_names = previous_local_identifier_names
         self.current_type_aliases = previous_type_aliases
         self.current_compile_time_int_constants = previous_compile_time_int_constants
         self.current_compile_time_int_vector_constants = (
@@ -8902,9 +9720,10 @@ class GLSLCodeGen:
             record = self.glsl_resource_declaration_record(node)
             if record is None:
                 continue
-            name, declaration = record
-            declarations_by_name.setdefault(name, declaration)
-            used_names.add(name)
+            source_name, declaration = record
+            emitted_name = self.glsl_module_identifier_name(source_name)
+            declarations_by_name.setdefault(emitted_name, declaration)
+            used_names.add(emitted_name)
 
         def add_parameters(func):
             for param in getattr(func, "parameters", getattr(func, "params", [])) or []:
@@ -8919,7 +9738,7 @@ class GLSLCodeGen:
                 if record is None:
                     continue
                 original_name, declaration = record
-                emitted_name = original_name
+                emitted_name = self.glsl_module_identifier_name(original_name)
                 existing = declarations_by_name.get(emitted_name)
                 if existing is not None and self.glsl_resource_declarations_conflict(
                     existing,
@@ -8934,6 +9753,8 @@ class GLSLCodeGen:
                     record = self.glsl_resource_declaration_record(declaration_node)
                     if record is not None:
                         emitted_name, declaration = record
+                declaration_node.name = emitted_name
+                if emitted_name != original_name:
                     self.stage_entry_resource_parameter_aliases.setdefault(
                         id(func), {}
                     )[original_name] = emitted_name
@@ -8984,6 +9805,8 @@ class GLSLCodeGen:
                 var_type=constant_struct_type,
                 attributes=list(getattr(parameter, "attributes", []) or []),
                 qualifiers=["uniform"],
+                source_location=getattr(parameter, "source_location", None),
+                annotations=deepcopy(getattr(parameter, "annotations", {})),
             )
 
         resource_type = self.stage_entry_resource_parameter_type(parameter)
@@ -9014,6 +9837,8 @@ class GLSLCodeGen:
             attributes=list(getattr(parameter, "attributes", []) or []),
             qualifiers=list(getattr(parameter, "qualifiers", []) or []),
             resource_qualifiers=resource_qualifiers,
+            source_location=getattr(parameter, "source_location", None),
+            annotations=deepcopy(getattr(parameter, "annotations", {})),
         )
         for attr_name in (
             "array_sizes",
@@ -9049,20 +9874,18 @@ class GLSLCodeGen:
         )
 
     def glsl_scoped_entry_resource_name(self, func, parameter_name, used_names):
-        func_name = sanitize_type_name(getattr(func, "name", None) or "entry")
-        parameter_name = sanitize_type_name(parameter_name or "resource")
+        func_name = self.glsl_sanitized_identifier_base(
+            getattr(func, "name", None),
+            fallback="entry",
+        )
+        parameter_name = self.glsl_sanitized_identifier_base(
+            parameter_name,
+            fallback="resource",
+        )
         base_name = "_".join(part for part in (func_name, parameter_name) if part)
         if not base_name:
             base_name = "entry_resource"
-        if base_name[0].isdigit():
-            base_name = f"entry_{base_name}"
-
-        candidate = base_name
-        suffix = 2
-        while candidate in used_names or candidate in self.GLSL_RESERVED_IDENTIFIERS:
-            candidate = f"{base_name}_{suffix}"
-            suffix += 1
-        return candidate
+        return self.glsl_unique_identifier(base_name, used_names)
 
     def collect_global_variable_types(self, nodes):
         variable_types = {}
@@ -9106,6 +9929,107 @@ class GLSLCodeGen:
                 if (member_name := getattr(member, "name", None))
             )
         return names
+
+    def glsl_preprocessor_identifier_names(self, ast):
+        names = set()
+        for directive in getattr(ast, "preprocessors", []) or []:
+            if getattr(directive, "directive", None) != "define":
+                continue
+            content = str(getattr(directive, "content", "") or "")
+            match = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)", content)
+            if match is not None:
+                names.add(match.group(1))
+        return names
+
+    def prepare_glsl_program_identifier_names(
+        self,
+        ast,
+        structs,
+        functions,
+        target_stage=None,
+    ):
+        type_names = {
+            getattr(node, "name", None)
+            for node in structs or ()
+            if getattr(node, "name", None)
+        }
+        type_names.update(
+            specialization.get("struct_name")
+            for specialization in self.generic_struct_specializations.values()
+            if specialization.get("struct_name")
+        )
+        type_names.update(
+            specialization.get("struct_name")
+            for specialization in self.generic_enum_specializations.values()
+            if specialization.get("struct_name")
+        )
+
+        names = set(self.glsl_global_identifier_names)
+        names.update(type_names)
+        names.update(
+            getattr(function, "name", None)
+            for function in functions or ()
+            if getattr(function, "name", None)
+        )
+        for _entry_id, _stage_name, function in collect_stage_entry_records(
+            ast,
+            target_stage,
+            self.combined_stage_entry_types(),
+        ):
+            names.update(
+                getattr(parameter, "name", None)
+                for parameter in (
+                    getattr(function, "parameters", getattr(function, "params", []))
+                    or ()
+                )
+                if getattr(parameter, "name", None)
+            )
+        for struct in structs or ():
+            names.update(
+                getattr(member, "name", None)
+                for member in getattr(struct, "members", []) or []
+                if getattr(member, "name", None)
+            )
+
+        self.prepare_glsl_module_identifier_names(
+            names,
+            type_names=type_names,
+            reserved_names=self.glsl_preprocessor_identifier_names(ast),
+        )
+
+    def prepare_glsl_enum_identifier_names(self):
+        self.enum_variant_constants = {
+            path: self.glsl_generated_module_identifier(
+                ("enum-constant", path),
+                source_name,
+            )
+            for path, source_name in sorted(self.enum_variant_constants.items())
+        }
+        self.enum_variant_constructors = {
+            path: self.glsl_generated_module_identifier(
+                ("enum-constructor", path),
+                source_name,
+            )
+            for path, source_name in sorted(self.enum_variant_constructors.items())
+        }
+
+        constructor_names = {}
+        for type_text, specialization in sorted(
+            self.generic_enum_specializations.items()
+        ):
+            definition = specialization["definition"]
+            for variant in sorted(
+                getattr(definition["enum"], "variants", ()) or (),
+                key=lambda item: item.name,
+            ):
+                source_name = f"{specialization['struct_name']}_{variant.name}_make"
+                constructor_names[(type_text, variant.name)] = (
+                    self.glsl_generated_module_identifier(
+                        ("generic-enum-constructor", type_text, variant.name),
+                        source_name,
+                    )
+                )
+        self.glsl_generic_enum_constructor_names = constructor_names
 
     def is_stage_local_resource_variable(self, node):
         vtype = self.type_name_string(
@@ -9401,12 +10325,16 @@ class GLSLCodeGen:
     def collect_glsl_storage_pointer_resource_bindings(self, declarations):
         bindings = {}
         for declaration in declarations or []:
-            name = self.resource_node_name(declaration)
-            if not name:
+            source_name = self.resource_node_name(declaration)
+            if not source_name:
                 continue
-            binding = self.glsl_stage_entry_storage_pointer_binding(declaration, name)
+            emitted_name = self.glsl_global_identifier_name(source_name)
+            binding = self.glsl_stage_entry_storage_pointer_binding(
+                declaration, emitted_name
+            )
             if binding is not None:
-                bindings[name] = binding
+                bindings[source_name] = dict(binding)
+                bindings[emitted_name] = dict(binding)
         return bindings
 
     def resource_parameter_qualifiers(self, param):
@@ -9494,6 +10422,16 @@ class GLSLCodeGen:
     def is_stage_builtin_semantic(self, semantic):
         mapped_semantic = self.map_semantic(semantic)
         return mapped_semantic.startswith("gl_") or semantic == "threads_per_grid"
+
+    def stage_io_semantic_from_node(self, node):
+        semantic = self.semantic_from_node(node)
+        if semantic is not None:
+            return semantic
+        name = getattr(node, "name", None)
+        mapped_name = self.semantic_map.get(name)
+        if isinstance(mapped_name, str) and mapped_name.startswith("gl_"):
+            return name
+        return None
 
     def parameter_has_mapped_semantic(
         self, parameter, expected_semantic, stage_name=None
@@ -9658,6 +10596,7 @@ class GLSLCodeGen:
                 return
 
             param_type = self.map_type(self.resource_node_type(param))
+            input_name = self.glsl_module_identifier_name(param.name)
             layout = self.stage_io_layout_for_node(param)
             self.reserve_stage_io_layout(
                 self.stage_io_used_locations,
@@ -9665,7 +10604,7 @@ class GLSLCodeGen:
                 "input",
                 layout,
                 param_type,
-                param.name,
+                input_name,
             )
             prefix = self.stage_io_declaration_prefix(
                 param, "in", stage_name=stage_name
@@ -9673,11 +10612,11 @@ class GLSLCodeGen:
             if self.requires_flat_stage_input(stage_name, param_type):
                 prefix = self.with_flat_stage_input_qualifier(prefix)
             parameter_declaration = format_c_style_array_declaration(
-                param_type, param.name
+                param_type, input_name
             )
             declaration = f"{prefix} {parameter_declaration};"
             if self.reserve_stage_io_declaration(
-                stage_name, "input", param.name, declaration
+                stage_name, "input", input_name, declaration
             ):
                 if target_stage is None:
                     declarations.append(
@@ -10142,16 +11081,24 @@ class GLSLCodeGen:
         return "layout(location = 0)"
 
     def stage_io_name_avoiding_reserved(self, preferred_name, reserved_names):
-        if preferred_name not in reserved_names:
-            return preferred_name
+        emitted_name = self.glsl_module_identifier_name(preferred_name)
+        emitted_reserved_names = {
+            self.glsl_module_identifier_name(name)
+            for name in reserved_names
+            if name
+            and name not in self.GLSL_BUILTIN_INTERFACE_BLOCK_NAMES
+            and not str(name).startswith("gl_")
+        }
+        emitted_reserved_names.update(
+            name for name in reserved_names if str(name).startswith("gl_")
+        )
+        if emitted_name not in emitted_reserved_names:
+            return emitted_name
 
-        base_name = f"out_{preferred_name}"
-        candidate = base_name
-        suffix = 1
-        while candidate in reserved_names:
-            suffix += 1
-            candidate = f"{base_name}_{suffix}"
-        return candidate
+        return self.glsl_generated_module_identifier(
+            ("stage-io", "reserved", str(preferred_name)),
+            f"out_{emitted_name}",
+        )
 
     def function_local_variable_names(self, func):
         body = getattr(func, "body", [])
@@ -10292,6 +11239,7 @@ class GLSLCodeGen:
         code = ""
         for member in getattr(node, "members", []) or []:
             member_type = self.member_type_name(member)
+            member_name = self.glsl_module_identifier_name(member.name)
             layout = self.stage_io_layout_for_node(member)
             self.reserve_stage_io_layout(
                 self.stage_io_used_locations,
@@ -10299,13 +11247,13 @@ class GLSLCodeGen:
                 "input",
                 layout,
                 member_type,
-                member.name,
+                member_name,
             )
             prefix = self.stage_io_declaration_prefix(member, "in", stage_name="vertex")
-            member_decl = format_c_style_array_declaration(member_type, member.name)
+            member_decl = format_c_style_array_declaration(member_type, member_name)
             declaration = f"{prefix} {member_decl};"
             if self.reserve_stage_io_declaration(
-                "vertex", "input", member.name, declaration
+                "vertex", "input", member_name, declaration
             ):
                 code += f"{declaration}\n"
         return code
@@ -10313,12 +11261,13 @@ class GLSLCodeGen:
     def generate_legacy_output_declarations(self, node):
         code = ""
         for member in getattr(node, "members", []) or []:
+            member_name = self.glsl_module_identifier_name(member.name)
             member_decl = format_c_style_array_declaration(
-                self.member_type_name(member), member.name
+                self.member_type_name(member), member_name
             )
             declaration = f"out {member_decl};"
             if self.reserve_stage_io_declaration(
-                "vertex", "output", member.name, declaration
+                "vertex", "output", member_name, declaration
             ):
                 code += f"{declaration}\n"
         return code
@@ -10455,13 +11404,16 @@ class GLSLCodeGen:
         }
 
     def vertex_output_member_name(self, member):
-        semantic = self.semantic_from_node(member)
+        semantic = self.stage_io_semantic_from_node(member)
         mapped_semantic = self.map_semantic(semantic)
         if self.is_vertex_builtin_output(mapped_semantic):
             return mapped_semantic
         if member.name in self.vertex_input_member_names:
-            return f"out_{member.name}"
-        return member.name
+            return self.glsl_generated_module_identifier(
+                ("stage-io", "vertex-output", member.name),
+                f"out_{member.name}",
+            )
+        return self.glsl_module_identifier_name(member.name)
 
     def fragment_output_member_name(
         self, member, struct_name=None, reserved_names=None
@@ -10471,7 +11423,7 @@ class GLSLCodeGen:
                 member.name, member.name
             )
 
-        mapped_semantic = self.map_semantic(self.semantic_from_node(member))
+        mapped_semantic = self.map_semantic(self.stage_io_semantic_from_node(member))
         if mapped_semantic == "gl_FragDepth":
             return mapped_semantic
         if mapped_semantic == "gl_FragStencilRefARB":
@@ -10502,7 +11454,7 @@ class GLSLCodeGen:
         return self.combined_fragment_input_member_name(member.name)
 
     def fragment_input_builtin_alias(self, member):
-        semantic = self.semantic_from_node(member)
+        semantic = self.stage_io_semantic_from_node(member)
         if semantic is None:
             return None
         mapped_semantic = self.map_stage_input_semantic(semantic, "fragment")
@@ -10523,14 +11475,11 @@ class GLSLCodeGen:
             self.current_target_stage is not None
             or input_name not in self.combined_vertex_output_member_names
         ):
-            return input_name
-        candidate = f"in_{input_name}"
-        suffix = 1
-        reserved_names = set(self.combined_vertex_output_member_names)
-        while candidate in reserved_names:
-            suffix += 1
-            candidate = f"in_{input_name}_{suffix}"
-        return candidate
+            return self.glsl_module_identifier_name(input_name)
+        return self.glsl_generated_module_identifier(
+            ("stage-io", "combined-fragment-input", input_name),
+            f"in_{input_name}",
+        )
 
     def is_vertex_builtin_output(self, name):
         return name in {
@@ -10565,7 +11514,7 @@ class GLSLCodeGen:
                 maps[param.name] = member_map
             else:
                 maps[param.name] = {
-                    member.name: member.name
+                    member.name: self.glsl_struct_member_name(type_name, member.name)
                     for member in getattr(struct, "members", [])
                 }
         return maps
@@ -10625,6 +11574,19 @@ class GLSLCodeGen:
                 aliases[param.name] = self.stage_input_builtin_alias(
                     semantic, shader_type
                 )
+                continue
+            if shader_type in {
+                "vertex",
+                "fragment",
+                "geometry",
+                "tessellation_control",
+                "tessellation_evaluation",
+                "mesh",
+                "task",
+            } and self.is_stage_entry_value_parameter(param):
+                input_name = self.glsl_module_identifier_name(param.name)
+                if input_name != param.name:
+                    aliases[param.name] = input_name
         return aliases
 
     def stage_builtin_parameter_local_alias_declarations(self, func, shader_type):
@@ -10656,7 +11618,8 @@ class GLSLCodeGen:
         )
         if expression is None:
             return None
-        return f"{base_type} {param.name} = {expression};"
+        parameter_name = self.glsl_local_identifier_name(param.name)
+        return f"{base_type} {parameter_name} = {expression};"
 
     def stage_builtin_parameter_local_alias_expression(self, builtin, mapped_type):
         # Metal permits the positional/dimension compute builtins to be declared
@@ -10758,6 +11721,7 @@ class GLSLCodeGen:
 
     def vertex_stage_output(self, func):
         output_type = self.function_return_type(func)
+        source_output_type = self.glsl_source_type_identifier_name(output_type)
         if output_type == "void":
             return None
 
@@ -10766,7 +11730,7 @@ class GLSLCodeGen:
         if not mapped_semantic and output_type == "vec4":
             mapped_semantic = "gl_Position"
         elif not mapped_semantic:
-            if output_type in self.structs_by_name or output_type not in {
+            if source_output_type in self.structs_by_name or output_type not in {
                 "float",
                 "double",
                 "int",
@@ -10838,9 +11802,10 @@ class GLSLCodeGen:
             return None
 
         output_type = self.function_return_type(func)
+        source_output_type = self.glsl_source_type_identifier_name(output_type)
         if output_type == "void":
             return None
-        if output_type in self.structs_by_name:
+        if source_output_type in self.structs_by_name:
             return None
 
         semantic = self.function_return_semantic(func) or "gl_FragColor"
@@ -11325,10 +12290,11 @@ class GLSLCodeGen:
                 specialized,
                 static_args,
             )
+            target_name = self.glsl_function_declaration_name(specialized)
             rendered_args = ", ".join(
-                self.generate_function_call_arguments(specialized.name, call_args)
+                self.generate_function_call_arguments(target_name, call_args)
             )
-            cases.append((index, f"{specialized.name}({rendered_args})"))
+            cases.append((index, f"{target_name}({rendered_args})"))
 
         return {
             "index_expr": dynamic_info["index_expr"],
@@ -11473,61 +12439,279 @@ class GLSLCodeGen:
             return self.type_name_string(inferred_type) or "float"
         return var_type_name
 
-    def glsl_parameter_identifier_name(self, name, parameter_names=None):
-        if (
-            name not in self.GLSL_RESERVED_IDENTIFIERS
-            and name not in self.GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS
+    def glsl_identifier_requires_escape(self, name, extra_reserved=()):
+        name = str(name or "")
+        return (
+            not name
+            or name in self.GLSL_RESERVED_IDENTIFIERS
+            or name in extra_reserved
+            or name.startswith(self.GLSL_RESERVED_IDENTIFIER_PREFIXES)
+            or "__" in name
+        )
+
+    def glsl_sanitized_identifier_base(
+        self,
+        name,
+        fallback="identifier",
+        extra_reserved=(),
+    ):
+        source_name = str(name or "")
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", source_name) and not (
+            self.glsl_identifier_requires_escape(source_name, extra_reserved)
         ):
-            return name
+            return source_name
+        candidate = sanitize_type_name(source_name) or sanitize_type_name(fallback)
+        candidate = candidate or "identifier"
+        candidate = re.sub(r"_+", "_", candidate)
+        if candidate[0].isdigit():
+            candidate = f"identifier_{candidate}"
+        if source_name.startswith(
+            self.GLSL_RESERVED_IDENTIFIER_PREFIXES
+        ) or candidate.startswith(self.GLSL_RESERVED_IDENTIFIER_PREFIXES):
+            candidate = f"crossgl_{candidate.lstrip('_')}"
+            candidate = re.sub(r"_+", "_", candidate)
+        if candidate in self.GLSL_RESERVED_IDENTIFIERS or candidate in extra_reserved:
+            candidate = f"{candidate}_"
+        return candidate
 
-        used_names = set(self.local_variable_types)
-        used_names.update(parameter_names or ())
-        used_names.update(self.current_identifier_aliases.values())
-        used_names.update(self.GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS)
-
-        alias = f"{name}_"
-        suffix = 1
-        while alias in used_names:
+    def glsl_unique_identifier(
+        self,
+        base_name,
+        used_names,
+        *,
+        extra_reserved=(),
+    ):
+        base_name = self.glsl_sanitized_identifier_base(
+            base_name,
+            extra_reserved=extra_reserved,
+        )
+        candidate = base_name
+        suffix = 2
+        while candidate in used_names or self.glsl_identifier_requires_escape(
+            candidate,
+            extra_reserved,
+        ):
+            separator = "" if base_name.endswith("_") else "_"
+            candidate = f"{base_name}{separator}{suffix}"
             suffix += 1
-            alias = f"{name}_{suffix}"
-        self.current_identifier_aliases[name] = alias
-        return alias
+        return candidate
 
-    def glsl_local_identifier_name(self, name):
-        reserved_names = self.current_stage_declared_names()
-        if (
-            name not in self.GLSL_RESERVED_IDENTIFIERS
-            and name not in self.GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS
-            and name not in reserved_names
+    def glsl_identifier_map(self, names, *, reserved_names=(), extra_reserved=()):
+        unique_names = []
+        seen = set()
+        for name in names or ():
+            if not name:
+                continue
+            name = str(name)
+            if name in seen:
+                continue
+            seen.add(name)
+            unique_names.append(name)
+
+        external_reserved_names = {
+            str(name)
+            for name in reserved_names or ()
+            if name and not self.glsl_identifier_requires_escape(name, extra_reserved)
+        }
+        used_names = set(external_reserved_names)
+        used_names.update(
+            name
+            for name in unique_names
+            if not self.glsl_identifier_requires_escape(name, extra_reserved)
+        )
+
+        identifier_map = {}
+        for name in sorted(unique_names):
+            if (
+                not self.glsl_identifier_requires_escape(name, extra_reserved)
+                and name not in external_reserved_names
+            ):
+                identifier_map[name] = name
+                continue
+            emitted_name = self.glsl_unique_identifier(
+                self.glsl_sanitized_identifier_base(
+                    name,
+                    extra_reserved=extra_reserved,
+                ),
+                used_names,
+                extra_reserved=extra_reserved,
+            )
+            identifier_map[name] = emitted_name
+            used_names.add(emitted_name)
+        return identifier_map
+
+    def prepare_glsl_module_identifier_names(
+        self,
+        names,
+        *,
+        type_names=(),
+        reserved_names=(),
+    ):
+        self.glsl_module_identifier_names = self.glsl_identifier_map(
+            names,
+            reserved_names=reserved_names,
+        )
+        self.glsl_module_generated_identifier_names = {}
+        self.glsl_module_used_identifier_names = {
+            str(name)
+            for name in reserved_names or ()
+            if name and not self.glsl_identifier_requires_escape(name)
+        }
+        self.glsl_module_used_identifier_names.update(
+            self.glsl_module_identifier_names.values()
+        )
+        self.glsl_type_identifier_names = {
+            str(name): self.glsl_module_identifier_names.get(
+                str(name),
+                self.glsl_sanitized_identifier_base(name),
+            )
+            for name in type_names or ()
+            if name
+        }
+
+    def glsl_module_identifier_name(self, name):
+        if not name:
+            return name
+        name = str(name)
+        emitted_name = self.glsl_module_identifier_names.get(name)
+        if emitted_name is not None:
+            return emitted_name
+        if name in self.glsl_module_identifier_names.values() or name in (
+            self.glsl_module_generated_identifier_names.values()
         ):
             return name
 
-        used_names = set(self.local_variable_types)
+        emitted_name = self.glsl_unique_identifier(
+            self.glsl_sanitized_identifier_base(name),
+            self.glsl_module_used_identifier_names,
+        )
+        self.glsl_module_identifier_names[name] = emitted_name
+        self.glsl_module_used_identifier_names.add(emitted_name)
+        return emitted_name
+
+    def glsl_generated_module_identifier(self, identity, base_name):
+        if identity in self.glsl_module_generated_identifier_names:
+            return self.glsl_module_generated_identifier_names[identity]
+        emitted_name = self.glsl_unique_identifier(
+            self.glsl_sanitized_identifier_base(base_name),
+            self.glsl_module_used_identifier_names,
+        )
+        self.glsl_module_generated_identifier_names[identity] = emitted_name
+        self.glsl_module_used_identifier_names.add(emitted_name)
+        return emitted_name
+
+    def glsl_type_identifier_name(self, name):
+        if not name:
+            return name
+        emitted_name = self.glsl_type_identifier_names.get(str(name))
+        if emitted_name is not None:
+            return emitted_name
+        return self.glsl_module_identifier_name(name)
+
+    def glsl_source_type_identifier_name(self, name):
+        for source_name, emitted_name in self.glsl_type_identifier_names.items():
+            if emitted_name == name:
+                return source_name
+        return name
+
+    def glsl_struct_node(self, type_name):
+        source_type_name = self.glsl_source_type_identifier_name(type_name)
+        return self.structs_by_name.get(source_type_name)
+
+    def glsl_struct_member_types(self, type_name):
+        source_type_name = self.glsl_source_type_identifier_name(type_name)
+        return self.struct_member_types.get(source_type_name, {})
+
+    def prepare_glsl_local_identifier_names(self, function):
+        names = self.collect_glsl_function_local_identifier_names(function)
+        global_names = set(self.glsl_global_identifier_names)
+        shared_names = names & global_names
+        identifier_names = {
+            name: self.glsl_module_identifier_name(name) for name in shared_names
+        }
+        reserved_names = {
+            self.glsl_module_identifier_name(name) for name in global_names
+        }
+        reserved_names.update(self.current_identifier_aliases.values())
+        identifier_names.update(
+            self.glsl_identifier_map(
+                names - shared_names,
+                reserved_names=reserved_names,
+                extra_reserved=self.GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS,
+            )
+        )
+        self.current_glsl_local_identifier_names = identifier_names
+
+    def glsl_local_declaration_identifier_name(self, name, reserved_names=()):
+        existing = self.current_identifier_aliases.get(name)
+        if existing is not None and name in self.current_glsl_local_identifier_names:
+            return existing
+
+        preallocated = name in self.current_glsl_local_identifier_names
+        emitted_name = self.current_glsl_local_identifier_names.get(name)
+        if emitted_name is None:
+            emitted_name = self.glsl_sanitized_identifier_base(
+                name,
+                extra_reserved=self.GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS,
+            )
+
+        used_names = set(self.current_glsl_local_identifier_names.values())
+        used_names.update(self.local_variable_types)
         used_names.update(self.current_identifier_aliases.values())
         used_names.update(reserved_names)
         used_names.update(self.GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS)
+        if preallocated:
+            used_names.discard(emitted_name)
+        if emitted_name in used_names or emitted_name in reserved_names:
+            emitted_name = self.glsl_unique_identifier(
+                emitted_name,
+                used_names,
+                extra_reserved=self.GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS,
+            )
+        self.current_glsl_local_identifier_names[name] = emitted_name
+        if emitted_name != name:
+            self.current_identifier_aliases[name] = emitted_name
+        return emitted_name
 
-        alias = f"{name}_"
-        suffix = 1
-        while alias in used_names:
-            suffix += 1
-            alias = f"{name}_{suffix}"
-        self.current_identifier_aliases[name] = alias
-        return alias
+    def glsl_parameter_identifier_name(self, name, parameter_names=None):
+        reserved_names = set(parameter_names or ())
+        reserved_names.discard(name)
+        return self.glsl_local_declaration_identifier_name(
+            name,
+            reserved_names,
+        )
+
+    def glsl_local_identifier_name(self, name):
+        reserved_names = self.current_stage_declared_names()
+        return self.glsl_local_declaration_identifier_name(name, reserved_names)
 
     def glsl_global_identifier_name(self, name):
-        if name not in self.GLSL_RESERVED_IDENTIFIERS:
-            return name
+        emitted_name = self.glsl_module_identifier_name(name)
+        if emitted_name != name:
+            self.current_identifier_aliases[name] = emitted_name
+        return emitted_name
 
-        used_names = set(self.global_variable_types)
-        used_names.update(self.current_identifier_aliases.values())
-        alias = f"{name}_"
-        suffix = 1
-        while alias in used_names:
-            suffix += 1
-            alias = f"{name}_{suffix}"
-        self.current_identifier_aliases[name] = alias
-        return alias
+    def glsl_global_declaration_identifier_name(self, node, name):
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", ()) or ()
+        }
+        attributes = {
+            str(getattr(attribute, "name", "")).lower()
+            for attribute in getattr(node, "attributes", ()) or ()
+        }
+        preserves_fragment_depth = (
+            name == "gl_FragDepth"
+            and "out" in qualifiers
+            and bool(
+                attributes
+                & {"depth_any", "depth_greater", "depth_less", "depth_unchanged"}
+            )
+        )
+        if preserves_fragment_depth:
+            self.current_identifier_aliases.pop(name, None)
+            return name
+        return self.glsl_global_identifier_name(name)
 
     def glsl_declaration_has_shared_qualifier(self, node):
         """Return whether a declaration carries a workgroup-shared qualifier."""
@@ -11913,6 +13097,14 @@ class GLSLCodeGen:
         for node in self.walk_ast(getattr(function, "body", [])):
             if isinstance(node, (VariableNode, ArrayNode)):
                 names.add(getattr(node, "name", None))
+            elif isinstance(node, ForInNode):
+                pattern = getattr(node, "pattern", None)
+                if isinstance(pattern, str):
+                    names.add(pattern)
+            elif isinstance(node, IdentifierPatternNode):
+                name = getattr(node, "name", None)
+                if name not in {None, ".."} and "::" not in name:
+                    names.add(name)
         return {name for name in names if name}
 
     def generate_glsl_mutable_storage_pointer_root_declarations(self, body, indent):
@@ -11957,18 +13149,28 @@ class GLSLCodeGen:
         used = set(used_names or self.current_glsl_synthetic_local_names)
         used.update(self.local_variable_types)
         used.update(self.current_identifier_aliases.values())
+        used.update(self.current_glsl_local_identifier_names.values())
         used.update(self.current_stage_declared_names())
         used.update(self.GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS)
-        candidate = sanitize_type_name(base_name) or "workgroup_offset"
-        if candidate[0].isdigit():
-            candidate = f"local_{candidate}"
-        while candidate in used or candidate in self.GLSL_RESERVED_IDENTIFIERS:
-            candidate += "_"
+        candidate = self.glsl_unique_identifier(
+            self.glsl_sanitized_identifier_base(
+                base_name,
+                fallback="workgroup_offset",
+                extra_reserved=self.GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS,
+            ),
+            used,
+            extra_reserved=self.GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS,
+        )
         if used_names is None:
             self.current_glsl_synthetic_local_names.add(candidate)
         else:
             used_names.add(candidate)
         return candidate
+
+    def next_glsl_temp_variable(self, base_name):
+        index = self.match_temp_variable_index
+        self.match_temp_variable_index += 1
+        return self.glsl_synthetic_local_identifier(f"cgl_{base_name}_{index}")
 
     def glsl_pointer_offset_sum(self, base, delta):
         if base in {None, 0, "0"}:
@@ -12458,7 +13660,7 @@ class GLSLCodeGen:
         element_type = binding.get("element_type") if binding else None
         member_name = (
             self.glsl_struct_member_name(element_type, str(member))
-            if element_type in self.structs_by_name
+            if self.glsl_struct_node(element_type) is not None
             else str(member)
         )
         return f"{pointee}.{member_name}"
@@ -12476,7 +13678,7 @@ class GLSLCodeGen:
         element_type = binding.get("element_type") if binding else None
         member_name = (
             self.glsl_struct_member_name(element_type, str(member))
-            if element_type in self.structs_by_name
+            if self.glsl_struct_node(element_type) is not None
             else str(member)
         )
         return f"{pointee}.{member_name}"
@@ -12845,10 +14047,9 @@ class GLSLCodeGen:
 
     def glsl_unique_shared_identifier(self, base_name, used_names):
         """Return a unique global identifier for a hoisted shared variable."""
-        candidate = base_name
-        while candidate in used_names or candidate in self.GLSL_RESERVED_IDENTIFIERS:
-            candidate += "_"
-        return candidate
+        reserved_names = set(used_names)
+        reserved_names.update(self.glsl_module_used_identifier_names)
+        return self.glsl_unique_identifier(base_name, reserved_names)
 
     def collect_glsl_function_local_shared_declarations(self, ast, target_stage=None):
         """Hoist function-local workgroup-shared declarations to global scope.
@@ -12889,6 +14090,7 @@ class GLSLCodeGen:
                     f"{func_name}_{name}", used_names
                 )
                 used_names.add(alias)
+                self.glsl_module_used_identifier_names.add(alias)
                 declared_type = self.local_variable_declared_type(node)
                 self.global_variable_types[alias] = declared_type
                 declarations.append((node, alias))
@@ -13053,15 +14255,411 @@ class GLSLCodeGen:
 
     def global_variable_qualifier(self, node):
         qualifier_prefix = self.glsl_variable_qualifier_prefix(node)
+        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
+        runtime_storage_qualifiers = {
+            "buffer",
+            "device",
+            "global",
+            "groupshared",
+            "in",
+            "inout",
+            "input",
+            "out",
+            "output",
+            "shared",
+            "storage",
+            "threadgroup",
+            "uniform",
+            "workgroup",
+        }
+        is_compile_time = (
+            "const" in qualifiers or id(node) in self.glsl_compile_time_global_node_ids
+        ) and not qualifiers & runtime_storage_qualifiers
         if qualifier_prefix:
+            storage_qualifiers = {
+                "in",
+                "out",
+                "shared",
+                "taskPayloadSharedEXT",
+                "rayPayloadEXT",
+                "rayPayloadInEXT",
+                "hitAttributeEXT",
+                "callableDataEXT",
+                "callableDataInEXT",
+            }
+            if is_compile_time and not (
+                set(qualifier_prefix.split()) & storage_qualifiers
+            ):
+                return f"const {qualifier_prefix} "
             return f"{qualifier_prefix} "
 
-        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
         if qualifiers & {"shared", "groupshared", "workgroup", "threadgroup"}:
             return "shared "
-        if "const" in qualifiers:
+        if is_compile_time:
             return "const "
         return "uniform "
+
+    def prepare_glsl_compile_time_globals(self, ast, global_vars):
+        specialization_dependent_names = set(self.glsl_specialization_constant_names)
+        known_constant_names = {
+            self.glsl_specialization_constant_name(node)
+            for node in getattr(ast, "constants", []) or []
+            if self.glsl_specialization_constant_name(node)
+        }
+        known_constant_names.update(self.glsl_specialization_constant_names)
+        known_constant_names.update(getattr(self, "enum_variant_constants", {}))
+        known_constant_names.update(GLSL_BUILTIN_INT_LIMITS)
+        known_constant_names.add("gl_WorkGroupSize")
+        self.collect_glsl_specialization_dependent_constants(
+            getattr(ast, "constants", []) or [], specialization_dependent_names
+        )
+        candidate_names = {
+            self.resource_node_name(node)
+            for node in global_vars or []
+            if self.is_glsl_compile_time_global_candidate(node)
+        }
+        candidate_names.discard(None)
+        literal_int_constants = dict(self.literal_int_constants)
+
+        for node in global_vars or []:
+            if not self.is_glsl_compile_time_global_candidate(node):
+                continue
+            name = self.resource_node_name(node, "<unnamed>")
+            if not self.is_glsl_compile_time_value_type(
+                self.resource_node_type(node), int_constants=literal_int_constants
+            ):
+                type_name = self.type_name_string(self.resource_node_type(node))
+                raise OpenGLCompileTimeGlobalError(
+                    f"OpenGL compile-time global '{name}' cannot use value type "
+                    f"'{type_name}'",
+                    variable_name=name,
+                    expression_kind=self.resource_node_type(node).__class__.__name__,
+                    detail=type_name,
+                    reason="unsupported-value-type",
+                    source_location=getattr(node, "source_location", None),
+                )
+            specialization_dependent = (
+                self.validate_glsl_compile_time_global_expression(
+                    node,
+                    getattr(node, "initial_value", None),
+                    known_constant_names,
+                    candidate_names,
+                    specialization_dependent_names,
+                )
+            )
+            self.glsl_compile_time_global_node_ids.add(id(node))
+            known_constant_names.add(name)
+            if specialization_dependent:
+                specialization_dependent_names.add(name)
+
+            literal_int_value = self.glsl_compile_time_global_integer_value(
+                node,
+                literal_int_constants,
+            )
+            if literal_int_value is not None:
+                literal_int_constants[name] = literal_int_value
+                self.literal_int_constants[name] = literal_int_value
+                self.current_compile_time_int_constants[name] = literal_int_value
+
+    def collect_glsl_specialization_dependent_constants(self, constants, dependent):
+        pending = list(constants or [])
+        changed = True
+        while changed:
+            changed = False
+            remaining = []
+            for node in pending:
+                name = self.glsl_specialization_constant_name(node)
+                if not name or name in dependent:
+                    continue
+                value = self.glsl_specialization_constant_value(node)
+                references = {
+                    expression.name
+                    for expression in self.walk_ast(value)
+                    if isinstance(expression, IdentifierNode)
+                }
+                if references & dependent:
+                    dependent.add(name)
+                    changed = True
+                else:
+                    remaining.append(node)
+            pending = remaining
+
+    def glsl_compile_time_global_integer_value(self, node, constants):
+        mapped_type = self.map_type(self.resource_node_type(node))
+        if mapped_type not in {"int", "uint", "int64_t", "uint64_t"}:
+            return None
+        return evaluate_literal_int_expression(
+            getattr(node, "initial_value", None), constants
+        )
+
+    def is_glsl_compile_time_global_candidate(self, node):
+        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
+        if "constant" not in qualifiers:
+            return False
+        if getattr(node, "initial_value", None) is None:
+            return False
+        if getattr(node, "resource_qualifiers", None):
+            return False
+        if qualifiers & {
+            "buffer",
+            "device",
+            "function",
+            "global",
+            "groupshared",
+            "in",
+            "inout",
+            "input",
+            "local",
+            "out",
+            "output",
+            "private",
+            "readonly",
+            "readwrite",
+            "restrict",
+            "shared",
+            "storage",
+            "thread",
+            "threadgroup",
+            "threadgroup_imageblock",
+            "uniform",
+            "volatile",
+            "workgroup",
+            "writeonly",
+        }:
+            return False
+        if any(
+            self.is_resource_binding_attribute(attr)
+            or self.is_resource_memory_attribute(attr)
+            or str(getattr(attr, "name", "")).lower() in {"access", "uav"}
+            for attr in getattr(node, "attributes", []) or []
+        ):
+            return False
+        if self.glsl_variable_layout_prefix(node).strip():
+            return False
+        return not self.is_glsl_compile_time_resource_type(
+            self.resource_node_type(node)
+        )
+
+    def is_glsl_compile_time_resource_type(self, vtype, seen=None):
+        if isinstance(vtype, (PointerType, ReferenceType)):
+            return True
+        if isinstance(vtype, ArrayType):
+            return self.is_glsl_compile_time_resource_type(vtype.element_type, seen)
+
+        type_name = self.type_name_string(vtype)
+        if not type_name:
+            return False
+        base_type, _array_suffix = split_array_type_suffix(type_name)
+        resolved_type = self.resolve_glsl_type_alias(base_type.strip())
+        if resolved_type.rstrip().endswith(("*", "&")):
+            return True
+        if self.is_structured_buffer_type(
+            resolved_type
+        ) or self.is_constant_buffer_type(resolved_type):
+            return True
+
+        mapped_type = self.map_type(resolved_type)
+        if self.is_opaque_resource_type(mapped_type) or self.is_ray_query_type_name(
+            mapped_type
+        ):
+            return True
+
+        seen = set(seen or ())
+        source_mapped_type = self.glsl_source_type_identifier_name(mapped_type)
+        if source_mapped_type in seen:
+            return False
+        struct = self.structs_by_name.get(source_mapped_type)
+        if struct is None:
+            return False
+        seen.add(source_mapped_type)
+        return any(
+            self.is_glsl_compile_time_resource_type(member.member_type, seen)
+            for member in getattr(struct, "members", []) or []
+        )
+
+    def is_glsl_compile_time_value_type(self, vtype, seen=None, *, int_constants=None):
+        if isinstance(vtype, (PointerType, ReferenceType)):
+            return False
+        if isinstance(vtype, ArrayType):
+            size = evaluate_literal_int_expression(
+                getattr(vtype, "size", None),
+                self.literal_int_constants if int_constants is None else int_constants,
+            )
+            return (
+                size is not None
+                and size > 0
+                and self.is_glsl_compile_time_value_type(
+                    vtype.element_type,
+                    seen,
+                    int_constants=int_constants,
+                )
+            )
+
+        type_name = self.type_name_string(vtype)
+        if not type_name or "[]" in type_name.replace(" ", ""):
+            return False
+        base_type = self.resource_base_type(vtype)
+        if self.is_structured_buffer_type(base_type) or self.is_constant_buffer_type(
+            base_type
+        ):
+            return False
+        mapped_resource_type = self.map_resource_type_with_format(base_type)
+        if self.is_opaque_resource_type(mapped_resource_type):
+            return False
+        if self.type_contains_opaque_resource(vtype):
+            return False
+
+        mapped_type = self.map_type(base_type)
+        if self.is_opaque_resource_type(mapped_type) or self.is_ray_query_type_name(
+            mapped_type
+        ):
+            return False
+        seen = set(seen or ())
+        source_mapped_type = self.glsl_source_type_identifier_name(mapped_type)
+        if source_mapped_type in seen:
+            return True
+        struct = self.structs_by_name.get(source_mapped_type)
+        if struct is None:
+            return (
+                self.is_scalar_value_type(mapped_type)
+                or self.is_vector_value_type(mapped_type)
+                or self.glsl_matrix_dimensions(mapped_type) is not None
+                or mapped_type == "int"
+            )
+        seen.add(source_mapped_type)
+        return all(
+            self.is_glsl_compile_time_value_type(
+                member.member_type,
+                seen,
+                int_constants=int_constants,
+            )
+            for member in getattr(struct, "members", []) or []
+        )
+
+    def validate_glsl_compile_time_global_expression(
+        self,
+        node,
+        expression,
+        known_constant_names,
+        candidate_names,
+        specialization_dependent_names,
+    ):
+        def reject(reason, current, detail=None):
+            name = self.resource_node_name(node, "<unnamed>")
+            description = reason.replace("-", " ")
+            if detail:
+                description += f" '{detail}'"
+            raise OpenGLCompileTimeGlobalError(
+                f"OpenGL compile-time global '{name}' cannot use {description}",
+                variable_name=name,
+                expression_kind=(
+                    current.__class__.__name__ if current is not None else None
+                ),
+                detail=detail,
+                reason=reason,
+                source_location=getattr(current, "source_location", None)
+                or getattr(node, "source_location", None),
+            )
+
+        def validate(current):
+            if isinstance(current, LiteralNode):
+                return False
+            if isinstance(current, (IdentifierNode, VariableNode)):
+                name = getattr(current, "name", None)
+                if name in known_constant_names:
+                    return name in specialization_dependent_names
+                if name and render_standard_math_constant(name, "opengl") is not None:
+                    return False
+                reason = (
+                    "forward-reference" if name in candidate_names else "runtime-value"
+                )
+                reject(reason, current, name)
+            if isinstance(current, ArrayLiteralNode):
+                dependencies = [
+                    validate(element)
+                    for element in getattr(current, "elements", []) or []
+                ]
+                return any(dependencies)
+            if isinstance(current, MemberAccessNode):
+                return validate(current.object)
+            if isinstance(current, SwizzleNode):
+                return validate(current.vector_expr)
+            if isinstance(current, ArrayAccessNode):
+                array_dependency = validate(current.array)
+                index_dependency = validate(current.index)
+                if index_dependency:
+                    reject("specialization-array-index", current)
+                return array_dependency
+            if isinstance(current, BinaryOpNode):
+                return any((validate(current.left), validate(current.right)))
+            if isinstance(current, UnaryOpNode):
+                if self.map_operator(current.op) in {"++", "--"}:
+                    reject("mutation", current)
+                return validate(current.operand)
+            if isinstance(current, TernaryOpNode):
+                return any(
+                    (
+                        validate(current.condition),
+                        validate(current.true_expr),
+                        validate(current.false_expr),
+                    )
+                )
+            if isinstance(current, CastNode):
+                return validate(current.expression)
+            if isinstance(current, FunctionCallNode):
+                function_name = self.function_call_name(current)
+                if function_name in self.function_return_types:
+                    reject("function-call", current, function_name)
+                arguments = (
+                    getattr(current, "arguments", getattr(current, "args", [])) or []
+                )
+                dependencies = [validate(argument) for argument in arguments]
+                specialization_dependent = any(dependencies)
+                if self.glsl_constructor_type(function_name) is not None:
+                    return specialization_dependent
+                if function_name not in {
+                    "abs",
+                    "acos",
+                    "asin",
+                    "ceil",
+                    "clamp",
+                    "cos",
+                    "degrees",
+                    "dot",
+                    "exp",
+                    "exp2",
+                    "floor",
+                    "inversesqrt",
+                    "length",
+                    "log",
+                    "log2",
+                    "max",
+                    "min",
+                    "mod",
+                    "normalize",
+                    "pow",
+                    "radians",
+                    "round",
+                    "sign",
+                    "sin",
+                    "sqrt",
+                    "trunc",
+                }:
+                    reject("function-call", current, function_name)
+                if specialization_dependent:
+                    reject("specialization-function-call", current, function_name)
+                return False
+            if isinstance(current, ConstructorNode):
+                dependencies = [
+                    validate(argument)
+                    for argument in list(
+                        getattr(current, "arguments", []) or []
+                    ) + list((getattr(current, "named_arguments", {}) or {}).values())
+                ]
+                return any(dependencies)
+            reject("unsupported-expression", current)
+
+        return validate(expression)
 
     def glsl_empty_struct_type_name(self, vtype):
         type_name = self.type_name_string(vtype)
@@ -13411,7 +15009,7 @@ class GLSLCodeGen:
 
         runtime_initializer = id(node) in self.glsl_runtime_global_initializer_node_ids
         qualifier = "" if runtime_initializer else self.global_variable_qualifier(node)
-        emitted_name = self.glsl_global_identifier_name(name)
+        emitted_name = self.glsl_global_declaration_identifier_name(node, name)
         if emitted_name != name:
             declaration = format_c_style_array_declaration(
                 mapped_type_for_layout if mapped_type_for_layout is not None else vtype,
@@ -13450,15 +15048,18 @@ class GLSLCodeGen:
         builtin_name = self.glsl_builtin_stage_interface_name(node)
         if builtin_name is not None:
             source_name = self.resource_node_name(node, "")
-            if source_name and source_name != builtin_name:
-                self.current_identifier_aliases[source_name] = builtin_name
+            if source_name:
+                if source_name != builtin_name:
+                    self.current_identifier_aliases[source_name] = builtin_name
+                else:
+                    self.current_identifier_aliases.pop(source_name, None)
             return ""
 
         vtype, _, array_suffix, _ = self.resource_declaration_shape(node)
         mapped_type = f"{self.map_type(vtype)}{array_suffix}"
-        declaration = format_c_style_array_declaration(
-            mapped_type, self.resource_node_name(node, "")
-        )
+        source_name = self.resource_node_name(node, "")
+        emitted_name = self.glsl_global_identifier_name(source_name)
+        declaration = format_c_style_array_declaration(mapped_type, emitted_name)
         direction = self.stage_local_interface_direction(node)
         if direction is not None:
             prefix = self.stage_io_declaration_prefix(node, direction)
@@ -13864,6 +15465,72 @@ class GLSLCodeGen:
             )
         return None
 
+    def glsl_ordered_boolean_minmax_call(
+        self,
+        func_name,
+        args,
+        *,
+        source_location=None,
+    ):
+        if func_name in self.function_return_types:
+            return None
+        argument_types = [
+            self.map_type(self.expression_result_type(argument)) for argument in args
+        ]
+        width = ordered_boolean_minmax_width(func_name, argument_types)
+        if width is None:
+            if func_name in {"min", "max"} and any(
+                is_boolean_type(type_name) for type_name in argument_types
+            ):
+                reason = (
+                    "invalid-arity"
+                    if len(args) != 2
+                    else (
+                        "operand-type-unresolved"
+                        if any(not type_name for type_name in argument_types)
+                        else "operand-type-mismatch"
+                    )
+                )
+                raise self.GLSL_BOOLEAN_ORDERED_INTRINSIC_ERROR(
+                    f"{self.GLSL_TARGET_DISPLAY_NAME} codegen cannot preserve "
+                    "ordered boolean "
+                    f"'{func_name}' for operand types {argument_types}",
+                    operation=func_name,
+                    operand_types=argument_types,
+                    reason=reason,
+                    source_location=source_location,
+                )
+            return None
+
+        left, right = (self.generate_expression(argument) for argument in args)
+        if width == 1:
+            operator = "&&" if func_name == "min" else "||"
+            return f"(({left}) {operator} ({right}))"
+
+        helper_name = self.glsl_generated_module_identifier(
+            ("ordered-boolean", func_name, width),
+            f"crossgl_bool_{func_name}_bvec{width}",
+        )
+        self.required_glsl_boolean_order_helpers.add((helper_name, func_name, width))
+        return f"{helper_name}({left}, {right})"
+
+    def generate_glsl_boolean_order_helpers(self):
+        helpers = []
+        components = "xyzw"
+        for helper_name, operation, width in sorted(
+            getattr(self, "required_glsl_boolean_order_helpers", set())
+        ):
+            operator = "&&" if operation == "min" else "||"
+            values = ", ".join(
+                f"left.{component} {operator} right.{component}"
+                for component in components[:width]
+            )
+            helpers.append(
+                f"bvec{width} {helper_name}(bvec{width} left, bvec{width} right) "
+                f"{{\n    return bvec{width}({values});\n}}\n"
+            )
+        return ("\n".join(helpers) + "\n") if helpers else ""
+
     def generate_glsl_complex64_helpers(self):
         if not getattr(self, "required_glsl_complex64_helpers", set()):
             return ""
@@ -13981,29 +15648,191 @@ complex64_t crossgl_complex64_mod_assign(
     def is_glsl_complex64_type(self, type_text):
         return self.map_type(type_text) == "complex64_t"
 
-    def glsl_complex64_operand(self, rendered, type_text):
+    def glsl_complex64_operand(self, rendered, type_text, expr=None):
         if self.is_glsl_complex64_type(type_text):
             return rendered
-        value_type = self.glsl_value_type_info(type_text)
+        return self.glsl_registered_scalar_to_struct_conversion(
+            expr,
+            rendered,
+            type_text,
+            "complex64_t",
+            StructureConversionKind.SCALAR_PROMOTION.value,
+        )
+
+    @staticmethod
+    def glsl_structure_conversion_scalar_kind(value_type):
         if value_type is None or value_type["width"] != 1:
             return None
-        if value_type["family"] == "bool":
-            real = f"(({rendered}) ? 1.0 : 0.0)"
-        elif value_type["family"] in {"int", "uint", "float"}:
-            real = f"float({rendered})"
-        else:
+        return {
+            "bool": ScalarKind.BOOLEAN,
+            "int": ScalarKind.SIGNED_INTEGER,
+            "uint": ScalarKind.UNSIGNED_INTEGER,
+            "float": ScalarKind.FLOATING,
+        }.get(value_type["family"])
+
+    def glsl_registered_scalar_structure_contract(self, destination_type):
+        destination_type_name = self.glsl_normalized_source_type(destination_type)
+        if not destination_type_name:
             return None
-        return f"complex64_t({real}, 0.0)"
+        source_destination_type = self.glsl_source_type_identifier_name(
+            destination_type_name
+        )
+        candidates = (
+            source_destination_type,
+            destination_type_name,
+            source_destination_type.rsplit("::", 1)[-1],
+            destination_type_name.rsplit("::", 1)[-1],
+        )
+        for candidate in candidates:
+            contract = registered_scalar_to_structure_conversion(candidate)
+            if contract is not None:
+                mapped_destination_type = self.map_type(destination_type_name)
+                source_destination_type = self.glsl_source_type_identifier_name(
+                    mapped_destination_type
+                )
+                return contract, source_destination_type, mapped_destination_type
+        return None
+
+    def glsl_registered_structure_destination_shape(self, binding):
+        contract, source_destination_type, _mapped_destination_type = binding
+        member_types = self.struct_member_types.get(source_destination_type)
+        if member_types is None:
+            member_types = self.struct_member_types.get(contract.destination_type)
+        if member_types is None:
+            return None
+        return tuple(
+            (
+                name,
+                self.glsl_normalized_source_type(member_type)
+                or self.type_name_string(member_type),
+            )
+            for name, member_type in member_types.items()
+        )
+
+    def glsl_validate_registered_structure_destination(
+        self,
+        expr,
+        binding,
+        source_type,
+        conversion_kind,
+    ):
+        contract, _source_destination_type, mapped_destination_type = binding
+        destination_shape = self.glsl_registered_structure_destination_shape(binding)
+        if destination_shape is None:
+            self.glsl_struct_construction_error(
+                expr,
+                mapped_destination_type,
+                source_type,
+                conversion_kind,
+                "destination-shape-unknown",
+            )
+        if not contract.matches_destination_shape(destination_shape):
+            self.glsl_struct_construction_error(
+                expr,
+                mapped_destination_type,
+                source_type,
+                conversion_kind,
+                "destination-shape-mismatch",
+            )
+
+    def glsl_render_scalar_structure_field(self, rendered, source_info, target_type):
+        target_info = self.glsl_value_type_info(target_type)
+        if target_info is None or target_info["width"] != 1:
+            return None
+        if target_info["family"] == "bool":
+            if source_info["family"] == "bool":
+                return rendered
+            source_zero = self.zero_value_expression(source_info["mapped"])
+            return f"({rendered} != {source_zero})"
+        if source_info["family"] == "bool":
+            target_zero = self.zero_value_expression(target_info["mapped"])
+            target_one = {
+                "int": "1",
+                "uint": "1u",
+                "float": "1.0",
+                "double": "1.0",
+            }.get(target_info["mapped"], f"{target_info['mapped']}(1)")
+            return f"(({rendered}) ? {target_one} : {target_zero})"
+        return f"{target_info['mapped']}({rendered})"
 
     def glsl_registered_scalar_to_struct_conversion(
-        self, rendered, source_type, destination_type
+        self,
+        expr,
+        rendered,
+        source_type,
+        destination_type,
+        conversion_kind,
     ):
-        destination_type = self.map_type(destination_type)
-        if destination_type not in self.GLSL_REGISTERED_SCALAR_STRUCT_CONVERSIONS:
+        binding = self.glsl_registered_scalar_structure_contract(destination_type)
+        if binding is None:
             return None
-        if destination_type == "complex64_t":
-            return self.glsl_complex64_operand(rendered, source_type)
-        return None
+        contract, _source_destination_type, mapped_destination_type = binding
+        source_info = self.glsl_value_type_info(source_type)
+        scalar_kind = self.glsl_structure_conversion_scalar_kind(source_info)
+        if scalar_kind not in contract.source_kinds:
+            return None
+        self.glsl_validate_registered_structure_destination(
+            expr,
+            binding,
+            source_type,
+            conversion_kind,
+        )
+        if contract.scalar_source_use_count != 1:
+            self.glsl_struct_construction_error(
+                expr,
+                mapped_destination_type,
+                source_type,
+                conversion_kind,
+                "source-single-evaluation-unsupported",
+            )
+
+        field_values = []
+        for field in contract.fields:
+            if field.scalar_value is StructureFieldValue.ZERO:
+                field_values.append(self.zero_value_expression(field.type_name))
+                continue
+            converted = self.glsl_render_scalar_structure_field(
+                rendered,
+                source_info,
+                field.type_name,
+            )
+            if converted is None:
+                self.glsl_struct_construction_error(
+                    expr,
+                    mapped_destination_type,
+                    source_type,
+                    conversion_kind,
+                    "field-conversion-unsupported",
+                )
+            field_values.append(converted)
+        return f"{mapped_destination_type}({', '.join(field_values)})"
+
+    def glsl_registered_default_struct_construction(self, expr, destination_type):
+        binding = self.glsl_registered_scalar_structure_contract(destination_type)
+        if binding is None:
+            return None
+        contract, _source_destination_type, mapped_destination_type = binding
+        if not contract.supports_default_construction:
+            return None
+        conversion_kind = StructureConversionKind.DEFAULT_CONSTRUCTION.value
+        self.glsl_validate_registered_structure_destination(
+            expr,
+            binding,
+            None,
+            conversion_kind,
+        )
+        field_values = []
+        for field in contract.fields:
+            if field.default_value is not StructureFieldValue.ZERO:
+                self.glsl_struct_construction_error(
+                    expr,
+                    mapped_destination_type,
+                    None,
+                    conversion_kind,
+                    "field-default-unsupported",
+                )
+            field_values.append(self.zero_value_expression(field.type_name))
+        return f"{mapped_destination_type}({', '.join(field_values)})"
 
     def glsl_struct_construction_error(
         self,
@@ -14013,9 +15842,12 @@ complex64_t crossgl_complex64_mod_assign(
         conversion_kind,
         reason,
     ):
+        if isinstance(conversion_kind, StructureConversionKind):
+            conversion_kind = conversion_kind.value
         rendered_source_type = self.type_name_string(source_type) or "unknown"
-        raise OpenGLStructConstructionError(
-            "OpenGL cannot preserve structure construction from "
+        raise self.GLSL_STRUCT_CONSTRUCTION_ERROR(
+            f"{self.GLSL_TARGET_DISPLAY_NAME} cannot preserve structure "
+            "construction from "
             f"'{rendered_source_type}' to '{destination_type}': "
             f"{reason.replace('-', ' ')}",
             destination_type=destination_type,
@@ -14026,9 +15858,10 @@ complex64_t crossgl_complex64_mod_assign(
         )
 
     def glsl_struct_constructor_conversion(self, expr, constructor, arguments):
-        if constructor not in self.structs_by_name:
+        source_constructor = self.glsl_source_type_identifier_name(constructor)
+        if source_constructor not in self.structs_by_name:
             return None
-        struct_node = self.structs_by_name[constructor]
+        struct_node = self.structs_by_name[source_constructor]
         if not list(getattr(struct_node, "members", []) or []):
             if all(
                 self.glsl_side_effect_free_expression(argument)
@@ -14043,9 +15876,7 @@ complex64_t crossgl_complex64_mod_assign(
                 "constructor-arguments-have-side-effects",
             )
         if not arguments:
-            if constructor == "complex64_t":
-                return "complex64_t(0.0, 0.0)"
-            return None
+            return self.glsl_registered_default_struct_construction(expr, constructor)
         if len(arguments) != 1:
             return None
 
@@ -14055,31 +15886,35 @@ complex64_t crossgl_complex64_mod_assign(
         if source_type is not None and self.map_type(source_type) == constructor:
             return rendered
 
-        promoted = self.glsl_registered_scalar_to_struct_conversion(
-            rendered, source_type, constructor
-        )
-        if promoted is not None:
-            return promoted
-
         constructor_fields = list(
-            self.struct_member_types.get(constructor, {}).values()
+            self.struct_member_types.get(source_constructor, {}).values()
         )
         if len(constructor_fields) == 1:
             return None
 
+        promoted = self.glsl_registered_scalar_to_struct_conversion(
+            expr,
+            rendered,
+            source_type,
+            constructor,
+            StructureConversionKind.SCALAR_PROMOTION.value,
+        )
+        if promoted is not None:
+            return promoted
+
         source_info = self.glsl_value_type_info(source_type)
         source_mapped = self.map_type(source_type) if source_type is not None else None
         if source_type is None:
-            conversion_kind = "unknown"
+            conversion_kind = StructureConversionKind.UNKNOWN.value
             reason = "source-type-unknown"
-        elif source_mapped in self.structs_by_name:
-            conversion_kind = "structure-conversion"
+        elif self.glsl_struct_node(source_mapped) is not None:
+            conversion_kind = StructureConversionKind.STRUCTURE_CONVERSION.value
             reason = "structure-conversion-unsupported"
         elif source_info is not None and source_info["width"] == 1:
-            conversion_kind = "scalar-promotion"
+            conversion_kind = StructureConversionKind.SCALAR_PROMOTION.value
             reason = "scalar-conversion-unregistered"
         else:
-            conversion_kind = "value-conversion"
+            conversion_kind = StructureConversionKind.VALUE_CONVERSION.value
             reason = "source-shape-unsupported"
         self.glsl_struct_construction_error(
             expr,
@@ -14142,8 +15977,8 @@ complex64_t crossgl_complex64_mod_assign(
                 "operator-unsupported",
             )
 
-        left_operand = self.glsl_complex64_operand(left, left_type)
-        right_operand = self.glsl_complex64_operand(right, right_type)
+        left_operand = self.glsl_complex64_operand(left, left_type, expr.left)
+        right_operand = self.glsl_complex64_operand(right, right_type, expr.right)
         if left_operand is None or right_operand is None:
             self.glsl_complex64_error(
                 expr,
@@ -14200,7 +16035,7 @@ complex64_t crossgl_complex64_mod_assign(
             )
         right_type = self.glsl_source_expression_type(right_node)
         right = self.generate_expression(right_node)
-        right_operand = self.glsl_complex64_operand(right, right_type)
+        right_operand = self.glsl_complex64_operand(right, right_type, right_node)
         if right_operand is None:
             self.glsl_complex64_error(
                 node,
@@ -14236,55 +16071,26 @@ complex64_t crossgl_complex64_mod_assign(
         source_type = self.glsl_normalized_source_type(vtype)
         if not source_type:
             return None
-        compact = re.sub(r"\s+", "", source_type).lower()
-        scalar_types = {
-            "char": (True, 8),
-            "signedchar": (True, 8),
-            "i8": (True, 8),
-            "int8": (True, 8),
-            "int8_t": (True, 8),
-            "uchar": (False, 8),
-            "unsignedchar": (False, 8),
-            "u8": (False, 8),
-            "uint8": (False, 8),
-            "uint8_t": (False, 8),
-            "short": (True, 16),
-            "signedshort": (True, 16),
-            "i16": (True, 16),
-            "int16": (True, 16),
-            "int16_t": (True, 16),
-            "ushort": (False, 16),
-            "unsignedshort": (False, 16),
-            "u16": (False, 16),
-            "uint16": (False, 16),
-            "uint16_t": (False, 16),
-        }
-        scalar = scalar_types.get(compact)
-        if scalar is not None:
-            signed, bits = scalar
-            return {
-                "signed": signed,
-                "bits": bits,
-                "width": 1,
-                "mapped": "int" if signed else "uint",
-            }
-
-        vector_match = re.fullmatch(
-            r"(char|uchar|short|ushort|i8vec|u8vec|i16vec|u16vec)([234])",
-            compact,
-        )
-        if vector_match is None:
+        shape = narrow_integer_shape(source_type)
+        if shape is None:
             return None
-        family, width_text = vector_match.groups()
-        signed = family in {"char", "short", "i8vec", "i16vec"}
-        bits = 8 if family in {"char", "uchar", "i8vec", "u8vec"} else 16
-        width = int(width_text)
+        kind, bits, width = shape
         return {
-            "signed": signed,
+            "signed": kind is ArithmeticScalarKind.SIGNED_INTEGER,
             "bits": bits,
             "width": width,
-            "mapped": f"{'i' if signed else 'u'}vec{width}",
+            "mapped": self.map_type(source_type),
         }
+
+    def glsl_arithmetic_operand_type(self, vtype):
+        source_type = self.glsl_normalized_source_type(vtype)
+        if not source_type:
+            return None
+        try:
+            mapped_type = self.map_type(source_type)
+        except OpenGLTemplateTypeError:
+            return None
+        return arithmetic_type(source_type, mapped_type)
 
     def glsl_value_type_info(self, vtype):
         type_name = self.glsl_normalized_source_type(vtype)
@@ -14294,134 +16100,129 @@ complex64_t crossgl_complex64_mod_assign(
             mapped = self.map_type(type_name)
         except OpenGLTemplateTypeError:
             return None
+        target = target_arithmetic_type(mapped)
+        if target is None:
+            return None
         narrow = self.glsl_narrow_integer_contract(type_name)
-        scalar_components = {
-            "bool": ("bool", 1),
-            "int": ("int", 32),
-            "uint": ("uint", 32),
-            "int64_t": ("int", 64),
-            "uint64_t": ("uint", 64),
-            "float": ("float", 32),
-            "double": ("float", 64),
-        }
-        component = scalar_components.get(mapped)
-        width = 1
-        if component is None:
-            vector_match = re.fullmatch(
-                r"(bvec|ivec|uvec|i64vec|u64vec|vec|dvec)([234])", mapped
-            )
-            if vector_match is None:
-                return None
-            prefix, width_text = vector_match.groups()
-            width = int(width_text)
-            component = {
-                "bvec": ("bool", 1),
-                "ivec": ("int", 32),
-                "uvec": ("uint", 32),
-                "i64vec": ("int", 64),
-                "u64vec": ("uint", 64),
-                "vec": ("float", 32),
-                "dvec": ("float", 64),
-            }[prefix]
-        family, bits = component
+        family = {
+            ArithmeticScalarKind.BOOLEAN: "bool",
+            ArithmeticScalarKind.SIGNED_INTEGER: "int",
+            ArithmeticScalarKind.UNSIGNED_INTEGER: "uint",
+            ArithmeticScalarKind.FLOATING: "float",
+        }[target.kind]
         return {
             "source": type_name,
             "mapped": mapped,
             "family": family,
-            "bits": bits,
-            "width": width,
+            "bits": target.bits,
+            "width": target.lanes,
             "narrow": narrow,
         }
 
     def glsl_vector_type_for_component(self, component_type, width):
-        prefix = {
-            "bool": "bvec",
-            "int": "ivec",
-            "uint": "uvec",
-            "int64_t": "i64vec",
-            "uint64_t": "u64vec",
-            "float": "vec",
-            "double": "dvec",
-        }.get(component_type)
-        return f"{prefix}{width}" if prefix is not None else None
+        component = target_arithmetic_type(component_type)
+        if component is None or component.lanes != 1:
+            return None
+        return arithmetic_type_name(component.kind, component.bits, width)
+
+    def glsl_arithmetic_type_from_info(self, info, *, width=None):
+        kind = {
+            "bool": ArithmeticScalarKind.BOOLEAN,
+            "int": ArithmeticScalarKind.SIGNED_INTEGER,
+            "uint": ArithmeticScalarKind.UNSIGNED_INTEGER,
+            "float": ArithmeticScalarKind.FLOATING,
+        }.get(info["family"])
+        if kind is None:
+            return None
+        narrow = info["narrow"]
+        bits = narrow["bits"] if narrow is not None else info["bits"]
+        return ArithmeticType(
+            info["source"],
+            info["mapped"],
+            kind,
+            bits,
+            info["width"] if width is None else width,
+        )
 
     def glsl_promoted_integer_component(self, info):
-        if info["family"] == "bool" or info["narrow"] is not None:
-            return "int"
-        if info["family"] == "int":
-            return "int64_t" if info["bits"] == 64 else "int"
-        if info["family"] == "uint":
-            return "uint64_t" if info["bits"] == 64 else "uint"
-        return None
+        operand = self.glsl_arithmetic_type_from_info(info, width=1)
+        return promoted_integer_type_name(operand) if operand is not None else None
 
     def glsl_promoted_integer_type(self, info):
-        component_type = self.glsl_promoted_integer_component(info)
-        if component_type is None:
+        operand = self.glsl_arithmetic_type_from_info(info)
+        return promoted_integer_type_name(operand) if operand is not None else None
+
+    def glsl_arithmetic_conversion_plan(
+        self,
+        left_type,
+        right_type,
+        operator,
+        *,
+        source_node=None,
+        fail_closed=False,
+    ):
+        left = self.glsl_arithmetic_operand_type(left_type)
+        right = self.glsl_arithmetic_operand_type(right_type)
+        if left is None or right is None:
             return None
-        if info["width"] == 1:
-            return component_type
-        return self.glsl_vector_type_for_component(component_type, info["width"])
-
-    def glsl_common_integer_component(self, left, right):
-        left_type = self.glsl_promoted_integer_component(left)
-        right_type = self.glsl_promoted_integer_component(right)
-        if left_type is None or right_type is None:
+        try:
+            return resolve_arithmetic_conversion(
+                left,
+                right,
+                operator,
+                supported_integer_widths=(
+                    self.GLSL_SUPPORTED_ARITHMETIC_INTEGER_WIDTHS
+                ),
+                supported_floating_widths=(
+                    self.GLSL_SUPPORTED_ARITHMETIC_FLOATING_WIDTHS
+                ),
+            )
+        except UnrepresentableArithmeticConversion as error:
+            if fail_closed:
+                self.glsl_arithmetic_conversion_error(
+                    source_node,
+                    operator,
+                    left_type,
+                    right_type,
+                    error.attempted_common_type,
+                    error.reason,
+                )
             return None
-        if left_type == right_type:
-            return left_type
 
-        integer_info = {
-            "int": (True, 32),
-            "uint": (False, 32),
-            "int64_t": (True, 64),
-            "uint64_t": (False, 64),
-        }
-        left_signed, left_bits = integer_info[left_type]
-        right_signed, right_bits = integer_info[right_type]
-        if left_signed == right_signed:
-            return left_type if left_bits >= right_bits else right_type
-
-        signed_type, signed_bits = (
-            (left_type, left_bits) if left_signed else (right_type, right_bits)
+    def glsl_arithmetic_conversion_error(
+        self,
+        source_node,
+        operator,
+        left_type,
+        right_type,
+        attempted_common_type,
+        reason,
+    ):
+        operand_types = (
+            self.type_name_string(left_type) or "unknown",
+            self.type_name_string(right_type) or "unknown",
         )
-        unsigned_type, unsigned_bits = (
-            (right_type, right_bits) if left_signed else (left_type, left_bits)
+        rendered_common_type = attempted_common_type or "unavailable"
+        raise self.GLSL_ARITHMETIC_CONVERSION_ERROR(
+            f"{self.GLSL_TARGET_DISPLAY_NAME} cannot preserve arithmetic operator "
+            f"'{operator}' for source operands '{operand_types[0]}' and "
+            f"'{operand_types[1]}'; attempted common type "
+            f"'{rendered_common_type}': {reason.replace('-', ' ')}",
+            operator=operator,
+            operand_types=operand_types,
+            attempted_common_type=attempted_common_type,
+            reason=reason,
+            source_location=getattr(source_node, "source_location", None),
         )
-        if unsigned_bits >= signed_bits:
-            return unsigned_type
-        if signed_bits > unsigned_bits:
-            return signed_type
-        return "uint64_t" if signed_bits == 64 else "uint"
 
     def glsl_common_arithmetic_type(self, left_type, right_type, operator):
-        if operator not in {
-            "+",
-            "-",
-            "*",
-            "/",
-            "%",
-            "&",
-            "|",
-            "^",
-            "<<",
-            ">>",
-            "<",
-            "<=",
-            ">",
-            ">=",
-            "==",
-            "!=",
-            "?:",
-        }:
+        plan = self.glsl_arithmetic_conversion_plan(left_type, right_type, operator)
+        if plan is None:
             return None
         left = self.glsl_value_type_info(left_type)
         right = self.glsl_value_type_info(right_type)
         if left is None or right is None:
             return None
-        if operator in {"<<", ">>"}:
-            if self.glsl_promoted_integer_type(right) is None:
-                return None
-            return self.glsl_promoted_integer_type(left)
         if (
             self.glsl_source_type_signature(left["source"])
             == self.glsl_source_type_signature(right["source"])
@@ -14429,67 +16230,27 @@ complex64_t crossgl_complex64_mod_assign(
             and left["family"] != "bool"
         ):
             return left["source"]
-        if left["width"] > 1 and right["width"] > 1 and left["width"] != right["width"]:
-            return None
-        width = max(left["width"], right["width"])
+        return plan.common_type
 
-        if left["family"] == "float" or right["family"] == "float":
-            floating_width = max(
-                info["bits"] for info in (left, right) if info["family"] == "float"
-            )
-            component = "double" if floating_width == 64 else "float"
-        elif left["family"] == right["family"] == "bool" and operator in {"==", "!="}:
-            component = "bool"
-        else:
-            component = self.glsl_common_integer_component(left, right)
-        if component is None:
-            return None
-        if width == 1:
-            return component
-        return self.glsl_vector_type_for_component(component, width)
-
-    def glsl_binary_operand_conversion_types(self, left_type, right_type, operator):
-        left = self.glsl_value_type_info(left_type)
-        right = self.glsl_value_type_info(right_type)
-        if left is None or right is None:
-            return None
-        if operator in {"<<", ">>"}:
-            if (
-                left["width"] > 1
-                and right["width"] > 1
-                and left["width"] != right["width"]
-            ):
-                return None
-            left_target = self.glsl_promoted_integer_type(left)
-            right_target = self.glsl_promoted_integer_type(right)
-            if left_target is None or right_target is None:
-                return None
-            return left_target, right_target
-
-        common_type = self.glsl_common_arithmetic_type(left_type, right_type, operator)
-        common = self.glsl_value_type_info(common_type)
-        if common is None:
-            return None
-        component_type = {
-            ("bool", 1): "bool",
-            ("int", 32): "int",
-            ("uint", 32): "uint",
-            ("int", 64): "int64_t",
-            ("uint", 64): "uint64_t",
-            ("float", 32): "float",
-            ("float", 64): "double",
-        }[(common["family"], common["bits"])]
-        left_target = (
-            component_type
-            if left["width"] == 1
-            else self.glsl_vector_type_for_component(component_type, left["width"])
+    def glsl_binary_operand_conversion_types(
+        self,
+        left_type,
+        right_type,
+        operator,
+        *,
+        source_node=None,
+        fail_closed=False,
+    ):
+        plan = self.glsl_arithmetic_conversion_plan(
+            left_type,
+            right_type,
+            operator,
+            source_node=source_node,
+            fail_closed=fail_closed,
         )
-        right_target = (
-            component_type
-            if right["width"] == 1
-            else self.glsl_vector_type_for_component(component_type, right["width"])
-        )
-        return left_target, right_target
+        if plan is None:
+            return None
+        return plan.left_target_type, plan.right_target_type
 
     def glsl_unary_source_result_type(self, expression):
         operator = self.map_operator(expression.op)
@@ -14598,30 +16359,39 @@ complex64_t crossgl_complex64_mod_assign(
     def glsl_expected_type_conversion(self, expr, generated, expected_type):
         if expected_type is None or not isinstance(generated, str):
             return generated
-        expected_type_name = self.type_name_string(expected_type)
-        resolved_expected_type = self.resolve_glsl_type_alias(expected_type_name)
-        registered_expected_type = next(
-            (
-                candidate
-                for candidate in (
-                    resolved_expected_type,
-                    resolved_expected_type.rsplit("::", 1)[-1],
-                )
-                if candidate in self.GLSL_REGISTERED_SCALAR_STRUCT_CONVERSIONS
-            ),
-            None,
+        registered_binding = self.glsl_registered_scalar_structure_contract(
+            expected_type
         )
-        if registered_expected_type is not None:
-            mapped_expected_type = self.map_type(registered_expected_type)
+        if registered_binding is not None:
+            _contract, _source_expected_type, mapped_expected_type = registered_binding
             actual_type = self.glsl_source_expression_type(expr)
-            actual = self.glsl_value_type_info(actual_type)
             is_destination_type = (
                 actual_type is not None
                 and self.map_type(actual_type) == mapped_expected_type
             )
-            if is_destination_type or (actual is not None and actual["width"] == 1):
+            if is_destination_type:
+                return generated
+            if self.glsl_is_explicit_type_constructor_expression(
+                generated, mapped_expected_type
+            ):
+                return generated
+            conversion_kind = StructureConversionKind.CONTEXTUAL_SCALAR_CONVERSION.value
+            if actual_type is None:
+                self.glsl_struct_construction_error(
+                    expr,
+                    mapped_expected_type,
+                    None,
+                    conversion_kind,
+                    "source-type-unknown",
+                )
+            actual = self.glsl_value_type_info(actual_type)
+            if actual is not None and actual["width"] == 1:
                 converted = self.glsl_registered_scalar_to_struct_conversion(
-                    generated, actual_type, mapped_expected_type
+                    expr,
+                    generated,
+                    actual_type,
+                    mapped_expected_type,
+                    conversion_kind,
                 )
                 if converted is not None:
                     return converted
@@ -14629,17 +16399,22 @@ complex64_t crossgl_complex64_mod_assign(
                     expr,
                     mapped_expected_type,
                     actual_type,
-                    "contextual-scalar-conversion",
-                    "source-shape-unsupported",
+                    conversion_kind,
+                    "scalar-source-kind-unsupported",
                 )
-            if actual is not None:
-                self.glsl_struct_construction_error(
-                    expr,
-                    mapped_expected_type,
-                    actual_type,
-                    "contextual-scalar-conversion",
-                    "source-shape-unsupported",
-                )
+            mapped_actual_type = self.map_type(actual_type)
+            reason = (
+                "structure-conversion-unsupported"
+                if self.glsl_struct_node(mapped_actual_type) is not None
+                else "source-shape-unsupported"
+            )
+            self.glsl_struct_construction_error(
+                expr,
+                mapped_expected_type,
+                actual_type,
+                conversion_kind,
+                reason,
+            )
         expected = self.glsl_value_type_info(expected_type)
         if expected is None:
             return generated
@@ -14981,6 +16756,91 @@ complex64_t crossgl_complex64_mod_assign(
             rendered_columns.append(f"{column_type}({', '.join(rendered_values)})")
         return f"{mapped_type}({', '.join(rendered_columns)})"
 
+    def glsl_vector_initializer_component_count(self, expression):
+        type_info = self.glsl_value_type_info(self.expression_result_type(expression))
+        if type_info is not None:
+            return type_info["width"]
+        return self.expression_component_count(expression)
+
+    def generate_glsl_vector_aggregate_initializer(self, expr, mapped_type):
+        if not self.is_vector_value_type(mapped_type):
+            return None
+        if self.glsl_is_zero_aggregate_initializer(expr):
+            return self.glsl_value_initialized_expression(expr, mapped_type)
+
+        width = self.value_component_count(mapped_type)
+        component_type = self.vector_component_type(mapped_type)
+        if not width or width <= 1 or component_type is None:
+            return None
+
+        rendered = []
+        provided_components = 0
+        for element in list(getattr(expr, "elements", []) or []):
+            component_count = self.glsl_vector_initializer_component_count(element)
+            if component_count is None:
+                self.glsl_aggregate_error(
+                    expr,
+                    expected_type=mapped_type,
+                    reason="vector-element-type-unresolved",
+                    detail="a vector aggregate element has no known component width",
+                )
+            if provided_components + component_count > width:
+                self.glsl_aggregate_error(
+                    expr,
+                    expected_type=mapped_type,
+                    reason="element-count-mismatch",
+                    expected_element_count=width,
+                )
+            rendered.append(
+                self.generate_expression_with_expected(
+                    element,
+                    component_type if component_count == 1 else None,
+                )
+            )
+            provided_components += component_count
+
+        rendered.extend(
+            self.glsl_value_initialized_expression(expr, component_type)
+            for _index in range(provided_components, width)
+        )
+        return f"{mapped_type}({', '.join(rendered)})"
+
+    def generate_glsl_partial_vector_constructor(
+        self, expr, constructor, source_constructor
+    ):
+        arguments = list(getattr(expr, "arguments", getattr(expr, "args", [])) or [])
+        if not self.is_vector_value_type(constructor) or len(arguments) <= 1:
+            return None
+
+        component_counts = [
+            self.glsl_vector_initializer_component_count(argument)
+            for argument in arguments
+        ]
+        if any(component_count is None for component_count in component_counts):
+            return None
+
+        width = self.value_component_count(constructor)
+        provided_components = sum(component_counts)
+        if not width or provided_components >= width:
+            return None
+
+        component_type = self.vector_component_type(constructor)
+        if component_type is None:
+            return None
+        rendered = [
+            self.generate_expression_with_expected(
+                argument,
+                component_type if component_count == 1 else None,
+            )
+            for argument, component_count in zip(arguments, component_counts)
+        ]
+        rendered.extend(
+            self.zero_value_expression(component_type)
+            for _index in range(provided_components, width)
+        )
+        generated = f"{constructor}({', '.join(rendered)})"
+        return self.glsl_apply_narrow_integer_contract(generated, source_constructor)
+
     def glsl_aggregate_initializer_contract(self, expr, expected_type):
         expected_type = self.type_name_string(expected_type)
         if not expected_type:
@@ -15031,7 +16891,8 @@ complex64_t crossgl_complex64_mod_assign(
         _base_type, array_suffix = split_array_type_suffix(mapped_type)
         return bool(
             array_suffix
-            or mapped_type in self.struct_member_types
+            or self.glsl_source_type_identifier_name(mapped_type)
+            in self.struct_member_types
             or self.is_vector_value_type(mapped_type)
             or self.glsl_matrix_dimensions(mapped_type) is not None
         )
@@ -15051,13 +16912,14 @@ complex64_t crossgl_complex64_mod_assign(
             constructor = self.glsl_fixed_array_constructor_type(mapped_type, extent)
             return f"{constructor}({', '.join(elements)})"
 
-        member_types = self.struct_member_types.get(mapped_type)
+        source_mapped_type = self.glsl_source_type_identifier_name(mapped_type)
+        member_types = self.struct_member_types.get(source_mapped_type)
         if member_types is not None:
             elements = [
                 self.glsl_value_initialized_expression(expr, member_type)
                 for member_type in member_types.values()
             ]
-            if not elements and mapped_type in self.structs_by_name:
+            if not elements and source_mapped_type in self.structs_by_name:
                 return f"{mapped_type}(0)"
             return f"{mapped_type}({', '.join(elements)})"
 
@@ -15083,6 +16945,12 @@ complex64_t crossgl_complex64_mod_assign(
                 expr
             ) and self.glsl_is_value_initializable_aggregate_type(mapped_type):
                 return self.glsl_value_initialized_expression(expr, mapped_type)
+            vector_initializer = self.generate_glsl_vector_aggregate_initializer(
+                expr,
+                mapped_type,
+            )
+            if vector_initializer is not None:
+                return vector_initializer
             matrix_initializer = self.generate_glsl_matrix_aggregate_initializer(
                 expr,
                 mapped_type,
@@ -15112,7 +16980,7 @@ complex64_t crossgl_complex64_mod_assign(
             self.glsl_value_initialized_expression(expr, element_types[index])
             for index in range(len(elements), expected_count)
         )
-        if not rendered and constructor in self.structs_by_name:
+        if not rendered and self.glsl_struct_node(constructor) is not None:
             return f"{constructor}(0)"
         return f"{constructor}({', '.join(rendered)})"
 
@@ -15189,15 +17057,18 @@ complex64_t crossgl_complex64_mod_assign(
             return True
 
         mapped_type = self.map_type(base_type)
+        source_mapped_type = self.glsl_source_type_identifier_name(mapped_type)
         seen = set(seen or set())
-        if mapped_type in seen:
+        if source_mapped_type in seen:
             return False
-        seen.add(mapped_type)
+        seen.add(source_mapped_type)
 
-        struct = self.structs_by_name.get(mapped_type)
+        struct = self.structs_by_name.get(source_mapped_type)
         if struct is None:
             return False
-        for member_type in self.struct_member_types.get(mapped_type, {}).values():
+        for member_type in self.struct_member_types.get(
+            source_mapped_type, {}
+        ).values():
             if self.type_contains_opaque_resource(member_type, seen):
                 return True
         return False
@@ -15277,11 +17148,13 @@ complex64_t crossgl_complex64_mod_assign(
             "dmat4x4",
         }:
             return constructor
-        if constructor in getattr(self, "structs_by_name", {}):
+        if func_name in getattr(self, "structs_by_name", {}):
             return constructor
-        if constructor in getattr(self, "struct_member_types", {}):
+        if func_name in getattr(self, "struct_member_types", {}):
             return constructor
-        if constructor in getattr(self, "enum_struct_type_names", set()):
+        if func_name in getattr(self, "enum_struct_type_names", set()):
+            return constructor
+        if constructor in self.glsl_type_identifier_names.values():
             return constructor
         return None
 
@@ -15506,6 +17379,12 @@ complex64_t crossgl_complex64_mod_assign(
                 return numeric_result_type
             if func_name in {"normalize", "reflect"} and args:
                 return self.expression_result_type(args[0])
+            if (
+                func_name in {"max", "min"}
+                and args
+                and func_name not in self.function_return_types
+            ):
+                return self.expression_result_type(args[0])
             if func_name == "dot" and args:
                 return (
                     self.vector_component_type(self.expression_result_type(args[0]))
@@ -15677,19 +17556,40 @@ complex64_t crossgl_complex64_mod_assign(
             return f"{vector_type}({generated})"
         return generated
 
-    def generate_vector_relational_expression(self, left_expr, operator, right_expr):
+    def generate_vector_relational_expression(
+        self, left_expr, operator, right_expr, *, source_node=None
+    ):
         function_name = self.GLSL_VECTOR_RELATIONAL_FUNCTIONS.get(operator)
         if function_name is None:
             return None
 
-        left_type = self.expression_result_type(left_expr)
-        right_type = self.expression_result_type(right_expr)
+        left_type = self.glsl_source_expression_type(left_expr)
+        right_type = self.glsl_source_expression_type(right_expr)
         vector_type = self.glsl_relational_vector_type(left_type, right_type)
         if vector_type is None:
             return None
 
-        left = self.glsl_vector_relational_operand(left_expr, left_type, vector_type)
-        right = self.glsl_vector_relational_operand(right_expr, right_type, vector_type)
+        plan = self.glsl_arithmetic_conversion_plan(
+            left_type,
+            right_type,
+            operator,
+            source_node=source_node,
+            fail_closed=True,
+        )
+        if plan is None:
+            left = self.glsl_vector_relational_operand(
+                left_expr, left_type, vector_type
+            )
+            right = self.glsl_vector_relational_operand(
+                right_expr, right_type, vector_type
+            )
+        else:
+            left = self.generate_expression_with_expected(
+                left_expr, plan.left_target_type
+            )
+            right = self.generate_expression_with_expected(
+                right_expr, plan.right_target_type
+            )
         return f"{function_name}({left}, {right})"
 
     def validate_dispatch_mesh_count_argument(self, arg, index):
@@ -16323,16 +18223,13 @@ complex64_t crossgl_complex64_mod_assign(
         self, target, value, binary_operator, expected_type, source_node
     ):
         expected = self.glsl_value_type_info(expected_type)
-        if (
-            binary_operator not in {"&", "|", "^"}
-            or expected is None
-            or expected["family"] != "bool"
-        ):
+        if binary_operator is None or expected is None or expected["family"] != "bool":
             return None
         if not self.glsl_stable_update_target(target):
             target_name = self.expression_name(target)
-            raise OpenGLBooleanCompoundAssignmentError(
-                "OpenGL cannot safely lower boolean compound assignment "
+            raise self.GLSL_BOOLEAN_COMPOUND_ASSIGNMENT_ERROR(
+                f"{self.GLSL_TARGET_DISPLAY_NAME} cannot safely lower boolean "
+                "compound assignment "
                 f"'{binary_operator}=' for a side-effecting lvalue",
                 operator=f"{binary_operator}=",
                 target=target_name,
@@ -16355,7 +18252,11 @@ complex64_t crossgl_complex64_mod_assign(
             return None
         value_type = self.glsl_source_expression_type(value)
         conversion_types = self.glsl_binary_operand_conversion_types(
-            expected_type, value_type, binary_operator
+            expected_type,
+            value_type,
+            binary_operator,
+            source_node=source_node,
+            fail_closed=True,
         )
         if conversion_types is None:
             return None
@@ -16490,8 +18391,9 @@ complex64_t crossgl_complex64_mod_assign(
             code += f"{indent_str}}}\n"
             return code
 
-        condition = self.generate_expression(
-            node.condition if hasattr(node, "condition") else node.if_condition
+        condition = self.generate_expression_with_expected(
+            node.condition if hasattr(node, "condition") else node.if_condition,
+            "bool",
         )
         code = f"{indent_str}if ({condition}) {{\n"
 
@@ -16504,7 +18406,9 @@ complex64_t crossgl_complex64_mod_assign(
             for else_if_condition, else_if_body in zip(
                 node.else_if_conditions, node.else_if_bodies
             ):
-                condition = self.generate_expression(else_if_condition)
+                condition = self.generate_expression_with_expected(
+                    else_if_condition, "bool"
+                )
                 code += f" else if ({condition}) {{\n"
                 code += self.generate_scoped_statement_body(else_if_body, indent + 1)
                 code += f"{indent_str}}}"
@@ -16617,30 +18521,94 @@ complex64_t crossgl_complex64_mod_assign(
         iterable_node = getattr(node, "iterable", "")
         previous_local_variable_types = dict(self.local_variable_types)
         previous_local_variable_source_types = dict(self.local_variable_source_types)
+        previous_identifier_aliases = dict(self.current_identifier_aliases)
         previous_compile_time_constant_state = (
             self.glsl_compile_time_constant_scope_state()
         )
 
         try:
-            self.local_variable_types[pattern] = "int"
-            self.local_variable_source_types[pattern] = "int"
+            binding_qualifier = self.validate_glsl_for_in_binding(node, pattern)
+            pattern_name = self.glsl_local_identifier_name(pattern)
             self.current_compile_time_int_constants.pop(pattern, None)
             self.current_compile_time_int_vector_constants.pop(pattern, None)
             self.current_compile_time_int_vector_array_constants.pop(pattern, None)
 
             if isinstance(iterable_node, RangeNode):
+                self.local_variable_types[pattern] = "int"
+                self.local_variable_source_types[pattern] = "int"
                 start = self.generate_expression(iterable_node.start)
                 end = self.generate_expression(iterable_node.end)
                 comparator = "<=" if iterable_node.inclusive else "<"
                 code = (
-                    f"{indent_str}for (int {pattern} = {start}; "
-                    f"{pattern} {comparator} {end}; ++{pattern}) {{\n"
+                    f"{indent_str}for (int {pattern_name} = {start}; "
+                    f"{pattern_name} {comparator} {end}; ++{pattern_name}) {{\n"
                 )
-            else:
+            elif self.is_scalar_integer_type(
+                self.glsl_source_expression_type(iterable_node)
+            ):
+                self.local_variable_types[pattern] = "int"
+                self.local_variable_source_types[pattern] = "int"
                 iterable = self.generate_expression(iterable_node)
                 code = (
-                    f"{indent_str}for (int {pattern} = 0; {pattern} < {iterable}; "
-                    f"++{pattern}) {{\n"
+                    f"{indent_str}for (int {pattern_name} = 0; "
+                    f"{pattern_name} < {iterable}; ++{pattern_name}) {{\n"
+                )
+            else:
+                iterable_type = self.glsl_for_in_fixed_array_type(
+                    node, pattern, iterable_node
+                )
+                extent, element_type = self.glsl_for_in_array_shape(
+                    node, pattern, iterable_type
+                )
+                if extent == 0:
+                    if not self.glsl_side_effect_free_expression(iterable_node):
+                        self.raise_glsl_for_in_iterable_error(
+                            node,
+                            pattern,
+                            iterable_type,
+                            reason="side-effecting-empty-array",
+                        )
+                    return ""
+
+                mapped_iterable_type = self.map_type(iterable_type)
+                mapped_element_type = self.map_type(element_type)
+                if self.type_contains_opaque_resource(element_type):
+                    self.raise_glsl_for_in_iterable_error(
+                        node,
+                        pattern,
+                        iterable_type,
+                        binding_type=element_type,
+                        reason="unsupported-element-type",
+                    )
+
+                container_name = self.glsl_synthetic_local_identifier(
+                    f"{pattern}_crossgl_iterable"
+                )
+                index_name = self.glsl_synthetic_local_identifier(
+                    f"{pattern}_crossgl_index"
+                )
+                iterable = self.generate_expression_with_expected(
+                    iterable_node, iterable_type
+                )
+                container_declaration = format_c_style_array_declaration(
+                    mapped_iterable_type, container_name
+                )
+                pattern_declaration = format_c_style_array_declaration(
+                    mapped_element_type, pattern_name
+                )
+                pattern_declaration = f"{binding_qualifier}{pattern_declaration}"
+                self.local_variable_types[container_name] = iterable_type
+                self.local_variable_source_types[container_name] = iterable_type
+                self.local_variable_types[index_name] = "int"
+                self.local_variable_source_types[index_name] = "int"
+                self.local_variable_types[pattern] = element_type
+                self.local_variable_source_types[pattern] = element_type
+                code = (
+                    f"{indent_str}{container_declaration} = {iterable};\n"
+                    f"{indent_str}for (int {index_name} = 0; "
+                    f"{index_name} < {extent}; ++{index_name}) {{\n"
+                    f"{indent_str}    {pattern_declaration} = "
+                    f"{container_name}[{index_name}];\n"
                 )
 
             code += self.generate_scoped_statement_body(
@@ -16651,9 +18619,120 @@ complex64_t crossgl_complex64_mod_assign(
         finally:
             self.local_variable_types = previous_local_variable_types
             self.local_variable_source_types = previous_local_variable_source_types
+            self.current_identifier_aliases = previous_identifier_aliases
             self.restore_glsl_compile_time_constant_scope_state(
                 previous_compile_time_constant_state
             )
+
+    def validate_glsl_for_in_binding(self, node, pattern):
+        binding_type = getattr(
+            node, "binding_type", getattr(node, "pattern_type", None)
+        )
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "binding_qualifiers", []) or []
+        }
+        mutable_reference = bool(
+            getattr(node, "is_mutable_reference", False)
+            or getattr(node, "mutable_reference", False)
+            or (
+                isinstance(binding_type, ReferenceType)
+                and getattr(binding_type, "is_mutable", False)
+            )
+            or (
+                not isinstance(binding_type, ReferenceType)
+                and self.type_name_string(binding_type or "").rstrip().endswith("&")
+                and "const" not in qualifiers
+                and "readonly" not in qualifiers
+            )
+        )
+        if not mutable_reference:
+            immutable_reference = isinstance(
+                binding_type, ReferenceType
+            ) and not getattr(binding_type, "is_mutable", False)
+            return (
+                "const "
+                if immutable_reference
+                or qualifiers
+                & {
+                    "const",
+                    "constant",
+                    "readonly",
+                }
+                else ""
+            )
+        self.raise_glsl_for_in_iterable_error(
+            node,
+            pattern,
+            self.glsl_source_expression_type(getattr(node, "iterable", None)),
+            binding_type=self.type_name_string(binding_type),
+            reason="mutable-reference-binding",
+        )
+
+    def glsl_for_in_fixed_array_type(self, node, pattern, iterable_node):
+        iterable_type = self.type_name_string(
+            self.glsl_source_expression_type(iterable_node)
+        )
+        if not iterable_type:
+            self.raise_glsl_for_in_iterable_error(
+                node, pattern, None, reason="unresolved-iterable-type"
+            )
+        if self.glsl_outer_array_type(iterable_type) is None:
+            self.raise_glsl_for_in_iterable_error(
+                node, pattern, iterable_type, reason="not-fixed-array"
+            )
+        return iterable_type
+
+    def glsl_for_in_array_shape(self, node, pattern, iterable_type):
+        extent_text, element_type = self.glsl_outer_array_type(iterable_type)
+        constants = {
+            **self.literal_int_constants,
+            **self.current_compile_time_int_constants,
+        }
+        extent = evaluate_literal_int_expression(extent_text, constants)
+        if extent is None:
+            self.raise_glsl_for_in_iterable_error(
+                node, pattern, iterable_type, reason="unknown-extent"
+            )
+        if extent < 0:
+            self.raise_glsl_for_in_iterable_error(
+                node, pattern, iterable_type, reason="invalid-extent"
+            )
+        return extent, element_type
+
+    def raise_glsl_for_in_iterable_error(
+        self,
+        node,
+        pattern,
+        iterable_type,
+        *,
+        binding_type=None,
+        reason,
+    ):
+        descriptions = {
+            "invalid-extent": "has a negative fixed-array extent",
+            "mutable-reference-binding": (
+                "requires mutable reference binding, which GLSL cannot preserve"
+            ),
+            "not-fixed-array": "is not a fixed array",
+            "side-effecting-empty-array": (
+                "is an empty array whose container expression has side effects"
+            ),
+            "unknown-extent": "does not have a compile-time fixed-array extent",
+            "unresolved-iterable-type": "has an unresolved iterable type",
+            "unsupported-element-type": "contains an unsupported opaque element type",
+        }
+        detail = descriptions.get(reason, "has no faithful GLSL iterable contract")
+        type_label = iterable_type or "<unresolved>"
+        raise OpenGLForInIterableError(
+            f"OpenGL for-in binding '{pattern}' over '{type_label}' {detail}",
+            pattern=pattern,
+            iterable_type=iterable_type,
+            binding_type=binding_type,
+            reason=reason,
+            source_location=getattr(node, "source_location", None)
+            or getattr(getattr(node, "iterable", None), "source_location", None),
+        )
 
     def generate_while(self, node, indent):
         indent_str = "    " * indent
@@ -16905,7 +18984,35 @@ complex64_t crossgl_complex64_mod_assign(
     def generate_glsl_builtin_option_none_value(self):
         if not getattr(self, "glsl_builtin_option_available", False):
             return None
-        return generate_enum_constructor_call(self, "Option::None", [])
+        return self.glsl_enum_constructor_call("Option::None", [])
+
+    def glsl_rewrite_generic_enum_constructor_call(self, rendered):
+        if rendered is None:
+            return None
+        for (type_text, variant_name), target_name in sorted(
+            self.glsl_generic_enum_constructor_names.items()
+        ):
+            specialization = self.generic_enum_specializations[type_text]
+            source_name = f"{specialization['struct_name']}_{variant_name}_make"
+            prefix = f"{source_name}("
+            if rendered.startswith(prefix):
+                return f"{target_name}{rendered[len(source_name):]}"
+        return rendered
+
+    def glsl_enum_constructor_call(self, path, arguments):
+        return self.glsl_rewrite_generic_enum_constructor_call(
+            generate_enum_constructor_call(self, path, arguments)
+        )
+
+    def glsl_enum_constructor_expression(self, expression):
+        return self.glsl_rewrite_generic_enum_constructor_call(
+            generate_enum_constructor_expression(self, expression)
+        )
+
+    def glsl_enum_value_expression(self, path):
+        return self.glsl_rewrite_generic_enum_constructor_call(
+            enum_value_expression(self, path)
+        )
 
     def generate_glsl_builtin_option_none_comparison(self, left, op, right):
         if op not in {"==", "!="}:
@@ -16918,7 +19025,8 @@ complex64_t crossgl_complex64_mod_assign(
         subject = right if left_is_none else left
         subject_expr = self.generate_expression(subject)
         operator = "==" if op == "==" else "!="
-        return f"({subject_expr}.variant {operator} Option_None)"
+        none_name = self.enum_variant_constants.get("Option::None", "Option_None")
+        return f"({subject_expr}.variant {operator} {none_name})"
 
     def generate_expression(self, expr, is_main=False):
         """Render a CrossGL AST expression into GLSL expression syntax."""
@@ -16976,7 +19084,7 @@ complex64_t crossgl_complex64_mod_assign(
                 if expr.name in self.current_resource_aliases:
                     return self.current_resource_aliases[expr.name]["expression"]
                 if expr.name in getattr(self, "enum_variant_constants", {}):
-                    return enum_value_expression(self, expr.name)
+                    return self.glsl_enum_value_expression(expr.name)
                 if expr.name in self.current_identifier_aliases:
                     return self.current_identifier_aliases[expr.name]
                 return self.generate_glsl_identifier_expression(expr.name)
@@ -16992,7 +19100,7 @@ complex64_t crossgl_complex64_mod_assign(
             if expr.name in self.current_resource_aliases:
                 return self.current_resource_aliases[expr.name]["expression"]
             if expr.name in getattr(self, "enum_variant_constants", {}):
-                return enum_value_expression(self, expr.name)
+                return self.glsl_enum_value_expression(expr.name)
             if expr.name in self.current_identifier_aliases:
                 return self.current_identifier_aliases[expr.name]
             return self.generate_glsl_identifier_expression(expr.name)
@@ -17041,7 +19149,7 @@ complex64_t crossgl_complex64_mod_assign(
             if option_none_comparison is not None:
                 return option_none_comparison
             vector_relational = self.generate_vector_relational_expression(
-                expr.left, op, expr.right
+                expr.left, op, expr.right, source_node=expr
             )
             if vector_relational is not None:
                 return vector_relational
@@ -17061,7 +19169,11 @@ complex64_t crossgl_complex64_mod_assign(
                     right_type,
                 )
             operand_types = self.glsl_binary_operand_conversion_types(
-                left_type, right_type, op
+                left_type,
+                right_type,
+                op,
+                source_node=expr,
+                fail_closed=True,
             )
             if operand_types is not None:
                 left_expected, right_expected = operand_types
@@ -17200,7 +19312,7 @@ complex64_t crossgl_complex64_mod_assign(
             else:
                 return str(expr)
         elif isinstance(expr, ConstructorNode):
-            enum_constructor = generate_enum_constructor_expression(self, expr)
+            enum_constructor = self.glsl_enum_constructor_expression(expr)
             if enum_constructor is not None:
                 return enum_constructor
             constructor = generate_struct_constructor_expression(self, expr)
@@ -17284,6 +19396,14 @@ complex64_t crossgl_complex64_mod_assign(
             if reciprocal_call is not None:
                 return reciprocal_call
 
+            boolean_order_call = self.glsl_ordered_boolean_minmax_call(
+                original_func_name,
+                expr.args,
+                source_location=getattr(expr, "source_location", None),
+            )
+            if boolean_order_call is not None:
+                return boolean_order_call
+
             bitcast_call = self.generate_bitcast_call(original_func_name, expr.args)
             if bitcast_call is not None:
                 return bitcast_call
@@ -17314,8 +19434,8 @@ complex64_t crossgl_complex64_mod_assign(
             if static_generic_call is not None:
                 return static_generic_call
 
-            enum_constructor = generate_enum_constructor_call(
-                self, original_func_name, expr.args
+            enum_constructor = self.glsl_enum_constructor_call(
+                original_func_name, expr.args
             )
             if enum_constructor is not None:
                 return enum_constructor
@@ -17343,9 +19463,17 @@ complex64_t crossgl_complex64_mod_assign(
             )
             resource_call_args = list(expr.args)
             resolved_overload = None
+            specialized_source_name = specialized_func_name
             if specialized_func_name is not None:
-                func_name = specialized_func_name
-                callee = specialized_func_name
+                specialized_definition = self.function_definitions.get(
+                    specialized_func_name
+                )
+                func_name = (
+                    self.glsl_function_declaration_name(specialized_definition)
+                    if specialized_definition is not None
+                    else self.glsl_module_identifier_name(specialized_func_name)
+                )
+                callee = func_name
                 resource_call_args = generic_function_value_arguments(
                     self,
                     original_func_name,
@@ -17360,7 +19488,7 @@ complex64_t crossgl_complex64_mod_assign(
                     "concrete instantiation before GLSL generation"
                 )
 
-            resource_lookup_name = func_name
+            resource_lookup_name = specialized_source_name or func_name
             private_materialized_call_name = None
             if specialized_func_name is None:
                 resolved_overload = self.resolve_glsl_function_overload(
@@ -17387,6 +19515,15 @@ complex64_t crossgl_complex64_mod_assign(
 
             constructor = self.glsl_constructor_type(func_name)
             if constructor:
+                partial_vector_constructor = (
+                    self.generate_glsl_partial_vector_constructor(
+                        expr,
+                        constructor,
+                        original_func_name,
+                    )
+                )
+                if partial_vector_constructor is not None:
+                    return partial_vector_constructor
                 converted_constructor = self.glsl_struct_constructor_conversion(
                     expr,
                     constructor,
@@ -17395,7 +19532,7 @@ complex64_t crossgl_complex64_mod_assign(
                 if converted_constructor is not None:
                     return converted_constructor
                 constructor_fields = list(
-                    self.struct_member_types.get(constructor, {}).values()
+                    self.glsl_struct_member_types(constructor).values()
                 )
                 args = ", ".join(
                     self.generate_expression_with_expected(
@@ -17440,8 +19577,8 @@ complex64_t crossgl_complex64_mod_assign(
                 )
             )
             if resource_specialization is not None:
-                func_name = resource_specialization.name
-                callee = resource_specialization.name
+                func_name = self.glsl_function_declaration_name(resource_specialization)
+                callee = func_name
                 argument_func_name = func_name
                 argument_parameter_infos = None
                 call_args = self.glsl_resource_specialized_call_arguments(
@@ -17575,25 +19712,22 @@ complex64_t crossgl_complex64_mod_assign(
             condition = self.generate_expression(expr.condition)
             true_type = self.glsl_source_expression_type(expr.true_expr)
             false_type = self.glsl_source_expression_type(expr.false_expr)
-            if self.glsl_source_type_signature(
-                true_type
-            ) == self.glsl_source_type_signature(false_type):
-                conditional_type = true_type
-            else:
-                conditional_type = self.glsl_common_arithmetic_type(
-                    true_type,
-                    false_type,
-                    "?:",
-                )
-            if conditional_type is None:
+            plan = self.glsl_arithmetic_conversion_plan(
+                true_type,
+                false_type,
+                "?:",
+                source_node=expr,
+                fail_closed=True,
+            )
+            if plan is None:
                 true_expr = self.generate_expression(expr.true_expr)
                 false_expr = self.generate_expression(expr.false_expr)
             else:
                 true_expr = self.generate_expression_with_expected(
-                    expr.true_expr, conditional_type
+                    expr.true_expr, plan.left_target_type
                 )
                 false_expr = self.generate_expression_with_expected(
-                    expr.false_expr, conditional_type
+                    expr.false_expr, plan.right_target_type
                 )
             return f"({condition} ? {true_expr} : {false_expr})"
         else:
@@ -18837,9 +20971,11 @@ complex64_t crossgl_complex64_mod_assign(
         if not object_type:
             return member_name
         struct_name, _array_suffix = split_array_type_suffix(object_type)
-        if struct_name not in self.structs_by_name:
+        struct_name = self.glsl_source_type_identifier_name(struct_name)
+        member_map = self.glsl_struct_member_name_map(struct_name)
+        if not member_map:
             return member_name
-        return self.glsl_struct_member_name(struct_name, member_name)
+        return member_map.get(member_name, member_name)
 
     def expression_name(self, expr):
         if isinstance(expr, str):
@@ -18995,8 +21131,22 @@ complex64_t crossgl_complex64_mod_assign(
 
         self.glsl_function_overloads_by_name = groups
         self.glsl_function_target_names = {}
-        used_names = set(groups)
-        used_names.update(reserved_names)
+
+        for function_name, declarations in groups.items():
+            target_name = self.glsl_module_identifier_name(function_name)
+            if target_name == function_name:
+                continue
+            for declaration in declarations:
+                self.glsl_function_target_names[id(declaration)] = target_name
+            representative = next(
+                (
+                    declaration
+                    for declaration in declarations
+                    if getattr(declaration, "body", None) is not None
+                ),
+                declarations[0],
+            )
+            self.register_glsl_function_target_metadata(target_name, representative)
 
         for function_name, overloads in groups.items():
             mapped_groups = {}
@@ -19033,12 +21183,10 @@ complex64_t crossgl_complex64_mod_assign(
                 for source_key, declarations in source_groups.items():
                     suffix = self.glsl_function_overload_suffix(source_key)
                     base_name = f"{function_name}_{suffix}"
-                    target_name = base_name
-                    suffix_index = 2
-                    while target_name in used_names:
-                        target_name = f"{base_name}_{suffix_index}"
-                        suffix_index += 1
-                    used_names.add(target_name)
+                    target_name = self.glsl_generated_module_identifier(
+                        ("mapped-overload", function_name, source_key),
+                        base_name,
+                    )
                     for declaration in declarations:
                         self.glsl_function_target_names[id(declaration)] = target_name
                     representative = next(
@@ -19208,9 +21356,10 @@ complex64_t crossgl_complex64_mod_assign(
             )
 
     def glsl_function_declaration_name(self, function):
-        return self.glsl_function_target_names.get(
-            id(function), getattr(function, "name", "")
-        )
+        target_name = self.glsl_function_target_names.get(id(function))
+        if target_name is not None:
+            return target_name
+        return self.glsl_module_identifier_name(getattr(function, "name", ""))
 
     def register_glsl_function_graph_scope(self, function, *, stage_context=None):
         if function is not None:
@@ -23283,13 +25432,11 @@ complex64_t crossgl_complex64_mod_assign(
             used_names = self.collect_glsl_function_local_identifier_names(function)
             base_names = {}
             for parameter in private_parameters:
-                base_name = f"{parameter.name}_base"
-                while (
-                    base_name in used_names
-                    or base_name in self.GLSL_RESERVED_IDENTIFIERS
-                    or base_name in self.GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS
-                ):
-                    base_name += "_"
+                base_name = self.glsl_unique_identifier(
+                    f"{parameter.name}_base",
+                    used_names,
+                    extra_reserved=self.GLSL_ALIAS_TARGET_LOCAL_IDENTIFIERS,
+                )
                 used_names.add(base_name)
                 base_names[parameter.name] = base_name
             pointer_base_names[function_key] = base_names
@@ -23369,6 +25516,16 @@ complex64_t crossgl_complex64_mod_assign(
 
         self.function_private_pointer_required_spans = required_spans
         self.function_private_pointer_view_calls = view_calls
+        for caller_key, calls in view_calls.items():
+            if not calls or caller_key not in pointer_parameters:
+                continue
+            function = functions_by_key[caller_key]
+            self.glsl_attach_private_pointer_correlated_view_contracts(
+                function,
+                caller_key,
+                calls,
+                self.visible_literal_int_constants(function),
+            )
         for calls in view_calls.values():
             for call in calls:
                 seen_backing_roots = {}
@@ -23490,6 +25647,8 @@ complex64_t crossgl_complex64_mod_assign(
                     for parameter_name, binding in call["bindings"].items():
                         span = callee_spans.get(parameter_name, 0)
                         if span <= 0 or binding.get("root_kind") != "parameter":
+                            continue
+                        if binding.get("correlated_access_contract") is not None:
                             continue
                         _lower, upper = (
                             self.glsl_private_pointer_binding_offset_interval(
@@ -24056,6 +26215,884 @@ complex64_t crossgl_complex64_mod_assign(
 
         visit(getattr(function, "body", []), initial_bindings, initial_intervals)
         return calls
+
+    def glsl_private_pointer_affine_form(self, expression, forms, constants):
+        value = self.literal_int_value(expression, constants)
+        if value is not None:
+            return value, ()
+        if expression is None:
+            return None
+        if isinstance(expression, str):
+            return forms.get(expression)
+        if isinstance(expression, (IdentifierNode, VariableNode)):
+            return forms.get(getattr(expression, "name", None))
+        if isinstance(expression, UnaryOpNode):
+            if expression.op in {"++", "--"}:
+                return None
+            operand = self.glsl_private_pointer_affine_form(
+                expression.operand, forms, constants
+            )
+            if operand is None:
+                return None
+            if expression.op == "+":
+                return operand
+            if expression.op == "-":
+                return self.glsl_private_pointer_scale_affine_form(operand, -1)
+            return None
+        if isinstance(expression, BinaryOpNode):
+            if expression.op in {"+", "-"}:
+                left = self.glsl_private_pointer_affine_form(
+                    expression.left, forms, constants
+                )
+                right = self.glsl_private_pointer_affine_form(
+                    expression.right, forms, constants
+                )
+                return self.glsl_private_pointer_combine_affine_forms(
+                    left,
+                    right,
+                    -1 if expression.op == "-" else 1,
+                )
+            if expression.op != "*":
+                return None
+            left_coefficient = self.literal_int_value(expression.left, constants)
+            right_coefficient = self.literal_int_value(expression.right, constants)
+            if left_coefficient is not None:
+                affine = self.glsl_private_pointer_affine_form(
+                    expression.right, forms, constants
+                )
+                return self.glsl_private_pointer_scale_affine_form(
+                    affine, left_coefficient
+                )
+            if right_coefficient is not None:
+                affine = self.glsl_private_pointer_affine_form(
+                    expression.left, forms, constants
+                )
+                return self.glsl_private_pointer_scale_affine_form(
+                    affine, right_coefficient
+                )
+            return None
+        if isinstance(expression, FunctionCallNode):
+            function_name = self.function_call_name(expression)
+            arguments = list(
+                getattr(expression, "arguments", getattr(expression, "args", [])) or []
+            )
+            if (
+                function_name
+                in {
+                    "int",
+                    "uint",
+                    "short",
+                    "ushort",
+                    "int16",
+                    "uint16",
+                    "int32_t",
+                    "uint32_t",
+                    "size_t",
+                    "ptrdiff_t",
+                }
+                and len(arguments) == 1
+            ):
+                return self.glsl_private_pointer_affine_form(
+                    arguments[0], forms, constants
+                )
+        return None
+
+    def glsl_private_pointer_combine_affine_forms(self, left, right, right_scale=1):
+        if left is None or right is None:
+            return None
+        coefficients = dict(left[1])
+        for symbol, coefficient in right[1]:
+            coefficients[symbol] = coefficients.get(symbol, 0) + (
+                right_scale * coefficient
+            )
+            if coefficients[symbol] == 0:
+                del coefficients[symbol]
+        return (
+            left[0] + right_scale * right[0],
+            tuple(sorted(coefficients.items())),
+        )
+
+    def glsl_private_pointer_scale_affine_form(self, form, coefficient):
+        if form is None:
+            return None
+        return (
+            form[0] * coefficient,
+            tuple(
+                (symbol, value * coefficient)
+                for symbol, value in form[1]
+                if value * coefficient != 0
+            ),
+        )
+
+    def glsl_private_pointer_contract_expression_key(
+        self, expression, value_keys, constants
+    ):
+        value = self.literal_int_value(expression, constants)
+        if value is not None:
+            return "literal", value
+        if expression is None:
+            return None
+        if isinstance(expression, str):
+            return value_keys.get(expression, ("name", expression))
+        if isinstance(expression, (IdentifierNode, VariableNode)):
+            name = getattr(expression, "name", None)
+            return value_keys.get(name, ("name", name))
+        if isinstance(expression, UnaryOpNode):
+            if expression.op in {"++", "--"}:
+                return None
+            operand = self.glsl_private_pointer_contract_expression_key(
+                expression.operand, value_keys, constants
+            )
+            return None if operand is None else ("unary", expression.op, operand)
+        if isinstance(expression, BinaryOpNode):
+            left = self.glsl_private_pointer_contract_expression_key(
+                expression.left, value_keys, constants
+            )
+            right = self.glsl_private_pointer_contract_expression_key(
+                expression.right, value_keys, constants
+            )
+            if left is None or right is None:
+                return None
+            return "binary", expression.op, left, right
+        if isinstance(expression, TernaryOpNode):
+            condition = self.glsl_private_pointer_contract_expression_key(
+                expression.condition, value_keys, constants
+            )
+            true_value = self.glsl_private_pointer_contract_expression_key(
+                expression.true_expr, value_keys, constants
+            )
+            false_value = self.glsl_private_pointer_contract_expression_key(
+                expression.false_expr, value_keys, constants
+            )
+            if condition is None or true_value is None or false_value is None:
+                return None
+            return "ternary", condition, true_value, false_value
+        if isinstance(expression, FunctionCallNode):
+            function_name = self.function_call_name(expression)
+            arguments = list(
+                getattr(expression, "arguments", getattr(expression, "args", [])) or []
+            )
+            if (
+                function_name
+                in {
+                    "int",
+                    "uint",
+                    "short",
+                    "ushort",
+                    "int16",
+                    "uint16",
+                    "int32_t",
+                    "uint32_t",
+                    "size_t",
+                    "ptrdiff_t",
+                }
+                and len(arguments) == 1
+            ):
+                argument = self.glsl_private_pointer_contract_expression_key(
+                    arguments[0], value_keys, constants
+                )
+                return None if argument is None else ("cast", function_name, argument)
+        return None
+
+    def glsl_private_pointer_symbolic_offset(
+        self,
+        expression,
+        pointer_roots,
+        forms,
+        constants,
+    ):
+        if isinstance(expression, str):
+            return (expression, (0, ())) if expression in pointer_roots else None
+        if isinstance(expression, (IdentifierNode, VariableNode)):
+            name = getattr(expression, "name", None)
+            return (name, (0, ())) if name in pointer_roots else None
+        if isinstance(expression, UnaryOpNode) and expression.op == "&":
+            if not isinstance(expression.operand, ArrayAccessNode):
+                return None
+            binding = self.glsl_private_pointer_symbolic_offset(
+                expression.operand.array,
+                pointer_roots,
+                forms,
+                constants,
+            )
+            delta = self.glsl_private_pointer_affine_form(
+                expression.operand.index, forms, constants
+            )
+            if binding is None or delta is None:
+                return None
+            return (
+                binding[0],
+                self.glsl_private_pointer_combine_affine_forms(binding[1], delta),
+            )
+        if not isinstance(expression, BinaryOpNode) or expression.op not in {"+", "-"}:
+            return None
+        binding = self.glsl_private_pointer_symbolic_offset(
+            expression.left,
+            pointer_roots,
+            forms,
+            constants,
+        )
+        delta_expression = expression.right
+        operator = expression.op
+        if binding is None and expression.op == "+":
+            binding = self.glsl_private_pointer_symbolic_offset(
+                expression.right,
+                pointer_roots,
+                forms,
+                constants,
+            )
+            delta_expression = expression.left
+        delta = self.glsl_private_pointer_affine_form(
+            delta_expression, forms, constants
+        )
+        if binding is None or delta is None:
+            return None
+        return (
+            binding[0],
+            self.glsl_private_pointer_combine_affine_forms(
+                binding[1], delta, -1 if operator == "-" else 1
+            ),
+        )
+
+    def glsl_private_pointer_correlated_loop_contract(
+        self,
+        node,
+        intervals,
+        value_keys,
+        constants,
+        active_loops,
+    ):
+        init = getattr(node, "init", None)
+        loop_name = getattr(init, "name", None)
+        start = intervals.get(loop_name)
+        if not loop_name or start is None or start[0] != start[1]:
+            return None
+        condition = getattr(node, "condition", None)
+        if not isinstance(condition, BinaryOpNode):
+            return None
+        left_name = self.expression_name(condition.left)
+        right_name = self.expression_name(condition.right)
+        operator = condition.op
+        if left_name == loop_name:
+            bound_expression = condition.right
+        elif right_name == loop_name:
+            bound_expression = condition.left
+            operator = {"<": ">", "<=": ">=", ">": "<", ">=": "<="}.get(operator)
+        else:
+            return None
+        update = getattr(node, "update", None)
+        if not (
+            isinstance(update, UnaryOpNode)
+            and self.expression_name(update.operand) == loop_name
+            and update.op == "++"
+            and operator in {"<", "<="}
+        ):
+            return None
+        bound_key = self.glsl_private_pointer_contract_expression_key(
+            bound_expression, value_keys, constants
+        )
+        if bound_key is None:
+            return None
+        interval_name, interval = self.glsl_private_pointer_loop_interval(
+            node, intervals, constants
+        )
+        if interval_name != loop_name:
+            interval = None
+        parent_keys = tuple(loop["key"] for loop in active_loops.values())
+        key = (loop_name, start[0], operator, bound_key, 1, parent_keys)
+        symbol = repr(("loop", key))
+        return {
+            "key": key,
+            "symbol": symbol,
+            "interval": interval,
+            "lower_bound": start[0],
+        }
+
+    def glsl_attach_private_pointer_correlated_view_contracts(
+        self,
+        function,
+        function_key,
+        calls,
+        constants,
+    ):
+        """Attach same-backing access witnesses to otherwise symbolic views."""
+
+        pointer_roots = set(
+            self.function_private_pointer_element_types.get(function_key, {})
+        )
+        full_span_roots = self.function_private_pointer_full_span_parameters.get(
+            function_key, set()
+        )
+        if not pointer_roots or not full_span_roots:
+            return
+
+        intervals = {}
+        forms = {}
+        value_keys = {}
+        for name, value in constants.items():
+            literal = self.literal_int_value(value, constants)
+            if literal is None:
+                continue
+            intervals[name] = (literal, literal)
+            forms[name] = (literal, ())
+            value_keys[name] = ("literal", literal)
+        for parameter in getattr(function, "parameters", []) or []:
+            name = getattr(parameter, "name", None)
+            if not name or name in pointer_roots:
+                continue
+            symbol = f"value:{name}"
+            forms[name] = (0, ((symbol, 1),))
+            value_keys[name] = ("value", name)
+
+        calls_by_id = {id(call["node"]): call for call in calls}
+        call_footprints = []
+        access_footprints = []
+
+        def modified_names(value):
+            names = set()
+            for child in self.walk_ast(value):
+                if isinstance(child, AssignmentNode):
+                    target = getattr(child, "target", getattr(child, "left", None))
+                    if isinstance(target, (str, IdentifierNode, VariableNode)):
+                        name = self.expression_name(target)
+                        if name:
+                            names.add(name)
+                elif isinstance(child, UnaryOpNode) and child.op in {"++", "--"}:
+                    name = self.expression_name(child.operand)
+                    if name:
+                        names.add(name)
+            return names
+
+        def set_name_value(
+            name,
+            expression,
+            operator,
+            active_forms,
+            active_value_keys,
+            active_intervals,
+            source,
+        ):
+            affine = self.glsl_private_pointer_affine_form(
+                expression, active_forms, constants
+            )
+            value_key = self.glsl_private_pointer_contract_expression_key(
+                expression, active_value_keys, constants
+            )
+            interval = self.glsl_private_pointer_interval(
+                expression, active_intervals, constants
+            )
+            if operator != "=":
+                scale = 1 if operator == "+=" else -1 if operator == "-=" else None
+                if scale is None:
+                    affine = None
+                    interval = None
+                    value_key = None
+                else:
+                    affine = self.glsl_private_pointer_combine_affine_forms(
+                        active_forms.get(name), affine, scale
+                    )
+                    current_interval = active_intervals.get(name)
+                    if current_interval is None or interval is None:
+                        interval = None
+                    elif scale > 0:
+                        interval = (
+                            current_interval[0] + interval[0],
+                            current_interval[1] + interval[1],
+                        )
+                    else:
+                        interval = (
+                            current_interval[0] - interval[1],
+                            current_interval[1] - interval[0],
+                        )
+                    current_key = active_value_keys.get(name)
+                    value_key = (
+                        None
+                        if current_key is None or value_key is None
+                        else ("binary", operator[0], current_key, value_key)
+                    )
+            if affine is None:
+                active_forms.pop(name, None)
+            else:
+                active_forms[name] = affine
+            if interval is None:
+                active_intervals.pop(name, None)
+            else:
+                active_intervals[name] = interval
+            active_value_keys[name] = (
+                value_key if value_key is not None else ("unknown", id(source), name)
+            )
+
+        def record_call(
+            node,
+            active_forms,
+            active_loops,
+            active_predicates,
+            active_pointer_roots,
+        ):
+            call = calls_by_id.get(id(node))
+            if call is None:
+                return
+            arguments = list(
+                getattr(node, "arguments", getattr(node, "args", [])) or []
+            )
+            parameter_indices = self.function_private_pointer_parameter_indices.get(
+                call["callee"], {}
+            )
+            for index, parameter_name in parameter_indices.items():
+                binding = call["bindings"].get(parameter_name, {})
+                if (
+                    binding.get("root_kind") != "parameter"
+                    or binding.get("offset_interval") is not None
+                    or binding.get("side_effecting")
+                    or binding.get("root") not in full_span_roots
+                    or parameter_name
+                    in self.function_private_pointer_full_span_parameters.get(
+                        call["callee"], set()
+                    )
+                ):
+                    continue
+                argument = arguments[index] if index < len(arguments) else None
+                symbolic = self.glsl_private_pointer_symbolic_offset(
+                    argument,
+                    active_pointer_roots,
+                    active_forms,
+                    constants,
+                )
+                if symbolic is None or symbolic[0] != binding.get("root"):
+                    continue
+                call_footprints.append(
+                    {
+                        "binding": binding,
+                        "call": call,
+                        "parameter": parameter_name,
+                        "root": symbolic[0],
+                        "form": symbolic[1],
+                        "loops": dict(active_loops),
+                        "predicates": tuple(active_predicates),
+                    }
+                )
+
+        def record_access(
+            node,
+            active_forms,
+            active_loops,
+            active_predicates,
+            active_pointer_roots,
+        ):
+            symbolic = self.glsl_private_pointer_symbolic_offset(
+                node.array,
+                active_pointer_roots,
+                active_forms,
+                constants,
+            )
+            index = self.glsl_private_pointer_affine_form(
+                node.index, active_forms, constants
+            )
+            if symbolic is None or index is None or symbolic[0] not in full_span_roots:
+                return
+            access_footprints.append(
+                {
+                    "root": symbolic[0],
+                    "form": self.glsl_private_pointer_combine_affine_forms(
+                        symbolic[1], index
+                    ),
+                    "loops": dict(active_loops),
+                    "predicates": tuple(active_predicates),
+                    "source_location": getattr(node, "source_location", None),
+                }
+            )
+
+        def visit(
+            value,
+            active_forms,
+            active_value_keys,
+            active_intervals,
+            active_loops,
+            active_predicates,
+            active_pointer_roots,
+        ):
+            if value is None or isinstance(value, (str, int, float, bool)):
+                return
+            if isinstance(value, (list, tuple)):
+                for item in value:
+                    visit(
+                        item,
+                        active_forms,
+                        active_value_keys,
+                        active_intervals,
+                        active_loops,
+                        active_predicates,
+                        active_pointer_roots,
+                    )
+                return
+            if isinstance(value, BlockNode):
+                block_forms = dict(active_forms)
+                block_value_keys = dict(active_value_keys)
+                block_intervals = dict(active_intervals)
+                block_roots = set(active_pointer_roots)
+                for statement in getattr(value, "statements", []) or []:
+                    visit(
+                        statement,
+                        block_forms,
+                        block_value_keys,
+                        block_intervals,
+                        active_loops,
+                        active_predicates,
+                        block_roots,
+                    )
+                return
+            if isinstance(value, (VariableNode, ArrayNode)):
+                initial_value = getattr(value, "initial_value", None)
+                visit(
+                    initial_value,
+                    active_forms,
+                    active_value_keys,
+                    active_intervals,
+                    active_loops,
+                    active_predicates,
+                    active_pointer_roots,
+                )
+                name = getattr(value, "name", None)
+                if name:
+                    set_name_value(
+                        name,
+                        initial_value,
+                        "=",
+                        active_forms,
+                        active_value_keys,
+                        active_intervals,
+                        value,
+                    )
+                    active_pointer_roots.discard(name)
+                return
+            if isinstance(value, AssignmentNode):
+                target = getattr(value, "target", getattr(value, "left", None))
+                assigned = getattr(value, "value", getattr(value, "right", None))
+                visit(
+                    target,
+                    active_forms,
+                    active_value_keys,
+                    active_intervals,
+                    active_loops,
+                    active_predicates,
+                    active_pointer_roots,
+                )
+                visit(
+                    assigned,
+                    active_forms,
+                    active_value_keys,
+                    active_intervals,
+                    active_loops,
+                    active_predicates,
+                    active_pointer_roots,
+                )
+                if isinstance(target, (str, IdentifierNode, VariableNode)):
+                    name = self.expression_name(target)
+                    if name:
+                        set_name_value(
+                            name,
+                            assigned,
+                            getattr(value, "operator", "="),
+                            active_forms,
+                            active_value_keys,
+                            active_intervals,
+                            value,
+                        )
+                return
+            if isinstance(value, FunctionCallNode):
+                record_call(
+                    value,
+                    active_forms,
+                    active_loops,
+                    active_predicates,
+                    active_pointer_roots,
+                )
+                for argument in (
+                    getattr(value, "arguments", getattr(value, "args", [])) or []
+                ):
+                    visit(
+                        argument,
+                        active_forms,
+                        active_value_keys,
+                        active_intervals,
+                        active_loops,
+                        active_predicates,
+                        active_pointer_roots,
+                    )
+                return
+            if isinstance(value, ArrayAccessNode):
+                record_access(
+                    value,
+                    active_forms,
+                    active_loops,
+                    active_predicates,
+                    active_pointer_roots,
+                )
+                visit(
+                    value.array,
+                    active_forms,
+                    active_value_keys,
+                    active_intervals,
+                    active_loops,
+                    active_predicates,
+                    active_pointer_roots,
+                )
+                visit(
+                    value.index,
+                    active_forms,
+                    active_value_keys,
+                    active_intervals,
+                    active_loops,
+                    active_predicates,
+                    active_pointer_roots,
+                )
+                return
+            if isinstance(value, IfNode):
+                condition = getattr(value, "condition", None)
+                visit(
+                    condition,
+                    active_forms,
+                    active_value_keys,
+                    active_intervals,
+                    active_loops,
+                    active_predicates,
+                    active_pointer_roots,
+                )
+                condition_key = self.glsl_private_pointer_contract_expression_key(
+                    condition, active_value_keys, constants
+                )
+                if condition_key is None:
+                    condition_key = ("unknown-condition", id(value))
+                visit(
+                    getattr(value, "then_branch", None),
+                    dict(active_forms),
+                    dict(active_value_keys),
+                    dict(active_intervals),
+                    active_loops,
+                    (*active_predicates, (condition_key, True)),
+                    set(active_pointer_roots),
+                )
+                visit(
+                    getattr(value, "else_branch", None),
+                    dict(active_forms),
+                    dict(active_value_keys),
+                    dict(active_intervals),
+                    active_loops,
+                    (*active_predicates, (condition_key, False)),
+                    set(active_pointer_roots),
+                )
+                for name in modified_names(value):
+                    active_forms.pop(name, None)
+                    active_intervals.pop(name, None)
+                    active_value_keys[name] = ("unknown", id(value), name)
+                return
+            if isinstance(value, ForNode):
+                loop_forms = dict(active_forms)
+                loop_value_keys = dict(active_value_keys)
+                loop_intervals = dict(active_intervals)
+                loop_roots = set(active_pointer_roots)
+                visit(
+                    getattr(value, "init", None),
+                    loop_forms,
+                    loop_value_keys,
+                    loop_intervals,
+                    active_loops,
+                    active_predicates,
+                    loop_roots,
+                )
+                loop_contract = self.glsl_private_pointer_correlated_loop_contract(
+                    value,
+                    loop_intervals,
+                    loop_value_keys,
+                    constants,
+                    active_loops,
+                )
+                loop_name = getattr(getattr(value, "init", None), "name", None)
+                nested_loops = dict(active_loops)
+                if loop_contract is not None and loop_name:
+                    symbol = loop_contract["symbol"]
+                    loop_forms[loop_name] = (0, ((symbol, 1),))
+                    loop_value_keys[loop_name] = ("loop", loop_contract["key"])
+                    nested_loops[symbol] = loop_contract
+                elif loop_name:
+                    loop_forms.pop(loop_name, None)
+                    loop_value_keys[loop_name] = ("unknown-loop", id(value))
+                    loop_intervals.pop(loop_name, None)
+                visit(
+                    getattr(value, "condition", None),
+                    loop_forms,
+                    loop_value_keys,
+                    loop_intervals,
+                    nested_loops,
+                    active_predicates,
+                    loop_roots,
+                )
+                visit(
+                    getattr(value, "body", None),
+                    loop_forms,
+                    loop_value_keys,
+                    loop_intervals,
+                    nested_loops,
+                    active_predicates,
+                    loop_roots,
+                )
+                visit(
+                    getattr(value, "update", None),
+                    loop_forms,
+                    loop_value_keys,
+                    loop_intervals,
+                    nested_loops,
+                    active_predicates,
+                    loop_roots,
+                )
+                for name in modified_names(value):
+                    active_forms.pop(name, None)
+                    active_intervals.pop(name, None)
+                    active_value_keys[name] = ("unknown", id(value), name)
+                return
+            if isinstance(value, (ForInNode, WhileNode, DoWhileNode, LoopNode)):
+                loop_forms = {
+                    name: form
+                    for name, form in active_forms.items()
+                    if name not in modified_names(value)
+                }
+                visit(
+                    getattr(value, "iterable", None),
+                    loop_forms,
+                    dict(active_value_keys),
+                    dict(active_intervals),
+                    active_loops,
+                    active_predicates,
+                    set(active_pointer_roots),
+                )
+                visit(
+                    getattr(value, "condition", None),
+                    loop_forms,
+                    dict(active_value_keys),
+                    dict(active_intervals),
+                    active_loops,
+                    active_predicates,
+                    set(active_pointer_roots),
+                )
+                visit(
+                    getattr(value, "body", None),
+                    loop_forms,
+                    dict(active_value_keys),
+                    dict(active_intervals),
+                    active_loops,
+                    active_predicates,
+                    set(active_pointer_roots),
+                )
+                return
+            if isinstance(value, UnaryOpNode):
+                visit(
+                    value.operand,
+                    active_forms,
+                    active_value_keys,
+                    active_intervals,
+                    active_loops,
+                    active_predicates,
+                    active_pointer_roots,
+                )
+                if value.op in {"++", "--"}:
+                    name = self.expression_name(value.operand)
+                    if name:
+                        active_forms.pop(name, None)
+                        active_intervals.pop(name, None)
+                        active_value_keys[name] = ("unknown", id(value), name)
+                return
+            if not hasattr(value, "__dict__"):
+                return
+            for key, child in vars(value).items():
+                if key in {
+                    "parent",
+                    "annotations",
+                    "args",
+                    "name",
+                    "left",
+                    "right",
+                    "array",
+                    "index",
+                    "if_condition",
+                    "if_body",
+                    "else_body",
+                }:
+                    continue
+                visit(
+                    child,
+                    active_forms,
+                    active_value_keys,
+                    active_intervals,
+                    active_loops,
+                    active_predicates,
+                    active_pointer_roots,
+                )
+
+        visit(
+            getattr(function, "body", []),
+            forms,
+            value_keys,
+            intervals,
+            {},
+            (),
+            pointer_roots,
+        )
+
+        for footprint in call_footprints:
+            if not self.glsl_private_pointer_offset_is_nonnegative(footprint):
+                continue
+            for access in access_footprints:
+                covered_span = self.glsl_private_pointer_access_covered_span(
+                    footprint, access
+                )
+                if covered_span is not None:
+                    footprint["binding"]["correlated_access_contract"] = {
+                        "span": covered_span,
+                        "source_location": access["source_location"],
+                    }
+                    break
+
+    def glsl_private_pointer_offset_is_nonnegative(self, footprint):
+        constant, terms = footprint["form"]
+        minimum = constant
+        for symbol, coefficient in terms:
+            loop = footprint["loops"].get(symbol)
+            if loop is None or coefficient < 0 or loop["lower_bound"] < 0:
+                return False
+            minimum += coefficient * loop["lower_bound"]
+        return minimum >= 0
+
+    def glsl_private_pointer_access_covered_span(self, footprint, access):
+        if (
+            access["root"] != footprint["root"]
+            or access["predicates"] != footprint["predicates"]
+        ):
+            return None
+        for symbol, _coefficient in footprint["form"][1]:
+            loop = footprint["loops"].get(symbol)
+            if (
+                loop is not None
+                and access["loops"].get(symbol, {}).get("key") != loop["key"]
+            ):
+                return None
+        difference = self.glsl_private_pointer_combine_affine_forms(
+            access["form"], footprint["form"], -1
+        )
+        if difference == (0, ()):
+            return 1
+        if difference is None or difference[0] != 0 or len(difference[1]) != 1:
+            return None
+        coverage_symbol, coefficient = difference[1][0]
+        coverage_loop = access["loops"].get(coverage_symbol)
+        if (
+            coefficient != 1
+            or coverage_symbol in dict(footprint["form"][1])
+            or coverage_loop is None
+            or coverage_loop["interval"] is None
+            or coverage_loop["interval"][0] != 0
+        ):
+            return None
+        return coverage_loop["interval"][1] + 1
 
     def glsl_private_pointer_expression_has_side_effects(self, expression):
         if expression is None or isinstance(expression, (str, int, float, bool)):
@@ -24857,6 +27894,8 @@ complex64_t crossgl_complex64_mod_assign(
             reason = "side-effecting-view-offset"
         elif require_exact and not isinstance(exact_offset, int):
             reason = "unprovable-view-offset"
+        elif binding.get("correlated_access_contract") is not None:
+            return None
         elif not (
             isinstance(interval, tuple)
             and len(interval) == 2
@@ -24967,6 +28006,33 @@ complex64_t crossgl_complex64_mod_assign(
                     source_location=getattr(call.get("node"), "source_location", None),
                 )
             return
+        correlated_contract = binding.get("correlated_access_contract")
+        if correlated_contract is not None:
+            covered_span = correlated_contract["span"]
+            if (
+                parameter_name
+                not in self.function_private_pointer_full_span_parameters.get(
+                    call["callee"], set()
+                )
+                and required_span <= covered_span
+                and required_span <= extent
+            ):
+                return
+            if required_span > extent:
+                display_name = self.glsl_private_pointer_display_name(call["callee"])
+                backing_name = binding.get("root") or "unknown"
+                raise OpenGLPrivatePointerParameterError(
+                    "OpenGL private pointer view "
+                    f"'{display_name}.{parameter_name}' requires at least "
+                    f"{required_span} elements, but backing array "
+                    f"'{backing_name}' has extent {extent}",
+                    function_name=display_name,
+                    parameter_name=parameter_name,
+                    reason="view-out-of-bounds",
+                    source_location=getattr(call.get("node"), "source_location", None),
+                )
+            binding = dict(binding)
+            binding.pop("correlated_access_contract", None)
         lower_offset, upper_offset = self.glsl_private_pointer_binding_offset_interval(
             call, parameter_name, binding
         )
@@ -25720,7 +28786,7 @@ complex64_t crossgl_complex64_mod_assign(
             return f"{mapped_type}(0)"
         if mapped_type.startswith(("vec", "dvec", "mat", "dmat")):
             return f"{mapped_type}(0.0)"
-        struct = self.structs_by_name.get(mapped_type)
+        struct = self.glsl_struct_node(mapped_type)
         if struct is not None:
             member_values = []
             for member in getattr(struct, "members", []) or []:
@@ -25802,47 +28868,59 @@ complex64_t crossgl_complex64_mod_assign(
         memory_qualifiers = self.structured_buffer_memory_qualifiers(vtype, node)
         qualifier_prefix = f"{memory_qualifiers} " if memory_qualifiers else ""
         layout = self.glsl_resource_layout_prefix("std430", binding=binding)
+        block_name = self.glsl_generated_module_identifier(
+            ("structured-buffer-block", name),
+            f"{name}Buffer",
+        )
         if array_size is not None:
             instance_member = "data"
             self.structured_buffer_instance_members[name] = instance_member
             array_suffix = f"[{array_size}]" if array_size else "[]"
             return (
                 f"{layout} {qualifier_prefix}buffer "
-                f"{name}Buffer {{ {element_type} {instance_member}[]; }} "
+                f"{block_name} {{ {element_type} {instance_member}[]; }} "
                 f"{name}{array_suffix};\n"
             )
         return (
             f"{layout} {qualifier_prefix}buffer "
-            f"{name}Buffer {{ {element_type} {name}[]; }};\n"
+            f"{block_name} {{ {element_type} {name}[]; }};\n"
         )
 
     def structured_buffer_counter_resource_name(self, name):
-        return f"{name}Counter"
+        return self.glsl_generated_module_identifier(
+            ("structured-buffer-counter", name),
+            f"{name}Counter",
+        )
 
     def structured_buffer_counter_parameter_name(self, name):
-        return f"{name}Counter"
+        return self.glsl_synthetic_local_identifier(f"{name}Counter")
 
     def structured_buffer_counter_block_declaration(
         self, name, binding, array_size=None
     ):
         counter_member = self.structured_buffer_counter_resource_name(name)
+        block_name = self.glsl_generated_module_identifier(
+            ("structured-buffer-counter-block", name),
+            f"{name}CounterBuffer",
+        )
         if array_size is not None:
             counter_member = "counter"
-            counter_instance = f"{name}Counters"
+            counter_instance = self.glsl_generated_module_identifier(
+                ("structured-buffer-counter-instance", name),
+                f"{name}Counters",
+            )
             self.structured_buffer_counter_members[name] = counter_member
             self.structured_buffer_counter_instances[name] = counter_instance
             array_suffix = f"[{array_size}]" if array_size else "[]"
             layout = self.glsl_resource_layout_prefix("std430", binding=binding)
             return (
-                f"{layout} buffer {name}CounterBuffer "
+                f"{layout} buffer {block_name} "
                 f"{{ uint {counter_member}[]; }} {counter_instance}{array_suffix};\n"
             )
 
         self.structured_buffer_counter_members[name] = counter_member
         layout = self.glsl_resource_layout_prefix("std430", binding=binding)
-        return (
-            f"{layout} buffer {name}CounterBuffer " f"{{ uint {counter_member}[]; }};\n"
-        )
+        return f"{layout} buffer {block_name} " f"{{ uint {counter_member}[]; }};\n"
 
     def glsl_buffer_block_attribute(self, node):
         for attr in getattr(node, "attributes", []) or []:
@@ -26026,30 +29104,38 @@ complex64_t crossgl_complex64_mod_assign(
     def reserve_glsl_interface_block_name(self, qualifier, name):
         if not name:
             return
+        emitted_name = (
+            str(name)
+            if str(name) in self.GLSL_BUILTIN_INTERFACE_BLOCK_NAMES
+            else self.glsl_module_identifier_name(name)
+        )
         self.glsl_interface_block_names_by_qualifier.setdefault(
             str(qualifier).lower(), set()
-        ).add(str(name))
+        ).add(emitted_name)
 
     def unique_glsl_interface_block_name(self, qualifier, source_name, instance_name):
         qualifier = str(qualifier).lower()
         used_names = self.glsl_interface_block_names_by_qualifier.setdefault(
             qualifier, set()
         )
-        source_name = sanitize_type_name(str(source_name)) or "InterfaceBlock"
-        if (
-            source_name not in used_names
-            and source_name not in self.GLSL_RESERVED_IDENTIFIERS
+        if str(source_name) in self.GLSL_BUILTIN_INTERFACE_BLOCK_NAMES:
+            return str(source_name)
+        source_name = self.glsl_sanitized_identifier_base(
+            source_name,
+            fallback="InterfaceBlock",
+        )
+        if source_name not in used_names and not self.glsl_identifier_requires_escape(
+            source_name
         ):
             used_names.add(source_name)
             return source_name
 
-        instance_name = sanitize_type_name(str(instance_name)) or "instance"
+        instance_name = self.glsl_sanitized_identifier_base(
+            instance_name,
+            fallback="instance",
+        )
         base_name = f"{source_name}_{instance_name}"
-        candidate = base_name
-        suffix = 2
-        while candidate in used_names or candidate in self.GLSL_RESERVED_IDENTIFIERS:
-            candidate = f"{base_name}_{suffix}"
-            suffix += 1
+        candidate = self.glsl_unique_identifier(base_name, used_names)
         used_names.add(candidate)
         return candidate
 
@@ -26344,9 +29430,10 @@ complex64_t crossgl_complex64_mod_assign(
         return vtype, resource_count
 
     def global_resource_binding_metadata(self, node):
-        var_name = self.resource_node_name(node)
-        if not var_name:
+        source_var_name = self.resource_node_name(node)
+        if not source_var_name:
             return None
+        var_name = self.glsl_global_identifier_name(source_var_name)
 
         vtype, resource_count = self.global_resource_shape(node)
         if self.is_glsl_buffer_block_variable(node, vtype):
@@ -26360,7 +29447,7 @@ complex64_t crossgl_complex64_mod_assign(
         else:
             mapped_type = self.map_resource_type_with_format(vtype, node)
             if mapped_type == "sampler":
-                if not self.should_preserve_sampler_resource(var_name):
+                if not self.should_preserve_sampler_resource(source_var_name):
                     return None
                 namespace = "sampler binding"
             elif not self.is_opaque_resource_type(mapped_type):
@@ -26699,23 +29786,26 @@ complex64_t crossgl_complex64_mod_assign(
 
         generic_enum_type = generic_enum_specialized_type_name(self, vtype_str)
         if generic_enum_type is not None:
-            return generic_enum_type
+            return self.glsl_type_identifier_name(generic_enum_type)
 
         generic_struct_type = generic_struct_specialized_type_name(self, vtype_str)
         if generic_struct_type is not None:
-            return generic_struct_type
+            return self.glsl_type_identifier_name(generic_struct_type)
 
         materialized_generic_type = self.materialized_generic_type_name(vtype_str)
         if materialized_generic_type is not None:
-            return materialized_generic_type
+            return self.glsl_type_identifier_name(materialized_generic_type)
 
         if vtype_str in getattr(self, "enum_type_names", set()):
             return "int"
 
         if vtype_str in getattr(self, "enum_struct_type_names", set()):
-            return vtype_str
+            return self.glsl_type_identifier_name(vtype_str)
 
-        return self.type_mapping.get(vtype_str, vtype_str)
+        mapped_type = self.type_mapping.get(vtype_str, vtype_str)
+        if mapped_type == vtype_str and vtype_str in self.glsl_type_identifier_names:
+            return self.glsl_type_identifier_name(vtype_str)
+        return mapped_type
 
     def resolve_glsl_type_alias(self, type_name):
         aliases = getattr(self, "current_type_aliases", {})
@@ -28287,7 +31377,8 @@ complex64_t crossgl_complex64_mod_assign(
         if not instance_args:
             return ""
 
-        instance_name = self.attribute_value_to_string(instance_args[0])
+        source_instance_name = self.attribute_value_to_string(instance_args[0])
+        instance_name = self.glsl_global_identifier_name(source_instance_name)
         array_attr = self.glsl_attribute(node, "glsl_interface_array")
         array_suffix = ""
         if array_attr is not None:
@@ -28305,27 +31396,30 @@ complex64_t crossgl_complex64_mod_assign(
     def glsl_struct_member_name_map(self, struct_name):
         if not struct_name:
             return {}
+        struct_name = self.glsl_source_type_identifier_name(struct_name)
         if struct_name in self.struct_member_name_maps:
             return self.struct_member_name_maps[struct_name]
 
         struct = self.structs_by_name.get(struct_name)
-        member_names = [
-            getattr(member, "name", None)
-            for member in getattr(struct, "members", []) or []
-        ]
+        if struct is not None:
+            member_names = [
+                getattr(member, "name", None)
+                for member in getattr(struct, "members", []) or []
+            ]
+        else:
+            member_names = list(self.struct_member_types.get(struct_name, {}))
+            for enum in self.struct_payload_enums:
+                if enum.name == struct_name:
+                    member_names = [
+                        "variant",
+                        *(
+                            field_name
+                            for field_name, _ in enum_struct_fields(enum) or []
+                        ),
+                    ]
+                    break
         member_names = [name for name in member_names if name]
-        used_names = set()
-        member_map = {}
-        for name in member_names:
-            candidate = name
-            if candidate in self.GLSL_RESERVED_IDENTIFIERS or candidate in used_names:
-                candidate = f"{name}_"
-                suffix = 1
-                while candidate in used_names:
-                    suffix += 1
-                    candidate = f"{name}_{suffix}"
-            member_map[name] = candidate
-            used_names.add(candidate)
+        member_map = self.glsl_identifier_map(member_names)
 
         self.struct_member_name_maps[struct_name] = member_map
         return member_map
@@ -28336,13 +31430,22 @@ complex64_t crossgl_complex64_mod_assign(
         )
 
     def generate_glsl_interface_block_member_declaration(
-        self, member, indent="    ", struct_name=None
+        self,
+        member,
+        indent="    ",
+        struct_name=None,
+        members_are_global=False,
+        builtin_block=False,
     ):
         qualifier = self.glsl_variable_qualifier_prefix(member)
         qualifier = f"{qualifier} " if qualifier else ""
-        member_name = self.glsl_struct_member_name(
-            struct_name, getattr(member, "name", "")
-        )
+        source_member_name = getattr(member, "name", "")
+        if builtin_block and source_member_name.startswith("gl_"):
+            member_name = source_member_name
+        elif members_are_global:
+            member_name = self.glsl_global_identifier_name(source_member_name)
+        else:
+            member_name = self.glsl_struct_member_name(struct_name, source_member_name)
 
         if isinstance(member, ArrayNode):
             element_type = getattr(
@@ -28378,13 +31481,24 @@ complex64_t crossgl_complex64_mod_assign(
         if qualifier_prefix:
             qualifier_prefix += " "
 
-        block_name = self.glsl_interface_block_name(node)
+        source_block_name = self.glsl_interface_block_name(node)
+        block_name = (
+            source_block_name
+            if source_block_name in self.GLSL_BUILTIN_INTERFACE_BLOCK_NAMES
+            else self.glsl_module_identifier_name(source_block_name)
+        )
+        instance_suffix = self.glsl_interface_block_instance_suffix(node)
         code = f"{layout}{qualifier_prefix}{block_name} {{\n"
         for member in getattr(node, "members", []) or []:
             code += self.generate_glsl_interface_block_member_declaration(
-                member, struct_name=node.name
+                member,
+                struct_name=node.name,
+                members_are_global=not instance_suffix,
+                builtin_block=(
+                    source_block_name in self.GLSL_BUILTIN_INTERFACE_BLOCK_NAMES
+                ),
             )
-        code += f"}}{self.glsl_interface_block_instance_suffix(node)};\n"
+        code += f"}}{instance_suffix};\n"
         return code
 
     def generate_struct_member_declaration(
@@ -28427,7 +31541,7 @@ complex64_t crossgl_complex64_mod_assign(
         return f"{indent}float {member_name};\n"
 
     def generate_struct(self, node):
-        code = f"struct {node.name} {{\n"
+        code = f"struct {self.glsl_type_identifier_name(node.name)} {{\n"
         members = [
             member
             for member in getattr(node, "members", []) or []

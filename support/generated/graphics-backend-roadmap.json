@@ -23,9 +23,13 @@
         },
         "opengl": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_reserved_identifiers_are_sanitized_consistently",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_reserved_identifier_mapping_preserves_scope_and_source_names",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_builtin_interface_block_members_preserve_builtin_names",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_reserved_identifiers_validate_without_warnings"
           ],
-          "notes": "",
+          "notes": "OpenGL target output applies deterministic, collision-free GLSL identifier remapping to user and generated symbols, including target-reserved gl_ and consecutive-underscore spellings, while preserving declared builtin interface names and source provenance, with warning-fatal glslang and SPIR-V validation coverage.",
           "status": "supported"
         }
       }
@@ -1313,9 +1317,11 @@
           "evidence": [
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_generic_struct_concrete_constructor_and_member_access",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_zero_fills_partial_aggregate_initializers",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_zero_fills_partial_vector_initializers_without_repeating_values",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_partial_vector_initializers_validate_with_glslang_and_spirv_val",
             "tests/test_translator/test_native_runtime_drivers.py::def test_runtime_parity_glsl_partial_aggregate_executes_on_vulkan"
           ],
-          "notes": "OpenGL lowers struct declarations, member access, initialization, and return values. Contextual braced initializers preserve trailing value initialization recursively through nested structs and fixed arrays, with generated-code validation and native compute runtime coverage.",
+          "notes": "OpenGL lowers struct declarations, member access, initialization, and return values. Contextual braced initializers preserve trailing value initialization recursively through nested structs, fixed arrays, and vectors; Metal-materialized partial vector constructors count supplied scalar and vector components and append type-correct zeros without repeating expression evaluation. Generated-code validation and native compute runtime coverage exercise the lowering.",
           "status": "supported"
         }
       }
@@ -1328,9 +1334,12 @@
       "support": {
         "directx": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_array_handling"
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_array_handling",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_codegen_lowers_fixed_array_value_locals_and_indexing",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_fixed_array_value_locals_validate_with_dxc",
+            "tests/test_translator/test_project_translation.py::def test_metal_fixed_array_value_locals_match_direct_and_project_directx"
           ],
-          "notes": "",
+          "notes": "DirectX preserves native HLSL arrays for storage while lowering fixed-array return values to scalar-compatible vectors or generated carrier structs. Matching local declarations and initializers use the same value representation, retain source array types for overload resolution, and preserve constant and dynamic indexing. Direct and project Metal translation plus official DXC validation cover the value-local contract.",
           "status": "supported"
         },
         "metal": {
@@ -1431,9 +1440,14 @@
       "support": {
         "directx": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_while_switch_and_void_return_emit_c_style_syntax"
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_while_switch_and_void_return_emit_c_style_syntax",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_for_in_fixed_arrays_materialize_once_and_preserve_element_types",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_for_in_reduced_side_effecting_subarray_selector_is_evaluated_once",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_for_in_unknown_or_user_defined_iterables_are_structured_diagnostics",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_for_in_mutable_reference_binding_is_structured_diagnostic",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_fixed_array_for_in_validates_with_dxc"
           ],
-          "notes": "",
+          "notes": "DirectX control-flow lowering preserves integer-bound counted loops and lowers fixed-array for-in iteration by source element value across scalar, vector, struct, and nested-array elements. Fixed-array container expressions are materialized once, immutable binding qualifiers are preserved, and mutable-reference, unknown-extent, unresolved, and user-defined iterable contracts produce structured diagnostics. Official DXC validation covers the generated compute shader.",
           "status": "supported"
         },
         "metal": {
@@ -1445,9 +1459,13 @@
         },
         "opengl": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_while_switch_and_void_return_emit_c_style_syntax"
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_while_switch_and_void_return_emit_c_style_syntax",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_for_in_fixed_arrays_bind_source_element_types_and_evaluate_once",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_for_in_unknown_or_user_defined_iterables_are_structured_diagnostics",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_for_in_mutable_reference_binding_is_structured_diagnostic",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_fixed_array_for_in_validates_with_glslang_and_spirv_val"
           ],
-          "notes": "",
+          "notes": "GLSL control-flow lowering includes fixed-array for-in iteration by source element value across scalar, vector, struct, and nested-array elements. Container expressions are evaluated once, source element types and immutable binding qualifiers are preserved, mutable-reference and unresolved iterable contracts are structured diagnostics, WebGL reuses the same lowering, and glslang/spirv-val validation covers the generated compute shader.",
           "status": "supported"
         }
       }
@@ -2304,6 +2322,41 @@
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_root_overrides"
           ],
           "notes": "The project pipeline batches discovered units through the existing single-file translator, normalizes duplicate explicit targets, rejects empty CLI target overrides, applies source backend overrides and command-scoped source-root overrides, preserves repository-relative target and variant output paths, refuses to write artifacts outside the repository, records unsupported target diagnostics and per-artifact failures, records artifact matrix emitted, translated, failed, missing, extra, and completion counts with target and variant rollups, and has real translator coverage for multiple units, all supported target backends, and variants. External corpus coverage is tracked separately from core batch translation support.",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "project",
+      "description": "Select one materialized source entry and emit an independently loadable artifact with deterministic identity, path, provenance, and reflected interface metadata.",
+      "id": "project.entry_scoped_artifacts",
+      "name": "Entry-scoped project artifacts",
+      "support": {
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
+          ],
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
+          "status": "validated_rejection"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
+          ],
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
+          "status": "validated_rejection"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_entry_scoped_generation_keeps_only_selected_interface_and_helpers",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_entry_scoped_generation_reports_available_entries",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_emits_entry_scoped_opengl_artifact_and_reflection",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_keeps_aggregate_opengl_output_without_entry_selection",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_missing_selected_opengl_entry",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_requires_configured_entry_point_metadata",
+            "tests/test_mlx_porting_harness.py::def test_arange_opengl_check_confirms_native_validation"
+          ],
+          "notes": "Project configuration selects one materialized compute entry, emits a standalone GLSL main artifact at a deterministic entry path, retains only the selected stage interface and reachable helpers, records source-to-target entry identity in report and validation records, preserves provenance and source maps, and exposes an entry-scoped reflected runtime interface. Aggregate output remains unchanged when no entry is selected. The pinned MLX arangeuint32 proof compiles and executes through Mesa OpenGL with exact uint32 readback on Linux CI.",
           "status": "supported"
         }
       }
@@ -3239,9 +3292,106 @@
             "tests/test_translator/test_runtime_verification.py::def test_runtime_parity_native_adapter_reports_validation_failure",
             "tests/test_translator/test_runtime_verification.py::def test_runtime_parity_native_adapter_reports_dispatch_failure",
             "tests/test_translator/test_runtime_verification.py::def test_runtime_parity_native_adapter_reports_numerical_mismatch",
+            "tests/test_translator/test_runtime_verification.py::def test_runtime_parity_native_opengl_adapter_compiles_specialization_to_spirv",
+            "tests/test_translator/test_runtime_verification.py::def test_runtime_parity_native_opengl_adapter_preserves_uniform_source_path",
+            "tests/test_translator/test_native_runtime_drivers.py::def test_opengl_compute_runtime_reports_missing_spirv_extension",
+            "tests/test_translator/test_native_runtime_drivers.py::def test_opengl_compute_runtime_specializes_typed_values_and_binds_uniforms",
+            "tests/test_translator/test_native_runtime_drivers.py::def test_prepare_opengl_specializations_rejects_invalid_ids_types_and_values",
+            "tests/test_translator/test_native_runtime_drivers.py::def test_opengl_compute_runtime_specializes_generated_spirv_on_device",
             "tests/test_translator/test_runtime_verification.py::def test_default_runtime_test_adapters_cover_native_platform_classes"
           ],
-          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. OpenGL native runtime parity adapters add reusable adapter-backed execution with GLSL validation command orchestration, fixture resource and constant binding, dispatch/readback driver contracts, and distinct unavailable platform/tooling, setup, validation, dispatch, and comparison mismatch reporting. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, ambiguous selectors, and selected-artifact runtime metadata readiness counts while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, hard-code a validation corpus, or require native runtime execution when dependencies are unavailable.",
+          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. OpenGL native runtime parity adapters add reusable adapter-backed execution with GLSL validation command orchestration, fixture resource and constant binding, dispatch/readback driver contracts, and distinct unavailable platform/tooling, setup, validation, dispatch, and comparison mismatch reporting. Specialization-bearing OpenGL compute artifacts compile to OpenGL SPIR-V, require OpenGL 4.6 or GL_ARB_gl_spirv plus the shader-binary and specialization entry points, apply bool and 32-bit signed, unsigned, or floating scalar values by numeric ID, keep ordinary uniforms on a separate binding path, and report applied values with provenance; artifacts without deferred specialization retain the GLSL source path. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, ambiguous selectors, and selected-artifact runtime metadata readiness counts while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, hard-code a validation corpus, or require native runtime execution when dependencies are unavailable.",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "project",
+      "description": "Execute repository-agnostic project test-runner plans with validated, project-root-contained environment setup.",
+      "id": "project.test_runner_environment",
+      "name": "Project test-runner environment execution",
+      "support": {
+        "directx": {
+          "evidence": [
+            "tests/test_project_test_runner.py::def test_runtime_adapter_requirements_use_plan_environment",
+            "tests/test_project_test_runner.py::def test_project_test_runner_applies_environment_and_ordered_setup",
+            "tests/test_project_test_runner.py::def test_project_test_runner_reports_setup_failure_and_skips_dependent_commands",
+            "tests/test_project_test_runner.py::def test_project_test_runner_does_not_interpret_string_setup_commands_with_shell",
+            "tests/test_project_test_runner.py::def test_project_test_runner_rejects_working_directory_escape",
+            "tests/test_project_test_runner.py::def test_project_cli_round_trips_test_runner_environment"
+          ],
+          "notes": "execute-test-runner validates saved environment contracts, resolves environment and command working directories beneath an explicit project root, merges configured variables for setup and test subprocesses, executes setup argv in declaration order without an implicit shell, skips dependent commands after setup failure, and reports setup logs plus applied variable names without configured values. Required adapter tools and environment variables retain deterministic structured skips. The runner does not install dependencies or hard-code repository or backend setup.",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_project_test_runner.py::def test_runtime_adapter_requirements_use_plan_environment",
+            "tests/test_project_test_runner.py::def test_project_test_runner_applies_environment_and_ordered_setup",
+            "tests/test_project_test_runner.py::def test_project_test_runner_reports_setup_failure_and_skips_dependent_commands",
+            "tests/test_project_test_runner.py::def test_project_test_runner_does_not_interpret_string_setup_commands_with_shell",
+            "tests/test_project_test_runner.py::def test_project_test_runner_rejects_working_directory_escape",
+            "tests/test_project_test_runner.py::def test_project_cli_round_trips_test_runner_environment"
+          ],
+          "notes": "execute-test-runner validates saved environment contracts, resolves environment and command working directories beneath an explicit project root, merges configured variables for setup and test subprocesses, executes setup argv in declaration order without an implicit shell, skips dependent commands after setup failure, and reports setup logs plus applied variable names without configured values. Required adapter tools and environment variables retain deterministic structured skips. The runner does not install dependencies or hard-code repository or backend setup.",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_project_test_runner.py::def test_runtime_adapter_requirements_use_plan_environment",
+            "tests/test_project_test_runner.py::def test_project_test_runner_applies_environment_and_ordered_setup",
+            "tests/test_project_test_runner.py::def test_project_test_runner_reports_setup_failure_and_skips_dependent_commands",
+            "tests/test_project_test_runner.py::def test_project_test_runner_does_not_interpret_string_setup_commands_with_shell",
+            "tests/test_project_test_runner.py::def test_project_test_runner_rejects_working_directory_escape",
+            "tests/test_project_test_runner.py::def test_project_cli_round_trips_test_runner_environment"
+          ],
+          "notes": "execute-test-runner validates saved environment contracts, resolves environment and command working directories beneath an explicit project root, merges configured variables for setup and test subprocesses, executes setup argv in declaration order without an implicit shell, skips dependent commands after setup failure, and reports setup logs plus applied variable names without configured values. Required adapter tools and environment variables retain deterministic structured skips. The runner does not install dependencies or hard-code repository or backend setup.",
+          "status": "supported"
+        }
+      }
+    },
+    {
+      "category": "project",
+      "description": "Emit deterministic exact-lookup runtime variant registries from ready runtime packages or loader manifests.",
+      "id": "project.runtime_variant_registry",
+      "name": "Runtime variant registry",
+      "support": {
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_loader_blockers",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_malformed_inputs_and_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_cli_json_and_text"
+          ],
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_loader_blockers",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_malformed_inputs_and_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_cli_json_and_text"
+          ],
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "status": "supported"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_loader_blockers",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_malformed_inputs_and_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_cli_json_and_text"
+          ],
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
           "status": "supported"
         }
       }
@@ -4412,28 +4562,28 @@
         "validated_rejection": 0
       }
     },
-    "feature_count": 70,
+    "feature_count": 73,
     "status_counts": {
       "directx": {
         "diagnostic": 2,
         "partial": 0,
-        "supported": 68,
+        "supported": 70,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 0
+        "validated_rejection": 1
       },
       "metal": {
         "diagnostic": 4,
         "partial": 0,
-        "supported": 66,
+        "supported": 68,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 0
+        "validated_rejection": 1
       },
       "opengl": {
         "diagnostic": 2,
         "partial": 0,
-        "supported": 68,
+        "supported": 71,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0

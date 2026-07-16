@@ -160,14 +160,9 @@ def test_parse_specialization_constant_layout_roundtrip():
 
     glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
 
-    assert "layout(constant_id" not in glsl
-    assert (
-        "/* CrossGL fallback: OpenGL source validation cannot preserve "
-        "specialization constant id 0 for 'LIGHTING_MODEL'; using the default "
-        "literal. */"
-    ) in glsl
-    assert "const int LIGHTING_MODEL = 0;" in glsl
-    assert "const uint MAX_LIGHTS = 4u;" in glsl
+    assert "layout(constant_id = 0) const int LIGHTING_MODEL = 0;" in glsl
+    assert "layout(constant_id = 1) const uint MAX_LIGHTS = 4u;" in glsl
+    assert "CrossGL fallback" not in glsl
 
 
 def test_codegen_stage_layout_integer_constant_expression_values():

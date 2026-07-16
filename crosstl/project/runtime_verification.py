@@ -282,9 +282,14 @@ class RuntimeSpecializationConstant:
     constant_id: Any = None
     kind: str = "specialization-constant"
     dtype: str | None = None
+    source_type: str | None = None
     value: Any = None
     default: Any = None
     required: bool = False
+    overridden: bool | None = None
+    override_status: str | None = None
+    status: str | None = None
+    value_provenance: Mapping[str, Any] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:
@@ -295,10 +300,20 @@ class RuntimeSpecializationConstant:
             payload["id"] = self.constant_id
         if self.dtype is not None:
             payload["dtype"] = self.dtype
+        if self.source_type is not None:
+            payload["sourceType"] = self.source_type
         if self.value is not None:
             payload["value"] = self.value
         if self.default is not None:
             payload["default"] = self.default
+        if self.overridden is not None:
+            payload["overridden"] = self.overridden
+        if self.override_status is not None:
+            payload["overrideStatus"] = self.override_status
+        if self.status is not None:
+            payload["status"] = self.status
+        if self.value_provenance:
+            payload["valueProvenance"] = dict(self.value_provenance)
         if self.metadata:
             payload["metadata"] = dict(self.metadata)
         return payload
@@ -1467,7 +1482,7 @@ class DirectXRuntimeParityAdapter(NativeRuntimeParityAdapter):
     target = "directx"
     targets = ("directx",)
     required_tools = ("dxc",)
-    supported_platforms = ("win32", "cygwin")
+    supported_platforms = ("win32",)
 
     def validation_commands(
         self,
@@ -1517,8 +1532,48 @@ class OpenGLRuntimeParityAdapter(NativeRuntimeParityAdapter):
         *,
         temp_dir: Path,
     ) -> tuple[NativeRuntimeValidationCommand, ...]:
-        _ = temp_dir
         stage = _native_glsl_stage(state, artifact_path)
+        if _opengl_runtime_specialization_bindings(state):
+            if stage != "comp":
+                raise RuntimeAdapterSetupError(
+                    "OpenGL SPIR-V specialization runtime supports compute artifacts only.",
+                    details={
+                        "target": self.target,
+                        "artifactPath": str(artifact_path),
+                        "stage": stage,
+                        "reasonKind": "specialization-stage-unsupported",
+                    },
+                )
+            entry_point = _native_entry_point_name(state) or "main"
+            if entry_point != "main":
+                raise RuntimeAdapterSetupError(
+                    "OpenGL specialization runtime artifacts must expose their selected entry point as main.",
+                    details={
+                        "target": self.target,
+                        "artifactPath": str(artifact_path),
+                        "entryPoint": entry_point,
+                        "reasonKind": "specialization-entry-point-unsupported",
+                    },
+                )
+            output_path = temp_dir / f"{artifact_path.stem}.spv"
+            return (
+                NativeRuntimeValidationCommand(
+                    command=(
+                        self._tool_command("glslangValidator"),
+                        "--target-env",
+                        "opengl",
+                        "-S",
+                        stage,
+                        "-e",
+                        entry_point,
+                        "-o",
+                        str(output_path),
+                        str(artifact_path),
+                    ),
+                    action="compile-glsl-to-opengl-spirv-for-runtime",
+                    module_path=output_path,
+                ),
+            )
         return (
             NativeRuntimeValidationCommand(
                 command=(
@@ -1530,6 +1585,41 @@ class OpenGLRuntimeParityAdapter(NativeRuntimeParityAdapter):
                 action="validate-glsl-for-opengl-runtime",
             ),
         )
+
+    def _prepare_dispatch_request(
+        self, state: RuntimeExecutionState, artifact_path: Path, module_path: Path
+    ) -> NativeRuntimeDispatchRequest:
+        prepared = super()._prepare_dispatch_request(
+            state,
+            artifact_path,
+            module_path,
+        )
+        specialization_constants = {
+            name: binding
+            for name, binding in prepared.constants.items()
+            if _opengl_runtime_constant_is_specialization(binding.constant)
+        }
+        uniforms = {
+            name: binding
+            for name, binding in prepared.constants.items()
+            if not _opengl_runtime_constant_is_specialization(binding.constant)
+        }
+        details = {
+            "specializationConstantCount": len(specialization_constants),
+            "specializationConstantIds": [
+                binding.constant.constant_id
+                for _name, binding in sorted(specialization_constants.items())
+            ],
+            "uniformConstantCount": len(uniforms),
+            "uniformConstants": sorted(uniforms),
+        }
+        state.details["openglRuntimeConstants"] = details
+        state.record_step(
+            "bind",
+            "classify-opengl-runtime-constants",
+            details={"target": self.target, **details},
+        )
+        return prepared
 
 
 class VulkanRuntimeParityAdapter(NativeRuntimeParityAdapter):
@@ -1593,6 +1683,14 @@ def native_runtime_parity_adapter(
     if adapter_class is None:
         raise RuntimeVerificationError(
             f"Native runtime parity adapter is not available for {target}."
+        )
+    if runtime is None and normalized in {"directx", "opengl"}:
+        from .native_runtime_drivers import DirectXComputeRuntime, OpenGLComputeRuntime
+
+        runtime = (
+            DirectXComputeRuntime()
+            if normalized == "directx"
+            else OpenGLComputeRuntime()
         )
     return adapter_class(runtime=runtime, **kwargs)
 
@@ -3251,7 +3349,10 @@ def _runtime_test_plan_case(
     execution_plan = prepare_runtime_execution(request)
     diagnostics = list(execution_plan.diagnostics)
     missing = _missing_platform_requirements(test_case.platform_requirements)
-    if missing["tools"] or missing["environment"]:
+    if _runtime_diagnostics_have_errors(diagnostics):
+        status = RUNTIME_FAILED
+        failure_phase = "runtime-setup"
+    elif missing["tools"] or missing["environment"]:
         diagnostics.append(
             _runtime_test_platform_skip_diagnostic(
                 test_case,
@@ -3261,9 +3362,6 @@ def _runtime_test_plan_case(
         )
         status = SKIPPED
         failure_phase = "platform-requirements"
-    elif _runtime_diagnostics_have_errors(diagnostics):
-        status = RUNTIME_FAILED
-        failure_phase = "runtime-setup"
     else:
         status = "planned"
         failure_phase = None
@@ -3449,6 +3547,23 @@ def _native_entry_point_name(state: RuntimeExecutionState) -> str | None:
         return contract.entry_points[0].name
     entry_point = state.request.artifact.get("entryPoint")
     return entry_point if isinstance(entry_point, str) and entry_point.strip() else None
+
+
+def _opengl_runtime_constant_is_specialization(
+    constant: RuntimeSpecializationConstant,
+) -> bool:
+    kind = str(constant.kind or "").strip().lower().replace("_", "-")
+    return kind in {"specialization-constant", "function-constant"}
+
+
+def _opengl_runtime_specialization_bindings(
+    state: RuntimeExecutionState,
+) -> tuple[RuntimeBoundConstant, ...]:
+    return tuple(
+        binding
+        for binding in state.plan.constant_bindings
+        if _opengl_runtime_constant_is_specialization(binding.constant)
+    )
 
 
 def _native_hlsl_profile(state: RuntimeExecutionState) -> str:
@@ -3840,6 +3955,11 @@ def _parse_runtime_specialization_constant(
         raise RuntimeVerificationError(
             f"{field_name} must identify a constant by name or id."
         )
+    value_provenance = value.get("valueProvenance", {})
+    if not isinstance(value_provenance, Mapping):
+        raise RuntimeVerificationError(
+            f"{field_name}.valueProvenance must be an object."
+        )
     return RuntimeSpecializationConstant(
         name=name,
         constant_id=constant_id,
@@ -3847,12 +3967,31 @@ def _parse_runtime_specialization_constant(
             _optional_string(value.get("kind"), field_name=f"{field_name}.kind")
             or default_kind
         ),
-        dtype=_optional_string(value.get("dtype"), field_name=f"{field_name}.dtype"),
-        value=value.get("value"),
-        default=value.get("default"),
+        dtype=_optional_string(
+            value.get("dtype", value.get("sourceType")),
+            field_name=f"{field_name}.dtype",
+        ),
+        source_type=_optional_string(
+            value.get("sourceType"), field_name=f"{field_name}.sourceType"
+        ),
+        value=value.get("concreteValue", value.get("value")),
+        default=value.get("defaultValue", value.get("default")),
         required=_optional_bool(
             value.get("required", False), field_name=f"{field_name}.required"
         ),
+        overridden=(
+            _optional_bool(
+                value.get("overridden"), field_name=f"{field_name}.overridden"
+            )
+            if "overridden" in value
+            else None
+        ),
+        override_status=_optional_string(
+            value.get("overrideStatus"),
+            field_name=f"{field_name}.overrideStatus",
+        ),
+        status=_optional_string(value.get("status"), field_name=f"{field_name}.status"),
+        value_provenance=dict(value_provenance),
         metadata=_parse_runtime_contract_item_metadata(value, field_name=field_name),
     )
 
@@ -4652,17 +4791,45 @@ def _runtime_adapter_contract_with_diagnostics(
     fixture: RuntimeFixture, artifact: Mapping[str, Any]
 ) -> tuple[RuntimeAdapterContract, tuple[Mapping[str, Any], ...]]:
     artifact_contract = _runtime_adapter_contract_from_artifact(artifact)
+    explicit_contract = fixture.adapter_contract
+    contract_mode = _runtime_artifact_contract_mode(explicit_contract)
+    if contract_mode not in {"merge", "replace"}:
+        selection_contract = (
+            artifact_contract
+            if explicit_contract is None
+            else _merge_runtime_adapter_contract(artifact_contract, explicit_contract)
+        )
+        diagnostic = _runtime_execution_diagnostic(
+            "error",
+            "project.runtime-verification.artifact-contract-mode-invalid",
+            "Runtime fixture artifact contract mode must be merge or replace.",
+            artifact,
+            fixture=fixture.id,
+            reasonKind="artifact-contract-mode-invalid",
+            artifactContractMode=contract_mode,
+            supportedArtifactContractModes=["merge", "replace"],
+        )
+        return selection_contract, (diagnostic,)
+
+    replace_artifact_contract = (
+        contract_mode == "replace" and explicit_contract is not None
+    )
     selection_contract = (
-        artifact_contract
-        if fixture.adapter_contract is None
-        else _merge_runtime_adapter_contract(
-            artifact_contract, fixture.adapter_contract
+        explicit_contract
+        if replace_artifact_contract
+        else (
+            artifact_contract
+            if explicit_contract is None
+            else _merge_runtime_adapter_contract(artifact_contract, explicit_contract)
         )
     )
     selected_entry_point, selection_source = _runtime_selected_entry_point(
         fixture, selection_contract
     )
-    candidates = tuple(entry.name for entry in artifact_contract.entry_points)
+    candidate_contract = (
+        selection_contract if replace_artifact_contract else artifact_contract
+    )
+    candidates = tuple(entry.name for entry in candidate_contract.entry_points)
     if selected_entry_point is None:
         if len(candidates) <= 1:
             return selection_contract, ()
@@ -4703,7 +4870,7 @@ def _runtime_adapter_contract_with_diagnostics(
         return selection_contract, (diagnostic,)
 
     scoped_artifact, diagnostics = _scope_runtime_adapter_contract(
-        artifact_contract,
+        candidate_contract,
         fixture=fixture,
         artifact=artifact,
         selected_entry_point=selected_entry_point,
@@ -4711,7 +4878,7 @@ def _runtime_adapter_contract_with_diagnostics(
     )
     contract = (
         scoped_artifact
-        if fixture.adapter_contract is None
+        if explicit_contract is None or replace_artifact_contract
         else _merge_runtime_adapter_contract(scoped_artifact, fixture.adapter_contract)
     )
     return (
@@ -4722,6 +4889,17 @@ def _runtime_adapter_contract_with_diagnostics(
         ),
         diagnostics,
     )
+
+
+def _runtime_artifact_contract_mode(
+    contract: RuntimeAdapterContract | None,
+) -> str:
+    if contract is None:
+        return "merge"
+    value = contract.metadata.get("artifactContractMode", "merge")
+    if not isinstance(value, str):
+        return str(value)
+    return value.strip().lower()
 
 
 def _runtime_selected_entry_point(
@@ -4977,15 +5155,23 @@ def _runtime_adapter_contract_from_artifact(
         for index, binding in enumerate(resource_records)
         if isinstance(binding, Mapping)
     )
+    specialization_records = list(
+        _runtime_record_sequence(artifact.get("specializationConstants"))
+    )
+    if not specialization_records and isinstance(host_interface, Mapping):
+        specialization_records = list(
+            _runtime_record_sequence(host_interface.get("specializationConstants"))
+        )
+    if not specialization_records and isinstance(host_interface, Mapping):
+        specialization_records = [
+            constant
+            for constant in _runtime_record_sequence(host_interface.get("constants"))
+            if isinstance(constant, Mapping)
+            and str(constant.get("kind", "")).lower()
+            in {"function-constant", "specialization-constant"}
+        ]
     artifact_payload = {
-        "specializationConstants": [
-            *list(_runtime_record_sequence(artifact.get("specializationConstants"))),
-            *(
-                list(_runtime_record_sequence(host_interface.get("constants")))
-                if isinstance(host_interface, Mapping)
-                else []
-            ),
-        ],
+        "specializationConstants": specialization_records,
         "functionConstants": artifact.get("functionConstants", []),
     }
     manifest_contract = RuntimeAdapterContract(
@@ -5120,7 +5306,11 @@ def _merge_runtime_adapter_contract(
         specialization_constants=_merge_runtime_contract_items(
             base.specialization_constants,
             override.specialization_constants,
-            key=lambda item: item.name if item.name is not None else item.constant_id,
+            key=lambda item: (
+                ("id", item.constant_id)
+                if item.constant_id is not None
+                else ("name", item.name)
+            ),
         ),
         dispatch=_merge_runtime_dispatch(base.dispatch, override.dispatch),
         validation_hooks=_merge_runtime_contract_items(

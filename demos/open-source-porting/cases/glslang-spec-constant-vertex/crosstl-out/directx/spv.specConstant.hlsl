@@ -3,13 +3,12 @@ static const int arraySize = 5;
 static const bool spBool = true;
 static const float spFloat = 3.14;
 static const double spDouble = 3.141592653589793;
-static const uint scale = 2;
+static const uint scale = 2u;
 static const int dupArraySize = 12;
 static const bool spDupBool = true;
 static const float spDupFloat = 3.14;
 static const double spDupDouble = 3.141592653589793;
-static const uint dupScale = 2;
-
+static const uint dupScale = 2u;
 static const int gl_MaxImageUnits = 8;
 
 struct VertexInput {

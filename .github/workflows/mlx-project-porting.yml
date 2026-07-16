@@ -19,7 +19,11 @@ on:
       - "tests/test_translator/test_codegen/test_GLSL_codegen.py"
       - "tests/test_translator/test_codegen/test_SPIRV_codegen.py"
       - "tests/test_translator/test_codegen/test_directx_codegen.py"
+      - "tests/fixtures/runtime_verification/**"
+      - "tests/fixtures/project_porting/mlx/**"
+      - "tests/test_translator/test_native_runtime_drivers.py"
       - "tests/test_translator/test_project_translation.py"
+      - "tests/test_translator/test_runtime_verification.py"
   pull_request:
     branches: [main]
     paths:
@@ -34,7 +38,11 @@ on:
       - "tests/test_translator/test_codegen/test_GLSL_codegen.py"
       - "tests/test_translator/test_codegen/test_SPIRV_codegen.py"
       - "tests/test_translator/test_codegen/test_directx_codegen.py"
+      - "tests/fixtures/runtime_verification/**"
+      - "tests/fixtures/project_porting/mlx/**"
+      - "tests/test_translator/test_native_runtime_drivers.py"
       - "tests/test_translator/test_project_translation.py"
+      - "tests/test_translator/test_runtime_verification.py"
   schedule:
     - cron: "31 4 * * 1"
   workflow_dispatch:
@@ -73,7 +81,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y glslang-tools libvulkan1 mesa-vulkan-drivers spirv-tools vulkan-tools
+          sudo apt-get install -y glslang-tools libegl1 libgl1 libgl1-mesa-dri libglx-mesa0 libopengl0 mesa-vulkan-drivers spirv-tools vulkan-tools
           glslangValidator --version
 
       - name: Install Linux DXC
@@ -118,10 +126,14 @@ jobs:
           }
           $dxc.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
-      - name: Install Linux Vulkan runtime dependency
+      - name: Install Windows Direct3D runtime dependencies
+        if: runner.os == 'Windows'
+        run: python -m pip install -e ".[directx-runtime]" pytest-xdist
+
+      - name: Install Linux runtime dependencies
         if: runner.os == 'Linux'
         run: |
-          python -m pip install vulkan==1.3.275.1
+          python -m pip install moderngl==5.12.0 PyOpenGL==3.1.10 pytest-xdist vulkan==1.3.275.1
 
       - name: Checkout pinned MLX
         shell: bash
@@ -129,6 +141,7 @@ jobs:
           set -euo pipefail
           rm -rf mlx-upstream
           git clone --filter=blob:none --no-checkout https://github.com/ml-explore/mlx.git mlx-upstream
+          git -C mlx-upstream config core.autocrlf false
           git -C mlx-upstream sparse-checkout init --cone
           git -C mlx-upstream sparse-checkout set mlx/backend/metal/kernels
           git -C mlx-upstream checkout "$MLX_COMMIT"
@@ -144,6 +157,7 @@ jobs:
               --mlx-root mlx-upstream \
               --require-opengl-frontier-toolchain \
               --require-opengl-gemv-toolchain \
+              --require-opengl-native-runtime \
               --require-vulkan-gemv-toolchain \
               --require-vulkan-toolchain \
               --require-vulkan-native-runtime
@@ -160,6 +174,51 @@ jobs:
               --require-metal-toolchain
           fi
 
+      - name: Prove pinned MLX RMSNorm specialization variants
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            python demos/integrations/mlx/prove_rms_norm_specialization.py \
+              --mlx-root mlx-upstream \
+              --work-dir .crosstl-mlx-porting/rms-norm-specialization \
+              --require-directx-toolchain
+          elif [ "$RUNNER_OS" = "Linux" ]; then
+            python demos/integrations/mlx/prove_rms_norm_specialization.py \
+              --mlx-root mlx-upstream \
+              --work-dir .crosstl-mlx-porting/rms-norm-specialization \
+              --require-opengl-toolchain
+          else
+            python demos/integrations/mlx/prove_rms_norm_specialization.py \
+              --mlx-root mlx-upstream \
+              --work-dir .crosstl-mlx-porting/rms-norm-specialization
+          fi
+
+      - name: Prove Direct3D immutable lookup numerical execution
+        if: runner.os == 'Windows'
+        env:
+          CROSTL_RUN_DIRECTX_LOOKUP_DEVICE_TEST: "1"
+        run: python -m pytest -q -n auto tests/test_translator/test_native_runtime_drivers.py -k "directx_compute_runtime_executes_mlx_file_scope_lookup_on_device"
+
+      - name: Prove translated MLX arange Direct3D numerical execution
+        if: runner.os == 'Windows'
+        env:
+          CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-upstream
+          CROSTL_RUN_DIRECTX_MLX_ARANGE_DEVICE_TEST: "1"
+        run: python -m pytest -q -n auto tests/test_translator/test_native_runtime_drivers.py -k "directx_compute_runtime_executes_translated_pinned_mlx_arange_on_device"
+
+      - name: Prove OpenGL SPIR-V specialization runtime
+        if: runner.os == 'Linux'
+        env:
+          CROSTL_RUN_OPENGL_SPIRV_DEVICE_TEST: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          python -m pytest -q -n auto \
+            tests/test_translator/test_native_runtime_drivers.py \
+            -k "opengl_compute_runtime_specializes_generated_spirv_on_device"
+
       - name: Verify MLX frontier accounting
         shell: bash
         run: |
@@ -168,14 +227,30 @@ jobs:
           import os
           from pathlib import Path
 
+          from demos.integrations.mlx.run_mlx_porting import (
+              MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS,
+              MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES,
+              MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES,
+          )
+
           fence_source = "mlx/backend/metal/kernels/fence.metal"
           fence_issue = "https://github.com/CrossGL/crosstl/issues/1537"
-          opengl_frontier_sources = {
-              "mlx/backend/metal/kernels/arg_reduce.metal",
+          directx_frontier_sources = set(MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES)
+          directx_entry_point_counts = dict(
+              MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS
+          )
+          directx_frontier_count = len(directx_frontier_sources)
+          directx_entry_point_count = sum(directx_entry_point_counts.values())
+          opengl_frontier_sources = set(MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES)
+          opengl_frontier_count = len(opengl_frontier_sources)
+          required_opengl_promotions = {
               "mlx/backend/metal/kernels/binary_two.metal",
-              "mlx/backend/metal/kernels/logsumexp.metal",
-              "mlx/backend/metal/kernels/softmax.metal",
+              "mlx/backend/metal/kernels/ternary.metal",
           }
+          if not required_opengl_promotions <= opengl_frontier_sources:
+              raise SystemExit("required OpenGL frontier promotions are missing")
+          if opengl_frontier_count != 8:
+              raise SystemExit("expected 8 OpenGL toolchain frontier sources")
           payload = json.loads(
               Path("mlx-upstream/.crosstl-mlx-porting/summary.json").read_text(
                   encoding="utf-8"
@@ -288,27 +363,61 @@ jobs:
                       f"reference accessor {target} native validation must be "
                       f"{expected_status} on {os.environ['RUNNER_OS']}"
                   )
+          directx = checks["directx-vulkan-frontier"]
+          if (
+              set(directx["directxToolchainSources"])
+              != directx_frontier_sources
+              or directx["directxToolchainArtifactCount"]
+              != directx_frontier_count
+              or directx["directxToolchainExpectedEntryPointCounts"]
+              != directx_entry_point_counts
+              or directx["directxToolchainExpectedEntryPointCount"]
+              != directx_entry_point_count
+          ):
+              raise SystemExit("DirectX frontier accounting is incomplete")
+          if os.environ["RUNNER_OS"] == "Windows":
+              if (
+                  directx["directxToolchainRequired"] is not True
+                  or directx["directxValidationStatus"] != "validated"
+                  or directx["directxToolchainValidatedArtifactCount"]
+                  != directx_frontier_count
+                  or set(directx["directxToolchainValidatedSources"])
+                  != directx_frontier_sources
+                  or directx["directxToolchainValidatedEntryPointCounts"]
+                  != directx_entry_point_counts
+                  or directx["directxToolchainValidatedEntryPointCount"]
+                  != directx_entry_point_count
+                  or directx["toolchainRuns"] != directx_entry_point_count
+              ):
+                  raise SystemExit(
+                      "DirectX frontier toolchain must validate every configured "
+                      "source artifact and compute entry"
+                  )
           opengl = checks["opengl-frontier"]
           if set(opengl["sources"]) != opengl_frontier_sources:
-              raise SystemExit("expected 4 OpenGL toolchain frontier sources")
+              raise SystemExit("OpenGL toolchain frontier sources are incomplete")
           if (
-              opengl["sourceCount"] != 4
-              or opengl["artifactCount"] != 4
+              opengl["sourceCount"] != opengl_frontier_count
+              or opengl["artifactCount"] != opengl_frontier_count
               or opengl["projectDiagnosticCount"] != 0
           ):
-              raise SystemExit("OpenGL frontier accounting must be 4 sources, 4 artifacts, and 0 project diagnostics")
+              raise SystemExit(
+                  "OpenGL frontier accounting must cover every configured source "
+                  "with one artifact and zero project diagnostics"
+              )
           if os.environ["RUNNER_OS"] == "Linux":
               validated_sources = set(opengl["toolchainValidatedSources"])
               validation_outputs = set(opengl["nativeValidationOutputs"])
               if (
                   opengl["toolchainRequired"] is not True
                   or opengl["nativeValidationStatus"] != "validated"
-                  or opengl["toolchainValidatedArtifactCount"] != 4
+                  or opengl["toolchainValidatedArtifactCount"]
+                  != opengl_frontier_count
                   or validated_sources != opengl_frontier_sources
                   or validation_outputs != opengl_frontier_sources
               ):
                   raise SystemExit(
-                      "OpenGL frontier toolchain must validate all 4 source paths"
+                      "OpenGL frontier toolchain must validate every source path"
                   )
           PY
 

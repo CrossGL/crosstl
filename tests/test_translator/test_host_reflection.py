@@ -94,6 +94,38 @@ def test_hlsl_reflection_preserves_entry_points_resources_and_constants(tmp_path
     ]
 
 
+def test_glsl_reflection_canonicalizes_c_family_specialization_ids(tmp_path):
+    artifact = tmp_path / "kernel.comp"
+    artifact.write_text(
+        textwrap.dedent("""
+            #version 450 core
+            layout(local_size_x = 1) in;
+            layout(constant_id = 00) const int zero = 0;
+            layout(constant_id = 01) const int one = 1;
+            layout(constant_id = 10u) const int decimal = 10;
+            layout(constant_id = 0x10u) const int hexadecimal = 16;
+            layout(constant_id = 0b10000u) const int binary = 16;
+            void main() {}
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    reflection = reflect_target_host_interface(
+        artifact, target="opengl", stage="compute"
+    )
+
+    assert [
+        (constant["name"], constant["id"])
+        for constant in reflection["specializationConstants"]
+    ] == [
+        ("zero", 0),
+        ("one", 1),
+        ("decimal", 10),
+        ("hexadecimal", 16),
+        ("binary", 16),
+    ]
+
+
 def test_hlsl_reflection_excludes_malformed_function_declarations(tmp_path):
     reflection = _reflect_hlsl(
         tmp_path,

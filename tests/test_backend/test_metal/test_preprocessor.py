@@ -6,6 +6,7 @@ from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
 from crosstl.backend.Metal.preprocessor import (
     MetalPreprocessor,
+    MetalStatelessGlobalElisionError,
     MetalStructMethodError,
     MetalTemplateSpecializationError,
 )
@@ -3733,6 +3734,546 @@ def test_preprocessor_instantiates_template_method_from_pointer_arguments():
     assert "tile.load(" not in output
 
 
+def test_preprocessor_infers_addressed_buffer_element_pointer_for_nested_call():
+    code = """
+    struct Fragment {
+      template <typename SrcPtrType>
+      static float load(SrcPtrType src) { return float(src[0]); }
+    };
+
+    struct Tile {
+      template <typename U>
+      float load(const device U* src, int i, int j) {
+        return Fragment::load(&(src[(i * 8) * 36 + (j * 8)]));
+      }
+    };
+
+    kernel void k(
+        const device half* input [[buffer(0)]],
+        device float* output [[buffer(1)]],
+        uint index [[thread_position_in_grid]]) {
+      Tile tile;
+      output[index] = tile.load(input, int(index), 1);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert (
+        "float Fragment__load__const_device_half_ptr(const device half* src)" in output
+    )
+    assert (
+        "Fragment__load__const_device_half_ptr("
+        "&(src[(i * 8) * 36 + (j * 8)]))" in output
+    )
+    assert "Tile__load__half(tile, input, int(index), 1)" in output
+    assert "Fragment::load(" not in output
+
+
+def test_preprocessor_preserves_const_threadgroup_pointer_in_nested_call():
+    code = """
+    struct Fragment {
+      template <typename SrcPtrType>
+      static float load(SrcPtrType src) { return float(src[0]); }
+    };
+
+    struct Tile {
+      template <typename U>
+      float load(const threadgroup U* src, int index) {
+        return Fragment::load(&(src[index]));
+      }
+    };
+
+    kernel void k(
+        device float* output [[buffer(0)]],
+        uint index [[thread_position_in_grid]]) {
+      threadgroup half shared_values[64];
+      Tile tile;
+      output[index] = tile.load(shared_values, int(index));
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert (
+        "float Fragment__load__const_threadgroup_half_ptr("
+        "const threadgroup half* src)" in output
+    )
+    assert "Fragment__load__const_threadgroup_half_ptr(&(src[index]))" in output
+    assert "Tile__load__half(tile, shared_values, int(index))" in output
+
+
+def test_preprocessor_preserves_generic_pointer_argument_expressions():
+    code = """
+    struct Loader {
+      template <typename Pointer>
+      float load(Pointer src) { return float(src[0]); }
+    };
+
+    kernel void k(
+        const device half* src [[buffer(0)]],
+        device float* out [[buffer(1)]],
+        uint offset [[thread_position_in_grid]]) {
+      Loader loader;
+      out[0] = loader.load(src);
+      out[1] = loader.load(src + offset);
+      out[2] = loader.load(offset + src);
+      out[3] = loader.load(src - offset);
+      out[4] = loader.load(&(src[offset]));
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    helper = (
+        "float Loader__load__const_device_half_ptr("
+        "thread Loader& self, const device half* src)"
+    )
+    assert output.count(helper) == 1
+    assert "Loader__load__const_device_half_ptr(loader, src)" in output
+    assert "Loader__load__const_device_half_ptr(loader, src + offset)" in output
+    assert "Loader__load__const_device_half_ptr(loader, offset + src)" in output
+    assert "Loader__load__const_device_half_ptr(loader, src - offset)" in output
+    assert "Loader__load__const_device_half_ptr(loader, &(src[offset]))" in output
+    assert "Loader__load__half(" not in output
+
+
+def test_preprocessor_preserves_addressed_pointer_through_auto_locals():
+    code = """
+    struct Loader {
+      template <typename Pointer>
+      float load(Pointer src) { return float(src[0]); }
+    };
+
+    kernel void k(
+        const device half* src [[buffer(0)]],
+        device float* out [[buffer(1)]],
+        uint offset [[thread_position_in_grid]]) {
+      Loader loader;
+      auto cast_ptr = static_cast<const device half*>(src);
+      auto offset_ptr = cast_ptr + offset;
+      auto copied_ptr = offset_ptr;
+      out[0] = loader.load(cast_ptr);
+      out[1] = loader.load(offset_ptr);
+      out[2] = loader.load(copied_ptr);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    helper = (
+        "float Loader__load__const_device_half_ptr("
+        "thread Loader& self, const device half* src)"
+    )
+    assert output.count(helper) == 1
+    assert "Loader__load__const_device_half_ptr(loader, cast_ptr)" in output
+    assert "Loader__load__const_device_half_ptr(loader, offset_ptr)" in output
+    assert "Loader__load__const_device_half_ptr(loader, copied_ptr)" in output
+    assert "Loader__load__half(" not in output
+
+
+def test_preprocessor_declared_pointer_parameter_still_binds_pointee():
+    code = """
+    struct Loader {
+      template <typename U>
+      float load(const device U* src) { return float(src[0]); }
+    };
+
+    kernel void k(
+        const device half* src [[buffer(0)]],
+        device float* out [[buffer(1)]],
+        uint offset [[thread_position_in_grid]]) {
+      Loader loader;
+      out[0] = loader.load(src);
+      out[1] = loader.load(src + offset);
+      out[2] = loader.load(offset + src);
+      out[3] = loader.load(src - offset);
+      out[4] = loader.load(&(src[offset]));
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    helper = "float Loader__load__half(thread Loader& self, const device half* src)"
+    assert output.count(helper) == 1
+    assert "Loader__load__half(loader, src)" in output
+    assert "Loader__load__half(loader, src + offset)" in output
+    assert "Loader__load__half(loader, offset + src)" in output
+    assert "Loader__load__half(loader, src - offset)" in output
+    assert "Loader__load__half(loader, &(src[offset]))" in output
+    assert "Loader__load__const_device_half_ptr(" not in output
+
+
+def test_preprocessor_matches_concrete_pointer_template_member_parameters():
+    code = """
+    struct Loader {
+      template <typename Tag>
+      float load_pointer(const device float* src, Tag tag) {
+        return src[0] + tag;
+      }
+
+      template <typename Tag>
+      float load_qualified(const volatile device float* src, Tag tag) {
+        return src[0] + tag;
+      }
+    };
+
+    kernel void k(
+        const device float* src [[buffer(0)]],
+        device float* out [[buffer(1)]]) {
+      Loader loader;
+      out[0] = loader.load_pointer(src, 1);
+      out[1] = loader.load_qualified(src, 1);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert (
+        "float Loader__load_pointer__int(thread Loader& self, "
+        "const device float* src, int tag)" in output
+    )
+    assert (
+        "float Loader__load_qualified__int(thread Loader& self, "
+        "const volatile device float* src, int tag)" in output
+    )
+
+
+@pytest.mark.parametrize(
+    ("alias_declarations", "declared_pointee", "argument_pointee"),
+    [
+        pytest.param(
+            "typedef half float16_t;",
+            "half",
+            "float16_t",
+            id="typedef-argument",
+        ),
+        pytest.param(
+            "using scalar_t = half;\nusing source_t = scalar_t;",
+            "half",
+            "source_t",
+            id="using-argument-chain",
+        ),
+        pytest.param(
+            "typedef half scalar_t;\ntypedef scalar_t source_t;",
+            "source_t",
+            "half",
+            id="typedef-declaration-chain",
+        ),
+    ],
+)
+def test_preprocessor_matches_global_pointer_pointee_aliases(
+    alias_declarations, declared_pointee, argument_pointee
+):
+    code = f"""
+    {alias_declarations}
+
+    struct Loader {{
+      template <typename Tag>
+      float load(const device {declared_pointee}* src, Tag tag) {{
+        return float(src[0]) + tag;
+      }}
+    }};
+
+    kernel void k(
+        const device {argument_pointee}* src [[buffer(0)]],
+        device float* out [[buffer(1)]]) {{
+      Loader loader;
+      out[0] = loader.load(src, 1);
+    }}
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Loader__load__int(loader, src, 1)" in output
+    assert "loader.load(" not in output
+
+
+def test_preprocessor_matches_local_pointer_pointee_alias_chain():
+    code = """
+    struct Loader {
+      template <typename Tag>
+      float load(const device half* src, Tag tag) {
+        return float(src[0]) + tag;
+      }
+    };
+
+    kernel void k(
+        const device half* src [[buffer(0)]],
+        device float* out [[buffer(1)]]) {
+      typedef half scalar_t;
+      using source_t = scalar_t;
+      const device source_t* local_src = src;
+      Loader loader;
+      out[0] = loader.load(local_src, 1);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Loader__load__int(loader, local_src, 1)" in output
+
+
+def test_preprocessor_resolves_shadowed_pointer_pointee_alias_at_each_call():
+    code = """
+    using element_t = int;
+
+    struct Loader {
+      template <typename Tag>
+      int load_half(const device half* src, Tag tag) {
+        return int(src[0]) + tag;
+      }
+
+      template <typename Tag>
+      int load_int(const device int* src, Tag tag) {
+        return src[0] + tag;
+      }
+    };
+
+    kernel void k(
+        const device half* half_src [[buffer(0)]],
+        const device int* int_src [[buffer(1)]],
+        device int* out [[buffer(2)]]) {
+      Loader loader;
+      {
+        using element_t = half;
+        const device element_t* inner_src = half_src;
+        out[0] = loader.load_half(inner_src, 1);
+      }
+      const device element_t* outer_src = int_src;
+      out[1] = loader.load_int(outer_src, 2);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Loader__load_half__int(loader, inner_src, 1)" in output
+    assert "Loader__load_int__int(loader, outer_src, 2)" in output
+
+
+@pytest.mark.parametrize(
+    ("alias_declarations", "argument_pointee"),
+    [
+        pytest.param("using source_t = int;", "source_t", id="incompatible"),
+        pytest.param(
+            "using source_t = later_t;\nusing later_t = half;",
+            "source_t",
+            id="unresolved-forward",
+        ),
+        pytest.param(
+            "using first_t = second_t;\nusing second_t = first_t;",
+            "first_t",
+            id="cycle",
+        ),
+    ],
+)
+def test_preprocessor_rejects_unproved_pointer_pointee_alias_equivalence(
+    alias_declarations, argument_pointee
+):
+    code = f"""
+    {alias_declarations}
+
+    struct Loader {{
+      template <typename Tag>
+      float load(const device half* src, Tag tag) {{ return float(tag); }}
+    }};
+
+    kernel void k(
+        const device {argument_pointee}* src [[buffer(0)]],
+        device float* out [[buffer(1)]]) {{
+      Loader loader;
+      out[0] = loader.load(src, 1);
+    }}
+    """
+
+    with pytest.raises(MetalStructMethodError, match="did not bind consistently"):
+        MetalPreprocessor().preprocess(code)
+
+
+def test_preprocessor_allows_pointer_qualification_added_through_pointee_alias():
+    code = """
+    using readonly_half_t = const half;
+
+    struct Loader {
+      template <typename Tag>
+      float load(device readonly_half_t* src, Tag tag) {
+        return float(src[0]) + tag;
+      }
+    };
+
+    kernel void k(
+        device half* src [[buffer(0)]],
+        device float* out [[buffer(1)]]) {
+      Loader loader;
+      out[0] = loader.load(src, 1);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Loader__load__int(loader, src, 1)" in output
+
+
+def test_preprocessor_rejects_pointer_qualification_dropped_through_pointee_alias():
+    code = """
+    using readonly_half_t = const half;
+
+    struct Loader {
+      template <typename Tag>
+      float load(device half* src, Tag tag) { return float(tag); }
+    };
+
+    kernel void k(
+        device readonly_half_t* src [[buffer(0)]],
+        device float* out [[buffer(1)]]) {
+      Loader loader;
+      out[0] = loader.load(src, 1);
+    }
+    """
+
+    with pytest.raises(MetalStructMethodError, match="did not bind consistently"):
+        MetalPreprocessor().preprocess(code)
+
+
+@pytest.mark.parametrize(
+    ("declared_type", "actual_parameter"),
+    [
+        pytest.param(
+            "const device float*",
+            "const device int* value [[buffer(0)]],",
+            id="pointer-pointee",
+        ),
+        pytest.param(
+            "const device float*",
+            "const volatile device float* value [[buffer(0)]],",
+            id="dropped-volatile",
+        ),
+    ],
+)
+def test_preprocessor_rejects_concrete_pointer_template_member_parameter_mismatch(
+    declared_type, actual_parameter
+):
+    code = f"""
+    struct Loader {{
+      template <typename Tag>
+      float load({declared_type} value, Tag tag) {{ return float(tag); }}
+    }};
+
+    kernel void k(
+        {actual_parameter}
+        device float* out [[buffer(1)]]) {{
+      Loader loader;
+      out[0] = loader.load(value, 1);
+    }}
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.project_diagnostic_code == "project.translate.metal-struct-method"
+    assert error.missing_capabilities == ("struct.template-method",)
+    assert error.requested_signature == "loader.load(value, 1)"
+    assert "did not bind consistently" in str(error)
+
+
+def test_preprocessor_rejects_concrete_array_pointee_mismatch():
+    code = """
+    struct Loader {
+      template <typename Tag>
+      float load(thread float values[4], Tag tag) { return float(tag); }
+    };
+
+    kernel void k(device float* out [[buffer(0)]]) {
+      thread int values[4];
+      Loader loader;
+      out[0] = loader.load(values, 1);
+    }
+    """
+
+    with pytest.raises(MetalStructMethodError, match="did not bind consistently"):
+        MetalPreprocessor().preprocess(code)
+
+
+def test_preprocessor_validates_dependent_concrete_pointer_pointee_portion():
+    source = """
+    template <typename Left, typename Right>
+    struct Pair { Left first; Right second; };
+
+    struct Loader {
+      template <typename Tag>
+      float load(const device Pair<Tag, float>* value, Tag tag) {
+        return float(tag);
+      }
+    };
+
+    kernel void k(
+        const device Pair<int, RIGHT_TYPE>* value [[buffer(0)]],
+        device float* out [[buffer(1)]]) {
+      Loader loader;
+      out[0] = loader.load(value, 1);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(source.replace("RIGHT_TYPE", "float"))
+    assert "Loader__load__int(loader, value, 1)" in output
+
+    with pytest.raises(MetalStructMethodError, match="did not bind consistently"):
+        MetalPreprocessor().preprocess(source.replace("RIGHT_TYPE", "int"))
+
+
+def test_preprocessor_selects_template_pointer_overload_by_concrete_pointee():
+    code = """
+    struct Loader {
+      template <typename Tag>
+      int load_pointer(const device float* src, Tag tag) {
+        return int(src[0]) + tag;
+      }
+
+      template <typename Tag>
+      int load_pointer(const device int* src, Tag tag) {
+        return src[0] + tag;
+      }
+    };
+
+    kernel void k(
+        const device int* src [[buffer(0)]],
+        device int* out [[buffer(1)]]) {
+      Loader loader;
+      out[0] = loader.load_pointer(src, 1);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert (
+        "int Loader__load_pointer__int(thread Loader& self, "
+        "const device int* src, int tag)" in output
+    )
+    assert "const device float* src, int tag" not in output
+
+
+def test_preprocessor_preserves_scalar_conversion_for_concrete_parameter():
+    code = """
+    struct Loader {
+      template <typename Tag>
+      float load(float value, Tag tag) { return value + tag; }
+    };
+
+    kernel void k(device float* out [[buffer(0)]]) {
+      Loader loader;
+      out[0] = loader.load(1, 2);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Loader__load__int(loader, 1, 2)" in output
+    assert (
+        "float Loader__load__int(thread Loader& self, float value, int tag)" in output
+    )
+
+
 def test_preprocessor_instantiates_explicit_value_template_member_call():
     code = """
     struct Reducer {
@@ -4814,8 +5355,62 @@ def test_preprocessor_rewrites_temporary_functor_calls_inside_template_operator(
     assert "Remainder{}(" not in output
 
 
+def test_preprocessor_preserves_concrete_overload_identity_in_temporary_wrappers():
+    code = """
+    typedef bfloat bfloat16_t;
+
+    struct FloorDivide {
+      template <typename T>
+      T operator()(T x, T y) {
+        return x / y;
+      }
+
+      template <>
+      half operator()(half x, half y) {
+        return trunc(x / y);
+      }
+
+      template <>
+      bfloat16_t operator()(bfloat16_t x, bfloat16_t y) {
+        return x - y;
+      }
+    };
+
+    kernel void run(
+        device half* values [[buffer(0)]],
+        uint index [[thread_position_in_grid]]) {
+      half half_value = half(index + 2u);
+      bfloat16_t bfloat_value = bfloat16_t(index + 2u);
+      values[index * 2u] = FloorDivide{}(half_value, half(2.0h));
+      values[index * 2u + 1u] = half(FloorDivide{}(
+          bfloat_value, bfloat16_t(2.0h)));
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    half_wrapper = "FloorDivide__operator_call__metal_overload_1__temporary"
+    bfloat_wrapper = "FloorDivide__operator_call__metal_overload_2__temporary"
+    assert f"{half_wrapper}(half_value, half(2.0h))" in output
+    assert f"{bfloat_wrapper}(bfloat_value, bfloat16_t(2.0h))" in output
+    assert (
+        f"half {half_wrapper}(half x, half y) "
+        "{ FloorDivide self; return FloorDivide__operator_call(self, x, y); }" in output
+    )
+    assert (
+        f"bfloat16_t {bfloat_wrapper}(bfloat16_t x, bfloat16_t y) "
+        "{ FloorDivide self; return FloorDivide__operator_call(self, x, y); }" in output
+    )
+    assert "FloorDivide__operator_call__half" not in output
+
+
 def test_preprocessor_selects_unsigned_integral_sfinae_overload_for_bool():
     code = """
+    struct complex64_t {
+      float real;
+      float imag;
+    };
+
     struct Remainder {
       template <typename T>
       metal::enable_if_t<metal::is_integral_v<T> & !metal::is_signed_v<T>, T>
@@ -4832,6 +5427,11 @@ def test_preprocessor_selects_unsigned_integral_sfinae_overload_for_bool():
       template <typename T>
       metal::enable_if_t<!metal::is_integral_v<T>, T> operator()(T x, T y) {
         return x;
+      }
+
+      template <>
+      complex64_t operator()(complex64_t x, complex64_t y) {
+        return x % y;
       }
     };
 
@@ -5241,6 +5841,27 @@ def test_preprocessor_template_member_binding_drops_expression_reference():
     )
 
     assert bindings == {"T": "float"}
+
+
+def test_preprocessor_explicit_template_binding_allows_untyped_parameter():
+    preprocessor = MetalPreprocessor()
+    struct = preprocessor._find_concrete_struct_definitions("""
+        struct Consumer {
+          template <typename T>
+          static T consume(float untyped) { return T(untyped); }
+        };
+        """)[0]
+    method = struct.template_methods[0]
+
+    bindings = preprocessor._bind_template_method_parameters(
+        method,
+        [None],
+        explicit_template_arguments=["int"],
+        owner_struct=struct,
+        structs_by_name={struct.name: struct},
+    )
+
+    assert bindings == {"T": "int"}
 
 
 @pytest.mark.parametrize(
@@ -5938,6 +6559,145 @@ def test_preprocessor_template_method_uninferable_argument_clean_fails():
     )
 
 
+def test_preprocessor_addressed_element_side_effect_clean_fails_structured():
+    code = """
+    struct Fragment {
+      template <typename SrcPtrType>
+      static float load(SrcPtrType src) { return float(src[0]); }
+    };
+
+    kernel void k(
+        const device half* src [[buffer(0)]],
+        device float* out [[buffer(1)]],
+        uint index [[thread_position_in_grid]]) {
+      out[index] = Fragment::load(&(src[index++]));
+    }
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.project_diagnostic_code == "project.translate.metal-struct-method"
+    assert error.missing_capabilities == ("struct.template-method",)
+    assert error.struct_name == "Fragment"
+    assert error.method_name == "load"
+    assert error.requested_signature == "Fragment.load(&(src[index++]))"
+    assert error.suggested_action
+    assert error.source_location["length"] == len("load(&(src[index++]))")
+    assert "could not be inferred conservatively" in str(error)
+
+
+@pytest.mark.parametrize("argument", ["src", "src + offset"])
+def test_preprocessor_generic_pointer_without_address_space_clean_fails(argument):
+    code = f"""
+    struct Loader {{
+      template <typename Pointer>
+      float load(Pointer src) {{ return src[0]; }}
+    }};
+
+    void invoke(float* src, int offset) {{
+      Loader loader;
+      float value = loader.load({argument});
+    }}
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.project_diagnostic_code == "project.translate.metal-struct-method"
+    assert error.missing_capabilities == ("struct.template-method",)
+    assert error.struct_name == "Loader"
+    assert error.method_name == "load"
+    assert error.requested_signature == f"loader.load({argument})"
+    assert "could not be inferred conservatively" in str(error)
+
+
+@pytest.mark.parametrize(
+    "cast_expression",
+    [
+        "static_cast<float*>(src)",
+        "static_cast<const float*>(src)",
+        "static_cast<device half**>(src)",
+        "static_cast<device thread half*>(src)",
+        "static_cast<device device half*>(src)",
+    ],
+)
+def test_preprocessor_generic_pointer_cast_without_single_address_space_clean_fails(
+    cast_expression,
+):
+    code = f"""
+    struct Loader {{
+      template <typename Pointer>
+      float load(Pointer src) {{ return float(src[0]); }}
+    }};
+
+    void invoke(const device half* src) {{
+      Loader loader;
+      float value = loader.load({cast_expression});
+    }}
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.project_diagnostic_code == "project.translate.metal-struct-method"
+    assert error.missing_capabilities == ("struct.template-method",)
+    assert error.requested_signature == f"loader.load({cast_expression})"
+    assert "could not be inferred conservatively" in str(error)
+
+
+def test_preprocessor_unqualified_auto_pointer_clean_fails():
+    code = """
+    struct Loader {
+      template <typename Pointer>
+      float load(Pointer src) { return float(src[0]); }
+    };
+
+    void invoke(const device half* src) {
+      Loader loader;
+      auto pointer = static_cast<half*>(src);
+      float value = loader.load(pointer);
+    }
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.project_diagnostic_code == "project.translate.metal-struct-method"
+    assert error.missing_capabilities == ("struct.template-method",)
+    assert error.requested_signature == "loader.load(pointer)"
+    assert "could not be inferred conservatively" in str(error)
+
+
+def test_preprocessor_declared_unqualified_pointer_parameter_clean_fails():
+    code = """
+    struct Loader {
+      template <typename U>
+      float load(U* src) { return float(src[0]); }
+    };
+
+    kernel void k(
+        const device half* src [[buffer(0)]],
+        device float* out [[buffer(1)]]) {
+      Loader loader;
+      out[0] = loader.load(src);
+    }
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.project_diagnostic_code == "project.translate.metal-struct-method"
+    assert error.missing_capabilities == ("struct.template-method",)
+    assert error.requested_signature == "loader.load(src)"
+    assert "did not bind consistently" in str(error)
+
+
 def test_preprocessor_template_method_conflicting_binding_clean_fails():
     # The single template parameter T appears in two parameters whose call-site
     # arguments infer to DIFFERENT concrete types (float and int). Rather than
@@ -6178,6 +6938,141 @@ def test_infer_argument_type_recognizes_pointer_arguments_and_offsets():
     assert pp._infer_argument_type("input * 2", buffers, locals_) is None
     assert pp._infer_argument_type("input / 2", buffers, locals_) is None
     assert pp._infer_argument_type("input * offset", buffers, locals_) is None
+
+
+def test_infer_argument_type_preserves_addressed_element_pointer_type():
+    pp = MetalPreprocessor()
+    code = """
+    kernel void k(const device half* src [[buffer(0)]]) {
+      threadgroup float scratch[64];
+    }
+    """
+    positioned = pp._collect_buffer_element_types(code, [])
+    buffers = pp._flatten_types_at(positioned, len(code))
+
+    assert (
+        pp._infer_argument_type(
+            "&(src[(i * 8) * 36 + (j * 8)])",
+            buffers,
+            {"i": "short", "j": "short"},
+        )
+        == "const device half*"
+    )
+    assert (
+        pp._infer_argument_type("&scratch[i + 1]", buffers, {"i": "ushort"})
+        == "threadgroup float*"
+    )
+
+
+def test_infer_argument_type_preserves_qualified_pointer_expressions():
+    pp = MetalPreprocessor()
+    code = "kernel void k(const device half* src [[buffer(0)]]) {}"
+    positioned = pp._collect_buffer_element_types(code, [])
+    buffers = pp._flatten_types_at(positioned, len(code))
+    locals_ = {"offset": "uint"}
+
+    assert pp._infer_argument_type("src", buffers, locals_) == "const device half*"
+    assert (
+        pp._infer_argument_type("src + offset", buffers, locals_)
+        == "const device half*"
+    )
+    assert (
+        pp._infer_argument_type("offset + src", buffers, locals_)
+        == "const device half*"
+    )
+    assert (
+        pp._infer_argument_type("src - offset", buffers, locals_)
+        == "const device half*"
+    )
+    assert pp._infer_argument_type("offset - src", buffers, locals_) is None
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [
+        ("static_cast<const device half*>(src)", "const device half*"),
+        (
+            "static_cast<threadgroup volatile float*>(src)",
+            "threadgroup volatile float*",
+        ),
+        ("static_cast<float*>(src)", None),
+        ("static_cast<const float*>(src)", None),
+        ("static_cast<device float**>(src)", None),
+        ("static_cast<device thread float*>(src)", None),
+        ("static_cast<device device float*>(src)", None),
+    ],
+)
+def test_infer_argument_type_validates_pointer_static_cast_target(expression, expected):
+    assert MetalPreprocessor()._infer_argument_type(expression, {}, {}) == expected
+
+
+@pytest.mark.parametrize(
+    ("local_type", "expected"),
+    [
+        ("const threadgroup half*", "const threadgroup half*"),
+        ("half*", None),
+        ("threadgroup half**", None),
+        ("device thread half*", None),
+    ],
+)
+def test_infer_argument_type_validates_propagated_local_pointer_type(
+    local_type, expected
+):
+    pp = MetalPreprocessor()
+    assert pp._infer_argument_type("pointer", {}, {"pointer": local_type}) == expected
+    offset_expected = expected if expected is not None else None
+    assert (
+        pp._infer_argument_type(
+            "pointer + offset", {}, {"pointer": local_type, "offset": "uint"}
+        )
+        == offset_expected
+    )
+
+
+def test_infer_argument_type_validates_cached_pointer_return_type():
+    pp = MetalPreprocessor()
+    pp._record_known_member_function_return_type(
+        "Source__addressed", "const device half*"
+    )
+    pp._known_member_function_return_types["Source__unqualified"] = "half*"
+
+    assert (
+        pp._infer_argument_type("Source__addressed(src)", {}, {})
+        == "const device half*"
+    )
+    assert pp._infer_argument_type("Source__unqualified(src)", {}, {}) is None
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "&(src[index++])",
+        "&(src[next(index)])",
+        "&(src[index = 0])",
+        "&(src[index, 0])",
+        "&(src[index ? 1 : 0])",
+        "&(src[index][0])",
+        "&(src[index] + 1)",
+        "&(missing[index])",
+    ],
+)
+def test_infer_argument_type_rejects_unsupported_addressed_elements(expression):
+    pp = MetalPreprocessor()
+    code = "kernel void k(const device float* src [[buffer(0)]]) {}"
+    positioned = pp._collect_buffer_element_types(code, [])
+    buffers = pp._flatten_types_at(positioned, len(code))
+
+    assert pp._infer_argument_type(expression, buffers, {"index": "uint"}) is None
+
+
+def test_infer_argument_type_rejects_address_without_pointer_metadata():
+    # An element-only legacy view cannot prove the source address space.
+    assert (
+        MetalPreprocessor()._infer_argument_type(
+            "&(src[index])", {"src": "float"}, {"index": "uint"}
+        )
+        is None
+    )
 
 
 def test_infer_argument_type_simd_group_builtin_returns_first_arg_type():
@@ -6537,16 +7432,40 @@ def test_collect_buffer_element_types_rejects_non_declaration_subscripts():
     )
     element_types = pp._collect_buffer_element_types(code, [])
     # totals is a real `float totals[4]` array; the only recorded type is float.
-    assert [t for _, t in element_types.get("totals", [])] == ["float"]
+    assert [t.element_type for _, t in element_types.get("totals", [])] == ["float"]
+    assert [t.pointer_type for _, t in element_types.get("totals", [])] == [
+        "thread float*"
+    ]
     # A struct array records its element struct type.
-    assert [t for _, t in element_types.get("items", [])] == ["Pair"]
+    assert [t.element_type for _, t in element_types.get("items", [])] == ["Pair"]
+    assert [t.pointer_type for _, t in element_types.get("items", [])] == [
+        "thread Pair*"
+    ]
     # `return`/`if` tokens never become element types.
     assert "block" not in element_types
     assert all(
-        t not in {"return", "if", "else", "for", "while"}
+        t.element_type not in {"return", "if", "else", "for", "while"}
         for entries in element_types.values()
         for _, t in entries
     )
+
+
+def test_collect_buffer_element_types_preserves_leading_const_pointer_qualifiers():
+    pp = MetalPreprocessor()
+    code = """
+    void read(
+        const device half* device_src,
+        const threadgroup float* group_src) {}
+    """
+
+    element_types = pp._collect_buffer_element_types(code, [])
+
+    assert [entry.pointer_type for _, entry in element_types.get("device_src", [])] == [
+        "const device half*"
+    ]
+    assert [entry.pointer_type for _, entry in element_types.get("group_src", [])] == [
+        "const threadgroup float*"
+    ]
 
 
 # --------------------------------------------------------------------------- #
@@ -6797,3 +7716,235 @@ def test_sfinae_simd_reduce_full_pipeline_to_hlsl():
     assert "op.simd_reduce(" not in hlsl
     assert re.search(r"(?<![\w_])simd_reduce\s*\(", hlsl) is None
     assert "WaveActiveSum" in hlsl
+
+
+def test_preprocessor_elides_stateless_compile_time_global_calls():
+    source = """
+    struct Logger {
+      constexpr Logger(constant char*, constant char*) constant {}
+
+      template <typename... Args>
+      void log_debug(constant char*, Args...) const {
+        trap();
+      }
+
+      template <typename... Args>
+      void log_debug(constant char*, Args...) const constant {}
+    };
+
+    constant Logger logger("subsystem", "kernel");
+
+    int bump(device int* output) {
+      output[0] += 1;
+      return output[0];
+    }
+
+    kernel void compute(device int* output [[buffer(0)]]) {
+      logger.log_debug("value=%d", bump(output));
+      logger.log_debug("plain=%d", output[0]);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(source)
+
+    assert "constant Logger logger" not in output
+    assert "logger.log_debug" not in output
+    assert "bump(output);" in output
+    assert output.count("bump(output)") == 1
+    assert len(re.findall(r"(?m)^\s*output\[0\];$", output)) == 1
+    assert "trap();" not in output
+
+
+def test_preprocessor_elided_call_evaluates_multiple_arguments_once():
+    source = """
+    struct Logger {
+      constexpr Logger() constant {}
+
+      template <typename... Args>
+      void log_debug(constant char*, Args...) const constant {}
+    };
+
+    constant Logger logger;
+
+    int bump(device int* output) {
+      output[0] += 1;
+      return output[0];
+    }
+
+    kernel void compute(device int* output [[buffer(0)]]) {
+      if (output[0] > 0)
+        logger.log_debug("values=%d,%d", bump(output), bump(output));
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(source)
+
+    assert "logger" not in output
+    assert output.count("bump(output);") == 2
+    assert re.search(
+        r"if\s*\(output\[0\]\s*>\s*0\)\s*\{\s*"
+        r"bump\(output\);\s*bump\(output\);\s*\}",
+        output,
+    )
+
+
+def test_preprocessor_does_not_elide_function_declaration_as_global():
+    source = """
+    struct Logger {
+      constexpr Logger(constant char*) constant {}
+    };
+
+    constant Logger make_logger(constant char*);
+    """
+
+    output = MetalPreprocessor().preprocess(source)
+
+    assert "constant Logger make_logger(constant char*);" in output
+
+
+def test_preprocessor_elides_calls_between_extern_declaration_and_definition():
+    source = """
+    struct Logger {
+      constexpr Logger() constant {}
+      void log_debug(constant char*) const constant {}
+    };
+
+    extern constant Logger logger;
+
+    kernel void compute(device int* output [[buffer(0)]]) {
+      logger.log_debug("message");
+      output[0] = 1;
+    }
+
+    constant Logger logger{};
+    """
+
+    output = MetalPreprocessor().preprocess(source)
+
+    assert "extern constant Logger logger" not in output
+    assert "constant Logger logger" not in output
+    assert "logger.log_debug" not in output
+    assert "output[0] = 1;" in output
+
+
+@pytest.mark.parametrize("member", ["int state;", "uint state : 1;"])
+def test_preprocessor_preserves_stateful_compile_time_globals(member):
+    source = f"""
+    struct Logger {{
+      {member}
+      constexpr Logger() constant {{}}
+    }};
+
+    constant Logger logger;
+    kernel void compute() {{}}
+    """
+
+    output = MetalPreprocessor().preprocess(source)
+
+    assert "constant Logger logger;" in output
+    assert member in output
+
+
+@pytest.mark.parametrize(
+    ("source", "reason", "effect"),
+    [
+        (
+            """
+            struct Logger {
+              constexpr Logger() constant { trap(); }
+            };
+            constant Logger logger;
+            kernel void compute() {}
+            """,
+            "constructor-has-effects",
+            "trap-or-termination",
+        ),
+        (
+            """
+            struct Logger {
+              constexpr Logger() constant {}
+              void log_debug(constant char*) const constant;
+            };
+            constant Logger logger;
+            kernel void compute() { logger.log_debug("message"); }
+            """,
+            "method-body-unresolved",
+            None,
+        ),
+        (
+            """
+            struct Logger {
+              constexpr Logger() constant {}
+            };
+            constant Logger logger;
+            kernel void compute() { constant Logger* observed = &logger; }
+            """,
+            "identity-observed",
+            "object-identity",
+        ),
+        (
+            """
+            struct Logger {
+              constexpr Logger() constant {}
+              void log_debug(constant char*) const constant { printf("real"); }
+            };
+            constant Logger logger;
+            kernel void compute() { logger.log_debug("message"); }
+            """,
+            "method-has-effects",
+            "function-call",
+        ),
+        (
+            """
+            struct Logger {
+              constexpr Logger() constant {}
+              ~Logger() { trap(); }
+            };
+            constant Logger logger;
+            kernel void compute() {}
+            """,
+            "destructor-has-effects",
+            "trap-or-termination",
+        ),
+        (
+            """
+            struct Logger {
+              constexpr Logger() constant {}
+              int value() const constant { return 1; }
+            };
+            constant Logger logger;
+            kernel void compute() { logger.value(); }
+            """,
+            "method-returns-value",
+            "returned-value",
+        ),
+        (
+            """
+            constant char* category();
+            struct Logger {
+              constexpr Logger(constant char*) constant {}
+            };
+            constant Logger logger(category());
+            kernel void compute() {}
+            """,
+            "initializer-effect-unproven",
+            "initializer-evaluation",
+        ),
+    ],
+)
+def test_preprocessor_stateless_global_proof_fails_closed(source, reason, effect):
+    with pytest.raises(MetalStatelessGlobalElisionError) as exc_info:
+        MetalPreprocessor().preprocess(source)
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.metal-stateless-global-unsafe"
+    )
+    assert diagnostic.missing_capabilities == ("metal.stateless-global-elision",)
+    assert diagnostic.global_name == "logger"
+    assert diagnostic.type_name == "Logger"
+    assert diagnostic.reason == reason
+    assert diagnostic.effect == effect
+    assert diagnostic.source_location["line"] > 0
+    assert diagnostic.source_location["column"] > 0
+    assert diagnostic.source_location["length"] > 0

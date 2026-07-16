@@ -1,3 +1,4 @@
+import re
 import shutil
 import subprocess
 from types import SimpleNamespace
@@ -7,7 +8,14 @@ import pytest
 import crosstl
 import crosstl.translator.codegen as codegen
 from crosstl.formatter import format_shader_code
-from crosstl.translator.codegen.webgl_codegen import WebGLCodeGen
+from crosstl.translator.ast import BinaryOpNode
+from crosstl.translator.codegen.webgl_codegen import (
+    WebGLArithmeticConversionError,
+    WebGLBooleanCompoundAssignmentError,
+    WebGLBooleanOrderedIntrinsicError,
+    WebGLCodeGen,
+    WebGLStructConstructionError,
+)
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 from tests.test_backend.test_SPIRV.test_codegen import (
@@ -54,6 +62,23 @@ def parse_shader(source):
     return Parser(Lexer(source).get_tokens()).parse()
 
 
+def assert_webgl_stage_validates_if_available(generated, tmp_path, name, stage="frag"):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        return
+    output_path = tmp_path / f"{name}.{stage}.webgl.glsl"
+    output_path.write_text(generated, encoding="utf-8")
+    result = subprocess.run(
+        [glslang, "-S", stage, str(output_path)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stdout
+
+
 def test_webgl_backend_is_target_only():
     spec = codegen.get_backend("webgl2")
 
@@ -66,7 +91,7 @@ def test_webgl_backend_is_target_only():
     assert isinstance(codegen.get_codegen("essl"), WebGLCodeGen)
 
 
-def test_webgl_codegen_emits_glsl_es_header_and_default_precision():
+def test_webgl_codegen_emits_glsl_es_header_and_default_precision(tmp_path):
     generated = WebGLCodeGen().generate(parse_shader(WEBGL_SHADER))
 
     assert generated.startswith("#version 300 es\n")
@@ -77,6 +102,435 @@ def test_webgl_codegen_emits_glsl_es_header_and_default_precision():
     assert "precision highp int;\n" in generated
     assert "#version 450 core" not in generated
     assert "layout(location = 0) out vec4 fragColor;" in generated
+    _assert_webgl_supported_arithmetic_conversions(tmp_path)
+    _assert_webgl_unavailable_integer_width_diagnostic()
+    _assert_webgl_boolean_arithmetic_compound_assignments(tmp_path)
+    _assert_webgl_boolean_arithmetic_compound_diagnostic()
+
+
+def _assert_webgl_supported_arithmetic_conversions(tmp_path):
+    shader = r"""
+    shader WebGLArithmeticConversions {
+        int addNarrow(uint16_t left, int16_t right) {
+            return left + right;
+        }
+
+        ivec3 addNarrowVector(ushort3 left, short3 right) {
+            return left + right;
+        }
+
+        uvec3 addMixed(ivec3 left, uint right) {
+            return left + right;
+        }
+
+        bvec3 compareMixed(ivec3 left, uint right) {
+            return left < right;
+        }
+
+        uvec3 chooseMixed(bool condition, int left, uvec3 right) {
+            return condition ? left : right;
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                int narrow = addNarrow(uint16_t(3u), int16_t(-2));
+                ivec3 narrowVector = addNarrowVector(
+                    ushort3(1u),
+                    short3(-2)
+                );
+                uvec3 mixed = addMixed(ivec3(narrow), 4u);
+                bvec3 ordered = compareMixed(ivec3(narrow), 5u);
+                uvec3 selected = chooseMixed(ordered.x, narrow, mixed);
+                return vec4(selected, 1.0);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate_stage(parse_shader(shader), "fragment")
+
+    assert "return (int(left) + right);" in generated
+    assert "return (ivec3(left) + right);" in generated
+    assert "return (uvec3(left) + right);" in generated
+    assert "return lessThan(uvec3(left), uvec3(right));" in generated
+    assert "return (condition ? uvec3(left) : right);" in generated
+    assert "#extension GL_ARB_gpu_shader_int64" not in generated
+    assert_webgl_stage_validates_if_available(
+        generated, tmp_path, "arithmetic_conversions", "frag"
+    )
+
+
+def _assert_webgl_unavailable_integer_width_diagnostic():
+    shader = r"""
+    shader WebGLWideArithmetic {
+        int64_t multiply(uint left, int64_t right) {
+            return left * right;
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+    ast = parse_shader(shader)
+    source_location = {"line": 4, "column": 25}
+    codegen = WebGLCodeGen()
+    expression = next(
+        node for node in codegen.walk_ast(ast) if isinstance(node, BinaryOpNode)
+    )
+    expression.source_location = source_location
+
+    with pytest.raises(WebGLArithmeticConversionError) as exc_info:
+        codegen.generate_stage(ast, "fragment")
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.webgl-arithmetic-conversion-invalid"
+    )
+    assert diagnostic.missing_capabilities == ("webgl.arithmetic-conversion-lowering",)
+    assert diagnostic.operator == "*"
+    assert diagnostic.operand_types == ("uint", "int64_t")
+    assert diagnostic.attempted_common_type == "int64_t"
+    assert diagnostic.common_type == "int64_t"
+    assert diagnostic.reason == "target-integer-width-unsupported"
+    assert diagnostic.source_location == source_location
+
+
+def _assert_webgl_boolean_arithmetic_compound_assignments(tmp_path):
+    shader = r"""
+    shader WebGLBooleanArithmeticCompoundAssignments {
+        struct Flags {
+            bool enabled;
+        };
+
+        bool powerBool(bool base, bool exp) {
+            bool result = true;
+            while (exp) {
+                if (exp & 1) {
+                    result *= base;
+                }
+                exp >>= 1;
+                base *= base;
+            }
+            return result;
+        }
+
+        bool3 updateMask(bool3 value, bool3 factor) {
+            value *= factor;
+            value >>= 1;
+            return value;
+        }
+
+        bool nextFlag(inout uint calls) {
+            calls += 1u;
+            return true;
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                uint calls = 0u;
+                Flags flags;
+                flags.enabled = false;
+                flags.enabled *= nextFlag(calls);
+                bool value = powerBool(true, false);
+                bool3 mask = updateMask(
+                    bool3(true, false, true),
+                    bool3(false, true, true)
+                );
+                return vec4(value ? 1.0 : 0.0);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate_stage(parse_shader(shader), "fragment")
+
+    assert "if (((int(exp) & 1) != 0))" in generated
+    assert "result = ((int(result) * int(base)) != 0);" in generated
+    assert "exp = ((int(exp) >> 1) != 0);" in generated
+    assert "base = ((int(base) * int(base)) != 0);" in generated
+    assert "value = notEqual((ivec3(value) * ivec3(factor)), ivec3(0));" in generated
+    assert "value = notEqual((ivec3(value) >> 1), ivec3(0));" in generated
+    assert generated.count("nextFlag(calls)") == 1
+    assert (
+        "flags.enabled = ((int(flags.enabled) * int(nextFlag(calls))) != 0);"
+        in generated
+    )
+    assert "result *= base;" not in generated
+    assert "exp >>= 1;" not in generated
+    assert_webgl_stage_validates_if_available(
+        generated,
+        tmp_path,
+        "boolean_arithmetic_compound_assignments",
+        "frag",
+    )
+
+
+def _assert_webgl_boolean_arithmetic_compound_diagnostic():
+    shader = r"""
+    shader WebGLSideEffectingBooleanCompoundAssignmentIndex {
+        uint nextIndex(inout uint calls) {
+            calls += 1u;
+            return 0u;
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                uint calls = 0u;
+                bool values[2] = {true, false};
+                values[nextIndex(calls)] *= false;
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(WebGLBooleanCompoundAssignmentError) as exc_info:
+        WebGLCodeGen().generate_stage(parse_shader(shader), "fragment")
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.webgl-boolean-compound-assignment-invalid"
+    )
+    assert diagnostic.missing_capabilities == (
+        "webgl.boolean-compound-assignment-lowering",
+    )
+    assert diagnostic.operator == "*="
+    assert diagnostic.target_type == "bool"
+    assert diagnostic.reason == "lvalue-side-effects"
+
+
+def test_webgl_codegen_sanitizes_reserved_identifiers_and_collisions():
+    shader = r"""
+    shader WebGLReservedIdentifiers {
+        float gl_helper(float __arg, float _arg) {
+            float local__value = __arg;
+            float local_value = _arg;
+            return local__value + local_value;
+        }
+
+        vertex {
+            vec4 main(
+                vec3 position__value @ POSITION,
+                vec3 position_value @ NORMAL
+            ) @ gl_Position {
+                float result__value = gl_helper(
+                    position__value.x,
+                    position_value.x
+                );
+                float result_value = result__value;
+                return vec4(
+                    position__value + position_value + vec3(result_value),
+                    1.0
+                );
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate_stage(parse_shader(shader), "vertex")
+
+    assert "__" not in generated
+    assert "layout(location = 0) in vec3 position_value_2;" in generated
+    assert "layout(location = 1) in vec3 position_value;" in generated
+    assert "float crossgl_gl_helper(float arg, float _arg)" in generated
+    assert generated.count("float crossgl_gl_helper(float arg, float _arg)") == 2
+    assert "crossgl_gl_helper(position_value_2.x, position_value.x)" in generated
+    assert "float local_value_2 = arg;" in generated
+
+
+def test_webgl_codegen_sanitizes_webgl_reserved_prefixes():
+    shader = r"""
+    shader WebGLReservedPrefixes {
+        float crossgl_webgl_helper(float value) { return value; }
+
+        float webgl_helper(float _webgl_arg) {
+            float webgl__value = _webgl_arg;
+            return webgl__value;
+        }
+
+        vertex {
+            vec4 main(vec3 webgl_position @ POSITION) @ gl_Position {
+                return vec4(webgl_position, webgl_helper(1.0));
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate_stage(parse_shader(shader), "vertex")
+
+    assert "layout(location = 0) in vec3 crossgl_webgl_position;" in generated
+    assert "float crossgl_webgl_helper_2(float crossgl_webgl_arg)" in generated
+    assert "float crossgl_webgl_value = crossgl_webgl_arg;" in generated
+    assert "crossgl_webgl_helper_2(1.0)" in generated
+    assert re.search(r"\b(?:webgl_|_webgl_)[A-Za-z0-9_]*", generated) is None
+    assert "__" not in generated
+
+
+@pytest.mark.parametrize(
+    ("source_name", "emitted_name"),
+    (
+        ("texture_a_", "texture_a_"),
+        ("texture_a__", "texture_a"),
+        ("texture_a___", "texture_a"),
+    ),
+)
+def test_webgl_trailing_underscore_resource_names_share_glsl_mapping(
+    tmp_path, source_name, emitted_name
+):
+    shader = f"""
+    shader WebGLTrailingUnderscore {{
+        sampler2D {source_name} @binding(0);
+
+        fragment {{
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {{
+                return texture({source_name}, uv);
+            }}
+        }}
+    }}
+    """
+
+    codegen = WebGLCodeGen()
+    generated = codegen.generate_stage(parse_shader(shader), "fragment")
+
+    assert codegen.glsl_sanitized_identifier_base(source_name) == emitted_name
+    assert codegen.glsl_module_identifier_names[source_name] == emitted_name
+    assert f"uniform sampler2D {emitted_name};" in generated
+    assert f"texture({emitted_name}, uv)" in generated
+    assert generated.count(emitted_name) == 2
+    assert_webgl_stage_validates_if_available(
+        generated,
+        tmp_path,
+        f"trailing_underscore_{len(source_name) - len(source_name.rstrip('_'))}",
+    )
+
+
+def test_webgl_structure_copy_and_registered_scalar_conversion_validate(tmp_path):
+    shader = """
+    shader WebGLStructureConversions {
+        struct Pair {
+            float first;
+            float second;
+        };
+
+        struct complex64_t {
+            float real;
+            float imag;
+        };
+
+        Pair copyPair(Pair value) {
+            return Pair(value);
+        }
+
+        complex64_t promote(float value) {
+            return value;
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                Pair pair = Pair(1.0, 2.0);
+                Pair copied = Pair(pair);
+                complex64_t promoted = complex64_t(3.0);
+                complex64_t returned = promote(4.0);
+                return vec4(
+                    copied.first,
+                    copied.second,
+                    promoted.real,
+                    returned.imag
+                );
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate_stage(parse_shader(shader), "fragment")
+
+    assert "return value;" in generated
+    assert "Pair copied = pair;" in generated
+    assert "complex64_t promoted = complex64_t(float(3.0), 0.0);" in generated
+    assert "return complex64_t(float(value), 0.0);" in generated
+    assert "Pair(value)" not in generated
+    assert "Pair(pair)" not in generated
+    assert_webgl_stage_validates_if_available(
+        generated,
+        tmp_path,
+        "webgl_structure_conversions",
+    )
+
+
+def test_webgl_registered_scalar_conversion_rejects_destination_shape():
+    shader = """
+    shader InvalidWebGLStructureConversion {
+        struct complex64_t {
+            float real;
+            int imag;
+        };
+
+        complex64_t promote(float value) {
+            return value;
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                complex64_t value = promote(1.0);
+                return vec4(value.real);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(WebGLStructConstructionError) as exc_info:
+        WebGLCodeGen().generate_stage(parse_shader(shader), "fragment")
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.webgl-struct-construction-unsupported"
+    )
+    assert diagnostic.destination_type == "complex64_t"
+    assert diagnostic.source_type == "float"
+    assert diagnostic.conversion_kind == "contextual-scalar-conversion"
+    assert diagnostic.reason == "destination-shape-mismatch"
+
+
+def test_webgl_codegen_reuses_fixed_array_for_in_contract():
+    shader = """
+    shader WebGLFixedArrayForIn {
+        constant uint[2] values = {3u, 5u};
+        fragment {
+            vec4 main() @ gl_FragColor {
+                uint total = 0u;
+                for value in values {
+                    total += value;
+                }
+                return vec4(float(total));
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "uint value_crossgl_iterable[2] = values;" in generated
+    assert "value_crossgl_index < 2" in generated
+    assert "uint value = value_crossgl_iterable[value_crossgl_index];" in generated
+
+    counted_shader = """
+    shader WebGLIntegerBoundForIn {
+        int helper(int limit) {
+            int total = 0;
+            for value in limit {
+                total += value;
+            }
+            return total;
+        }
+    }
+    """
+
+    counted = WebGLCodeGen().generate(parse_shader(counted_shader))
+
+    assert "for (int value = 0; value < limit; ++value)" in counted
 
 
 def test_webgl_codegen_preserves_explicit_precision_qualifiers():
@@ -984,3 +1438,66 @@ def test_webgl_codegen_rejects_non_webgl_stage_targets(stage):
         match=rf"WebGL target does not support shader stage\(s\): {stage}",
     ):
         WebGLCodeGen().generate_program(ast, target_stage=stage)
+
+
+def test_webgl_boolean_vector_min_max_validate_without_integer_mix_extension(
+    tmp_path,
+):
+    shader = """
+    shader BooleanMinMax {
+        fragment {
+            bvec3 vectorMin(bvec3 left, bvec3 right) {
+                return min(left, right);
+            }
+
+            bvec3 vectorMax(bvec3 left, bvec3 right) {
+                return max(left, right);
+            }
+
+            vec4 main() @ gl_FragColor {
+                bvec3 minimum = vectorMin(
+                    bvec3(true, false, true),
+                    bvec3(true, true, false)
+                );
+                bvec3 maximum = vectorMax(
+                    bvec3(false, false, true),
+                    bvec3(false, true, false)
+                );
+                return vec4(minimum.x, maximum.y, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated = WebGLCodeGen().generate(parse_shader(shader))
+
+    assert "#extension GL_EXT_shader_integer_mix" not in generated
+    assert "return bvec3(left.x && right.x" in generated
+    assert "return bvec3(left.x || right.x" in generated
+    assert_webgl_stage_validates_if_available(generated, tmp_path, "boolean-min-max")
+
+
+def test_webgl_boolean_min_max_reports_unrepresentable_operand_shapes():
+    shader = """
+    shader BooleanMinMismatch {
+        fragment {
+            bvec2 invalidMin(bvec2 left, bvec3 right) {
+                return min(left, right);
+            }
+
+            vec4 main() @ gl_FragColor {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(WebGLBooleanOrderedIntrinsicError) as exc_info:
+        WebGLCodeGen().generate(parse_shader(shader))
+
+    assert exc_info.value.project_diagnostic_code == (
+        "project.translate.webgl-boolean-ordered-intrinsic-unrepresentable"
+    )
+    assert exc_info.value.operation == "min"
+    assert exc_info.value.operand_types == ("bvec2", "bvec3")
+    assert exc_info.value.reason == "operand-type-mismatch"

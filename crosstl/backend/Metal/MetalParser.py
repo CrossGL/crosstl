@@ -408,6 +408,10 @@ class MetalParser:
         self.known_value_template_parameters = set()
         self.declaration_context_stack = []
         self.namespace_aliases = {}
+        self.namespace_scope_stack = []
+        self.using_namespace_directives = []
+        self.last_struct_type_aliases = []
+        self.last_struct_constructors = []
 
     def skip_comments(self):
         while self.pos < len(self.tokens) and self.current_token[0] in [
@@ -507,6 +511,29 @@ class MetalParser:
         if self.declaration_context_stack:
             self.declaration_context_stack.pop()
 
+    def current_namespace(self):
+        return "::".join(
+            component
+            for scope in self.namespace_scope_stack
+            for component in scope
+            if component
+        )
+
+    def annotate_declaration_scope(self, node):
+        if node is None:
+            return node
+        namespace = self.current_namespace()
+        node.namespace = namespace
+        name = getattr(node, "name", None)
+        if name:
+            node.qualified_name = f"{namespace}::{name}" if namespace else name
+        return node
+
+    def close_namespace_scope(self):
+        self.eat("RBRACE")
+        if self.namespace_scope_stack:
+            self.namespace_scope_stack.pop()
+
     def peek(self, offset=1):
         idx = self.pos + offset
         if idx < len(self.tokens):
@@ -561,6 +588,8 @@ class MetalParser:
                     functions.append(declaration)
                 elif isinstance(declaration, StructNode):
                     structs.append(declaration)
+                elif isinstance(declaration, TypeAliasNode):
+                    typedefs.append(declaration)
             elif self.current_token[0] == "STRUCT":
                 if self.is_function_definition():
                     function = self.parse_function()
@@ -612,6 +641,7 @@ class MetalParser:
                 elif isinstance(typedef, EnumNode):
                     enums.append(typedef)
                 elif typedef is not None:
+                    self.annotate_declaration_scope(typedef)
                     typedefs.append(typedef)
             elif self.current_token[0] == "STATIC_ASSERT":
                 global_variables.append(self.parse_static_assert())
@@ -658,6 +688,8 @@ class MetalParser:
                     self.add_global_declaration(
                         global_variables, self.parse_global_variable()
                     )
+            elif self.current_token[0] == "RBRACE" and self.namespace_scope_stack:
+                self.close_namespace_scope()
             else:
                 self.eat(self.current_token[0])
 
@@ -674,9 +706,20 @@ class MetalParser:
         shader.template_specialization_limit_source = (
             self.template_specialization_limit_source
         )
+        shader.using_namespace_directives = list(self.using_namespace_directives)
+        shader.namespace_aliases = dict(self.namespace_aliases)
         return shader
 
     def add_global_declaration(self, global_variables, declaration):
+        declarations = declaration if isinstance(declaration, list) else [declaration]
+        for item in declarations:
+            scoped_item = (
+                item.left
+                if isinstance(item, AssignmentNode)
+                and isinstance(item.left, VariableNode)
+                else item
+            )
+            self.annotate_declaration_scope(scoped_item)
         if isinstance(declaration, list):
             global_variables.extend(declaration)
         else:
@@ -773,6 +816,12 @@ class MetalParser:
             return
         if self.current_token[0] == "LBRACE":
             self.eat("LBRACE")
+            components = tuple(
+                component
+                for component in str(namespace_name or "").split("::")
+                if component
+            )
+            self.namespace_scope_stack.append(components)
         elif self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
 
@@ -787,6 +836,21 @@ class MetalParser:
         return (
             self.current_token[0] == "IDENTIFIER"
             and self.current_token[1] == "template"
+        )
+
+    def is_template_alias_declaration_start(self):
+        if not self.is_template_declaration_start():
+            return False
+        angle_start = self.pos + 1
+        if (
+            angle_start >= len(self.tokens)
+            or self.tokens[angle_start][0] != "LESS_THAN"
+        ):
+            return False
+        declaration_start = self.skip_template_argument_list_at(angle_start)
+        return (
+            declaration_start < len(self.tokens)
+            and self.tokens[declaration_start][0] == "USING"
         )
 
     def is_union_declaration_start(self):
@@ -864,7 +928,7 @@ class MetalParser:
         template_type_names = {
             name
             for kind, name in template_parameters
-            if kind in {"typename", "class"} and name
+            if kind in {"typename", "class", "typename...", "class..."} and name
         }
         template_value_names = {
             name for kind, name in template_parameters if kind == "value" and name
@@ -895,6 +959,22 @@ class MetalParser:
                     if not getattr(struct, "source_location", None):
                         struct.source_location = template_location
                 return struct
+
+            if self.current_token[0] == "USING":
+                alias = self.parse_using_statement()
+                if isinstance(alias, TypeAliasNode):
+                    alias.generics = [
+                        name for _kind, name in template_parameters if name
+                    ]
+                    alias.template_parameters = template_parameters
+                    alias.template_parameter_defaults = template_parameter_defaults
+                    alias.is_template_alias = True
+                    template_location = self.source_span_from_tokens(
+                        start_token, self.tokens[self.pos - 1]
+                    )
+                    alias.template_source_location = template_location
+                    alias.source_location = template_location
+                return alias
 
             if not self.is_function_definition():
                 function_template_name = self.template_function_declaration_name_at(
@@ -1543,9 +1623,21 @@ class MetalParser:
         self.eat("USING")
         if self.current_token[0] == "NAMESPACE":
             self.eat("NAMESPACE")
+            target_name = None
             if self.current_token[0] in {"IDENTIFIER", "METAL"}:
-                self.parse_scoped_identifier()
+                target_name = self.parse_scoped_identifier()
             self.eat("SEMICOLON")
+            if target_name:
+                self.using_namespace_directives.append(
+                    {
+                        "namespace": self.current_namespace(),
+                        "target": target_name,
+                        "source_location": self.source_span_from_tokens(
+                            start_token, self.tokens[self.pos - 1]
+                        ),
+                        "declaration_context": self.current_declaration_context(),
+                    }
+                )
             return None
         if self.is_using_declaration_start():
             self.parse_using_declaration()
@@ -1561,25 +1653,29 @@ class MetalParser:
             parameters = self.parse_callable_alias_parameters()
             self.eat("SEMICOLON")
             self.register_known_type(alias_name)
-            return CallableTypeAliasNode(
+            return self.annotate_declaration_scope(
+                CallableTypeAliasNode(
+                    alias_type,
+                    alias_name,
+                    parameters,
+                    indirection=indirection,
+                    qualifiers=qualifiers,
+                    source_location=self.source_span_from_tokens(
+                        start_token, self.tokens[self.pos - 1]
+                    ),
+                )
+            )
+        self.eat("SEMICOLON")
+        self.register_known_type(alias_name)
+        return self.annotate_declaration_scope(
+            TypeAliasNode(
                 alias_type,
                 alias_name,
-                parameters,
-                indirection=indirection,
                 qualifiers=qualifiers,
                 source_location=self.source_span_from_tokens(
                     start_token, self.tokens[self.pos - 1]
                 ),
             )
-        self.eat("SEMICOLON")
-        self.register_known_type(alias_name)
-        return TypeAliasNode(
-            alias_type,
-            alias_name,
-            qualifiers=qualifiers,
-            source_location=self.source_span_from_tokens(
-                start_token, self.tokens[self.pos - 1]
-            ),
         )
 
     def is_using_declaration_start(self):
@@ -1604,9 +1700,10 @@ class MetalParser:
         self.eat("SEMICOLON")
 
         self.register_known_type(alias_name)
-        union_node = StructNode(alias_name, members)
+        union_node = self.annotate_declaration_scope(StructNode(alias_name, members))
         union_node.aggregate_kind = "union"
         union_node.using_alias = True
+        union_node.type_aliases = list(self.last_struct_type_aliases)
         return union_node
 
     def parse_enum(self):
@@ -1957,6 +2054,7 @@ class MetalParser:
             self.eat("SEMICOLON")
 
     def parse_global_variable(self, pre_alignas=None):
+        start_token = self.current_token
         attributes = self.parse_attributes()
         alignas_specs = pre_alignas or self.parse_alignas_specifiers()
         vtype, qualifiers = self.parse_type_specifier(attributes=attributes)
@@ -1973,6 +2071,9 @@ class MetalParser:
         var_node.array_sizes = array_sizes
         self.apply_declarator_metadata(var_node, type_suffix, grouped_suffix)
         var_node.alignas = alignas_specs
+        var_node.source_location = self.source_span_from_tokens(
+            start_token, self.tokens[self.pos - 1]
+        )
         self.register_local_variable_name(name)
         if "const" in qualifiers or "constexpr" in qualifiers:
             var_node.is_const = True
@@ -1993,8 +2094,7 @@ class MetalParser:
             return node
 
         if self.current_token[0] == "LPAREN":
-            args = self.parse_parenthesized_arguments()
-            node = AssignmentNode(var_node, VectorConstructorNode(vtype, args))
+            node = AssignmentNode(var_node, self.parse_vector_constructor(vtype))
             if self.current_token[0] == "COMMA":
                 return self.parse_remaining_global_variable_declarations(
                     base_vtype,
@@ -2054,9 +2154,8 @@ class MetalParser:
                 self.eat("EQUALS")
                 nodes.append(AssignmentNode(var_node, self.parse_expression()))
             elif self.current_token[0] == "LPAREN":
-                args = self.parse_parenthesized_arguments()
                 nodes.append(
-                    AssignmentNode(var_node, VectorConstructorNode(decl_type, args))
+                    AssignmentNode(var_node, self.parse_vector_constructor(decl_type))
                 )
             elif self.current_token[0] == "LBRACE":
                 nodes.append(AssignmentNode(var_node, self.parse_initializer_list()))
@@ -2496,6 +2595,7 @@ class MetalParser:
         return array_sizes
 
     def parse_struct(self, pre_alignas=None):
+        start_token = self.current_token
         alignas_specs = (
             list(pre_alignas)
             if pre_alignas is not None
@@ -2523,20 +2623,33 @@ class MetalParser:
             base_types = self.parse_struct_base_clause()
         self.eat("LBRACE")
 
-        members = self.parse_struct_members()
+        members = self.parse_struct_members(name)
 
-        struct_node = StructNode(name, members)
+        struct_node = self.annotate_declaration_scope(StructNode(name, members))
         struct_node.attributes = struct_attributes
         struct_node.alignas = alignas_specs
         struct_node.base_types = base_types
+        struct_node.type_aliases = list(self.last_struct_type_aliases)
+        struct_node.constructors = list(self.last_struct_constructors)
+        for constructor in struct_node.constructors:
+            constructor.owner_name = name
+            constructor.name = name
+            constructor.owner_qualified_name = struct_node.qualified_name
+        for alias in struct_node.type_aliases:
+            alias.owner_name = name
+            alias.owner_qualified_name = struct_node.qualified_name
         self.eat("RBRACE")
         struct_node.trailing_declarations = self.parse_trailing_aggregate_declarations(
             name
+        )
+        struct_node.declaration_source_location = self.source_span_from_tokens(
+            start_token, self.tokens[self.pos - 1]
         )
         self.pop_declaration_context()
         return struct_node
 
     def parse_class(self, pre_alignas=None):
+        start_token = self.current_token
         alignas_specs = (
             list(pre_alignas)
             if pre_alignas is not None
@@ -2564,16 +2677,28 @@ class MetalParser:
             base_types = self.parse_struct_base_clause()
         self.eat("LBRACE")
 
-        members = self.parse_struct_members()
+        members = self.parse_struct_members(name)
 
-        class_node = StructNode(name, members)
+        class_node = self.annotate_declaration_scope(StructNode(name, members))
         class_node.attributes = class_attributes
         class_node.alignas = alignas_specs
         class_node.base_types = base_types
         class_node.aggregate_kind = "class"
+        class_node.type_aliases = list(self.last_struct_type_aliases)
+        class_node.constructors = list(self.last_struct_constructors)
+        for constructor in class_node.constructors:
+            constructor.owner_name = name
+            constructor.name = name
+            constructor.owner_qualified_name = class_node.qualified_name
+        for alias in class_node.type_aliases:
+            alias.owner_name = name
+            alias.owner_qualified_name = class_node.qualified_name
         self.eat("RBRACE")
         class_node.trailing_declarations = self.parse_trailing_aggregate_declarations(
             name
+        )
+        class_node.declaration_source_location = self.source_span_from_tokens(
+            start_token, self.tokens[self.pos - 1]
         )
         self.pop_declaration_context()
         return class_node
@@ -2615,6 +2740,7 @@ class MetalParser:
         return bases
 
     def parse_union(self):
+        start_token = self.current_token
         self.skip_gnu_extension_prefix_tokens()
         self.eat("IDENTIFIER")
         name = self.current_token[1] if self.is_current_name_token() else None
@@ -2629,13 +2755,25 @@ class MetalParser:
         self.push_declaration_context(f"union {name}")
         self.eat("LBRACE")
 
-        members = self.parse_struct_members()
+        members = self.parse_struct_members(name)
 
-        union_node = StructNode(name, members)
+        union_node = self.annotate_declaration_scope(StructNode(name, members))
         union_node.aggregate_kind = "union"
+        union_node.type_aliases = list(self.last_struct_type_aliases)
+        union_node.constructors = list(self.last_struct_constructors)
+        for constructor in union_node.constructors:
+            constructor.owner_name = name
+            constructor.name = name
+            constructor.owner_qualified_name = union_node.qualified_name
+        for alias in union_node.type_aliases:
+            alias.owner_name = name
+            alias.owner_qualified_name = union_node.qualified_name
         self.eat("RBRACE")
         union_node.trailing_declarations = self.parse_trailing_aggregate_declarations(
             name
+        )
+        union_node.declaration_source_location = self.source_span_from_tokens(
+            start_token, self.tokens[self.pos - 1]
         )
         self.pop_declaration_context()
         return union_node
@@ -2659,9 +2797,8 @@ class MetalParser:
                 self.eat("EQUALS")
                 declarations.append(AssignmentNode(var_node, self.parse_expression()))
             elif self.current_token[0] == "LPAREN":
-                args = self.parse_parenthesized_arguments()
                 declarations.append(
-                    AssignmentNode(var_node, VectorConstructorNode(decl_type, args))
+                    AssignmentNode(var_node, self.parse_vector_constructor(decl_type))
                 )
             elif self.current_token[0] == "LBRACE":
                 declarations.append(
@@ -2676,8 +2813,10 @@ class MetalParser:
             self.eat("SEMICOLON")
             return declarations
 
-    def parse_struct_members(self):
+    def parse_struct_members(self, owner_name=None):
         members = []
+        type_aliases = []
+        constructors = []
         while self.current_token[0] != "RBRACE":
             if self.current_token[0] == "SEMICOLON":
                 self.eat("SEMICOLON")
@@ -2701,12 +2840,29 @@ class MetalParser:
                 members.append(self.parse_static_assert())
                 continue
             if self.current_token[0] == "USING":
-                self.parse_using_statement()
+                alias = self.parse_using_statement()
+                if isinstance(alias, TypeAliasNode):
+                    type_aliases.append(alias)
                 continue
             if self.current_token[0] == "TYPEDEF":
-                self.parse_typedef()
+                alias = self.parse_typedef()
+                if isinstance(alias, TypeAliasNode):
+                    self.annotate_declaration_scope(alias)
+                    type_aliases.append(alias)
                 continue
             if self.is_template_declaration_start():
+                if self.is_template_alias_declaration_start():
+                    alias = self.parse_template_declaration()
+                    if isinstance(alias, TypeAliasNode):
+                        type_aliases.append(alias)
+                    continue
+                if owner_name and self.is_template_constructor_declaration_start(
+                    owner_name
+                ):
+                    constructors.append(
+                        self.parse_template_constructor_declaration(owner_name)
+                    )
+                    continue
                 self.skip_template_declaration()
                 continue
             member_alignas = self.parse_alignas_specifiers()
@@ -2718,6 +2874,11 @@ class MetalParser:
                 continue
             if self.is_struct_destructor_start():
                 self.skip_struct_method()
+                continue
+            if owner_name and self.is_struct_constructor_start(owner_name):
+                constructor = self.parse_struct_constructor(owner_name)
+                constructor.alignas = member_alignas
+                constructors.append(constructor)
                 continue
             vtype, qualifiers = self.parse_type_specifier()
             if self.current_token[0] == "OPERATOR":
@@ -2757,7 +2918,222 @@ class MetalParser:
                 )
                 continue
             self.eat("SEMICOLON")
+        self.last_struct_type_aliases = type_aliases
+        self.last_struct_constructors = constructors
         return members
+
+    def is_template_constructor_declaration_start(self, owner_name):
+        if not self.is_template_declaration_start():
+            return False
+        angle_start = self.pos + 1
+        if (
+            angle_start >= len(self.tokens)
+            or self.tokens[angle_start][0] != "LESS_THAN"
+        ):
+            return False
+        declaration_start = self.skip_template_argument_list_at(angle_start)
+        return self.is_struct_constructor_start_at(declaration_start, owner_name)
+
+    def is_struct_constructor_start(self, owner_name):
+        return self.is_struct_constructor_start_at(self.pos, owner_name)
+
+    def is_struct_constructor_start_at(self, idx, owner_name):
+        owner = str(owner_name).split("<", 1)[0].rsplit("::", 1)[-1]
+        while idx < len(self.tokens):
+            token_type, token_value = self.tokens[idx]
+            if token_type == "ATTRIBUTE":
+                idx += 1
+                continue
+            if token_type == "ALIGNAS":
+                idx = self.skip_alignas_specifier_tokens_at(idx)
+                continue
+            if self.is_qualifier_token_at(idx) or (
+                token_type == "IDENTIFIER"
+                and token_value
+                in {
+                    "explicit",
+                    "inline",
+                    "constexpr",
+                    *MACRO_QUALIFIERS,
+                }
+            ):
+                idx += 1
+                continue
+            break
+        return (
+            idx + 1 < len(self.tokens)
+            and self.tokens[idx][1] == owner
+            and self.tokens[idx + 1][0] == "LPAREN"
+        )
+
+    def parse_template_constructor_declaration(self, owner_name):
+        start_token = self.current_token
+        template_parameters = self.parse_template_prefix()
+        template_parameter_defaults = dict(
+            getattr(self, "last_template_parameter_defaults", {}) or {}
+        )
+        template_type_names = {
+            name
+            for kind, name in template_parameters
+            if kind in {"typename", "class", "typename...", "class..."} and name
+        }
+        template_value_names = {
+            name for kind, name in template_parameters if kind == "value" and name
+        }
+        added_type_names = template_type_names - self.known_types
+        added_value_names = template_value_names - self.known_value_template_parameters
+        self.known_types.update(added_type_names)
+        self.known_value_template_parameters.update(added_value_names)
+        try:
+            constructor = self.parse_struct_constructor(owner_name)
+            constructor.template_parameters = list(template_parameters)
+            constructor.template_parameter_defaults = template_parameter_defaults
+            constructor.generics = [name for _kind, name in template_parameters if name]
+            constructor.template_source_location = self.source_span_from_tokens(
+                start_token, self.tokens[self.pos - 1]
+            )
+            if constructor.source_location is None:
+                constructor.source_location = constructor.template_source_location
+            return constructor
+        finally:
+            self.known_types.difference_update(added_type_names)
+            self.known_value_template_parameters.difference_update(added_value_names)
+
+    def parse_struct_constructor(self, owner_name):
+        start_token = self.current_token
+        qualifiers = []
+        while True:
+            if self.current_token[0] == "ATTRIBUTE":
+                qualifiers.append(self.current_token[1])
+                self.eat("ATTRIBUTE")
+                continue
+            if self.is_type_qualifier_start():
+                qualifiers.extend(self.parse_type_qualifier())
+                continue
+            if self.current_token[0] == "IDENTIFIER" and self.current_token[1] in {
+                "explicit",
+                "inline",
+                "constexpr",
+                *MACRO_QUALIFIERS,
+            }:
+                qualifiers.append(self.current_token[1])
+                self.eat("IDENTIFIER")
+                continue
+            break
+
+        owner = str(owner_name).split("<", 1)[0].rsplit("::", 1)[-1]
+        if self.current_token[1] != owner:
+            raise self.syntax_error(
+                f"Expected constructor owner {owner}, got {self.current_token[1]}"
+            )
+        self.eat(self.current_token[0])
+        self.push_declaration_context(f"constructor {owner_name}")
+        self.eat("LPAREN")
+        params = self.parse_parameters()
+        self.eat("RPAREN")
+
+        receiver_qualifiers = []
+        while self.current_token[0] not in {
+            "COLON",
+            "LBRACE",
+            "SEMICOLON",
+            "EQUALS",
+            "EOF",
+        }:
+            if self.current_token == ("IDENTIFIER", "noexcept"):
+                receiver_qualifiers.append(self.current_token[1])
+                self.eat("IDENTIFIER")
+                if self.current_token[0] == "LPAREN":
+                    receiver_qualifiers.append(
+                        self.parse_balanced_token_text(
+                            "LPAREN",
+                            "RPAREN",
+                            error_message="Unterminated constructor noexcept qualifier",
+                        )
+                    )
+                continue
+            receiver_qualifiers.append(self.current_token[1])
+            self.eat(self.current_token[0])
+
+        initializers = []
+        if self.current_token[0] == "COLON":
+            self.eat("COLON")
+            while True:
+                initializers.append(self.parse_constructor_initializer())
+                if self.current_token[0] != "COMMA":
+                    break
+                self.eat("COMMA")
+
+        declaration_kind = "definition"
+        body = None
+        if self.current_token[0] == "EQUALS":
+            self.eat("EQUALS")
+            declaration_kind = str(self.current_token[1])
+            self.eat(self.current_token[0])
+            self.eat("SEMICOLON")
+        elif self.current_token[0] == "SEMICOLON":
+            declaration_kind = "declaration"
+            self.eat("SEMICOLON")
+        else:
+            self.pending_block_scope_names.append(
+                {param.name for param in params if getattr(param, "name", None)}
+            )
+            body = self.parse_block()
+            if self.current_token[0] == "SEMICOLON":
+                self.eat("SEMICOLON")
+
+        constructor = ConstructorNode(
+            owner_name,
+            params,
+            body,
+            initializers=initializers,
+            qualifiers=[*qualifiers, *receiver_qualifiers],
+            declaration_kind=declaration_kind,
+            source_location=self.source_span_from_tokens(
+                start_token, self.tokens[self.pos - 1]
+            ),
+        )
+        self.pop_declaration_context()
+        return constructor
+
+    def parse_constructor_initializer(self):
+        start_token = self.current_token
+        target_parts = []
+        angle_depth = 0
+        while self.current_token[0] != "EOF":
+            token_type, token_value = self.current_token
+            if angle_depth == 0 and token_type in {"LPAREN", "LBRACE"}:
+                break
+            if token_type == "LESS_THAN":
+                angle_depth += 1
+            elif token_type == "GREATER_THAN" and angle_depth:
+                angle_depth -= 1
+            elif token_type == "SHIFT_RIGHT" and angle_depth >= 2:
+                angle_depth -= 2
+            target_parts.append(token_value)
+            self.eat(token_type)
+        target = self.format_generic_type_tokens(target_parts)
+        if not target:
+            raise self.syntax_error("Expected constructor initializer target")
+
+        if self.current_token[0] == "LPAREN":
+            style = "paren"
+            arguments = self.parse_parenthesized_arguments()
+        elif self.current_token[0] == "LBRACE":
+            style = "brace"
+            arguments = self.parse_initializer_list().elements
+        else:
+            raise self.syntax_error(
+                "Expected parenthesized or braced constructor initializer"
+            )
+        return ConstructorInitializerNode(
+            target,
+            arguments,
+            style=style,
+            source_location=self.source_span_from_tokens(
+                start_token, self.tokens[self.pos - 1]
+            ),
+        )
 
     def parse_remaining_struct_member_declarations(
         self, vtype, qualifiers, alignas_specs
@@ -2961,6 +3337,7 @@ class MetalParser:
         return ConstantBufferNode(name, members)
 
     def parse_function(self):
+        start_token = self.current_token
         attributes = self.parse_attributes()
 
         qualifier = None
@@ -3035,7 +3412,11 @@ class MetalParser:
             attributes=attributes,
             qualifier=qualifier,  # Also store as single qualifier for backward compatibility
         )
+        self.annotate_declaration_scope(function)
         function.declaration_qualifiers = list(return_qualifiers)
+        function.declaration_source_location = self.source_span_from_tokens(
+            start_token, self.tokens[self.pos - 1]
+        )
         self.pop_declaration_context()
         return function
 
@@ -3593,8 +3974,7 @@ class MetalParser:
             return node
 
         if self.current_token[0] == "LPAREN":
-            args = self.parse_parenthesized_arguments()
-            node = AssignmentNode(var_node, VectorConstructorNode(vtype, args))
+            node = AssignmentNode(var_node, self.parse_vector_constructor(vtype))
             if self.current_token[0] == "COMMA":
                 return self.parse_remaining_variable_declarations(
                     base_vtype, qualifiers, [node]
@@ -3647,9 +4027,8 @@ class MetalParser:
                 self.eat(self.current_token[0])
                 nodes.append(AssignmentNode(var_node, self.parse_expression(), op))
             elif self.current_token[0] == "LPAREN":
-                args = self.parse_parenthesized_arguments()
                 nodes.append(
-                    AssignmentNode(var_node, VectorConstructorNode(vtype, args))
+                    AssignmentNode(var_node, self.parse_vector_constructor(vtype))
                 )
             elif self.current_token[0] == "LBRACE":
                 nodes.append(AssignmentNode(var_node, self.parse_initializer_list()))
@@ -4589,6 +4968,7 @@ class MetalParser:
         return self.format_generic_type_tokens(parts)
 
     def parse_initializer_list(self):
+        start_token = self.current_token
         self.eat("LBRACE")
         elements = []
 
@@ -4602,7 +4982,11 @@ class MetalParser:
             break
 
         self.eat("RBRACE")
-        return InitializerListNode(elements)
+        node = InitializerListNode(elements)
+        node.source_location = self.source_span_from_tokens(
+            start_token, self.tokens[self.pos - 1]
+        )
+        return node
 
     def parse_initializer_element(self):
         if self.current_token[0] in ("DOT", "LBRACKET"):
@@ -4688,8 +5072,13 @@ class MetalParser:
         return "::".join(parts)
 
     def parse_vector_constructor(self, type_name):
+        start_token = self.current_token
         args = self.parse_parenthesized_arguments()
-        return VectorConstructorNode(type_name, args)
+        node = VectorConstructorNode(type_name, args)
+        node.source_location = self.source_span_from_tokens(
+            start_token, self.tokens[self.pos - 1]
+        )
+        return node
 
     def parse_parenthesized_arguments(self):
         self.eat("LPAREN")
@@ -4702,12 +5091,14 @@ class MetalParser:
         return args
 
     def parse_call(self, callee):
+        open_token = self.current_token
         self.eat("LPAREN")
         args = []
         while self.current_token[0] != "RPAREN":
             args.append(self.parse_expression())
             if self.current_token[0] == "COMMA":
                 self.eat("COMMA")
+        close_token = self.current_token
         self.eat("RPAREN")
 
         if isinstance(callee, MemberAccessNode):
@@ -4717,7 +5108,22 @@ class MetalParser:
         if isinstance(callee, VariableNode):
             if callee.name == "discard_fragment" and not args:
                 return DiscardNode()
-            return FunctionCallNode(callee.name, args)
+            node = FunctionCallNode(callee.name, args)
+            call_location = self.source_span_from_tokens(open_token, close_token)
+            callee_location = getattr(callee, "source_location", None)
+            if callee_location is not None:
+                call_location = dict(callee_location)
+                closing_location = self.source_span_from_tokens(open_token, close_token)
+                if closing_location is not None:
+                    for key in ("end_line", "end_column", "end_offset"):
+                        if key in closing_location:
+                            call_location[key] = closing_location[key]
+                    if "offset" in call_location and "end_offset" in call_location:
+                        call_location["length"] = (
+                            call_location["end_offset"] - call_location["offset"]
+                        )
+            node.source_location = call_location
+            return node
         return CallNode(callee, args)
 
     def build_texture_sample(self, texture, args):

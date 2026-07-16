@@ -116,19 +116,42 @@
       "mlx/backend/metal/kernels/arg_reduce.metal",
       "mlx/backend/metal/kernels/binary_two.metal",
       "mlx/backend/metal/kernels/logsumexp.metal",
-      "mlx/backend/metal/kernels/softmax.metal"
+      "mlx/backend/metal/kernels/rms_norm.metal",
+      "mlx/backend/metal/kernels/rope.metal",
+      "mlx/backend/metal/kernels/scaled_dot_product_attention.metal",
+      "mlx/backend/metal/kernels/softmax.metal",
+      "mlx/backend/metal/kernels/ternary.metal"
     ],
-    "source_count": 4,
+    "source_count": 8,
     "target": "opengl",
-    "artifact_count": 4,
+    "artifact_count": 8,
     "project_diagnostic_count": 0,
-    "glslang_compiled_artifact_count": 4,
-    "spirv_validated_artifact_count": 4,
+    "glslang_compiled_artifact_count": 8,
+    "spirv_validated_artifact_count": 8,
     "glslang_target_environments": [
       "opengl",
       "spirv1.3"
     ],
     "spirv_val_target_environment": "spv1.3",
+    "specialization_constants": {
+      "mlx/backend/metal/kernels/rms_norm.metal": {
+        "has_w": 20
+      },
+      "mlx/backend/metal/kernels/rope.metal": {
+        "forward": 1,
+        "hs_transpose": 3,
+        "traditional": 2
+      },
+      "mlx/backend/metal/kernels/scaled_dot_product_attention.metal": {
+        "blocks": 26,
+        "bool_mask": 23,
+        "do_causal": 22,
+        "float_mask": 24,
+        "has_mask": 20,
+        "has_sinks": 25,
+        "query_transposed": 21
+      }
+    },
     "binary_two_fixed_array_resource_status": {
       "status": "validated",
       "resolved_issue": "https://github.com/CrossGL/crosstl/issues/1661",
@@ -136,6 +159,47 @@
     },
     "runtime_integration_included": false,
     "runtime_parity_claimed": false
+  },
+  "rms_norm_specialization_status": {
+    "status": "translation-and-native-compilation-validated",
+    "source": "mlx/backend/metal/kernels/rms_norm.metal",
+    "source_sha256": "5d411a2350ba7ddf84eb35f9dcac7cde0d441bd55fa1e9e1ccc61d490d428dee",
+    "function_constant": {
+      "name": "has_w",
+      "id": 20,
+      "required": true
+    },
+    "directx": {
+      "specialization_materialization": "concrete-crossgl-variant",
+      "variants": [
+        {
+          "name": "has_w_false_by_name",
+          "selector": "has_w",
+          "selector_kind": "name",
+          "value": false
+        },
+        {
+          "name": "has_w_true_by_id",
+          "selector": "20",
+          "selector_kind": "id",
+          "value": true
+        }
+      ],
+      "native_compilation": "required-on-windows-ci",
+      "compiled_entry_count_per_variant": 1
+    },
+    "opengl": {
+      "specialization_materialization": "deferred",
+      "constant_id": 20,
+      "native_compilation": "required-on-linux-ci",
+      "spirv_validation": "required-on-linux-ci"
+    },
+    "numerical_execution_included": false,
+    "runtime_parity_claimed": false,
+    "full_mlx_test_suite_included": false,
+    "runtime_blocked_by": [
+      "https://github.com/CrossGL/crosstl/issues/1750"
+    ]
   },
   "pointer_reinterpretation_status": {
     "status": "partial",
@@ -315,7 +379,7 @@
       "static_members": 42
     },
     "native_validation": {
-      "directx": "translated-dxc-blocked-by-existing-issues",
+      "directx": "dxc-validated",
       "opengl": "validated",
       "vulkan": "validated"
     },
@@ -372,23 +436,54 @@
   },
   "directx_toolchain_status": {
     "status": "passing",
-    "note": "Windows CI compiles every discovered entry in the generated DirectX HLSL for the verified subset below. Other clean frontier kernels translate to DirectX but remain outside the compile gate for the listed structural or semantic defects. fence.metal is a separate blocked source and emits no DirectX artifact under its atomic-fence contract diagnostic.",
+    "note": "Windows CI compiles all 574 generated compute entries in the full 11-source clean DirectX HLSL frontier below. This is native compiler validation only and does not establish Direct3D runtime execution or numerical parity. fence.metal is a separate blocked source and emits no DirectX artifact under its atomic-fence contract diagnostic.",
+    "compiler": {
+      "name": "dxc",
+      "version": "v1.9.2602.24"
+    },
+    "specialization_constants": {
+      "1": false,
+      "2": false,
+      "3": false,
+      "20": false,
+      "21": false,
+      "22": false,
+      "23": false,
+      "24": false,
+      "25": false,
+      "26": 1
+    },
+    "expected_entry_point_counts": {
+      "mlx/backend/metal/kernels/arange.metal": 11,
+      "mlx/backend/metal/kernels/arg_reduce.metal": 24,
+      "mlx/backend/metal/kernels/binary_two.metal": 225,
+      "mlx/backend/metal/kernels/layer_norm.metal": 12,
+      "mlx/backend/metal/kernels/logsumexp.metal": 6,
+      "mlx/backend/metal/kernels/random.metal": 2,
+      "mlx/backend/metal/kernels/rms_norm.metal": 12,
+      "mlx/backend/metal/kernels/rope.metal": 18,
+      "mlx/backend/metal/kernels/scaled_dot_product_attention.metal": 42,
+      "mlx/backend/metal/kernels/softmax.metal": 10,
+      "mlx/backend/metal/kernels/ternary.metal": 212
+    },
     "dxc_validated_sources": [
       "mlx/backend/metal/kernels/arange.metal",
       "mlx/backend/metal/kernels/arg_reduce.metal",
-      "mlx/backend/metal/kernels/rope.metal"
+      "mlx/backend/metal/kernels/binary_two.metal",
+      "mlx/backend/metal/kernels/layer_norm.metal",
+      "mlx/backend/metal/kernels/logsumexp.metal",
+      "mlx/backend/metal/kernels/random.metal",
+      "mlx/backend/metal/kernels/rms_norm.metal",
+      "mlx/backend/metal/kernels/rope.metal",
+      "mlx/backend/metal/kernels/scaled_dot_product_attention.metal",
+      "mlx/backend/metal/kernels/softmax.metal",
+      "mlx/backend/metal/kernels/ternary.metal"
     ],
     "directx_toolchain_gaps": {
-      "mlx/backend/metal/kernels/fence.metal": "the requested mem_device, memory_order_seq_cst, thread_scope_system atomic-fence contract is not representable in HLSL and fails with project.translate.directx-atomic-fence-unsupported (https://github.com/CrossGL/crosstl/issues/1537)",
-      "mlx/backend/metal/kernels/random.metal": "the generated dispatch-info cbuffer still requires reflected runtime binding and dispatch-plan coverage before it enters the DXC/runtime gate (https://github.com/CrossGL/crosstl/issues/1542)",
-      "mlx/backend/metal/kernels/binary_two.metal": "operator-functor call lowering emits duplicated/temporary helper names and a conditional operator over a non-numeric result (https://github.com/CrossGL/crosstl/issues/1536)",
-      "mlx/backend/metal/kernels/layer_norm.metal": "pointer-style helpers and resource rebasing remain outside the DXC gate (https://github.com/CrossGL/crosstl/issues/1518)",
-      "mlx/backend/metal/kernels/logsumexp.metal": "storage-resource cursor arithmetic remains invalid HLSL (https://github.com/CrossGL/crosstl/issues/1518)",
-      "mlx/backend/metal/kernels/rms_norm.metal": "storage-resource cursor arithmetic remains invalid HLSL (https://github.com/CrossGL/crosstl/issues/1518)",
-      "mlx/backend/metal/kernels/scaled_dot_product_attention.metal": "storage-resource cursor arithmetic remains outside the DXC gate (https://github.com/CrossGL/crosstl/issues/1518)",
-      "mlx/backend/metal/kernels/softmax.metal": "storage-resource cursor arithmetic remains invalid HLSL (https://github.com/CrossGL/crosstl/issues/1518)",
-      "mlx/backend/metal/kernels/ternary.metal": "static template-trait member WorkPerThread<T>::n is emitted as an undeclared identifier and a conditional operator returns a non-numeric type (https://github.com/CrossGL/crosstl/issues/1491, https://github.com/CrossGL/crosstl/issues/1524)"
-    }
+      "mlx/backend/metal/kernels/fence.metal": "the requested mem_device, memory_order_seq_cst, thread_scope_system atomic-fence contract is not representable in HLSL and fails with project.translate.directx-atomic-fence-unsupported (https://github.com/CrossGL/crosstl/issues/1537)"
+    },
+    "native_runtime_executed": false,
+    "runtime_parity_claimed": false
   },
   "opengl_smoke_status": {
     "status": "passing",
@@ -463,11 +558,17 @@
         "arangefloat32"
       ]
     },
+    "native_opengl_execution": {
+      "required_on_linux_ci": true,
+      "source_entry_point": "arangeuint32",
+      "target_entry_point": "main",
+      "expected_output": [300, 317, 334, 351]
+    },
     "target_specializations": {
       "directx": "uint8 via CSMain",
-      "opengl": "uint8 via main",
+      "opengl": "entry-scoped uint32 via main",
       "vulkan": "uint32, int32, and float32 via named entry points",
-      "per_entry_packaging_tracked_by": "https://github.com/CrossGL/crosstl/issues/1523"
+      "remaining_entry_packaging_scope_tracked_by": "https://github.com/CrossGL/crosstl/issues/1523"
     }
   },
   "full_corpus_scout": {
@@ -553,6 +654,8 @@
     "https://github.com/CrossGL/crosstl/issues/1670",
     "https://github.com/CrossGL/crosstl/issues/1671",
     "https://github.com/CrossGL/crosstl/issues/1672",
+    "https://github.com/CrossGL/crosstl/issues/1696",
+    "https://github.com/CrossGL/crosstl/issues/1750",
     "https://github.com/CrossGL/crosstl/issues/1312",
     "https://github.com/CrossGL/crosstl/issues/1376",
     "https://github.com/CrossGL/crosstl/issues/1676",
@@ -591,6 +694,10 @@
     "https://github.com/CrossGL/crosstl/issues/1660"
   ],
   "resolved_issues": [
+    "https://github.com/CrossGL/crosstl/issues/1728",
+    "https://github.com/CrossGL/crosstl/issues/1701",
+    "https://github.com/CrossGL/crosstl/issues/1694",
+    "https://github.com/CrossGL/crosstl/issues/1695",
     "https://github.com/CrossGL/crosstl/issues/1667",
     "https://github.com/CrossGL/crosstl/issues/1668",
     "https://github.com/CrossGL/crosstl/issues/1661",

@@ -1,9 +1,23 @@
+import ast
 import importlib
 import inspect
 import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def _setup_keyword(name):
+    tree = ast.parse((ROOT / "setup.py").read_text(encoding="utf-8"))
+    setup_call = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "setup"
+    )
+    keyword = next(item for item in setup_call.keywords if item.arg == name)
+    return ast.literal_eval(keyword.value)
 
 
 def _catalog_backends():
@@ -48,6 +62,14 @@ def test_native_backend_modules_are_importable():
                 failures.append(f"{module}: {type(exc).__name__}: {exc}")
 
     assert not failures, "Native backend import failures:\n" + "\n".join(failures)
+
+
+def test_directx_runtime_extra_declares_supported_compushady_release():
+    extras = _setup_keyword("extras_require")
+
+    assert extras["directx-runtime"] == [
+        "compushady>=0.17.5,<0.18; platform_system=='Windows'"
+    ]
 
 
 def test_native_backend_packages_expose_core_frontend_classes():

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 import crosstl.project as project_api
+from crosstl._crosstl import translate
 from crosstl.project.runtime_verification import (
     COMPARISON_FAILED,
     PASSED,
@@ -916,6 +917,222 @@ def test_plan_runtime_test_manifest_scopes_contract_to_fixture_entry_point(tmp_p
     assert contract["dispatch"]["entryPoint"] == "vector_add"
 
 
+def test_plan_runtime_test_manifest_can_replace_ambiguous_artifact_contract(tmp_path):
+    artifact_report = _artifact_report(
+        tmp_path,
+        [
+            _translated_artifact(
+                id="ambiguous-aggregate",
+                hostInterface={"status": "ambiguous"},
+                entryPoints=[{"name": "CSMain", "stage": "compute"}],
+                resourceBindings=[{"name": "unscoped", "kind": "buffer", "binding": 0}],
+                dispatch={"entryPoint": "CSMain", "workgroupCount": [1, 1, 1]},
+            )
+        ],
+    )
+    fixture = _runtime_fixture(
+        entryPoint="CSMain_3",
+        runtimeAdapter={
+            "entryPoints": [
+                {
+                    "name": "CSMain_3",
+                    "stage": "compute",
+                    "workgroupSize": [1, 1, 1],
+                }
+            ],
+            "resourceBindings": [
+                {
+                    "name": "lhs",
+                    "kind": "buffer",
+                    "binding": 4,
+                    "value": "lhs",
+                },
+                {
+                    "name": "out",
+                    "kind": "buffer",
+                    "binding": 2,
+                    "value": "out",
+                },
+            ],
+            "dispatch": {"entryPoint": "CSMain_3", "globalSize": [2, 1, 1]},
+            "metadata": {"artifactContractMode": "replace"},
+        },
+    )
+
+    plan = plan_runtime_test_manifest(
+        artifact_report,
+        {"kind": RUNTIME_TEST_MANIFEST_KIND, "tests": [fixture]},
+        project_root=tmp_path,
+    )
+
+    case = plan["testCases"][0]
+    assert case["status"] in {"planned", "skipped"}
+    assert [
+        binding["name"] for binding in case["runtimeAdapter"]["resourceBindings"]
+    ] == ["lhs", "out"]
+    assert case["runtimeAdapter"]["dispatch"]["entryPoint"] == "CSMain_3"
+    assert all(
+        diagnostic["code"] != "project.runtime-verification.entry-point-missing"
+        for diagnostic in case["diagnostics"]
+    )
+
+
+def test_plan_runtime_test_manifest_rejects_invalid_artifact_contract_mode(tmp_path):
+    artifact_report = _artifact_report(tmp_path, [_translated_artifact()])
+    fixture = _runtime_fixture(
+        adapter="unavailable-runtime",
+        runtimeAdapter={"metadata": {"artifactContractMode": "overlay"}},
+    )
+
+    plan = plan_runtime_test_manifest(
+        artifact_report,
+        {
+            "kind": RUNTIME_TEST_MANIFEST_KIND,
+            "adapters": [
+                {
+                    "id": "unavailable-runtime",
+                    "target": "opengl",
+                    "executor": "opengl",
+                    "platformRequirements": {
+                        "requiredTools": ["crosstl-guaranteed-missing-runtime-tool"]
+                    },
+                }
+            ],
+            "tests": [fixture],
+        },
+        project_root=tmp_path,
+    )
+
+    case = plan["testCases"][0]
+    diagnostic = next(
+        item
+        for item in case["diagnostics"]
+        if item["code"] == "project.runtime-verification.artifact-contract-mode-invalid"
+    )
+    assert case["status"] == RUNTIME_FAILED
+    assert diagnostic["reasonKind"] == "artifact-contract-mode-invalid"
+    assert diagnostic["artifactContractMode"] == "overlay"
+    assert diagnostic["supportedArtifactContractModes"] == ["merge", "replace"]
+
+
+def test_mlx_arange_directx_generated_manifest_plans_curated_interface(tmp_path):
+    fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / "mlx"
+    artifact_path = tmp_path / "out" / "directx" / "arange.hlsl"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text("// generated aggregate", encoding="utf-8")
+    artifact_report = {
+        "kind": "crosstl-runtime-artifact-manifest",
+        "project": {"root": str(tmp_path), "targets": ["directx"]},
+        "artifacts": [
+            {
+                "id": "mlx-arange-generated-directx",
+                "source": "mlx/backend/metal/kernels/arange.metal",
+                "path": "out/directx/arange.hlsl",
+                "target": "directx",
+                "sourceBackend": "metal",
+                "status": "translated",
+                "hostInterface": {"status": "ambiguous"},
+                "entryPoints": [
+                    {
+                        "name": "CSMain",
+                        "stage": "compute",
+                        "executionConfig": {"numthreads": [1, 1, 1]},
+                    }
+                ],
+                "resourceBindings": [
+                    {
+                        "name": "arangeuint8_start_Constants",
+                        "kind": "constant-buffer",
+                        "set": 0,
+                        "binding": 0,
+                    },
+                    {
+                        "name": "out_",
+                        "kind": "buffer",
+                        "set": 0,
+                        "binding": 2,
+                        "access": "read_write",
+                    },
+                ],
+                "parameterBlocks": [
+                    {
+                        "name": "arangeuint8_start_Constants",
+                        "kind": "constant-buffer",
+                        "set": 0,
+                        "binding": 0,
+                        "status": "layout-ready",
+                    }
+                ],
+                "dispatch": {
+                    "status": "available",
+                    "workgroups": [
+                        {
+                            "entryPoint": "CSMain",
+                            "stage": "compute",
+                            "workgroupSize": [1, 1, 1],
+                        }
+                    ],
+                },
+                "runtimeDataStatus": {
+                    "hostInterface": "ambiguous",
+                    "entryPoints": "available",
+                    "resourceBindings": "available",
+                    "parameterBlocks": "available",
+                    "dispatch": "available",
+                },
+            }
+        ],
+    }
+
+    manifest = build_runtime_test_manifest(
+        artifact_report,
+        fixture_dir / "arange_directx.fixture-metadata.json",
+        project_root=tmp_path,
+    )
+    plan = plan_runtime_test_manifest(
+        artifact_report,
+        manifest,
+        project_root=tmp_path,
+    )
+
+    assert manifest["success"] is True
+    assert manifest["tests"][0]["entryPoint"] == "CSMain_3"
+    assert manifest["tests"][0]["metadata"]["runtimeMetadata"]["status"] == (
+        "incomplete"
+    )
+    case = plan["testCases"][0]
+    assert case["status"] == "planned"
+    assert case["runtimeExecution"]["dispatch"] == {
+        "entryPoint": "CSMain_3",
+        "workgroupSize": [1, 1, 1],
+        "workgroupCount": [7, 1, 1],
+        "globalSize": [7, 1, 1],
+    }
+    bindings = case["runtimeExecution"]["resourceBindings"]
+    assert [binding["binding"]["name"] for binding in bindings] == [
+        "arangeuint32_start_Constants",
+        "arangeuint32_step_Constants",
+        "out_",
+    ]
+    assert [binding["binding"]["binding"] for binding in bindings] == [4, 5, 2]
+    assert bindings[0]["binding"]["metadata"]["parameterBlock"] == {
+        "field": "arangeuint32_start",
+        "byteOffset": 0,
+        "byteSize": 4,
+    }
+    assert bindings[1]["binding"]["metadata"]["parameterBlock"] == {
+        "field": "arangeuint32_step",
+        "byteOffset": 0,
+        "byteSize": 4,
+    }
+    assert [binding["source"] for binding in bindings] == [
+        "input",
+        "input",
+        "expectedOutput",
+    ]
+    assert all(binding["status"] == "bound" for binding in bindings)
+
+
 def test_plan_runtime_test_manifest_infers_entry_point_from_dispatch(tmp_path):
     artifact_report = _artifact_report(
         tmp_path,
@@ -1413,6 +1630,109 @@ def test_build_runtime_test_manifest_from_mlx_fixture_metadata():
     }
 
 
+def test_mlx_file_scope_immutable_lookup_fixture_is_value_sensitive():
+    fixture_dir = ROOT / "tests" / "fixtures" / "runtime_verification" / "mlx"
+    source_path = fixture_dir / "file_scope_immutable_lookup.metal"
+    artifact_report = fixture_dir / "file_scope_immutable_lookup.artifacts.json"
+    fixture_metadata = fixture_dir / "file_scope_immutable_lookup.fixture-metadata.json"
+
+    generated = translate(
+        str(source_path),
+        backend="directx",
+        source_backend="metal",
+        format_output=False,
+    )
+    assert (
+        "static const uint lookup_table[2][4] = "
+        "{{3u, 5u, 7u, 11u}, {13u, 17u, 19u, 23u}};"
+    ) in generated
+    assert "static const uint lookup_table[2][4];" not in generated
+    assert "output[index] = lookup_table[row][column];" in generated
+
+    manifest = build_runtime_test_manifest(
+        artifact_report,
+        fixture_metadata,
+        project_root=ROOT,
+    )
+
+    assert manifest["success"] is True
+    assert manifest["summary"]["testCount"] == 1
+    assert manifest["summary"]["testsByTarget"] == {"directx": 1}
+    assert manifest["summary"]["runtimeMetadataStatusCounts"] == {"ready": 1}
+    assert manifest["adapters"][0]["executor"] == "directx"
+    assert manifest["adapters"][0]["platformRequirements"]["requiredTools"] == ["dxc"]
+    test_case = manifest["tests"][0]
+    assert test_case["id"] == "mlx-file-scope-immutable-lookup-u32"
+    assert test_case["expectedOutputs"] == [
+        {
+            "name": "output",
+            "kind": "buffer",
+            "dtype": "uint32",
+            "shape": [4],
+            "values": [5, 19, 11, 13],
+            "tolerance": {"absolute": 0.0, "relative": 0.0},
+        }
+    ]
+    assert test_case["runtimeAdapter"]["dispatch"] == {
+        "entryPoint": "CSMain",
+        "globalSize": [4, 1, 1],
+    }
+
+    plan = plan_runtime_test_manifest(manifest)
+    runtime_execution = plan["testCases"][0]["runtimeExecution"]
+    assert runtime_execution["dispatch"] == {
+        "entryPoint": "CSMain",
+        "workgroupSize": [1, 1, 1],
+        "workgroupCount": [4, 1, 1],
+        "globalSize": [4, 1, 1],
+        "metadata": {"stage": "compute", "source": "fixture", "status": "available"},
+    }
+    assert runtime_execution["resourceBindings"][0]["binding"] == {
+        "id": "buffer|0|output",
+        "name": "output",
+        "kind": "buffer",
+        "type": "RWStructuredBuffer<uint>",
+        "set": 0,
+        "binding": 0,
+        "access": "write",
+    }
+
+
+def test_mlx_workflow_requires_directx_lookup_numerical_execution():
+    workflow = (ROOT / ".github" / "workflows" / "mlx-project-porting.yml").read_text(
+        encoding="utf-8"
+    )
+    for watched_path in (
+        "tests/fixtures/runtime_verification/**",
+        "tests/test_translator/test_native_runtime_drivers.py",
+        "tests/test_translator/test_runtime_verification.py",
+    ):
+        assert workflow.count(f'- "{watched_path}"') == 2
+
+    compile_start = workflow.index("- name: Run MLX project-porting checks")
+    runtime_start = workflow.index(
+        "- name: Prove Direct3D immutable lookup numerical execution"
+    )
+    runtime_end = workflow.index("- name: Verify MLX frontier accounting")
+    assert compile_start < runtime_start < runtime_end
+
+    compile_step = workflow[compile_start:runtime_start]
+    runtime_step = workflow[runtime_start:runtime_end]
+    assert "--require-directx-toolchain" in compile_step
+    assert "CROSTL_RUN_DIRECTX_LOOKUP_DEVICE_TEST" not in compile_step
+    assert "if: runner.os == 'Windows'" in runtime_step
+    assert 'CROSTL_RUN_DIRECTX_LOOKUP_DEVICE_TEST: "1"' in runtime_step
+    assert "python -m pytest -q -n auto" in runtime_step
+    assert "tests/test_translator/test_native_runtime_drivers.py" in runtime_step
+    assert (
+        "directx_compute_runtime_executes_mlx_file_scope_lookup_on_device"
+        in runtime_step
+    )
+    assert "continue-on-error" not in runtime_step
+    assert "|| true" not in runtime_step
+    assert 'python -m pip install -e ".[directx-runtime]" pytest-xdist' in workflow
+
+
 def test_build_runtime_test_manifest_reports_ambiguous_fixture_selector(tmp_path):
     metadata = {
         "kind": "crosstl-project-runtime-fixture-metadata",
@@ -1855,7 +2175,9 @@ def test_runtime_parity_native_factories_create_target_adapters():
 
     assert set(adapters) == {"directx", "opengl", "vulkan"}
     assert isinstance(adapters["directx"], DirectXRuntimeParityAdapter)
+    assert adapters["directx"].runtime.name == "directx-compute-runtime"
     assert isinstance(adapters["opengl"], OpenGLRuntimeParityAdapter)
+    assert adapters["opengl"].runtime.name == "opengl-compute-runtime"
     assert isinstance(adapters["vulkan"], VulkanRuntimeParityAdapter)
     assert isinstance(
         native_runtime_parity_adapter("DirectX"), DirectXRuntimeParityAdapter
@@ -1883,6 +2205,126 @@ def test_runtime_parity_native_adapter_reports_unavailable_tooling(tmp_path):
     assert result["failurePhase"] == "runtime"
     assert result["executor"]["details"]["reasonKind"] == "tool-unavailable"
     assert result["executor"]["details"]["missingTools"] == [missing_tool]
+
+
+def test_runtime_parity_native_opengl_adapter_compiles_specialization_to_spirv(
+    tmp_path,
+):
+    artifact_path = tmp_path / "out" / "opengl" / "debug" / "add.glsl"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text(
+        "#version 450\nlayout(constant_id = 0) const uint tile_size = 1u;\n"
+        "void main() {}\n",
+        encoding="utf-8",
+    )
+    calls = []
+
+    def passing_command(command, *, input_text=None):
+        assert input_text is None
+        calls.append(command)
+        output_path = Path(command[command.index("-o") + 1])
+        output_path.write_bytes(b"\x03\x02#\x07\x00\x00\x00\x00")
+        return {"returncode": 0}
+
+    runtime = FakeNativeRuntime()
+    adapter = OpenGLRuntimeParityAdapter(
+        runtime=runtime,
+        required_tools=(),
+        tool_resolver=lambda tool: f"/fake/{tool}",
+        command_runner=passing_command,
+    )
+
+    report = verify_runtime_test_manifest(
+        _artifact_report(tmp_path, [_native_runtime_artifact()]),
+        _native_runtime_manifest(),
+        executors={"opengl": adapter},
+    )
+
+    result = report["results"][0]
+    assert result["status"] == PASSED
+    assert calls[0][:7] == (
+        "/fake/glslangValidator",
+        "--target-env",
+        "opengl",
+        "-S",
+        "comp",
+        "-e",
+        "main",
+    )
+    assert calls[0][-3] == "-o"
+    assert calls[0][-1] == str(artifact_path.resolve())
+    assert runtime.prepared.module_path.suffix == ".spv"
+    details = result["executor"]["details"]
+    assert details["nativeRuntimeDispatch"]["modulePath"].endswith(".spv")
+    assert details["openglRuntimeConstants"] == {
+        "specializationConstantCount": 1,
+        "specializationConstantIds": [0],
+        "uniformConstantCount": 0,
+        "uniformConstants": [],
+    }
+    assert any(
+        step["action"] == "compile-glsl-to-opengl-spirv-for-runtime"
+        for step in details["adapterSteps"]
+    )
+
+
+def test_runtime_parity_native_opengl_adapter_preserves_uniform_source_path(
+    tmp_path,
+):
+    artifact_path = tmp_path / "out" / "opengl" / "debug" / "add.glsl"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text(
+        "#version 450\nuniform uint tile_size;\nvoid main() {}\n",
+        encoding="utf-8",
+    )
+    calls = []
+
+    def passing_command(command, *, input_text=None):
+        assert input_text is None
+        calls.append(command)
+        return {"returncode": 0}
+
+    artifact = _native_runtime_artifact(
+        specializationConstants=[
+            {
+                "name": "tile_size",
+                "kind": "uniform",
+                "dtype": "uint32",
+                "value": 2,
+            }
+        ]
+    )
+    runtime = FakeNativeRuntime()
+    adapter = OpenGLRuntimeParityAdapter(
+        runtime=runtime,
+        required_tools=(),
+        tool_resolver=lambda tool: f"/fake/{tool}",
+        command_runner=passing_command,
+    )
+
+    report = verify_runtime_test_manifest(
+        _artifact_report(tmp_path, [artifact]),
+        _native_runtime_manifest(),
+        executors={"opengl": adapter},
+    )
+
+    result = report["results"][0]
+    assert result["status"] == PASSED
+    assert calls == [
+        (
+            "/fake/glslangValidator",
+            "-S",
+            "comp",
+            str(artifact_path.resolve()),
+        )
+    ]
+    assert runtime.prepared.module_path == artifact_path.resolve()
+    assert result["executor"]["details"]["openglRuntimeConstants"] == {
+        "specializationConstantCount": 0,
+        "specializationConstantIds": [],
+        "uniformConstantCount": 1,
+        "uniformConstants": ["tile_size"],
+    }
 
 
 def test_runtime_parity_native_adapter_skips_validation_tooling_when_disabled(

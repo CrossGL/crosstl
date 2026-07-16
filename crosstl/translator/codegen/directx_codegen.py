@@ -4,6 +4,7 @@ import re
 from copy import deepcopy
 from hashlib import sha1
 
+from ...glsl_builtins import GLSL_BUILTIN_INT_LIMITS
 from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
@@ -14,6 +15,7 @@ from ..ast import (
     BinaryOpNode,
     BlockNode,
     BreakNode,
+    CastNode,
     ConstructorNode,
     ContinueNode,
     CooperativeMatrixOpNode,
@@ -26,6 +28,7 @@ from ..ast import (
     FunctionNode,
     IdentifierNode,
     IfNode,
+    LiteralNode,
     LoopNode,
     MatchNode,
     MemberAccessNode,
@@ -78,6 +81,7 @@ from .array_utils import (
     parse_array_type,
     split_array_type_suffix,
 )
+from .boolean_intrinsics import is_boolean_type, ordered_boolean_minmax_width
 from .constant_ordering import partition_constants_by_struct_dependency
 from .enum_utils import (
     build_generic_enum_specialization,
@@ -347,6 +351,65 @@ class DirectXUnresolvedSourceTypeError(ValueError):
         super().__init__(message)
 
 
+class DirectXTextureOffsetError(ValueError):
+    """Raised when an HLSL texture offset cannot preserve source semantics."""
+
+    project_diagnostic_code = (
+        "project.translate.directx-texture-offset-immediate-required"
+    )
+    missing_capabilities = ("directx.runtime-texture-offset-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        operation,
+        target_method,
+        blocking_expression,
+        function_name,
+        reason,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.operation = operation
+        self.target_method = target_method
+        self.blocking_expression = blocking_expression
+        self.function_name = function_name
+        self.reason = reason
+        self.source_location = source_location
+        self.operation_context = {
+            "sourceOperation": operation,
+            "targetMethod": target_method,
+            "function": function_name,
+            "blockingExpression": blocking_expression,
+            "reason": reason,
+        }
+
+
+class DirectXForInIterableError(ValueError):
+    """Raised when a CrossGL for-in binding has no faithful HLSL lowering."""
+
+    project_diagnostic_code = "project.translate.directx-for-in-iterable-unsupported"
+    missing_capabilities = ("directx.fixed-array-for-in-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        pattern=None,
+        iterable_type=None,
+        binding_type=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.pattern = pattern
+        self.iterable_type = iterable_type
+        self.binding_type = binding_type
+        self.reason = reason
+        self.source_location = source_location
+
+
 class DirectXTrailingZeroBuiltinError(ValueError):
     """Raised when a Clang trailing-zero builtin has no faithful HLSL lowering."""
 
@@ -403,6 +466,192 @@ class DirectXAggregateInitializerError(ValueError):
         self.source_location = source_location
 
 
+class DirectXCompileTimeGlobalError(ValueError):
+    """Raised when a file-scope constant has no faithful HLSL initializer."""
+
+    project_diagnostic_code = "project.translate.directx-compile-time-global-invalid"
+    missing_capabilities = ("directx.compile-time-global-initializer",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        variable_name=None,
+        expression_kind=None,
+        detail=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.variable_name = variable_name
+        self.expression_kind = expression_kind
+        self.detail = detail
+        self.reason = reason
+        self.source_location = source_location
+
+
+class DirectXAggregateConditionalError(ValueError):
+    """Raised when an aggregate conditional has no faithful HLSL lowering."""
+
+    project_diagnostic_code = (
+        "project.translate.directx-aggregate-conditional-unsupported"
+    )
+    missing_capabilities = ("directx.aggregate-conditional-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        aggregate_type=None,
+        target="HLSL",
+        context=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.aggregate_type = aggregate_type
+        self.target = target
+        self.context = context
+        self.reason = reason
+        self.source_location = source_location
+
+
+class DirectXUnionLayoutError(ValueError):
+    """Raised when source union storage cannot be represented faithfully in HLSL."""
+
+    project_diagnostic_code = "project.translate.directx-union-layout-unsupported"
+    missing_capabilities = ("directx.union-storage-aliasing",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        union_name=None,
+        member_name=None,
+        member_type=None,
+        size=None,
+        alignment=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.union_name = union_name
+        self.member_name = member_name
+        self.member_type = member_type
+        self.size = size
+        self.alignment = alignment
+        self.reason = reason
+        self.source_location = source_location
+
+
+class DirectXMappedOverloadError(ValueError):
+    """Raised when source overload binding cannot survive HLSL type mapping."""
+
+    project_diagnostic_code = "project.translate.directx-mapped-overload-ambiguous"
+    missing_capabilities = ("directx.mapped-overload-resolution",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        function_name=None,
+        argument_types=None,
+        candidates=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.function_name = function_name
+        self.argument_types = tuple(argument_types or ())
+        self.candidates = tuple(candidates or ())
+        self.reason = reason
+        self.source_location = source_location
+
+
+class DirectXMinimumPrecisionIntegerArithmeticError(ValueError):
+    """Raised when minimum-precision integer arithmetic cannot be lowered."""
+
+    project_diagnostic_code = (
+        "project.translate.directx-minimum-precision-integer-arithmetic-unsupported"
+    )
+    missing_capabilities = ("directx.minimum-precision-integer-arithmetic-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        operator=None,
+        left_type=None,
+        right_type=None,
+        expected_type=None,
+        context=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.operator = operator
+        self.left_type = left_type
+        self.right_type = right_type
+        self.expected_type = expected_type
+        self.context = context
+        self.reason = reason
+        self.source_location = source_location
+
+
+class DirectXBooleanCompoundAssignmentError(ValueError):
+    """Raised when a boolean compound assignment has no faithful HLSL form."""
+
+    project_diagnostic_code = (
+        "project.translate.directx-boolean-compound-assignment-unrepresentable"
+    )
+    missing_capabilities = ("directx.boolean-compound-assignment-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        operator=None,
+        target_type=None,
+        right_type=None,
+        operation_type=None,
+        context=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.operator = operator
+        self.target_type = target_type
+        self.right_type = right_type
+        self.operation_type = operation_type
+        self.context = context
+        self.reason = reason
+        self.source_location = source_location
+
+
+class DirectXBooleanOrderedIntrinsicError(ValueError):
+    """Raised when boolean min/max operands have no faithful HLSL lowering."""
+
+    project_diagnostic_code = (
+        "project.translate.directx-boolean-ordered-intrinsic-unrepresentable"
+    )
+    missing_capabilities = ("directx.boolean-ordered-intrinsic-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        operation=None,
+        operand_types=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.operation = operation
+        self.operand_types = tuple(operand_types or ())
+        self.reason = reason
+        self.source_location = source_location
+
+
 class DirectXPrivatePointerParameterError(ValueError):
     """Raised when a private pointer cannot become a fixed HLSL array."""
 
@@ -443,6 +692,36 @@ class DirectXWorkgroupPointerError(ValueError):
         super().__init__(message)
         self.function_name = function_name
         self.parameter_name = parameter_name
+        self.reason = reason
+        self.source_location = source_location
+
+
+class DirectXResourcePointerParameterError(ValueError):
+    """Raised when a storage-pointer parameter has no faithful HLSL pair."""
+
+    project_diagnostic_code = (
+        "project.translate.directx-resource-pointer-parameter-unsupported"
+    )
+    missing_capabilities = ("directx.resource-pointer-parameter-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        function_name=None,
+        parameter_name=None,
+        address_space=None,
+        expected_access=None,
+        actual_access=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.function_name = function_name
+        self.parameter_name = parameter_name
+        self.address_space = address_space
+        self.expected_access = expected_access
+        self.actual_access = actual_access
         self.reason = reason
         self.source_location = source_location
 
@@ -520,6 +799,137 @@ class DirectXAtomicFenceLoweringError(ValueError):
         )
 
 
+class DirectXSpecializationConstantError(ValueError):
+    """Raised when a deferred specialization input cannot be represented in HLSL."""
+
+    project_diagnostic_code = (
+        "project.translate.directx-specialization-constant-unsupported"
+    )
+    missing_capabilities = ("directx.specialization-constant-variant",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        constant_name=None,
+        constant_id=None,
+        constant_type=None,
+        reason=None,
+        source_location=None,
+        conflicting_name=None,
+        conflicting_id=None,
+        conflicting_type=None,
+    ):
+        super().__init__(message)
+        self.constant_name = constant_name
+        self.constant_id = constant_id
+        self.constant_type = constant_type
+        self.reason = reason
+        self.source_location = source_location
+        self.conflicting_name = conflicting_name
+        self.conflicting_id = conflicting_id
+        self.conflicting_type = conflicting_type
+
+
+class _DirectXResourceRegisterAllocator(dict):
+    """Track resource allocations with merged occupancy ranges per namespace."""
+
+    def __init__(self):
+        super().__init__()
+        self._allocation_keys = set()
+        self._occupied_ranges = {}
+        self.relocation_cursors = {}
+        self.range_inspection_count = 0
+
+    def _lower_bound(self, ranges, start):
+        lower = 0
+        upper = len(ranges)
+        while lower < upper:
+            middle = (lower + upper) // 2
+            self.range_inspection_count += 1
+            if ranges[middle][0] < start:
+                lower = middle + 1
+            else:
+                upper = middle
+        return lower
+
+    def _occupied_range_conflicts(self, namespace, start, end):
+        ranges = self._occupied_ranges.get(namespace, ())
+        index = self._lower_bound(ranges, start)
+        if index:
+            self.range_inspection_count += 1
+            if ranges[index - 1][1] >= start:
+                return True
+        if index < len(ranges):
+            self.range_inspection_count += 1
+            if ranges[index][0] <= end:
+                return True
+        return False
+
+    def range_is_available(self, namespace, start, end):
+        return not self._occupied_range_conflicts(namespace, start, end)
+
+    def has_allocation(self, namespace, start, end, name):
+        return (namespace, start, end, name) in self._allocation_keys
+
+    def conflicting_allocation(self, namespace, start, end):
+        if not self._occupied_range_conflicts(namespace, start, end):
+            return None
+        for record in self.get(namespace, ()):
+            self.range_inspection_count += 1
+            if start <= record[1] and record[0] <= end:
+                return record
+        return None
+
+    def next_available(self, namespace, start, count):
+        ranges = self._occupied_ranges.get(namespace, ())
+        binding = start
+        index = self._lower_bound(ranges, binding)
+        if index:
+            self.range_inspection_count += 1
+            previous_end = ranges[index - 1][1]
+            if previous_end >= binding:
+                binding = previous_end + 1
+        while index < len(ranges):
+            self.range_inspection_count += 1
+            used_start, used_end = ranges[index]
+            if used_start > binding + count - 1:
+                break
+            binding = max(binding, used_end + 1)
+            index += 1
+        return binding
+
+    def add_allocation(self, namespace, start, end, name, provenance):
+        self.setdefault(namespace, []).append((start, end, name, provenance))
+        self._allocation_keys.add((namespace, start, end, name))
+
+        ranges = self._occupied_ranges.setdefault(namespace, [])
+        index = self._lower_bound(ranges, start)
+        merged_start = start
+        merged_end = end
+        if index:
+            self.range_inspection_count += 1
+            previous_start, previous_end = ranges[index - 1]
+            if previous_end + 1 >= merged_start:
+                merged_start = previous_start
+                merged_end = max(merged_end, previous_end)
+                index -= 1
+                del ranges[index]
+        while index < len(ranges):
+            self.range_inspection_count += 1
+            used_start, used_end = ranges[index]
+            if used_start > merged_end + 1:
+                break
+            merged_end = max(merged_end, used_end)
+            del ranges[index]
+        ranges.insert(index, (merged_start, merged_end))
+
+    def advance_relocation_cursor(self, namespace, start, count):
+        self.relocation_cursors[namespace] = max(
+            self.relocation_cursors.get(namespace, 0), start + count
+        )
+
+
 class HLSLCodeGen:
     """Emit HLSL source from the shared CrossGL translator AST."""
 
@@ -558,6 +968,18 @@ class HLSLCodeGen:
             "min16uint",
         }
     )
+    HLSL_MINIMUM_PRECISION_INTEGER_BASE_TYPES = frozenset(
+        {"min12int", "min16int", "min16uint"}
+    )
+    HLSL_INTEGER_ARITHMETIC_BASE_TYPES = (
+        "uint64_t",
+        "int64_t",
+        "min16uint",
+        "min16int",
+        "min12int",
+        "uint",
+        "int",
+    )
     HLSL_PATCH_CONTROL_POINT_LIMIT = 32
     METAL_ONLY_SYSTEM_INCLUDES = frozenset(
         {
@@ -576,6 +998,16 @@ class HLSLCodeGen:
     )
     METAL_TYPE_ALIAS_GLOBALS = frozenset({"bfloat16_t", "float16_t"})
     HLSL_CANONICAL_NARROW_FLOAT_CONSTRUCTORS = frozenset({"bfloat", "bfloat16"})
+    HLSL_CANONICAL_64_BIT_VECTOR_CONSTRUCTORS = frozenset(
+        {
+            "i64vec2",
+            "i64vec3",
+            "i64vec4",
+            "u64vec2",
+            "u64vec3",
+            "u64vec4",
+        }
+    )
     HLSL_INTERPOLATION_MODE_MODIFIERS = {
         "flat": "nointerpolation",
         "nointerpolation": "nointerpolation",
@@ -949,10 +1381,8 @@ class HLSLCodeGen:
         "nonuniform",
         "nonuniformEXT",
     }
-    # Matches glslang's default resource limit for this built-in constant.
-    HLSL_GLSL_BUILTIN_INT_CONSTANTS = {
-        "gl_MaxImageUnits": 8,
-    }
+    HLSL_GLSL_BUILTIN_INT_CONSTANTS = GLSL_BUILTIN_INT_LIMITS
+    HLSL_SPECIALIZATION_CONSTANT_TYPES = frozenset({"bool", "int", "uint", "float"})
 
     def __init__(self, target_profile=None):
         """Initialize DirectX type maps and per-generation resource state."""
@@ -984,6 +1414,10 @@ class HLSLCodeGen:
         self.function_parameter_names = {}
         self.function_parameter_types = {}
         self.hlsl_function_name_aliases = {}
+        self.hlsl_function_overloads_by_name = {}
+        self.hlsl_function_target_names = {}
+        self.hlsl_function_target_names_by_signature = {}
+        self.hlsl_mapped_overload_names = set()
         self.function_stage_parameter_dependencies = {}
         self.function_hlsl_fragment_builtin_dependencies = {}
         self.function_hlsl_fragment_builtin_parameter_names = {}
@@ -1015,14 +1449,25 @@ class HLSLCodeGen:
         self.function_hlsl_workgroup_pointer_parameter_indices = {}
         self.function_hlsl_workgroup_pointer_backing_variants = {}
         self.function_hlsl_workgroup_pointer_base_names = {}
+        self.function_hlsl_resource_pointer_parameters = {}
+        self.function_hlsl_resource_pointer_parameter_indices = {}
         self.hlsl_omitted_function_names = set()
         self.current_hlsl_workgroup_pointer_variant = {}
         self.current_hlsl_workgroup_pointer_base_names = {}
         self.hlsl_global_groupshared_pointer_aliases = {}
         self.hlsl_groupshared_pointer_bindings_by_declaration = {}
         self.directx_resource_register_overrides = {}
+        self.directx_resource_register_allocator = None
         self.literal_int_constants = {}
         self.literal_bool_constants = {}
+        self.hlsl_texture_offset_global_constants = {}
+        self.hlsl_texture_offset_parameter_constants = {}
+        self.current_hlsl_texture_offset_constants = None
+        self.directx_specialization_constant_records = []
+        self.directx_specialization_constant_global_ids = set()
+        self.directx_specialization_constant_types = {}
+        self.directx_compile_time_global_node_ids = set()
+        self.directx_omitted_compile_time_global_node_ids = set()
         self.standard_math_constant_shadow_names = set()
         self.current_identifier_aliases = {}
         self.current_identifier_reserved_names = set()
@@ -1033,6 +1478,7 @@ class HLSLCodeGen:
         self.allow_hlsl_byteaddress_interlocked_member_expression = False
         self.current_generic_function_substitutions = {}
         self.local_variable_types = {}
+        self.local_variable_source_types = {}
         self.global_variable_types = {}
         self.hlsl_struct_buffer_resource_types = {}
         self.hlsl_promoted_entry_resource_parameter_names = {}
@@ -1043,6 +1489,7 @@ class HLSLCodeGen:
         self.current_hlsl_parameter_resource_types = {}
         self.struct_member_types = {}
         self.structs_by_name = {}
+        self.hlsl_union_layouts = {}
         self.hlsl_fixed_array_return_structs = {}
         self.hlsl_fixed_array_return_struct_nodes = {}
         self.hlsl_fixed_array_return_struct_metadata = {}
@@ -1246,6 +1693,12 @@ class HLSLCodeGen:
             "vec2<u32>": "uint2",
             "vec3<u32>": "uint3",
             "vec4<u32>": "uint4",
+            "i64vec2": "int64_t2",
+            "i64vec3": "int64_t3",
+            "i64vec4": "int64_t4",
+            "u64vec2": "uint64_t2",
+            "u64vec3": "uint64_t3",
+            "u64vec4": "uint64_t4",
             "vec2<bool>": "bool2",
             "vec3<bool>": "bool3",
             "vec4<bool>": "bool4",
@@ -1586,6 +2039,10 @@ class HLSLCodeGen:
         self.implicit_texture_sampler_parameters = {}
         self.function_parameter_types = {}
         self.hlsl_function_name_aliases = {}
+        self.hlsl_function_overloads_by_name = {}
+        self.hlsl_function_target_names = {}
+        self.hlsl_function_target_names_by_signature = {}
+        self.hlsl_mapped_overload_names = set()
         self.function_private_pointer_array_size_hints = {}
         self.function_private_pointer_required_spans = {}
         self.function_private_pointer_parameters = {}
@@ -1603,6 +2060,8 @@ class HLSLCodeGen:
         self.function_hlsl_workgroup_pointer_parameter_indices = {}
         self.function_hlsl_workgroup_pointer_backing_variants = {}
         self.function_hlsl_workgroup_pointer_base_names = {}
+        self.function_hlsl_resource_pointer_parameters = {}
+        self.function_hlsl_resource_pointer_parameter_indices = {}
         self.hlsl_omitted_function_names = set()
         self.current_hlsl_workgroup_pointer_variant = {}
         self.current_hlsl_workgroup_pointer_base_names = {}
@@ -1618,15 +2077,26 @@ class HLSLCodeGen:
         self.required_hlsl_inverse_helpers = set()
         self.required_hlsl_fragment_shading_rate_helper = False
         self.directx_resource_register_overrides = {}
+        self.directx_resource_register_allocator = None
+        self.directx_specialization_constant_records = []
+        self.directx_specialization_constant_global_ids = set()
+        self.directx_specialization_constant_types = {}
+        self.directx_compile_time_global_node_ids = set()
+        self.directx_omitted_compile_time_global_node_ids = set()
         self.current_identifier_aliases = {}
         self.current_identifier_reserved_names = set()
         self.current_function_name = None
         self.current_function_return_type = None
         self.current_expression_expected_type = None
+        self.hlsl_texture_offset_global_constants = {}
+        self.hlsl_texture_offset_parameter_constants = {}
+        self.current_hlsl_texture_offset_constants = None
         self.current_hlsl_stage_output_lowering = None
         self.allow_hlsl_byteaddress_interlocked_member_expression = False
         self.local_variable_types = {}
+        self.local_variable_source_types = {}
         self.global_variable_types = {}
+        self.hlsl_union_layouts = {}
         self.hlsl_struct_buffer_resource_types = {}
         self.hlsl_promoted_entry_resource_parameter_names = {}
         self.hlsl_promoted_entry_scalar_constant_members = {}
@@ -1668,15 +2138,46 @@ class HLSLCodeGen:
         self.current_unsupported_glsl_buffer_block_local_variables = set()
         self.current_glsl_buffer_block_parameter_failures = {}
         self.current_glsl_buffer_block_parameter_struct_failures = {}
+        self.directx_specialization_constant_records = (
+            self.collect_directx_specialization_constants(ast)
+        )
+        self.directx_specialization_constant_global_ids = {
+            id(record["node"])
+            for record in self.directx_specialization_constant_records
+            if record["is_global"]
+        }
+        self.directx_specialization_constant_types = {
+            record["name"]: self.type_name_string(record["type"])
+            for record in self.directx_specialization_constant_records
+        }
         self.literal_int_constants = collect_literal_int_constants(
             getattr(ast, "constants", [])
         )
+        for record in self.directx_specialization_constant_records:
+            if record["mapped_type"] not in {"int", "uint"}:
+                continue
+            value = self.literal_int_value(record["value"], self.literal_int_constants)
+            if value is not None:
+                self.literal_int_constants[record["name"]] = value
         self.literal_int_constants.update(
             self.referenced_hlsl_glsl_builtin_int_constants(ast)
+        )
+        self.hlsl_texture_offset_global_constants = (
+            self.collect_hlsl_texture_offset_global_constants(
+                getattr(ast, "constants", [])
+            )
         )
         self.literal_bool_constants = self.collect_hlsl_literal_bool_constants(
             getattr(ast, "constants", [])
         )
+        for record in self.directx_specialization_constant_records:
+            if record["mapped_type"] != "bool":
+                continue
+            value = self.hlsl_literal_bool_value(
+                record["value"], self.literal_bool_constants
+            )
+            if value is not None:
+                self.literal_bool_constants[record["name"]] = value
         self.current_hlsl_visible_int_constants = None
         structs = deduplicate_named_declarations(
             list(getattr(ast, "structs", []) or [])
@@ -1757,6 +2258,9 @@ class HLSLCodeGen:
             for node in getattr(ast, "constants", []) or []
             if getattr(node, "name", None)
         }
+        self.standard_math_constant_shadow_names.update(
+            record["name"] for record in self.directx_specialization_constant_records
+        )
         for import_node in getattr(ast, "imports", []) or []:
             alias = getattr(import_node, "alias", None)
             if alias:
@@ -1780,6 +2284,7 @@ class HLSLCodeGen:
             self.collect_hlsl_struct_buffer_resource_types(global_vars)
         )
         self.global_variable_types = self.collect_global_variable_types(global_vars)
+        self.global_variable_types.update(self.directx_specialization_constant_types)
         self.global_variable_types.update(self.collect_cbuffer_member_types(cbuffers))
         functions = self.collect_functions(ast)
         self.hlsl_compute_num_workgroups_uniform = (
@@ -1868,6 +2373,7 @@ class HLSLCodeGen:
             structs, self.type_name_string
         )
         self.remove_hlsl_static_struct_member_types(structs)
+        self.hlsl_union_layouts = self.collect_hlsl_union_layouts(structs)
         self.refresh_hlsl_fixed_array_return_struct_member_types()
         self.struct_member_types.update(
             collect_generic_enum_specialization_member_types(
@@ -1881,6 +2387,7 @@ class HLSLCodeGen:
                 self.generic_struct_specializations,
             )
         )
+        self.prepare_directx_compile_time_globals(ast, global_vars)
         self.hlsl_lowered_struct_resource_members = (
             self.collect_hlsl_lowered_struct_resource_members(structs, functions)
         )
@@ -1959,6 +2466,13 @@ class HLSLCodeGen:
                 generic_function_specializations.values()
             ).items():
                 self.function_overloads.setdefault(name, []).extend(overloads)
+        resource_pointer_functions = list(functions)
+        resource_pointer_functions.extend(generic_function_specializations.values())
+        self.prepare_hlsl_mapped_function_overloads(
+            resource_pointer_functions,
+            reserved_names=self.hlsl_mapped_overload_reserved_names(ast),
+        )
+        self.collect_hlsl_resource_pointer_parameters(resource_pointer_functions)
         self.function_stage_parameter_dependencies = (
             self.collect_hlsl_function_stage_parameter_dependencies(ast, target_stage)
         )
@@ -2040,6 +2554,7 @@ class HLSLCodeGen:
             )
         )
         code += self.generate_constants(ast, leading_constants)
+        code += self.generate_directx_specialization_constant_globals()
         code += self.generate_hlsl_glsl_builtin_constant_declarations(ast)
         code += self.generate_hlsl_ordered_struct_declarations(structs)
         code += self.generate_constants(ast, struct_dependent_constants)
@@ -2106,7 +2621,7 @@ class HLSLCodeGen:
         sampler_registers = {}
         uav_registers = {}
         cbuffer_registers = {}
-        used_resource_registers = {}
+        used_resource_registers = self.new_directx_resource_register_allocator()
         self.reserve_explicit_global_resource_registers(
             global_vars, used_resource_registers
         )
@@ -2160,7 +2675,14 @@ class HLSLCodeGen:
             else:
                 var_name = f"var{i}"
 
+            if id(node) in self.directx_omitted_compile_time_global_node_ids:
+                continue
+
             if self.hlsl_should_omit_metal_global_declaration(var_name, vtype):
+                continue
+
+            if id(node) in self.directx_compile_time_global_node_ids:
+                code += self.generate_directx_compile_time_global_declaration(node)
                 continue
 
             attribute_array_size = self.hlsl_resource_array_size_expression(node, vtype)
@@ -2706,6 +3228,9 @@ class HLSLCodeGen:
             self.hlsl_program_has_amplification_stage(ast)
         )
 
+        self.hlsl_texture_offset_parameter_constants = (
+            self.collect_hlsl_texture_offset_parameter_constants(ast, target_stage)
+        )
         functions = getattr(ast, "functions", [])
         global_functions_by_name = {
             func.name: func
@@ -2847,6 +3372,7 @@ class HLSLCodeGen:
         code += self.generate_hlsl_trailing_zero_helpers()
         code += self.generate_hlsl_complex64_helpers()
         code += self.generate_hlsl_explicit_bitcast_helpers()
+        code += self.generate_hlsl_union_storage_helpers()
         code += self.generate_hlsl_fixed_array_return_helpers()
         code += function_declarations_code
         code += functions_code
@@ -3022,6 +3548,44 @@ uint64_t __crossgl_bitcast_uint2_to_uint64(uint2 value) {
             for helper in sorted(self.required_hlsl_explicit_bitcast_helpers)
         )
         return f"{helpers}\n" if helpers else ""
+
+    def generate_hlsl_union_storage_helpers(self):
+        needs_byte_words = any(
+            member["kind"] in {"u8x4", "u8x4_array"}
+            for layout in self.hlsl_union_layouts.values()
+            for member in layout["members"].values()
+        )
+        if not needs_byte_words:
+            return ""
+        return """
+uint4 __crossgl_union_unpack_u8x4(uint word) {
+    return uint4(
+        word & 0xffu,
+        (word >> 8u) & 0xffu,
+        (word >> 16u) & 0xffu,
+        (word >> 24u) & 0xffu
+    );
+}
+
+uint __crossgl_union_pack_u8x4(uint4 value) {
+    return (value.x & 0xffu)
+        | ((value.y & 0xffu) << 8u)
+        | ((value.z & 0xffu) << 16u)
+        | ((value.w & 0xffu) << 24u);
+}
+
+uint __crossgl_union_set_u8x4_lane(
+    inout uint word,
+    uint lane,
+    uint selected
+) {
+    uint shift = (lane & 3u) * 8u;
+    uint mask = 0xffu << shift;
+    word = (word & ~mask) | ((selected & 0xffu) << shift);
+    return selected & 0xffu;
+}
+
+"""
 
     def generate_hlsl_complex64_helpers(self):
         if not getattr(self, "required_hlsl_complex64_helpers", set()):
@@ -3284,7 +3848,11 @@ bool __crossgl_complex64_less_equal(complex64_t left, complex64_t right) {
             add_record(
                 node.name,
                 self.generate_hlsl_regular_struct_declaration(node),
-                self.struct_member_types.get(node.name, {}).values(),
+                (
+                    [self.hlsl_union_layouts[node.name]["storage_type"]]
+                    if node.name in self.hlsl_union_layouts
+                    else self.struct_member_types.get(node.name, {}).values()
+                ),
             )
 
         all_names = {record["name"] for record in records}
@@ -3332,6 +3900,10 @@ bool __crossgl_complex64_less_equal(complex64_t left, complex64_t right) {
         return code
 
     def generate_hlsl_regular_struct_declaration(self, node):
+        union_layout = self.hlsl_union_layouts.get(node.name)
+        if union_layout is not None:
+            return self.generate_hlsl_union_storage_declaration(node, union_layout)
+
         code = f"struct {node.name} {{\n"
         members = [
             member
@@ -3465,6 +4037,652 @@ bool __crossgl_complex64_less_equal(complex64_t left, complex64_t right) {
                 )
         code += "};\n"
         return code
+
+    def generate_hlsl_union_storage_declaration(self, node, layout):
+        return (
+            f"struct {node.name} {{\n"
+            f"    {layout['storage_type']} {layout['storage_field']};\n"
+            "};\n"
+        )
+
+    def hlsl_union_attribute(self, node, name):
+        for attribute in getattr(node, "attributes", []) or []:
+            if str(getattr(attribute, "name", "")).lower() == name:
+                return attribute
+        return None
+
+    def hlsl_union_layout_error(
+        self,
+        node,
+        *,
+        reason,
+        detail,
+        member=None,
+        member_type=None,
+        size=None,
+        alignment=None,
+    ):
+        union_name = getattr(node, "name", None) or "<anonymous>"
+        member_name = getattr(member, "name", None)
+        member_detail = f" member '{member_name}'" if member_name else ""
+        return DirectXUnionLayoutError(
+            f"DirectX cannot lower source union '{union_name}'{member_detail} "
+            f"to canonical HLSL storage: {detail}",
+            union_name=union_name,
+            member_name=member_name,
+            member_type=member_type,
+            size=size,
+            alignment=alignment,
+            reason=reason,
+            source_location=(
+                getattr(member, "source_location", None)
+                or getattr(node, "source_location", None)
+            ),
+        )
+
+    def hlsl_union_layout_int(self, attribute, index):
+        arguments = list(getattr(attribute, "arguments", []) or [])
+        if index >= len(arguments):
+            return None
+        return evaluate_literal_int_expression(
+            arguments[index], self.literal_int_constants
+        )
+
+    def hlsl_union_layout_name(self, attribute, index):
+        arguments = list(getattr(attribute, "arguments", []) or [])
+        if index >= len(arguments):
+            return None
+        value = self.attribute_value_to_string(arguments[index])
+        return str(value).strip().lower() if value is not None else None
+
+    def collect_hlsl_union_layouts(self, structs):
+        layouts = {}
+        for node in structs or []:
+            if not isinstance(node, StructNode):
+                continue
+            attribute = self.hlsl_union_attribute(node, "union_layout")
+            if attribute is None:
+                continue
+
+            arguments = list(getattr(attribute, "arguments", []) or [])
+            if len(arguments) != 4:
+                raise self.hlsl_union_layout_error(
+                    node,
+                    reason="layout-contract-malformed",
+                    detail="@union_layout requires size, alignment, byte order, and ABI",
+                )
+            size = self.hlsl_union_layout_int(attribute, 0)
+            alignment = self.hlsl_union_layout_int(attribute, 1)
+            byte_order = self.hlsl_union_layout_name(attribute, 2)
+            source_abi = self.hlsl_union_layout_name(attribute, 3)
+            if not size or not alignment:
+                raise self.hlsl_union_layout_error(
+                    node,
+                    reason="source-layout-unresolved",
+                    detail="the source ABI did not provide a concrete size and alignment",
+                    size=size,
+                    alignment=alignment,
+                )
+            if size not in {4, 8, 16}:
+                raise self.hlsl_union_layout_error(
+                    node,
+                    reason="storage-size-unsupported",
+                    detail=(
+                        f"{size}-byte storage is outside the supported 4/8/16-byte "
+                        "value contract"
+                    ),
+                    size=size,
+                    alignment=alignment,
+                )
+            if alignment != size:
+                raise self.hlsl_union_layout_error(
+                    node,
+                    reason="aggregate-alignment-unsupported",
+                    detail=(
+                        f"{size}-byte storage with {alignment}-byte alignment may "
+                        "change enclosing aggregate layout"
+                    ),
+                    size=size,
+                    alignment=alignment,
+                )
+            if byte_order != "little_endian":
+                raise self.hlsl_union_layout_error(
+                    node,
+                    reason="byte-order-unsupported",
+                    detail=f"byte order '{byte_order or '<missing>'}' is not supported",
+                    size=size,
+                    alignment=alignment,
+                )
+            if not source_abi:
+                raise self.hlsl_union_layout_error(
+                    node,
+                    reason="source-abi-missing",
+                    detail="the retained union contract has no source ABI",
+                    size=size,
+                    alignment=alignment,
+                )
+
+            word_count = size // 4
+            storage_type = "uint" if word_count == 1 else f"uint{word_count}"
+            member_names = {
+                getattr(member, "name", None)
+                for member in getattr(node, "members", []) or []
+                if getattr(member, "name", None)
+            }
+            storage_field = "CrossGLUnionStorage"
+            suffix = 2
+            while storage_field in member_names:
+                storage_field = f"CrossGLUnionStorage{suffix}"
+                suffix += 1
+
+            members = {}
+            for member in getattr(node, "members", []) or []:
+                if self.hlsl_static_struct_member(member):
+                    continue
+                member_name = getattr(member, "name", None)
+                if not member_name:
+                    raise self.hlsl_union_layout_error(
+                        node,
+                        reason="anonymous-member-unsupported",
+                        detail="anonymous instance members are not representable",
+                        member=member,
+                        size=size,
+                        alignment=alignment,
+                    )
+                member_attribute = self.hlsl_union_attribute(
+                    member, "union_member_layout"
+                )
+                if (
+                    member_attribute is None
+                    or len(list(getattr(member_attribute, "arguments", []) or [])) != 3
+                ):
+                    raise self.hlsl_union_layout_error(
+                        node,
+                        reason="member-layout-missing",
+                        detail="the retained member layout is missing or malformed",
+                        member=member,
+                        size=size,
+                        alignment=alignment,
+                    )
+                offset = self.hlsl_union_layout_int(member_attribute, 0)
+                member_size = self.hlsl_union_layout_int(member_attribute, 1)
+                member_alignment = self.hlsl_union_layout_int(member_attribute, 2)
+                member_type = self.struct_member_types.get(node.name, {}).get(
+                    member_name
+                )
+                if offset != 0:
+                    raise self.hlsl_union_layout_error(
+                        node,
+                        reason="member-offset-unsupported",
+                        detail=f"member offset {offset!r} does not alias byte zero",
+                        member=member,
+                        member_type=member_type,
+                        size=size,
+                        alignment=alignment,
+                    )
+                if member_size != size:
+                    raise self.hlsl_union_layout_error(
+                        node,
+                        reason="member-size-mismatch",
+                        detail=(
+                            f"member size {member_size!r} does not cover the full "
+                            f"{size}-byte canonical storage"
+                        ),
+                        member=member,
+                        member_type=member_type,
+                        size=size,
+                        alignment=alignment,
+                    )
+                if (
+                    not member_alignment
+                    or member_alignment > alignment
+                    or alignment % member_alignment != 0
+                ):
+                    raise self.hlsl_union_layout_error(
+                        node,
+                        reason="member-alignment-unsupported",
+                        detail=(
+                            f"member alignment {member_alignment!r} is incompatible "
+                            f"with aggregate alignment {alignment}"
+                        ),
+                        member=member,
+                        member_type=member_type,
+                        size=size,
+                        alignment=alignment,
+                    )
+                member_storage = self.hlsl_union_member_storage_kind(
+                    node,
+                    member,
+                    member_type,
+                    word_count,
+                    size,
+                    alignment,
+                )
+                member_storage["node"] = member
+                members[member_name] = member_storage
+
+            if not members:
+                raise self.hlsl_union_layout_error(
+                    node,
+                    reason="empty-union-unsupported",
+                    detail="the union has no instance members",
+                    size=size,
+                    alignment=alignment,
+                )
+            layouts[node.name] = {
+                "name": node.name,
+                "size": size,
+                "alignment": alignment,
+                "byte_order": byte_order,
+                "source_abi": source_abi,
+                "word_count": word_count,
+                "storage_type": storage_type,
+                "storage_field": storage_field,
+                "members": members,
+                "node": node,
+            }
+        return layouts
+
+    def hlsl_union_member_storage_kind(
+        self,
+        node,
+        member,
+        member_type,
+        word_count,
+        size,
+        alignment,
+    ):
+        type_name = str(member_type or "").strip()
+        base_type, array_suffix = split_array_type_suffix(type_name)
+        base_type = str(base_type).strip()
+        extent = None
+        if array_suffix:
+            match = re.fullmatch(r"\[([1-9][0-9]*)\]", array_suffix)
+            if match is None:
+                raise self.hlsl_union_layout_error(
+                    node,
+                    reason="member-array-shape-unsupported",
+                    detail=(
+                        f"member type '{type_name}' is not a one-dimensional "
+                        "literal fixed array"
+                    ),
+                    member=member,
+                    member_type=type_name,
+                    size=size,
+                    alignment=alignment,
+                )
+            extent = int(match.group(1))
+            if word_count == 1:
+                raise self.hlsl_union_layout_error(
+                    node,
+                    reason="single-word-array-member-unsupported",
+                    detail=(
+                        "single-word canonical storage cannot preserve dynamic "
+                        f"indexing of '{type_name}'"
+                    ),
+                    member=member,
+                    member_type=type_name,
+                    size=size,
+                    alignment=alignment,
+                )
+
+        if base_type == "u8vec4":
+            if extent is None and word_count == 1:
+                return {"kind": "u8x4", "type": type_name}
+            if extent == word_count:
+                return {
+                    "kind": "u8x4_array",
+                    "type": type_name,
+                    "extent": extent,
+                }
+            raise self.hlsl_union_layout_error(
+                node,
+                reason="member-storage-shape-mismatch",
+                detail=(
+                    f"byte-vector view '{type_name}' does not provide one u8vec4 "
+                    f"per canonical word ({word_count} required)"
+                ),
+                member=member,
+                member_type=type_name,
+                size=size,
+                alignment=alignment,
+            )
+
+        mapped_base = self.map_type(base_type)
+        scalar_match = re.fullmatch(r"(uint|int|float)([234])?", mapped_base)
+        if scalar_match is None:
+            raise self.hlsl_union_layout_error(
+                node,
+                reason="member-shape-unsupported",
+                detail=(
+                    f"member type '{type_name}' is not a supported 32-bit "
+                    "scalar/vector or u8vec4 word view"
+                ),
+                member=member,
+                member_type=type_name,
+                size=size,
+                alignment=alignment,
+            )
+        component_kind, width_text = scalar_match.groups()
+        width = int(width_text) if width_text else 1
+        if extent is not None:
+            if width != 1 or extent != word_count:
+                raise self.hlsl_union_layout_error(
+                    node,
+                    reason="member-storage-shape-mismatch",
+                    detail=(
+                        f"word-array view '{type_name}' does not provide exactly "
+                        f"{word_count} scalar words"
+                    ),
+                    member=member,
+                    member_type=type_name,
+                    size=size,
+                    alignment=alignment,
+                )
+            return {
+                "kind": f"{component_kind}32_array",
+                "type": type_name,
+                "extent": extent,
+            }
+        if width != word_count:
+            raise self.hlsl_union_layout_error(
+                node,
+                reason="member-storage-shape-mismatch",
+                detail=(
+                    f"member type '{type_name}' exposes {width} words but the "
+                    f"canonical storage contains {word_count}"
+                ),
+                member=member,
+                member_type=type_name,
+                size=size,
+                alignment=alignment,
+            )
+        return {"kind": f"{component_kind}32", "type": type_name}
+
+    def hlsl_union_layout_for_type(self, type_value):
+        type_name = self.type_name_string(type_value)
+        base_type, _array_suffix = split_array_type_suffix(str(type_name or ""))
+        base_type = str(base_type).strip()
+        while base_type.startswith(("const ", "volatile ")):
+            base_type = base_type.split(" ", 1)[1].strip()
+        base_type = base_type.rstrip("&*").strip()
+        return self.hlsl_union_layouts.get(base_type)
+
+    def hlsl_union_member_access_info(self, expression):
+        if not isinstance(expression, MemberAccessNode):
+            return None
+        object_expr = getattr(
+            expression, "object_expr", getattr(expression, "object", None)
+        )
+        layout = self.hlsl_union_layout_for_type(
+            self.expression_result_type(object_expr)
+        )
+        if layout is None:
+            return None
+        member_name = str(getattr(expression, "member", ""))
+        member = layout["members"].get(member_name)
+        if member is None:
+            return None
+        return {
+            "expression": expression,
+            "object": object_expr,
+            "layout": layout,
+            "member_name": member_name,
+            "member": member,
+        }
+
+    def hlsl_union_array_access_info(self, expression):
+        if not isinstance(expression, ArrayAccessNode):
+            return None
+        array_expr = getattr(
+            expression, "array_expr", getattr(expression, "array", None)
+        )
+        member_info = self.hlsl_union_member_access_info(array_expr)
+        if member_info is None or not member_info["member"]["kind"].endswith("_array"):
+            return None
+        return {
+            **member_info,
+            "expression": expression,
+            "member_expression": array_expr,
+            "index": getattr(
+                expression, "index_expr", getattr(expression, "index", None)
+            ),
+        }
+
+    def hlsl_union_storage_expression(self, info, index=None):
+        object_expr = self.generate_expression_with_expected(info["object"], None)
+        storage = f"{object_expr}.{info['layout']['storage_field']}"
+        if index is not None:
+            rendered_index = self.generate_expression_with_expected(index, "uint")
+            storage = f"{storage}[{rendered_index}]"
+        return storage
+
+    def hlsl_union_usage_error(self, info, expression, reason, detail):
+        layout = info["layout"]
+        return self.hlsl_union_layout_error(
+            layout["node"],
+            reason=reason,
+            detail=detail,
+            member=info["member"].get("node"),
+            member_type=info["member"].get("type"),
+            size=layout["size"],
+            alignment=layout["alignment"],
+        )
+
+    def generate_hlsl_union_member_read(self, expression):
+        info = self.hlsl_union_member_access_info(expression)
+        if info is None:
+            return None
+        kind = info["member"]["kind"]
+        if kind.endswith("_array"):
+            raise self.hlsl_union_usage_error(
+                info,
+                expression,
+                "whole-array-member-access-unsupported",
+                "HLSL cannot materialize the union's fixed-array member as a value",
+            )
+        storage = self.hlsl_union_storage_expression(info)
+        if kind == "uint32":
+            return storage
+        if kind == "int32":
+            return f"asint({storage})"
+        if kind == "float32":
+            return f"asfloat({storage})"
+        if kind == "u8x4":
+            return f"__crossgl_union_unpack_u8x4({storage})"
+        return None
+
+    def generate_hlsl_union_array_read(self, expression):
+        info = self.hlsl_union_array_access_info(expression)
+        if info is None:
+            return None
+        storage = self.hlsl_union_storage_expression(info, info["index"])
+        kind = info["member"]["kind"]
+        if kind == "uint32_array":
+            return storage
+        if kind == "int32_array":
+            return f"asint({storage})"
+        if kind == "float32_array":
+            return f"asfloat({storage})"
+        if kind == "u8x4_array":
+            return f"__crossgl_union_unpack_u8x4({storage})"
+        return None
+
+    def hlsl_union_u8_lane_target(self, expression):
+        lane = None
+        value_expr = None
+        if isinstance(expression, ArrayAccessNode):
+            value_expr = getattr(
+                expression, "array_expr", getattr(expression, "array", None)
+            )
+            lane = getattr(expression, "index_expr", getattr(expression, "index", None))
+        elif isinstance(expression, MemberAccessNode):
+            lane_name = str(getattr(expression, "member", ""))
+            lane_index = {
+                "x": 0,
+                "r": 0,
+                "y": 1,
+                "g": 1,
+                "z": 2,
+                "b": 2,
+                "w": 3,
+                "a": 3,
+            }.get(lane_name)
+            if lane_index is None:
+                return None
+            value_expr = getattr(
+                expression, "object_expr", getattr(expression, "object", None)
+            )
+            lane = f"{lane_index}u"
+        if value_expr is None:
+            return None
+
+        array_info = self.hlsl_union_array_access_info(value_expr)
+        if array_info is not None and array_info["member"]["kind"] == "u8x4_array":
+            return {
+                "info": array_info,
+                "storage": self.hlsl_union_storage_expression(
+                    array_info, array_info["index"]
+                ),
+                "lane": lane,
+            }
+        member_info = self.hlsl_union_member_access_info(value_expr)
+        if member_info is not None and member_info["member"]["kind"] == "u8x4":
+            return {
+                "info": member_info,
+                "storage": self.hlsl_union_storage_expression(member_info),
+                "lane": lane,
+            }
+        return None
+
+    def hlsl_union_access_ancestor(self, expression):
+        current = expression
+        while isinstance(current, (MemberAccessNode, ArrayAccessNode)):
+            array_info = self.hlsl_union_array_access_info(current)
+            if array_info is not None:
+                return array_info
+            member_info = self.hlsl_union_member_access_info(current)
+            if member_info is not None:
+                return member_info
+            if isinstance(current, MemberAccessNode):
+                current = getattr(
+                    current, "object_expr", getattr(current, "object", None)
+                )
+            else:
+                current = getattr(
+                    current, "array_expr", getattr(current, "array", None)
+                )
+        return None
+
+    def generate_hlsl_union_assignment(self, target, value, operator):
+        lane_target = self.hlsl_union_u8_lane_target(target)
+        if lane_target is not None:
+            if operator != "=":
+                raise self.hlsl_union_usage_error(
+                    lane_target["info"],
+                    target,
+                    "byte-lane-compound-write-unsupported",
+                    "compound byte-lane writes require an unimplemented read-modify-write contract",
+                )
+            lane = lane_target["lane"]
+            rendered_lane = (
+                lane
+                if isinstance(lane, str)
+                else self.generate_expression_with_expected(lane, "uint")
+            )
+            selected = self.generate_expression_with_expected(value, "uint")
+            return (
+                "__crossgl_union_set_u8x4_lane("
+                f"{lane_target['storage']}, {rendered_lane}, {selected})"
+            )
+
+        array_info = self.hlsl_union_array_access_info(target)
+        if array_info is not None:
+            kind = array_info["member"]["kind"]
+            storage = self.hlsl_union_storage_expression(
+                array_info, array_info["index"]
+            )
+            element_type, _suffix = split_array_type_suffix(
+                array_info["member"]["type"]
+            )
+            rendered = self.generate_expression_with_expected(value, element_type)
+            if kind == "uint32_array":
+                return f"{storage} {operator} {rendered}"
+            if operator != "=":
+                raise self.hlsl_union_usage_error(
+                    array_info,
+                    target,
+                    "interpreted-compound-write-unsupported",
+                    "compound writes through a reinterpreted array member are not supported",
+                )
+            if kind in {"int32_array", "float32_array"}:
+                rendered = f"asuint({rendered})"
+            elif kind == "u8x4_array":
+                rendered = f"__crossgl_union_pack_u8x4({rendered})"
+            return f"{storage} = {rendered}"
+
+        member_info = self.hlsl_union_member_access_info(target)
+        if member_info is not None:
+            kind = member_info["member"]["kind"]
+            if kind.endswith("_array"):
+                raise self.hlsl_union_usage_error(
+                    member_info,
+                    target,
+                    "whole-array-member-write-unsupported",
+                    "HLSL cannot assign the union's fixed-array member as a value",
+                )
+            storage = self.hlsl_union_storage_expression(member_info)
+            rendered = self.generate_expression_with_expected(
+                value, member_info["member"]["type"]
+            )
+            if kind == "uint32":
+                return f"{storage} {operator} {rendered}"
+            if operator != "=":
+                raise self.hlsl_union_usage_error(
+                    member_info,
+                    target,
+                    "interpreted-compound-write-unsupported",
+                    "compound writes through a reinterpreted member are not supported",
+                )
+            if kind in {"int32", "float32"}:
+                rendered = f"asuint({rendered})"
+            elif kind == "u8x4":
+                rendered = f"__crossgl_union_pack_u8x4({rendered})"
+            return f"{storage} = {rendered}"
+
+        ancestor = self.hlsl_union_access_ancestor(target)
+        if ancestor is not None and ancestor["member"]["kind"] not in {
+            "uint32",
+            "uint32_array",
+        }:
+            raise self.hlsl_union_usage_error(
+                ancestor,
+                target,
+                "interpreted-subcomponent-write-unsupported",
+                "this reinterpreted member subcomponent is not a canonical HLSL lvalue",
+            )
+        return None
+
+    def generate_hlsl_union_small_vector_set_call(self, function_name, arguments):
+        if (
+            function_name != "CrossGLMetalVectorIndex_u8vec4_set"
+            or len(arguments or []) != 3
+        ):
+            return None
+        value_expr, lane_expr, selected_expr = arguments
+        array_info = self.hlsl_union_array_access_info(value_expr)
+        if array_info is not None and array_info["member"]["kind"] == "u8x4_array":
+            storage = self.hlsl_union_storage_expression(
+                array_info, array_info["index"]
+            )
+        else:
+            member_info = self.hlsl_union_member_access_info(value_expr)
+            if member_info is None or member_info["member"]["kind"] != "u8x4":
+                return None
+            storage = self.hlsl_union_storage_expression(member_info)
+        lane = self.generate_expression_with_expected(lane_expr, "uint")
+        selected = self.generate_expression_with_expected(selected_expr, "uint")
+        return f"__crossgl_union_set_u8x4_lane({storage}, {lane}, {selected})"
 
     def hlsl_static_struct_member(self, member):
         """Return whether a member is compile-time metadata, not instance state."""
@@ -4100,6 +5318,227 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         type_key = str(type_name or "").rsplit("::", 1)[-1]
         return type_key == "thread_scope" and str(var_name).startswith("thread_scope")
 
+    def directx_specialization_constant_attributes(self, node):
+        attributes = []
+        for attr in getattr(node, "attributes", []) or []:
+            name = str(getattr(attr, "name", "")).lower().replace("-", "_")
+            if name.startswith("metal_") or name.startswith("msl_"):
+                name = name.split("_", 1)[1]
+            if name in {"function_constant", "constant_id"}:
+                attributes.append(attr)
+        return attributes
+
+    def directx_specialization_constant_source_location(self, node, attributes=()):
+        for candidate in (node, *attributes):
+            source_location = getattr(candidate, "source_location", None)
+            if source_location is not None:
+                return source_location
+        return None
+
+    def directx_specialization_constant_type(self, node):
+        return getattr(
+            node,
+            "const_type",
+            getattr(node, "var_type", getattr(node, "vtype", "float")),
+        )
+
+    def directx_specialization_constant_value(self, node):
+        if hasattr(node, "const_type"):
+            return getattr(node, "value", None)
+        return getattr(node, "initial_value", getattr(node, "value", None))
+
+    def directx_specialization_constant_id(self, node, attributes=None):
+        attributes = list(
+            self.directx_specialization_constant_attributes(node)
+            if attributes is None
+            else attributes
+        )
+        if not attributes:
+            return None
+
+        name = getattr(node, "name", getattr(node, "variable_name", "<unnamed>"))
+        type_name = self.type_name_string(
+            self.directx_specialization_constant_type(node)
+        )
+        source_location = self.directx_specialization_constant_source_location(
+            node, attributes
+        )
+        constant_ids = []
+        for attr in attributes:
+            arguments = list(getattr(attr, "arguments", []) or [])
+            raw_id = (
+                self.attribute_value_to_string(arguments[0])
+                if len(arguments) == 1
+                else None
+            )
+            constant_id = (
+                self.binding_index_value(arguments[0]) if len(arguments) == 1 else None
+            )
+            if constant_id is None:
+                rendered_id = raw_id if raw_id is not None else "<missing>"
+                raise DirectXSpecializationConstantError(
+                    f"DirectX specialization constant '{name}' requires one "
+                    f"non-negative integer id; received {rendered_id}",
+                    constant_name=name,
+                    constant_id=raw_id,
+                    constant_type=type_name,
+                    reason="invalid-id",
+                    source_location=source_location,
+                )
+            constant_ids.append(constant_id)
+
+        first_id = constant_ids[0]
+        for conflicting_id in constant_ids[1:]:
+            if conflicting_id == first_id:
+                continue
+            raise DirectXSpecializationConstantError(
+                f"DirectX specialization constant '{name}' carries conflicting "
+                f"ids {first_id} and {conflicting_id}",
+                constant_name=name,
+                constant_id=first_id,
+                constant_type=type_name,
+                reason="conflicting-id",
+                source_location=source_location,
+                conflicting_id=conflicting_id,
+            )
+        return first_id
+
+    def collect_directx_specialization_constants(self, ast):
+        global_nodes = list(getattr(ast, "global_variables", []) or [])
+        global_node_ids = {id(node) for node in global_nodes}
+        declarations = list(getattr(ast, "constants", []) or []) + global_nodes
+        records = []
+        records_by_id = {}
+        records_by_name = {}
+
+        for node in declarations:
+            attributes = self.directx_specialization_constant_attributes(node)
+            if not attributes:
+                continue
+
+            name = getattr(node, "name", getattr(node, "variable_name", "<unnamed>"))
+            type_node = self.directx_specialization_constant_type(node)
+            source_type = self.type_name_string(type_node)
+            mapped_type = self.map_type(type_node)
+            source_location = self.directx_specialization_constant_source_location(
+                node, attributes
+            )
+            constant_id = self.directx_specialization_constant_id(node, attributes)
+
+            if mapped_type not in self.HLSL_SPECIALIZATION_CONSTANT_TYPES:
+                supported = ", ".join(sorted(self.HLSL_SPECIALIZATION_CONSTANT_TYPES))
+                raise DirectXSpecializationConstantError(
+                    f"DirectX specialization constant '{name}' (id {constant_id}) "
+                    f"cannot use type '{source_type}'; concrete DirectX variants "
+                    f"currently support scalar {supported}",
+                    constant_name=name,
+                    constant_id=constant_id,
+                    constant_type=source_type,
+                    reason="incompatible-type",
+                    source_location=source_location,
+                )
+
+            value = self.directx_specialization_constant_value(node)
+            if value is None:
+                raise DirectXSpecializationConstantError(
+                    f"DirectX specialization constant '{name}' (id {constant_id}, "
+                    f"type '{source_type}') has no concrete/default value; HLSL "
+                    "cannot preserve deferred specialization without a generated "
+                    "DirectX variant",
+                    constant_name=name,
+                    constant_id=constant_id,
+                    constant_type=source_type,
+                    reason="missing-required-value",
+                    source_location=source_location,
+                )
+
+            previous = records_by_id.get(constant_id)
+            if previous is not None:
+                if previous["mapped_type"] != mapped_type:
+                    reason = "conflicting-id-type"
+                    message = (
+                        f"DirectX specialization constant id {constant_id} has "
+                        f"incompatible declarations: '{previous['name']}' uses "
+                        f"'{previous['source_type']}', while '{name}' uses "
+                        f"'{source_type}'"
+                    )
+                else:
+                    reason = "duplicate-id"
+                    message = (
+                        f"DirectX specialization constant id {constant_id} is "
+                        f"assigned to both '{previous['name']}' and '{name}'"
+                    )
+                raise DirectXSpecializationConstantError(
+                    message,
+                    constant_name=name,
+                    constant_id=constant_id,
+                    constant_type=source_type,
+                    reason=reason,
+                    source_location=source_location,
+                    conflicting_name=previous["name"],
+                    conflicting_type=previous["source_type"],
+                )
+
+            previous = records_by_name.get(name)
+            if previous is not None:
+                raise DirectXSpecializationConstantError(
+                    f"DirectX specialization constant name '{name}' is assigned "
+                    f"to both id {previous['id']} and id {constant_id}",
+                    constant_name=name,
+                    constant_id=constant_id,
+                    constant_type=source_type,
+                    reason="duplicate-name",
+                    source_location=source_location,
+                    conflicting_name=previous["name"],
+                    conflicting_id=previous["id"],
+                    conflicting_type=previous["source_type"],
+                )
+
+            record = {
+                "node": node,
+                "name": name,
+                "id": constant_id,
+                "type": type_node,
+                "source_type": source_type,
+                "mapped_type": mapped_type,
+                "value": value,
+                "is_global": id(node) in global_node_ids,
+            }
+            records.append(record)
+            records_by_id[constant_id] = record
+            records_by_name[name] = record
+
+        return records
+
+    def directx_specialization_constant_record(self, node):
+        return next(
+            (
+                record
+                for record in self.directx_specialization_constant_records
+                if record["node"] is node
+            ),
+            None,
+        )
+
+    def generate_directx_specialization_constant_declaration(self, record):
+        declaration = format_c_style_array_declaration(
+            record["mapped_type"], record["name"]
+        )
+        value_code = self.generate_constant_expression(record["value"], record["type"])
+        return (
+            "/* CrossGL DirectX specialization constant "
+            f"id {record['id']} fixed to its default. */\n"
+            f"static const {declaration} = {value_code};\n"
+        )
+
+    def generate_directx_specialization_constant_globals(self):
+        code = "".join(
+            self.generate_directx_specialization_constant_declaration(record)
+            for record in self.directx_specialization_constant_records
+            if record["is_global"]
+        )
+        return f"{code}\n" if code else ""
+
     def generate_constants(self, ast, constants=None):
         code = ""
         for node in (
@@ -4107,6 +5546,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         ):
             name = getattr(node, "name", None)
             if not name:
+                continue
+
+            specialization_record = self.directx_specialization_constant_record(node)
+            if specialization_record is not None:
+                code += self.generate_directx_specialization_constant_declaration(
+                    specialization_record
+                )
                 continue
 
             const_type = getattr(node, "const_type", getattr(node, "vtype", "float"))
@@ -4118,6 +5564,542 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             code += f"static const {declaration} = {value_code};\n"
 
         return f"{code}\n" if code else ""
+
+    def directx_compile_time_global_error(
+        self,
+        node,
+        expression,
+        *,
+        reason,
+        detail=None,
+    ):
+        name = getattr(node, "name", getattr(node, "variable_name", "<unnamed>"))
+        explanation = detail or reason.replace("-", " ")
+        source_location = getattr(expression, "source_location", None) or getattr(
+            node, "source_location", None
+        )
+        raise DirectXCompileTimeGlobalError(
+            f"DirectX compile-time global '{name}' cannot be lowered: {explanation}",
+            variable_name=name,
+            expression_kind=(
+                expression.__class__.__name__ if expression is not None else None
+            ),
+            detail=detail,
+            reason=reason,
+            source_location=source_location,
+        )
+
+    def is_directx_compile_time_global_candidate(self, node):
+        if getattr(node, "initial_value", None) is None:
+            return False
+        if id(node) in self.directx_specialization_constant_global_ids:
+            return False
+
+        qualifiers = {
+            str(value).lower() for value in getattr(node, "qualifiers", []) or []
+        }
+        if not qualifiers.intersection({"const", "constant"}):
+            return False
+        if qualifiers.intersection(
+            {
+                "buffer",
+                "coherent",
+                "device",
+                "global",
+                "groupshared",
+                "in",
+                "inout",
+                "input",
+                "out",
+                "output",
+                "readonly",
+                "readwrite",
+                "restrict",
+                "shared",
+                "storage",
+                "thread",
+                "threadgroup",
+                "threadgroup_imageblock",
+                "uniform",
+                "volatile",
+                "workgroup",
+                "writeonly",
+            }
+        ):
+            return False
+        if getattr(node, "resource_qualifiers", None):
+            return False
+        if getattr(node, "semantic", None) is not None:
+            return False
+        if getattr(node, "attributes", None):
+            return False
+
+        vtype = getattr(node, "var_type", getattr(node, "vtype", None))
+        return not self.is_directx_compile_time_resource_type(vtype, node=node)
+
+    def is_directx_compile_time_resource_type(self, vtype, *, node=None, seen=None):
+        if isinstance(vtype, (PointerType, ReferenceType)):
+            return True
+        if isinstance(vtype, ArrayType):
+            return self.is_directx_compile_time_resource_type(
+                vtype.element_type,
+                node=node,
+                seen=seen,
+            )
+
+        type_name = self.type_name_string(vtype)
+        base_type, array_suffix = split_array_type_suffix(type_name)
+        if array_suffix:
+            return self.is_directx_compile_time_resource_type(
+                base_type,
+                node=node,
+                seen=seen,
+            )
+
+        mapped_type = self.map_resource_type_with_format(vtype, node)
+        if (
+            self.is_resource_parameter_type(vtype)
+            or self.is_sampler_type(vtype)
+            or self.is_image_type(vtype)
+            or mapped_type.startswith("Texture")
+            or self.is_hlsl_feedback_texture_type(mapped_type)
+            or self.is_hlsl_rw_texture_type(mapped_type)
+            or self.is_hlsl_acceleration_structure_type(mapped_type)
+            or self.is_hlsl_uav_buffer_type(mapped_type)
+            or self.is_hlsl_readonly_buffer_type(mapped_type)
+            or self.is_hlsl_constant_buffer_type(mapped_type)
+            or self.is_hlsl_texture_buffer_type(mapped_type)
+            or mapped_type in {"SamplerState", "SamplerComparisonState"}
+        ):
+            return True
+
+        mapped_value_type = self.map_type(vtype)
+        seen = set(seen or ())
+        if mapped_value_type in seen:
+            return False
+        fields = self.hlsl_struct_constructor_fields(mapped_value_type)
+        if fields is None:
+            return False
+        seen.add(mapped_value_type)
+        return any(
+            self.is_directx_compile_time_resource_type(
+                field_type,
+                seen=seen,
+            )
+            for _field_name, field_type in fields
+        )
+
+    def validate_directx_compile_time_global_type(
+        self,
+        node,
+        vtype,
+        *,
+        seen=None,
+    ):
+        if isinstance(vtype, (PointerType, ReferenceType)):
+            self.directx_compile_time_global_error(
+                node,
+                vtype,
+                reason="unrepresentable-value-type",
+                detail=f"pointer/reference type '{self.type_name_string(vtype)}'",
+            )
+
+        mapped_type = self.map_type(vtype)
+        array_type = self.hlsl_outer_array_type(mapped_type)
+        if array_type is not None:
+            _array_type, extent_text, element_type = array_type
+            extent = evaluate_literal_int_expression(
+                extent_text,
+                self.literal_int_constants,
+            )
+            if extent is None:
+                self.directx_compile_time_global_error(
+                    node,
+                    vtype,
+                    reason="array-extent-unresolved",
+                    detail=f"array extent '{extent_text}' is not a known integer constant",
+                )
+            if extent <= 0:
+                self.directx_compile_time_global_error(
+                    node,
+                    vtype,
+                    reason="array-extent-invalid",
+                    detail=f"array extent '{extent}' must be positive",
+                )
+            self.validate_directx_compile_time_global_type(
+                node,
+                element_type,
+                seen=seen,
+            )
+            return
+
+        if self.is_scalar_value_type(mapped_type) or self.is_vector_value_type(
+            mapped_type
+        ):
+            return
+
+        fields = self.hlsl_struct_constructor_fields(mapped_type)
+        if fields is not None:
+            if not fields:
+                self.directx_compile_time_global_error(
+                    node,
+                    vtype,
+                    reason="unrepresentable-value-type",
+                    detail=f"empty struct type '{mapped_type}'",
+                )
+            seen = set(seen or ())
+            if mapped_type in seen:
+                self.directx_compile_time_global_error(
+                    node,
+                    vtype,
+                    reason="recursive-value-type",
+                    detail=f"recursive struct type '{mapped_type}'",
+                )
+            seen.add(mapped_type)
+            for _field_name, field_type in fields:
+                self.validate_directx_compile_time_global_type(
+                    node,
+                    field_type,
+                    seen=seen,
+                )
+            return
+
+        self.directx_compile_time_global_error(
+            node,
+            vtype,
+            reason="unrepresentable-value-type",
+            detail=f"value type '{mapped_type}'",
+        )
+
+    def directx_compile_time_constructor_type(self, type_name):
+        mapped_type = self.map_type(type_name)
+        if self.is_scalar_value_type(mapped_type) or self.is_vector_value_type(
+            mapped_type
+        ):
+            return mapped_type
+        if self.hlsl_struct_constructor_fields(mapped_type) is not None:
+            return mapped_type
+        return None
+
+    def validate_directx_compile_time_global_expression(
+        self,
+        node,
+        expression,
+        known_constant_names,
+        candidate_names,
+    ):
+        def reject(reason, current, detail=None):
+            self.directx_compile_time_global_error(
+                node,
+                current,
+                reason=reason,
+                detail=detail,
+            )
+
+        def validate(current):
+            if isinstance(current, (bool, int, float, LiteralNode)):
+                return
+            if isinstance(current, (IdentifierNode, VariableNode)):
+                name = getattr(current, "name", None)
+                if name in known_constant_names:
+                    return
+                if name and render_standard_math_constant(name, "directx") is not None:
+                    return
+                reason = (
+                    "forward-reference" if name in candidate_names else "runtime-value"
+                )
+                reject(reason, current, name)
+            if isinstance(current, ArrayLiteralNode):
+                for element in getattr(current, "elements", []) or []:
+                    validate(element)
+                return
+            if isinstance(current, MemberAccessNode):
+                validate(
+                    getattr(current, "object", getattr(current, "object_expr", None))
+                )
+                return
+            if isinstance(current, SwizzleNode):
+                validate(current.vector_expr)
+                return
+            if isinstance(current, ArrayAccessNode):
+                validate(
+                    getattr(current, "array", getattr(current, "array_expr", None))
+                )
+                validate(
+                    getattr(current, "index", getattr(current, "index_expr", None))
+                )
+                return
+            if isinstance(current, BinaryOpNode):
+                validate(current.left)
+                validate(current.right)
+                return
+            if isinstance(current, UnaryOpNode):
+                operator = self.map_operator(current.op)
+                if operator not in {"+", "-", "!", "~"}:
+                    reject("invalid-unary-operator", current, operator)
+                validate(current.operand)
+                return
+            if isinstance(current, TernaryOpNode):
+                validate(current.condition)
+                validate(current.true_expr)
+                validate(current.false_expr)
+                return
+            if isinstance(current, CastNode):
+                if (
+                    self.directx_compile_time_constructor_type(current.target_type)
+                    is None
+                ):
+                    reject(
+                        "unrepresentable-cast-type",
+                        current,
+                        self.type_name_string(current.target_type),
+                    )
+                validate(current.expression)
+                return
+            if isinstance(current, ConstructorNode):
+                constructor_type = self.type_name_string(current.constructor_type)
+                if self.directx_compile_time_constructor_type(constructor_type) is None:
+                    reject("unrepresentable-constructor", current, constructor_type)
+                for argument in list(current.arguments or []) + list(
+                    (current.named_arguments or {}).values()
+                ):
+                    validate(argument)
+                return
+            if isinstance(current, FunctionCallNode):
+                function_name = self.function_call_name(current)
+                if self.directx_compile_time_constructor_type(function_name) is None:
+                    reject("function-call", current, function_name)
+                for argument in (
+                    getattr(current, "arguments", getattr(current, "args", [])) or []
+                ):
+                    validate(argument)
+                return
+            reject("unrepresentable-expression", current)
+
+        validate(expression)
+
+    def prepare_directx_compile_time_globals(self, ast, global_vars):
+        self.directx_compile_time_global_node_ids = set()
+        self.directx_omitted_compile_time_global_node_ids = set()
+        candidates = [
+            node
+            for node in global_vars or []
+            if self.is_directx_compile_time_global_candidate(node)
+        ]
+        candidate_names = {
+            getattr(node, "name", getattr(node, "variable_name", None))
+            for node in candidates
+        }
+        candidate_names.discard(None)
+        known_constant_names = {
+            getattr(node, "name", None)
+            for node in getattr(ast, "constants", []) or []
+            if getattr(node, "name", None)
+        }
+        known_constant_names.update(self.directx_specialization_constant_types)
+        known_constant_names.update(getattr(self, "enum_variant_constants", {}))
+        known_constant_names.update(self.HLSL_GLSL_BUILTIN_INT_CONSTANTS)
+
+        for node in candidates:
+            vtype = getattr(node, "var_type", getattr(node, "vtype", None))
+            name = getattr(node, "name", getattr(node, "variable_name", None))
+            struct_fields = self.hlsl_struct_constructor_fields(self.map_type(vtype))
+            if struct_fields == []:
+                self.validate_directx_compile_time_global_expression(
+                    node,
+                    getattr(node, "initial_value", None),
+                    known_constant_names,
+                    candidate_names,
+                )
+                referenced = any(
+                    isinstance(candidate, IdentifierNode) and candidate.name == name
+                    for candidate in self.walk_ast(ast)
+                )
+                if name and not referenced:
+                    self.directx_omitted_compile_time_global_node_ids.add(id(node))
+                    known_constant_names.add(name)
+                    continue
+            self.validate_directx_compile_time_global_type(node, vtype)
+            self.validate_directx_compile_time_global_expression(
+                node,
+                getattr(node, "initial_value", None),
+                known_constant_names,
+                candidate_names,
+            )
+            self.directx_compile_time_global_node_ids.add(id(node))
+            if name:
+                known_constant_names.add(name)
+
+            if self.map_type(vtype) not in {"int", "uint", "int64_t", "uint64_t"}:
+                continue
+            value = evaluate_literal_int_expression(
+                getattr(node, "initial_value", None),
+                self.literal_int_constants,
+            )
+            if value is not None and name:
+                self.literal_int_constants[name] = value
+
+    def hlsl_compile_time_default_initializer(self, node, expression, expected_type):
+        mapped_type = self.map_type(expected_type)
+        array_type = self.hlsl_outer_array_type(mapped_type)
+        if array_type is not None:
+            _array_type, extent_text, element_type = array_type
+            extent = evaluate_literal_int_expression(
+                extent_text,
+                self.literal_int_constants,
+            )
+            if extent is None or extent <= 0:
+                self.directx_compile_time_global_error(
+                    node,
+                    expression,
+                    reason="array-extent-unresolved",
+                    detail=f"array extent '{extent_text}' is not a positive integer constant",
+                )
+            elements = [
+                self.hlsl_compile_time_default_initializer(
+                    node,
+                    expression,
+                    element_type,
+                )
+                for _index in range(extent)
+            ]
+            return "{" + ", ".join(elements) + "}"
+
+        fields = self.hlsl_struct_constructor_fields(mapped_type)
+        if fields is not None:
+            values = [
+                self.hlsl_compile_time_default_initializer(
+                    node,
+                    expression,
+                    field_type,
+                )
+                for _field_name, field_type in fields
+            ]
+            return "{" + ", ".join(values) + "}"
+        if self.is_vector_value_type(mapped_type):
+            return f"({mapped_type})0"
+        return default_value_expression(self, mapped_type)
+
+    def hlsl_compile_time_initializer_expression(
+        self,
+        node,
+        expression,
+        expected_type,
+    ):
+        mapped_type = self.map_type(expected_type)
+        array_type = self.hlsl_outer_array_type(mapped_type)
+        if array_type is not None:
+            if not isinstance(expression, ArrayLiteralNode):
+                self.directx_compile_time_global_error(
+                    node,
+                    expression,
+                    reason="array-initializer-shape",
+                    detail="fixed arrays require a brace initializer",
+                )
+            _mapped_type, extent, element_type = (
+                self.hlsl_fixed_array_aggregate_contract(expression, mapped_type)
+            )
+            elements = list(getattr(expression, "elements", []) or [])
+            if self.hlsl_is_zero_aggregate_initializer(expression):
+                elements = []
+            if len(elements) > extent:
+                self.hlsl_aggregate_error(
+                    expression,
+                    expected_type=mapped_type,
+                    reason="element-count-mismatch",
+                    expected_element_count=extent,
+                )
+            rendered = [
+                self.hlsl_compile_time_initializer_expression(
+                    node,
+                    element,
+                    element_type,
+                )
+                for element in elements
+            ]
+            rendered.extend(
+                self.hlsl_compile_time_default_initializer(
+                    node,
+                    expression,
+                    element_type,
+                )
+                for _index in range(len(elements), extent)
+            )
+            return "{" + ", ".join(rendered) + "}"
+
+        fields = self.hlsl_struct_constructor_fields(mapped_type)
+        if fields is not None:
+            initializer = self.hlsl_struct_initializer_components(
+                expected_type,
+                expression,
+            )
+            if initializer is not None:
+                _type_name, initializer_fields, _rendered_args, field_exprs = (
+                    initializer
+                )
+                rendered = []
+                for (_field_name, field_type), field_expression in zip(
+                    initializer_fields,
+                    field_exprs,
+                ):
+                    if field_expression is None:
+                        rendered.append(
+                            self.hlsl_compile_time_default_initializer(
+                                node,
+                                expression,
+                                field_type,
+                            )
+                        )
+                    else:
+                        rendered.append(
+                            self.hlsl_compile_time_initializer_expression(
+                                node,
+                                field_expression,
+                                field_type,
+                            )
+                        )
+                return "{" + ", ".join(rendered) + "}"
+            if isinstance(expression, (ArrayLiteralNode, ConstructorNode)) or (
+                isinstance(expression, FunctionCallNode)
+                and self.function_call_name(expression)
+                == self.type_name_string(expected_type)
+            ):
+                self.directx_compile_time_global_error(
+                    node,
+                    expression,
+                    reason="struct-initializer-shape",
+                    detail=f"initializer does not match struct type '{mapped_type}'",
+                )
+
+        if isinstance(expression, ArrayLiteralNode):
+            return self.hlsl_contextual_aggregate_initializer(expression, mapped_type)
+        if isinstance(expression, CastNode):
+            target_type = self.map_type(expression.target_type)
+            operand = self.hlsl_compile_time_initializer_expression(
+                node,
+                expression.expression,
+                expression.target_type,
+            )
+            return f"{target_type}({operand})"
+        if isinstance(expression, ConstructorNode):
+            constructor_type = self.map_type(expression.constructor_type)
+            arguments = [
+                self.generate_constant_expression(argument)
+                for argument in expression.arguments
+            ]
+            return f"{constructor_type}({', '.join(arguments)})"
+        return self.generate_constant_expression(expression, expected_type)
+
+    def generate_directx_compile_time_global_declaration(self, node):
+        name = getattr(node, "name", getattr(node, "variable_name", None))
+        vtype = getattr(node, "var_type", getattr(node, "vtype", None))
+        declaration = format_c_style_array_declaration(self.map_type(vtype), name)
+        initializer = self.hlsl_compile_time_initializer_expression(
+            node,
+            getattr(node, "initial_value", None),
+            vtype,
+        )
+        return f"static const {declaration} = {initializer};\n"
 
     def referenced_hlsl_glsl_builtin_int_constants(self, ast):
         declared_names = {
@@ -4255,9 +6237,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "Cbuffer member name(s) conflict with DirectX global declaration(s): "
                 f"{names}"
             )
-        used_resource_registers = (
-            used_resource_registers if used_resource_registers is not None else {}
-        )
+        if used_resource_registers is None:
+            used_resource_registers = self.new_directx_resource_register_allocator()
         texture_registers = texture_registers if texture_registers is not None else {}
         cbuffer_registers = cbuffer_registers if cbuffer_registers is not None else {}
         self.reserve_explicit_cbuffer_registers(cbuffers, used_resource_registers)
@@ -4605,6 +6586,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         emitted_param_names = set(param_names)
         previous_function_return_type = self.current_function_return_type
         previous_local_variable_types = self.local_variable_types
+        previous_local_variable_source_types = self.local_variable_source_types
         previous_identifier_aliases = self.current_identifier_aliases
         previous_identifier_reserved_names = self.current_identifier_reserved_names
         previous_stage_output_lowering = self.current_hlsl_stage_output_lowering
@@ -4643,6 +6625,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         self.current_function_name = getattr(func, "name", None) or entry_name
         self.local_variable_types = {}
+        self.local_variable_source_types = {}
         self.current_identifier_aliases = {}
         self.current_hlsl_resource_pointer_offsets = {}
         self.current_hlsl_resource_pointer_aliases = {
@@ -4707,9 +6690,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 raw_param_type = p.vtype
             else:
                 raw_param_type = "float"
-            self.local_variable_types[p.name] = self.type_name_string(raw_param_type)
+            raw_param_type_name = self.type_name_string(raw_param_type)
+            self.local_variable_types[p.name] = raw_param_type_name
+            self.local_variable_source_types[p.name] = raw_param_type_name
 
             param_decl_type = self.type_name_string(raw_param_type)
+            resource_pointer_contract = self.hlsl_resource_pointer_parameter_contract(
+                p, function_name
+            )
             param_type = self.hlsl_workgroup_pointer_parameter_array_type(
                 p, getattr(func, "name", None)
             )
@@ -4717,6 +6705,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 param_type = self.hlsl_private_pointer_parameter_array_type(
                     p, getattr(func, "name", None)
                 )
+            if param_type is None and resource_pointer_contract is not None:
+                param_type = resource_pointer_contract["resource_type"]
             if param_type is None:
                 param_type = self.map_resource_parameter_type_with_hint(
                     param_decl_type, p, getattr(func, "name", None)
@@ -4827,6 +6817,28 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             params.append(
                 f"{declaration} {semantic_attr}" if semantic_attr else declaration
             )
+            if resource_pointer_contract is not None:
+                used_names = set(self.current_identifier_reserved_names)
+                used_names.update(emitted_param_names)
+                offset_name = self.hlsl_unique_local_identifier(
+                    f"{p.name}_offset", used_names
+                )
+                params.append(f"int64_t {offset_name}")
+                emitted_param_names.add(offset_name)
+                self.current_identifier_reserved_names.add(offset_name)
+                self.local_variable_types[offset_name] = "int64_t"
+                self.current_hlsl_resource_pointer_aliases[p.name] = {
+                    "kind": "resource-pointer",
+                    "root": self.hlsl_declaration_identifier_name(p.name),
+                    "root_kind": "parameter",
+                    "offset": offset_name,
+                    "element_type": resource_pointer_contract["element_type"],
+                    "source_element_type": resource_pointer_contract["element_type"],
+                    "resource_type": resource_pointer_contract["resource_type"],
+                    "address_space": resource_pointer_contract["address_space"],
+                    "access": resource_pointer_contract["access"],
+                    "is_pointer_alias": True,
+                }
             if is_private_pointer_parameter(
                 p
             ) and p.name not in self.function_private_pointer_scalar_parameters.get(
@@ -5255,6 +7267,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         }
         previous_hlsl_visible_int_constants = self.current_hlsl_visible_int_constants
         self.current_hlsl_visible_int_constants = self.hlsl_initial_int_constants(func)
+        previous_texture_offset_constants = self.current_hlsl_texture_offset_constants
+        self.current_hlsl_texture_offset_constants = (
+            self.hlsl_initial_texture_offset_constants(func)
+        )
+        for parameter_name, value in self.hlsl_texture_offset_parameter_constants.get(
+            id(func), {}
+        ).items():
+            self.current_hlsl_texture_offset_constants[parameter_name] = value
         needs_fallthrough_return = (
             return_type != "void" and not self.statement_body_terminates(body)
         )
@@ -5271,6 +7291,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         finally:
             self.current_hlsl_visible_int_constants = (
                 previous_hlsl_visible_int_constants
+            )
+            self.current_hlsl_texture_offset_constants = (
+                previous_texture_offset_constants
             )
         if needs_fallthrough_return:
             if (
@@ -5302,6 +7325,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.current_function_return_type = previous_function_return_type
         self.current_function_name = previous_function_name
         self.local_variable_types = previous_local_variable_types
+        self.local_variable_source_types = previous_local_variable_source_types
         self.current_identifier_aliases = previous_identifier_aliases
         self.current_identifier_reserved_names = previous_identifier_reserved_names
         self.current_hlsl_stage_output_lowering = previous_stage_output_lowering
@@ -5334,8 +7358,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         indent_str = "    " * indent
 
         if isinstance(stmt, VariableNode):
+            source_vtype = self.hlsl_source_variable_declared_type(stmt)
             vtype = self.local_variable_declared_type(stmt)
             self.local_variable_types[stmt.name] = self.type_name_string(vtype)
+            self.local_variable_source_types[stmt.name] = self.type_name_string(
+                source_vtype
+            )
             if id(stmt) in self.hlsl_hoisted_groupshared_declaration_ids:
                 return ""
             resource_pointer_alias = (
@@ -5356,10 +7384,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     f"{self.unsupported_glsl_buffer_block_local_variable_placeholder('HLSL', vtype, stmt.name)};\n",
                 )
 
-            declaration = format_c_style_array_declaration(
+            base_declaration = format_c_style_array_declaration(
                 self.map_type(vtype), stmt_name
             )
-            declaration = f"{self.local_variable_qualifier(stmt)}{declaration}"
+            declaration = f"{self.local_variable_qualifier(stmt)}{base_declaration}"
             initial_value = getattr(stmt, "initial_value", None)
             if isinstance(initial_value, MatchNode):
                 code = f"{indent_str}{declaration};\n"
@@ -5373,6 +7401,34 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
                 return self.hlsl_record_generated_statement_int_constants(stmt, code)
             if initial_value is not None:
+                aggregate_init = (
+                    self.generate_hlsl_aggregate_conditional_initialization(
+                        initial_value,
+                        f"{self.local_variable_qualifier(stmt, omit_const=True)}"
+                        f"{base_declaration}",
+                        stmt_name,
+                        vtype,
+                        indent,
+                    )
+                )
+                if aggregate_init is not None:
+                    return self.hlsl_record_generated_statement_int_constants(
+                        stmt, aggregate_init
+                    )
+                aggregate_value = (
+                    self.render_hlsl_aggregate_conditional_value_expression(
+                        initial_value,
+                        vtype,
+                        indent,
+                        context="initializer",
+                    )
+                )
+                if aggregate_value is not None:
+                    aggregate_code, init_expr = aggregate_value
+                    aggregate_code += f"{indent_str}{declaration} = {init_expr};\n"
+                    return self.hlsl_record_generated_statement_int_constants(
+                        stmt, aggregate_code
+                    )
                 ternary_init = (
                     self.generate_hlsl_typed_buffer_atomic_ternary_initialization(
                         initial_value,
@@ -5445,6 +7501,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return f"{indent_str}{element_type}[{size}] {stmt_name};\n"
 
         elif isinstance(stmt, AssignmentNode):
+            aggregate_assignment = (
+                self.generate_hlsl_aggregate_conditional_assignment_statement(
+                    stmt, indent
+                )
+            )
+            if aggregate_assignment is not None:
+                return self.hlsl_record_generated_statement_int_constants(
+                    stmt, aggregate_assignment
+                )
             ternary_assignment = (
                 self.generate_hlsl_typed_buffer_atomic_ternary_assignment_statement(
                     stmt, indent
@@ -5465,7 +7530,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
             return self.hlsl_record_generated_statement_int_constants(
                 stmt,
-                self.generate_statement_code(self.generate_assignment(stmt), indent),
+                self.generate_statement_code(
+                    self.generate_assignment(stmt, statement_context=True), indent
+                ),
             )
 
         elif isinstance(stmt, BlockNode):
@@ -5511,6 +7578,23 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                             code += ", "
                     return f"{indent_str}return {code};\n"
                 else:
+                    aggregate_return = self.generate_hlsl_aggregate_conditional_return(
+                        stmt.value, indent
+                    )
+                    if aggregate_return is not None:
+                        return aggregate_return
+                    aggregate_value = (
+                        self.render_hlsl_aggregate_conditional_value_expression(
+                            stmt.value,
+                            self.current_function_return_type,
+                            indent,
+                            context="return",
+                        )
+                    )
+                    if aggregate_value is not None:
+                        aggregate_code, return_expr = aggregate_value
+                        aggregate_code += f"{indent_str}return {return_expr};\n"
+                        return aggregate_code
                     ternary_return = (
                         self.generate_hlsl_typed_buffer_atomic_ternary_return(
                             stmt.value, indent
@@ -5569,6 +7653,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 if tail_return is not None:
                     return tail_return
                 if isinstance(getattr(stmt, "expression", None), AssignmentNode):
+                    aggregate_assignment = (
+                        self.generate_hlsl_aggregate_conditional_assignment_statement(
+                            stmt.expression, indent
+                        )
+                    )
+                    if aggregate_assignment is not None:
+                        return self.hlsl_record_generated_statement_int_constants(
+                            stmt, aggregate_assignment
+                        )
                     ternary_assignment = self.generate_hlsl_typed_buffer_atomic_ternary_assignment_statement(
                         stmt.expression, indent
                     )
@@ -5586,9 +7679,23 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     return self.hlsl_record_generated_statement_int_constants(
                         stmt,
                         self.generate_statement_code(
-                            self.generate_assignment(stmt.expression), indent
+                            self.generate_assignment(
+                                stmt.expression, statement_context=True
+                            ),
+                            indent,
                         ),
                     )
+                aggregate_value = (
+                    self.render_hlsl_aggregate_conditional_value_expression(
+                        stmt.expression,
+                        self.expression_result_type(stmt.expression),
+                        indent,
+                        context="expression-statement",
+                    )
+                )
+                if aggregate_value is not None:
+                    aggregate_code, expression = aggregate_value
+                    return f"{aggregate_code}{indent_str}{expression};\n"
                 atomic_statement = self.generate_hlsl_typed_buffer_atomic_statement(
                     stmt.expression
                 )
@@ -5622,6 +7729,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return f"{indent_str}{self.generate_expression(stmt)};\n"
 
         else:
+            aggregate_value = self.render_hlsl_aggregate_conditional_value_expression(
+                stmt,
+                self.expression_result_type(stmt),
+                indent,
+                context="expression-statement",
+            )
+            if aggregate_value is not None:
+                aggregate_code, expression = aggregate_value
+                return f"{aggregate_code}{indent_str}{expression};\n"
             atomic_statement = self.generate_hlsl_typed_buffer_atomic_statement(stmt)
             if atomic_statement is not None:
                 return self.generate_statement_code(atomic_statement, indent)
@@ -5653,6 +7769,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if not return_type or return_type == "void":
             return None
 
+        aggregate_return = self.generate_hlsl_aggregate_conditional_return(
+            stmt.expression, indent
+        )
+        if aggregate_return is not None:
+            return aggregate_return
+
+        aggregate_value = self.render_hlsl_aggregate_conditional_value_expression(
+            stmt.expression,
+            return_type,
+            indent,
+            context="return",
+        )
+        if aggregate_value is not None:
+            aggregate_code, value = aggregate_value
+            return f"{aggregate_code}{'    ' * indent}return {value};\n"
+
         indent_str = "    " * indent
         value = self.generate_expression_with_expected(stmt.expression, return_type)
         return f"{indent_str}return {value};\n"
@@ -5674,9 +7806,52 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return "float"
         if vtype is None:
             vtype = self.expression_result_type(getattr(stmt, "initial_value", None))
-        return vtype or "float"
+        vtype = vtype or "float"
+        fixed_array_value_type = self.hlsl_fixed_array_local_value_type(
+            vtype,
+            getattr(stmt, "initial_value", None),
+        )
+        return fixed_array_value_type or vtype
 
-    def local_variable_qualifier(self, node):
+    def hlsl_fixed_array_local_value_type(self, declared_type, initializer):
+        if initializer is None:
+            return None
+        declared_components = self.hlsl_fixed_array_return_components(declared_type)
+        if declared_components is None:
+            return None
+
+        initializer_source_type = self.hlsl_source_expression_type(initializer)
+        if initializer_source_type is None or (
+            self.hlsl_source_type_signature(initializer_source_type)
+            != self.hlsl_source_type_signature(declared_type)
+        ):
+            return None
+
+        lowered_type = self.hlsl_fixed_array_return_type_name(declared_type)
+        initializer_value_type = self.expression_result_type(initializer)
+        if self.map_type(initializer_value_type) != self.map_type(lowered_type):
+            return None
+        return lowered_type
+
+    def hlsl_source_variable_declared_type(self, stmt):
+        vtype = getattr(stmt, "var_type", None)
+        if vtype is None:
+            vtype = getattr(stmt, "vtype", None)
+        vtype_name = self.type_name_string(vtype)
+        if isinstance(vtype_name, str) and vtype_name.strip().lower() in {
+            "auto",
+            "let",
+        }:
+            return self.hlsl_source_expression_type(
+                getattr(stmt, "initial_value", None)
+            ) or self.local_variable_declared_type(stmt)
+        if vtype is None:
+            return self.hlsl_source_expression_type(
+                getattr(stmt, "initial_value", None)
+            ) or self.local_variable_declared_type(stmt)
+        return vtype
+
+    def local_variable_qualifier(self, node, *, omit_const=False):
         qualifiers = {str(value).lower() for value in getattr(node, "qualifiers", [])}
         rendered = []
         if qualifiers & {"groupshared", "shared", "threadgroup", "workgroup"}:
@@ -5685,7 +7860,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             rendered.append("static")
         if self.hlsl_has_precise_modifier(node):
             rendered.append("precise")
-        if "const" in qualifiers:
+        if "const" in qualifiers and not omit_const:
             rendered.append("const")
         return f"{' '.join(rendered)} " if rendered else ""
 
@@ -5814,6 +7989,23 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if expected == "complex64_t" and self.is_scalar_value_type(source):
             self.required_hlsl_complex64_helpers.add("__crossgl_complex64_make")
             return f"__crossgl_complex64_make({rendered}, 0.0)"
+        expected_integer = self.hlsl_integer_arithmetic_type_info(expected)
+        source_integer = self.hlsl_integer_arithmetic_type_info(source)
+        if (
+            expected_integer is not None
+            and expected_integer["minimum_precision"]
+            and source_integer is not None
+            and expected_integer["width"] == source_integer["width"]
+        ):
+            signed_source_bases = {"int", "int64_t", "uint64_t"}
+            unsigned_source_bases = {"uint", "uint64_t"}
+            valid_source_bases = (
+                unsigned_source_bases
+                if expected_integer["base_type"] == "min16uint"
+                else signed_source_bases
+            )
+            if source_integer["base_type"] in valid_source_bases:
+                return f"{expected}({rendered})"
         signed_narrowing = {
             ("int", "int64_t"),
             ("int", "uint64_t"),
@@ -5980,6 +8172,671 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             and (right_is_matrix or right_is_vector)
             or right_is_matrix
             and left_is_vector
+        )
+
+    def hlsl_integer_arithmetic_type_info(self, vtype):
+        type_name = self.type_name_string(vtype)
+        if not type_name:
+            return None
+        mapped_type = self.map_type(type_name)
+        for base_type in self.HLSL_INTEGER_ARITHMETIC_BASE_TYPES:
+            if mapped_type == base_type:
+                width = 1
+            elif mapped_type in {f"{base_type}2", f"{base_type}3", f"{base_type}4"}:
+                width = int(mapped_type[-1])
+            else:
+                continue
+            return {
+                "mapped_type": mapped_type,
+                "base_type": base_type,
+                "width": width,
+                "minimum_precision": (
+                    base_type in self.HLSL_MINIMUM_PRECISION_INTEGER_BASE_TYPES
+                ),
+            }
+        return None
+
+    def hlsl_floating_arithmetic_type(self, vtype):
+        type_name = self.type_name_string(vtype)
+        if not type_name:
+            return False
+        mapped_type = self.map_type(type_name)
+        component_type = (
+            self.vector_component_type(mapped_type)
+            if self.is_vector_value_type(mapped_type)
+            else mapped_type
+        )
+        return component_type in {
+            "double",
+            "float",
+            "half",
+            "min10float",
+            "min16float",
+        }
+
+    def hlsl_minimum_precision_integer_arithmetic_error(
+        self,
+        node,
+        operator,
+        left_type,
+        right_type,
+        *,
+        expected_type=None,
+        context,
+        reason,
+        detail,
+    ):
+        mapped_left = self.map_type(left_type) if left_type else None
+        mapped_right = self.map_type(right_type) if right_type else None
+        mapped_expected = self.map_type(expected_type) if expected_type else None
+        raise DirectXMinimumPrecisionIntegerArithmeticError(
+            "DirectX cannot lower minimum-precision integer "
+            f"'{operator}' in {context}: {detail}",
+            operator=operator,
+            left_type=mapped_left,
+            right_type=mapped_right,
+            expected_type=mapped_expected,
+            context=context,
+            reason=reason,
+            source_location=getattr(node, "source_location", None),
+        )
+
+    def hlsl_promoted_integer_arithmetic_base_type(self, type_info):
+        if type_info["minimum_precision"]:
+            return "int"
+        return type_info["base_type"]
+
+    def hlsl_common_integer_arithmetic_base_type(self, left_info, right_info):
+        if (
+            left_info["base_type"] == "min16uint"
+            and right_info["base_type"] == "min16uint"
+        ):
+            return "uint"
+        left_base = self.hlsl_promoted_integer_arithmetic_base_type(left_info)
+        right_base = self.hlsl_promoted_integer_arithmetic_base_type(right_info)
+        if left_base == right_base:
+            return left_base
+        if "uint64_t" in {left_base, right_base}:
+            return "uint64_t"
+        if "int64_t" in {left_base, right_base}:
+            return "int64_t"
+        if "uint" in {left_base, right_base}:
+            return "uint"
+        return "int"
+
+    def hlsl_minimum_precision_integer_operation_contract(
+        self,
+        node,
+        operator,
+        left_type,
+        right_type,
+        *,
+        context,
+    ):
+        left_info = self.hlsl_integer_arithmetic_type_info(left_type)
+        right_info = self.hlsl_integer_arithmetic_type_info(right_type)
+        has_minimum_precision_operand = any(
+            info is not None and info["minimum_precision"]
+            for info in (left_info, right_info)
+        )
+        if not has_minimum_precision_operand:
+            return None
+        if self.hlsl_floating_arithmetic_type(
+            left_type
+        ) or self.hlsl_floating_arithmetic_type(right_type):
+            return None
+        if left_info is None or right_info is None:
+            self.hlsl_minimum_precision_integer_arithmetic_error(
+                node,
+                operator,
+                left_type,
+                right_type,
+                context=context,
+                reason="unresolved-integer-operation-type",
+                detail=(
+                    "both operand types must resolve to scalar or vector integer "
+                    "types before signedness-preserving widening"
+                ),
+            )
+        left_width = left_info["width"]
+        right_width = right_info["width"]
+        if left_width > 1 and right_width > 1 and left_width != right_width:
+            self.hlsl_minimum_precision_integer_arithmetic_error(
+                node,
+                operator,
+                left_type,
+                right_type,
+                context=context,
+                reason="incompatible-vector-widths",
+                detail=(
+                    f"vector widths {left_width} and {right_width} cannot be "
+                    "combined without changing the source operation"
+                ),
+            )
+        return {
+            "left": left_info,
+            "right": right_info,
+            "base_type": self.hlsl_common_integer_arithmetic_base_type(
+                left_info, right_info
+            ),
+            "result_width": max(left_width, right_width),
+        }
+
+    def hlsl_widened_integer_operand(self, rendered, type_info, base_type):
+        width = type_info["width"]
+        operation_type = base_type if width == 1 else f"{base_type}{width}"
+        if type_info["mapped_type"] == operation_type:
+            return rendered
+        return f"{operation_type}({rendered})"
+
+    def hlsl_minimum_precision_integer_operation_expression(
+        self,
+        node,
+        operator,
+        left,
+        right,
+        left_type,
+        right_type,
+        *,
+        expected_type=None,
+        context,
+    ):
+        if operator not in {"/", "%"}:
+            return None
+        contract = self.hlsl_minimum_precision_integer_operation_contract(
+            node,
+            operator,
+            left_type,
+            right_type,
+            context=context,
+        )
+        if contract is None:
+            return None
+
+        left = self.hlsl_widened_integer_operand(
+            left, contract["left"], contract["base_type"]
+        )
+        right = self.hlsl_widened_integer_operand(
+            right, contract["right"], contract["base_type"]
+        )
+        rendered = f"({left} {operator} {right})"
+
+        expected_info = self.hlsl_integer_arithmetic_type_info(expected_type)
+        if expected_info is None or not expected_info["minimum_precision"]:
+            return rendered
+        if expected_info["width"] != contract["result_width"]:
+            self.hlsl_minimum_precision_integer_arithmetic_error(
+                node,
+                operator,
+                left_type,
+                right_type,
+                expected_type=expected_type,
+                context=context,
+                reason="incompatible-result-width",
+                detail=(
+                    f"the operation produces {contract['result_width']} component(s), "
+                    f"but the required result has {expected_info['width']}"
+                ),
+            )
+        return f"{expected_info['mapped_type']}({rendered})"
+
+    def hlsl_minimum_precision_integer_binary_expression(
+        self, expr, left, right, operator
+    ):
+        return self.hlsl_minimum_precision_integer_operation_expression(
+            expr,
+            operator,
+            left,
+            right,
+            self.expression_result_type(getattr(expr, "left", None)),
+            self.expression_result_type(getattr(expr, "right", None)),
+            context="binary expression",
+        )
+
+    def hlsl_minimum_precision_compound_target_is_stable(self, target):
+        if self.hlsl_repeatable_array_assignment_target(target):
+            return True
+        if not isinstance(target, ArrayAccessNode):
+            return False
+
+        index = getattr(target, "index", None)
+        index_is_literal = isinstance(index, (int, float)) or (
+            hasattr(index, "__class__") and "Literal" in str(index.__class__)
+        )
+        return (
+            index_is_literal
+            and self.hlsl_minimum_precision_compound_target_is_stable(
+                getattr(target, "array", None)
+            )
+        )
+
+    def generate_hlsl_minimum_precision_integer_compound_assignment(
+        self,
+        node,
+        target,
+        value,
+        operator,
+        *,
+        lhs=None,
+        target_type=None,
+    ):
+        operator = self.map_operator(operator)
+        binary_operator = {"/=": "/", "%=": "%"}.get(operator)
+        if binary_operator is None:
+            return None
+
+        target_type = target_type or self.expression_result_type(target)
+        target_info = self.hlsl_integer_arithmetic_type_info(target_type)
+        if target_info is None or not target_info["minimum_precision"]:
+            return None
+        value_type = self.expression_result_type(value)
+        if self.hlsl_floating_arithmetic_type(value_type):
+            return None
+        if self.hlsl_expression_has_observable_side_effects(target):
+            self.hlsl_minimum_precision_integer_arithmetic_error(
+                node,
+                binary_operator,
+                target_type,
+                value_type,
+                expected_type=target_type,
+                context="compound assignment",
+                reason="side-effecting-assignment-target",
+                detail=(
+                    "the assignment target would need to be evaluated more than "
+                    "once; materialize its index or pointer before the assignment"
+                ),
+            )
+        if self.hlsl_expression_has_observable_side_effects(
+            value
+        ) and not self.hlsl_minimum_precision_compound_target_is_stable(target):
+            self.hlsl_minimum_precision_integer_arithmetic_error(
+                node,
+                binary_operator,
+                target_type,
+                value_type,
+                expected_type=target_type,
+                context="compound assignment",
+                reason="rhs-may-change-assignment-target",
+                detail=(
+                    "the side-effecting right operand may change the storage "
+                    "selected by the repeated assignment target; materialize its "
+                    "index or pointer before the assignment"
+                ),
+            )
+
+        lhs = lhs or self.generate_expression(target)
+        rhs = self.generate_expression_with_expected(value, None)
+        operation = self.hlsl_minimum_precision_integer_operation_expression(
+            node,
+            binary_operator,
+            lhs,
+            rhs,
+            target_type,
+            value_type,
+            expected_type=target_type,
+            context="compound assignment",
+        )
+        if operation is None:
+            return None
+        return f"{lhs} = {operation}"
+
+    def hlsl_boolean_compound_assignment_error(
+        self,
+        node,
+        operator,
+        target_type,
+        right_type,
+        *,
+        reason,
+        detail,
+        operation_type=None,
+    ):
+        mapped_target = self.map_type(target_type) if target_type else None
+        mapped_right = self.map_type(right_type) if right_type else None
+        raise DirectXBooleanCompoundAssignmentError(
+            "DirectX cannot lower boolean compound assignment "
+            f"'{operator}': {detail}",
+            operator=operator,
+            target_type=mapped_target,
+            right_type=mapped_right,
+            operation_type=operation_type,
+            context="compound assignment",
+            reason=reason,
+            source_location=getattr(node, "source_location", None),
+        )
+
+    def hlsl_boolean_compound_type_info(self, vtype):
+        mapped_type = self.map_type(vtype) if vtype else None
+        if mapped_type == "bool" or mapped_type in {"bool2", "bool3", "bool4"}:
+            return {
+                "base_type": "int",
+                "width": 1 if mapped_type == "bool" else int(mapped_type[-1]),
+                "kind": "integer",
+                "boolean": True,
+            }
+        integer_info = self.hlsl_integer_arithmetic_type_info(vtype)
+        if integer_info is not None:
+            source_component = self.type_name_string(vtype).strip()
+            generic_vector = re.fullmatch(r"vec[234]<(.+)>", source_component)
+            suffixed_vector = re.fullmatch(r"(.+?)(?:vec)?[234]", source_component)
+            if generic_vector is not None:
+                source_component = generic_vector.group(1)
+            elif suffixed_vector is not None:
+                source_component = suffixed_vector.group(1)
+            promoted_base = (
+                "int"
+                if source_component in self.HLSL_NARROW_INTEGER_TYPE_NAMES
+                else self.hlsl_promoted_integer_arithmetic_base_type(integer_info)
+            )
+            return {
+                "base_type": promoted_base,
+                "width": integer_info["width"],
+                "kind": "integer",
+                "boolean": False,
+            }
+        if self.is_scalar_value_type(mapped_type):
+            base_type, width = mapped_type, 1
+        elif self.is_vector_value_type(mapped_type):
+            base_type = self.vector_component_type(mapped_type)
+            width = int(mapped_type[-1])
+        else:
+            return None
+        if base_type not in {
+            "double",
+            "float",
+            "half",
+            "min16float",
+            "min10float",
+        }:
+            return None
+        return {
+            "base_type": base_type,
+            "width": width,
+            "kind": "floating",
+            "boolean": False,
+        }
+
+    def hlsl_boolean_compound_temporary(self, base_name, vtype):
+        used_names = set(self.local_variable_types)
+        used_names.update(self.global_variable_types)
+        used_names.update(self.current_identifier_reserved_names)
+        used_names.update(self.current_identifier_aliases.values())
+        name = self.hlsl_unique_local_identifier(base_name, used_names)
+        self.current_identifier_reserved_names.add(name)
+        self.local_variable_types[name] = vtype
+        return name
+
+    def hlsl_stabilize_boolean_compound_lvalue(
+        self,
+        node,
+        target,
+        operator,
+        target_type,
+        right_type,
+    ):
+        def reject(reason, detail):
+            self.hlsl_boolean_compound_assignment_error(
+                node,
+                operator,
+                target_type,
+                right_type,
+                reason=reason,
+                detail=detail,
+            )
+
+        if self.hlsl_union_access_ancestor(target) is not None:
+            reject(
+                "union-writeback-unrepresentable",
+                (
+                    "the target is a reinterpreted union view whose bool writeback "
+                    "cannot preserve its storage contract"
+                ),
+            )
+        if (
+            self.glsl_buffer_block_array_access(target) is not None
+            or self.glsl_buffer_block_member_access(target) is not None
+        ):
+            reject(
+                "byte-address-writeback-unrepresentable",
+                (
+                    "the target uses ByteAddressBuffer storage and cannot expose a "
+                    "repeatable bool lvalue"
+                ),
+            )
+
+        prefix = []
+        stabilized_target = deepcopy(target)
+
+        def stabilize(expression):
+            if isinstance(expression, (IdentifierNode, VariableNode)):
+                return expression
+
+            if isinstance(expression, MemberAccessNode):
+                owner = stabilize(
+                    getattr(
+                        expression, "object_expr", getattr(expression, "object", None)
+                    )
+                )
+                expression.object_expr = owner
+                expression.object = owner
+                return expression
+
+            if isinstance(expression, SwizzleNode):
+                vector = stabilize(getattr(expression, "vector_expr", None))
+                expression.vector_expr = vector
+                return expression
+
+            if isinstance(expression, ArrayAccessNode):
+                array = stabilize(
+                    getattr(
+                        expression, "array_expr", getattr(expression, "array", None)
+                    )
+                )
+                expression.array_expr = array
+                expression.array = array
+                index = getattr(
+                    expression, "index_expr", getattr(expression, "index", None)
+                )
+                index_info = self.hlsl_boolean_compound_type_info(
+                    self.expression_result_type(index)
+                )
+                static_index = (
+                    isinstance(index, int)
+                    and not isinstance(index, bool)
+                    or isinstance(index, LiteralNode)
+                    and index_info is not None
+                    and not index_info["boolean"]
+                    and index_info["kind"] == "integer"
+                    and self.literal_int_value(index, {}) is not None
+                )
+                if static_index:
+                    return expression
+
+                if (
+                    self.hlsl_fixed_array_return_struct_metadata_for_type(
+                        self.expression_result_type(array)
+                    )
+                    is not None
+                ):
+                    reject(
+                        "dynamic-fixed-array-writeback-unrepresentable",
+                        (
+                            "a dynamically indexed fixed-array value is exposed "
+                            "through a read helper and is not an HLSL lvalue"
+                        ),
+                    )
+
+                if (
+                    index_info is None
+                    or index_info["kind"] != "integer"
+                    or index_info["width"] != 1
+                ):
+                    reject(
+                        "unresolved-index-type",
+                        (
+                            "each dynamic lvalue index must resolve to a scalar "
+                            "integer type before it can be evaluated once"
+                        ),
+                    )
+
+                promoted_index_type = index_info["base_type"]
+                rendered_index = self.generate_expression_with_expected(index, None)
+                index_name = self.hlsl_boolean_compound_temporary(
+                    "__crossgl_bool_compound_index", promoted_index_type
+                )
+                prefix.append(
+                    f"{promoted_index_type} {index_name} = "
+                    f"{promoted_index_type}({rendered_index})"
+                )
+                stable_index = IdentifierNode(
+                    index_name,
+                    source_location=getattr(index, "source_location", None),
+                )
+                expression.index_expr = stable_index
+                expression.index = stable_index
+                return expression
+
+            reject(
+                "unstable-assignment-target",
+                (
+                    "only identifier, member, swizzle, and indexed lvalues can be "
+                    "stabilized without an HLSL reference"
+                ),
+            )
+
+        return prefix, stabilize(stabilized_target)
+
+    def generate_hlsl_boolean_compound_assignment(
+        self,
+        node,
+        target,
+        value,
+        operator,
+        *,
+        target_type=None,
+        statement_context,
+    ):
+        operator = self.map_operator(operator)
+        binary_operator = {
+            "+=": "+",
+            "-=": "-",
+            "*=": "*",
+            "/=": "/",
+            "%=": "%",
+            "<<=": "<<",
+            ">>=": ">>",
+        }.get(operator)
+        target_type = target_type or self.expression_result_type(target)
+        right_type = self.expression_result_type(value)
+        target_info = self.hlsl_boolean_compound_type_info(target_type)
+        if binary_operator is None:
+            return None
+
+        def reject(reason, detail, operation_type=None):
+            self.hlsl_boolean_compound_assignment_error(
+                node,
+                operator,
+                target_type,
+                right_type,
+                reason=reason,
+                detail=detail,
+                operation_type=operation_type,
+            )
+
+        mapped_target = self.map_type(target_type) if target_type else None
+        if target_info is None or not target_info["boolean"]:
+            matrix_shape = (
+                self.hlsl_matrix_shape(mapped_target) if mapped_target else None
+            )
+            if matrix_shape is not None and matrix_shape[0] == "bool":
+                reject(
+                    "target-shape-unrepresentable",
+                    "only scalar and vector bool lvalues have a defined writeback",
+                )
+            return None
+        right_info = self.hlsl_boolean_compound_type_info(right_type)
+        if right_info is None:
+            reject(
+                "unresolved-promoted-operand-type",
+                (
+                    "the right operand must resolve to a scalar or vector arithmetic "
+                    "type before source promotion"
+                ),
+            )
+        if right_info["width"] > 1 and right_info["width"] != target_info["width"]:
+            reject(
+                "incompatible-vector-widths",
+                (
+                    f"the {target_info['width']}-component target cannot consume a "
+                    f"{right_info['width']}-component promoted right operand"
+                ),
+            )
+        if binary_operator in {"<<", ">>", "%"} and right_info["kind"] != "integer":
+            reason = (
+                "non-integral-shift-operand"
+                if binary_operator in {"<<", ">>"}
+                else "non-integral-remainder-operand"
+            )
+            reject(
+                reason,
+                f"{binary_operator} operands require integral promotion",
+            )
+
+        if binary_operator in {"<<", ">>"}:
+            operation_base = "int"
+            right_base = right_info["base_type"]
+        elif right_info["kind"] == "floating":
+            operation_base = right_base = right_info["base_type"]
+        else:
+            right_base = right_info["base_type"]
+            operation_base = (
+                right_base if right_base in {"uint64_t", "int64_t", "uint"} else "int"
+            )
+            right_base = operation_base
+
+        operation_type = operation_base + (
+            "" if target_info["width"] == 1 else str(target_info["width"])
+        )
+        right_operation_type = right_base + (
+            "" if right_info["width"] == 1 else str(right_info["width"])
+        )
+        if not statement_context:
+            reject(
+                "statement-context-required",
+                (
+                    "the promoted read, ordered right operand, and bool writeback "
+                    "require statement temporaries"
+                ),
+                operation_type,
+            )
+
+        prefix, stable_target = self.hlsl_stabilize_boolean_compound_lvalue(
+            node,
+            target,
+            operator,
+            target_type,
+            right_type,
+        )
+        lhs = self.generate_expression(stable_target)
+        rhs = self.generate_expression_with_expected(value, None)
+        lhs_name = self.hlsl_boolean_compound_temporary(
+            "__crossgl_bool_compound_lhs", operation_type
+        )
+        rhs_name = self.hlsl_boolean_compound_temporary(
+            "__crossgl_bool_compound_rhs", right_operation_type
+        )
+        operation = (
+            f"({lhs_name} {binary_operator} {rhs_name}) != "
+            f"{self.diagnostic_zero_value_for_type(operation_type)}"
+        )
+        return "\n".join(
+            [
+                *prefix,
+                f"{operation_type} {lhs_name} = {operation_type}({lhs})",
+                f"{right_operation_type} {rhs_name} = "
+                f"{right_operation_type}({rhs})",
+                f"{lhs} = ({operation})",
+            ]
         )
 
     def hlsl_vector_swizzle(self, width):
@@ -6167,6 +9024,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 right_type
             ):
                 return "complex64_t"
+            mapped_operator = self.map_operator(operator)
+            if mapped_operator in {"/", "%"}:
+                integer_contract = (
+                    self.hlsl_minimum_precision_integer_operation_contract(
+                        expr,
+                        mapped_operator,
+                        left_type,
+                        right_type,
+                        context="binary expression",
+                    )
+                )
+                if integer_contract is not None:
+                    width = integer_contract["result_width"]
+                    suffix = "" if width == 1 else str(width)
+                    return f"{integer_contract['base_type']}{suffix}"
             if self.is_vector_value_type(left_type):
                 return left_type
             if self.is_vector_value_type(right_type):
@@ -6350,7 +9222,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             } and func_name not in getattr(self, "function_return_types", {}):
                 return "float"
             if (
-                func_name in {"clamp", "lerp", "mix"}
+                func_name in {"clamp", "lerp", "max", "min", "mix"}
                 and args
                 and func_name not in getattr(self, "function_return_types", {})
             ):
@@ -6867,6 +9739,244 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         binding["scalar"] = parameter_name in (
             self.function_private_pointer_scalar_parameters.get(function_name, set())
         )
+        return binding
+
+    def hlsl_resource_pointer_parameter_type_node(self, parameter):
+        parameter_type = getattr(
+            parameter, "param_type", getattr(parameter, "vtype", None)
+        )
+        return parameter_type if isinstance(parameter_type, PointerType) else None
+
+    def hlsl_resource_pointer_parameter_address_space(self, parameter):
+        pointer_type = self.hlsl_resource_pointer_parameter_type_node(parameter)
+        if pointer_type is None:
+            return None
+        address_space = str(pointer_type.address_space or "").strip().lower()
+        if not address_space:
+            qualifiers = {
+                str(qualifier).lower()
+                for qualifier in getattr(parameter, "qualifiers", []) or []
+            }
+            address_space = next(
+                (
+                    candidate
+                    for candidate in ("device", "global", "storage")
+                    if candidate in qualifiers
+                ),
+                "",
+            )
+        return address_space or None
+
+    def hlsl_resource_pointer_parameter(self, parameter):
+        return self.hlsl_resource_pointer_parameter_address_space(parameter) in {
+            "device",
+            "global",
+            "storage",
+        }
+
+    def hlsl_resource_pointer_parameter_access(self, parameter):
+        pointer_type = self.hlsl_resource_pointer_parameter_type_node(parameter)
+        access_mode = str(getattr(pointer_type, "access_mode", None) or "").lower()
+        access_aliases = {
+            "read": "read",
+            "readonly": "read",
+            "write": "write",
+            "writeonly": "write",
+            "read_write": "read_write",
+            "readwrite": "read_write",
+        }
+        if access_mode in access_aliases:
+            return access_aliases[access_mode]
+
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(parameter, "qualifiers", []) or []
+        }
+        if qualifiers.intersection({"read_write", "readwrite", "inout"}):
+            return "read_write"
+        if qualifiers.intersection({"write", "writeonly", "out"}):
+            return "write"
+        if qualifiers.intersection({"const", "constant", "read", "readonly", "in"}):
+            return "read"
+        if pointer_type is not None and not getattr(pointer_type, "is_mutable", True):
+            return "read"
+        return "read_write"
+
+    def hlsl_resource_pointer_parameter_contract(self, parameter, function_name=None):
+        if not self.hlsl_resource_pointer_parameter(parameter):
+            return None
+        pointer_type = self.hlsl_resource_pointer_parameter_type_node(parameter)
+        pointee_type = getattr(pointer_type, "pointee_type", None)
+        parameter_name = getattr(parameter, "name", None)
+        address_space = self.hlsl_resource_pointer_parameter_address_space(parameter)
+        if isinstance(pointee_type, (PointerType, ArrayType)) or pointee_type is None:
+            raise DirectXResourcePointerParameterError(
+                "DirectX storage pointer parameter "
+                f"'{function_name}.{parameter_name}' has an unsupported pointee "
+                "type",
+                function_name=function_name,
+                parameter_name=parameter_name,
+                address_space=address_space,
+                reason="unsupported-pointee-type",
+                source_location=getattr(parameter, "source_location", None),
+            )
+
+        element_type = self.type_name_string(pointee_type)
+        mapped_element_type = self.map_type(element_type)
+        if not mapped_element_type or any(
+            marker in str(mapped_element_type) for marker in ("*", "&", "[")
+        ):
+            raise DirectXResourcePointerParameterError(
+                "DirectX storage pointer parameter "
+                f"'{function_name}.{parameter_name}' has an unsupported pointee "
+                "type",
+                function_name=function_name,
+                parameter_name=parameter_name,
+                address_space=address_space,
+                reason="unsupported-pointee-type",
+                source_location=getattr(parameter, "source_location", None),
+            )
+
+        access = self.hlsl_resource_pointer_parameter_access(parameter)
+        resource_name = "StructuredBuffer" if access == "read" else "RWStructuredBuffer"
+        return {
+            "address_space": address_space,
+            "access": access,
+            "element_type": element_type,
+            "resource_type": f"{resource_name}<{mapped_element_type}>",
+        }
+
+    def collect_hlsl_resource_pointer_parameters(self, functions):
+        parameters_by_function = {}
+        indices_by_function = {}
+        for function in functions or []:
+            function_name = getattr(function, "name", None)
+            if not function_name:
+                continue
+            parameters = getattr(
+                function, "parameters", getattr(function, "params", [])
+            )
+            pointer_parameters = []
+            pointer_indices = {}
+            for index, parameter in enumerate(parameters):
+                if not self.hlsl_resource_pointer_parameter(parameter):
+                    continue
+                pointer_parameters.append(parameter)
+                pointer_indices[index] = parameter.name
+            if pointer_parameters:
+                parameters_by_function[function_name] = pointer_parameters
+                indices_by_function[function_name] = pointer_indices
+        self.function_hlsl_resource_pointer_parameters = parameters_by_function
+        self.function_hlsl_resource_pointer_parameter_indices = indices_by_function
+
+    def hlsl_resource_pointer_parameter_indices_for_function(self, function_name):
+        indices = self.function_hlsl_resource_pointer_parameter_indices.get(
+            function_name
+        )
+        if indices is not None:
+            return indices
+        materialized_name = self.hlsl_materialized_function_name(function_name)
+        return self.function_hlsl_resource_pointer_parameter_indices.get(
+            materialized_name, {}
+        )
+
+    def hlsl_resource_pointer_parameter_for_call(self, function_name, argument_index):
+        parameter_name = self.hlsl_resource_pointer_parameter_indices_for_function(
+            function_name
+        ).get(argument_index)
+        if parameter_name is None:
+            return None, function_name
+        materialized_name = self.hlsl_materialized_function_name(function_name)
+        parameters = self.function_hlsl_resource_pointer_parameters.get(
+            function_name
+        ) or self.function_hlsl_resource_pointer_parameters.get(materialized_name, [])
+        parameter = next(
+            (candidate for candidate in parameters if candidate.name == parameter_name),
+            None,
+        )
+        return parameter, materialized_name
+
+    def hlsl_resource_pointer_access_satisfies(self, actual_access, required_access):
+        if required_access == "read":
+            return actual_access in {"read", "read_write"}
+        if required_access == "write":
+            return actual_access in {"write", "read_write"}
+        return actual_access == "read_write"
+
+    def hlsl_resource_pointer_call_argument_binding(
+        self, function_name, argument_index, argument
+    ):
+        parameter, materialized_name = self.hlsl_resource_pointer_parameter_for_call(
+            function_name, argument_index
+        )
+        if parameter is None:
+            return None
+        parameter_name = parameter.name
+        contract = self.hlsl_resource_pointer_parameter_contract(
+            parameter, materialized_name
+        )
+        binding = self.hlsl_resource_pointer_binding(argument)
+        if binding is None or binding.get("kind") == "workgroup-pointer":
+            raise DirectXResourcePointerParameterError(
+                "DirectX storage pointer argument for "
+                f"'{materialized_name}.{parameter_name}' has no concrete "
+                "StructuredBuffer or RWStructuredBuffer backing resource",
+                function_name=materialized_name,
+                parameter_name=parameter_name,
+                address_space=contract["address_space"],
+                expected_access=contract["access"],
+                reason="call-backing-unresolved",
+                source_location=getattr(argument, "source_location", None),
+            )
+
+        resource_name = self.hlsl_resource_type_name(binding.get("resource_type"))
+        if resource_name not in {"StructuredBuffer", "RWStructuredBuffer"}:
+            raise DirectXResourcePointerParameterError(
+                "DirectX storage pointer argument for "
+                f"'{materialized_name}.{parameter_name}' requires a "
+                "StructuredBuffer or RWStructuredBuffer root",
+                function_name=materialized_name,
+                parameter_name=parameter_name,
+                address_space=contract["address_space"],
+                expected_access=contract["access"],
+                actual_access=binding.get("access"),
+                reason="resource-kind-mismatch",
+                source_location=getattr(argument, "source_location", None),
+            )
+
+        expected_type = self.map_type(contract["element_type"])
+        actual_type = self.map_type(binding.get("element_type"))
+        if not actual_type or actual_type != expected_type:
+            raise DirectXResourcePointerParameterError(
+                "DirectX storage pointer argument for "
+                f"'{materialized_name}.{parameter_name}' changes element type "
+                f"from {actual_type or 'unknown'} to {expected_type}",
+                function_name=materialized_name,
+                parameter_name=parameter_name,
+                address_space=contract["address_space"],
+                expected_access=contract["access"],
+                actual_access=binding.get("access"),
+                reason="element-type-mismatch",
+                source_location=getattr(argument, "source_location", None),
+            )
+
+        actual_access = binding.get("access")
+        if not self.hlsl_resource_pointer_access_satisfies(
+            actual_access, contract["access"]
+        ):
+            raise DirectXResourcePointerParameterError(
+                "DirectX storage pointer argument for "
+                f"'{materialized_name}.{parameter_name}' requires "
+                f"{contract['access']} access but its backing resource provides "
+                f"{actual_access or 'unknown'} access",
+                function_name=materialized_name,
+                parameter_name=parameter_name,
+                address_space=contract["address_space"],
+                expected_access=contract["access"],
+                actual_access=actual_access,
+                reason="access-mismatch",
+                source_location=getattr(argument, "source_location", None),
+            )
         return binding
 
     def hlsl_workgroup_pointer_call_argument_binding(
@@ -7490,6 +10600,37 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             },
         }
 
+    def hlsl_const_auto_resource_pointer_pointee_type(self, node, vtype, binding):
+        if not isinstance(vtype, PointerType):
+            return None
+        pointee_type = self.type_name_string(getattr(vtype, "pointee_type", None))
+        if str(pointee_type or "").strip().lower() != "auto":
+            return None
+
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        if not qualifiers.intersection({"const", "constant"}):
+            return None
+        if self.hlsl_resource_type_name(binding.get("resource_type")) not in {
+            "StructuredBuffer",
+            "RWStructuredBuffer",
+        }:
+            return None
+        if binding.get("pointer_reinterpretation") is not None:
+            return None
+
+        backing_element_type = binding.get("element_type")
+        if backing_element_type is None:
+            return None
+        mapped_element_type = str(self.map_type(backing_element_type) or "").strip()
+        if mapped_element_type.lower() in {"", "auto", "let", "void"} or any(
+            marker in mapped_element_type for marker in ("*", "&", "[")
+        ):
+            return None
+        return backing_element_type
+
     def generate_hlsl_resource_pointer_alias_declaration(self, node, indent):
         pointer_array_declaration = (
             self.generate_hlsl_resource_pointer_array_declaration(node, indent)
@@ -7535,6 +10676,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             else self.hlsl_buffer_pointer_pointee_type(vtype)
         )
         backing_element_type = binding.get("element_type")
+        inferred_element_type = self.hlsl_const_auto_resource_pointer_pointee_type(
+            node, vtype, binding
+        )
+        if inferred_element_type is not None:
+            declared_element_type = inferred_element_type
+            self.local_variable_types[node.name] = f"{inferred_element_type}*"
         if (
             declared_element_type is not None
             and backing_element_type is not None
@@ -7706,7 +10853,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         binding = self.hlsl_resource_pointer_binding(pointer_expression)
         if binding is None:
             return None
-        if require_write and binding.get("access") != "read_write":
+        binding_access = binding.get("access")
+        if require_write and not self.hlsl_resource_pointer_access_satisfies(
+            binding_access, "write"
+        ):
             pointer_array_binding = binding.get("pointer_array_binding")
             if pointer_array_binding is not None:
                 raise self.hlsl_resource_pointer_array_error(
@@ -7719,6 +10869,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             name = getattr(pointer_expression, "name", None) or str(pointer_expression)
             raise ValueError(
                 f"DirectX resource pointer '{name}' does not provide writable storage"
+            )
+        if not require_write and binding_access == "write":
+            name = getattr(pointer_expression, "name", None) or str(pointer_expression)
+            raise DirectXResourcePointerParameterError(
+                f"DirectX resource pointer '{name}' does not provide readable storage",
+                function_name=self.current_function_name,
+                parameter_name=getattr(pointer_expression, "name", None),
+                address_space=binding.get("address_space", "storage"),
+                expected_access="read",
+                actual_access=binding_access,
+                reason="read-through-writeonly-pointer",
+                source_location=getattr(pointer_expression, "source_location", None),
             )
         reinterpretation = binding.get("pointer_reinterpretation")
         if require_write and reinterpretation is not None:
@@ -7818,12 +10980,24 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if lhs is None:
             return None
         binding = self.hlsl_resource_pointer_binding(target.operand)
+        compound_assignment = (
+            self.generate_hlsl_minimum_precision_integer_compound_assignment(
+                target,
+                target,
+                value,
+                op,
+                lhs=lhs,
+                target_type=binding.get("element_type") if binding else None,
+            )
+        )
+        if compound_assignment is not None:
+            return compound_assignment
         rhs = self.generate_expression_with_expected(
             value, binding.get("element_type") if binding else None
         )
         return f"{lhs} {op} {rhs}"
 
-    def generate_assignment(self, node):
+    def generate_assignment(self, node, *, statement_context=False):
         if hasattr(node, "target") and hasattr(node, "value"):
             target = node.target
             value = node.value
@@ -7834,6 +11008,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             op = getattr(node, "operator", "=")
 
         target_type = self.expression_result_type(target)
+        boolean_compound_assignment = self.generate_hlsl_boolean_compound_assignment(
+            node,
+            target,
+            value,
+            op,
+            target_type=target_type,
+            statement_context=statement_context,
+        )
+        if boolean_compound_assignment is not None:
+            return boolean_compound_assignment
+
+        union_assignment = self.generate_hlsl_union_assignment(target, value, op)
+        if union_assignment is not None:
+            return union_assignment
+
         if isinstance(value, ArrayLiteralNode) and self.hlsl_outer_array_type(
             target_type
         ):
@@ -7876,6 +11065,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 target.array, target.index, require_write=True
             )
             binding = self.hlsl_resource_pointer_binding(target.array)
+            compound_assignment = (
+                self.generate_hlsl_minimum_precision_integer_compound_assignment(
+                    node,
+                    target,
+                    value,
+                    op,
+                    lhs=lhs,
+                    target_type=binding.get("element_type") if binding else None,
+                )
+            )
+            if compound_assignment is not None:
+                return compound_assignment
             rhs = self.generate_expression_with_expected(
                 value, binding.get("element_type") if binding else None
             )
@@ -7901,6 +11102,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             lift_statements, rhs = lifted_value
             lhs = self.generate_expression(target)
             return "\n".join([*lift_statements, f"{lhs} {op} {rhs}"])
+
+        compound_assignment = (
+            self.generate_hlsl_minimum_precision_integer_compound_assignment(
+                node,
+                target,
+                value,
+                op,
+                target_type=target_type,
+            )
+        )
+        if compound_assignment is not None:
+            return compound_assignment
 
         lhs = self.generate_expression(target)
         rhs = self.generate_expression_with_expected(
@@ -8061,6 +11274,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if self.current_hlsl_visible_int_constants is None
             else dict(self.current_hlsl_visible_int_constants)
         )
+        previous_texture_offset_constants = (
+            None
+            if self.current_hlsl_texture_offset_constants is None
+            else dict(self.current_hlsl_texture_offset_constants)
+        )
 
         try:
             loop_range = self.hlsl_canonical_for_index_range(node)
@@ -8114,6 +11332,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 previous_unsupported_locals
             )
             self.current_hlsl_visible_int_constants = previous_visible_int_constants
+            self.current_hlsl_texture_offset_constants = (
+                previous_texture_offset_constants
+            )
 
     def generate_block(self, node, indent):
         indent_str = "    " * indent
@@ -8138,6 +11359,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if self.current_hlsl_visible_int_constants is None
             else dict(self.current_hlsl_visible_int_constants)
         )
+        previous_texture_offset_constants = (
+            None
+            if self.current_hlsl_texture_offset_constants is None
+            else dict(self.current_hlsl_texture_offset_constants)
+        )
         try:
             return self.generate_statement_body(body, indent)
         finally:
@@ -8150,12 +11376,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 previous_unsupported_locals
             )
             self.current_hlsl_visible_int_constants = previous_visible_int_constants
+            self.current_hlsl_texture_offset_constants = (
+                previous_texture_offset_constants
+            )
 
     def generate_for_in(self, node, indent):
         indent_str = "    " * indent
         pattern = getattr(node, "pattern", "item")
         iterable_node = getattr(node, "iterable", "")
         previous_local_variable_types = dict(self.local_variable_types)
+        previous_local_variable_source_types = dict(self.local_variable_source_types)
         previous_identifier_aliases = dict(self.current_identifier_aliases)
         previous_resource_pointer_aliases = dict(
             self.current_hlsl_resource_pointer_aliases
@@ -8168,13 +11398,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if self.current_hlsl_visible_int_constants is None
             else dict(self.current_hlsl_visible_int_constants)
         )
+        previous_texture_offset_constants = (
+            None
+            if self.current_hlsl_texture_offset_constants is None
+            else dict(self.current_hlsl_texture_offset_constants)
+        )
 
         try:
-            self.local_variable_types[pattern] = "int"
             pattern_name = self.hlsl_declaration_identifier_name(pattern)
             self.current_unsupported_glsl_buffer_block_local_variables.discard(pattern)
 
             if isinstance(iterable_node, RangeNode):
+                self.local_variable_types[pattern] = "int"
+                self.local_variable_source_types[pattern] = "int"
                 start = self.generate_expression(iterable_node.start)
                 end = self.generate_expression(iterable_node.end)
                 comparator = "<=" if iterable_node.inclusive else "<"
@@ -8188,24 +11424,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 code += f"{indent_str}}}\n"
                 return code
 
-            container_binding = self.hlsl_for_in_container_binding(iterable_node)
-            if container_binding is not None:
-                # C++ range-based for over a fixed-size array: iterate an index
-                # over the element count and bind the loop variable to each
-                # element. HLSL has no range-for, and treating the container as
-                # a scalar loop bound (the historical fallback below) produced
-                # `for (int r = 0; r < arr; ...)`, which DXC rejects.
-                element_type, length = container_binding
+            binding_qualifier = self.validate_hlsl_for_in_binding(node, pattern)
+            iterable_type = self.hlsl_for_in_iterable_type(node, pattern, iterable_node)
+
+            # Preserve the established shorthand where an integer expression is
+            # the exclusive upper bound of a counted loop.
+            if self.is_scalar_integer_type(iterable_type):
+                self.local_variable_types[pattern] = "int"
+                self.local_variable_source_types[pattern] = "int"
                 iterable = self.generate_expression(iterable_node)
-                index_name = self.hlsl_declaration_identifier_name(
-                    f"{pattern}_crossgl_index"
-                )
-                self.local_variable_types[pattern] = element_type
                 code = (
-                    f"{indent_str}for (int {index_name} = 0; "
-                    f"{index_name} < {length}; ++{index_name}) {{\n"
-                    f"{indent_str}    {element_type} {pattern_name} = "
-                    f"({iterable})[{index_name}];\n"
+                    f"{indent_str}for (int {pattern_name} = 0; "
+                    f"{pattern_name} < {iterable}; ++{pattern_name}) {{\n"
                 )
                 code += self.generate_scoped_statement_body(
                     getattr(node, "body", []), indent + 1
@@ -8213,18 +11443,78 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 code += f"{indent_str}}}\n"
                 return code
 
-            iterable = self.generate_expression(iterable_node)
+            extent, element_type = self.hlsl_for_in_array_shape(
+                node, pattern, iterable_type
+            )
+            if extent == 0:
+                if not self.hlsl_expression_is_repeatable(iterable_node):
+                    self.raise_hlsl_for_in_iterable_error(
+                        node,
+                        pattern,
+                        iterable_type,
+                        reason="side-effecting-empty-array",
+                    )
+                return ""
+
+            mapped_iterable_type = self.map_type(iterable_type)
+            mapped_element_type = self.map_type(element_type)
+            element_base, _element_suffix = split_array_type_suffix(mapped_element_type)
+            if self.is_resource_parameter_type(
+                element_base
+            ) or self.is_hlsl_global_resource_type(element_base):
+                self.raise_hlsl_for_in_iterable_error(
+                    node,
+                    pattern,
+                    iterable_type,
+                    binding_type=element_type,
+                    reason="unsupported-element-type",
+                )
+
+            used_names = set(self.local_variable_types)
+            used_names.update(self.global_variable_types)
+            used_names.update(self.current_identifier_aliases.values())
+            used_names.update(self.current_identifier_reserved_names)
+            container_name = self.hlsl_unique_local_identifier(
+                f"{pattern}_crossgl_iterable", used_names
+            )
+            used_names.add(container_name)
+            index_name = self.hlsl_unique_local_identifier(
+                f"{pattern}_crossgl_index", used_names
+            )
+            iterable = self.generate_expression_with_expected(
+                iterable_node, iterable_type
+            )
+            container_declaration = format_c_style_array_declaration(
+                mapped_iterable_type, container_name
+            )
+            pattern_declaration = format_c_style_array_declaration(
+                mapped_element_type, pattern_name
+            )
+            pattern_declaration = f"{binding_qualifier}{pattern_declaration}"
+
+            self.local_variable_types[container_name] = iterable_type
+            self.local_variable_source_types[container_name] = iterable_type
+            self.local_variable_types[index_name] = "int"
+            self.local_variable_source_types[index_name] = "int"
+            self.local_variable_types[pattern] = element_type
+            self.local_variable_source_types[pattern] = element_type
             code = (
-                f"{indent_str}for (int {pattern_name} = 0; "
-                f"{pattern_name} < {iterable}; ++{pattern_name}) {{\n"
+                f"{indent_str}{{\n"
+                f"{indent_str}    {container_declaration} = {iterable};\n"
+                f"{indent_str}    for (int {index_name} = 0; "
+                f"{index_name} < {extent}; ++{index_name}) {{\n"
+                f"{indent_str}        {pattern_declaration} = "
+                f"{container_name}[{index_name}];\n"
             )
             code += self.generate_scoped_statement_body(
-                getattr(node, "body", []), indent + 1
+                getattr(node, "body", []), indent + 2
             )
+            code += f"{indent_str}    }}\n"
             code += f"{indent_str}}}\n"
             return code
         finally:
             self.local_variable_types = previous_local_variable_types
+            self.local_variable_source_types = previous_local_variable_source_types
             self.current_identifier_aliases = previous_identifier_aliases
             self.current_hlsl_resource_pointer_aliases = (
                 previous_resource_pointer_aliases
@@ -8233,40 +11523,139 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 previous_unsupported_locals
             )
             self.current_hlsl_visible_int_constants = previous_visible_int_constants
+            self.current_hlsl_texture_offset_constants = (
+                previous_texture_offset_constants
+            )
 
-    def hlsl_for_in_container_binding(self, iterable_node):
-        """Return (element_type, length) for a range-for over a fixed array.
+    def validate_hlsl_for_in_binding(self, node, pattern):
+        binding_type = getattr(
+            node, "binding_type", getattr(node, "pattern_type", None)
+        )
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "binding_qualifiers", []) or []
+        }
+        binding_type_name = self.type_name_string(binding_type or "")
+        if isinstance(binding_type, ReferenceType):
+            binding_type_name = f"{binding_type_name}&"
+        readonly = bool(
+            qualifiers & {"const", "constant", "in", "readonly"}
+            or "const" in binding_type_name.lower().split()
+            or "readonly" in binding_type_name.lower().split()
+        )
+        mutable_reference = bool(
+            getattr(node, "is_mutable_reference", False)
+            or getattr(node, "mutable_reference", False)
+            or "mut" in qualifiers
+            or (
+                isinstance(binding_type, ReferenceType)
+                and getattr(binding_type, "is_mutable", False)
+            )
+            or (
+                not isinstance(binding_type, ReferenceType)
+                and binding_type_name.rstrip().endswith("&")
+                and not readonly
+            )
+        )
+        if mutable_reference:
+            self.raise_hlsl_for_in_iterable_error(
+                node,
+                pattern,
+                self.type_name_string(
+                    self.hlsl_source_expression_type(getattr(node, "iterable", None))
+                ),
+                binding_type=binding_type_name or None,
+                reason="mutable-reference-binding",
+            )
 
-        Resolves the declared array type of the iterated container so a C++
-        range-based ``for (auto x : container)`` can lower to an index loop that
-        binds ``x`` to each element. Returns ``None`` when the container is not a
-        statically-sized array (the caller then keeps the scalar-bound
-        fallback).
-        """
-        index_levels = 0
-        base = iterable_node
-        while isinstance(base, ArrayAccessNode):
-            index_levels += 1
-            base = getattr(base, "array", getattr(base, "array_expr", None))
-        if base is None:
+        modifiers = []
+        if "precise" in qualifiers:
+            modifiers.append("precise")
+        if readonly or (
+            isinstance(binding_type, ReferenceType)
+            and not getattr(binding_type, "is_mutable", False)
+        ):
+            modifiers.append("const")
+        return f"{' '.join(modifiers)} " if modifiers else ""
+
+    def hlsl_for_in_iterable_type(self, node, pattern, iterable_node):
+        iterable_type = self.type_name_string(
+            self.hlsl_source_expression_type(iterable_node)
+        )
+        if not iterable_type:
+            self.raise_hlsl_for_in_iterable_error(
+                node, pattern, None, reason="unresolved-iterable-type"
+            )
+        return iterable_type
+
+    def hlsl_for_in_outer_array_type(self, iterable_type):
+        base_type, array_suffix = split_array_type_suffix(str(iterable_type or ""))
+        if not array_suffix:
             return None
-
-        base_type = self.type_name_string(self.expression_result_type(base))
-        if not base_type or "[" not in base_type:
+        match = re.fullmatch(r"\[([^\]]*)\](.*)", array_suffix)
+        if match is None:
             return None
+        extent_text = match.group(1).strip()
+        remaining_suffix = match.group(2)
+        return extent_text, f"{base_type}{remaining_suffix}"
 
-        element_base, suffix = split_array_type_suffix(base_type)
-        dimensions = re.findall(r"\[([^\]]*)\]", suffix)
-        if index_levels >= len(dimensions):
-            return None
+    def hlsl_for_in_array_shape(self, node, pattern, iterable_type):
+        array_shape = self.hlsl_for_in_outer_array_type(iterable_type)
+        if array_shape is None:
+            self.raise_hlsl_for_in_iterable_error(
+                node, pattern, iterable_type, reason="not-fixed-array"
+            )
+        extent_text, element_type = array_shape
+        if not extent_text:
+            self.raise_hlsl_for_in_iterable_error(
+                node, pattern, iterable_type, reason="unknown-extent"
+            )
+        constants = dict(self.literal_int_constants)
+        constants.update(self.current_hlsl_visible_int_constants or {})
+        extent = evaluate_literal_int_expression(extent_text, constants)
+        if extent is None:
+            self.raise_hlsl_for_in_iterable_error(
+                node, pattern, iterable_type, reason="unknown-extent"
+            )
+        if extent < 0:
+            self.raise_hlsl_for_in_iterable_error(
+                node, pattern, iterable_type, reason="invalid-extent"
+            )
+        return extent, element_type
 
-        remaining = dimensions[index_levels:]
-        length = remaining[0].strip()
-        if not length:
-            return None
-        inner_suffix = "".join(f"[{dim}]" for dim in remaining[1:])
-        element_type = f"{element_base}{inner_suffix}"
-        return element_type, length
+    def raise_hlsl_for_in_iterable_error(
+        self,
+        node,
+        pattern,
+        iterable_type,
+        *,
+        binding_type=None,
+        reason,
+    ):
+        descriptions = {
+            "invalid-extent": "has a negative fixed-array extent",
+            "mutable-reference-binding": (
+                "requires mutable reference binding, which HLSL cannot preserve"
+            ),
+            "not-fixed-array": "is neither a fixed array nor an integer loop bound",
+            "side-effecting-empty-array": (
+                "is an empty array whose container expression has side effects"
+            ),
+            "unknown-extent": "does not have a compile-time fixed-array extent",
+            "unresolved-iterable-type": "has an unresolved iterable type",
+            "unsupported-element-type": "contains an unsupported resource element type",
+        }
+        detail = descriptions.get(reason, "has no faithful HLSL iterable contract")
+        type_label = iterable_type or "<unresolved>"
+        raise DirectXForInIterableError(
+            f"DirectX for-in binding '{pattern}' over '{type_label}' {detail}",
+            pattern=pattern,
+            iterable_type=iterable_type,
+            binding_type=binding_type,
+            reason=reason,
+            source_location=getattr(node, "source_location", None)
+            or getattr(getattr(node, "iterable", None), "source_location", None),
+        )
 
     def generate_while(self, node, indent):
         indent_str = "    " * indent
@@ -8412,8 +11801,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return self.generate_expression(init).strip().rstrip(";")
 
     def generate_for_variable_initializer(self, node, include_type=True):
+        source_vtype = self.hlsl_source_variable_declared_type(node)
         vtype = self.local_variable_declared_type(node)
         self.local_variable_types[node.name] = self.type_name_string(vtype)
+        self.local_variable_source_types[node.name] = self.type_name_string(
+            source_vtype
+        )
         name = self.hlsl_declaration_identifier_name(node.name)
         mapped_type = self.map_type(vtype)
         declaration = format_c_style_array_declaration(mapped_type, name)
@@ -8611,12 +12004,36 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if bool_arithmetic is not None:
                 return bool_arithmetic
+            minimum_precision_integer = (
+                self.hlsl_minimum_precision_integer_binary_expression(
+                    expr,
+                    left,
+                    right,
+                    mapped_op,
+                )
+            )
+            if minimum_precision_integer is not None:
+                return minimum_precision_integer
             return f"({left} {mapped_op} {right})"
         elif isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr)
         elif hasattr(expr, "__class__") and "UnaryOp" in str(expr.__class__):
             op = getattr(expr, "operator", getattr(expr, "op", "+"))
             mapped_op = self.map_operator(op)
+            if mapped_op in {"++", "--"}:
+                ancestor = self.hlsl_union_access_ancestor(
+                    getattr(expr, "operand", None)
+                )
+                if ancestor is not None and ancestor["member"]["kind"] not in {
+                    "uint32",
+                    "uint32_array",
+                }:
+                    raise self.hlsl_union_usage_error(
+                        ancestor,
+                        expr,
+                        "interpreted-increment-unsupported",
+                        "increment and decrement require a canonical union lvalue",
+                    )
             if mapped_op == "*" and not getattr(expr, "is_postfix", False):
                 private_pointee = self.generate_hlsl_private_pointer_view_access(
                     expr.operand, access_expression=expr
@@ -8656,6 +12073,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         elif hasattr(expr, "__class__") and "ArrayAccess" in str(expr.__class__):
             array_expr = getattr(expr, "array_expr", getattr(expr, "array", ""))
             index_expr = getattr(expr, "index_expr", getattr(expr, "index", ""))
+            union_array_read = self.generate_hlsl_union_array_read(expr)
+            if union_array_read is not None:
+                return union_array_read
             pointer_array_binding = self.hlsl_resource_pointer_array_for_access(expr)
             if pointer_array_binding is not None:
                 self.hlsl_resource_pointer_array_index(
@@ -8738,6 +12158,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 func_name = original_func_name
                 callee = original_func_name
 
+            union_small_vector_set = self.generate_hlsl_union_small_vector_set_call(
+                func_name, args
+            )
+            if union_small_vector_set is not None:
+                return union_small_vector_set
+
             byteaddress_interlocked_call = (
                 self.generate_hlsl_byteaddress_interlocked_member_call(
                     func_expr,
@@ -8815,7 +12241,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if bitcast_call is not None:
                 return bitcast_call
 
-            texture_call = self.generate_texture_call(func_name, args)
+            texture_call = self.generate_texture_call(func_name, args, call_node=expr)
             if texture_call is not None:
                 return texture_call
 
@@ -8846,6 +12272,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if specialized_func_name is not None:
                 callee = specialized_func_name
                 func_name = specialized_func_name
+
+            if func_name in self.hlsl_mapped_overload_names:
+                resolved_overload = self.resolve_hlsl_function_overload(
+                    func_name,
+                    args,
+                    call_node=expr,
+                )
+                if resolved_overload is not None:
+                    target_name = self.hlsl_function_declaration_name(resolved_overload)
+                    callee = target_name
+                    func_name = target_name
+                    call_argument_func_name = target_name
 
             constructor_type = self.hlsl_type_constructor_name(func_name)
             if constructor_type is not None:
@@ -9087,6 +12525,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             return f"{callee}({args_str})"
         elif hasattr(expr, "__class__") and "MemberAccess" in str(expr.__class__):
+            union_member_read = self.generate_hlsl_union_member_read(expr)
+            if union_member_read is not None:
+                return union_member_read
             struct_buffer_access = self.hlsl_struct_buffer_member_access_expression(
                 expr
             )
@@ -9109,6 +12550,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return f"{obj}.{member}"
         elif hasattr(expr, "__class__") and "TernaryOp" in str(expr.__class__):
             expected_type = self.current_expression_expected_type
+            aggregate_type = self.hlsl_aggregate_conditional_type(expr, expected_type)
+            if aggregate_type is not None:
+                self.hlsl_aggregate_conditional_error(
+                    expr,
+                    aggregate_type=aggregate_type,
+                    context="expression",
+                    reason="statement-context-required",
+                    detail=(
+                        "HLSL aggregate selection requires a temporary or direct "
+                        "statement control flow"
+                    ),
+                )
             condition = self.generate_expression_with_expected(
                 getattr(expr, "condition", ""), "bool"
             )
@@ -9254,6 +12707,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def hlsl_builtin_function_call(self, func_name, args, *, source_location=None):
         if not func_name or func_name in getattr(self, "function_return_types", {}):
             return None
+        boolean_order_call = self.hlsl_ordered_boolean_minmax_call(
+            func_name,
+            args,
+            source_location=source_location,
+        )
+        if boolean_order_call is not None:
+            return boolean_order_call
         trailing_zero_call = self.generate_hlsl_trailing_zero_call(
             func_name,
             args,
@@ -9297,6 +12757,47 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         left = self.generate_expression(args[0])
         right = self.generate_expression(args[1])
         return f"(({left}) - (({right}) * floor(({left}) / ({right}))))"
+
+    def hlsl_ordered_boolean_minmax_call(
+        self,
+        func_name,
+        args,
+        *,
+        source_location=None,
+    ):
+        argument_types = [
+            self.map_type(self.expression_result_type(argument)) for argument in args
+        ]
+        width = ordered_boolean_minmax_width(func_name, argument_types)
+        if width is None:
+            if func_name in {"min", "max"} and any(
+                is_boolean_type(type_name) for type_name in argument_types
+            ):
+                reason = (
+                    "invalid-arity"
+                    if len(args) != 2
+                    else (
+                        "operand-type-unresolved"
+                        if any(not type_name for type_name in argument_types)
+                        else "operand-type-mismatch"
+                    )
+                )
+                raise DirectXBooleanOrderedIntrinsicError(
+                    "DirectX codegen cannot preserve ordered boolean "
+                    f"'{func_name}' for operand types {argument_types}",
+                    operation=func_name,
+                    operand_types=argument_types,
+                    reason=reason,
+                    source_location=source_location,
+                )
+            return None
+
+        left, right = (self.generate_expression(argument) for argument in args)
+        operation = "and" if func_name == "min" else "or"
+        if width == 1:
+            operator = "&&" if func_name == "min" else "||"
+            return f"(({left}) {operator} ({right}))"
+        return f"{operation}({left}, {right})"
 
     def hlsl_trailing_zero_builtin_is_shadowed(self, func_name):
         return (
@@ -9496,6 +12997,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if name in self.METAL_TYPE_ALIAS_GLOBALS:
             return self.map_type(name)
         if name in self.HLSL_CANONICAL_NARROW_FLOAT_CONSTRUCTORS:
+            return self.map_type(name)
+        if name in self.HLSL_CANONICAL_64_BIT_VECTOR_CONSTRUCTORS:
             return self.map_type(name)
         generic_vector = self.hlsl_generic_vector_type_name(name)
         if generic_vector is not None:
@@ -11704,7 +15207,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if current_nodes is not None and target_stage is None:
             return current_nodes
 
-        global_vars = list(getattr(root, "global_variables", []) or [])
+        specialization_constant_ids = getattr(
+            self, "directx_specialization_constant_global_ids", set()
+        )
+        global_vars = [
+            node
+            for node in getattr(root, "global_variables", []) or []
+            if id(node) not in specialization_constant_ids
+        ]
         stage_resource_vars = collect_stage_local_variables(
             root, target_stage, self.is_stage_local_resource_variable
         )
@@ -15565,6 +19075,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             visible_constants.pop(getattr(param, "name", None), None)
         return visible_constants
 
+    def hlsl_initial_texture_offset_constants(self, func):
+        visible_constants = dict(self.hlsl_texture_offset_global_constants)
+        for param in getattr(func, "parameters", getattr(func, "params", [])) or []:
+            visible_constants.pop(getattr(param, "name", None), None)
+        return visible_constants
+
     def hlsl_update_visible_bool_constants(self, stmt, visible_bool_constants):
         if isinstance(stmt, VariableNode):
             name = getattr(stmt, "name", None)
@@ -15619,6 +19135,37 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if target_name:
             visible_int_constants.pop(target_name, None)
 
+    def hlsl_update_visible_texture_offset_constants(
+        self, stmt, visible_offset_constants
+    ):
+        if isinstance(stmt, VariableNode):
+            name = getattr(stmt, "name", None)
+            if not name:
+                return
+
+            visible_offset_constants.pop(name, None)
+            if "const" not in getattr(stmt, "qualifiers", []):
+                return
+
+            value = self.hlsl_texture_offset_constant_value(
+                getattr(stmt, "initial_value", None),
+                scalar_constants=self.hlsl_current_visible_int_constants(),
+                offset_constants=visible_offset_constants,
+            )
+            if value is not None and len(value) > 1:
+                visible_offset_constants[name] = value
+            return
+
+        assignment = self.hlsl_assignment_from_statement(stmt)
+        if assignment is None:
+            return
+
+        target_name = self.expression_name(
+            getattr(assignment, "target", getattr(assignment, "left", None))
+        )
+        if target_name:
+            visible_offset_constants.pop(target_name, None)
+
     def hlsl_current_visible_int_constants(self):
         if self.current_hlsl_visible_int_constants is not None:
             return self.current_hlsl_visible_int_constants
@@ -15628,6 +19175,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if self.current_hlsl_visible_int_constants is not None:
             self.hlsl_update_visible_int_constants(
                 stmt, self.current_hlsl_visible_int_constants
+            )
+        if self.current_hlsl_texture_offset_constants is not None:
+            self.hlsl_update_visible_texture_offset_constants(
+                stmt, self.current_hlsl_texture_offset_constants
             )
         return generated_code
 
@@ -19113,10 +22664,193 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             used_names.add(alias)
         return aliases
 
+    def prepare_hlsl_mapped_function_overloads(self, functions, reserved_names=()):
+        """Assign target names when distinct source overloads collapse in HLSL."""
+        groups = {}
+        for function in functions or []:
+            function_name = getattr(function, "name", None)
+            if not function_name or function_stage_name(function):
+                continue
+            groups.setdefault(function_name, []).append(function)
+
+        self.hlsl_function_overloads_by_name = groups
+        self.hlsl_function_target_names = {}
+        self.hlsl_function_target_names_by_signature = {}
+        self.hlsl_mapped_overload_names = set()
+        used_names = set(groups)
+        used_names.update(self.hlsl_function_name_aliases.values())
+        used_names.update(reserved_names)
+
+        for function_name, overloads in groups.items():
+            mapped_groups = {}
+            for function in overloads:
+                target_key = self.hlsl_mapped_function_signature_key(function)
+                mapped_groups.setdefault(target_key, []).append(function)
+
+            for mapped_overloads in mapped_groups.values():
+                source_groups = {}
+                for function in mapped_overloads:
+                    source_key = self.hlsl_source_function_signature(function)
+                    source_groups.setdefault(source_key, []).append(function)
+                if len(source_groups) < 2:
+                    continue
+
+                if any(
+                    self.hlsl_function_has_resource_contract(function)
+                    for function in mapped_overloads
+                ):
+                    candidates = [
+                        self.hlsl_function_candidate_signature(declarations[0])
+                        for _source_key, declarations in sorted(
+                            source_groups.items(), key=lambda item: repr(item[0])
+                        )
+                    ]
+                    raise DirectXMappedOverloadError(
+                        "DirectX codegen cannot preserve mapped overloads with "
+                        f"resource parameters for '{function_name}'; candidates "
+                        f"are {', '.join(candidates)}",
+                        function_name=function_name,
+                        candidates=candidates,
+                        reason="resource-parameter-collision",
+                    )
+
+                self.hlsl_mapped_overload_names.add(function_name)
+                for source_key, declarations in sorted(
+                    source_groups.items(), key=lambda item: repr(item[0])
+                ):
+                    suffix = self.hlsl_function_overload_suffix(source_key)
+                    base_name = self.hlsl_sanitized_identifier(
+                        f"{function_name}_{suffix}"
+                    )
+                    target_name = base_name
+                    suffix_index = 2
+                    while (
+                        target_name in used_names
+                        or target_name in self.HLSL_RESERVED_LOCAL_IDENTIFIER_NAMES
+                    ):
+                        target_name = f"{base_name}_{suffix_index}"
+                        suffix_index += 1
+                    used_names.add(target_name)
+                    signature_key = (function_name, source_key)
+                    self.hlsl_function_target_names_by_signature[signature_key] = (
+                        target_name
+                    )
+                    for declaration in declarations:
+                        self.hlsl_function_target_names[id(declaration)] = target_name
+                    representative = next(
+                        (
+                            declaration
+                            for declaration in declarations
+                            if getattr(declaration, "body", None) is not None
+                        ),
+                        declarations[0],
+                    )
+                    self.register_hlsl_function_target_metadata(
+                        target_name, representative
+                    )
+
+    def hlsl_source_function_signature(self, function):
+        return tuple(
+            self.hlsl_source_type_signature(
+                getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+            )
+            for parameter in (
+                getattr(function, "parameters", getattr(function, "params", [])) or []
+            )
+        )
+
+    def hlsl_source_type_signature(self, value_type):
+        type_name = self.type_name_string(value_type) or "void"
+        return re.sub(r"\s+", " ", str(type_name).strip())
+
+    def hlsl_mapped_function_signature_key(self, function):
+        function_name = getattr(function, "name", None)
+        parameters = []
+        for parameter in (
+            getattr(function, "parameters", getattr(function, "params", [])) or []
+        ):
+            raw_type = self.type_name_string(
+                getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+            )
+            mapped_type = self.map_resource_parameter_type_with_hint(
+                raw_type, parameter, function_name
+            )
+            parameters.append(re.sub(r"\s+", " ", str(mapped_type).strip()))
+        return tuple(parameters)
+
+    def hlsl_function_has_resource_contract(self, function):
+        function_name = getattr(function, "name", None)
+        for parameter in (
+            getattr(function, "parameters", getattr(function, "params", [])) or []
+        ):
+            raw_type = self.type_name_string(
+                getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+            )
+            mapped_type = self.map_resource_parameter_type_with_hint(
+                raw_type, parameter, function_name
+            )
+            if self.is_resource_parameter_type(raw_type) or (
+                self.is_hlsl_global_resource_type(mapped_type)
+            ):
+                return True
+        return False
+
+    def hlsl_function_overload_suffix(self, source_signature):
+        parts = []
+        for type_name in source_signature:
+            part = re.sub(r"[^0-9A-Za-z]+", "_", type_name).strip("_")
+            parts.append(part or "value")
+        return "_".join(parts) or "void"
+
+    def hlsl_mapped_overload_reserved_names(self, ast):
+        names = set(self.global_variable_types)
+        names.update(self.structs_by_name)
+        for directive in getattr(ast, "preprocessors", []) or []:
+            if getattr(directive, "directive", None) != "define":
+                continue
+            content = str(getattr(directive, "content", "") or "")
+            match = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)", content)
+            if match is not None:
+                names.add(match.group(1))
+        for node in self.walk_ast(ast):
+            name = getattr(node, "name", None)
+            if isinstance(name, str) and name:
+                names.add(name)
+        return names
+
+    def register_hlsl_function_target_metadata(self, target_name, function):
+        parameters = (
+            getattr(function, "parameters", getattr(function, "params", [])) or []
+        )
+        self.function_return_types[target_name] = self.hlsl_function_return_type_name(
+            self.type_name_string(getattr(function, "return_type", "void"))
+        )
+        self.function_parameter_names[target_name] = [
+            getattr(parameter, "name", None) for parameter in parameters
+        ]
+        self.function_parameter_types[target_name] = [
+            self.function_parameter_type_name(parameter) for parameter in parameters
+        ]
+
+    def hlsl_function_candidate_signature(self, function):
+        parameters = ", ".join(self.hlsl_source_function_signature(function))
+        return_type = self.hlsl_source_type_signature(
+            getattr(function, "return_type", None)
+        )
+        return f"{getattr(function, 'name', '')}({parameters}) -> {return_type}"
+
     def hlsl_function_declaration_name(self, func, entry_name=None):
         if entry_name:
             return entry_name
         name = getattr(func, "name", None)
+        target_name = self.hlsl_function_target_names.get(id(func))
+        if target_name is None and name:
+            source_key = self.hlsl_source_function_signature(func)
+            target_name = self.hlsl_function_target_names_by_signature.get(
+                (name, source_key)
+            )
+        if target_name is not None:
+            return target_name
         return self.hlsl_function_name_aliases.get(name, name)
 
     def hlsl_materialized_function_name(self, name):
@@ -19143,6 +22877,178 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def hlsl_dependency_function_call_name(self, call):
         return self.hlsl_function_call_name(self.function_call_name(call))
+
+    def resolve_hlsl_function_overload(
+        self, function_name, arguments, *, call_node=None
+    ):
+        candidates = [
+            function
+            for function in self.hlsl_function_overloads_by_name.get(function_name, ())
+            if len(
+                getattr(function, "parameters", getattr(function, "params", [])) or []
+            )
+            == len(arguments)
+        ]
+        if not candidates:
+            return None
+
+        unique_candidates = {}
+        for function in candidates:
+            source_key = self.hlsl_source_function_signature(function)
+            previous = unique_candidates.get(source_key)
+            if previous is None or (
+                getattr(previous, "body", None) is None
+                and getattr(function, "body", None) is not None
+            ):
+                unique_candidates[source_key] = function
+        candidates = list(unique_candidates.values())
+        if len(candidates) == 1:
+            return candidates[0]
+
+        argument_types = [
+            self.hlsl_source_expression_type(argument) for argument in arguments
+        ]
+        scored = []
+        for function in candidates:
+            parameters = (
+                getattr(function, "parameters", getattr(function, "params", [])) or []
+            )
+            score = 0
+            compatible = True
+            for argument_type, parameter in zip(argument_types, parameters):
+                if argument_type is None:
+                    continue
+                parameter_type = getattr(
+                    parameter, "param_type", getattr(parameter, "vtype", None)
+                )
+                match_score = self.hlsl_function_type_match_score(
+                    argument_type, parameter_type
+                )
+                if match_score is None:
+                    compatible = False
+                    break
+                score += match_score
+            if compatible:
+                scored.append((score, function))
+
+        if scored:
+            highest_score = max(score for score, _function in scored)
+            winners = [function for score, function in scored if score == highest_score]
+            if len(winners) == 1:
+                return winners[0]
+        else:
+            winners = candidates
+
+        argument_names = [
+            (
+                self.hlsl_source_type_signature(argument_type)
+                if argument_type is not None
+                else "unknown"
+            )
+            for argument_type in argument_types
+        ]
+        candidate_names = [
+            self.hlsl_function_candidate_signature(function) for function in winners
+        ]
+        raise DirectXMappedOverloadError(
+            "DirectX codegen cannot preserve source overload binding for "
+            f"'{function_name}({', '.join(argument_names)})' after HLSL type "
+            f"mapping; candidates are {', '.join(candidate_names)}",
+            function_name=function_name,
+            argument_types=argument_names,
+            candidates=candidate_names,
+            reason="call-binding-ambiguous",
+            source_location=getattr(call_node, "source_location", None),
+        )
+
+    def hlsl_function_type_match_score(self, actual_type, parameter_type):
+        if actual_type is None or parameter_type is None:
+            return None
+        actual_signature = self.hlsl_source_type_signature(actual_type)
+        parameter_signature = self.hlsl_source_type_signature(parameter_type)
+        if actual_signature == parameter_signature:
+            return 8
+        if self.map_type(actual_type) == self.map_type(parameter_type):
+            return 2
+        if self.is_scalar_value_type(actual_type) and self.is_scalar_value_type(
+            parameter_type
+        ):
+            return 1
+        return None
+
+    def hlsl_source_expression_type(self, expression):
+        if expression is None:
+            return None
+        if isinstance(expression, (VariableNode, IdentifierNode)) or (
+            hasattr(expression, "__class__")
+            and "IdentifierNode" in str(expression.__class__)
+        ):
+            name = getattr(expression, "name", None)
+            return (
+                self.local_variable_source_types.get(name)
+                or self.local_variable_types.get(name)
+                or self.global_variable_types.get(name)
+                or self.expression_result_type(expression)
+            )
+        if isinstance(expression, ArrayAccessNode):
+            array_type = self.hlsl_source_expression_type(expression.array)
+            type_name = self.type_name_string(array_type)
+            if not type_name:
+                return None
+            base_type, array_suffix = split_array_type_suffix(type_name)
+            if array_suffix:
+                remaining_suffix = re.sub(r"^\s*\[[^\]]*\]", "", array_suffix)
+                return f"{base_type}{remaining_suffix}"
+            if type_name.rstrip().endswith(("*", "&")):
+                return type_name.rstrip()[:-1].strip()
+            return self.expression_result_type(expression)
+        if isinstance(expression, BinaryOpNode):
+            operator = self.map_operator(
+                getattr(expression, "op", getattr(expression, "operator", None))
+            )
+            if operator in {"==", "!=", "<", "<=", ">", ">=", "&&", "||"}:
+                return self.expression_result_type(expression)
+            left_type = self.hlsl_source_expression_type(expression.left)
+            right_type = self.hlsl_source_expression_type(expression.right)
+            if left_type is None:
+                return right_type
+            if right_type is None:
+                return left_type
+            if self.hlsl_source_type_signature(
+                left_type
+            ) == self.hlsl_source_type_signature(right_type):
+                return left_type
+            return self.expression_result_type(expression)
+        if isinstance(expression, UnaryOpNode):
+            return self.hlsl_source_expression_type(
+                getattr(expression, "operand", getattr(expression, "expr", None))
+            )
+        if isinstance(expression, TernaryOpNode):
+            true_type = self.hlsl_source_expression_type(expression.true_expr)
+            false_type = self.hlsl_source_expression_type(expression.false_expr)
+            if true_type is None:
+                return false_type
+            if false_type is None:
+                return true_type
+            if self.hlsl_source_type_signature(
+                true_type
+            ) == self.hlsl_source_type_signature(false_type):
+                return true_type
+            return self.expression_result_type(expression)
+        if isinstance(expression, ConstructorNode):
+            return self.type_name_string(getattr(expression, "constructor_type", None))
+        if isinstance(expression, FunctionCallNode):
+            function_name = self.function_call_name(expression)
+            if self.hlsl_type_constructor_name(function_name) is not None:
+                return function_name
+            resolved = self.resolve_hlsl_function_overload(
+                function_name,
+                expression.arguments,
+                call_node=expression,
+            )
+            if resolved is not None:
+                return self.type_name_string(getattr(resolved, "return_type", None))
+        return self.expression_result_type(expression)
 
     def collect_function_parameters(self, functions):
         parameters = []
@@ -21970,6 +25876,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         space = self.explicit_resource_register_space(node)
         return prefix, binding, space, resource_count, var_name
 
+    def new_directx_resource_register_allocator(self):
+        allocator = _DirectXResourceRegisterAllocator()
+        self.directx_resource_register_allocator = allocator
+        return allocator
+
     def reserve_explicit_global_resource_registers(self, global_vars, used_registers):
         self.directx_resource_register_overrides = {}
         relocatable_metadata = []
@@ -22079,6 +25990,32 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         space=None,
         provenance=None,
     ):
+        if isinstance(used_registers, _DirectXResourceRegisterAllocator):
+            count = max(count or 1, 1)
+            end = preferred + count - 1
+            namespace = (register_prefix, space)
+            if used_registers.has_allocation(namespace, preferred, end, name):
+                return preferred
+
+            if used_registers.range_is_available(namespace, preferred, end):
+                binding = preferred
+            else:
+                cursor = used_registers.relocation_cursors.get(namespace, preferred)
+                binding = used_registers.next_available(
+                    namespace, max(preferred, cursor), count
+                )
+            self.reserve_resource_register_range(
+                used_registers,
+                register_prefix,
+                binding,
+                count,
+                name,
+                space,
+                provenance=provenance,
+            )
+            used_registers.advance_relocation_cursor(namespace, binding, count)
+            return binding
+
         try:
             self.reserve_resource_register_range(
                 used_registers,
@@ -22119,6 +26056,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     ):
         count = max(count or 1, 1)
         binding = self.next_resource_register(register_cursors, space)
+        if isinstance(used_registers, _DirectXResourceRegisterAllocator):
+            return used_registers.next_available(
+                (register_prefix, space), binding, count
+            )
+
         ranges = used_registers.get((register_prefix, space), [])
         while True:
             end = binding + count - 1
@@ -22151,6 +26093,29 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         count = max(count or 1, 1)
         end = start + count - 1
         namespace = (register_prefix, space)
+        if isinstance(used_registers, _DirectXResourceRegisterAllocator):
+            if used_registers.has_allocation(namespace, start, end, name):
+                return
+            used_record = used_registers.conflicting_allocation(namespace, start, end)
+            if used_record is None:
+                used_registers.add_allocation(namespace, start, end, name, provenance)
+                return
+
+            used_start, used_end, used_name = used_record[:3]
+            used_provenance = used_record[3] if len(used_record) > 3 else None
+            self.raise_resource_register_conflict(
+                register_prefix,
+                start,
+                end,
+                name,
+                provenance,
+                space,
+                used_start,
+                used_end,
+                used_name,
+                used_provenance,
+            )
+
         ranges = used_registers.setdefault(namespace, [])
         for used_record in ranges:
             used_start, used_end, used_name = used_record[:3]
@@ -22158,23 +26123,47 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if start <= used_end and used_start <= end:
                 if used_start == start and used_end == end and used_name == name:
                     return
-                provenance_details = self.resource_binding_conflict_provenance_details(
+                self.raise_resource_register_conflict(
+                    register_prefix,
+                    start,
+                    end,
                     name,
                     provenance,
+                    space,
+                    used_start,
+                    used_end,
                     used_name,
                     used_provenance,
                 )
-                provenance_suffix = (
-                    f" ({provenance_details})" if provenance_details else ""
-                )
-                raise ValueError(
-                    f"Conflicting DirectX resource binding for '{name}': "
-                    f"{self.resource_register_range_label(register_prefix, start, end, space)} "
-                    f"overlaps '{used_name}' "
-                    f"{self.resource_register_range_label(register_prefix, used_start, used_end, space)}"
-                    f"{provenance_suffix}"
-                )
         ranges.append((start, end, name, provenance))
+
+    def raise_resource_register_conflict(
+        self,
+        register_prefix,
+        start,
+        end,
+        name,
+        provenance,
+        space,
+        used_start,
+        used_end,
+        used_name,
+        used_provenance,
+    ):
+        provenance_details = self.resource_binding_conflict_provenance_details(
+            name,
+            provenance,
+            used_name,
+            used_provenance,
+        )
+        provenance_suffix = f" ({provenance_details})" if provenance_details else ""
+        raise ValueError(
+            f"Conflicting DirectX resource binding for '{name}': "
+            f"{self.resource_register_range_label(register_prefix, start, end, space)} "
+            f"overlaps '{used_name}' "
+            f"{self.resource_register_range_label(register_prefix, used_start, used_end, space)}"
+            f"{provenance_suffix}"
+        )
 
     def resource_register_range_label(self, register_prefix, start, end, space=None):
         if start == end:
@@ -22197,6 +26186,881 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def literal_int_value(self, expr, constants=None):
         return evaluate_literal_int_expression(expr, constants)
+
+    def hlsl_texture_offset_type_dimension(self, type_value):
+        type_name = self.type_name_string(type_value)
+        normalized = "".join(str(type_name or "").split()).lower()
+        if normalized in {
+            "char",
+            "short",
+            "int",
+            "long",
+            "int8_t",
+            "int16_t",
+            "int32_t",
+            "int64_t",
+            "uchar",
+            "ushort",
+            "uint",
+            "ulong",
+            "uint8_t",
+            "uint16_t",
+            "uint32_t",
+            "uint64_t",
+            "i8",
+            "i16",
+            "i32",
+            "u8",
+            "u16",
+            "u32",
+        }:
+            return 1
+        match = re.fullmatch(r"(?:i|u)?vec([234])(?:<(?:i|u)\d+>)?", normalized)
+        if match is None:
+            match = re.fullmatch(r"(?:int|uint)([234])", normalized)
+        return int(match.group(1)) if match is not None else None
+
+    def hlsl_texture_offset_constructor_parts(self, expr):
+        if isinstance(expr, FunctionCallNode):
+            return self.function_call_name(expr), list(
+                getattr(expr, "arguments", getattr(expr, "args", [])) or []
+            )
+        if isinstance(expr, ConstructorNode):
+            return self.type_name_string(getattr(expr, "constructor_type", None)), list(
+                getattr(expr, "arguments", []) or []
+            )
+        return None, None
+
+    def hlsl_texture_offset_constant_value(
+        self,
+        expr,
+        *,
+        scalar_constants=None,
+        offset_constants=None,
+    ):
+        scalar_constants = (
+            self.hlsl_current_visible_int_constants()
+            if scalar_constants is None
+            else scalar_constants
+        )
+        offset_constants = (
+            self.current_hlsl_texture_offset_constants or {}
+            if offset_constants is None
+            else offset_constants
+        )
+        scalar_constants = dict(scalar_constants)
+        scalar_constants.update(
+            {
+                name: value[0]
+                for name, value in offset_constants.items()
+                if len(value) == 1
+            }
+        )
+
+        if expr is None:
+            return None
+        if isinstance(expr, bool):
+            return None
+        if isinstance(expr, int):
+            return (expr,)
+        if isinstance(expr, str):
+            if expr in offset_constants:
+                return tuple(offset_constants[expr])
+            scalar = self.literal_int_value(expr, scalar_constants)
+            return (int(scalar),) if scalar is not None else None
+
+        name = getattr(expr, "name", None)
+        if isinstance(name, str):
+            if name in offset_constants:
+                return tuple(offset_constants[name])
+            if name in scalar_constants:
+                return (int(scalar_constants[name]),)
+
+        constructor_name, constructor_args = self.hlsl_texture_offset_constructor_parts(
+            expr
+        )
+        constructor_dimension = self.hlsl_texture_offset_type_dimension(
+            constructor_name
+        )
+        if constructor_dimension is not None:
+            components = []
+            for argument in constructor_args:
+                value = self.hlsl_texture_offset_constant_value(
+                    argument,
+                    scalar_constants=scalar_constants,
+                    offset_constants=offset_constants,
+                )
+                if value is None:
+                    return None
+                components.extend(value)
+            if len(components) == 1 and constructor_dimension > 1:
+                components *= constructor_dimension
+            if len(components) != constructor_dimension:
+                return None
+            return tuple(int(component) for component in components)
+
+        if isinstance(expr, CastNode):
+            dimension = self.hlsl_texture_offset_type_dimension(
+                getattr(expr, "target_type", None)
+            )
+            value = self.hlsl_texture_offset_constant_value(
+                getattr(expr, "expression", None),
+                scalar_constants=scalar_constants,
+                offset_constants=offset_constants,
+            )
+            if dimension is None or value is None:
+                return None
+            if len(value) == 1 and dimension > 1:
+                value *= dimension
+            return tuple(value) if len(value) == dimension else None
+
+        if isinstance(expr, UnaryOpNode):
+            value = self.hlsl_texture_offset_constant_value(
+                getattr(expr, "operand", None),
+                scalar_constants=scalar_constants,
+                offset_constants=offset_constants,
+            )
+            operator = getattr(expr, "operator", getattr(expr, "op", None))
+            if value is None or operator not in {"+", "-", "~"}:
+                return None
+            if operator == "+":
+                return value
+            if operator == "-":
+                return tuple(-component for component in value)
+            return tuple(~component for component in value)
+
+        if isinstance(expr, BinaryOpNode):
+            left = self.hlsl_texture_offset_constant_value(
+                getattr(expr, "left", None),
+                scalar_constants=scalar_constants,
+                offset_constants=offset_constants,
+            )
+            right = self.hlsl_texture_offset_constant_value(
+                getattr(expr, "right", None),
+                scalar_constants=scalar_constants,
+                offset_constants=offset_constants,
+            )
+            if left is None or right is None:
+                return None
+            if len(left) == 1 and len(right) > 1:
+                left *= len(right)
+            if len(right) == 1 and len(left) > 1:
+                right *= len(left)
+            if len(left) != len(right):
+                return None
+            operator = getattr(expr, "operator", getattr(expr, "op", None))
+            values = []
+            for lhs, rhs in zip(left, right):
+                value = self.hlsl_texture_offset_binary_component(lhs, operator, rhs)
+                if value is None:
+                    return None
+                values.append(value)
+            return tuple(values)
+
+        if isinstance(expr, TernaryOpNode):
+            condition = self.literal_int_value(
+                getattr(expr, "condition", None), scalar_constants
+            )
+            if condition is None:
+                return None
+            selected = (
+                getattr(expr, "true_expr", None)
+                if condition
+                else getattr(expr, "false_expr", None)
+            )
+            return self.hlsl_texture_offset_constant_value(
+                selected,
+                scalar_constants=scalar_constants,
+                offset_constants=offset_constants,
+            )
+
+        if isinstance(expr, (MemberAccessNode, SwizzleNode)):
+            components = getattr(expr, "member", None)
+            vector_expr = getattr(expr, "object_expr", None)
+            if components is None:
+                components = getattr(expr, "components", None)
+                vector_expr = getattr(expr, "vector_expr", None)
+            value = self.hlsl_texture_offset_constant_value(
+                vector_expr,
+                scalar_constants=scalar_constants,
+                offset_constants=offset_constants,
+            )
+            indices = self.hlsl_texture_offset_swizzle_indices(components)
+            if (
+                value is None
+                or indices is None
+                or any(i >= len(value) for i in indices)
+            ):
+                return None
+            return tuple(value[index] for index in indices)
+
+        scalar = self.literal_int_value(expr, scalar_constants)
+        return (int(scalar),) if scalar is not None else None
+
+    def hlsl_texture_offset_binary_component(self, left, operator, right):
+        if operator == "+":
+            return left + right
+        if operator == "-":
+            return left - right
+        if operator == "*":
+            return left * right
+        if operator == "/" and right != 0:
+            quotient = abs(left) // abs(right)
+            return -quotient if (left < 0) != (right < 0) else quotient
+        if operator == "%" and right != 0:
+            quotient = abs(left) // abs(right)
+            quotient = -quotient if (left < 0) != (right < 0) else quotient
+            return left - quotient * right
+        if operator == "<<" and right >= 0:
+            return left << right
+        if operator == ">>" and right >= 0:
+            return left >> right
+        if operator == "&":
+            return left & right
+        if operator == "|":
+            return left | right
+        if operator == "^":
+            return left ^ right
+        return None
+
+    def hlsl_texture_offset_swizzle_indices(self, components):
+        if not isinstance(components, str) or not components:
+            return None
+        groups = ("xyzw", "rgba", "stpq")
+        indices = []
+        for component in components:
+            index = next(
+                (group.find(component) for group in groups if component in group), -1
+            )
+            if index < 0:
+                return None
+            indices.append(index)
+        return tuple(indices)
+
+    def hlsl_immediate_texture_offset(
+        self,
+        func_name,
+        offset_expression,
+        texture_type,
+        target_method,
+        *,
+        call_node=None,
+    ):
+        value = self.hlsl_texture_offset_constant_value(offset_expression)
+        expected_dimension = self.resource_offset_dimension(func_name, texture_type)
+        texture_shape = self.sampled_texture_shape_type(texture_type) or "Texture"
+        qualified_method = f"{texture_shape}.{target_method}"
+        blocking_expression = self.hlsl_texture_offset_expression_label(
+            offset_expression
+        )
+        function_name = self.current_function_name or "<global>"
+        source_location = getattr(call_node, "source_location", None) or getattr(
+            offset_expression, "source_location", None
+        )
+
+        reason = None
+        detail = None
+        if value is None or (
+            expected_dimension is not None and len(value) != expected_dimension
+        ):
+            reason = "runtime-offset-requires-immediate"
+            detail = (
+                f"offset expression '{blocking_expression}' is runtime-derived, but "
+                f"HLSL {qualified_method} requires a compile-time immediate offset"
+            )
+        elif any(component < -8 or component > 7 for component in value):
+            reason = "immediate-offset-out-of-range"
+            detail = (
+                f"offset expression '{blocking_expression}' resolves to "
+                f"{self.hlsl_texture_offset_value_label(value)}, but HLSL "
+                f"{qualified_method} immediate components must be between -8 and 7"
+            )
+
+        if reason is not None:
+            raise DirectXTextureOffsetError(
+                f"DirectX texture operation '{func_name}' in function "
+                f"'{function_name}' cannot preserve source sampling semantics: "
+                f"{detail}. Use a literal or const offset in range, ensure every "
+                "reachable helper call supplies one concrete value, or target a "
+                "backend/profile with programmable texture offsets.",
+                operation=func_name,
+                target_method=qualified_method,
+                blocking_expression=blocking_expression,
+                function_name=function_name,
+                reason=reason,
+                source_location=source_location,
+            )
+
+        return self.hlsl_render_texture_offset_value(value)
+
+    def hlsl_texture_offset_expression_label(self, expression):
+        constructor_name, constructor_args = self.hlsl_texture_offset_constructor_parts(
+            expression
+        )
+        if constructor_name is not None:
+            arguments = ", ".join(
+                self.hlsl_texture_offset_expression_label(argument)
+                for argument in constructor_args
+            )
+            return f"{constructor_name}({arguments})"
+        return expression_debug_name(expression)
+
+    def hlsl_render_texture_offset_value(self, value):
+        if len(value) == 1:
+            return str(value[0])
+        return f"int{len(value)}({', '.join(str(component) for component in value)})"
+
+    def hlsl_texture_offset_value_label(self, value):
+        if len(value) == 1:
+            return str(value[0])
+        return f"({', '.join(str(component) for component in value)})"
+
+    def collect_hlsl_texture_offset_global_constants(self, constants):
+        resolved = {}
+        pending = list(constants or [])
+        changed = True
+        while changed:
+            changed = False
+            remaining = []
+            for constant in pending:
+                name = getattr(constant, "name", None)
+                dimension = self.hlsl_texture_offset_type_dimension(
+                    getattr(constant, "const_type", None)
+                )
+                if not name or dimension is None or dimension == 1:
+                    continue
+                value = self.hlsl_texture_offset_constant_value(
+                    getattr(constant, "value", None),
+                    scalar_constants=self.literal_int_constants,
+                    offset_constants=resolved,
+                )
+                if value is None:
+                    remaining.append(constant)
+                    continue
+                if len(value) == dimension:
+                    resolved[name] = value
+                    changed = True
+            pending = remaining
+        return resolved
+
+    def hlsl_texture_offset_analysis_functions(self, ast, target_stage):
+        functions = [
+            function
+            for function in getattr(ast, "functions", []) or []
+            if getattr(function, "name", None) not in self.hlsl_omitted_function_names
+            and should_emit_qualified_function(
+                target_stage, function_stage_name(function)
+            )
+        ]
+        for stage_type, stage in getattr(ast, "stages", {}).items():
+            stage_name = normalize_stage_name(stage_type)
+            if not stage_matches(target_stage, stage_name):
+                continue
+            functions.extend(getattr(stage, "local_functions", []) or [])
+            entry_point = getattr(stage, "entry_point", None)
+            if entry_point is not None:
+                functions.append(entry_point)
+        deduplicated = []
+        seen = set()
+        for function in functions:
+            if id(function) in seen or getattr(function, "body", None) is None:
+                continue
+            seen.add(id(function))
+            deduplicated.append(function)
+        return deduplicated
+
+    def hlsl_texture_offset_operation_requires_immediate(self, operation):
+        return (
+            is_texture_sample_basic_offset_operation(operation)
+            or is_texture_sample_lod_offset_operation(operation)
+            or is_texture_sample_grad_offset_operation(operation)
+            or is_projected_texture_basic_offset_operation(operation)
+            or is_projected_texture_lod_offset_operation(operation)
+            or is_projected_texture_grad_offset_operation(operation)
+            or is_texture_compare_offset_operation(operation)
+        )
+
+    def collect_hlsl_texture_offset_parameter_constants(self, ast, target_stage):
+        functions = self.hlsl_texture_offset_analysis_functions(ast, target_stage)
+        if not any(
+            self.hlsl_texture_offset_operation_requires_immediate(
+                self.function_call_name(node)
+            )
+            for function in functions
+            for node in self.walk_ast(getattr(function, "body", None))
+            if isinstance(node, FunctionCallNode)
+        ):
+            return {}
+
+        functions_by_name = {}
+        for function in functions:
+            name = getattr(function, "name", None)
+            if name:
+                functions_by_name.setdefault(name, []).append(function)
+
+        mutated_parameter_indices = self.hlsl_texture_offset_mutated_parameter_indices(
+            functions, functions_by_name
+        )
+
+        proven = {}
+        for _ in range(len(functions) + 1):
+            incoming = {id(function): [] for function in functions}
+            for caller in functions:
+                scalar_constants = self.hlsl_initial_int_constants(caller)
+                offset_constants = self.hlsl_initial_texture_offset_constants(caller)
+                for parameter_name, value in proven.get(id(caller), {}).items():
+                    offset_constants[parameter_name] = value
+                self.collect_hlsl_texture_offset_calls_from_body(
+                    getattr(caller, "body", None),
+                    functions_by_name,
+                    scalar_constants,
+                    offset_constants,
+                    incoming,
+                )
+
+            updated = {}
+            for function in functions:
+                calls = incoming[id(function)]
+                if not calls:
+                    continue
+                parameter_values = {}
+                parameters = list(
+                    getattr(function, "parameters", getattr(function, "params", []))
+                    or []
+                )
+                for index, parameter in enumerate(parameters):
+                    if index in mutated_parameter_indices[id(function)]:
+                        continue
+                    values = [arguments[index] for arguments in calls]
+                    first = values[0]
+                    if first is not None and all(
+                        value == first for value in values[1:]
+                    ):
+                        parameter_values[getattr(parameter, "name", "")] = first
+                if parameter_values:
+                    updated[id(function)] = parameter_values
+            if updated == proven:
+                break
+            proven = updated
+        return proven
+
+    def hlsl_texture_offset_call_target(self, call, functions_by_name):
+        name = self.function_call_name(call)
+        candidates = list(functions_by_name.get(name, []))
+        if not candidates and isinstance(name, str) and "::" in name:
+            candidates = list(functions_by_name.get(name.rsplit("::", 1)[-1], []))
+        if len(candidates) == 1:
+            return candidates[0]
+        if not candidates:
+            return None
+        argument_count = len(
+            getattr(call, "arguments", getattr(call, "args", [])) or []
+        )
+        arity_matches = [
+            candidate
+            for candidate in candidates
+            if len(
+                getattr(candidate, "parameters", getattr(candidate, "params", [])) or []
+            )
+            == argument_count
+        ]
+        return arity_matches[0] if len(arity_matches) == 1 else None
+
+    def hlsl_texture_offset_write_root_name(self, expression):
+        if isinstance(expression, str):
+            return expression
+        if isinstance(
+            expression, (ArrayAccessNode, MemberAccessNode, PointerAccessNode)
+        ):
+            child = getattr(
+                expression,
+                "array_expr",
+                getattr(
+                    expression,
+                    "object_expr",
+                    getattr(expression, "pointer_expr", None),
+                ),
+            )
+            return self.hlsl_texture_offset_write_root_name(child)
+        if isinstance(expression, SwizzleNode):
+            return self.hlsl_texture_offset_write_root_name(
+                getattr(expression, "vector_expr", None)
+            )
+        name = getattr(expression, "name", None)
+        if isinstance(name, str):
+            return name
+        return None
+
+    def hlsl_texture_offset_mutated_parameter_indices(
+        self, functions, functions_by_name
+    ):
+        parameter_indices = {}
+        mutated = {}
+        for function in functions:
+            parameters = list(
+                getattr(function, "parameters", getattr(function, "params", [])) or []
+            )
+            parameter_indices[id(function)] = {
+                getattr(parameter, "name", None): index
+                for index, parameter in enumerate(parameters)
+                if getattr(parameter, "name", None)
+            }
+            mutated[id(function)] = {
+                index
+                for index, parameter in enumerate(parameters)
+                if set(self.hlsl_parameter_qualifiers(parameter)) & {"out", "inout"}
+            }
+
+            for node in self.walk_ast(getattr(function, "body", None)):
+                target = None
+                if isinstance(node, AssignmentNode):
+                    target = getattr(node, "target", getattr(node, "left", None))
+                elif isinstance(node, UnaryOpNode) and getattr(
+                    node, "operator", getattr(node, "op", None)
+                ) in {"++", "--"}:
+                    target = getattr(node, "operand", None)
+                root_name = self.hlsl_texture_offset_write_root_name(target)
+                index = parameter_indices[id(function)].get(root_name)
+                if index is not None:
+                    mutated[id(function)].add(index)
+
+        changed = True
+        while changed:
+            changed = False
+            for function in functions:
+                caller_parameters = parameter_indices[id(function)]
+                for node in self.walk_ast(getattr(function, "body", None)):
+                    if not isinstance(node, FunctionCallNode):
+                        continue
+                    callee = self.hlsl_texture_offset_call_target(
+                        node, functions_by_name
+                    )
+                    if callee is None:
+                        continue
+                    arguments = list(
+                        getattr(node, "arguments", getattr(node, "args", [])) or []
+                    )
+                    callee_parameters = list(
+                        getattr(
+                            callee,
+                            "parameters",
+                            getattr(callee, "params", []),
+                        )
+                        or []
+                    )
+                    for index in mutated[id(callee)]:
+                        if index >= len(arguments) or index >= len(callee_parameters):
+                            continue
+                        if not set(
+                            self.hlsl_parameter_qualifiers(callee_parameters[index])
+                        ) & {"out", "inout"}:
+                            continue
+                        root_name = self.hlsl_texture_offset_write_root_name(
+                            arguments[index]
+                        )
+                        caller_index = caller_parameters.get(root_name)
+                        if (
+                            caller_index is not None
+                            and caller_index not in mutated[id(function)]
+                        ):
+                            mutated[id(function)].add(caller_index)
+                            changed = True
+        return mutated
+
+    def collect_hlsl_texture_offset_calls_from_expression(
+        self,
+        expression,
+        functions_by_name,
+        scalar_constants,
+        offset_constants,
+        incoming,
+    ):
+        if expression is None:
+            return
+        for node in self.walk_ast(expression):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            callee = self.hlsl_texture_offset_call_target(node, functions_by_name)
+            if callee is None:
+                continue
+            arguments = list(
+                getattr(node, "arguments", getattr(node, "args", [])) or []
+            )
+            parameters = list(
+                getattr(callee, "parameters", getattr(callee, "params", [])) or []
+            )
+            values = []
+            for index, parameter in enumerate(parameters):
+                argument = (
+                    arguments[index]
+                    if index < len(arguments)
+                    else getattr(parameter, "default_value", None)
+                )
+                values.append(
+                    self.hlsl_texture_offset_constant_value(
+                        argument,
+                        scalar_constants=scalar_constants,
+                        offset_constants=offset_constants,
+                    )
+                )
+            incoming[id(callee)].append(values)
+
+    def hlsl_update_texture_offset_analysis_constants(
+        self, statement, scalar_constants, offset_constants
+    ):
+        if isinstance(statement, VariableNode):
+            name = getattr(statement, "name", None)
+            if not name:
+                return
+            scalar_constants.pop(name, None)
+            offset_constants.pop(name, None)
+            if "const" not in getattr(statement, "qualifiers", []):
+                return
+            value = self.hlsl_texture_offset_constant_value(
+                getattr(statement, "initial_value", None),
+                scalar_constants=scalar_constants,
+                offset_constants=offset_constants,
+            )
+            if value is None:
+                return
+            if len(value) == 1:
+                scalar_constants[name] = value[0]
+            else:
+                offset_constants[name] = value
+            return
+
+        assignment = self.hlsl_assignment_from_statement(statement)
+        if assignment is None:
+            return
+        target_name = self.expression_name(
+            getattr(assignment, "target", getattr(assignment, "left", None))
+        )
+        if target_name:
+            scalar_constants.pop(target_name, None)
+            offset_constants.pop(target_name, None)
+
+    def collect_hlsl_texture_offset_calls_from_body(
+        self,
+        body,
+        functions_by_name,
+        scalar_constants,
+        offset_constants,
+        incoming,
+    ):
+        for statement in self.hlsl_statement_body_items(body):
+            if isinstance(statement, VariableNode):
+                self.collect_hlsl_texture_offset_calls_from_expression(
+                    getattr(statement, "initial_value", None),
+                    functions_by_name,
+                    scalar_constants,
+                    offset_constants,
+                    incoming,
+                )
+                self.hlsl_update_texture_offset_analysis_constants(
+                    statement, scalar_constants, offset_constants
+                )
+                continue
+
+            if isinstance(statement, BlockNode):
+                self.collect_hlsl_texture_offset_calls_from_body(
+                    statement,
+                    functions_by_name,
+                    dict(scalar_constants),
+                    dict(offset_constants),
+                    incoming,
+                )
+                continue
+
+            if isinstance(statement, IfNode):
+                self.collect_hlsl_texture_offset_calls_from_expression(
+                    getattr(statement, "condition", None),
+                    functions_by_name,
+                    scalar_constants,
+                    offset_constants,
+                    incoming,
+                )
+                for else_if_condition in (
+                    getattr(statement, "else_if_conditions", []) or []
+                ):
+                    self.collect_hlsl_texture_offset_calls_from_expression(
+                        else_if_condition,
+                        functions_by_name,
+                        scalar_constants,
+                        offset_constants,
+                        incoming,
+                    )
+                branches = [
+                    getattr(
+                        statement, "then_branch", getattr(statement, "if_body", None)
+                    ),
+                    *list(getattr(statement, "else_if_bodies", []) or []),
+                    getattr(
+                        statement, "else_branch", getattr(statement, "else_body", None)
+                    ),
+                ]
+                for branch in branches:
+                    if branch is not None:
+                        self.collect_hlsl_texture_offset_calls_from_body(
+                            branch,
+                            functions_by_name,
+                            dict(scalar_constants),
+                            dict(offset_constants),
+                            incoming,
+                        )
+                continue
+
+            if isinstance(statement, ForNode):
+                loop_scalars = dict(scalar_constants)
+                loop_offsets = dict(offset_constants)
+                initializers = getattr(statement, "init", None)
+                if not isinstance(initializers, list):
+                    initializers = [initializers] if initializers is not None else []
+                for initializer in initializers:
+                    self.collect_hlsl_texture_offset_calls_from_expression(
+                        initializer,
+                        functions_by_name,
+                        loop_scalars,
+                        loop_offsets,
+                        incoming,
+                    )
+                    self.hlsl_update_texture_offset_analysis_constants(
+                        initializer, loop_scalars, loop_offsets
+                    )
+                for expression in (
+                    getattr(statement, "condition", None),
+                    getattr(statement, "update", None),
+                ):
+                    self.collect_hlsl_texture_offset_calls_from_expression(
+                        expression,
+                        functions_by_name,
+                        loop_scalars,
+                        loop_offsets,
+                        incoming,
+                    )
+                self.collect_hlsl_texture_offset_calls_from_body(
+                    getattr(statement, "body", None),
+                    functions_by_name,
+                    loop_scalars,
+                    loop_offsets,
+                    incoming,
+                )
+                continue
+
+            if isinstance(statement, ForInNode):
+                self.collect_hlsl_texture_offset_calls_from_expression(
+                    getattr(statement, "iterable", None),
+                    functions_by_name,
+                    scalar_constants,
+                    offset_constants,
+                    incoming,
+                )
+                loop_scalars = dict(scalar_constants)
+                loop_offsets = dict(offset_constants)
+                pattern_name = self.hlsl_declaration_identifier_name(
+                    getattr(statement, "pattern", None)
+                )
+                loop_scalars.pop(pattern_name, None)
+                loop_offsets.pop(pattern_name, None)
+                self.collect_hlsl_texture_offset_calls_from_body(
+                    getattr(statement, "body", None),
+                    functions_by_name,
+                    loop_scalars,
+                    loop_offsets,
+                    incoming,
+                )
+                continue
+
+            if isinstance(statement, (WhileNode, DoWhileNode, LoopNode)):
+                self.collect_hlsl_texture_offset_calls_from_expression(
+                    getattr(statement, "condition", None),
+                    functions_by_name,
+                    scalar_constants,
+                    offset_constants,
+                    incoming,
+                )
+                self.collect_hlsl_texture_offset_calls_from_body(
+                    getattr(statement, "body", None),
+                    functions_by_name,
+                    dict(scalar_constants),
+                    dict(offset_constants),
+                    incoming,
+                )
+                continue
+
+            if isinstance(statement, SwitchNode):
+                self.collect_hlsl_texture_offset_calls_from_expression(
+                    getattr(statement, "expression", None),
+                    functions_by_name,
+                    scalar_constants,
+                    offset_constants,
+                    incoming,
+                )
+                for case in getattr(statement, "cases", []) or []:
+                    self.collect_hlsl_texture_offset_calls_from_expression(
+                        getattr(case, "value", None),
+                        functions_by_name,
+                        scalar_constants,
+                        offset_constants,
+                        incoming,
+                    )
+                    self.collect_hlsl_texture_offset_calls_from_body(
+                        getattr(case, "statements", []),
+                        functions_by_name,
+                        dict(scalar_constants),
+                        dict(offset_constants),
+                        incoming,
+                    )
+                self.collect_hlsl_texture_offset_calls_from_body(
+                    getattr(statement, "default_case", None),
+                    functions_by_name,
+                    dict(scalar_constants),
+                    dict(offset_constants),
+                    incoming,
+                )
+                continue
+
+            if isinstance(statement, MatchNode):
+                self.collect_hlsl_texture_offset_calls_from_expression(
+                    getattr(statement, "expression", None),
+                    functions_by_name,
+                    scalar_constants,
+                    offset_constants,
+                    incoming,
+                )
+                for arm in getattr(statement, "arms", []) or []:
+                    arm_scalars = dict(scalar_constants)
+                    arm_offsets = dict(offset_constants)
+                    pattern_name = self.hlsl_declaration_identifier_name(
+                        getattr(arm, "pattern", None)
+                    )
+                    arm_scalars.pop(pattern_name, None)
+                    arm_offsets.pop(pattern_name, None)
+                    self.collect_hlsl_texture_offset_calls_from_expression(
+                        getattr(arm, "guard", None),
+                        functions_by_name,
+                        arm_scalars,
+                        arm_offsets,
+                        incoming,
+                    )
+                    self.collect_hlsl_texture_offset_calls_from_body(
+                        getattr(arm, "body", None),
+                        functions_by_name,
+                        arm_scalars,
+                        arm_offsets,
+                        incoming,
+                    )
+                continue
+
+            self.collect_hlsl_texture_offset_calls_from_expression(
+                statement,
+                functions_by_name,
+                scalar_constants,
+                offset_constants,
+                incoming,
+            )
+            self.hlsl_update_texture_offset_analysis_constants(
+                statement, scalar_constants, offset_constants
+            )
 
     def initial_literal_int_constants(self, func):
         visible_constants = dict(self.literal_int_constants)
@@ -22310,6 +27174,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 workgroup_pointer_func_name, {}
             )
         )
+        resource_pointer_indices = (
+            self.hlsl_resource_pointer_parameter_indices_for_function(
+                workgroup_pointer_func_name
+            )
+        )
         rendered_args = []
         for index, arg in enumerate(args):
             expected_type = (
@@ -22328,7 +27197,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         "argument; a materialized array temporary is required"
                     ),
                 )
-            if index in workgroup_pointer_indices:
+            if index in workgroup_pointer_indices or index in resource_pointer_indices:
                 rendered_args.append("")
             else:
                 rendered_args.append(
@@ -22368,17 +27237,28 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     ]
                 )
             else:
-                private_binding = self.hlsl_private_pointer_call_argument_binding(
-                    private_pointer_func_name, index, arg
+                resource_binding = self.hlsl_resource_pointer_call_argument_binding(
+                    workgroup_pointer_func_name, index, arg
                 )
-                if private_binding is None:
-                    generated_args.append(rendered_args[index])
-                elif private_binding.get("scalar"):
-                    generated_args.append(private_binding["backing"])
-                else:
+                if resource_binding is not None:
                     generated_args.extend(
-                        [private_binding["backing"], private_binding["offset"]]
+                        [
+                            resource_binding["root"],
+                            f"int64_t({resource_binding.get('offset', '0')})",
+                        ]
                     )
+                else:
+                    private_binding = self.hlsl_private_pointer_call_argument_binding(
+                        private_pointer_func_name, index, arg
+                    )
+                    if private_binding is None:
+                        generated_args.append(rendered_args[index])
+                    elif private_binding.get("scalar"):
+                        generated_args.append(private_binding["backing"])
+                    else:
+                        generated_args.extend(
+                            [private_binding["backing"], private_binding["offset"]]
+                        )
             if index >= len(param_names):
                 continue
             texture_param = param_names[index]
@@ -23854,7 +28734,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def unsupported_texture_sample_offset_call(self, func_name, reason):
         return unsupported_texture_offset_call_expression("DirectX", func_name, reason)
 
-    def generate_texture_sample_offset_call(self, func_name, args):
+    def generate_texture_sample_offset_call(self, func_name, args, *, call_node=None):
         parts = self.texture_call_parts(args, func_name)
         if parts is None:
             return self.unsupported_texture_sample_offset_call(
@@ -23876,13 +28756,26 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return self.unsupported_texture_sample_offset_call(
                     func_name, count_error
                 )
-            offset = self.generate_expression(extra_args[0])
             if len(extra_args) == 2:
                 bias = self.generate_expression(extra_args[1])
+                offset = self.hlsl_immediate_texture_offset(
+                    func_name,
+                    extra_args[0],
+                    texture_type,
+                    "SampleBias",
+                    call_node=call_node,
+                )
                 return (
                     f"{texture_name}.SampleBias("
                     f"{sampler_name}, {coord}, {bias}, {offset})"
                 )
+            offset = self.hlsl_immediate_texture_offset(
+                func_name,
+                extra_args[0],
+                texture_type,
+                "Sample",
+                call_node=call_node,
+            )
             return f"{texture_name}.Sample({sampler_name}, {coord}, {offset})"
 
         if is_texture_sample_lod_offset_operation(func_name):
@@ -23894,7 +28787,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     func_name, count_error
                 )
             lod = self.generate_expression(extra_args[0])
-            offset = self.generate_expression(extra_args[1])
+            offset = self.hlsl_immediate_texture_offset(
+                func_name,
+                extra_args[1],
+                texture_type,
+                "SampleLevel",
+                call_node=call_node,
+            )
             return (
                 f"{texture_name}.SampleLevel({sampler_name}, {coord}, {lod}, {offset})"
             )
@@ -23909,7 +28808,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
             ddx = self.generate_expression(extra_args[0])
             ddy = self.generate_expression(extra_args[1])
-            offset = self.generate_expression(extra_args[2])
+            offset = self.hlsl_immediate_texture_offset(
+                func_name,
+                extra_args[2],
+                texture_type,
+                "SampleGrad",
+                call_node=call_node,
+            )
             return (
                 f"{texture_name}.SampleGrad("
                 f"{sampler_name}, {coord}, {ddx}, {ddy}, {offset})"
@@ -23970,7 +28875,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return f"float3({projected_coord}, {self.vector_component(coord, 'z')})"
         return projected_coord
 
-    def generate_texture_projected_call(self, func_name, args):
+    def generate_texture_projected_call(self, func_name, args, *, call_node=None):
         parts = self.texture_call_parts(args, func_name)
         if parts is None:
             return self.unsupported_texture_projected_call(
@@ -24014,14 +28919,26 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     func_name, texture_sample_offset_capability_error("DirectX")
                 )
             if len(extra_args) == 1:
-                offset = self.generate_expression(extra_args[0])
+                offset = self.hlsl_immediate_texture_offset(
+                    func_name,
+                    extra_args[0],
+                    texture_type,
+                    "Sample",
+                    call_node=call_node,
+                )
                 return (
                     f"{texture_name}.Sample("
                     f"{sampler_name}, {projected_coord}, {offset})"
                 )
             if len(extra_args) == 2:
-                offset = self.generate_expression(extra_args[0])
                 bias = self.generate_expression(extra_args[1])
+                offset = self.hlsl_immediate_texture_offset(
+                    func_name,
+                    extra_args[0],
+                    texture_type,
+                    "SampleBias",
+                    call_node=call_node,
+                )
                 return (
                     f"{texture_name}.SampleBias("
                     f"{sampler_name}, {projected_coord}, {bias}, {offset})"
@@ -24049,7 +28966,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     func_name, texture_sample_offset_capability_error("DirectX")
                 )
             lod = self.generate_expression(extra_args[0])
-            offset = self.generate_expression(extra_args[1])
+            offset = self.hlsl_immediate_texture_offset(
+                func_name,
+                extra_args[1],
+                texture_type,
+                "SampleLevel",
+                call_node=call_node,
+            )
             return (
                 f"{texture_name}.SampleLevel("
                 f"{sampler_name}, {projected_coord}, {lod}, {offset})"
@@ -24080,7 +29003,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 )
             ddx = self.generate_expression(extra_args[0])
             ddy = self.generate_expression(extra_args[1])
-            offset = self.generate_expression(extra_args[2])
+            offset = self.hlsl_immediate_texture_offset(
+                func_name,
+                extra_args[2],
+                texture_type,
+                "SampleGrad",
+                call_node=call_node,
+            )
             return (
                 f"{texture_name}.SampleGrad("
                 f"{sampler_name}, {projected_coord}, {ddx}, {ddy}, {offset})"
@@ -24197,7 +29126,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         return f"float3({projected_coord}, {self.vector_component(coord, 'z')})"
 
-    def generate_texture_compare_call(self, func_name, args):
+    def generate_texture_compare_call(self, func_name, args, *, call_node=None):
         parts = self.texture_call_parts(args, func_name)
         if parts is None:
             return self.unsupported_texture_compare_call(
@@ -24248,7 +29177,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     return self.unsupported_texture_compare_call(
                         func_name, texture_compare_offset_capability_error("DirectX")
                     )
-                offset = self.generate_expression(extra_args[1])
+                offset = self.hlsl_immediate_texture_offset(
+                    func_name,
+                    extra_args[1],
+                    texture_type,
+                    "SampleCmp",
+                    call_node=call_node,
+                )
                 return (
                     f"{texture_name}.SampleCmp("
                     f"{sampler_name}, {projected_coord}, {compare}, {offset})"
@@ -24336,7 +29271,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return self.unsupported_texture_compare_call(
                     func_name, texture_compare_offset_capability_error("DirectX")
                 )
-            offset = self.generate_expression(extra_args[1])
+            offset = self.hlsl_immediate_texture_offset(
+                func_name,
+                extra_args[1],
+                texture_type,
+                "SampleCmp",
+                call_node=call_node,
+            )
             return f"{texture_name}.SampleCmp({sampler_name}, {coord}, {compare}, {offset})"
 
         if is_texture_compare_lod_operation(func_name):
@@ -25008,6 +29949,494 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         code += f"{indent_str}{parts['intrinsic']}({', '.join(call_args)});\n"
         code += f"{indent_str}return {original};\n"
         return code
+
+    def hlsl_is_ternary_expression(self, expr):
+        return isinstance(expr, TernaryOpNode) or (
+            hasattr(expr, "__class__") and "TernaryOp" in str(expr.__class__)
+        )
+
+    def hlsl_aggregate_value_type(self, type_name):
+        type_name = self.type_name_string(type_name)
+        if not type_name:
+            return None
+        mapped_type = self.map_type(type_name)
+        if self.hlsl_struct_constructor_fields(mapped_type) is not None:
+            return mapped_type
+        if self.hlsl_outer_array_type(mapped_type) is not None:
+            return mapped_type
+        return None
+
+    def hlsl_aggregate_conditional_type(self, expr, expected_type=None):
+        if not self.hlsl_is_ternary_expression(expr):
+            return None
+
+        inferred_candidates = [
+            self.expression_result_type(expr),
+            self.expression_result_type(getattr(expr, "true_expr", None)),
+            self.expression_result_type(getattr(expr, "false_expr", None)),
+        ]
+        for candidate in inferred_candidates:
+            aggregate_type = self.hlsl_aggregate_value_type(candidate)
+            if aggregate_type is not None:
+                return aggregate_type
+
+        inferred_types = [
+            self.type_name_string(candidate)
+            for candidate in inferred_candidates
+            if self.type_name_string(candidate)
+        ]
+        if any(
+            self.is_scalar_value_type(candidate)
+            or self.is_vector_value_type(candidate)
+            or self.hlsl_matrix_shape(self.map_type(candidate)) is not None
+            for candidate in inferred_types
+        ):
+            return None
+        return self.hlsl_aggregate_value_type(expected_type)
+
+    def hlsl_first_aggregate_conditional(self, expr, expected_type=None):
+        aggregate_type = self.hlsl_aggregate_conditional_type(expr, expected_type)
+        if aggregate_type is not None:
+            return expr, aggregate_type
+        for node in self.walk_ast(expr):
+            if node is expr:
+                continue
+            aggregate_type = self.hlsl_aggregate_conditional_type(node)
+            if aggregate_type is not None:
+                return node, aggregate_type
+        return None, None
+
+    def hlsl_aggregate_conditional_error(
+        self,
+        expr,
+        *,
+        aggregate_type,
+        context,
+        reason,
+        detail,
+    ):
+        type_name = self.map_type(aggregate_type) if aggregate_type else None
+        display_type = type_name or "<unresolved>"
+        raise DirectXAggregateConditionalError(
+            "DirectX cannot lower aggregate conditional value "
+            f"'{display_type}' in {context}: {detail}",
+            aggregate_type=type_name,
+            target="HLSL",
+            context=context,
+            reason=reason,
+            source_location=getattr(expr, "source_location", None),
+        )
+
+    def hlsl_expression_has_observable_side_effects(self, expr):
+        for node in self.walk_ast(expr):
+            if isinstance(node, AssignmentNode):
+                return True
+            if isinstance(node, UnaryOpNode) and getattr(node, "op", None) in {
+                "++",
+                "--",
+            }:
+                return True
+            if isinstance(node, FunctionCallNode) or (
+                hasattr(node, "__class__") and "FunctionCall" in str(node.__class__)
+            ):
+                return True
+        return False
+
+    def render_hlsl_statement_value_expression(
+        self, expr, expected_type, indent, *, context
+    ):
+        aggregate_value = self.render_hlsl_aggregate_conditional_value_expression(
+            expr,
+            expected_type,
+            indent,
+            context=context,
+        )
+        if aggregate_value is not None:
+            return aggregate_value
+
+        if self.hlsl_expression_contains_typed_buffer_atomic(expr):
+            return self.render_hlsl_typed_buffer_atomic_value_expression(
+                expr, expected_type, indent
+            )
+
+        lifted_atomic = self.hlsl_typed_buffer_atomic_lifted_expression(expr)
+        if lifted_atomic is not None:
+            statements, rendered = lifted_atomic
+            return self.generate_statement_code("\n".join(statements), indent), rendered
+
+        return "", self.generate_expression_with_expected(expr, expected_type)
+
+    def hlsl_aggregate_conditional_declaration(self, type_name, variable_name):
+        return format_c_style_array_declaration(self.map_type(type_name), variable_name)
+
+    def render_hlsl_aggregate_array_copy(
+        self,
+        target,
+        source,
+        expected_type,
+        root_expr,
+        indent,
+        *,
+        context,
+    ):
+        try:
+            _mapped_type, extent, element_type = (
+                self.hlsl_fixed_array_aggregate_contract(root_expr, expected_type)
+            )
+        except DirectXAggregateInitializerError as error:
+            self.hlsl_aggregate_conditional_error(
+                root_expr,
+                aggregate_type=expected_type,
+                context=context,
+                reason="array-shape-unresolved",
+                detail=str(error),
+            )
+
+        code = ""
+        for index in range(extent):
+            child_target = f"{target}[{index}]"
+            child_source = f"{source}[{index}]"
+            if self.hlsl_outer_array_type(element_type) is not None:
+                code += self.render_hlsl_aggregate_array_copy(
+                    child_target,
+                    child_source,
+                    element_type,
+                    root_expr,
+                    indent,
+                    context=context,
+                )
+            else:
+                code += f"{'    ' * indent}{child_target} = {child_source};\n"
+        return code
+
+    def render_hlsl_aggregate_conditional_branch_assignment(
+        self,
+        expr,
+        target,
+        expected_type,
+        indent,
+        *,
+        context,
+    ):
+        if self.hlsl_aggregate_conditional_type(expr, expected_type) is not None:
+            return self.generate_hlsl_aggregate_conditional_assignment(
+                expr,
+                target,
+                "=",
+                expected_type,
+                indent,
+                context=context,
+            )
+
+        if self.hlsl_outer_array_type(expected_type) is not None:
+            if isinstance(expr, ArrayLiteralNode):
+                statements = self.hlsl_aggregate_assignment_statements(
+                    target,
+                    expr,
+                    expected_type,
+                    expr,
+                )
+                return self.generate_statement_code("\n".join(statements), indent)
+            if not self.hlsl_repeatable_array_assignment_target(expr):
+                self.hlsl_aggregate_conditional_error(
+                    expr,
+                    aggregate_type=expected_type,
+                    context=context,
+                    reason="array-branch-evaluation",
+                    detail=(
+                        "the selected array branch cannot be evaluated once and "
+                        "copied element by element"
+                    ),
+                )
+            source = self.generate_expression(expr)
+            return self.render_hlsl_aggregate_array_copy(
+                target,
+                source,
+                expected_type,
+                expr,
+                indent,
+                context=context,
+            )
+
+        struct_initialization = self.render_hlsl_struct_value_initialization(
+            target, expected_type, expr, indent
+        )
+        if struct_initialization is not None:
+            return struct_initialization
+
+        code, rendered = self.render_hlsl_statement_value_expression(
+            expr,
+            expected_type,
+            indent,
+            context=context,
+        )
+        return f"{code}{'    ' * indent}{target} = {rendered};\n"
+
+    def generate_hlsl_aggregate_conditional_assignment(
+        self,
+        expr,
+        target,
+        operator,
+        expected_type,
+        indent,
+        *,
+        context,
+    ):
+        aggregate_type = self.hlsl_aggregate_conditional_type(expr, expected_type)
+        if aggregate_type is None:
+            return None
+        if operator != "=":
+            self.hlsl_aggregate_conditional_error(
+                expr,
+                aggregate_type=aggregate_type,
+                context=context,
+                reason="unsupported-assignment-operator",
+                detail=f"operator '{operator}' has no aggregate assignment contract",
+            )
+
+        condition = getattr(expr, "condition", None)
+        condition_code, rendered_condition = (
+            self.render_hlsl_statement_value_expression(
+                condition,
+                "bool",
+                indent,
+                context="condition",
+            )
+        )
+        indent_str = "    " * indent
+        code = condition_code
+        code += f"{indent_str}if ({rendered_condition}) {{\n"
+        code += self.render_hlsl_aggregate_conditional_branch_assignment(
+            getattr(expr, "true_expr", None),
+            target,
+            aggregate_type,
+            indent + 1,
+            context=context,
+        )
+        code += f"{indent_str}}} else {{\n"
+        code += self.render_hlsl_aggregate_conditional_branch_assignment(
+            getattr(expr, "false_expr", None),
+            target,
+            aggregate_type,
+            indent + 1,
+            context=context,
+        )
+        code += f"{indent_str}}}\n"
+        return code
+
+    def generate_hlsl_aggregate_conditional_initialization(
+        self,
+        expr,
+        declaration,
+        target,
+        expected_type,
+        indent,
+    ):
+        aggregate_type = self.hlsl_aggregate_conditional_type(expr, expected_type)
+        if aggregate_type is None:
+            return None
+        indent_str = "    " * indent
+        code = f"{indent_str}{declaration};\n"
+        code += self.generate_hlsl_aggregate_conditional_assignment(
+            expr,
+            target,
+            "=",
+            aggregate_type,
+            indent,
+            context="initializer",
+        )
+        return code
+
+    def generate_hlsl_aggregate_conditional_assignment_statement(self, stmt, indent):
+        if hasattr(stmt, "target") and hasattr(stmt, "value"):
+            target = stmt.target
+            value = stmt.value
+            operator = getattr(stmt, "operator", "=")
+        else:
+            target = stmt.left
+            value = stmt.right
+            operator = getattr(stmt, "operator", "=")
+
+        target_type = self.expression_result_type(target)
+        if self.hlsl_aggregate_conditional_type(value, target_type) is None:
+            return None
+        return self.generate_hlsl_aggregate_conditional_assignment(
+            value,
+            self.generate_expression(target),
+            operator,
+            target_type,
+            indent,
+            context="assignment",
+        )
+
+    def generate_hlsl_aggregate_conditional_return(self, expr, indent=0):
+        aggregate_type = self.hlsl_aggregate_conditional_type(
+            expr, self.current_function_return_type
+        )
+        if aggregate_type is None:
+            return None
+
+        condition_code, rendered_condition = (
+            self.render_hlsl_statement_value_expression(
+                getattr(expr, "condition", None),
+                "bool",
+                indent,
+                context="condition",
+            )
+        )
+        indent_str = "    " * indent
+        code = condition_code
+        code += f"{indent_str}if ({rendered_condition}) {{\n"
+        code += self.generate_hlsl_aggregate_conditional_return_branch(
+            getattr(expr, "true_expr", None), aggregate_type, indent + 1
+        )
+        code += f"{indent_str}}} else {{\n"
+        code += self.generate_hlsl_aggregate_conditional_return_branch(
+            getattr(expr, "false_expr", None), aggregate_type, indent + 1
+        )
+        code += f"{indent_str}}}\n"
+        return code
+
+    def generate_hlsl_aggregate_conditional_return_branch(
+        self, expr, expected_type, indent
+    ):
+        nested = self.generate_hlsl_aggregate_conditional_return(expr, indent)
+        if nested is not None:
+            return nested
+
+        struct_return = self.render_hlsl_struct_return(expr, indent)
+        if struct_return is not None:
+            return struct_return
+
+        code, rendered = self.render_hlsl_statement_value_expression(
+            expr,
+            expected_type,
+            indent,
+            context="return",
+        )
+        return f"{code}{'    ' * indent}return {rendered};\n"
+
+    def materialize_hlsl_aggregate_conditional(
+        self, expr, expected_type, indent, *, context
+    ):
+        aggregate_type = self.hlsl_aggregate_conditional_type(expr, expected_type)
+        if aggregate_type is None:
+            return None
+        temp_name = self.next_hlsl_temp_variable("aggregate_conditional")
+        self.local_variable_types[temp_name] = aggregate_type
+        declaration = self.hlsl_aggregate_conditional_declaration(
+            aggregate_type, temp_name
+        )
+        indent_str = "    " * indent
+        code = f"{indent_str}{declaration};\n"
+        code += self.generate_hlsl_aggregate_conditional_assignment(
+            expr,
+            temp_name,
+            "=",
+            aggregate_type,
+            indent,
+            context=context,
+        )
+        return code, temp_name
+
+    def render_hlsl_aggregate_conditional_value_expression(
+        self, expr, expected_type, indent, *, context
+    ):
+        materialized = self.materialize_hlsl_aggregate_conditional(
+            expr, expected_type, indent, context=context
+        )
+        if materialized is not None:
+            return materialized
+
+        if not (
+            isinstance(expr, FunctionCallNode)
+            or (hasattr(expr, "__class__") and "FunctionCall" in str(expr.__class__))
+        ):
+            return None
+
+        func_name = self.function_call_name(expr)
+        args = list(getattr(expr, "arguments", getattr(expr, "args", [])) or [])
+        parameter_types = self.function_parameter_types.get(func_name) or []
+        aggregate_arguments = {}
+        for index, arg in enumerate(args):
+            argument_type = (
+                parameter_types[index] if index < len(parameter_types) else None
+            )
+            conditional, aggregate_type = self.hlsl_first_aggregate_conditional(
+                arg, argument_type
+            )
+            if conditional is not None:
+                aggregate_arguments[index] = (conditional, aggregate_type)
+
+        if not aggregate_arguments:
+            return None
+
+        first_index = min(aggregate_arguments)
+        first_conditional, first_aggregate_type = aggregate_arguments[first_index]
+        for index, arg in enumerate(args):
+            if index in aggregate_arguments:
+                continue
+            if self.hlsl_expression_has_observable_side_effects(arg):
+                self.hlsl_aggregate_conditional_error(
+                    first_conditional,
+                    aggregate_type=first_aggregate_type,
+                    context="call-argument",
+                    reason="sibling-evaluation-order",
+                    detail=(
+                        "materializing the aggregate argument would reorder another "
+                        "side-effecting argument"
+                    ),
+                )
+
+        rendered_args = []
+        argument_code = ""
+        changed_indices = set()
+
+        for index, arg in enumerate(args):
+            argument_type = (
+                parameter_types[index] if index < len(parameter_types) else None
+            )
+            rendered_argument = self.render_hlsl_aggregate_conditional_value_expression(
+                arg,
+                argument_type,
+                indent,
+                context="call-argument",
+            )
+            if rendered_argument is None:
+                rendered_args.append(
+                    self.generate_expression_with_expected(arg, argument_type)
+                )
+                continue
+
+            code, rendered = rendered_argument
+            argument_code += code
+            rendered_args.append(rendered)
+            changed_indices.add(index)
+
+        if not changed_indices:
+            return None
+
+        if not isinstance(func_name, str) or func_name not in getattr(
+            self, "function_return_types", {}
+        ):
+            self.hlsl_aggregate_conditional_error(
+                first_conditional,
+                aggregate_type=first_aggregate_type,
+                context="call-argument",
+                reason="unsupported-call-target",
+                detail="the callee does not have a materializable user-function contract",
+            )
+
+        specialized_func_name = generic_function_call_name(self, func_name, args)
+        callee = specialized_func_name or self.hlsl_function_call_name(func_name)
+        rendered_call_args = self.generate_call_arguments_from_rendered(
+            func_name,
+            args,
+            rendered_args,
+            private_pointer_func_name=func_name,
+            workgroup_pointer_func_name=func_name,
+        )
+        return argument_code, f"{callee}({', '.join(rendered_call_args)})"
 
     def hlsl_expression_contains_typed_buffer_atomic(self, expr):
         for node in self.walk_ast(expr):
@@ -28898,13 +34327,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             f"float{expected_dimension}, got {self.type_name_string(arg_type)}"
         )
 
-    def generate_texture_call(self, func_name, args):
+    def generate_texture_call(self, func_name, args, *, call_node=None):
         if not func_name:
             return None
 
         feedback_call = self.generate_hlsl_feedback_write_call(func_name, args)
         if feedback_call is not None:
             return feedback_call
+        if (
+            func_name != "textureSamplePosition"
+            and func_name not in self.texture_resource_operation_names()
+        ):
+            return None
 
         self.validate_texture_call_arity(func_name, args)
         self.validate_image_resource_argument(func_name, args)
@@ -29072,7 +34506,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return storage_image_operation
 
         if is_texture_compare_operation(func_name):
-            return self.generate_texture_compare_call(func_name, args)
+            return self.generate_texture_compare_call(
+                func_name, args, call_node=call_node
+            )
 
         if is_texture_gather_compare_operation(func_name):
             return self.generate_texture_gather_compare_call(func_name, args)
@@ -29081,10 +34517,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return self.generate_texture_gather_call(func_name, args)
 
         if is_texture_sample_offset_operation(func_name):
-            return self.generate_texture_sample_offset_call(func_name, args)
+            return self.generate_texture_sample_offset_call(
+                func_name, args, call_node=call_node
+            )
 
         if is_projected_texture_operation(func_name):
-            return self.generate_texture_projected_call(func_name, args)
+            return self.generate_texture_projected_call(
+                func_name, args, call_node=call_node
+            )
 
         if is_texture_sample_operation(func_name):
             parts = self.texture_call_parts(args, func_name)

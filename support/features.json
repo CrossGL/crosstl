@@ -23,8 +23,13 @@
         },
         "opengl": {
           "status": "supported",
+          "notes": "OpenGL target output applies deterministic, collision-free GLSL identifier remapping to user and generated symbols, including target-reserved gl_ and consecutive-underscore spellings, while preserving declared builtin interface names and source provenance, with warning-fatal glslang and SPIR-V validation coverage.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_reserved_identifiers_are_sanitized_consistently",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_reserved_identifier_mapping_preserves_scope_and_source_names",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_builtin_interface_block_members_preserve_builtin_names",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_reserved_identifiers_validate_without_warnings"
           ]
         },
         "metal": {
@@ -71,9 +76,12 @@
         },
         "webgl": {
           "status": "supported",
-          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path, including deterministic collision-free remapping of GLSL ES and WebGL-reserved gl_, webgl_, _webgl_, and consecutive-underscore identifiers, and covered by focused WebGL codegen and warning-fatal glslang smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_sanitizes_reserved_identifiers_and_collisions",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_sanitizes_webgl_reserved_prefixes",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_webgl_reserved_identifiers_validate_without_warnings"
           ]
         },
         "wgsl": {
@@ -3816,10 +3824,12 @@
         },
         "opengl": {
           "status": "supported",
-          "notes": "OpenGL lowers struct declarations, member access, initialization, and return values. Contextual braced initializers preserve trailing value initialization recursively through nested structs and fixed arrays, with generated-code validation and native compute runtime coverage.",
+          "notes": "OpenGL lowers struct declarations, member access, initialization, and return values. Contextual braced initializers preserve trailing value initialization recursively through nested structs, fixed arrays, and vectors; Metal-materialized partial vector constructors count supplied scalar and vector components and append type-correct zeros without repeating expression evaluation. Generated-code validation and native compute runtime coverage exercise the lowering.",
           "evidence": [
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_generic_struct_concrete_constructor_and_member_access",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_zero_fills_partial_aggregate_initializers",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_zero_fills_partial_vector_initializers_without_repeating_values",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_partial_vector_initializers_validate_with_glslang_and_spirv_val",
             "tests/test_translator/test_native_runtime_drivers.py::def test_runtime_parity_glsl_partial_aggregate_executes_on_vulkan"
           ]
         },
@@ -3893,8 +3903,12 @@
       "support": {
         "directx": {
           "status": "supported",
+          "notes": "DirectX preserves native HLSL arrays for storage while lowering fixed-array return values to scalar-compatible vectors or generated carrier structs. Matching local declarations and initializers use the same value representation, retain source array types for overload resolution, and preserve constant and dynamic indexing. Direct and project Metal translation plus official DXC validation cover the value-local contract.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_array_handling"
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_array_handling",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_codegen_lowers_fixed_array_value_locals_and_indexing",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_fixed_array_value_locals_validate_with_dxc",
+            "tests/test_translator/test_project_translation.py::def test_metal_fixed_array_value_locals_match_direct_and_project_directx"
           ]
         },
         "opengl": {
@@ -4170,14 +4184,25 @@
       "support": {
         "directx": {
           "status": "supported",
+          "notes": "DirectX control-flow lowering preserves integer-bound counted loops and lowers fixed-array for-in iteration by source element value across scalar, vector, struct, and nested-array elements. Fixed-array container expressions are materialized once, immutable binding qualifiers are preserved, and mutable-reference, unknown-extent, unresolved, and user-defined iterable contracts produce structured diagnostics. Official DXC validation covers the generated compute shader.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_while_switch_and_void_return_emit_c_style_syntax"
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_while_switch_and_void_return_emit_c_style_syntax",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_for_in_fixed_arrays_materialize_once_and_preserve_element_types",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_for_in_reduced_side_effecting_subarray_selector_is_evaluated_once",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_for_in_unknown_or_user_defined_iterables_are_structured_diagnostics",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_for_in_mutable_reference_binding_is_structured_diagnostic",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_hlsl_fixed_array_for_in_validates_with_dxc"
           ]
         },
         "opengl": {
           "status": "supported",
+          "notes": "GLSL control-flow lowering includes fixed-array for-in iteration by source element value across scalar, vector, struct, and nested-array elements. Container expressions are evaluated once, source element types and immutable binding qualifiers are preserved, mutable-reference and unresolved iterable contracts are structured diagnostics, WebGL reuses the same lowering, and glslang/spirv-val validation covers the generated compute shader.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_while_switch_and_void_return_emit_c_style_syntax"
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_while_switch_and_void_return_emit_c_style_syntax",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_for_in_fixed_arrays_bind_source_element_types_and_evaluate_once",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_for_in_unknown_or_user_defined_iterables_are_structured_diagnostics",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_for_in_mutable_reference_binding_is_structured_diagnostic",
+            "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_glsl_fixed_array_for_in_validates_with_glslang_and_spirv_val"
           ]
         },
         "metal": {
@@ -4228,9 +4253,10 @@
         },
         "webgl": {
           "status": "supported",
-          "notes": "WebGL2 target output is generated through the GLSL ES backend path and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
+          "notes": "WebGL2 target output is generated through the GLSL ES backend path, including the shared fixed-array for-in element-binding and explicit unsupported-iterable contract, and covered by focused WebGL codegen smoke tests. Browser/runtime conformance coverage is tracked separately from this source-generation contract.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_"
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_",
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_reuses_fixed_array_for_in_contract"
           ]
         },
         "wgsl": {
@@ -7167,6 +7193,97 @@
             "tests/test_translator/test_project_translation.py::def test_translate_project_honors_source_backend_overrides",
             "tests/test_translator/test_project_translation.py::def test_project_cli_inspect_report_text_reports_artifact_matrix_gaps",
             "tests/test_translator/test_project_translation.py::def test_project_cli_translate_project_applies_source_root_overrides"
+          ]
+        }
+      }
+    },
+    {
+      "id": "project.entry_scoped_artifacts",
+      "category": "project",
+      "name": "Entry-scoped project artifacts",
+      "description": "Select one materialized source entry and emit an independently loadable artifact with deterministic identity, path, provenance, and reflected interface metadata.",
+      "support": {
+        "directx": {
+          "status": "validated_rejection",
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "Project configuration selects one materialized compute entry, emits a standalone GLSL main artifact at a deterministic entry path, retains only the selected stage interface and reachable helpers, records source-to-target entry identity in report and validation records, preserves provenance and source maps, and exposes an entry-scoped reflected runtime interface. Aggregate output remains unchanged when no entry is selected. The pinned MLX arangeuint32 proof compiles and executes through Mesa OpenGL with exact uint32 readback on Linux CI.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_entry_scoped_generation_keeps_only_selected_interface_and_helpers",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_entry_scoped_generation_reports_available_entries",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_emits_entry_scoped_opengl_artifact_and_reflection",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_keeps_aggregate_opengl_output_without_entry_selection",
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_missing_selected_opengl_entry",
+            "tests/test_translator/test_project_translation.py::def test_validate_project_report_requires_configured_entry_point_metadata",
+            "tests/test_mlx_porting_harness.py::def test_arange_opengl_check_confirms_native_validation"
+          ]
+        },
+        "metal": {
+          "status": "validated_rejection",
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
+          ]
+        },
+        "vulkan": {
+          "status": "validated_rejection",
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
+          ]
+        },
+        "cuda": {
+          "status": "validated_rejection",
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
+          ]
+        },
+        "hip": {
+          "status": "validated_rejection",
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
+          ]
+        },
+        "mojo": {
+          "status": "validated_rejection",
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
+          ]
+        },
+        "rust": {
+          "status": "validated_rejection",
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
+          ]
+        },
+        "slang": {
+          "status": "validated_rejection",
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
+          ]
+        },
+        "webgl": {
+          "status": "validated_rejection",
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. WebGL2 does not support compute artifacts.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_webgl_codegen.py::def test_webgl_codegen_rejects_non_webgl_stages"
+          ]
+        },
+        "wgsl": {
+          "status": "validated_rejection",
+          "notes": "Project configuration and reporting preserve the requested entry identity, deterministic output path, provenance, and structured unsupported-target diagnostic without emitting a misleading pruned artifact. Target-specific standalone generation is not implemented yet.",
+          "evidence": [
+            "tests/test_translator/test_project_translation.py::def test_translate_project_reports_entry_selection_for_unsupported_target"
           ]
         }
       }
@@ -10199,7 +10316,7 @@
         },
         "opengl": {
           "status": "supported",
-          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. OpenGL native runtime parity adapters add reusable adapter-backed execution with GLSL validation command orchestration, fixture resource and constant binding, dispatch/readback driver contracts, and distinct unavailable platform/tooling, setup, validation, dispatch, and comparison mismatch reporting. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, ambiguous selectors, and selected-artifact runtime metadata readiness counts while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, hard-code a validation corpus, or require native runtime execution when dependencies are unavailable.",
+          "notes": "Runtime test manifest APIs parse crosstl-project-runtime-test-manifest JSON, generate manifests from crosstl-project-runtime-fixture-metadata curated fixture metadata plus translated artifact reports, plan crosstl-project-runtime-test-plan records, and write crosstl-project-runtime-test-report JSON for translated artifacts. The manifest maps artifact selectors to runtime adapters, fixtures, inputs, expected outputs, tolerances, adapter contracts, resource bindings, function or specialization constants, dispatch geometry, and platform requirements; default dependency-probe adapters cover native graphics and native compute classes with structured skip diagnostics when required tools or environment are unavailable. OpenGL native runtime parity adapters add reusable adapter-backed execution with GLSL validation command orchestration, fixture resource and constant binding, dispatch/readback driver contracts, and distinct unavailable platform/tooling, setup, validation, dispatch, and comparison mismatch reporting. Specialization-bearing OpenGL compute artifacts compile to OpenGL SPIR-V, require OpenGL 4.6 or GL_ARB_gl_spirv plus the shader-binary and specialization entry points, apply bool and 32-bit signed, unsigned, or floating scalar values by numeric ID, keep ordinary uniforms on a separate binding path, and report applied values with provenance; artifacts without deferred specialization retain the GLSL source path. Fixture manifest generation reports incomplete fixture data, duplicate ids, missing expected outputs, unresolved artifacts, ambiguous selectors, and selected-artifact runtime metadata readiness counts while keeping emitted documents compatible with runtime test planning. Reports connect runtime checks to fixture ids, source files, target backends, generated artifacts, executor details, comparisons, and toolchain/toolchainRuns logs. The feature reuses backend-neutral fixture comparison and does not rewrite host application code, install target SDKs, hard-code a validation corpus, or require native runtime execution when dependencies are unavailable.",
           "evidence": [
             "tests/test_translator/test_runtime_verification.py::def test_parse_runtime_test_manifest_maps_adapters_and_platform_requirements",
             "tests/test_translator/test_runtime_verification.py::def test_build_runtime_test_manifest_from_mlx_fixture_metadata",
@@ -10217,6 +10334,12 @@
             "tests/test_translator/test_runtime_verification.py::def test_runtime_parity_native_adapter_reports_validation_failure",
             "tests/test_translator/test_runtime_verification.py::def test_runtime_parity_native_adapter_reports_dispatch_failure",
             "tests/test_translator/test_runtime_verification.py::def test_runtime_parity_native_adapter_reports_numerical_mismatch",
+            "tests/test_translator/test_runtime_verification.py::def test_runtime_parity_native_opengl_adapter_compiles_specialization_to_spirv",
+            "tests/test_translator/test_runtime_verification.py::def test_runtime_parity_native_opengl_adapter_preserves_uniform_source_path",
+            "tests/test_translator/test_native_runtime_drivers.py::def test_opengl_compute_runtime_reports_missing_spirv_extension",
+            "tests/test_translator/test_native_runtime_drivers.py::def test_opengl_compute_runtime_specializes_typed_values_and_binds_uniforms",
+            "tests/test_translator/test_native_runtime_drivers.py::def test_prepare_opengl_specializations_rejects_invalid_ids_types_and_values",
+            "tests/test_translator/test_native_runtime_drivers.py::def test_opengl_compute_runtime_specializes_generated_spirv_on_device",
             "tests/test_translator/test_runtime_verification.py::def test_default_runtime_test_adapters_cover_native_platform_classes"
           ]
         },
@@ -10364,6 +10487,297 @@
             "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_reports_skipped_dependency_record",
             "tests/test_translator/test_runtime_verification.py::def test_verify_runtime_test_manifest_runs_executor_and_links_failed_check",
             "tests/test_translator/test_runtime_verification.py::def test_default_runtime_test_adapters_cover_native_platform_classes"
+          ]
+        }
+      }
+    },
+    {
+      "id": "project.test_runner_environment",
+      "category": "project",
+      "name": "Project test-runner environment execution",
+      "description": "Execute repository-agnostic project test-runner plans with validated, project-root-contained environment setup.",
+      "support": {
+        "directx": {
+          "status": "supported",
+          "notes": "execute-test-runner validates saved environment contracts, resolves environment and command working directories beneath an explicit project root, merges configured variables for setup and test subprocesses, executes setup argv in declaration order without an implicit shell, skips dependent commands after setup failure, and reports setup logs plus applied variable names without configured values. Required adapter tools and environment variables retain deterministic structured skips. The runner does not install dependencies or hard-code repository or backend setup.",
+          "evidence": [
+            "tests/test_project_test_runner.py::def test_runtime_adapter_requirements_use_plan_environment",
+            "tests/test_project_test_runner.py::def test_project_test_runner_applies_environment_and_ordered_setup",
+            "tests/test_project_test_runner.py::def test_project_test_runner_reports_setup_failure_and_skips_dependent_commands",
+            "tests/test_project_test_runner.py::def test_project_test_runner_does_not_interpret_string_setup_commands_with_shell",
+            "tests/test_project_test_runner.py::def test_project_test_runner_rejects_working_directory_escape",
+            "tests/test_project_test_runner.py::def test_project_cli_round_trips_test_runner_environment"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "execute-test-runner validates saved environment contracts, resolves environment and command working directories beneath an explicit project root, merges configured variables for setup and test subprocesses, executes setup argv in declaration order without an implicit shell, skips dependent commands after setup failure, and reports setup logs plus applied variable names without configured values. Required adapter tools and environment variables retain deterministic structured skips. The runner does not install dependencies or hard-code repository or backend setup.",
+          "evidence": [
+            "tests/test_project_test_runner.py::def test_runtime_adapter_requirements_use_plan_environment",
+            "tests/test_project_test_runner.py::def test_project_test_runner_applies_environment_and_ordered_setup",
+            "tests/test_project_test_runner.py::def test_project_test_runner_reports_setup_failure_and_skips_dependent_commands",
+            "tests/test_project_test_runner.py::def test_project_test_runner_does_not_interpret_string_setup_commands_with_shell",
+            "tests/test_project_test_runner.py::def test_project_test_runner_rejects_working_directory_escape",
+            "tests/test_project_test_runner.py::def test_project_cli_round_trips_test_runner_environment"
+          ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "execute-test-runner validates saved environment contracts, resolves environment and command working directories beneath an explicit project root, merges configured variables for setup and test subprocesses, executes setup argv in declaration order without an implicit shell, skips dependent commands after setup failure, and reports setup logs plus applied variable names without configured values. Required adapter tools and environment variables retain deterministic structured skips. The runner does not install dependencies or hard-code repository or backend setup.",
+          "evidence": [
+            "tests/test_project_test_runner.py::def test_runtime_adapter_requirements_use_plan_environment",
+            "tests/test_project_test_runner.py::def test_project_test_runner_applies_environment_and_ordered_setup",
+            "tests/test_project_test_runner.py::def test_project_test_runner_reports_setup_failure_and_skips_dependent_commands",
+            "tests/test_project_test_runner.py::def test_project_test_runner_does_not_interpret_string_setup_commands_with_shell",
+            "tests/test_project_test_runner.py::def test_project_test_runner_rejects_working_directory_escape",
+            "tests/test_project_test_runner.py::def test_project_cli_round_trips_test_runner_environment"
+          ]
+        },
+        "wgsl": {
+          "status": "supported",
+          "notes": "execute-test-runner validates saved environment contracts, resolves environment and command working directories beneath an explicit project root, merges configured variables for setup and test subprocesses, executes setup argv in declaration order without an implicit shell, skips dependent commands after setup failure, and reports setup logs plus applied variable names without configured values. Required adapter tools and environment variables retain deterministic structured skips. The runner does not install dependencies or hard-code repository or backend setup.",
+          "evidence": [
+            "tests/test_project_test_runner.py::def test_runtime_adapter_requirements_use_plan_environment",
+            "tests/test_project_test_runner.py::def test_project_test_runner_applies_environment_and_ordered_setup",
+            "tests/test_project_test_runner.py::def test_project_test_runner_reports_setup_failure_and_skips_dependent_commands",
+            "tests/test_project_test_runner.py::def test_project_test_runner_does_not_interpret_string_setup_commands_with_shell",
+            "tests/test_project_test_runner.py::def test_project_test_runner_rejects_working_directory_escape",
+            "tests/test_project_test_runner.py::def test_project_cli_round_trips_test_runner_environment"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "notes": "execute-test-runner validates saved environment contracts, resolves environment and command working directories beneath an explicit project root, merges configured variables for setup and test subprocesses, executes setup argv in declaration order without an implicit shell, skips dependent commands after setup failure, and reports setup logs plus applied variable names without configured values. Required adapter tools and environment variables retain deterministic structured skips. The runner does not install dependencies or hard-code repository or backend setup.",
+          "evidence": [
+            "tests/test_project_test_runner.py::def test_runtime_adapter_requirements_use_plan_environment",
+            "tests/test_project_test_runner.py::def test_project_test_runner_applies_environment_and_ordered_setup",
+            "tests/test_project_test_runner.py::def test_project_test_runner_reports_setup_failure_and_skips_dependent_commands",
+            "tests/test_project_test_runner.py::def test_project_test_runner_does_not_interpret_string_setup_commands_with_shell",
+            "tests/test_project_test_runner.py::def test_project_test_runner_rejects_working_directory_escape",
+            "tests/test_project_test_runner.py::def test_project_cli_round_trips_test_runner_environment"
+          ]
+        },
+        "vulkan": {
+          "status": "supported",
+          "notes": "execute-test-runner validates saved environment contracts, resolves environment and command working directories beneath an explicit project root, merges configured variables for setup and test subprocesses, executes setup argv in declaration order without an implicit shell, skips dependent commands after setup failure, and reports setup logs plus applied variable names without configured values. Required adapter tools and environment variables retain deterministic structured skips. The runner does not install dependencies or hard-code repository or backend setup.",
+          "evidence": [
+            "tests/test_project_test_runner.py::def test_runtime_adapter_requirements_use_plan_environment",
+            "tests/test_project_test_runner.py::def test_project_test_runner_applies_environment_and_ordered_setup",
+            "tests/test_project_test_runner.py::def test_project_test_runner_reports_setup_failure_and_skips_dependent_commands",
+            "tests/test_project_test_runner.py::def test_project_test_runner_does_not_interpret_string_setup_commands_with_shell",
+            "tests/test_project_test_runner.py::def test_project_test_runner_rejects_working_directory_escape",
+            "tests/test_project_test_runner.py::def test_project_cli_round_trips_test_runner_environment"
+          ]
+        },
+        "cuda": {
+          "status": "supported",
+          "notes": "execute-test-runner validates saved environment contracts, resolves environment and command working directories beneath an explicit project root, merges configured variables for setup and test subprocesses, executes setup argv in declaration order without an implicit shell, skips dependent commands after setup failure, and reports setup logs plus applied variable names without configured values. Required adapter tools and environment variables retain deterministic structured skips. The runner does not install dependencies or hard-code repository or backend setup.",
+          "evidence": [
+            "tests/test_project_test_runner.py::def test_runtime_adapter_requirements_use_plan_environment",
+            "tests/test_project_test_runner.py::def test_project_test_runner_applies_environment_and_ordered_setup",
+            "tests/test_project_test_runner.py::def test_project_test_runner_reports_setup_failure_and_skips_dependent_commands",
+            "tests/test_project_test_runner.py::def test_project_test_runner_does_not_interpret_string_setup_commands_with_shell",
+            "tests/test_project_test_runner.py::def test_project_test_runner_rejects_working_directory_escape",
+            "tests/test_project_test_runner.py::def test_project_cli_round_trips_test_runner_environment"
+          ]
+        },
+        "hip": {
+          "status": "supported",
+          "notes": "execute-test-runner validates saved environment contracts, resolves environment and command working directories beneath an explicit project root, merges configured variables for setup and test subprocesses, executes setup argv in declaration order without an implicit shell, skips dependent commands after setup failure, and reports setup logs plus applied variable names without configured values. Required adapter tools and environment variables retain deterministic structured skips. The runner does not install dependencies or hard-code repository or backend setup.",
+          "evidence": [
+            "tests/test_project_test_runner.py::def test_runtime_adapter_requirements_use_plan_environment",
+            "tests/test_project_test_runner.py::def test_project_test_runner_applies_environment_and_ordered_setup",
+            "tests/test_project_test_runner.py::def test_project_test_runner_reports_setup_failure_and_skips_dependent_commands",
+            "tests/test_project_test_runner.py::def test_project_test_runner_does_not_interpret_string_setup_commands_with_shell",
+            "tests/test_project_test_runner.py::def test_project_test_runner_rejects_working_directory_escape",
+            "tests/test_project_test_runner.py::def test_project_cli_round_trips_test_runner_environment"
+          ]
+        },
+        "mojo": {
+          "status": "supported",
+          "notes": "execute-test-runner validates saved environment contracts, resolves environment and command working directories beneath an explicit project root, merges configured variables for setup and test subprocesses, executes setup argv in declaration order without an implicit shell, skips dependent commands after setup failure, and reports setup logs plus applied variable names without configured values. Required adapter tools and environment variables retain deterministic structured skips. The runner does not install dependencies or hard-code repository or backend setup.",
+          "evidence": [
+            "tests/test_project_test_runner.py::def test_runtime_adapter_requirements_use_plan_environment",
+            "tests/test_project_test_runner.py::def test_project_test_runner_applies_environment_and_ordered_setup",
+            "tests/test_project_test_runner.py::def test_project_test_runner_reports_setup_failure_and_skips_dependent_commands",
+            "tests/test_project_test_runner.py::def test_project_test_runner_does_not_interpret_string_setup_commands_with_shell",
+            "tests/test_project_test_runner.py::def test_project_test_runner_rejects_working_directory_escape",
+            "tests/test_project_test_runner.py::def test_project_cli_round_trips_test_runner_environment"
+          ]
+        },
+        "rust": {
+          "status": "supported",
+          "notes": "execute-test-runner validates saved environment contracts, resolves environment and command working directories beneath an explicit project root, merges configured variables for setup and test subprocesses, executes setup argv in declaration order without an implicit shell, skips dependent commands after setup failure, and reports setup logs plus applied variable names without configured values. Required adapter tools and environment variables retain deterministic structured skips. The runner does not install dependencies or hard-code repository or backend setup.",
+          "evidence": [
+            "tests/test_project_test_runner.py::def test_runtime_adapter_requirements_use_plan_environment",
+            "tests/test_project_test_runner.py::def test_project_test_runner_applies_environment_and_ordered_setup",
+            "tests/test_project_test_runner.py::def test_project_test_runner_reports_setup_failure_and_skips_dependent_commands",
+            "tests/test_project_test_runner.py::def test_project_test_runner_does_not_interpret_string_setup_commands_with_shell",
+            "tests/test_project_test_runner.py::def test_project_test_runner_rejects_working_directory_escape",
+            "tests/test_project_test_runner.py::def test_project_cli_round_trips_test_runner_environment"
+          ]
+        },
+        "slang": {
+          "status": "supported",
+          "notes": "execute-test-runner validates saved environment contracts, resolves environment and command working directories beneath an explicit project root, merges configured variables for setup and test subprocesses, executes setup argv in declaration order without an implicit shell, skips dependent commands after setup failure, and reports setup logs plus applied variable names without configured values. Required adapter tools and environment variables retain deterministic structured skips. The runner does not install dependencies or hard-code repository or backend setup.",
+          "evidence": [
+            "tests/test_project_test_runner.py::def test_runtime_adapter_requirements_use_plan_environment",
+            "tests/test_project_test_runner.py::def test_project_test_runner_applies_environment_and_ordered_setup",
+            "tests/test_project_test_runner.py::def test_project_test_runner_reports_setup_failure_and_skips_dependent_commands",
+            "tests/test_project_test_runner.py::def test_project_test_runner_does_not_interpret_string_setup_commands_with_shell",
+            "tests/test_project_test_runner.py::def test_project_test_runner_rejects_working_directory_escape",
+            "tests/test_project_test_runner.py::def test_project_cli_round_trips_test_runner_environment"
+          ]
+        }
+      }
+    },
+    {
+      "id": "project.runtime_variant_registry",
+      "category": "project",
+      "name": "Runtime variant registry",
+      "description": "Emit deterministic exact-lookup runtime variant registries from ready runtime packages or loader manifests.",
+      "support": {
+        "directx": {
+          "status": "supported",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "evidence": [
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_loader_blockers",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_malformed_inputs_and_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_cli_json_and_text"
+          ]
+        },
+        "opengl": {
+          "status": "supported",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "evidence": [
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_loader_blockers",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_malformed_inputs_and_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_cli_json_and_text"
+          ]
+        },
+        "metal": {
+          "status": "supported",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "evidence": [
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_loader_blockers",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_malformed_inputs_and_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_cli_json_and_text"
+          ]
+        },
+        "vulkan": {
+          "status": "supported",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "evidence": [
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_loader_blockers",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_malformed_inputs_and_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_cli_json_and_text"
+          ]
+        },
+        "cuda": {
+          "status": "supported",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "evidence": [
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_loader_blockers",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_malformed_inputs_and_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_cli_json_and_text"
+          ]
+        },
+        "hip": {
+          "status": "supported",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "evidence": [
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_loader_blockers",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_malformed_inputs_and_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_cli_json_and_text"
+          ]
+        },
+        "mojo": {
+          "status": "supported",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "evidence": [
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_loader_blockers",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_malformed_inputs_and_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_cli_json_and_text"
+          ]
+        },
+        "rust": {
+          "status": "supported",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "evidence": [
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_loader_blockers",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_malformed_inputs_and_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_cli_json_and_text"
+          ]
+        },
+        "slang": {
+          "status": "supported",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "evidence": [
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_loader_blockers",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_malformed_inputs_and_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_cli_json_and_text"
+          ]
+        },
+        "webgl": {
+          "status": "supported",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "evidence": [
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_loader_blockers",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_malformed_inputs_and_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_cli_json_and_text"
+          ]
+        },
+        "wgsl": {
+          "status": "supported",
+          "notes": "runtime-variant-registry emits a deterministic crosstl-runtime-variant-registry from a ready package or loader manifest, with closed-schema validation, canonical exact keys, separate source and target names, artifact and binding metadata, specialization values and IDs, hashes, provenance, and stale or blocked propagation. It rejects duplicate or conflicting keys and does not compile targets, dispatch a host runtime, perform best-match selection, or execute deferred compilation.",
+          "evidence": [
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_is_deterministic_and_exact",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_accepts_loader_manifest",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_duplicate_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_stale_package_records",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_propagates_loader_blockers",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_rejects_malformed_inputs_and_keys",
+            "tests/test_translator/test_runtime_variant_registry.py::def test_runtime_variant_registry_cli_json_and_text"
           ]
         }
       }

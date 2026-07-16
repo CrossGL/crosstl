@@ -336,9 +336,9 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 26,
-        "endOffset": 775,
+        "endOffset": 788,
         "file": "crosstl-out/cgl/spv.specConstant.cgl",
-        "length": 40,
+        "length": 53,
         "line": 25,
         "offset": 735
       },
@@ -358,11 +358,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 30,
-        "endOffset": 865,
+        "endOffset": 878,
         "file": "crosstl-out/cgl/spv.specConstant.cgl",
         "length": 42,
         "line": 29,
-        "offset": 823
+        "offset": 836
       },
       "original": {
         "column": 1,
@@ -380,11 +380,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 31,
-        "endOffset": 902,
+        "endOffset": 915,
         "file": "crosstl-out/cgl/spv.specConstant.cgl",
         "length": 37,
         "line": 30,
-        "offset": 865
+        "offset": 878
       },
       "original": {
         "column": 1,
@@ -402,11 +402,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 33,
-        "endOffset": 965,
+        "endOffset": 978,
         "file": "crosstl-out/cgl/spv.specConstant.cgl",
         "length": 38,
         "line": 32,
-        "offset": 927
+        "offset": 940
       },
       "original": {
         "column": 1,
@@ -424,11 +424,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 35,
-        "endOffset": 1034,
+        "endOffset": 1047,
         "file": "crosstl-out/cgl/spv.specConstant.cgl",
         "length": 59,
         "line": 34,
-        "offset": 975
+        "offset": 988
       },
       "original": {
         "column": 1,
@@ -446,11 +446,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 38,
-        "endOffset": 1075,
+        "endOffset": 1088,
         "file": "crosstl-out/cgl/spv.specConstant.cgl",
         "length": 34,
         "line": 37,
-        "offset": 1041
+        "offset": 1054
       },
       "original": {
         "column": 1,
@@ -468,11 +468,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 39,
-        "endOffset": 1114,
+        "endOffset": 1127,
         "file": "crosstl-out/cgl/spv.specConstant.cgl",
         "length": 39,
         "line": 38,
-        "offset": 1075
+        "offset": 1088
       },
       "original": {
         "column": 1,
@@ -490,11 +490,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 45,
-        "endOffset": 1254,
+        "endOffset": 1267,
         "file": "crosstl-out/cgl/spv.specConstant.cgl",
         "length": 38,
         "line": 44,
-        "offset": 1216
+        "offset": 1229
       },
       "original": {
         "column": 1,
@@ -512,11 +512,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 46,
-        "endOffset": 1287,
+        "endOffset": 1300,
         "file": "crosstl-out/cgl/spv.specConstant.cgl",
         "length": 33,
         "line": 45,
-        "offset": 1254
+        "offset": 1267
       },
       "original": {
         "column": 1,
@@ -534,11 +534,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 48,
-        "endOffset": 1344,
+        "endOffset": 1357,
         "file": "crosstl-out/cgl/spv.specConstant.cgl",
         "length": 35,
         "line": 47,
-        "offset": 1309
+        "offset": 1322
       },
       "original": {
         "column": 1,
@@ -556,11 +556,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 50,
-        "endOffset": 1407,
+        "endOffset": 1420,
         "file": "crosstl-out/cgl/spv.specConstant.cgl",
         "length": 53,
         "line": 49,
-        "offset": 1354
+        "offset": 1367
       },
       "original": {
         "column": 1,
@@ -578,11 +578,11 @@
         "column": 1,
         "endColumn": 1,
         "endLine": 51,
-        "endOffset": 1432,
+        "endOffset": 1445,
         "file": "crosstl-out/cgl/spv.specConstant.cgl",
         "length": 25,
         "line": 50,
-        "offset": 1407
+        "offset": 1420
       },
       "original": {
         "column": 1,

@@ -259,6 +259,34 @@ def test_full_suite_runs_runtime_parity_only_for_available_adapters():
     assert '-k "runtime_parity"' in full_suite
 
 
+def test_full_suite_runs_fail_closed_windows_directx_native_runtime_smoke():
+    workflows = _workflow_texts()
+    full_suite = workflows.get("full-tests.yml", "")
+    smoke_runner = (ROOT / "tools" / "directx_runtime_smoke.py").read_text(
+        encoding="utf-8"
+    )
+    smoke_job = full_suite[
+        full_suite.index("  directx-native-runtime-smoke:") : full_suite.index(
+            "  compiler-smoke-linux:"
+        )
+    ]
+
+    assert "Direct3D 12 Native Runtime Smoke (Windows)" in smoke_job
+    assert "runs-on: windows-latest" in smoke_job
+    assert 'python-version: "3.12"' in smoke_job
+    assert "DirectXShaderCompiler/releases/download/v1.9.2602" in smoke_job
+    assert 'python -m pip install -e ".[directx-runtime]"' in smoke_job
+    assert "python tools/directx_runtime_smoke.py" in smoke_job
+    assert "continue-on-error" not in smoke_job
+    assert "crosstl.translate(" in smoke_runner
+    assert '[dxc, "-T", "cs_6_0", "-E", "CSMain"' in smoke_runner
+    assert "runtime.dispatch(" in smoke_runner
+    assert 'reason_kind != "device-unavailable"' in smoke_runner
+    assert "DIRECTX_RUNTIME_SMOKE_SKIPPED" in smoke_runner
+    assert "DXC compilation failed" in smoke_runner
+    assert "native runtime readback mismatch" in smoke_runner
+
+
 def test_open_source_porting_demo_workflow_feeds_support_failure_summaries():
     workflows = _workflow_texts()
     demo = workflows.get("demo.yml", "")
@@ -2130,11 +2158,17 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "--require-opengl-gemv-toolchain" in mlx_porting
     assert "--require-vulkan-gemv-toolchain" in mlx_porting
     assert "--require-vulkan-native-runtime" in mlx_porting
+    assert "--require-opengl-native-runtime" in mlx_porting
     assert "Install Windows DirectX Shader Compiler" in mlx_porting
     assert "DirectXShaderCompiler/releases/download/v1.9.2602.24" in mlx_porting
     assert "dxc --version" in mlx_porting
     assert "glslang-tools" in mlx_porting
     assert "glslangValidator --version" in mlx_porting
+    assert "moderngl==5.12.0" in mlx_porting
+    assert "libegl1" in mlx_porting
+    assert "libgl1" in mlx_porting
+    assert "libgl1-mesa-dri" in mlx_porting
+    assert "libopengl0" in mlx_porting
     assert "Validate OpenGL lowering contracts" in mlx_porting
     assert "opengl_lowers_expected_scalar_and_vector_conversions" in mlx_porting
     assert "opengl_preserves_metal_arithmetic_conversion_order" in mlx_porting
@@ -2149,6 +2183,17 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "Verify MLX frontier accounting" in mlx_porting
     assert "expected 11 clean MLX frontier sources" in mlx_porting
     assert "fence contract accounting must be 3 failed, 0 emitted" in mlx_porting
+    assert "MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES" in mlx_porting
+    assert "MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS" in mlx_porting
+    assert 'checks["directx-vulkan-frontier"]' in mlx_porting
+    assert 'directx["directxToolchainArtifactCount"]' in mlx_porting
+    assert 'directx["directxToolchainValidatedArtifactCount"]' in mlx_porting
+    assert 'directx["directxToolchainValidatedEntryPointCounts"]' in mlx_porting
+    assert 'directx["directxToolchainValidatedEntryPointCount"]' in mlx_porting
+    assert 'directx["toolchainRuns"] != directx_entry_point_count' in mlx_porting
+    assert "DirectX frontier accounting is incomplete" in mlx_porting
+    assert "DirectX frontier toolchain must validate every configured" in mlx_porting
+    assert "source artifact and compute entry" in mlx_porting
     assert 'checks["reference-accessor-lvalue-identity"]' in mlx_porting
     assert "reference accessor proof accounting is incomplete" in mlx_porting
     assert "reference accessor {target} storage evidence is incomplete" in mlx_porting
@@ -2156,15 +2201,16 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         "reference accessor {target} const-read evidence is incomplete" in mlx_porting
     )
     assert "reference accessor {target} native validation must be" in mlx_porting
-    assert "expected 4 OpenGL toolchain frontier sources" in mlx_porting
-    assert (
-        "OpenGL frontier accounting must be 4 sources, 4 artifacts, "
-        "and 0 project diagnostics"
-    ) in mlx_porting
-    assert "OpenGL frontier toolchain must validate all 4 source paths" in mlx_porting
+    assert "MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES" in mlx_porting
+    assert "expected 8 OpenGL toolchain frontier sources" in mlx_porting
+    assert "OpenGL frontier accounting must cover every configured source" in (
+        mlx_porting
+    )
+    assert "with one artifact and zero project diagnostics" in mlx_porting
+    assert "OpenGL frontier toolchain must validate every source path" in mlx_porting
     assert "mlx/backend/metal/kernels/binary_two.metal" in mlx_porting
     assert "mesa-vulkan-drivers" in mlx_porting
-    assert "python -m pip install vulkan==1.3.275.1" in mlx_porting
+    assert "vulkan==1.3.275.1" in mlx_porting
     assert "vulkaninfo --summary" in mlx_porting
     assert "mlx-full-corpus-scout:" in mlx_porting
     assert "MLX full-corpus artifact scout" in mlx_porting
@@ -2259,6 +2305,9 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
             in harness
         )
     assert "MLX_DIRECTX_VULKAN_FRONTIER_SOURCES" in harness
+    assert "MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES" in harness
+    assert "MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS" in harness
+    assert "MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT" in harness
     assert "MLX_BLOCKED_REDUCED_FRONTIER_SOURCES" in harness
     assert "_check_atomic_fence_contract" in harness
     assert "project.translate.directx-atomic-fence-unsupported" in harness

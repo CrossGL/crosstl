@@ -37,11 +37,17 @@ MLX_BINARY_TWO_SOURCE = "mlx/backend/metal/kernels/binary_two.metal"
 MLX_FENCE_SOURCE = "mlx/backend/metal/kernels/fence.metal"
 MLX_FENCE_EXPECTED_ATOMIC_FENCE_COUNT = 3
 MLX_GEMV_SOURCE = "mlx/backend/metal/kernels/gemv.metal"
+MLX_LAYER_NORM_SOURCE = "mlx/backend/metal/kernels/layer_norm.metal"
+MLX_LOGSUMEXP_SOURCE = "mlx/backend/metal/kernels/logsumexp.metal"
 MLX_METAL_ROUNDTRIP_SOURCE = MLX_FENCE_SOURCE
+MLX_RANDOM_SOURCE = "mlx/backend/metal/kernels/random.metal"
+MLX_RMS_NORM_SOURCE = "mlx/backend/metal/kernels/rms_norm.metal"
 MLX_ROPE_SOURCE = "mlx/backend/metal/kernels/rope.metal"
 MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE = (
     "mlx/backend/metal/kernels/scaled_dot_product_attention.metal"
 )
+MLX_SOFTMAX_SOURCE = "mlx/backend/metal/kernels/softmax.metal"
+MLX_TERNARY_SOURCE = "mlx/backend/metal/kernels/ternary.metal"
 REFERENCE_ACCESSOR_FIXTURE_NAME = "reference_accessor_lvalue.metal"
 REFERENCE_ACCESSOR_FIXTURE_PATH = (
     Path(__file__).resolve().parent / "fixtures" / REFERENCE_ACCESSOR_FIXTURE_NAME
@@ -57,21 +63,25 @@ TEMPLATE_MEMBER_POINTER_TARGETS = ("directx", "opengl")
 MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES = (
     MLX_ARG_REDUCE_SOURCE,
     MLX_BINARY_TWO_SOURCE,
-    "mlx/backend/metal/kernels/logsumexp.metal",
-    "mlx/backend/metal/kernels/softmax.metal",
-)
-MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
-    "mlx/backend/metal/kernels/arange.metal",
-    MLX_ARG_REDUCE_SOURCE,
-    MLX_BINARY_TWO_SOURCE,
-    "mlx/backend/metal/kernels/layer_norm.metal",
-    "mlx/backend/metal/kernels/logsumexp.metal",
-    "mlx/backend/metal/kernels/random.metal",
-    "mlx/backend/metal/kernels/rms_norm.metal",
+    MLX_LOGSUMEXP_SOURCE,
+    MLX_RMS_NORM_SOURCE,
     MLX_ROPE_SOURCE,
     MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
-    "mlx/backend/metal/kernels/softmax.metal",
-    "mlx/backend/metal/kernels/ternary.metal",
+    MLX_SOFTMAX_SOURCE,
+    MLX_TERNARY_SOURCE,
+)
+MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
+    MLX_ARANGE_SOURCE,
+    MLX_ARG_REDUCE_SOURCE,
+    MLX_BINARY_TWO_SOURCE,
+    MLX_LAYER_NORM_SOURCE,
+    MLX_LOGSUMEXP_SOURCE,
+    MLX_RANDOM_SOURCE,
+    MLX_RMS_NORM_SOURCE,
+    MLX_ROPE_SOURCE,
+    MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
+    MLX_SOFTMAX_SOURCE,
+    MLX_TERNARY_SOURCE,
 )
 MLX_CLEAN_REDUCED_FRONTIER_SOURCES = tuple(
     dict.fromkeys(
@@ -92,15 +102,63 @@ MLX_REDUCED_FRONTIER_SOURCES = tuple(
         )
     )
 )
-# Subset of the clean frontier gated by DXC on Windows. The DirectX/Vulkan frontier
-# is still translated in full (and all Vulkan artifacts are spirv-val'd), but the
-# remaining kernels have tracked structural or semantic defects and stay outside
-# the DirectX compile gate until those are fixed.
+# Full clean DirectX frontier gated by DXC on Windows. The separate blocked fence
+# source must fail before target emission under its atomic-fence diagnostic.
 MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES = (
-    "mlx/backend/metal/kernels/arange.metal",
+    MLX_ARANGE_SOURCE,
     MLX_ARG_REDUCE_SOURCE,
+    MLX_BINARY_TWO_SOURCE,
+    MLX_LAYER_NORM_SOURCE,
+    MLX_LOGSUMEXP_SOURCE,
+    MLX_RANDOM_SOURCE,
+    MLX_RMS_NORM_SOURCE,
     MLX_ROPE_SOURCE,
+    MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
+    MLX_SOFTMAX_SOURCE,
+    MLX_TERNARY_SOURCE,
 )
+# Pinned generated compute entries compiled by official DXC v1.9.2602.24.
+MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS = {
+    MLX_ARANGE_SOURCE: 11,
+    MLX_ARG_REDUCE_SOURCE: 24,
+    MLX_BINARY_TWO_SOURCE: 225,
+    MLX_LAYER_NORM_SOURCE: 12,
+    MLX_LOGSUMEXP_SOURCE: 6,
+    MLX_RANDOM_SOURCE: 2,
+    MLX_RMS_NORM_SOURCE: 12,
+    MLX_ROPE_SOURCE: 18,
+    MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE: 42,
+    MLX_SOFTMAX_SOURCE: 10,
+    MLX_TERNARY_SOURCE: 212,
+}
+MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT = sum(
+    MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS.values()
+)
+MLX_FRONTIER_SPECIALIZATION_CONSTANTS = {
+    "1": False,
+    "2": False,
+    "3": False,
+    "20": False,
+    "21": False,
+    "22": False,
+    "23": False,
+    "24": False,
+    "25": False,
+    "26": 1,
+}
+MLX_OPENGL_SPECIALIZATION_CONSTANT_IDS = {
+    MLX_RMS_NORM_SOURCE: {"has_w": 20},
+    MLX_ROPE_SOURCE: {"forward": 1, "traditional": 2, "hs_transpose": 3},
+    MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE: {
+        "has_mask": 20,
+        "query_transposed": 21,
+        "do_causal": 22,
+        "bool_mask": 23,
+        "float_mask": 24,
+        "has_sinks": 25,
+        "blocks": 26,
+    },
+}
 MLX_FENCE_REQUESTED_CONTRACT = {
     "memoryFlags": ["mem_device"],
     "memoryOrder": "memory_order_seq_cst",
@@ -182,7 +240,7 @@ RUNTIME_READINESS_ENTRY_POINTS = {
 }
 RUNTIME_READINESS_DEFAULT_VARIANTS = {
     "directx": "uint8",
-    "opengl": "uint8",
+    "opengl": "uint32",
     "vulkan": "uint32",
 }
 ARANGE_RUNTIME_VARIANTS = {
@@ -235,6 +293,10 @@ FULL_CORPUS_TRACKED_ISSUES = (
     *METAL_ROUNDTRIP_SEMANTIC_TRACKED_ISSUES,
 )
 RESOLVED_FRONTIER_ISSUES = (
+    "https://github.com/CrossGL/crosstl/issues/1728",
+    "https://github.com/CrossGL/crosstl/issues/1701",
+    "https://github.com/CrossGL/crosstl/issues/1694",
+    "https://github.com/CrossGL/crosstl/issues/1695",
     "https://github.com/CrossGL/crosstl/issues/1667",
     "https://github.com/CrossGL/crosstl/issues/1668",
     "https://github.com/CrossGL/crosstl/issues/1661",
@@ -590,8 +652,10 @@ def _write_project_config(
     include: str | Sequence[str],
     targets: Sequence[str],
     output_dir: str,
+    specialization_constants: Mapping[str, bool | int | float] | None = None,
     metal_source_options: Mapping[str, int] | None = None,
     metal_target_options: Mapping[str, Mapping[str, int]] | None = None,
+    entry_points: Mapping[str, str] | None = None,
 ) -> None:
     include_values = [include] if isinstance(include, str) else list(include)
     include_list = ", ".join(json.dumps(value) for value in include_values)
@@ -608,6 +672,16 @@ def _write_project_config(
         '"**/*.metal" = "metal"',
         "",
     ]
+    if entry_points:
+        lines.append("[project.entry_points]")
+        for source, entry_point in entry_points.items():
+            lines.append(f"{json.dumps(source)} = {json.dumps(entry_point)}")
+        lines.append("")
+    if specialization_constants:
+        lines.append("[project.specialization_constants]")
+        for selector, value in specialization_constants.items():
+            lines.append(f"{json.dumps(str(selector))} = {json.dumps(value)}")
+        lines.append("")
     if metal_source_options or metal_target_options:
         lines.append("[project.source_options.metal]")
         for key, value in (metal_source_options or {}).items():
@@ -1474,8 +1548,21 @@ def _reference_accessor_nested_const_alias_evidence(
         r"\[[^\]\n;]+\]\s*\[\s*k\s*\])\s*;",
         store_body,
     )
+    lane = r"(?:uint\s*\(\s*k\s*\)|k)"
+    helper_read = None
+    if direct_read is None:
+        helper_read = re.search(
+            r"\bCrossGLMetalVectorIndex_[A-Za-z0-9_]+_set\s*\(\s*stored\s*,\s*"
+            rf"{lane}\s*,\s*"
+            r"\bCrossGLMetalVectorIndex_[A-Za-z0-9_]+_get\s*\(\s*"
+            r"(?P<storage>self\s*\.\s*nestedTile\s*\.\s*val_frags\s*"
+            r"\[[^\]\n;]+\])\s*,\s*"
+            rf"{lane}\s*\)\s*\)",
+            store_body,
+        )
+    storage_read = direct_read or helper_read
     _require(
-        direct_read is not None,
+        storage_read is not None,
         f"{target_name} nested const reference alias was not eliminated to "
         "self.nestedTile.val_frags storage indexed by k",
     )
@@ -1489,11 +1576,18 @@ def _reference_accessor_nested_const_alias_evidence(
         "nested const store path",
     )
 
+    storage_lvalue = storage_read.group("storage")
+    component_read_lowering = "direct-index"
+    if helper_read is not None:
+        storage_lvalue = f"{storage_lvalue}[k]"
+        component_read_lowering = "lane-helper"
+
     return {
         "status": "verified-original-nested-storage-const-alias-read",
         "storageMember": "val_frags",
         "storagePath": "self.nestedTile.val_frags",
-        "storageLvalue": re.sub(r"\s+", "", direct_read.group("storage")),
+        "storageLvalue": re.sub(r"\s+", "", storage_lvalue),
+        "componentReadLowering": component_read_lowering,
         "outerReceiver": "self",
         "tileMember": "nestedTile",
         "fragmentType": "float2",
@@ -2352,7 +2446,9 @@ def _scaled_attention_local_alias_evidence(
             generated_by_target["vulkan"],
         )
     )
-    expected_entry_count = 42
+    expected_entry_count = MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS[
+        MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE
+    ]
     _require(
         directx_entry_count == expected_entry_count
         and vulkan_entry_count == expected_entry_count,
@@ -2380,6 +2476,22 @@ def _scaled_attention_local_alias_evidence(
     }
 
 
+def _directx_toolchain_entry_point(run: Mapping[str, Any]) -> str | None:
+    command = run.get("command")
+    if not isinstance(command, list) or any(
+        not isinstance(argument, str) for argument in command
+    ):
+        return None
+    try:
+        profile = command[command.index("-T") + 1]
+        entry_point = command[command.index("-E") + 1]
+    except (ValueError, IndexError):
+        return None
+    if not profile.startswith("cs_") or not entry_point:
+        return None
+    return entry_point
+
+
 def _translate_directx_vulkan_frontier(
     mlx_root: Path,
     work_dir: Path,
@@ -2398,6 +2510,7 @@ def _translate_directx_vulkan_frontier(
         include=MLX_DIRECTX_VULKAN_FRONTIER_SOURCES,
         targets=("directx", "vulkan"),
         output_dir=_relpath(work_dir / "out-directx-vulkan-frontier", mlx_root),
+        specialization_constants=MLX_FRONTIER_SPECIALIZATION_CONSTANTS,
     )
     run_toolchains = not FRONTIER_VALIDATION_TRACKED_ISSUES
     _run_command(
@@ -2489,6 +2602,7 @@ def _translate_directx_vulkan_frontier(
             output_dir=_relpath(
                 work_dir / f"out-{toolchain_name}-frontier-toolchain", mlx_root
             ),
+            specialization_constants=MLX_FRONTIER_SPECIALIZATION_CONSTANTS,
         )
         _run_command(
             f"validate-{toolchain_name}-frontier-toolchain",
@@ -2530,6 +2644,38 @@ def _translate_directx_vulkan_frontier(
         for run in toolchain_runs
         if isinstance(run, dict) and run.get("target") == "vulkan"
     ]
+    directx_entry_points_by_source: dict[str, list[str]] = {
+        source: [] for source in MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
+    }
+    for run in directx_runs:
+        if run.get("status") != "ok":
+            continue
+        source = run.get("source")
+        _require(
+            source in directx_entry_points_by_source,
+            f"DirectX toolchain validation reported an unexpected source: {source}",
+        )
+        entry_point = _directx_toolchain_entry_point(run)
+        _require(
+            entry_point is not None,
+            "DirectX toolchain validation did not record a compute entry command",
+        )
+        validated_entries = directx_entry_points_by_source[source]
+        _require(
+            entry_point not in validated_entries,
+            f"DirectX toolchain validation duplicated {source} entry {entry_point}",
+        )
+        validated_entries.append(entry_point)
+    directx_validated_entry_point_counts = {
+        source: len(entry_points)
+        for source, entry_points in directx_entry_points_by_source.items()
+        if entry_points
+    }
+    directx_validated_sources = [
+        source
+        for source in MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
+        if source in directx_validated_entry_point_counts
+    ]
     required_toolchains = {
         "directx": (
             require_directx_toolchain,
@@ -2549,6 +2695,19 @@ def _translate_directx_vulkan_frontier(
                 and artifact.get("status") == "translated"
                 and isinstance(artifact.get("path"), str)
             }
+            if target == "directx":
+                artifact_sources = {
+                    artifact.get("source")
+                    for artifact in artifact_payload.get("artifacts", [])
+                    if isinstance(artifact, dict)
+                    and artifact.get("target") == target
+                    and artifact.get("status") == "translated"
+                    and isinstance(artifact.get("source"), str)
+                }
+                _require(
+                    artifact_sources == set(MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES),
+                    "DirectX toolchain artifact sources did not match the frontier",
+                )
             validated_paths = {
                 run.get("path")
                 for run in runs
@@ -2575,6 +2734,16 @@ def _translate_directx_vulkan_frontier(
                     "validation issues are tracked"
                 ),
             )
+    if require_directx_toolchain and run_toolchains:
+        _require(
+            directx_validated_sources == list(MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES),
+            "DirectX toolchain did not validate every configured source",
+        )
+        _require(
+            directx_validated_entry_point_counts
+            == MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS,
+            "DirectX toolchain did not validate every generated compute entry point",
+        )
     return {
         "name": "directx-vulkan-frontier",
         "status": "passed",
@@ -2586,6 +2755,22 @@ def _translate_directx_vulkan_frontier(
         "targets": ["directx", "vulkan"],
         "toolchainRuns": len(toolchain_runs),
         "directxToolchainRequired": require_directx_toolchain,
+        "directxToolchainSources": list(MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES),
+        "directxToolchainArtifactCount": len(MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES),
+        "directxToolchainExpectedEntryPointCounts": dict(
+            MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS
+        ),
+        "directxToolchainExpectedEntryPointCount": (
+            MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT
+        ),
+        "directxToolchainValidatedSources": directx_validated_sources,
+        "directxToolchainValidatedArtifactCount": len(directx_validated_sources),
+        "directxToolchainValidatedEntryPointCounts": (
+            directx_validated_entry_point_counts
+        ),
+        "directxToolchainValidatedEntryPointCount": sum(
+            directx_validated_entry_point_counts.values()
+        ),
         "vulkanToolchainRequired": require_vulkan_toolchain,
         "directxValidationStatus": (
             "validated" if run_toolchains and directx_runs else "not-required"
@@ -2600,83 +2785,6 @@ def _translate_directx_vulkan_frontier(
         "trackedIssues": list(FRONTIER_VALIDATION_TRACKED_ISSUES),
         "runtimeParityClaimed": False,
     }
-
-
-def _require_arange_opengl_scalar_coercions(generated: str) -> None:
-    boolean_wrappers = (
-        (
-            "simd_shuffle_down(bool, uint)",
-            r"\bbool\s+simd_shuffle_down\s*\(\s*bool\s+data\s*,\s*uint\s+delta\s*\)\s*\{(?P<body>.*?)\}",
-            "subgroupShuffleDown(uint(data),delta)",
-        ),
-        (
-            "simd_shuffle_up(bool, uint)",
-            r"\bbool\s+simd_shuffle_up\s*\(\s*bool\s+data\s*,\s*uint\s+delta\s*\)\s*\{(?P<body>.*?)\}",
-            "subgroupShuffleUp(uint(data),delta)",
-        ),
-        (
-            "simd_shuffle_and_fill_up(bool, bool, uint)",
-            r"\bbool\s+simd_shuffle_and_fill_up\s*\(\s*bool\s+data\s*,\s*bool\s+filling\s*,\s*uint\s+delta\s*\)\s*\{(?P<body>.*?)\}",
-            "crossglWaveShuffleAndFillUp(uint(data),uint(filling),delta)",
-        ),
-        (
-            "simd_shuffle(bool, uint)",
-            r"\bbool\s+simd_shuffle\s*\(\s*bool\s+data\s*,\s*uint\s+lane\s*\)\s*\{(?P<body>.*?)\}",
-            "subgroupShuffle(uint(data),lane)",
-        ),
-    )
-    for signature, pattern, call in boolean_wrappers:
-        match = re.search(pattern, generated, flags=re.DOTALL)
-        _require(
-            match is not None,
-            f"OpenGL arange artifact is missing {signature}",
-        )
-        body = re.sub(r"\s+", "", match.group("body"))
-        return_pattern = rf"return\(*{re.escape(call)}!=(?:0u|uint\(0\))\)*;"
-        _require(
-            re.search(return_pattern, body) is not None,
-            (
-                "OpenGL arange artifact did not preserve the numeric-to-boolean "
-                f"scalar coercion in {signature}"
-            ),
-        )
-
-    signed_assignments = {
-        "int8": (
-            "arangeint8_out",
-            r"bitfieldExtract\(int\(.*uint\(arangeint8_start_Args_start\).*index\*uint\(arangeint8_step_Args_step\).*\),0,8\)",
-        ),
-        "int16": (
-            "arangeint16_out",
-            r"bitfieldExtract\(int\(.*uint\(arangeint16_start_Args_start\).*index\*uint\(arangeint16_step_Args_step\).*\),0,16\)",
-        ),
-        "int32": (
-            "arangeint32_out",
-            r"int\(.*uint\(arangeint32_start_Args_start\).*index\*uint\(arangeint32_step_Args_step\).*\)",
-        ),
-        "int64": (
-            "arangeint64_out",
-            r"\(*arangeint64_start_Args_start\+\(int64_t\(index\)\*arangeint64_step_Args_step\)\)*",
-        ),
-    }
-    for source_type, (output_name, expression_pattern) in signed_assignments.items():
-        assignment = re.search(
-            rf"\b{output_name}\s*\[\s*index\s*\]\s*=\s*(?P<expression>.*?);",
-            generated,
-            flags=re.DOTALL,
-        )
-        _require(
-            assignment is not None,
-            f"OpenGL arange artifact is missing the signed {source_type} assignment",
-        )
-        expression = re.sub(r"\s+", "", assignment.group("expression"))
-        _require(
-            re.fullmatch(expression_pattern, expression) is not None,
-            (
-                "OpenGL arange artifact did not preserve the signed "
-                f"{source_type} arange scalar coercion"
-            ),
-        )
 
 
 def _check_arange_opengl(
@@ -2694,6 +2802,7 @@ def _check_arange_opengl(
         include=MLX_ARANGE_SOURCE,
         targets=("opengl",),
         output_dir=_relpath(work_dir / "out-arange-opengl", mlx_root),
+        entry_points={MLX_ARANGE_SOURCE: "arangeuint32"},
     )
     result = _run_command(
         "translate-arange-opengl",
@@ -2759,30 +2868,37 @@ def _check_arange_opengl(
         "OpenGL arange artifact retained a Metal system preprocessor line",
     )
     _require(
-        "float log1p(float" not in generated,
-        "OpenGL arange artifact retained a collapsed log1p target signature",
+        artifact.get("entryPoint")
+        == {"source": "arangeuint32", "target": "main", "stage": "compute"},
+        "OpenGL arange artifact did not record the selected compute entry",
     )
     _require(
-        "float log1p_float(float" in generated
-        and "float log1p_bfloat16(float" in generated
-        and "log1p_float(r)" in generated,
-        "OpenGL arange artifact did not resolve the mapped log1p collision",
+        generated.count("void main()") == 1 and "compute_main" not in generated,
+        "OpenGL arange artifact is not independently loadable through one main entry",
+    )
+    resource_bindings = re.findall(
+        r"layout\s*\(\s*std(?:140|430)\s*,\s*binding\s*=\s*(\d+)\s*\)\s*"
+        r"(?:uniform|buffer)\b",
+        generated,
     )
     _require(
-        "return {" not in generated,
-        "OpenGL arange artifact retained an untyped aggregate return",
+        sorted(int(binding) for binding in resource_bindings) == [0, 1, 2],
+        "OpenGL arange artifact must expose only start, step, and output resources",
+    )
+    normalized_source = re.sub(r"\s+", "", generated)
+    _require(
+        "out_[index]=(start+(index*step));" in normalized_source,
+        "OpenGL arange artifact did not preserve uint32 arange data flow",
     )
     _require(
-        "return complex64_t(x, theta);" in generated
-        and "return complex64_t((0.5 * log1p_float(r)), theta);" in generated
-        and "return complex64_t(log(z0), theta);" in generated,
-        "OpenGL arange artifact did not lower aggregate complex returns",
+        "arangeuint8" not in generated and "arangefloat" not in generated,
+        "OpenGL arange artifact retained unrelated materialized entries",
     )
-    _require_arange_opengl_scalar_coercions(generated)
     _require(
-        "subgroupShuffleUp(value, delta);" in generated
-        and "return gl_SubgroupInvocationID >= delta ? shuffled : fill;" in generated,
-        "OpenGL arange artifact did not preserve shuffle-and-fill lane semantics",
+        "log1p__metal_overload_" not in generated
+        and "subgroupShuffle" not in generated
+        and "complex64_t probe(" not in generated,
+        "OpenGL arange artifact retained unrelated helper dependencies",
     )
     native_validation = _validate_arange_opengl(
         mlx_root,
@@ -2797,10 +2913,11 @@ def _check_arange_opengl(
         "source": MLX_ARANGE_SOURCE,
         "target": "opengl",
         "metalIncludesFiltered": True,
-        "mappedOverloadCollisionResolved": True,
-        "aggregateInitializerLowered": True,
-        "scalarCoercionLowered": True,
-        "shuffleAndFillLowered": True,
+        "selectedEntryPoint": "arangeuint32",
+        "targetEntryPoint": "main",
+        "interfaceResourceCount": 3,
+        "standaloneArtifact": True,
+        "arangeDataFlowPreserved": True,
         **native_validation,
         "trackedIssues": list(OPENGL_ARANGE_VALIDATION_TRACKED_ISSUES),
     }
@@ -2969,6 +3086,48 @@ def _check_opengl_frontier(
         )
         generated_paths[source] = generated_path
 
+    specialization_evidence: dict[str, dict[str, int]] = {}
+    for source, expected_constants in MLX_OPENGL_SPECIALIZATION_CONSTANT_IDS.items():
+        artifact = artifacts_by_source[source]
+        reflected_constants = artifact.get("specializationConstants", [])
+        _require(
+            isinstance(reflected_constants, list),
+            f"OpenGL specialization metadata is missing for {source}",
+        )
+        reflected_ids = {
+            constant.get("name"): constant.get("id")
+            for constant in reflected_constants
+            if isinstance(constant, Mapping)
+        }
+        _require(
+            reflected_ids == expected_constants,
+            f"OpenGL specialization metadata does not match {source}",
+        )
+        materialization = artifact.get("specializationMaterialization")
+        _require(
+            isinstance(materialization, Mapping)
+            and materialization.get("mode") == "deferred"
+            and materialization.get("targetSupportsDeferredSpecialization") is True,
+            f"OpenGL specialization deferral is not recorded for {source}",
+        )
+        generated = generated_paths[source].read_text(encoding="utf-8")
+        for name, constant_id in expected_constants.items():
+            _require(
+                re.search(
+                    rf"layout\s*\(\s*constant_id\s*=\s*{constant_id}\s*\)"
+                    rf"\s*const\s+\w+\s+{re.escape(name)}\s*=",
+                    generated,
+                )
+                is not None,
+                f"OpenGL artifact did not preserve specialization id {constant_id} "
+                f"for {name}",
+            )
+            _require(
+                re.search(rf"\buniform\s+\w+\s+{re.escape(name)}\b", generated) is None,
+                f"OpenGL artifact lowered specialization input {name} as a uniform",
+            )
+        specialization_evidence[source] = dict(expected_constants)
+
     validation_status = "not-required"
     validation_outputs: dict[str, str] = {}
     toolchain_validated_sources: list[str] = []
@@ -3060,6 +3219,7 @@ def _check_opengl_frontier(
         "nativeValidator": "glslangValidator",
         "spirvValidator": "spirv-val",
         "nativeValidationOutputs": validation_outputs,
+        "specializationConstants": specialization_evidence,
         "runtimeIntegrationIncluded": False,
     }
 
@@ -3774,14 +3934,15 @@ def _runtime_report_results_for_target(
     return results
 
 
-def _require_vulkan_native_runtime_results(
+def _require_native_runtime_results(
     runtime_report: Mapping[str, Any],
+    target: str,
 ) -> None:
-    vulkan_results = _runtime_report_results_for_target(runtime_report, "vulkan")
+    target_results = _runtime_report_results_for_target(runtime_report, target)
     _require(
-        bool(vulkan_results)
-        and all(result.get("status") == "passed" for result in vulkan_results),
-        "Vulkan native runtime execution was required for every MLX arange fixture",
+        bool(target_results)
+        and all(result.get("status") == "passed" for result in target_results),
+        f"{target} native runtime execution was required for every MLX arange fixture",
     )
 
 
@@ -3871,7 +4032,7 @@ def _execute_native_runtime_fixtures_for_report(
     name: str,
     runtime_artifact_manifest_path: Path,
     targets: Sequence[str],
-    require_vulkan_native_runtime: bool,
+    required_native_runtime_targets: Sequence[str] = (),
 ) -> dict[str, Any]:
     metadata_path = report_dir / f"{name}.native-runtime-execution-metadata.json"
     manifest_path = report_dir / f"{name}.native-runtime-execution-manifest.json"
@@ -3918,8 +4079,8 @@ def _execute_native_runtime_fixtures_for_report(
     passed_count = int(summary.get("passedCount", 0))
     unavailable_count = int(summary.get("unavailableCount", 0))
     skipped_count = int(summary.get("skippedCount", 0))
-    if require_vulkan_native_runtime:
-        _require_vulkan_native_runtime_results(runtime_report)
+    for target in required_native_runtime_targets:
+        _require_native_runtime_results(runtime_report, target)
     status = "passed"
     if failed_count:
         status = "blocked-by-tracked-issues"
@@ -3950,7 +4111,7 @@ def _plan_runtime_readiness_for_report(
     name: str,
     artifact_report: Path,
     targets: Sequence[str],
-    require_vulkan_native_runtime: bool,
+    required_native_runtime_targets: Sequence[str] = (),
 ) -> dict[str, Any]:
     _require(
         artifact_report.is_file(),
@@ -3991,7 +4152,7 @@ def _plan_runtime_readiness_for_report(
         name=name,
         runtime_artifact_manifest_path=runtime_artifact_manifest_path,
         targets=targets,
-        require_vulkan_native_runtime=require_vulkan_native_runtime,
+        required_native_runtime_targets=required_native_runtime_targets,
     )
 
     runtime_artifact_diagnostics_by_code = _diagnostics_by_code(
@@ -4079,6 +4240,7 @@ def _plan_reduced_runtime_readiness(
     report_dir: Path,
     *,
     require_vulkan_native_runtime: bool,
+    require_opengl_native_runtime: bool,
 ) -> dict[str, Any]:
     reports = [
         _plan_runtime_readiness_for_report(
@@ -4087,7 +4249,9 @@ def _plan_reduced_runtime_readiness(
             name="directx-vulkan-runtime-readiness",
             artifact_report=report_dir / "directx-vulkan-frontier.json",
             targets=("directx", "vulkan"),
-            require_vulkan_native_runtime=require_vulkan_native_runtime,
+            required_native_runtime_targets=(
+                ("vulkan",) if require_vulkan_native_runtime else ()
+            ),
         ),
         _plan_runtime_readiness_for_report(
             mlx_root=mlx_root,
@@ -4095,7 +4259,9 @@ def _plan_reduced_runtime_readiness(
             name="opengl-runtime-readiness",
             artifact_report=report_dir / "arange-opengl.json",
             targets=("opengl",),
-            require_vulkan_native_runtime=False,
+            required_native_runtime_targets=(
+                ("opengl",) if require_opengl_native_runtime else ()
+            ),
         ),
     ]
     status = (
@@ -4432,6 +4598,9 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
     require_opengl_gemv_toolchain = bool(
         getattr(args, "require_opengl_gemv_toolchain", False)
     )
+    require_opengl_native_runtime = bool(
+        getattr(args, "require_opengl_native_runtime", False)
+    )
     require_vulkan_gemv_toolchain = bool(
         getattr(args, "require_vulkan_gemv_toolchain", False)
     )
@@ -4442,6 +4611,10 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
     _require(
         not require_opengl_gemv_toolchain or args.mode == REDUCED_FRONTIER_MODE,
         "--require-opengl-gemv-toolchain is only valid in reduced-frontier mode",
+    )
+    _require(
+        not require_opengl_native_runtime or args.mode == REDUCED_FRONTIER_MODE,
+        "--require-opengl-native-runtime is only valid in reduced-frontier mode",
     )
     _require(
         not require_vulkan_gemv_toolchain or args.mode == REDUCED_FRONTIER_MODE,
@@ -4571,6 +4744,7 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
                 mlx_root,
                 report_dir,
                 require_vulkan_native_runtime=args.require_vulkan_native_runtime,
+                require_opengl_native_runtime=require_opengl_native_runtime,
             )
         )
     elif args.mode == FULL_CORPUS_MODE:
@@ -4640,6 +4814,7 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             "templateMemberBufferPointerNativeValidationIncluded": False,
             "openglFrontierToolchainRequired": require_opengl_frontier_toolchain,
             "openglGemvToolchainRequired": require_opengl_gemv_toolchain,
+            "openglNativeRuntimeRequired": require_opengl_native_runtime,
             "vulkanGemvToolchainRequired": require_vulkan_gemv_toolchain,
             "runtimeParityClaimed": False,
         },
@@ -4699,6 +4874,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--require-vulkan-native-runtime",
         action="store_true",
         help="Fail unless the MLX-generated Vulkan arange fixture executes natively.",
+    )
+    parser.add_argument(
+        "--require-opengl-native-runtime",
+        action="store_true",
+        help=(
+            "Fail unless the selected MLX OpenGL arangeuint32 artifact executes "
+            "natively and passes exact output comparison."
+        ),
     )
     parser.add_argument(
         "--require-opengl-frontier-toolchain",
