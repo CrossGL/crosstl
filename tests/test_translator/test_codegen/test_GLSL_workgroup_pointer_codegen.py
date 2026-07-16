@@ -342,3 +342,93 @@ def test_generic_workgroup_pointer_helper_specializes_without_pointer(tmp_path):
         tmp_path,
         "generic_workgroup_pointer_helper",
     )
+
+
+def test_nested_workgroup_pointer_helpers_preserve_bounded_backing_view(tmp_path):
+    shader = """
+    shader NestedWorkgroupPointerHelpers {
+        void leaf(threadgroup float* values) {
+            values[0] = values[1];
+        }
+
+        void middle(threadgroup float* values) {
+            leaf(values + 4u);
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint lane @ gl_LocalInvocationIndex) {
+                threadgroup float sharedValues[64];
+                middle(sharedValues + lane * 8u);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    backing = re.search(
+        r"^shared\s+float\s+([A-Za-z_]\w*)\s*\[\s*64\s*\]\s*;",
+        generated,
+        re.MULTILINE,
+    )
+    assert backing is not None, generated
+    assert re.search(r"\bfloat\s*\*", generated) is None, generated
+    leaf = re.search(
+        r"\bvoid\s+(?P<name>leaf[A-Za-z0-9_]*)\s*"
+        r"\((?P<params>[^)]*)\)\s*\{(?P<body>.*?)^\}",
+        generated,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert leaf is not None, generated
+    accesses = re.findall(
+        rf"\b{re.escape(backing.group(1))}\s*\[([^\]]+)\]",
+        leaf.group("body"),
+    )
+    assert len(accesses) == 2, generated
+    assert all("offset" in expression for expression in accesses), generated
+    assert any("1" in expression for expression in accesses), generated
+    assert "gl_LocalInvocationIndex" in generated, generated
+
+    assert_glsl_compute_validates_if_available(
+        generated,
+        tmp_path,
+        "nested_workgroup_pointer_helpers",
+    )
+
+
+def test_nested_workgroup_pointer_helper_rejects_out_of_bounds_view():
+    shader = """
+    shader OutOfBoundsWorkgroupPointerHelpers {
+        void leaf(threadgroup float* values) {
+            values[0] = values[1];
+        }
+
+        void middle(threadgroup float* values) {
+            leaf(values + 1u);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup float sharedValues[8];
+                middle(sharedValues + 7u);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "leaf"
+    assert error.parameter_name == "values"
+    assert error.backing_name is not None and error.backing_name.endswith(
+        "sharedValues"
+    )
+    assert "8" in error.offset_expression
+    assert error.materialization_name is not None
+    assert error.reason == "view-out-of-bounds"
