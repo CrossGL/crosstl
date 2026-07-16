@@ -567,20 +567,33 @@ RMSNorm specialization contract to the same upstream commit and to
 `rms_norm.metal` SHA-256
 `5d411a2350ba7ddf84eb35f9dcac7cde0d441bd55fa1e9e1ccc61d490d428dee`.
 It translates the upstream source through `crosstl.project.translate_project`.
-For DirectX, two named project variants set the required `has_w` function
-constant through both selector forms: `has_w=false` by name and `"20"=true` by
-numeric ID. The gate verifies each report's variant selector provenance,
-concrete specialization materialization, pinned source hash, and generated
-`static const bool has_w` value. Windows CI then uses DXC to compile a reflected
-compute entry from each generated HLSL artifact. The separate OpenGL project
-translation supplies no override, requires deferred runtime specialization,
-checks the generated `layout(constant_id = 20)` declaration, and compiles the
-GLSL to OpenGL SPIR-V 1.3 before `spirv-val` validation on Linux. This is
-translation and native compilation evidence only. It does not execute RMSNorm,
-establish numerical runtime parity, or claim support for the full MLX test
-suite. Runtime parity also requires the entry-point workgroup-size
-specialization contract tracked in
-[CrossGL/crosstl#1750](https://github.com/CrossGL/crosstl/issues/1750). The
+The pinned MLX host computes single-row workgroup width as
+`32 * ceil_div(ceil_div(axis_size, 4), 32)` and uses the selected pipeline's
+`maxTotalThreadsPerThreadgroup` for looped kernels. The proof materializes
+`[32, 1, 1]` and `[64, 1, 1]` as representative upstream-valid results of
+those host formulas. These two sizes deliberately do not claim complete axis,
+device-limit, or runtime-selected workgroup coverage.
+
+For DirectX, two named project variants combine those workgroup sizes with the
+required `has_w` function constant through both selector forms:
+`has_w=false` by name at `[32, 1, 1]` and `"20"=true` by numeric ID at
+`[64, 1, 1]`. The gate verifies variant selector and workgroup provenance,
+concrete specialization materialization, the pinned source hash, and the
+generated `static const bool has_w` value. Each HLSL library artifact retains
+execution metadata for all 12 pinned host-named entries and emits 12 matching
+`numthreads` attributes. Windows CI uses two DXC runs to compile one reflected
+representative entry from each HLSL library. For OpenGL, the `workgroup_32` and
+`workgroup_64` variants leave `has_w` deferred, retain
+`layout(constant_id = 20)`, and split each host-named entry into a standalone
+`main` artifact. Linux CI compiles all 24 GLSL artifacts to OpenGL SPIR-V 1.3
+and validates all 24 binaries with `spirv-val`.
+
+This is translation and native compilation evidence only. It does not execute
+RMSNorm, establish numerical or runtime parity, claim complete runtime
+coverage, or claim support for the full MLX test suite. End-to-end device
+execution and host selection of packaged variants remain tracked by
+[CrossGL/crosstl#1462](https://github.com/CrossGL/crosstl/issues/1462) and
+[CrossGL/crosstl#1735](https://github.com/CrossGL/crosstl/issues/1735). The
 translated MLX `arange.metal` Direct3D numerical proof remains a separate
 Windows CI check.
 

@@ -9,34 +9,106 @@
     "id": 20,
     "required": true
   },
+  "hostNamedEntryPoints": [
+    "rms_loopedbfloat16",
+    "rms_loopedfloat16",
+    "rms_loopedfloat32",
+    "rmsbfloat16",
+    "rmsfloat16",
+    "rmsfloat32",
+    "vjp_rms_loopedbfloat16",
+    "vjp_rms_loopedfloat16",
+    "vjp_rms_loopedfloat32",
+    "vjp_rmsbfloat16",
+    "vjp_rmsfloat16",
+    "vjp_rmsfloat32"
+  ],
+  "representativeWorkgroupContract": {
+    "hostSource": "mlx/backend/metal/normalization.cpp",
+    "hostLines": "52-91,137-197",
+    "singleRowFormula": "[32 * ceil_div(ceil_div(axis_size, 4), 32), 1, 1]",
+    "loopedFormula": "[maxTotalThreadsPerThreadgroup, 1, 1]",
+    "workgroupSizes": [
+      [
+        32,
+        1,
+        1
+      ],
+      [
+        64,
+        1,
+        1
+      ]
+    ],
+    "upstreamHostValid": true,
+    "completeRuntimeCoverage": false
+  },
   "directx": {
-    "entryPoint": "vjp_rmsfloat32",
     "profile": "cs_6_0",
+    "libraryArtifactCount": 2,
+    "hostNamedEntryCountPerArtifact": 12,
+    "compiledEntryPointCountPerVariant": 1,
+    "compilerRunCount": 2,
     "variants": [
       {
-        "name": "has_w_false_by_name",
+        "name": "has_w_false_by_name_workgroup_32",
         "selector": "has_w",
         "selectorKind": "name",
-        "value": false
+        "value": false,
+        "workgroupSize": [
+          32,
+          1,
+          1
+        ]
       },
       {
-        "name": "has_w_true_by_id",
+        "name": "has_w_true_by_id_workgroup_64",
         "selector": "20",
         "selectorKind": "id",
-        "value": true
+        "value": true,
+        "workgroupSize": [
+          64,
+          1,
+          1
+        ]
       }
     ]
   },
   "opengl": {
     "deferred": true,
-    "constantId": 20
+    "constantId": 20,
+    "standaloneArtifactCount": 24,
+    "standaloneArtifactCountPerVariant": 12,
+    "compiledArtifactCount": 24,
+    "validatedArtifactCount": 24,
+    "variants": [
+      {
+        "name": "workgroup_32",
+        "workgroupSize": [
+          32,
+          1,
+          1
+        ]
+      },
+      {
+        "name": "workgroup_64",
+        "workgroupSize": [
+          64,
+          1,
+          1
+        ]
+      }
+    ]
   },
   "claims": {
     "translationAndNativeCompilationOnly": true,
+    "representativeHostValidWorkgroupSizes": true,
+    "completeRuntimeCoverage": false,
     "numericalRuntimeParity": false,
     "fullMlxTestSuite": false,
     "runtimeBlockedBy": [
-      "https://github.com/CrossGL/crosstl/issues/1750"
+      "https://github.com/CrossGL/crosstl/issues/1462",
+      "https://github.com/CrossGL/crosstl/issues/1735"
     ]
   }
 }

@@ -460,36 +460,96 @@
       "id": 20,
       "required": true
     },
+    "representative_workgroup_contract": {
+      "host_source": "mlx/backend/metal/normalization.cpp",
+      "host_lines": "52-91,137-197",
+      "single_row_formula": "[32 * ceil_div(ceil_div(axis_size, 4), 32), 1, 1]",
+      "looped_formula": "[maxTotalThreadsPerThreadgroup, 1, 1]",
+      "workgroup_sizes": [
+        [
+          32,
+          1,
+          1
+        ],
+        [
+          64,
+          1,
+          1
+        ]
+      ],
+      "upstream_host_valid": true,
+      "complete_runtime_coverage": false
+    },
+    "host_named_entry_count": 12,
     "directx": {
       "specialization_materialization": "concrete-crossgl-variant",
       "variants": [
         {
-          "name": "has_w_false_by_name",
+          "name": "has_w_false_by_name_workgroup_32",
           "selector": "has_w",
           "selector_kind": "name",
-          "value": false
+          "value": false,
+          "workgroup_size": [
+            32,
+            1,
+            1
+          ]
         },
         {
-          "name": "has_w_true_by_id",
+          "name": "has_w_true_by_id_workgroup_64",
           "selector": "20",
           "selector_kind": "id",
-          "value": true
+          "value": true,
+          "workgroup_size": [
+            64,
+            1,
+            1
+          ]
         }
       ],
       "native_compilation": "required-on-windows-ci",
-      "compiled_entry_count_per_variant": 1
+      "library_artifact_count": 2,
+      "execution_entry_count_per_artifact": 12,
+      "generated_numthreads_count_per_artifact": 12,
+      "compiled_entry_count_per_variant": 1,
+      "compiler_run_count": 2
     },
     "opengl": {
       "specialization_materialization": "deferred",
       "constant_id": 20,
+      "variants": [
+        {
+          "name": "workgroup_32",
+          "workgroup_size": [
+            32,
+            1,
+            1
+          ]
+        },
+        {
+          "name": "workgroup_64",
+          "workgroup_size": [
+            64,
+            1,
+            1
+          ]
+        }
+      ],
+      "standalone_artifact_count": 24,
+      "standalone_artifact_count_per_variant": 12,
       "native_compilation": "required-on-linux-ci",
-      "spirv_validation": "required-on-linux-ci"
+      "compiled_artifact_count": 24,
+      "spirv_validation": "required-on-linux-ci",
+      "validated_artifact_count": 24
     },
     "numerical_execution_included": false,
+    "numerical_parity_claimed": false,
     "runtime_parity_claimed": false,
+    "complete_runtime_coverage_claimed": false,
     "full_mlx_test_suite_included": false,
     "runtime_blocked_by": [
-      "https://github.com/CrossGL/crosstl/issues/1750"
+      "https://github.com/CrossGL/crosstl/issues/1462",
+      "https://github.com/CrossGL/crosstl/issues/1735"
     ]
   },
   "pointer_reinterpretation_status": {
@@ -1097,10 +1157,12 @@
     "https://github.com/CrossGL/crosstl/issues/1671",
     "https://github.com/CrossGL/crosstl/issues/1672",
     "https://github.com/CrossGL/crosstl/issues/1696",
+    "https://github.com/CrossGL/crosstl/issues/1735",
     "https://github.com/CrossGL/crosstl/issues/1750",
     "https://github.com/CrossGL/crosstl/issues/1786",
     "https://github.com/CrossGL/crosstl/issues/1312",
     "https://github.com/CrossGL/crosstl/issues/1376",
+    "https://github.com/CrossGL/crosstl/issues/1462",
     "https://github.com/CrossGL/crosstl/issues/1676",
     "https://github.com/CrossGL/crosstl/issues/1388",
     "https://github.com/CrossGL/crosstl/issues/1471",

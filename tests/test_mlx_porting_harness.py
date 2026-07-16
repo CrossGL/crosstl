@@ -2,7 +2,6 @@ import hashlib
 import importlib.util
 import json
 import re
-import shutil
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -52,12 +51,52 @@ def test_mlx_porting_contract_uses_exact_pinned_revision():
     assert expected_gaps["commit"] == PINNED_MLX_COMMIT
 
 
+def _load_rms_norm_fixture_metadata():
+    return json.loads(
+        (
+            RMS_NORM_FIXTURE_ROOT / "rms_norm_specialization.fixture-metadata.json"
+        ).read_text(encoding="utf-8")
+    )
+
+
 def _prepare_reduced_rms_norm_checkout(module, tmp_path, monkeypatch):
     mlx_root = tmp_path / "mlx"
     source_path = mlx_root / module.MLX_RMS_NORM_SOURCE
     source_path.parent.mkdir(parents=True)
-    shutil.copyfile(
-        RMS_NORM_FIXTURE_ROOT / "rms_norm_specialization.metal", source_path
+    host_entry_points = _load_rms_norm_fixture_metadata()["hostNamedEntryPoints"]
+    instantiations = []
+    for index, entry_point in enumerate(host_entry_points):
+        template = (
+            "rms_looped_fixture"
+            if "_looped" in entry_point
+            else "rms_single_row_fixture"
+        )
+        instantiations.append(
+            f'instantiate_kernel("{entry_point}", {template}, {index})'
+        )
+    source_path.write_text(
+        """#include <metal_stdlib>
+using namespace metal;
+
+constant bool has_w [[function_constant(20)]];
+
+template <int TAG>
+[[kernel]] void rms_single_row_fixture(
+    device float* output [[buffer(0)]],
+    uint index [[thread_position_in_grid]]) {
+  output[index] = (has_w ? 1.0f : 0.0f) + float(TAG);
+}
+
+template <int TAG>
+[[kernel]] void rms_looped_fixture(
+    device float* output [[buffer(0)]],
+    uint index [[thread_position_in_grid]],
+    uint lsize [[threads_per_threadgroup]]) {
+  output[index] = (has_w ? 1.0f : 0.0f) + float(TAG) + float(lsize);
+}
+
+""" + "\n".join(instantiations) + "\n",
+        encoding="utf-8",
     )
     source_hash = hashlib.sha256(source_path.read_bytes()).hexdigest()
     monkeypatch.setattr(module, "MLX_RMS_NORM_SHA256", source_hash)
@@ -6579,11 +6618,7 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
 
 def test_rms_norm_contract_fixture_matches_pinned_harness_configuration():
     module = _load_rms_norm_harness()
-    metadata = json.loads(
-        (
-            RMS_NORM_FIXTURE_ROOT / "rms_norm_specialization.fixture-metadata.json"
-        ).read_text(encoding="utf-8")
-    )
+    metadata = _load_rms_norm_fixture_metadata()
 
     assert module.MLX_COMMIT == "4367c73b60541ddd5a266ce4644fd93d20223b6e"
     assert module.MLX_RMS_NORM_SHA256 == (
@@ -6595,11 +6630,60 @@ def test_rms_norm_contract_fixture_matches_pinned_harness_configuration():
         "id": module.RMS_NORM_FUNCTION_CONSTANT_ID,
         "required": True,
     }
-    assert metadata["directx"]["profile"] == module.RMS_NORM_DIRECTX_PROFILE
-    assert metadata["directx"]["variants"] == list(module.RMS_NORM_DIRECTX_VARIANTS)
-    assert metadata["opengl"] == {"deferred": True, "constantId": 20}
+    assert module.RMS_NORM_HOST_ENTRY_POINTS == (
+        "rms_loopedbfloat16",
+        "rms_loopedfloat16",
+        "rms_loopedfloat32",
+        "rmsbfloat16",
+        "rmsfloat16",
+        "rmsfloat32",
+        "vjp_rms_loopedbfloat16",
+        "vjp_rms_loopedfloat16",
+        "vjp_rms_loopedfloat32",
+        "vjp_rmsbfloat16",
+        "vjp_rmsfloat16",
+        "vjp_rmsfloat32",
+    )
+    assert metadata["hostNamedEntryPoints"] == list(module.RMS_NORM_HOST_ENTRY_POINTS)
+    assert len(metadata["hostNamedEntryPoints"]) == 12
+    assert module.RMS_NORM_EXPECTED_ENTRY_POINT_COUNT == 12
+    assert (
+        sum(
+            "_looped" in entry_point for entry_point in metadata["hostNamedEntryPoints"]
+        )
+        == module.RMS_NORM_LOOPED_ENTRY_POINT_COUNT
+        == 6
+    )
+    assert metadata["representativeWorkgroupContract"] == {
+        "hostSource": "mlx/backend/metal/normalization.cpp",
+        "hostLines": "52-91,137-197",
+        "singleRowFormula": "[32 * ceil_div(ceil_div(axis_size, 4), 32), 1, 1]",
+        "loopedFormula": "[maxTotalThreadsPerThreadgroup, 1, 1]",
+        "workgroupSizes": [[32, 1, 1], [64, 1, 1]],
+        "upstreamHostValid": True,
+        "completeRuntimeCoverage": False,
+    }
+    assert metadata["directx"] == {
+        "profile": module.RMS_NORM_DIRECTX_PROFILE,
+        "libraryArtifactCount": 2,
+        "hostNamedEntryCountPerArtifact": 12,
+        "compiledEntryPointCountPerVariant": 1,
+        "compilerRunCount": 2,
+        "variants": list(module.RMS_NORM_DIRECTX_VARIANTS),
+    }
+    assert metadata["opengl"] == {
+        "deferred": True,
+        "constantId": 20,
+        "standaloneArtifactCount": 24,
+        "standaloneArtifactCountPerVariant": 12,
+        "compiledArtifactCount": 24,
+        "validatedArtifactCount": 24,
+        "variants": list(module.RMS_NORM_OPENGL_VARIANTS),
+    }
     assert metadata["claims"] == {
         "translationAndNativeCompilationOnly": True,
+        "representativeHostValidWorkgroupSizes": True,
+        "completeRuntimeCoverage": False,
         "numericalRuntimeParity": False,
         "fullMlxTestSuite": False,
         "runtimeBlockedBy": list(module.RMS_NORM_RUNTIME_BLOCKERS),
@@ -6612,12 +6696,51 @@ def test_rms_norm_contract_fixture_matches_pinned_harness_configuration():
     status = expected_gaps["rms_norm_specialization_status"]
     assert status["source"] == module.MLX_RMS_NORM_SOURCE
     assert status["source_sha256"] == module.MLX_RMS_NORM_SHA256
+    assert status["host_named_entry_count"] == 12
+    assert status["representative_workgroup_contract"] == {
+        "host_source": "mlx/backend/metal/normalization.cpp",
+        "host_lines": "52-91,137-197",
+        "single_row_formula": "[32 * ceil_div(ceil_div(axis_size, 4), 32), 1, 1]",
+        "looped_formula": "[maxTotalThreadsPerThreadgroup, 1, 1]",
+        "workgroup_sizes": [[32, 1, 1], [64, 1, 1]],
+        "upstream_host_valid": True,
+        "complete_runtime_coverage": False,
+    }
+    assert status["directx"]["variants"] == [
+        {
+            "name": variant["name"],
+            "selector": variant["selector"],
+            "selector_kind": variant["selectorKind"],
+            "value": variant["value"],
+            "workgroup_size": variant["workgroupSize"],
+        }
+        for variant in module.RMS_NORM_DIRECTX_VARIANTS
+    ]
     assert status["directx"]["native_compilation"] == ("required-on-windows-ci")
+    assert status["directx"]["library_artifact_count"] == 2
+    assert status["directx"]["execution_entry_count_per_artifact"] == 12
+    assert status["directx"]["generated_numthreads_count_per_artifact"] == 12
+    assert status["directx"]["compiled_entry_count_per_variant"] == 1
+    assert status["directx"]["compiler_run_count"] == 2
+    assert status["opengl"]["variants"] == [
+        {
+            "name": variant["name"],
+            "workgroup_size": variant["workgroupSize"],
+        }
+        for variant in module.RMS_NORM_OPENGL_VARIANTS
+    ]
     assert status["opengl"]["native_compilation"] == "required-on-linux-ci"
+    assert status["opengl"]["standalone_artifact_count"] == 24
+    assert status["opengl"]["standalone_artifact_count_per_variant"] == 12
+    assert status["opengl"]["compiled_artifact_count"] == 24
+    assert status["opengl"]["validated_artifact_count"] == 24
     assert status["numerical_execution_included"] is False
+    assert status["numerical_parity_claimed"] is False
     assert status["runtime_parity_claimed"] is False
+    assert status["complete_runtime_coverage_claimed"] is False
     assert status["full_mlx_test_suite_included"] is False
     assert status["runtime_blocked_by"] == list(module.RMS_NORM_RUNTIME_BLOCKERS)
+    assert set(status["runtime_blocked_by"]) <= set(expected_gaps["tracked_issues"])
 
 
 def test_rms_norm_checkout_verifies_revision_and_source_hash(tmp_path, monkeypatch):
@@ -6671,44 +6794,83 @@ def test_rms_norm_directx_variants_translate_through_project_api(tmp_path, monke
     assert result["status"] == "passed"
     assert result["runtimeBlockedBy"] == list(module.RMS_NORM_RUNTIME_BLOCKERS)
     assert result["artifactCount"] == 2
+    assert result["executionEntryCountPerArtifact"] == 12
     assert result["runtimeParityClaimed"] is False
     assert result["numericalExecutionIncluded"] is False
     assert result["nativeCompilation"]["status"] == "not-required"
+    assert result["nativeCompilation"]["compiledArtifactCount"] == 0
+    assert result["nativeCompilation"]["runs"] == []
     variants = {variant["name"]: variant for variant in result["variants"]}
     assert set(variants) == {
-        "has_w_false_by_name",
-        "has_w_true_by_id",
+        variant["name"] for variant in module.RMS_NORM_DIRECTX_VARIANTS
     }
-    assert variants["has_w_false_by_name"]["selector"] == "has_w"
-    assert variants["has_w_false_by_name"]["selectorKind"] == "name"
-    assert variants["has_w_false_by_name"]["value"] is False
-    assert variants["has_w_false_by_name"]["generatedStaticConst"] == (
-        "static const bool has_w = false;"
-    )
-    assert variants["has_w_true_by_id"]["selector"] == "20"
-    assert variants["has_w_true_by_id"]["selectorKind"] == "id"
-    assert variants["has_w_true_by_id"]["value"] is True
-    assert variants["has_w_true_by_id"]["generatedStaticConst"] == (
-        "static const bool has_w = true;"
-    )
-    assert all(
-        variant["representativeEntryPoint"] == "CSMain" for variant in variants.values()
-    )
+    for expected in module.RMS_NORM_DIRECTX_VARIANTS:
+        variant = variants[expected["name"]]
+        assert variant["selector"] == expected["selector"]
+        assert variant["selectorKind"] == expected["selectorKind"]
+        assert variant["value"] is expected["value"]
+        assert variant["workgroupSize"] == expected["workgroupSize"]
+        assert variant["valueProvenance"] == {
+            "kind": "project-variant",
+            "path": (
+                f"project.variants.{expected['name']}.specialization_constants."
+                f"{expected['selector']}"
+            ),
+            "selector": expected["selector"],
+            "selectorKind": expected["selectorKind"],
+            "variant": expected["name"],
+        }
+        assert variant["generatedStaticConst"] == (
+            "static const bool has_w = " + ("true;" if expected["value"] else "false;")
+        )
+        assert variant["representativeEntryPoint"] == "CSMain"
+        execution = variant["execution"]
+        assert execution["hostNamedMaterializationCount"] == 12
+        assert execution["executionEntryCount"] == 12
+        assert execution["generatedNumthreadsContractCount"] == 12
+        assert execution["consumedWorkgroupProjectionCount"] == 6
+        assert execution["sourceEntryPoints"] == list(module.RMS_NORM_HOST_ENTRY_POINTS)
+        assert execution["executionIdentity"]["algorithm"] == "sha256"
+        assert re.fullmatch(r"[0-9a-f]{64}", execution["executionIdentity"]["value"])
     report = json.loads(
         (report_dir / "rms-norm-directx-variants.json").read_text(encoding="utf-8")
     )
-    assert report["summary"]["artifactsByVariant"] == {
-        "has_w_false_by_name": {
-            "artifactCount": 1,
-            "translatedCount": 1,
-            "failedCount": 0,
-        },
-        "has_w_true_by_id": {
-            "artifactCount": 1,
-            "translatedCount": 1,
-            "failedCount": 0,
-        },
+    expected_workgroup_sizes = {
+        variant["name"]: variant["workgroupSize"]
+        for variant in module.RMS_NORM_DIRECTX_VARIANTS
     }
+    assert report["project"]["variantWorkgroupSizes"] == expected_workgroup_sizes
+    assert report["summary"]["artifactsByVariant"] == {
+        variant_name: {
+            "artifactCount": 1,
+            "translatedCount": 1,
+            "failedCount": 0,
+        }
+        for variant_name in expected_workgroup_sizes
+    }
+    assert len(report["artifacts"]) == 2
+    for artifact in report["artifacts"]:
+        variant_name = artifact["variant"]
+        workgroup_size = expected_workgroup_sizes[variant_name]
+        execution = artifact["execution"]
+        assert execution["sourceEntryPoints"] == list(module.RMS_NORM_HOST_ENTRY_POINTS)
+        assert execution["provenance"] == {
+            "kind": "project-variant",
+            "path": f"project.variants.{variant_name}.workgroup_size",
+            "variant": variant_name,
+        }
+        assert len(execution["entryPoints"]) == 12
+        assert all(
+            entry["workgroupSize"] == workgroup_size
+            for entry in execution["entryPoints"]
+        )
+        generated = (mlx_root / artifact["path"]).read_text(encoding="utf-8")
+        attribute = (
+            f"[numthreads({workgroup_size[0]}, {workgroup_size[1]}, "
+            f"{workgroup_size[2]})]"
+        )
+        assert generated.count(attribute) == 12
+        assert generated.count(variants[variant_name]["generatedStaticConst"]) == 1
 
 
 def test_rms_norm_opengl_translation_retains_deferred_specialization(
@@ -6728,11 +6890,15 @@ def test_rms_norm_opengl_translation_retains_deferred_specialization(
     )
 
     assert result["status"] == "passed"
-    assert result["artifactCount"] == 1
+    assert result["artifactCount"] == 24
+    assert result["artifactCountPerVariant"] == 12
     assert result["runtimeParityClaimed"] is False
     assert result["numericalExecutionIncluded"] is False
     assert result["runtimeBlockedBy"] == list(module.RMS_NORM_RUNTIME_BLOCKERS)
     assert result["nativeCompilation"]["status"] == "not-required"
+    assert result["nativeCompilation"]["compiledArtifactCount"] == 0
+    assert result["nativeCompilation"]["validatedArtifactCount"] == 0
+    assert result["nativeCompilation"]["runs"] == []
     specialization = result["specializationConstant"]
     assert specialization["name"] == "has_w"
     assert specialization["id"] == 20
@@ -6743,12 +6909,91 @@ def test_rms_norm_opengl_translation_retains_deferred_specialization(
         "layout(constant_id = 20) const bool has_w = false;"
     )
     assert specialization["specializationMaterialization"]["mode"] == "deferred"
+    variants = {variant["name"]: variant for variant in result["variants"]}
+    assert set(variants) == {
+        variant["name"] for variant in module.RMS_NORM_OPENGL_VARIANTS
+    }
+    for expected in module.RMS_NORM_OPENGL_VARIANTS:
+        variant = variants[expected["name"]]
+        assert variant["workgroupSize"] == expected["workgroupSize"]
+        assert variant["artifactCount"] == 12
+        assert variant["executionEntryCount"] == 12
+        assert variant["generatedLocalSizeContractCount"] == 12
+        artifacts = variant["artifacts"]
+        assert [artifact["sourceEntryPoint"] for artifact in artifacts] == list(
+            module.RMS_NORM_HOST_ENTRY_POINTS
+        )
+        for artifact in artifacts:
+            assert artifact["targetEntryPoint"] == "main"
+            assert artifact["workgroupSize"] == expected["workgroupSize"]
+            assert artifact["generatedLocalSizeContract"] == (
+                "layout(local_size_x = "
+                f"{expected['workgroupSize'][0]}, local_size_y = "
+                f"{expected['workgroupSize'][1]}, local_size_z = "
+                f"{expected['workgroupSize'][2]}) in;"
+            )
+            assert artifact["consumedWorkgroupProjectionCount"] == (
+                1 if "_looped" in artifact["sourceEntryPoint"] else 0
+            )
+            for identity_key in ("executionIdentity", "executionEntryIdentity"):
+                assert artifact[identity_key]["algorithm"] == "sha256"
+                assert re.fullmatch(r"[0-9a-f]{64}", artifact[identity_key]["value"])
     report = json.loads(
         (report_dir / "rms-norm-opengl-deferred.json").read_text(encoding="utf-8")
     )
-    constant = report["artifacts"][0]["specializationConstants"][0]
-    assert constant["valueProvenance"] == {"kind": "runtime-override-required"}
-    assert "concreteValue" not in constant
+    expected_workgroup_sizes = {
+        variant["name"]: variant["workgroupSize"]
+        for variant in module.RMS_NORM_OPENGL_VARIANTS
+    }
+    assert report["project"]["variantWorkgroupSizes"] == expected_workgroup_sizes
+    assert report["summary"]["artifactsByVariant"] == {
+        variant_name: {
+            "artifactCount": 12,
+            "translatedCount": 12,
+            "failedCount": 0,
+        }
+        for variant_name in expected_workgroup_sizes
+    }
+    assert len(report["artifacts"]) == 24
+    artifact_identities = set()
+    for artifact in report["artifacts"]:
+        variant_name = artifact["variant"]
+        source_entry = artifact["entryPoint"]["source"]
+        artifact_identities.add((variant_name, source_entry))
+        assert artifact["entryPoint"] == {
+            "source": source_entry,
+            "target": "main",
+            "stage": "compute",
+        }
+        assert artifact["provenance"] == {
+            "pipeline": "entry-scoped-translate",
+            "intermediate": "crossgl",
+        }
+        execution = artifact["execution"]
+        assert execution["sourceEntryPoints"] == [source_entry]
+        assert execution["provenance"] == {
+            "kind": "project-variant",
+            "path": f"project.variants.{variant_name}.workgroup_size",
+            "variant": variant_name,
+        }
+        assert len(execution["entryPoints"]) == 1
+        assert execution["entryPoints"][0]["workgroupSize"] == (
+            expected_workgroup_sizes[variant_name]
+        )
+        constant = artifact["specializationConstants"][0]
+        assert constant["valueProvenance"] == {"kind": "runtime-override-required"}
+        assert "concreteValue" not in constant
+        generated = (mlx_root / artifact["path"]).read_text(encoding="utf-8")
+        local_size = variants[variant_name]["artifacts"][
+            list(module.RMS_NORM_HOST_ENTRY_POINTS).index(source_entry)
+        ]["generatedLocalSizeContract"]
+        assert generated.count(local_size) == 1
+        assert generated.count(specialization["generatedContract"]) == 1
+    assert artifact_identities == {
+        (variant["name"], source_entry)
+        for variant in module.RMS_NORM_OPENGL_VARIANTS
+        for source_entry in module.RMS_NORM_HOST_ENTRY_POINTS
+    }
 
 
 def test_rms_norm_native_toolchain_gates_compile_generated_artifacts(
@@ -6767,8 +7012,25 @@ def test_rms_norm_native_toolchain_gates_compile_generated_artifacts(
         artifacts_by_variant[variant["name"]] = {
             "path": artifact_path.relative_to(mlx_root).as_posix()
         }
-    opengl_artifact = work_dir / "artifacts" / "rms_norm.glsl"
-    opengl_artifact.write_text("generated GLSL", encoding="utf-8")
+    opengl_artifacts = []
+    for variant in module.RMS_NORM_OPENGL_VARIANTS:
+        for source_entry in module.RMS_NORM_HOST_ENTRY_POINTS:
+            artifact_path = (
+                work_dir / "artifacts" / variant["name"] / f"{source_entry}.glsl"
+            )
+            artifact_path.parent.mkdir(parents=True, exist_ok=True)
+            artifact_path.write_text("generated GLSL", encoding="utf-8")
+            opengl_artifacts.append(
+                {
+                    "path": artifact_path.relative_to(mlx_root).as_posix(),
+                    "variant": variant["name"],
+                    "entryPoint": {
+                        "source": source_entry,
+                        "target": "main",
+                        "stage": "compute",
+                    },
+                }
+            )
     commands = []
 
     def fake_run_command(name, command, *, log_dir, timeout_seconds=180):
@@ -6792,7 +7054,9 @@ def test_rms_norm_native_toolchain_gates_compile_generated_artifacts(
 
     monkeypatch.setattr(module, "_run_command", fake_run_command)
     monkeypatch.setattr(
-        module, "_representative_directx_entry_point", lambda _path: "CSMain"
+        module,
+        "_representative_directx_entry_point",
+        lambda *_args: "CSMain",
     )
     monkeypatch.setattr(
         module,
@@ -6811,9 +7075,14 @@ def test_rms_norm_native_toolchain_gates_compile_generated_artifacts(
 
     assert directx["status"] == "compiled"
     assert directx["compiledArtifactCount"] == 2
+    assert len(directx["runs"]) == 2
     assert [run["entryPoint"] for run in directx["runs"]] == [
         "CSMain",
         "CSMain",
+    ]
+    assert [run["workgroupSize"] for run in directx["runs"]] == [
+        [32, 1, 1],
+        [64, 1, 1],
     ]
     dxc_commands = [
         command
@@ -6825,7 +7094,7 @@ def test_rms_norm_native_toolchain_gates_compile_generated_artifacts(
 
     monkeypatch.setattr(module, "sys", SimpleNamespace(platform="linux"))
     opengl = module._compile_opengl(
-        opengl_artifact,
+        opengl_artifacts,
         mlx_root=mlx_root,
         work_dir=work_dir,
         log_dir=log_dir,
@@ -6833,22 +7102,41 @@ def test_rms_norm_native_toolchain_gates_compile_generated_artifacts(
     )
 
     assert opengl["status"] == "compiled-and-validated"
-    assert opengl["compiledArtifactCount"] == 1
-    glslang_command = next(
-        command for name, command in commands if name == "compile-rmsnorm-opengl"
-    )
-    assert glslang_command[1:7] == [
-        "--target-env",
-        "opengl",
-        "--target-env",
-        "spirv1.3",
-        "-S",
-        "comp",
+    assert opengl["compiledArtifactCount"] == 24
+    assert opengl["validatedArtifactCount"] == 24
+    assert len(opengl["runs"]) == 24
+    assert {(run["variant"], run["sourceEntryPoint"]) for run in opengl["runs"]} == {
+        (variant["name"], source_entry)
+        for variant in module.RMS_NORM_OPENGL_VARIANTS
+        for source_entry in module.RMS_NORM_HOST_ENTRY_POINTS
+    }
+    assert all(run["targetEntryPoint"] == "main" for run in opengl["runs"])
+    glslang_commands = [
+        command
+        for name, command in commands
+        if name.startswith("compile-rmsnorm-opengl-")
     ]
-    spirv_command = next(
-        command for name, command in commands if name == "validate-rmsnorm-opengl-spirv"
+    assert len(glslang_commands) == 24
+    assert all(
+        command[1:7]
+        == [
+            "--target-env",
+            "opengl",
+            "--target-env",
+            "spirv1.3",
+            "-S",
+            "comp",
+        ]
+        for command in glslang_commands
     )
-    assert spirv_command[1:3] == ["--target-env", "spv1.3"]
+    spirv_commands = [
+        command
+        for name, command in commands
+        if name.startswith("validate-rmsnorm-opengl-")
+    ]
+    assert len(spirv_commands) == 24
+    assert all(command[1:3] == ["--target-env", "spv1.3"] for command in spirv_commands)
+    assert len(commands) == 50
 
 
 def test_mlx_workflow_runs_platform_native_rms_norm_specialization_proof():
