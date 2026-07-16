@@ -134,9 +134,11 @@ The current harness verifies:
   In the CI-required mode every artifact compiles for OpenGL/SPIR-V 1.3 and
   passes `spirv-val`. This is native artifact validation only; the gate does not
   run the kernels or establish runtime parity;
-- on Linux CI, full project materialization of `gemv.metal` to OpenGL followed
-  by native GLSL compilation and SPIR-V 1.3 validation for all 225 source
-  specializations represented by the generated artifact;
+- full project materialization of pinned `gemv.metal` for OpenGL as a strict
+  expected frontier. All 225 source specializations must materialize, after
+  which translation must report the exact tracked workgroup-pointer diagnostic
+  in one failed artifact record and emit no target file. This check performs no
+  native validation or runtime execution;
 - on Linux CI, full project materialization and translation of `gemv.metal` to
   Vulkan produces 225 specializations and 224 `GLCompute` entry points. The
   generated artifact passes both `spirv-as` and `spirv-val` for `vulkan1.1`
@@ -270,8 +272,8 @@ python demos/integrations/mlx/run_mlx_porting.py \
 ```
 
 On Linux, install the OpenGL, SPIR-V, and Vulkan runtime dependencies to require
-OpenGL compilation and native execution as well as Vulkan validation and native
-execution of the generated MLX `arange` artifacts:
+the clean OpenGL compiler gates, the pinned GEMV expected frontier, and native
+OpenGL and Vulkan execution of the generated MLX `arange` artifacts:
 
 ```bash
 sudo apt-get update
@@ -280,7 +282,7 @@ python -m pip install moderngl==5.12.0 PyOpenGL==3.1.10 vulkan==1.3.275.1
 python demos/integrations/mlx/run_mlx_porting.py \
   --mlx-root /tmp/mlx \
   --require-opengl-frontier-toolchain \
-  --require-opengl-gemv-toolchain \
+  --require-opengl-gemv-frontier \
   --require-opengl-native-runtime \
   --require-vulkan-gemv-toolchain \
   --require-vulkan-toolchain \
@@ -389,7 +391,33 @@ concrete-backing failure. Translation now fails closed because the helper's
 workgroup access range cannot be proven. No GLSL artifact is emitted, so
 `glslangValidator`, runtime execution, and numerical parity do not apply to this
 check yet. [#1671](https://github.com/CrossGL/crosstl/issues/1671) remains open
-for the range-proof contract. CrossGL/crosstl#1672 tracks owner-dependent
+for the range-proof contract.
+
+The separate pinned `gemv.metal` OpenGL frontier uses the same 4,096
+specialization limit and 2,097,152-item materialization work budget. It requires
+SHA-256 `c34db77e61c1fea01f7f5d319a0bec1029a253e54d66bbce9009f32fe828ce9f`,
+one source unit, one failed artifact record, zero translated artifacts, zero
+emitted target files, and all 225 specializations materialized with no
+unsupported records. The required diagnostic is
+`project.translate.opengl-workgroup-pointer-unsupported` with capability
+`opengl.workgroup-pointer-lowering`; it must retain function
+`GEMVKernel_float_1_8_1_32_4_4_0__run`, parameter and backing `tgp_memory`,
+offset `0`, and reason `unprovable-view-access`. The concrete index derivation is
+`sgN = simd_gid % 8`, `simdM = simd_gid / 8`, `bm = simdM * 4`, and
+`tgp_results = tgp_memory + sgN * 8 + bm`. The witness `simd_gid == 16`
+produces base offset `8`, which is in bounds. The later guarded reduction can
+add relative index `59`, reaching element `67`; the 64-element backing's highest
+valid element index is `63`.
+[#1671](https://github.com/CrossGL/crosstl/issues/1671) tracks backing and range
+propagation. Exact workgroup-size specialization and required subgroup-width
+specialization remain tracked by
+[#1750](https://github.com/CrossGL/crosstl/issues/1750) and
+[#1786](https://github.com/CrossGL/crosstl/issues/1786), respectively. Because
+translation emits no GLSL artifact, this frontier attempts no native compiler
+or runtime validation and makes no runtime or numerical-parity claim. Compiler
+acceptance alone would not prove those execution contracts.
+
+CrossGL/crosstl#1672 tracks owner-dependent
 `constexpr` helper calls in quantized struct static members.
 CrossGL/crosstl#1491 tracks remaining qualified-static-constant materialization
 outside the compiler-validated DirectX frontier.
@@ -495,9 +523,6 @@ Future scouts should add issue-backed blockers only when there are
 concrete repros. Host runtime integration gaps should be handled in repository
 integration code or downstream runtime adapters, not hidden as shader
 translation successes.
-The full GEMV OpenGL gate accepts only the reserved double-underscore identifier
-warnings tracked in CrossGL/crosstl#1513; any other native compiler warning
-fails the check.
 The full GEMV Vulkan gate materializes all 225 source specializations and emits
 224 `GLCompute` entry points. The generated artifact passes both `spirv-as` and
 `spirv-val` for `vulkan1.1`, with zero semantic warnings and no known codegen

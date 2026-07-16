@@ -2155,7 +2155,8 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "--require-metal-toolchain" in mlx_porting
     assert "--require-directx-toolchain" in mlx_porting
     assert "--require-opengl-frontier-toolchain" in mlx_porting
-    assert "--require-opengl-gemv-toolchain" in mlx_porting
+    assert "--require-opengl-gemv-frontier" in mlx_porting
+    assert "--require-opengl-gemv-toolchain" not in mlx_porting
     assert "--require-vulkan-gemv-toolchain" in mlx_porting
     assert "--require-vulkan-native-runtime" in mlx_porting
     assert "--require-opengl-native-runtime" in mlx_porting

@@ -156,7 +156,7 @@ jobs:
               --mode reduced-frontier \
               --mlx-root mlx-upstream \
               --require-opengl-frontier-toolchain \
-              --require-opengl-gemv-toolchain \
+              --require-opengl-gemv-frontier \
               --require-opengl-native-runtime \
               --require-vulkan-gemv-toolchain \
               --require-vulkan-toolchain \

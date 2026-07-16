@@ -3060,183 +3060,308 @@ def test_fft_opengl_pointer_frontier_rejects_changed_provenance(
         module._check_fft_opengl_workgroup_pointer_frontier(*paths, "python")
 
 
-def _prepare_gemv_opengl_check(module, tmp_path, generated):
+def _prepare_gemv_opengl_frontier_check(module, tmp_path):
     mlx_root = tmp_path / "mlx"
     work_dir = mlx_root / ".crosstl-mlx-porting"
     config_dir = work_dir / "configs"
     report_dir = work_dir / "reports"
     log_dir = work_dir / "logs"
-    generated_path = work_dir / "out" / "opengl" / "gemv.glsl"
-    for path in (config_dir, report_dir, log_dir, generated_path.parent):
+    for path in (config_dir, report_dir, log_dir):
         path.mkdir(parents=True, exist_ok=True)
-    generated_path.write_text(generated, encoding="utf-8")
+
+    artifact_path = (
+        work_dir / "out-gemv-opengl-frontier" / "opengl" / module.MLX_GEMV_SOURCE
+    ).with_suffix(".glsl")
+    relative_artifact_path = artifact_path.relative_to(mlx_root).as_posix()
+    source_hash = {"algorithm": "sha256", "value": module.MLX_GEMV_SHA256}
     report = {
-        "summary": {"translatedCount": 1, "failedCount": 0},
+        "kind": "crosstl-project-portability-report",
+        "summary": {
+            "unitCount": 1,
+            "skippedCount": 0,
+            "targetCount": 1,
+            "artifactCount": 1,
+            "translatedCount": 0,
+            "failedCount": 1,
+            "diagnosticCounts": {"error": 1, "note": 0, "warning": 0},
+            "diagnosticsByCode": {module.GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE: 1},
+            "missingCapabilityCounts": {
+                module.GEMV_OPENGL_EXPECTED_MISSING_CAPABILITY: 1
+            },
+            "artifactProvenanceByPipeline": {"single-file-translate": 1},
+            "artifactProvenanceByIntermediate": {"crossgl": 1},
+        },
+        "units": [
+            {
+                "id": module.MLX_GEMV_SOURCE,
+                "path": module.MLX_GEMV_SOURCE,
+                "sourceBackend": "metal",
+                "extension": ".metal",
+                "sourceHash": source_hash,
+                "sourceSizeBytes": module.MLX_GEMV_SOURCE_SIZE_BYTES,
+            }
+        ],
+        "diagnostics": [
+            {
+                "severity": "error",
+                "code": module.GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE,
+                "message": module.GEMV_OPENGL_EXPECTED_MESSAGE,
+                "location": {"file": module.MLX_GEMV_SOURCE},
+                "target": "opengl",
+                "sourceBackend": "metal",
+                "missingCapabilities": [module.GEMV_OPENGL_EXPECTED_MISSING_CAPABILITY],
+                "details": {
+                    "sourcePath": module.MLX_GEMV_SOURCE,
+                    "targetArtifact": relative_artifact_path,
+                    "workgroupPointer": module.GEMV_OPENGL_EXPECTED_POINTER_EVIDENCE,
+                },
+            }
+        ],
         "artifacts": [
             {
                 "source": module.MLX_GEMV_SOURCE,
+                "sourceBackend": "metal",
                 "target": "opengl",
-                "path": generated_path.relative_to(mlx_root).as_posix(),
-                "status": "translated",
+                "path": relative_artifact_path,
+                "status": "failed",
+                "error": module.GEMV_OPENGL_EXPECTED_MESSAGE,
+                "sourceHash": source_hash,
+                "sourceSizeBytes": module.MLX_GEMV_SOURCE_SIZE_BYTES,
+                "provenance": {
+                    "intermediate": "crossgl",
+                    "pipeline": "single-file-translate",
+                },
                 "templateMaterialization": {
-                    "specializationCount": module.GEMV_EXPECTED_SPECIALIZATION_COUNT
+                    "status": "materialized",
+                    "specializationCount": module.GEMV_EXPECTED_SPECIALIZATION_COUNT,
+                    "specializations": [
+                        {"materializedName": f"specialization_{index}"}
+                        for index in range(module.GEMV_EXPECTED_SPECIALIZATION_COUNT)
+                    ],
+                    "unsupported": [],
                 },
             }
         ],
     }
-    (report_dir / "gemv-opengl.json").write_text(
+    report_path = report_dir / "gemv-opengl-frontier.json"
+    report_path.write_text(
         json.dumps(report),
         encoding="utf-8",
     )
-    return mlx_root, work_dir, config_dir, report_dir, log_dir
-
-
-def _gemv_opengl_frontier_source():
-    helpers = "\n".join(
-        f"void compute_main_{index}() {{}}" for index in range(2, 1 + 224)
+    return (
+        (mlx_root, work_dir, config_dir, report_dir, log_dir),
+        report_path,
+        artifact_path,
     )
-    return f"#version 450 core\nvoid main() {{}}\n{helpers}\n"
 
 
-def test_gemv_opengl_toolchain_check_compiles_and_validates_full_artifact(
-    tmp_path,
+def _stub_gemv_opengl_frontier(
+    module,
     monkeypatch,
+    commands,
+    report_path,
+    *,
+    returncode=1,
+    emitted_path=None,
 ):
-    module = _load_harness()
-    paths = _prepare_gemv_opengl_check(
-        module,
-        tmp_path,
-        _gemv_opengl_frontier_source(),
-    )
-    commands = []
+    report_text = report_path.read_text(encoding="utf-8")
 
-    def fake_run_command(name, command, *, log_dir, **_kwargs):
-        commands.append((name, list(command)))
-        stdout_path = log_dir / f"{name}.stdout"
-        stderr_path = log_dir / f"{name}.stderr"
-        stdout_path.write_text(
-            (
-                'WARNING: identifiers containing consecutive underscores ("__") '
-                "are reserved\n"
-                if name == "validate-gemv-opengl"
-                else ""
-            ),
-            encoding="utf-8",
-        )
-        stderr_path.write_text("", encoding="utf-8")
-        if name == "validate-gemv-opengl":
-            output_path = Path(command[command.index("-o") + 1])
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_bytes(b"\x03\x02\x23\x07")
-        return module.CommandResult(name, list(command), 0, stdout_path, stderr_path)
-
-    tools = {
-        "glslangValidator": "/tools/glslangValidator",
-        "spirv-val": "/tools/spirv-val",
-    }
-    monkeypatch.setattr(module, "_run_command", fake_run_command)
-    monkeypatch.setattr(module.shutil, "which", tools.get)
-
-    result = module._check_gemv_opengl_toolchain(*paths, "python")
-
-    assert result["status"] == "passed"
-    assert result["specializationCount"] == 225
-    assert result["entryPointCount"] == 224
-    assert result["nativeValidationStatus"] == "validated"
-    assert result["nativeWarningCount"] == 1
-    assert result["nativeWarningsTrackedBy"].endswith("/1513")
-    assert result["runtimeIntegrationIncluded"] is False
-    assert [name for name, _command in commands] == [
-        "translate-gemv-opengl",
-        "validate-gemv-opengl",
-        "validate-gemv-opengl-spirv",
-    ]
-    assert commands[1][1][:5] == [
-        "/tools/glslangValidator",
-        "--target-env",
-        "opengl",
-        "--target-env",
-        "spirv1.3",
-    ]
-    assert commands[2][1][:3] == [
-        "/tools/spirv-val",
-        "--target-env",
-        "spv1.3",
-    ]
-    config = (paths[2] / "gemv-opengl.toml").read_text(encoding="utf-8")
-    assert "max_template_specializations = 4096" in config
-    assert "max_template_materialization_work = 2097152" in config
-
-
-def test_gemv_opengl_toolchain_check_rejects_materialization_residue(
-    tmp_path,
-    monkeypatch,
-):
-    module = _load_harness()
-    paths = _prepare_gemv_opengl_check(
-        module,
-        tmp_path,
-        _gemv_opengl_frontier_source() + "OffsetT unresolved_value;\n",
-    )
-    commands = []
-
-    def fake_run_command(name, command, *, log_dir, **_kwargs):
-        commands.append(name)
+    def fake_run_command(name, command, *, log_dir, **kwargs):
+        commands.append((name, list(command), kwargs))
         stdout_path = log_dir / f"{name}.stdout"
         stderr_path = log_dir / f"{name}.stderr"
         stdout_path.write_text("", encoding="utf-8")
         stderr_path.write_text("", encoding="utf-8")
-        return module.CommandResult(name, list(command), 0, stdout_path, stderr_path)
+        report_path.write_text(report_text, encoding="utf-8")
+        if emitted_path is not None:
+            emitted_path.parent.mkdir(parents=True, exist_ok=True)
+            emitted_path.write_text("#version 450 core\n", encoding="utf-8")
+        return module.CommandResult(
+            name,
+            list(command),
+            returncode,
+            stdout_path,
+            stderr_path,
+        )
 
     monkeypatch.setattr(module, "_run_command", fake_run_command)
-    monkeypatch.setattr(module.shutil, "which", lambda name: f"/tools/{name}")
-
-    with pytest.raises(
-        module.PortingCheckError,
-        match="retained unresolved materialization text",
-    ):
-        module._check_gemv_opengl_toolchain(*paths, "python")
-
-    assert commands == ["translate-gemv-opengl"]
 
 
-def test_gemv_opengl_toolchain_check_rejects_untracked_native_warning(
+def test_gemv_opengl_frontier_accepts_exact_pinned_failure(
     tmp_path,
     monkeypatch,
 ):
     module = _load_harness()
-    paths = _prepare_gemv_opengl_check(
+    paths, report_path, artifact_path = _prepare_gemv_opengl_frontier_check(
+        module, tmp_path
+    )
+    commands = []
+    _stub_gemv_opengl_frontier(module, monkeypatch, commands, report_path)
+
+    result = module._check_gemv_opengl_frontier(*paths, "python")
+
+    assert result == {
+        "name": "gemv-opengl-frontier",
+        "status": "blocked-as-expected",
+        "report": ".crosstl-mlx-porting/reports/gemv-opengl-frontier.json",
+        "source": module.MLX_GEMV_SOURCE,
+        "sourceHash": module.MLX_GEMV_SHA256,
+        "target": "opengl",
+        "artifactStatus": "failed",
+        "artifactEmitted": False,
+        "emittedTargetFileCount": 0,
+        "nativeValidationAttempted": False,
+        "nativeValidationStatus": "not-run-no-artifact",
+        "templateMaterializationStatus": "materialized",
+        "templateSpecializationCount": 225,
+        "diagnosticCode": module.GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE,
+        "missingCapability": module.GEMV_OPENGL_EXPECTED_MISSING_CAPABILITY,
+        "workgroupPointer": module.GEMV_OPENGL_EXPECTED_POINTER_EVIDENCE,
+        "provenanceStatus": "concrete-backing-preserved",
+        "accessRangeStatus": "unprovable",
+        "trackedIssues": [
+            "https://github.com/CrossGL/crosstl/issues/1671",
+            "https://github.com/CrossGL/crosstl/issues/1750",
+            "https://github.com/CrossGL/crosstl/issues/1786",
+        ],
+        "translationBlockedBy": ["https://github.com/CrossGL/crosstl/issues/1671"],
+        "executionContractBlockedBy": [
+            "https://github.com/CrossGL/crosstl/issues/1750",
+            "https://github.com/CrossGL/crosstl/issues/1786",
+        ],
+        "maxTemplateSpecializations": 4096,
+        "maxTemplateMaterializationWork": 2097152,
+        "runtimeExecutionAttempted": False,
+        "runtimeIntegrationIncluded": False,
+        "runtimeParityClaimed": False,
+    }
+    assert [name for name, _command, _kwargs in commands] == [
+        "translate-gemv-opengl-frontier"
+    ]
+    assert commands[0][2]["check"] is False
+    assert commands[0][2]["timeout_seconds"] == 900
+    assert commands[0][1][-1] == "--no-format"
+    assert not artifact_path.exists()
+    config = (paths[2] / "gemv-opengl-frontier.toml").read_text(encoding="utf-8")
+    assert f'include = ["{module.MLX_GEMV_SOURCE}"]' in config
+    assert 'targets = ["opengl"]' in config
+    assert "max_template_specializations = 4096" in config
+    assert "max_template_materialization_work = 2097152" in config
+
+
+def test_gemv_opengl_frontier_rejects_wrong_diagnostic(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_harness()
+    paths, report_path, _artifact_path = _prepare_gemv_opengl_frontier_check(
+        module, tmp_path
+    )
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["summary"]["diagnosticsByCode"] = {"project.translate.other": 1}
+    report["diagnostics"][0]["code"] = "project.translate.other"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    commands = []
+    _stub_gemv_opengl_frontier(module, monkeypatch, commands, report_path)
+
+    with pytest.raises(module.PortingCheckError, match="diagnostic summary changed"):
+        module._check_gemv_opengl_frontier(*paths, "python")
+
+    assert [name for name, _command, _kwargs in commands] == [
+        "translate-gemv-opengl-frontier"
+    ]
+
+
+def test_gemv_opengl_frontier_rejects_emitted_artifact(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_harness()
+    paths, report_path, artifact_path = _prepare_gemv_opengl_frontier_check(
+        module, tmp_path
+    )
+    commands = []
+    _stub_gemv_opengl_frontier(
         module,
-        tmp_path,
-        _gemv_opengl_frontier_source(),
+        monkeypatch,
+        commands,
+        report_path,
+        emitted_path=artifact_path,
     )
 
-    def fake_run_command(name, command, *, log_dir, **_kwargs):
-        stdout_path = log_dir / f"{name}.stdout"
-        stderr_path = log_dir / f"{name}.stderr"
-        stdout_path.write_text(
-            (
-                "WARNING: subgroup behavior changed\n"
-                if name == "validate-gemv-opengl"
-                else ""
-            ),
-            encoding="utf-8",
-        )
-        stderr_path.write_text("", encoding="utf-8")
-        if name == "validate-gemv-opengl":
-            output_path = Path(command[command.index("-o") + 1])
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_bytes(b"\x03\x02\x23\x07")
-        return module.CommandResult(name, list(command), 0, stdout_path, stderr_path)
+    with pytest.raises(module.PortingCheckError, match="emitted GLSL"):
+        module._check_gemv_opengl_frontier(*paths, "python")
 
-    monkeypatch.setattr(module, "_run_command", fake_run_command)
-    monkeypatch.setattr(module.shutil, "which", lambda name: f"/tools/{name}")
 
-    with pytest.raises(
-        module.PortingCheckError,
-        match="emitted an untracked warning",
-    ):
-        module._check_gemv_opengl_toolchain(*paths, "python")
+def test_gemv_opengl_frontier_rejects_translation_success(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_harness()
+    paths, report_path, _artifact_path = _prepare_gemv_opengl_frontier_check(
+        module, tmp_path
+    )
+    commands = []
+    _stub_gemv_opengl_frontier(
+        module,
+        monkeypatch,
+        commands,
+        report_path,
+        returncode=0,
+    )
+
+    with pytest.raises(module.PortingCheckError, match="must remain fail-closed"):
+        module._check_gemv_opengl_frontier(*paths, "python")
+
+
+def test_gemv_opengl_frontier_rejects_missing_report_provenance(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_harness()
+    paths, report_path, _artifact_path = _prepare_gemv_opengl_frontier_check(
+        module, tmp_path
+    )
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["artifacts"][0].pop("provenance")
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    commands = []
+    _stub_gemv_opengl_frontier(module, monkeypatch, commands, report_path)
+
+    with pytest.raises(module.PortingCheckError, match="artifact provenance changed"):
+        module._check_gemv_opengl_frontier(*paths, "python")
+
+
+def test_gemv_opengl_frontier_rejects_changed_specialization_count(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_harness()
+    paths, report_path, _artifact_path = _prepare_gemv_opengl_frontier_check(
+        module, tmp_path
+    )
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    materialization = report["artifacts"][0]["templateMaterialization"]
+    materialization["specializationCount"] -= 1
+    materialization["specializations"].pop()
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    commands = []
+    _stub_gemv_opengl_frontier(module, monkeypatch, commands, report_path)
+
+    with pytest.raises(module.PortingCheckError, match="specialization count changed"):
+        module._check_gemv_opengl_frontier(*paths, "python")
+
+
+def test_gemv_opengl_frontier_flag_replaces_toolchain_flag():
+    module = _load_harness()
+
+    args = module.parse_args(
+        ["--mlx-root", "/tmp/mlx", "--require-opengl-gemv-frontier"]
+    )
+
+    assert args.require_opengl_gemv_frontier is True
+    with pytest.raises(SystemExit):
+        module.parse_args(["--mlx-root", "/tmp/mlx", "--require-opengl-gemv-toolchain"])
 
 
 def _prepare_gemv_vulkan_check(module, tmp_path, generated):
@@ -4491,6 +4616,82 @@ def test_fft_opengl_evidence_records_provenance_without_artifact_claims():
     assert "No GLSL artifact is emitted" in readme
 
 
+def test_gemv_opengl_gap_records_strict_expected_frontier():
+    module = _load_harness()
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    status = gaps["opengl_gemv_frontier_status"]
+    assert status["status"] == "blocked-as-expected"
+    assert status["source"] == module.MLX_GEMV_SOURCE
+    assert status["source_sha256"] == module.MLX_GEMV_SHA256
+    assert status["source_size_bytes"] == module.MLX_GEMV_SOURCE_SIZE_BYTES
+    assert status["target"] == "opengl"
+    assert status["project_translation"] == {
+        "unit_count": 1,
+        "artifact_count": 1,
+        "translated_count": 0,
+        "failed_count": 1,
+        "emitted_target_file_count": 0,
+        "max_template_specializations": 4096,
+        "max_template_materialization_work": 2097152,
+    }
+    assert status["materialization"] == {
+        "status": "materialized",
+        "specialization_count": 225,
+        "unsupported_specialization_count": 0,
+    }
+    assert status["diagnostic"] == {
+        "code": module.GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE,
+        "missing_capability": module.GEMV_OPENGL_EXPECTED_MISSING_CAPABILITY,
+        "message": module.GEMV_OPENGL_EXPECTED_MESSAGE,
+        "workgroup_pointer": module.GEMV_OPENGL_EXPECTED_POINTER_EVIDENCE,
+    }
+    assert status["range_derivation"] == {
+        "sgN": "simd_gid % 8",
+        "simdM": "simd_gid / 8",
+        "bm": "simdM * 4",
+        "tgp_results": "tgp_memory + sgN * 8 + bm",
+        "witness_simd_gid": 16,
+        "base_offset": 8,
+        "guarded_relative_index": 59,
+        "reached_element_index": 67,
+        "backing_element_count": 64,
+        "highest_valid_element_index": 63,
+    }
+    assert status["artifact_emitted"] is False
+    assert status["native_validation_attempted"] is False
+    assert status["native_validation_status"] == "not-run-no-artifact"
+    assert status["translation_blocked_by"] == [module.GEMV_OPENGL_BACKING_RANGE_ISSUE]
+    assert status["execution_contracts"] == {
+        "workgroup_size_specialization": {
+            "status": "not-established",
+            "blocked_by": module.GEMV_OPENGL_WORKGROUP_SIZE_ISSUE,
+        },
+        "subgroup_width_specialization": {
+            "status": "not-established",
+            "blocked_by": module.GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE,
+        },
+    }
+    assert status["blocked_by"] == list(module.GEMV_OPENGL_FRONTIER_TRACKED_ISSUES)
+    assert status["runtime_execution_attempted"] is False
+    assert status["runtime_integration_included"] is False
+    assert status["runtime_parity_claimed"] is False
+    assert module.GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE in gaps["tracked_issues"]
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "--require-opengl-gemv-frontier" in readme
+    assert "--require-opengl-gemv-toolchain" not in readme
+    assert "all 225 specializations materialized" in readme
+    assert "`simd_gid == 16` produces base offset `8`, which is in bounds" in readme
+    assert "relative index `59`, reaching element `67`" in readme
+    assert "highest valid element index is `63`" in readme
+    assert "attempts no native compiler" in readme
+
+
 def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatch):
     module = _load_harness()
     mlx_root = tmp_path / "mlx"
@@ -4683,8 +4884,11 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
     )
     monkeypatch.setattr(
         module,
-        "_check_gemv_opengl_toolchain",
-        lambda *args: {"name": "gemv-opengl-toolchain", "status": "passed"},
+        "_check_gemv_opengl_frontier",
+        lambda *args: {
+            "name": "gemv-opengl-frontier",
+            "status": "blocked-as-expected",
+        },
     )
     monkeypatch.setattr(
         module,
@@ -4725,7 +4929,7 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
             require_vulkan_native_runtime=False,
             require_opengl_native_runtime=True,
             require_opengl_frontier_toolchain=True,
-            require_opengl_gemv_toolchain=True,
+            require_opengl_gemv_frontier=True,
             require_vulkan_gemv_toolchain=True,
             mode=module.REDUCED_FRONTIER_MODE,
         )
@@ -4742,7 +4946,7 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
         "arange-opengl",
         "opengl-frontier",
         "fft-opengl-workgroup-pointer-frontier",
-        "gemv-opengl-toolchain",
+        "gemv-opengl-frontier",
         "gemv-vulkan-toolchain",
         "runtime-readiness",
     ]
@@ -4756,7 +4960,7 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
     ]
     assert result["scope"]["openglFrontierToolchainRequired"] is True
     assert result["scope"]["fftOpenGLWorkgroupPointerFrontierIncluded"] is True
-    assert result["scope"]["openglGemvToolchainRequired"] is True
+    assert result["scope"]["openglGemvFrontierRequired"] is True
     assert result["scope"]["openglNativeRuntimeRequired"] is True
     assert result["scope"]["vulkanGemvToolchainRequired"] is True
     assert result["scope"]["runtimeReadinessIncluded"] is True

@@ -40,6 +40,8 @@ MLX_FFT_SOURCE = "mlx/backend/metal/kernels/fft.metal"
 MLX_FFT_SHA256 = "3a1fbb38ed64f50a49a20d0c5adb1748d9d06ea20e5931e99aa26be543cb7825"
 MLX_FFT_SOURCE_SIZE_BYTES = 3278
 MLX_GEMV_SOURCE = "mlx/backend/metal/kernels/gemv.metal"
+MLX_GEMV_SHA256 = "c34db77e61c1fea01f7f5d319a0bec1029a253e54d66bbce9009f32fe828ce9f"
+MLX_GEMV_SOURCE_SIZE_BYTES = 5383
 MLX_LAYER_NORM_SOURCE = "mlx/backend/metal/kernels/layer_norm.metal"
 MLX_LOGSUMEXP_SOURCE = "mlx/backend/metal/kernels/logsumexp.metal"
 MLX_METAL_ROUNDTRIP_SOURCE = MLX_FENCE_SOURCE
@@ -200,6 +202,39 @@ GEMV_MAX_TEMPLATE_SPECIALIZATIONS = 4096
 GEMV_MAX_TEMPLATE_MATERIALIZATION_WORK = 2097152
 GEMV_EXPECTED_SPECIALIZATION_COUNT = 225
 GEMV_EXPECTED_ENTRY_POINT_COUNT = 224
+GEMV_OPENGL_TRANSLATION_TIMEOUT_SECONDS = 900
+GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE = (
+    "project.translate.opengl-workgroup-pointer-unsupported"
+)
+GEMV_OPENGL_EXPECTED_MISSING_CAPABILITY = "opengl.workgroup-pointer-lowering"
+GEMV_OPENGL_EXPECTED_MESSAGE = (
+    "OpenGL cannot prove the workgroup pointer access range for "
+    "'GEMVKernel_float_1_8_1_32_4_4_0__run.tgp_memory' into shared backing "
+    "'tgp_memory'"
+)
+GEMV_OPENGL_EXPECTED_POINTER_EVIDENCE = {
+    "backingName": "tgp_memory",
+    "function": "GEMVKernel_float_1_8_1_32_4_4_0__run",
+    "materializationName": (
+        "GEMVKernel_float_1_8_1_32_4_4_0_run__glsl_tgp_memory_"
+        "gemv_float32_bm1_bn8_sm1_sn32_tm4_tn4_nc0_axpby0_"
+        "tgp_memory_float_64"
+    ),
+    "offsetExpression": "0",
+    "parameter": "tgp_memory",
+    "reason": "unprovable-view-access",
+}
+GEMV_OPENGL_BACKING_RANGE_ISSUE = "https://github.com/CrossGL/crosstl/issues/1671"
+GEMV_OPENGL_WORKGROUP_SIZE_ISSUE = "https://github.com/CrossGL/crosstl/issues/1750"
+GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE = "https://github.com/CrossGL/crosstl/issues/1786"
+GEMV_OPENGL_EXECUTION_TRACKED_ISSUES = (
+    GEMV_OPENGL_WORKGROUP_SIZE_ISSUE,
+    GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE,
+)
+GEMV_OPENGL_FRONTIER_TRACKED_ISSUES = (
+    GEMV_OPENGL_BACKING_RANGE_ISSUE,
+    *GEMV_OPENGL_EXECUTION_TRACKED_ISSUES,
+)
 FFT_OPENGL_MAX_TEMPLATE_SPECIALIZATIONS = 4096
 FFT_OPENGL_MAX_TEMPLATE_MATERIALIZATION_WORK = 2097152
 FFT_OPENGL_TRANSLATION_TIMEOUT_SECONDS = 900
@@ -314,6 +349,7 @@ FULL_CORPUS_TRACKED_ISSUES = (
     *FULL_CORPUS_TRANSLATION_TRACKED_ISSUES,
     *OPENGL_ARANGE_VALIDATION_TRACKED_ISSUES,
     *OPENGL_SCALED_DOT_PRODUCT_ATTENTION_TRACKED_ISSUES,
+    *GEMV_OPENGL_EXECUTION_TRACKED_ISSUES,
     *RUNTIME_READINESS_TRACKED_ISSUES,
     *FENCE_CONTRACT_TRACKED_ISSUES,
     *VULKAN_GEMV_SEMANTIC_TRACKED_ISSUES,
@@ -3452,7 +3488,7 @@ def _check_fft_opengl_workgroup_pointer_frontier(
     }
 
 
-def _check_gemv_opengl_toolchain(
+def _check_gemv_opengl_frontier(
     mlx_root: Path,
     work_dir: Path,
     config_dir: Path,
@@ -3460,32 +3496,24 @@ def _check_gemv_opengl_toolchain(
     log_dir: Path,
     python: str,
 ) -> dict[str, Any]:
-    required_tools = {
-        "glslangValidator": shutil.which("glslangValidator"),
-        "spirv-val": shutil.which("spirv-val"),
-    }
-    missing_tools = sorted(
-        name for name, resolved in required_tools.items() if resolved is None
-    )
-    _require(
-        not missing_tools,
-        "OpenGL GEMV validation requires: " + ", ".join(missing_tools),
-    )
-
-    config_path = config_dir / "gemv-opengl.toml"
-    report_path = report_dir / "gemv-opengl.json"
+    config_path = config_dir / "gemv-opengl-frontier.toml"
+    report_path = report_dir / "gemv-opengl-frontier.json"
+    output_dir = work_dir / "out-gemv-opengl-frontier"
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    report_path.unlink(missing_ok=True)
     _write_project_config(
         config_path,
         include=MLX_GEMV_SOURCE,
         targets=("opengl",),
-        output_dir=_relpath(work_dir / "out-gemv-opengl", mlx_root),
+        output_dir=_relpath(output_dir, mlx_root),
         metal_source_options={
             "max_template_specializations": GEMV_MAX_TEMPLATE_SPECIALIZATIONS,
             "max_template_materialization_work": GEMV_MAX_TEMPLATE_MATERIALIZATION_WORK,
         },
     )
     result = _run_command(
-        "translate-gemv-opengl",
+        "translate-gemv-opengl-frontier",
         [
             python,
             "-m",
@@ -3500,154 +3528,185 @@ def _check_gemv_opengl_toolchain(
         ],
         log_dir=log_dir,
         check=False,
+        timeout_seconds=GEMV_OPENGL_TRANSLATION_TIMEOUT_SECONDS,
     )
-    payload = _load_json(report_path)
-    summary = payload.get("summary", {})
-    _require(isinstance(summary, dict), "OpenGL GEMV summary must be an object")
-    if result.returncode != 0:
-        diagnostics = [
-            str(item.get("message"))
-            for item in payload.get("diagnostics", [])
-            if isinstance(item, Mapping) and isinstance(item.get("message"), str)
-        ]
-        detail = f": {diagnostics[0]}" if diagnostics else ""
-        raise PortingCheckError(f"OpenGL GEMV translation failed{detail}")
     _require(
-        summary.get("translatedCount") == 1 and summary.get("failedCount") == 0,
-        "OpenGL GEMV report did not contain one clean translated artifact",
+        result.returncode == 1,
+        "OpenGL GEMV translation must remain fail-closed at its pinned "
+        "workgroup-pointer frontier",
+    )
+    _require(
+        report_path.is_file(),
+        "OpenGL GEMV translation did not produce a project report",
     )
 
-    artifact = next(
-        (
-            item
-            for item in payload.get("artifacts", [])
-            if isinstance(item, Mapping)
-            and item.get("source") == MLX_GEMV_SOURCE
-            and item.get("target") == "opengl"
-            and item.get("status") == "translated"
-        ),
-        None,
-    )
-    _require(isinstance(artifact, Mapping), "OpenGL GEMV artifact is missing")
-    artifact_path = artifact.get("path")
+    payload = _load_json(report_path)
     _require(
-        isinstance(artifact_path, str),
-        "OpenGL GEMV artifact path is missing",
+        payload.get("kind") == "crosstl-project-portability-report",
+        "OpenGL GEMV translation report kind changed",
     )
-    generated_path = mlx_root / artifact_path
+    summary = payload.get("summary", {})
     _require(
-        generated_path.is_file(),
-        f"OpenGL GEMV artifact is missing: {artifact_path}",
+        isinstance(summary, Mapping)
+        and summary.get("unitCount") == 1
+        and summary.get("skippedCount") == 0
+        and summary.get("targetCount") == 1
+        and summary.get("artifactCount") == 1
+        and summary.get("translatedCount") == 0
+        and summary.get("failedCount") == 1,
+        "OpenGL GEMV translation report did not retain one failed unit/artifact",
+    )
+    _require(
+        summary.get("diagnosticCounts") == {"error": 1, "note": 0, "warning": 0}
+        and summary.get("diagnosticsByCode")
+        == {GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE: 1}
+        and summary.get("missingCapabilityCounts")
+        == {GEMV_OPENGL_EXPECTED_MISSING_CAPABILITY: 1},
+        "OpenGL GEMV workgroup-pointer diagnostic summary changed",
+    )
+    _require(
+        summary.get("artifactProvenanceByPipeline") == {"single-file-translate": 1}
+        and summary.get("artifactProvenanceByIntermediate") == {"crossgl": 1},
+        "OpenGL GEMV report provenance summary changed",
+    )
+
+    units = payload.get("units", [])
+    _require(
+        isinstance(units, list) and len(units) == 1,
+        "OpenGL GEMV report must contain one source unit",
+    )
+    unit = units[0]
+    expected_source_hash = {"algorithm": "sha256", "value": MLX_GEMV_SHA256}
+    _require(
+        isinstance(unit, Mapping)
+        and unit.get("id") == MLX_GEMV_SOURCE
+        and unit.get("path") == MLX_GEMV_SOURCE
+        and unit.get("sourceBackend") == "metal"
+        and unit.get("extension") == ".metal"
+        and unit.get("sourceHash") == expected_source_hash
+        and unit.get("sourceSizeBytes") == MLX_GEMV_SOURCE_SIZE_BYTES,
+        "OpenGL GEMV source-unit provenance changed at the pinned MLX commit",
+    )
+
+    diagnostics = payload.get("diagnostics", [])
+    _require(
+        isinstance(diagnostics, list) and len(diagnostics) == 1,
+        "OpenGL GEMV report must contain one workgroup-pointer diagnostic",
+    )
+    diagnostic = diagnostics[0]
+    _require(
+        isinstance(diagnostic, Mapping)
+        and diagnostic.get("severity") == "error"
+        and diagnostic.get("code") == GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE
+        and diagnostic.get("message") == GEMV_OPENGL_EXPECTED_MESSAGE
+        and diagnostic.get("sourceBackend") == "metal"
+        and diagnostic.get("target") == "opengl"
+        and diagnostic.get("missingCapabilities")
+        == [GEMV_OPENGL_EXPECTED_MISSING_CAPABILITY],
+        "OpenGL GEMV workgroup-pointer diagnostic contract changed",
+    )
+    location = diagnostic.get("location", {})
+    _require(
+        isinstance(location, Mapping) and location.get("file") == MLX_GEMV_SOURCE,
+        "OpenGL GEMV diagnostic source changed",
+    )
+    details = diagnostic.get("details", {})
+    _require(isinstance(details, Mapping), "OpenGL GEMV diagnostic details are missing")
+
+    artifacts = payload.get("artifacts", [])
+    _require(
+        isinstance(artifacts, list) and len(artifacts) == 1,
+        "OpenGL GEMV report must contain one failed artifact record",
+    )
+    artifact = artifacts[0]
+    artifact_path = artifact.get("path") if isinstance(artifact, Mapping) else None
+    _require(
+        isinstance(artifact, Mapping)
+        and artifact.get("source") == MLX_GEMV_SOURCE
+        and artifact.get("sourceBackend") == "metal"
+        and artifact.get("target") == "opengl"
+        and artifact.get("status") == "failed"
+        and artifact.get("error") == GEMV_OPENGL_EXPECTED_MESSAGE
+        and isinstance(artifact_path, str),
+        "OpenGL GEMV failed artifact contract changed",
+    )
+    _require(
+        details
+        == {
+            "sourcePath": MLX_GEMV_SOURCE,
+            "targetArtifact": artifact_path,
+            "workgroupPointer": GEMV_OPENGL_EXPECTED_POINTER_EVIDENCE,
+        },
+        "OpenGL GEMV diagnostic lost exact workgroup-pointer provenance",
+    )
+    _require(
+        artifact.get("sourceHash") == expected_source_hash
+        and artifact.get("sourceSizeBytes") == MLX_GEMV_SOURCE_SIZE_BYTES
+        and artifact.get("provenance")
+        == {"intermediate": "crossgl", "pipeline": "single-file-translate"},
+        "OpenGL GEMV failed artifact provenance changed",
     )
 
     materialization = artifact.get("templateMaterialization", {})
     _require(
         isinstance(materialization, Mapping)
+        and materialization.get("status") == "materialized"
         and materialization.get("specializationCount")
         == GEMV_EXPECTED_SPECIALIZATION_COUNT,
-        "OpenGL GEMV artifact did not materialize the complete specialization set",
+        "OpenGL GEMV artifact specialization count changed",
     )
-    generated = generated_path.read_text(encoding="utf-8")
-    entry_point_count = len(
-        re.findall(
-            r"(?m)^void\s+(?:main|compute_main(?:_\d+)?)\s*\(",
-            generated,
-        )
-    )
+    specializations = materialization.get("specializations", [])
     _require(
-        entry_point_count == GEMV_EXPECTED_ENTRY_POINT_COUNT,
-        "OpenGL GEMV artifact did not emit the complete entry-point set",
-    )
-    residue = re.search(
-        r"BinaryOpNode|LoopedElemToLoc|\b(?:OffsetT|acc_type|nullptr)\b",
-        generated,
-    )
-    _require(
-        residue is None,
-        f"OpenGL GEMV artifact retained unresolved materialization text: {residue.group(0) if residue else ''}",
+        isinstance(specializations, list)
+        and len(specializations) == GEMV_EXPECTED_SPECIALIZATION_COUNT
+        and materialization.get("unsupported") == [],
+        "OpenGL GEMV artifact did not retain complete materialization evidence",
     )
 
-    output_path = work_dir / "validation" / "gemv-opengl.spv"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    compile_result = _run_command(
-        "validate-gemv-opengl",
-        [
-            str(required_tools["glslangValidator"]),
-            "--target-env",
-            "opengl",
-            "--target-env",
-            "spirv1.3",
-            "-S",
-            "comp",
-            str(generated_path),
-            "-o",
-            str(output_path),
-        ],
-        log_dir=log_dir,
-        check=False,
+    generated_path = (mlx_root / artifact_path).resolve()
+    _require(
+        _is_relative_to(generated_path, output_dir.resolve()),
+        "OpenGL GEMV artifact path escaped its output directory",
     )
     _require(
-        compile_result.returncode == 0,
-        "OpenGL GEMV native compilation failed; inspect validate-gemv-opengl logs",
+        not generated_path.exists(),
+        "OpenGL GEMV emitted GLSL despite its fail-closed project diagnostic",
     )
     _require(
-        output_path.is_file(),
-        "OpenGL GEMV native compilation succeeded without producing SPIR-V",
+        not output_dir.exists()
+        or not any(
+            path.is_file() or path.is_symlink() for path in output_dir.rglob("*")
+        ),
+        "OpenGL GEMV emitted target files despite its fail-closed project diagnostic",
     )
-    validation_result = _run_command(
-        "validate-gemv-opengl-spirv",
-        [
-            str(required_tools["spirv-val"]),
-            "--target-env",
-            "spv1.3",
-            str(output_path),
-        ],
-        log_dir=log_dir,
-        check=False,
-    )
-    _require(
-        validation_result.returncode == 0,
-        "OpenGL GEMV SPIR-V validation failed; inspect validate-gemv-opengl-spirv logs",
-    )
-    warning_lines = [
-        line
-        for path in (
-            compile_result.stdout_path,
-            compile_result.stderr_path,
-            validation_result.stdout_path,
-            validation_result.stderr_path,
-        )
-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
-        if "warning:" in line.lower()
-    ]
-    unexpected_warnings = [
-        line
-        for line in warning_lines
-        if 'identifiers containing consecutive underscores ("__") are reserved'
-        not in line
-    ]
-    _require(
-        not unexpected_warnings,
-        "OpenGL GEMV native compilation emitted an untracked warning: "
-        + (unexpected_warnings[0] if unexpected_warnings else ""),
-    )
+
     return {
-        "name": "gemv-opengl-toolchain",
-        "status": "passed",
+        "name": "gemv-opengl-frontier",
+        "status": "blocked-as-expected",
         "report": _relpath(report_path, mlx_root),
         "source": MLX_GEMV_SOURCE,
+        "sourceHash": MLX_GEMV_SHA256,
         "target": "opengl",
-        "specializationCount": materialization.get("specializationCount"),
-        "entryPointCount": entry_point_count,
-        "nativeValidationStatus": "validated",
-        "nativeValidator": "glslangValidator",
-        "spirvValidator": "spirv-val",
-        "nativeWarningCount": len(warning_lines),
-        "nativeWarningsTrackedBy": (
-            "https://github.com/CrossGL/crosstl/issues/1513" if warning_lines else None
-        ),
-        "nativeValidationOutput": _relpath(output_path, mlx_root),
+        "artifactStatus": "failed",
+        "artifactEmitted": False,
+        "emittedTargetFileCount": 0,
+        "nativeValidationAttempted": False,
+        "nativeValidationStatus": "not-run-no-artifact",
+        "templateMaterializationStatus": "materialized",
+        "templateSpecializationCount": GEMV_EXPECTED_SPECIALIZATION_COUNT,
+        "diagnosticCode": GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE,
+        "missingCapability": GEMV_OPENGL_EXPECTED_MISSING_CAPABILITY,
+        "workgroupPointer": dict(GEMV_OPENGL_EXPECTED_POINTER_EVIDENCE),
+        "provenanceStatus": "concrete-backing-preserved",
+        "accessRangeStatus": "unprovable",
+        "trackedIssues": list(GEMV_OPENGL_FRONTIER_TRACKED_ISSUES),
+        "translationBlockedBy": [GEMV_OPENGL_BACKING_RANGE_ISSUE],
+        "executionContractBlockedBy": list(GEMV_OPENGL_EXECUTION_TRACKED_ISSUES),
+        "maxTemplateSpecializations": GEMV_MAX_TEMPLATE_SPECIALIZATIONS,
+        "maxTemplateMaterializationWork": GEMV_MAX_TEMPLATE_MATERIALIZATION_WORK,
+        "runtimeExecutionAttempted": False,
         "runtimeIntegrationIncluded": False,
+        "runtimeParityClaimed": False,
     }
 
 
@@ -4823,8 +4882,8 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
     require_opengl_frontier_toolchain = bool(
         getattr(args, "require_opengl_frontier_toolchain", False)
     )
-    require_opengl_gemv_toolchain = bool(
-        getattr(args, "require_opengl_gemv_toolchain", False)
+    require_opengl_gemv_frontier = bool(
+        getattr(args, "require_opengl_gemv_frontier", False)
     )
     require_opengl_native_runtime = bool(
         getattr(args, "require_opengl_native_runtime", False)
@@ -4837,8 +4896,8 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
         "--require-opengl-frontier-toolchain is only valid in reduced-frontier mode",
     )
     _require(
-        not require_opengl_gemv_toolchain or args.mode == REDUCED_FRONTIER_MODE,
-        "--require-opengl-gemv-toolchain is only valid in reduced-frontier mode",
+        not require_opengl_gemv_frontier or args.mode == REDUCED_FRONTIER_MODE,
+        "--require-opengl-gemv-frontier is only valid in reduced-frontier mode",
     )
     _require(
         not require_opengl_native_runtime or args.mode == REDUCED_FRONTIER_MODE,
@@ -4955,9 +5014,9 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
                 args.python,
             )
         )
-        if require_opengl_gemv_toolchain:
+        if require_opengl_gemv_frontier:
             checks.append(
-                _check_gemv_opengl_toolchain(
+                _check_gemv_opengl_frontier(
                     mlx_root,
                     work_dir,
                     config_dir,
@@ -5055,7 +5114,7 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             "fftOpenGLWorkgroupPointerFrontierIncluded": (
                 fft_opengl_pointer_frontier_included
             ),
-            "openglGemvToolchainRequired": require_opengl_gemv_toolchain,
+            "openglGemvFrontierRequired": require_opengl_gemv_frontier,
             "openglNativeRuntimeRequired": require_opengl_native_runtime,
             "vulkanGemvToolchainRequired": require_vulkan_gemv_toolchain,
             "runtimeParityClaimed": False,
@@ -5134,11 +5193,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--require-opengl-gemv-toolchain",
+        "--require-opengl-gemv-frontier",
         action="store_true",
         help=(
-            "Materialize pinned GEMV for OpenGL and require native GLSL and "
-            "SPIR-V 1.3 validation."
+            "Require pinned GEMV OpenGL translation to materialize all source "
+            "specializations and stop at the exact tracked workgroup-pointer frontier."
         ),
     )
     parser.add_argument(

@@ -202,6 +202,78 @@
     "runtime_integration_included": false,
     "runtime_parity_claimed": false
   },
+  "opengl_gemv_frontier_status": {
+    "status": "blocked-as-expected",
+    "source": "mlx/backend/metal/kernels/gemv.metal",
+    "source_sha256": "c34db77e61c1fea01f7f5d319a0bec1029a253e54d66bbce9009f32fe828ce9f",
+    "source_size_bytes": 5383,
+    "target": "opengl",
+    "project_translation": {
+      "unit_count": 1,
+      "artifact_count": 1,
+      "translated_count": 0,
+      "failed_count": 1,
+      "emitted_target_file_count": 0,
+      "max_template_specializations": 4096,
+      "max_template_materialization_work": 2097152
+    },
+    "materialization": {
+      "status": "materialized",
+      "specialization_count": 225,
+      "unsupported_specialization_count": 0
+    },
+    "diagnostic": {
+      "code": "project.translate.opengl-workgroup-pointer-unsupported",
+      "missing_capability": "opengl.workgroup-pointer-lowering",
+      "message": "OpenGL cannot prove the workgroup pointer access range for 'GEMVKernel_float_1_8_1_32_4_4_0__run.tgp_memory' into shared backing 'tgp_memory'",
+      "workgroup_pointer": {
+        "backingName": "tgp_memory",
+        "function": "GEMVKernel_float_1_8_1_32_4_4_0__run",
+        "materializationName": "GEMVKernel_float_1_8_1_32_4_4_0_run__glsl_tgp_memory_gemv_float32_bm1_bn8_sm1_sn32_tm4_tn4_nc0_axpby0_tgp_memory_float_64",
+        "offsetExpression": "0",
+        "parameter": "tgp_memory",
+        "reason": "unprovable-view-access"
+      }
+    },
+    "range_derivation": {
+      "sgN": "simd_gid % 8",
+      "simdM": "simd_gid / 8",
+      "bm": "simdM * 4",
+      "tgp_results": "tgp_memory + sgN * 8 + bm",
+      "witness_simd_gid": 16,
+      "base_offset": 8,
+      "guarded_relative_index": 59,
+      "reached_element_index": 67,
+      "backing_element_count": 64,
+      "highest_valid_element_index": 63
+    },
+    "provenance_status": "concrete-backing-preserved",
+    "access_range_status": "unprovable",
+    "artifact_emitted": false,
+    "native_validation_attempted": false,
+    "native_validation_status": "not-run-no-artifact",
+    "translation_blocked_by": [
+      "https://github.com/CrossGL/crosstl/issues/1671"
+    ],
+    "execution_contracts": {
+      "workgroup_size_specialization": {
+        "status": "not-established",
+        "blocked_by": "https://github.com/CrossGL/crosstl/issues/1750"
+      },
+      "subgroup_width_specialization": {
+        "status": "not-established",
+        "blocked_by": "https://github.com/CrossGL/crosstl/issues/1786"
+      }
+    },
+    "blocked_by": [
+      "https://github.com/CrossGL/crosstl/issues/1671",
+      "https://github.com/CrossGL/crosstl/issues/1750",
+      "https://github.com/CrossGL/crosstl/issues/1786"
+    ],
+    "runtime_execution_attempted": false,
+    "runtime_integration_included": false,
+    "runtime_parity_claimed": false
+  },
   "rms_norm_specialization_status": {
     "status": "translation-and-native-compilation-validated",
     "source": "mlx/backend/metal/kernels/rms_norm.metal",
@@ -698,6 +770,7 @@
     "https://github.com/CrossGL/crosstl/issues/1672",
     "https://github.com/CrossGL/crosstl/issues/1696",
     "https://github.com/CrossGL/crosstl/issues/1750",
+    "https://github.com/CrossGL/crosstl/issues/1786",
     "https://github.com/CrossGL/crosstl/issues/1312",
     "https://github.com/CrossGL/crosstl/issues/1376",
     "https://github.com/CrossGL/crosstl/issues/1676",
