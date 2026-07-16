@@ -34,7 +34,12 @@ from crosstl.project.integral_literals import (
     CFamilyIntegralLiteralError,
     parse_c_family_integral_literal,
 )
-from crosstl.translator.ast import IdentifierNode
+from crosstl.translator.ast import (
+    AttributeNode,
+    IdentifierNode,
+    LiteralNode,
+    PrimitiveType,
+)
 from crosstl.translator.codegen import (
     backend_names,
     get_backend_extension,
@@ -1408,6 +1413,8 @@ REPORT_PROJECT_FIELDS = frozenset(
         "variantWorkgroupSizes",
         "workgroupSizeRules",
         "workgroupSizeRuleCount",
+        "subgroupWidthRules",
+        "subgroupWidthRuleCount",
         "selectedVariants",
         "externalCorpusManifest",
     )
@@ -1426,6 +1433,9 @@ WORKGROUP_SIZE_CONFIG_KEY = "workgroup_size"
 WORKGROUP_SIZE_RULES_CONFIG_KEY = "workgroup_size_rules"
 WORKGROUP_SIZE_SPECIALIZATION_CAPABILITY = "execution.workgroup-size-specialization"
 WORKGROUP_SIZE_SPECIALIZATION_TARGETS = frozenset(("directx", "opengl"))
+SUBGROUP_WIDTH_RULES_CONFIG_KEY = "subgroup_width_rules"
+SUBGROUP_WIDTH_SPECIALIZATION_CAPABILITY = "execution.subgroup-width-specialization"
+DIRECTX_EXACT_SUBGROUP_WIDTHS = frozenset((4, 8, 16, 32, 64, 128))
 DEFERRED_SPECIALIZATION_TARGETS = frozenset(
     ("cgl", "crossgl", "metal", "opengl", "vulkan")
 )
@@ -1679,6 +1689,8 @@ REPORT_ARTIFACT_EXECUTION_FIELDS = frozenset(
         "sourceEntryPoints",
         "entryPoints",
         "provenance",
+        "subgroupWidthProvenance",
+        "subgroupWidthEnforcement",
         "identity",
     )
 )
@@ -1689,7 +1701,9 @@ REPORT_ARTIFACT_EXECUTION_ENTRY_FIELDS = frozenset(
         "materializedEntryPoint",
         "targetEntryPoint",
         "workgroupSize",
+        "subgroupWidth",
         "rule",
+        "subgroupWidthRule",
         "parameters",
         "parameterSources",
         "materialization",
@@ -1698,6 +1712,9 @@ REPORT_ARTIFACT_EXECUTION_ENTRY_FIELDS = frozenset(
 )
 REPORT_ARTIFACT_EXECUTION_RULE_FIELDS = frozenset(
     ("components", "sourcePattern", "path")
+)
+REPORT_ARTIFACT_EXECUTION_SUBGROUP_WIDTH_RULE_FIELDS = frozenset(
+    ("expression", "sourcePattern", "path")
 )
 REPORT_ARTIFACT_EXECUTION_MATERIALIZATION_FIELDS = frozenset(
     ("name", "hostName", "materializedName")
@@ -2810,6 +2827,7 @@ DIRECTX_DXC_VRS_MIN_PROFILE_BY_STAGE = {
     "ps": "ps_6_4",
     "gs": "gs_6_4",
 }
+DIRECTX_DXC_EXACT_WAVE_SIZE_MIN_PROFILE_BY_STAGE = {"cs": "cs_6_6"}
 DIRECTX_HLSL_FUNCTION_RE = re.compile(
     r"(?P<attributes>(?:\s*\[[^\]]+\]\s*)*)"
     r"(?P<return_type>(?:[A-Za-z_][\w:<>,]*\s+)+?)"
@@ -2829,6 +2847,10 @@ DIRECTX_HLSL_NUMTHREADS_RE = re.compile(r"\[\s*numthreads\s*\(", re.IGNORECASE)
 DIRECTX_HLSL_NUMTHREADS_VALUES_RE = re.compile(
     r"\[\s*numthreads\s*\(\s*(?P<x>[^,\]]+)\s*,\s*"
     r"(?P<y>[^,\]]+)\s*,\s*(?P<z>[^,\]]+)\s*\)\s*\]",
+    re.IGNORECASE,
+)
+DIRECTX_HLSL_EXACT_WAVE_SIZE_RE = re.compile(
+    r"\[\s*WaveSize\s*\(\s*(?P<width>[^,\]]+)\s*\)\s*\]",
     re.IGNORECASE,
 )
 DIRECTX_HLSL_SEMANTIC_RE = re.compile(
@@ -3536,6 +3558,38 @@ def _as_workgroup_size_rules(
                 f"{field_name} contains conflicting normalized pattern '{pattern}'"
             )
         result[pattern] = normalized
+    return result
+
+
+def _as_subgroup_width_rules(
+    value: Any,
+    *,
+    field_name: str,
+) -> dict[str, str]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_name} must be a table")
+    result: dict[str, str] = {}
+    for raw_pattern, raw_expression in value.items():
+        if not isinstance(raw_pattern, str) or not raw_pattern.strip():
+            raise ValueError(f"{field_name} keys must be non-empty source patterns")
+        pattern = _normalize_project_relative_path(raw_pattern)
+        expression_path = _mapping_key_path(field_name, pattern)
+        if isinstance(raw_expression, int) and not isinstance(raw_expression, bool):
+            expression = str(raw_expression)
+        elif isinstance(raw_expression, str) and raw_expression.strip():
+            expression = raw_expression.strip()
+        else:
+            raise ValueError(
+                f"{expression_path} must be an integer or non-empty integral expression"
+            )
+        existing = result.get(pattern)
+        if existing is not None and existing != expression:
+            raise ValueError(
+                f"{field_name} contains conflicting normalized pattern '{pattern}'"
+            )
+        result[pattern] = expression
     return result
 
 
@@ -7241,6 +7295,7 @@ class ProjectConfig:
     workgroup_size_rules: Mapping[str, Sequence[str | int]] = field(
         default_factory=dict
     )
+    subgroup_width_rules: Mapping[str, str | int] = field(default_factory=dict)
     selected_variants: Sequence[str] | str = ()
     external_corpus_manifest: str | os.PathLike[str] | None = None
 
@@ -7472,6 +7527,14 @@ class ProjectConfig:
                 field_name="ProjectConfig.workgroup_size_rules",
             ),
         )
+        object.__setattr__(
+            self,
+            "subgroup_width_rules",
+            _as_subgroup_width_rules(
+                self.subgroup_width_rules,
+                field_name="ProjectConfig.subgroup_width_rules",
+            ),
+        )
         if self.external_corpus_manifest is not None:
             external_corpus_manifest = _path_string_arg(
                 self.external_corpus_manifest,
@@ -7684,6 +7747,34 @@ class ProjectWorkgroupSizeError(ValueError):
             tuple(source_workgroup_size) if source_workgroup_size is not None else None
         )
         self.source_location = source_location
+        self.rule_details = dict(rule_details or {})
+        self.materialization_details = dict(materialization_details or {})
+
+
+class ProjectSubgroupWidthError(ValueError):
+    """A project artifact cannot enforce an exact subgroup-width contract."""
+
+    missing_capabilities = (SUBGROUP_WIDTH_SPECIALIZATION_CAPABILITY,)
+    check_kind = "execution-specialization"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str,
+        reason: str,
+        source_entry_points: Sequence[str] = (),
+        subgroup_width: int | None = None,
+        source_subgroup_width: int | None = None,
+        rule_details: Mapping[str, Any] | None = None,
+        materialization_details: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.project_diagnostic_code = code
+        self.reason = reason
+        self.source_entry_points = tuple(source_entry_points)
+        self.subgroup_width = subgroup_width
+        self.source_subgroup_width = source_subgroup_width
         self.rule_details = dict(rule_details or {})
         self.materialization_details = dict(materialization_details or {})
 
@@ -8242,6 +8333,10 @@ class ProjectPortabilityReport:
                     )
                 },
                 "workgroupSizeRuleCount": len(self.config.workgroup_size_rules),
+                "subgroupWidthRules": dict(
+                    sorted(self.config.subgroup_width_rules.items())
+                ),
+                "subgroupWidthRuleCount": len(self.config.subgroup_width_rules),
                 "selectedVariants": list(self.config.selected_variants),
                 "externalCorpusManifest": self.config.external_corpus_manifest,
             },
@@ -8396,6 +8491,10 @@ def load_project_config(
         project.get(WORKGROUP_SIZE_RULES_CONFIG_KEY),
         field_name=f"crosstl.toml [project.{WORKGROUP_SIZE_RULES_CONFIG_KEY}]",
     )
+    subgroup_width_rules = _as_subgroup_width_rules(
+        project.get(SUBGROUP_WIDTH_RULES_CONFIG_KEY),
+        field_name=f"crosstl.toml [project.{SUBGROUP_WIDTH_RULES_CONFIG_KEY}]",
+    )
     output_dir = _as_optional_non_empty_str(
         project.get("output_dir"),
         field_name="crosstl.toml project.output_dir",
@@ -8443,6 +8542,7 @@ def load_project_config(
         workgroup_size=workgroup_size,
         variant_workgroup_sizes=_variant_workgroup_sizes(variants),
         workgroup_size_rules=workgroup_size_rules,
+        subgroup_width_rules=subgroup_width_rules,
         selected_variants=_as_str_list(
             project.get("selected_variants"),
             field_name="project.selected_variants",
@@ -9057,6 +9157,62 @@ def _configured_workgroup_size_rule(
     )
 
 
+def _configured_subgroup_width_rule(
+    config: ProjectConfig,
+    relative_path: str,
+) -> tuple[str, str, dict[str, Any]] | None:
+    normalized_path = _normalize_project_relative_path(relative_path)
+    matches = [
+        (pattern, expression)
+        for pattern, expression in config.subgroup_width_rules.items()
+        if fnmatch.fnmatch(normalized_path, pattern)
+    ]
+    if not matches:
+        return None
+    pattern, expression = max(
+        matches,
+        key=lambda item: _entry_point_selector_priority(item[0], normalized_path),
+    )
+    return (
+        pattern,
+        expression,
+        {
+            "kind": "materialized-template-rule",
+            "path": _mapping_key_path(
+                f"project.{SUBGROUP_WIDTH_RULES_CONFIG_KEY}", pattern
+            ),
+        },
+    )
+
+
+def _unsupported_subgroup_width_rule_target_error(
+    config: ProjectConfig,
+    unit: ProjectTranslationUnit,
+    target: str,
+) -> ProjectSubgroupWidthError | None:
+    configured = _configured_subgroup_width_rule(config, unit.relative_path)
+    if configured is None or target == "directx":
+        return None
+    pattern, expression, provenance = configured
+    reason = (
+        "opengl-enforcement-unavailable"
+        if target == "opengl"
+        else "target-not-supported"
+    )
+    return ProjectSubgroupWidthError(
+        f"Target '{target}' cannot enforce an exact subgroup width.",
+        code="project.translate.subgroup-width-enforcement-unsupported",
+        reason=reason,
+        rule_details={
+            "path": provenance["path"],
+            "sourcePattern": pattern,
+            "expression": expression,
+            "target": target,
+            "supportedTargets": ["directx"],
+        },
+    )
+
+
 def _unsupported_workgroup_size_rule_target_error(
     config: ProjectConfig,
     unit: ProjectTranslationUnit,
@@ -9240,6 +9396,27 @@ def _workgroup_rule_execution_identity(
             "sourceEntryPoints": list(source_entry_points),
             "entryPoints": [dict(entry) for entry in entry_points],
             "provenance": dict(provenance),
+        }
+    )
+
+
+def _subgroup_rule_execution_identity(
+    *,
+    source: str,
+    source_hash: Mapping[str, Any],
+    target: str,
+    variant: str | None,
+    execution: Mapping[str, Any],
+) -> dict[str, str]:
+    return _canonical_contract_hash(
+        {
+            "source": source,
+            "sourceHash": dict(source_hash),
+            "target": target,
+            "variant": variant,
+            "execution": {
+                key: execution[key] for key in sorted(execution) if key != "identity"
+            },
         }
     )
 
@@ -9557,6 +9734,304 @@ def _project_workgroup_rule_execution_metadata(
         provenance=provenance,
     )
     return execution
+
+
+def _wave_size_attribute(attribute: Any) -> bool:
+    name = str(getattr(attribute, "name", "")).strip().lower()
+    if name.startswith("hlsl_"):
+        name = name[len("hlsl_") :]
+    return name == "wavesize"
+
+
+def _set_crossgl_stage_subgroup_width(stage: Any, subgroup_width: int) -> None:
+    function = getattr(stage, "entry_point", None)
+    entry_name = str(getattr(function, "name", "main"))
+    attributes = list(getattr(function, "attributes", []) or [])
+    existing = [
+        attribute for attribute in attributes if _wave_size_attribute(attribute)
+    ]
+    if len(existing) > 1:
+        raise ProjectSubgroupWidthError(
+            f"Compute entry point '{entry_name}' declares multiple WaveSize attributes.",
+            code="project.translate.subgroup-width-conflict",
+            reason="source-metadata-ambiguous",
+            source_entry_points=(entry_name,),
+            subgroup_width=subgroup_width,
+        )
+    if existing:
+        arguments = list(getattr(existing[0], "arguments", []) or [])
+        source_width = (
+            _literal_workgroup_size_component(arguments[0])
+            if len(arguments) == 1
+            else None
+        )
+        if source_width is None:
+            raise ProjectSubgroupWidthError(
+                f"Compute entry point '{entry_name}' has a non-exact WaveSize attribute.",
+                code="project.translate.subgroup-width-invalid",
+                reason="source-metadata-not-exact",
+                source_entry_points=(entry_name,),
+                subgroup_width=subgroup_width,
+            )
+        if source_width != subgroup_width:
+            raise ProjectSubgroupWidthError(
+                f"Configured subgroup width {subgroup_width} conflicts with source "
+                f"WaveSize({source_width}) on '{entry_name}'.",
+                code="project.translate.subgroup-width-conflict",
+                reason="project-source-conflict",
+                source_entry_points=(entry_name,),
+                subgroup_width=subgroup_width,
+                source_subgroup_width=source_width,
+            )
+    function.attributes = [
+        attribute for attribute in attributes if not _wave_size_attribute(attribute)
+    ]
+    function.attributes.append(
+        AttributeNode(
+            "WaveSize",
+            [LiteralNode(subgroup_width, PrimitiveType("int"))],
+        )
+    )
+
+
+def _project_subgroup_width_rule_execution_metadata(
+    *,
+    ast: Any,
+    stages: Sequence[Any],
+    config: ProjectConfig,
+    unit: ProjectTranslationUnit,
+    target: str,
+    variant: str | None,
+    materialization: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    configured = _configured_subgroup_width_rule(config, unit.relative_path)
+    if configured is None:
+        return None
+    source_pattern, expression, provenance = configured
+    try:
+        joined = _workgroup_rule_materialization_join(
+            stages=stages,
+            materialization=materialization,
+            rule_path=str(provenance["path"]),
+            rule_components=(expression,),
+            source_pattern=source_pattern,
+        )
+    except ProjectWorkgroupSizeError as exc:
+        raise ProjectSubgroupWidthError(
+            "Subgroup-width rules require one host-named materialization per "
+            "compute entry point.",
+            code="project.translate.subgroup-width-materialization-invalid",
+            reason=exc.reason,
+            source_entry_points=exc.source_entry_points,
+            rule_details={
+                "path": provenance["path"],
+                "sourcePattern": source_pattern,
+                "expression": expression,
+            },
+            materialization_details=exc.materialization_details,
+        ) from exc
+
+    target_names = _target_entry_points_for_crossgl_stages(ast, target, stages)
+    entries = []
+    for stage, record in joined:
+        function = getattr(stage, "entry_point", None)
+        materialized_entry = str(getattr(function, "name", "main"))
+        host_name = str(record["hostName"])
+        parameters = record.get("parameters")
+        parameter_sources = record.get("parameterSources")
+        if (
+            not isinstance(parameters, Mapping)
+            or not isinstance(parameter_sources, Mapping)
+            or set(parameters) != set(parameter_sources)
+        ):
+            raise ProjectSubgroupWidthError(
+                f"Materialization '{host_name}' has incomplete parameter provenance.",
+                code="project.translate.subgroup-width-materialization-invalid",
+                reason="parameter-provenance-invalid",
+                source_entry_points=(host_name,),
+            )
+        normalized_parameters = {
+            str(name): str(value) for name, value in sorted(parameters.items())
+        }
+        normalized_parameter_sources = {
+            str(name): str(value) for name, value in sorted(parameter_sources.items())
+        }
+        try:
+            subgroup_width = _evaluate_project_bounded_integer_expression(
+                expression, normalized_parameters
+            )
+        except _ProjectWorkgroupRuleExpressionError as exc:
+            raise ProjectSubgroupWidthError(
+                f"Subgroup-width rule for '{host_name}' is invalid: {exc}",
+                code="project.translate.subgroup-width-rule-invalid",
+                reason=exc.reason,
+                source_entry_points=(host_name,),
+                rule_details={
+                    "path": provenance["path"],
+                    "sourcePattern": source_pattern,
+                    "expression": expression,
+                    "identifier": exc.identifier,
+                },
+            ) from exc
+        if subgroup_width <= 0:
+            raise ProjectSubgroupWidthError(
+                f"Subgroup-width rule for '{host_name}' resolved to a non-positive value.",
+                code="project.translate.subgroup-width-rule-invalid",
+                reason="non-positive-result",
+                source_entry_points=(host_name,),
+                subgroup_width=subgroup_width,
+            )
+        if subgroup_width not in DIRECTX_EXACT_SUBGROUP_WIDTHS:
+            raise ProjectSubgroupWidthError(
+                f"DirectX cannot enforce subgroup width {subgroup_width} for "
+                f"'{host_name}'.",
+                code="project.translate.subgroup-width-invalid",
+                reason="target-width-unsupported",
+                source_entry_points=(host_name,),
+                subgroup_width=subgroup_width,
+                rule_details={
+                    "path": provenance["path"],
+                    "sourcePattern": source_pattern,
+                    "expression": expression,
+                    "supportedWidths": sorted(DIRECTX_EXACT_SUBGROUP_WIDTHS),
+                },
+            )
+        _set_crossgl_stage_subgroup_width(stage, subgroup_width)
+        entry = {
+            "sourceEntryPoint": host_name,
+            "materializedEntryPoint": str(record["materializedName"]),
+            "targetEntryPoint": target_names.get(
+                materialized_entry, materialized_entry
+            ),
+            "subgroupWidth": subgroup_width,
+            "subgroupWidthRule": {
+                "expression": expression,
+                "sourcePattern": source_pattern,
+                "path": provenance["path"],
+            },
+            "parameters": normalized_parameters,
+            "parameterSources": normalized_parameter_sources,
+            "materialization": {
+                "name": str(record.get("name", "")),
+                "hostName": host_name,
+                "materializedName": str(record["materializedName"]),
+            },
+        }
+        entry["identity"] = _workgroup_rule_entry_identity(
+            source=unit.relative_path,
+            source_hash=unit.source_hash,
+            target=target,
+            variant=variant,
+            entry=entry,
+        )
+        entries.append(entry)
+    entries.sort(
+        key=lambda entry: (
+            entry["sourceEntryPoint"],
+            entry["materializedEntryPoint"],
+            entry["targetEntryPoint"],
+        )
+    )
+    execution = {
+        "sourceEntryPoints": [entry["sourceEntryPoint"] for entry in entries],
+        "entryPoints": entries,
+        "subgroupWidthProvenance": provenance,
+        "subgroupWidthEnforcement": {
+            "mechanism": "hlsl-wave-size-attribute",
+            "minimumShaderModel": "6.6",
+            "entryProfiles": [
+                {"entryPoint": entry["targetEntryPoint"], "profile": "cs_6_6"}
+                for entry in entries
+            ],
+        },
+    }
+    execution["identity"] = _subgroup_rule_execution_identity(
+        source=unit.relative_path,
+        source_hash=unit.source_hash,
+        target=target,
+        variant=variant,
+        execution=execution,
+    )
+    return execution
+
+
+def _merge_subgroup_rule_execution(
+    *,
+    workgroup: Mapping[str, Any] | None,
+    subgroup: Mapping[str, Any],
+    unit: ProjectTranslationUnit,
+    target: str,
+    variant: str | None,
+) -> dict[str, Any]:
+    if workgroup is None:
+        return dict(subgroup)
+    workgroup_entries = [
+        dict(entry)
+        for entry in _record_sequence(workgroup.get("entryPoints"))
+        if isinstance(entry, Mapping)
+    ]
+    subgroup_entries = [
+        dict(entry)
+        for entry in _record_sequence(subgroup.get("entryPoints"))
+        if isinstance(entry, Mapping)
+    ]
+    if not workgroup_entries:
+        raise ProjectSubgroupWidthError(
+            "Per-entry subgroup-width rules cannot be combined with aggregate "
+            "workgroup metadata.",
+            code="project.translate.subgroup-width-conflict",
+            reason="mixed-specialization-granularity",
+            source_entry_points=subgroup.get("sourceEntryPoints", ()),
+        )
+    key = lambda entry: (
+        str(entry.get("sourceEntryPoint", "")),
+        str(entry.get("materializedEntryPoint", "")),
+        str(entry.get("targetEntryPoint", "")),
+    )
+    workgroup_by_key = {key(entry): entry for entry in workgroup_entries}
+    subgroup_by_key = {key(entry): entry for entry in subgroup_entries}
+    if set(workgroup_by_key) != set(subgroup_by_key):
+        raise ProjectSubgroupWidthError(
+            "Workgroup and subgroup rules resolve different materialized entries.",
+            code="project.translate.subgroup-width-conflict",
+            reason="materialized-entry-identity-mismatch",
+            source_entry_points=subgroup.get("sourceEntryPoints", ()),
+        )
+    merged = dict(workgroup)
+    merged_entries = []
+    for identity in sorted(workgroup_by_key):
+        entry = workgroup_by_key[identity]
+        subgroup_entry = subgroup_by_key[identity]
+        for field_name in ("parameters", "parameterSources", "materialization"):
+            if entry.get(field_name) != subgroup_entry.get(field_name):
+                raise ProjectSubgroupWidthError(
+                    "Workgroup and subgroup rules have inconsistent materialization "
+                    "provenance.",
+                    code="project.translate.subgroup-width-conflict",
+                    reason="materialization-provenance-mismatch",
+                    source_entry_points=(identity[0],),
+                )
+        entry["subgroupWidth"] = subgroup_entry["subgroupWidth"]
+        entry["subgroupWidthRule"] = subgroup_entry["subgroupWidthRule"]
+        entry["identity"] = _workgroup_rule_entry_identity(
+            source=unit.relative_path,
+            source_hash=unit.source_hash,
+            target=target,
+            variant=variant,
+            entry=entry,
+        )
+        merged_entries.append(entry)
+    merged["entryPoints"] = merged_entries
+    merged["subgroupWidthProvenance"] = subgroup["subgroupWidthProvenance"]
+    merged["subgroupWidthEnforcement"] = subgroup["subgroupWidthEnforcement"]
+    merged["identity"] = _subgroup_rule_execution_identity(
+        source=unit.relative_path,
+        source_hash=unit.source_hash,
+        target=target,
+        variant=variant,
+        execution=merged,
+    )
+    return merged
 
 
 def _project_input_requires_workgroup_specialization(
@@ -19150,6 +19625,11 @@ def _workgroup_size_failure_details(
         "project.translate.workgroup-size-rule-invalid",
         "project.translate.workgroup-size-rule-unsupported-target",
         "project.translate.workgroup-size-materialization-invalid",
+        "project.translate.subgroup-width-conflict",
+        "project.translate.subgroup-width-enforcement-unsupported",
+        "project.translate.subgroup-width-invalid",
+        "project.translate.subgroup-width-rule-invalid",
+        "project.translate.subgroup-width-materialization-invalid",
     }:
         return {}
     execution: dict[str, Any] = {
@@ -19165,6 +19645,8 @@ def _workgroup_size_failure_details(
             if getattr(exc, "source_workgroup_size", None) is not None
             else None
         ),
+        "subgroupWidth": getattr(exc, "subgroup_width", None),
+        "sourceSubgroupWidth": getattr(exc, "source_subgroup_width", None),
         "rule": (
             dict(getattr(exc, "rule_details"))
             if getattr(exc, "rule_details", None)
@@ -21205,7 +21687,7 @@ def _validate_project_workgroup_target_output(
     execution_entries = [
         entry
         for entry in _record_sequence(execution.get("entryPoints"))
-        if isinstance(entry, Mapping)
+        if isinstance(entry, Mapping) and "workgroupSize" in entry
     ]
     if execution_entries:
         expected_by_target = {
@@ -21249,6 +21731,8 @@ def _validate_project_workgroup_target_output(
             )
         return
 
+    if "workgroupSize" not in execution:
+        return
     expected = tuple(execution.get("workgroupSize", ()))
     reflected = reflect_target_host_interface(output_path, target=target)
     reflected_sizes = []
@@ -21285,6 +21769,99 @@ def _validate_project_workgroup_target_output(
             source_entry_points=execution.get("sourceEntryPoints", ()),
             workgroup_size=expected,
             source_workgroup_size=mismatches[0],
+        )
+
+
+def _validate_project_subgroup_width_target_output(
+    output_path: Path,
+    *,
+    execution: Mapping[str, Any],
+) -> None:
+    entries = [
+        entry
+        for entry in _record_sequence(execution.get("entryPoints"))
+        if isinstance(entry, Mapping) and "subgroupWidth" in entry
+    ]
+    if not entries:
+        return
+    expected = {
+        str(entry["targetEntryPoint"]): int(entry["subgroupWidth"]) for entry in entries
+    }
+    enforcement = execution.get("subgroupWidthEnforcement")
+    profiles = (
+        enforcement.get("entryProfiles") if isinstance(enforcement, Mapping) else None
+    )
+    profile_map = {
+        str(item.get("entryPoint")): str(item.get("profile"))
+        for item in _record_sequence(profiles)
+        if isinstance(item, Mapping)
+        and _is_non_empty_string(item.get("entryPoint"))
+        and _is_non_empty_string(item.get("profile"))
+    }
+    if (
+        not isinstance(enforcement, Mapping)
+        or enforcement.get("mechanism") != "hlsl-wave-size-attribute"
+        or enforcement.get("minimumShaderModel") != "6.6"
+        or set(profile_map) != set(expected)
+        or any(profile != "cs_6_6" for profile in profile_map.values())
+    ):
+        raise ProjectSubgroupWidthError(
+            "DirectX subgroup-width enforcement requires WaveSize and cs_6_6.",
+            code="project.translate.subgroup-width-invalid",
+            reason="target-profile-contract-invalid",
+            source_entry_points=execution.get("sourceEntryPoints", ()),
+        )
+
+    source = output_path.read_text(encoding="utf-8", errors="replace")
+    reflected = {}
+    for match in DIRECTX_HLSL_FUNCTION_RE.finditer(source):
+        attributes = match.group("attributes") or ""
+        if not DIRECTX_HLSL_NUMTHREADS_RE.search(attributes):
+            continue
+        matches = list(DIRECTX_HLSL_EXACT_WAVE_SIZE_RE.finditer(attributes))
+        width = None
+        if len(matches) == 1:
+            try:
+                width = parse_c_family_integral_literal(matches[0].group("width"))
+            except CFamilyIntegralLiteralError:
+                width = None
+        reflected[match.group("name")] = width
+    if set(reflected) != set(expected):
+        raise ProjectSubgroupWidthError(
+            "Generated DirectX entries do not match the subgroup-width contract.",
+            code="project.translate.subgroup-width-invalid",
+            reason="target-entry-identity-mismatch",
+            source_entry_points=execution.get("sourceEntryPoints", ()),
+        )
+    mismatch = next(
+        (
+            (name, expected[name], reflected[name])
+            for name in sorted(expected)
+            if reflected[name] != expected[name]
+        ),
+        None,
+    )
+    if mismatch is not None:
+        name, expected_width, reflected_width = mismatch
+        raise ProjectSubgroupWidthError(
+            f"Generated DirectX entry '{name}' does not enforce "
+            f"WaveSize({expected_width}).",
+            code="project.translate.subgroup-width-conflict",
+            reason="target-output-mismatch",
+            source_entry_points=execution.get("sourceEntryPoints", ()),
+            subgroup_width=expected_width,
+            source_subgroup_width=reflected_width,
+        )
+    generated_profiles = dict(_directx_dxc_entry_profiles_from_source(source) or ())
+    if set(generated_profiles) != set(expected) or any(
+        not profile.startswith("cs_") or _directx_dxc_profile_version(profile) < (6, 6)
+        for profile in generated_profiles.values()
+    ):
+        raise ProjectSubgroupWidthError(
+            "Generated DirectX entries do not require Shader Model 6.6 or newer.",
+            code="project.translate.subgroup-width-invalid",
+            reason="target-profile-too-low",
+            source_entry_points=execution.get("sourceEntryPoints", ()),
         )
 
 
@@ -21482,6 +22059,7 @@ def translate_project(
             workgroup_size=config.workgroup_size,
             variant_workgroup_sizes=config.variant_workgroup_sizes,
             workgroup_size_rules=config.workgroup_size_rules,
+            subgroup_width_rules=config.subgroup_width_rules,
             selected_variants=config.selected_variants,
             external_corpus_manifest=config.external_corpus_manifest,
         )
@@ -21630,6 +22208,15 @@ def translate_project(
                     )
                     if unsupported_rule_target is not None:
                         raise unsupported_rule_target
+                    unsupported_subgroup_target = (
+                        _unsupported_subgroup_width_rule_target_error(
+                            config,
+                            unit,
+                            target,
+                        )
+                    )
+                    if unsupported_subgroup_target is not None:
+                        raise unsupported_subgroup_target
                     template_materialization = (
                         _project_template_materialization_for_artifact(
                             unit=unit,
@@ -21827,7 +22414,7 @@ def translate_project(
                     if translation_source_options:
                         translate_kwargs["source_options"] = translation_source_options
                     generated_source = None
-                    if (
+                    requires_workgroup_specialization = (
                         target in WORKGROUP_SIZE_SPECIALIZATION_TARGETS
                         and (
                             unit.source_backend == "metal"
@@ -21840,6 +22427,15 @@ def translate_project(
                             variant=variant,
                             project_relative_path=unit.relative_path,
                         )
+                    )
+                    requires_subgroup_specialization = (
+                        target == "directx"
+                        and _configured_subgroup_width_rule(config, unit.relative_path)
+                        is not None
+                    )
+                    if (
+                        requires_workgroup_specialization
+                        or requires_subgroup_specialization
                     ):
                         crossgl_ast = _crossgl_ast_for_project_target(
                             input_path=translation_input_path,
@@ -21853,7 +22449,7 @@ def translate_project(
                                 template_materialization is not None
                             ),
                         )
-                        execution = _project_workgroup_execution_metadata(
+                        workgroup_execution = _project_workgroup_execution_metadata(
                             ast=crossgl_ast,
                             config=config,
                             unit=unit,
@@ -21866,6 +22462,34 @@ def translate_project(
                                 else None
                             ),
                         )
+                        subgroup_execution = (
+                            _project_subgroup_width_rule_execution_metadata(
+                                ast=crossgl_ast,
+                                stages=_crossgl_compute_stages(
+                                    crossgl_ast, selected_entry_point
+                                ),
+                                config=config,
+                                unit=unit,
+                                target=target,
+                                variant=variant,
+                                materialization=(
+                                    template_materialization.metadata
+                                    if template_materialization is not None
+                                    else None
+                                ),
+                            )
+                            if requires_subgroup_specialization
+                            else None
+                        )
+                        execution = workgroup_execution
+                        if subgroup_execution is not None:
+                            execution = _merge_subgroup_rule_execution(
+                                workgroup=workgroup_execution,
+                                subgroup=subgroup_execution,
+                                unit=unit,
+                                target=target,
+                                variant=variant,
+                            )
                         if execution is not None:
                             split_specs = (
                                 _opengl_workgroup_split_specs(
@@ -21945,6 +22569,10 @@ def translate_project(
                                         target=target,
                                         execution=split_execution,
                                     )
+                                    _validate_project_subgroup_width_target_output(
+                                        split_output_path,
+                                        execution=split_execution,
+                                    )
                                     records, split_diagnostics = (
                                         _finalize_project_generated_artifact(
                                             config=config,
@@ -21986,6 +22614,10 @@ def translate_project(
                                 _validate_project_workgroup_target_output(
                                     output_path,
                                     target=target,
+                                    execution=execution,
+                                )
+                                _validate_project_subgroup_width_target_output(
+                                    output_path,
                                     execution=execution,
                                 )
                     if generated_source is None:
@@ -39014,6 +39646,10 @@ def _project_config_for_scan_validation(
             project.get("workgroupSizeRules", {}),
             field_name="project.workgroupSizeRules",
         )
+        subgroup_width_rules = _as_subgroup_width_rules(
+            project.get("subgroupWidthRules", {}),
+            field_name="project.subgroupWidthRules",
+        )
     except ValueError:
         return None
 
@@ -39062,6 +39698,7 @@ def _project_config_for_scan_validation(
             if value is not None
         },
         workgroup_size_rules=workgroup_size_rules,
+        subgroup_width_rules=subgroup_width_rules,
         selected_variants=tuple(selected_variants),
         external_corpus_manifest=external_corpus_manifest,
     )
@@ -39664,14 +40301,328 @@ def _artifact_rule_execution_contract_reasons(
         and isinstance(source_entry_points, list)
         and isinstance(provenance, Mapping)
     ):
-        expected_identity = _workgroup_rule_execution_identity(
+        if any(
+            isinstance(entry, Mapping) and "subgroupWidth" in entry
+            for entry in raw_entries
+        ):
+            expected_identity = _subgroup_rule_execution_identity(
+                source=str(source),
+                source_hash=source_hash,
+                target=str(target),
+                variant=variant,
+                execution=execution,
+            )
+        else:
+            expected_identity = _workgroup_rule_execution_identity(
+                source=str(source),
+                source_hash=source_hash,
+                target=str(target),
+                variant=variant,
+                source_entry_points=source_entry_points,
+                entry_points=[
+                    entry for entry in raw_entries if isinstance(entry, Mapping)
+                ],
+                provenance=provenance,
+            )
+        if execution.get("identity") != expected_identity:
+            reasons.append(
+                f"{execution_prefix}.identity must match the execution contract"
+            )
+    return reasons
+
+
+def _artifact_subgroup_rule_execution_contract_reasons(
+    prefix: str,
+    record: Mapping[str, Any],
+    execution: Mapping[str, Any],
+    project: Mapping[str, Any] | None,
+) -> list[str]:
+    execution_prefix = f"{prefix}.execution"
+    raw_entries = execution.get("entryPoints")
+    if not isinstance(raw_entries, list) or not raw_entries:
+        return [f"{execution_prefix}.entryPoints must be a non-empty list"]
+    reasons = []
+    source = record.get("source")
+    target = record.get("target")
+    variant = (
+        record.get("variant") if _is_non_empty_string(record.get("variant")) else None
+    )
+    source_hash = record.get("sourceHash")
+    if target != "directx":
+        reasons.append(f"{execution_prefix} subgroup width requires target directx")
+    project_rules = (
+        project.get("subgroupWidthRules") if isinstance(project, Mapping) else None
+    )
+    normalized_rules = {
+        str(pattern): str(expression)
+        for pattern, expression in (
+            project_rules.items() if isinstance(project_rules, Mapping) else ()
+        )
+        if _is_non_empty_string(pattern) and _is_non_empty_string(expression)
+    }
+    selected_pattern = None
+    if _is_non_empty_string(source):
+        matching = [
+            pattern
+            for pattern in normalized_rules
+            if fnmatch.fnmatch(str(source), pattern)
+        ]
+        if matching:
+            selected_pattern = max(
+                matching,
+                key=lambda pattern: _entry_point_selector_priority(
+                    pattern, str(source)
+                ),
+            )
+
+    shadow_entries = []
+    target_entries = []
+    for index, entry in enumerate(raw_entries):
+        entry_prefix = f"{execution_prefix}.entryPoints[{index}]"
+        if not isinstance(entry, Mapping):
+            reasons.append(f"{entry_prefix} must be an object")
+            continue
+        subgroup_width = entry.get("subgroupWidth")
+        if (
+            not isinstance(subgroup_width, int)
+            or isinstance(subgroup_width, bool)
+            or subgroup_width <= 0
+        ):
+            reasons.append(f"{entry_prefix}.subgroupWidth must be a positive integer")
+        elif subgroup_width not in DIRECTX_EXACT_SUBGROUP_WIDTHS:
+            reasons.append(
+                f"{entry_prefix}.subgroupWidth is not enforceable by DirectX WaveSize"
+            )
+        rule = entry.get("subgroupWidthRule")
+        expression = None
+        source_pattern = None
+        if not isinstance(rule, Mapping):
+            reasons.append(f"{entry_prefix}.subgroupWidthRule must be an object")
+        else:
+            reasons.extend(
+                _unsupported_mapping_field_reasons(
+                    f"{entry_prefix}.subgroupWidthRule",
+                    rule,
+                    REPORT_ARTIFACT_EXECUTION_SUBGROUP_WIDTH_RULE_FIELDS,
+                )
+            )
+            expression = rule.get("expression")
+            source_pattern = rule.get("sourcePattern")
+            if not _is_non_empty_string(expression):
+                reasons.append(
+                    f"{entry_prefix}.subgroupWidthRule.expression must be a string"
+                )
+            if not _is_non_empty_string(source_pattern):
+                reasons.append(
+                    f"{entry_prefix}.subgroupWidthRule.sourcePattern must be a string"
+                )
+            elif source_pattern != selected_pattern:
+                reasons.append(
+                    f"{entry_prefix}.subgroupWidthRule.sourcePattern must match the "
+                    "selected project rule"
+                )
+            expected_path = (
+                _mapping_key_path(
+                    f"project.{SUBGROUP_WIDTH_RULES_CONFIG_KEY}",
+                    str(source_pattern),
+                )
+                if _is_non_empty_string(source_pattern)
+                else None
+            )
+            if rule.get("path") != expected_path:
+                reasons.append(
+                    f"{entry_prefix}.subgroupWidthRule.path must match its sourcePattern"
+                )
+            if _is_non_empty_string(source_pattern) and (
+                expression != normalized_rules.get(str(source_pattern))
+            ):
+                reasons.append(
+                    f"{entry_prefix}.subgroupWidthRule.expression must match "
+                    "project.subgroupWidthRules"
+                )
+        parameters = entry.get("parameters")
+        if (
+            _is_non_empty_string(expression)
+            and isinstance(parameters, Mapping)
+            and isinstance(subgroup_width, int)
+            and not isinstance(subgroup_width, bool)
+        ):
+            try:
+                evaluated = _evaluate_project_bounded_integer_expression(
+                    str(expression),
+                    {str(name): str(value) for name, value in parameters.items()},
+                )
+            except _ProjectWorkgroupRuleExpressionError as exc:
+                reasons.append(
+                    f"{entry_prefix}.subgroupWidthRule.expression is invalid: "
+                    f"{exc.reason}"
+                )
+            else:
+                if evaluated != subgroup_width:
+                    reasons.append(
+                        f"{entry_prefix}.subgroupWidth must match its evaluated rule"
+                    )
+        target_entry = entry.get("targetEntryPoint")
+        if _is_non_empty_string(target_entry):
+            target_entries.append(str(target_entry))
+        identity_reasons = _hash_contract_reasons(
+            f"{entry_prefix}.identity",
+            entry.get("identity"),
+            require_closed_fields=True,
+        )
+        reasons.extend(identity_reasons)
+        if (
+            not identity_reasons
+            and _is_non_empty_string(source)
+            and _is_non_empty_string(target)
+            and isinstance(source_hash, Mapping)
+        ):
+            expected_identity = _workgroup_rule_entry_identity(
+                source=str(source),
+                source_hash=source_hash,
+                target=str(target),
+                variant=variant,
+                entry=entry,
+            )
+            if entry.get("identity") != expected_identity:
+                reasons.append(
+                    f"{entry_prefix}.identity must match the entry execution contract"
+                )
+
+        if _is_non_empty_string(expression) and _is_non_empty_string(source_pattern):
+            shadow = {
+                key: entry[key]
+                for key in (
+                    "sourceEntryPoint",
+                    "materializedEntryPoint",
+                    "targetEntryPoint",
+                    "parameters",
+                    "parameterSources",
+                    "materialization",
+                )
+                if key in entry
+            }
+            shadow["workgroupSize"] = [subgroup_width, 1, 1]
+            shadow["rule"] = {
+                "components": [str(expression), "1", "1"],
+                "sourcePattern": str(source_pattern),
+                "path": _mapping_key_path(
+                    f"project.{WORKGROUP_SIZE_RULES_CONFIG_KEY}", str(source_pattern)
+                ),
+            }
+            if (
+                _is_non_empty_string(source)
+                and _is_non_empty_string(target)
+                and isinstance(source_hash, Mapping)
+            ):
+                shadow["identity"] = _workgroup_rule_entry_identity(
+                    source=str(source),
+                    source_hash=source_hash,
+                    target=str(target),
+                    variant=variant,
+                    entry=shadow,
+                )
+            shadow_entries.append(shadow)
+
+    if shadow_entries and selected_pattern is not None:
+        shadow_provenance = {
+            "kind": "materialized-template-rule",
+            "path": _mapping_key_path(
+                f"project.{WORKGROUP_SIZE_RULES_CONFIG_KEY}", selected_pattern
+            ),
+        }
+        shadow_execution = {
+            "sourceEntryPoints": execution.get("sourceEntryPoints"),
+            "entryPoints": shadow_entries,
+            "provenance": shadow_provenance,
+        }
+        if (
+            _is_non_empty_string(source)
+            and _is_non_empty_string(target)
+            and isinstance(source_hash, Mapping)
+            and isinstance(execution.get("sourceEntryPoints"), list)
+        ):
+            shadow_execution["identity"] = _workgroup_rule_execution_identity(
+                source=str(source),
+                source_hash=source_hash,
+                target=str(target),
+                variant=variant,
+                source_entry_points=execution["sourceEntryPoints"],
+                entry_points=shadow_entries,
+                provenance=shadow_provenance,
+            )
+        shadow_project = dict(project or {})
+        shadow_project["workgroupSizeRules"] = {
+            pattern: [expression, "1", "1"]
+            for pattern, expression in normalized_rules.items()
+        }
+        reasons.extend(
+            _artifact_rule_execution_contract_reasons(
+                prefix,
+                record,
+                shadow_execution,
+                shadow_project,
+            )
+        )
+
+    provenance = execution.get("subgroupWidthProvenance")
+    expected_provenance = {
+        "kind": "materialized-template-rule",
+        "path": (
+            _mapping_key_path(
+                f"project.{SUBGROUP_WIDTH_RULES_CONFIG_KEY}", selected_pattern
+            )
+            if selected_pattern is not None
+            else None
+        ),
+    }
+    if provenance != expected_provenance:
+        reasons.append(
+            f"{execution_prefix}.subgroupWidthProvenance must match the selected "
+            "project rule"
+        )
+    enforcement = execution.get("subgroupWidthEnforcement")
+    profiles = (
+        enforcement.get("entryProfiles") if isinstance(enforcement, Mapping) else None
+    )
+    profile_records = [
+        item for item in _record_sequence(profiles) if isinstance(item, Mapping)
+    ]
+    profile_entries = [str(item.get("entryPoint", "")) for item in profile_records]
+    if (
+        not isinstance(enforcement, Mapping)
+        or enforcement.get("mechanism") != "hlsl-wave-size-attribute"
+        or enforcement.get("minimumShaderModel") != "6.6"
+        or profile_entries != sorted(set(target_entries))
+        or any(
+            not _is_non_empty_string(item.get("profile"))
+            or not str(item["profile"]).startswith("cs_")
+            or _directx_dxc_profile_version(str(item["profile"])) < (6, 6)
+            for item in profile_records
+        )
+    ):
+        reasons.append(
+            f"{execution_prefix}.subgroupWidthEnforcement must require WaveSize "
+            "and compute Shader Model 6.6 or newer for every target entry"
+        )
+    identity_reasons = _hash_contract_reasons(
+        f"{execution_prefix}.identity",
+        execution.get("identity"),
+        require_closed_fields=True,
+    )
+    reasons.extend(identity_reasons)
+    if (
+        not identity_reasons
+        and _is_non_empty_string(source)
+        and _is_non_empty_string(target)
+        and isinstance(source_hash, Mapping)
+    ):
+        expected_identity = _subgroup_rule_execution_identity(
             source=str(source),
             source_hash=source_hash,
             target=str(target),
             variant=variant,
-            source_entry_points=source_entry_points,
-            entry_points=[entry for entry in raw_entries if isinstance(entry, Mapping)],
-            provenance=provenance,
+            execution=execution,
         )
         if execution.get("identity") != expected_identity:
             reasons.append(
@@ -39731,14 +40682,36 @@ def _artifact_execution_contract_reasons(
         REPORT_ARTIFACT_EXECUTION_FIELDS,
     )
     if "entryPoints" in execution:
-        reasons.extend(
-            _artifact_rule_execution_contract_reasons(
-                prefix,
-                record,
-                execution,
-                project,
+        entries = [
+            entry
+            for entry in _record_sequence(execution.get("entryPoints"))
+            if isinstance(entry, Mapping)
+        ]
+        has_workgroup = any("workgroupSize" in entry for entry in entries)
+        has_subgroup = any("subgroupWidth" in entry for entry in entries)
+        if has_workgroup:
+            reasons.extend(
+                _artifact_rule_execution_contract_reasons(
+                    prefix,
+                    record,
+                    execution,
+                    project,
+                )
             )
-        )
+        if has_subgroup:
+            reasons.extend(
+                _artifact_subgroup_rule_execution_contract_reasons(
+                    prefix,
+                    record,
+                    execution,
+                    project,
+                )
+            )
+        if not has_workgroup and not has_subgroup:
+            reasons.append(
+                f"{execution_prefix}.entryPoints must define an execution "
+                "specialization"
+            )
         return reasons
     workgroup_size = execution.get("workgroupSize")
     reasons.extend(
@@ -42050,6 +43023,26 @@ def _workgroup_size_rule_mapping_contract_reasons(
     return reasons
 
 
+def _subgroup_width_rule_mapping_contract_reasons(
+    prefix: str,
+    value: Any,
+) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+    reasons = []
+    for pattern, expression in value.items():
+        if not _is_non_empty_string(pattern):
+            reasons.append(f"{prefix} keys must be non-empty source patterns")
+            rule_prefix = prefix
+        else:
+            rule_prefix = _mapping_key_path(prefix, str(pattern))
+            if not _is_repository_relative_glob(str(pattern)):
+                reasons.append(f"{rule_prefix} pattern must be repository-relative")
+        if not _is_non_empty_string(expression):
+            reasons.append(f"{rule_prefix} must be a non-empty integral expression")
+    return reasons
+
+
 def _source_options_mapping_contract_reasons(prefix: str, value: Any) -> list[str]:
     if not isinstance(value, Mapping):
         return [f"{prefix} must be an object"]
@@ -43185,6 +44178,35 @@ def _project_metadata_contract_reasons(
             reasons.append(
                 "project.workgroupSizeRuleCount must match "
                 "project.workgroupSizeRules"
+            )
+
+    subgroup_width_rules = project.get("subgroupWidthRules")
+    if _optional_project_field(
+        project,
+        "subgroupWidthRules",
+        required=require_full_metadata,
+    ):
+        reasons.extend(
+            _subgroup_width_rule_mapping_contract_reasons(
+                "project.subgroupWidthRules", subgroup_width_rules
+            )
+        )
+    if _optional_project_field(
+        project,
+        "subgroupWidthRuleCount",
+        required=require_full_metadata,
+    ):
+        count = project.get("subgroupWidthRuleCount")
+        if not _is_non_negative_int(count):
+            reasons.append(
+                "project.subgroupWidthRuleCount must be a non-negative integer"
+            )
+        elif isinstance(subgroup_width_rules, Mapping) and count != len(
+            subgroup_width_rules
+        ):
+            reasons.append(
+                "project.subgroupWidthRuleCount must match "
+                "project.subgroupWidthRules"
             )
 
     if _optional_project_field(
@@ -47070,18 +48092,21 @@ def _directx_hlsl_struct_stage(semantics: Sequence[str]) -> str | None:
 
 
 def _directx_dxc_profile_for_source(profile: str, source: str) -> str:
-    if not re.search(r"\bSV_ShadingRate\b", source, re.IGNORECASE):
-        return profile
-
     stage = profile.split("_", 1)[0]
-    min_profile = DIRECTX_DXC_VRS_MIN_PROFILE_BY_STAGE.get(stage)
-    if min_profile is None:
+    minimum_profiles = []
+    if re.search(r"\bSV_ShadingRate\b", source, re.IGNORECASE):
+        minimum_profiles.append(DIRECTX_DXC_VRS_MIN_PROFILE_BY_STAGE.get(stage))
+    if DIRECTX_HLSL_EXACT_WAVE_SIZE_RE.search(source):
+        minimum_profiles.append(
+            DIRECTX_DXC_EXACT_WAVE_SIZE_MIN_PROFILE_BY_STAGE.get(stage)
+        )
+    required = [value for value in minimum_profiles if value is not None]
+    if not required:
         return profile
-    if _directx_dxc_profile_version(profile) >= _directx_dxc_profile_version(
-        min_profile
-    ):
+    minimum = max(required, key=_directx_dxc_profile_version)
+    if _directx_dxc_profile_version(profile) >= _directx_dxc_profile_version(minimum):
         return profile
-    return min_profile
+    return minimum
 
 
 def _directx_dxc_profile_version(profile: str) -> tuple[int, int]:
