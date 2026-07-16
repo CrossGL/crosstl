@@ -432,21 +432,22 @@ def _write_template_member_pointer_report(
             StructuredBuffer<float> src : register(t0);
             RWStructuredBuffer<float> out_ : register(u1);
             float ReducedMMAFrag__load__const_device_float_ptr(
-                StructuredBuffer<float> src, int stride) {
-              return float(src[stride]);
+                StructuredBuffer<float> src, int64_t src_offset, int stride) {
+              return float(src[uint((src_offset + stride))]);
             }
             void ReducedMMATile__load__float(
                 inout ReducedMMATile self,
                 StructuredBuffer<float> src,
+                int64_t src_offset,
                 int index) {
               self.value = ReducedMMAFrag__load__const_device_float_ptr(
-                  &src[index], 1);
+                  src, int64_t((src_offset + index)), 1);
             }
             [numthreads(1, 1, 1)]
             void CSMain(uint3 gid_dispatchThreadID : SV_DispatchThreadID) {
               uint gid = gid_dispatchThreadID.x;
               ReducedMMATile tile;
-              ReducedMMATile__load__float(tile, src, int(gid));
+              ReducedMMATile__load__float(tile, src, int64_t(0), int(gid));
               out_[gid] = tile.value;
             }
         """
@@ -1000,16 +1001,16 @@ def test_template_member_pointer_check_records_precise_target_evidence(
     )
     assert directx["materializedOuterHelper"] == "ReducedMMATile__load__float"
     assert directx["sourceView"] == {
-        "representation": "structured-buffer-addressed-element",
+        "representation": "structured-buffer-plus-offset",
         "resourceName": "src",
         "parameterName": "src",
         "parameterType": "StructuredBuffer<float>",
-        "offsetParameter": None,
+        "offsetParameter": "src_offset",
         "scalarizedPointerParameter": False,
     }
-    assert directx["sourceIndexExpression"] == "&src[index]"
-    assert directx["indexedReadExpression"] == "src[stride]"
-    assert directx["indexedReadIndex"] == "stride"
+    assert directx["sourceIndexExpression"] == "src_offset+index"
+    assert directx["indexedReadExpression"] == "src[uint((src_offset+stride))]"
+    assert directx["indexedReadIndex"] == "uint((src_offset+stride))"
     assert directx["scalarizedPointerParameter"] is False
     assert directx["unresolvedSourceCallRetained"] is False
     assert directx["sourceIndexPreserved"] is True

@@ -1760,13 +1760,25 @@ def _template_member_pointer_evidence(
             "DirectX outer tile helper must retain src as a "
             "StructuredBuffer<float> parameter",
         )
-        offset_parameter = re.search(r"\b(?:u?int)\s+src_offset\b", helper_parameters)
+        offset_type = r"u?int(?:32_t|64_t)?"
+        offset_parameter = re.search(
+            rf"\b{offset_type}\s+src_offset\b", helper_parameters
+        )
+        outer_offset_parameter = re.search(
+            rf"\b{offset_type}\s+src_offset\b", outer_parameters
+        )
         addressed_argument = re.search(
             r"(?P<index>&\s*\(?\s*src\s*\[\s*index\s*\]\s*\)?)",
             helper_call_arguments,
         )
+        expected_offset = (
+            r"src_offset\s*\+\s*index|index\s*\+\s*src_offset"
+            if outer_offset_parameter is not None
+            else r"index"
+        )
         resource_offset_argument = re.search(
-            r"\bsrc\b[^;]*,\s*(?:int\s*\(\s*)?index\b",
+            rf"\bsrc\s*,\s*(?:{offset_type}\s*\(\s*)?\(*\s*"
+            rf"(?P<offset>{expected_offset})\s*\)*",
             helper_call_arguments,
         )
         _require(
@@ -1793,10 +1805,14 @@ def _template_member_pointer_evidence(
             "offsetParameter": "src_offset" if offset_parameter is not None else None,
             "scalarizedPointerParameter": False,
         }
-        source_index_expression = (
-            "src,index"
-            if addressed_argument is None
-            else re.sub(r"\s+", "", addressed_argument.group("index"))
+        source_index_expression = re.sub(
+            r"\s+",
+            "",
+            (
+                addressed_argument.group("index")
+                if addressed_argument is not None
+                else resource_offset_argument.group("offset")
+            ),
         )
     else:
         global_source = re.search(

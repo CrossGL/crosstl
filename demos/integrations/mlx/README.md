@@ -46,10 +46,11 @@ The current harness verifies:
   artifacts with zero diagnostics. The materialized fragment helper must keep
   a pointer-backed source view and read it at `stride`; a scalar `float src`
   parameter is rejected. The DirectX proof requires a `StructuredBuffer<float>`
-  source and preserves the addressed `src[index]` argument. The OpenGL proof
-  requires the equivalent global storage-buffer plus `src_offset` form, carries
-  `index` into that offset, and reads `src[src_offset + stride]`. Source-style
-  unresolved member calls are rejected. This gate inspects generated structure;
+  source and preserves the addressed `src[index]` position as a composed
+  `src_offset + index` view. The OpenGL proof requires the equivalent global
+  storage-buffer plus `src_offset` form, carries `index` into that offset, and
+  reads `src[src_offset + stride]`. Source-style unresolved member calls are
+  rejected. This gate inspects generated structure;
   it does not require native target compilation, execute a shader, or claim
   runtime parity;
 - DirectX and Vulkan artifact generation for the 11-source clean reduced
