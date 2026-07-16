@@ -26,20 +26,53 @@ MLX_RMS_NORM_SOURCE = "mlx/backend/metal/kernels/rms_norm.metal"
 MLX_RMS_NORM_SHA256 = "5d411a2350ba7ddf84eb35f9dcac7cde0d441bd55fa1e9e1ccc61d490d428dee"
 RMS_NORM_FUNCTION_CONSTANT_NAME = "has_w"
 RMS_NORM_FUNCTION_CONSTANT_ID = 20
+RMS_NORM_HOST_ENTRY_POINTS = (
+    "rms_loopedbfloat16",
+    "rms_loopedfloat16",
+    "rms_loopedfloat32",
+    "rmsbfloat16",
+    "rmsfloat16",
+    "rmsfloat32",
+    "vjp_rms_loopedbfloat16",
+    "vjp_rms_loopedfloat16",
+    "vjp_rms_loopedfloat32",
+    "vjp_rmsbfloat16",
+    "vjp_rmsfloat16",
+    "vjp_rmsfloat32",
+)
+RMS_NORM_EXPECTED_ENTRY_POINT_COUNT = len(RMS_NORM_HOST_ENTRY_POINTS)
+RMS_NORM_LOOPED_ENTRY_POINT_COUNT = sum(
+    "_looped" in entry_point for entry_point in RMS_NORM_HOST_ENTRY_POINTS
+)
 RMS_NORM_DIRECTX_PROFILE = "cs_6_0"
-RMS_NORM_RUNTIME_BLOCKERS = ("https://github.com/CrossGL/crosstl/issues/1750",)
+RMS_NORM_RUNTIME_BLOCKERS = (
+    "https://github.com/CrossGL/crosstl/issues/1462",
+    "https://github.com/CrossGL/crosstl/issues/1735",
+)
 RMS_NORM_DIRECTX_VARIANTS = (
     {
-        "name": "has_w_false_by_name",
+        "name": "has_w_false_by_name_workgroup_32",
         "selector": RMS_NORM_FUNCTION_CONSTANT_NAME,
         "selectorKind": "name",
         "value": False,
+        "workgroupSize": [32, 1, 1],
     },
     {
-        "name": "has_w_true_by_id",
+        "name": "has_w_true_by_id_workgroup_64",
         "selector": str(RMS_NORM_FUNCTION_CONSTANT_ID),
         "selectorKind": "id",
         "value": True,
+        "workgroupSize": [64, 1, 1],
+    },
+)
+RMS_NORM_OPENGL_VARIANTS = (
+    {
+        "name": "workgroup_32",
+        "workgroupSize": [32, 1, 1],
+    },
+    {
+        "name": "workgroup_64",
+        "workgroupSize": [64, 1, 1],
     },
 )
 DEFAULT_WORK_DIR = ".crosstl-mlx-porting/rms-norm-specialization"
@@ -187,6 +220,10 @@ def _project_config(
     *,
     target: str,
 ) -> ProjectConfig:
+    _require(
+        target in {"directx", "opengl"},
+        f"unsupported RMSNorm proof target: {target}",
+    )
     common: dict[str, Any] = {
         "root": mlx_root,
         "source_roots": (MLX_METAL_KERNEL_ROOT,),
@@ -197,18 +234,24 @@ def _project_config(
         "include_dirs": (".",),
     }
     if target == "directx":
-        variants = {variant["name"]: {} for variant in RMS_NORM_DIRECTX_VARIANTS}
+        configured_variants = RMS_NORM_DIRECTX_VARIANTS
         variant_specializations = {
             variant["name"]: {variant["selector"]: variant["value"]}
             for variant in RMS_NORM_DIRECTX_VARIANTS
         }
-        common.update(
-            {
-                "variants": variants,
-                "variant_specialization_constants": variant_specializations,
-                "selected_variants": tuple(variants),
-            }
-        )
+        common["variant_specialization_constants"] = variant_specializations
+    else:
+        configured_variants = RMS_NORM_OPENGL_VARIANTS
+    variants = {
+        variant["name"]: {"workgroup_size": variant["workgroupSize"]}
+        for variant in configured_variants
+    }
+    common.update(
+        {
+            "variants": variants,
+            "selected_variants": tuple(variants),
+        }
+    )
     return ProjectConfig(**common)
 
 
@@ -289,6 +332,56 @@ def _validate_report(
     return artifacts
 
 
+def _validate_project_variants(
+    payload: Mapping[str, Any],
+    variants: Sequence[Mapping[str, Any]],
+    *,
+    target: str,
+) -> None:
+    project = payload.get("project")
+    _require(isinstance(project, Mapping), f"{target} project metadata is missing")
+    variant_names = [str(variant["name"]) for variant in variants]
+    expected_workgroup_sizes = {
+        str(variant["name"]): list(variant["workgroupSize"]) for variant in variants
+    }
+    _require(
+        project.get("targets") == [target]
+        and project.get("variantCount") == len(variants)
+        and project.get("selectedVariants") == variant_names
+        and project.get("variants") == {name: {} for name in variant_names}
+        and project.get("variantWorkgroupSizes") == expected_workgroup_sizes
+        and project.get("workgroupSize") is None
+        and project.get("workgroupSizeRuleCount") == 0
+        and project.get("workgroupSizeRules") == {},
+        f"{target} report did not retain the exact workgroup variants",
+    )
+    expected_specializations = (
+        {
+            str(variant["name"]): {
+                str(variant["selector"]): variant["value"],
+            }
+            for variant in variants
+        }
+        if target == "directx"
+        else {}
+    )
+    _require(
+        project.get("specializationConstants") == {}
+        and project.get("specializationConstantCount") == 0
+        and project.get("variantSpecializationConstants") == expected_specializations,
+        f"{target} report specialization-variant configuration changed",
+    )
+
+
+def _is_sha256_identity(value: Any) -> bool:
+    return (
+        isinstance(value, Mapping)
+        and value.get("algorithm") == "sha256"
+        and isinstance(value.get("value"), str)
+        and re.fullmatch(r"[0-9a-f]{64}", value["value"]) is not None
+    )
+
+
 def _artifact_path(artifact: Mapping[str, Any], mlx_root: Path) -> Path:
     value = artifact.get("path")
     _require(isinstance(value, str) and value, "artifact path is missing")
@@ -307,6 +400,9 @@ def _validate_common_artifact(
     target: str,
     mlx_root: Path,
 ) -> tuple[Path, str]:
+    expected_pipeline = (
+        "single-file-translate" if target == "directx" else "entry-scoped-translate"
+    )
     _require(
         artifact.get("source") == MLX_RMS_NORM_SOURCE
         and artifact.get("sourceBackend") == "metal"
@@ -321,7 +417,7 @@ def _validate_common_artifact(
     )
     _require(
         artifact.get("provenance")
-        == {"pipeline": "single-file-translate", "intermediate": "crossgl"},
+        == {"pipeline": expected_pipeline, "intermediate": "crossgl"},
         f"{target} report did not retain Metal-to-CrossGL project provenance",
     )
     path = _artifact_path(artifact, mlx_root)
@@ -331,6 +427,13 @@ def _validate_common_artifact(
         and generated_hash.get("algorithm") == "sha256"
         and generated_hash.get("value") == _sha256(path),
         f"{target} generated artifact hash is missing or stale",
+    )
+    generated_size = artifact.get("generatedSizeBytes")
+    _require(
+        isinstance(generated_size, int)
+        and generated_size > 0
+        and generated_size == path.stat().st_size,
+        f"{target} generated artifact size is missing or stale",
     )
     return path, path.read_text(encoding="utf-8")
 
@@ -358,7 +461,226 @@ def _validate_specialization_materialization(
     )
 
 
-def _representative_directx_entry_point(artifact_path: Path) -> str:
+def _host_materializations(
+    artifact: Mapping[str, Any],
+    *,
+    target: str,
+) -> dict[tuple[str, str], Mapping[str, Any]]:
+    materialization = artifact.get("templateMaterialization")
+    specializations = (
+        materialization.get("specializations")
+        if isinstance(materialization, Mapping)
+        else None
+    )
+    _require(
+        isinstance(materialization, Mapping)
+        and materialization.get("status") == "materialized"
+        and materialization.get("specializationCount")
+        == RMS_NORM_EXPECTED_ENTRY_POINT_COUNT
+        and isinstance(specializations, list)
+        and len(specializations) == RMS_NORM_EXPECTED_ENTRY_POINT_COUNT
+        and materialization.get("unsupported") == [],
+        f"{target} RMSNorm artifact did not retain exactly 12 materializations",
+    )
+    host_materializations: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for record in specializations:
+        _require(
+            isinstance(record, Mapping),
+            f"{target} RMSNorm materialization records must be objects",
+        )
+        host_name = record.get("hostName")
+        materialized_name = record.get("materializedName")
+        _require(
+            isinstance(host_name, str)
+            and bool(host_name)
+            and isinstance(materialized_name, str)
+            and bool(materialized_name)
+            and isinstance(record.get("name"), str)
+            and bool(record.get("name")),
+            f"{target} RMSNorm host materialization identity is incomplete",
+        )
+        identity = (host_name, materialized_name)
+        _require(
+            identity not in host_materializations,
+            f"{target} RMSNorm host materialization identities must be unique",
+        )
+        host_materializations[identity] = record
+    _require(
+        set(host_materializations)
+        == {(entry_point, entry_point) for entry_point in RMS_NORM_HOST_ENTRY_POINTS},
+        f"{target} RMSNorm host-named compute entry set changed",
+    )
+    return host_materializations
+
+
+def _execution_entries(
+    artifact: Mapping[str, Any],
+    host_materializations: Mapping[tuple[str, str], Mapping[str, Any]],
+    *,
+    target: str,
+    variant_name: str,
+    workgroup_size: Sequence[int],
+    expected_source_entry_points: Sequence[str],
+) -> tuple[Mapping[str, Any], dict[str, Mapping[str, Any]]]:
+    execution = artifact.get("execution")
+    entries = execution.get("entryPoints") if isinstance(execution, Mapping) else None
+    expected_size = list(workgroup_size)
+    _require(
+        isinstance(execution, Mapping)
+        and execution.get("provenance")
+        == {
+            "kind": "project-variant",
+            "path": f"project.variants.{variant_name}.workgroup_size",
+            "variant": variant_name,
+        }
+        and _is_sha256_identity(execution.get("identity"))
+        and execution.get("sourceEntryPoints") == list(expected_source_entry_points)
+        and isinstance(entries, list)
+        and len(entries) == len(expected_source_entry_points),
+        f"{target} variant {variant_name} execution identity or entry set changed",
+    )
+    entries_by_target: dict[str, Mapping[str, Any]] = {}
+    source_identities: set[tuple[str, str]] = set()
+    for entry in entries:
+        _require(
+            isinstance(entry, Mapping),
+            f"{target} variant {variant_name} execution entries must be objects",
+        )
+        source_entry = entry.get("sourceEntryPoint")
+        materialized_entry = entry.get("materializedEntryPoint")
+        target_entry = entry.get("targetEntryPoint")
+        _require(
+            isinstance(source_entry, str)
+            and bool(source_entry)
+            and isinstance(materialized_entry, str)
+            and bool(materialized_entry)
+            and isinstance(target_entry, str)
+            and bool(target_entry),
+            f"{target} variant {variant_name} execution entry identity is incomplete",
+        )
+        source_identity = (source_entry, materialized_entry)
+        host_record = host_materializations.get(source_identity)
+        _require(
+            host_record is not None
+            and source_identity not in source_identities
+            and target_entry not in entries_by_target,
+            f"{target} variant {variant_name} execution identities are not unique",
+        )
+        expected_materialization = {
+            "hostName": source_entry,
+            "materializedName": materialized_entry,
+            "name": host_record.get("name"),
+        }
+        _require(
+            entry.get("materialization") == expected_materialization
+            and entry.get("parameters") == host_record.get("parameters")
+            and entry.get("parameterSources") == host_record.get("parameterSources")
+            and entry.get("workgroupSize") == expected_size
+            and _is_sha256_identity(entry.get("identity"))
+            and "rule" not in entry,
+            f"{target} variant {variant_name} execution contract changed for "
+            f"{source_entry}",
+        )
+        source_identities.add(source_identity)
+        entries_by_target[target_entry] = entry
+    _require(
+        {identity[0] for identity in source_identities}
+        == set(expected_source_entry_points),
+        f"{target} variant {variant_name} execution source identities changed",
+    )
+    return execution, entries_by_target
+
+
+def _directx_execution_evidence(
+    artifact: Mapping[str, Any],
+    generated: str,
+    variant: Mapping[str, Any],
+) -> dict[str, Any]:
+    variant_name = str(variant["name"])
+    workgroup_size = list(variant["workgroupSize"])
+    host_materializations = _host_materializations(
+        artifact,
+        target=f"DirectX variant {variant_name}",
+    )
+    execution, report_entries_by_target = _execution_entries(
+        artifact,
+        host_materializations,
+        target="DirectX",
+        variant_name=variant_name,
+        workgroup_size=workgroup_size,
+        expected_source_entry_points=RMS_NORM_HOST_ENTRY_POINTS,
+    )
+    generated_entry_pattern = re.compile(
+        r"(?m)^[ \t]*\[numthreads\(\s*(?P<x>\d+)\s*,\s*(?P<y>\d+)\s*,\s*"
+        r"(?P<z>\d+)\s*\)\][ \t]*\r?\n"
+        r"[ \t]*void[ \t]+(?P<target_entry>[A-Za-z_]\w*)[ \t]*\("
+    )
+    generated_entries_by_target: dict[str, list[int]] = {}
+    for match in generated_entry_pattern.finditer(generated):
+        target_entry = match.group("target_entry")
+        _require(
+            target_entry not in generated_entries_by_target,
+            f"DirectX variant {variant_name} generated duplicate target entries",
+        )
+        generated_entries_by_target[target_entry] = [
+            int(match.group(component)) for component in ("x", "y", "z")
+        ]
+    all_numthreads_sizes = [
+        [int(component) for component in match]
+        for match in re.findall(
+            r"\[\s*numthreads\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)\s*\]",
+            generated,
+        )
+    ]
+    _require(
+        len(generated_entries_by_target) == RMS_NORM_EXPECTED_ENTRY_POINT_COUNT
+        and set(generated_entries_by_target) == set(report_entries_by_target),
+        f"DirectX variant {variant_name} generated compute entry set changed",
+    )
+    _require(
+        len(all_numthreads_sizes) == RMS_NORM_EXPECTED_ENTRY_POINT_COUNT
+        and all(size == workgroup_size for size in all_numthreads_sizes),
+        f"DirectX variant {variant_name} generated an extra numthreads contract",
+    )
+    for target_entry, report_entry in report_entries_by_target.items():
+        _require(
+            generated_entries_by_target[target_entry]
+            == report_entry.get("workgroupSize")
+            == workgroup_size,
+            f"DirectX variant {variant_name} numthreads contract changed for "
+            f"{target_entry}",
+        )
+    projection_pattern = re.compile(
+        r"\buint\s+lsize\s*=\s*uint\s*\(\s*\(\s*uint3\s*\(\s*"
+        r"(?P<x>\d+)\s*,\s*(?P<y>\d+)\s*,\s*(?P<z>\d+)\s*\)\s*\)"
+        r"\.x\s*\)\s*;"
+    )
+    projected_sizes = [
+        [int(match.group(component)) for component in ("x", "y", "z")]
+        for match in projection_pattern.finditer(generated)
+    ]
+    lsize_assignments = re.findall(r"\buint\s+lsize\s*=\s*[^;]+;", generated)
+    _require(
+        len(lsize_assignments)
+        == len(projected_sizes)
+        == RMS_NORM_LOOPED_ENTRY_POINT_COUNT
+        and all(size == workgroup_size for size in projected_sizes),
+        f"DirectX variant {variant_name} consumed workgroup-size projection changed",
+    )
+    return {
+        "hostNamedMaterializationCount": len(host_materializations),
+        "executionIdentity": dict(execution["identity"]),
+        "executionEntryCount": len(report_entries_by_target),
+        "generatedNumthreadsContractCount": len(generated_entries_by_target),
+        "consumedWorkgroupProjectionCount": len(projected_sizes),
+        "sourceEntryPoints": list(RMS_NORM_HOST_ENTRY_POINTS),
+    }
+
+
+def _representative_directx_entry_point(
+    artifact_path: Path,
+    workgroup_size: Sequence[int] | None = None,
+) -> str:
     reflection = reflect_target_host_interface(artifact_path, target="directx")
     entries = reflection.get("entryPoints")
     _require(
@@ -377,6 +699,12 @@ def _representative_directx_entry_point(artifact_path: Path) -> str:
         compute_entries,
         "DirectX RMSNorm artifact has no reflected compute entry point",
     )
+    if workgroup_size is not None:
+        _require(
+            compute_entries[0].get("executionConfig")
+            == {"numthreads": list(workgroup_size)},
+            "DirectX RMSNorm representative reflection workgroup size changed",
+        )
     return str(compute_entries[0]["name"])
 
 
@@ -387,6 +715,7 @@ def _directx_variant_evidence(
     mlx_root: Path,
 ) -> dict[str, Any]:
     variant_name = str(variant["name"])
+    workgroup_size = list(variant["workgroupSize"])
     _require(
         artifact.get("variant") == variant_name,
         f"DirectX report artifact is missing variant {variant_name}",
@@ -431,18 +760,26 @@ def _directx_variant_evidence(
         target=f"DirectX variant {variant_name}",
         deferred=False,
     )
+    execution_evidence = _directx_execution_evidence(
+        artifact,
+        generated,
+        variant,
+    )
 
     literal = "true" if variant["value"] else "false"
-    static_constant = re.findall(
+    static_constants = re.findall(
         rf"\bstatic\s+const\s+bool\s+{RMS_NORM_FUNCTION_CONSTANT_NAME}"
-        rf"\s*=\s*{literal}\s*;",
+        r"\s*=\s*(true|false)\s*;",
         generated,
     )
     _require(
-        len(static_constant) == 1,
+        static_constants == [literal],
         f"DirectX variant {variant_name} did not emit the expected static const",
     )
-    entry_point = _representative_directx_entry_point(artifact_path)
+    entry_point = _representative_directx_entry_point(
+        artifact_path,
+        workgroup_size,
+    )
     _require(
         re.search(
             rf"\buniform\s+bool\s+{RMS_NORM_FUNCTION_CONSTANT_NAME}\b",
@@ -456,10 +793,12 @@ def _directx_variant_evidence(
         "selector": variant["selector"],
         "selectorKind": variant["selectorKind"],
         "value": variant["value"],
+        "workgroupSize": workgroup_size,
         "valueProvenance": expected_provenance,
         "specializationMaterialization": dict(
             artifact["specializationMaterialization"]
         ),
+        "execution": execution_evidence,
         "generatedStaticConst": f"static const bool has_w = {literal};",
         "representativeEntryPoint": entry_point,
         "artifact": _relpath(artifact_path, mlx_root),
@@ -525,6 +864,7 @@ def _compile_directx_variants(
         runs.append(
             {
                 "variant": variant_name,
+                "workgroupSize": list(variant["workgroupSize"]),
                 "status": "compiled",
                 "entryPoint": entry_point,
                 "artifact": _relpath(artifact_path, mlx_root),
@@ -563,6 +903,11 @@ def _check_directx(
         target="directx",
         expected_artifact_count=len(RMS_NORM_DIRECTX_VARIANTS),
     )
+    _validate_project_variants(
+        payload,
+        RMS_NORM_DIRECTX_VARIANTS,
+        target="directx",
+    )
     artifacts_by_variant = {
         str(artifact.get("variant")): artifact for artifact in artifacts
     }
@@ -593,6 +938,7 @@ def _check_directx(
         "target": "directx",
         "report": _relpath(report_path, mlx_root),
         "artifactCount": len(artifacts),
+        "executionEntryCountPerArtifact": RMS_NORM_EXPECTED_ENTRY_POINT_COUNT,
         "variants": variant_evidence,
         "nativeCompilation": native_compilation,
         "runtimeParityClaimed": False,
@@ -603,17 +949,32 @@ def _check_directx(
 
 def _opengl_evidence(
     artifact: Mapping[str, Any],
+    variant: Mapping[str, Any],
     *,
     mlx_root: Path,
-) -> tuple[dict[str, Any], Path]:
+) -> dict[str, Any]:
+    variant_name = str(variant["name"])
+    workgroup_size = list(variant["workgroupSize"])
     artifact_path, generated = _validate_common_artifact(
         artifact,
         target="opengl",
         mlx_root=mlx_root,
     )
+    entry_point = artifact.get("entryPoint")
+    source_entry = (
+        entry_point.get("source") if isinstance(entry_point, Mapping) else None
+    )
     _require(
-        "variant" not in artifact,
-        "OpenGL RMSNorm proof must remain an unmaterialized project variant",
+        artifact.get("variant") == variant_name
+        and isinstance(source_entry, str)
+        and source_entry in RMS_NORM_HOST_ENTRY_POINTS
+        and entry_point
+        == {
+            "source": source_entry,
+            "target": "main",
+            "stage": "compute",
+        },
+        f"OpenGL variant {variant_name} artifact entry identity changed",
     )
     constants = artifact.get("specializationConstants")
     _require(
@@ -631,12 +992,29 @@ def _opengl_evidence(
         and constant.get("status") == "required"
         and constant.get("valueProvenance") == {"kind": "runtime-override-required"}
         and "concreteValue" not in constant,
-        "OpenGL RMSNorm function-constant deferral record is incorrect",
+        f"OpenGL variant {variant_name} function-constant deferral is incorrect",
     )
     _validate_specialization_materialization(
         artifact,
-        target="OpenGL",
+        target=f"OpenGL variant {variant_name} entry {source_entry}",
         deferred=True,
+    )
+    host_materializations = _host_materializations(
+        artifact,
+        target=f"OpenGL variant {variant_name}",
+    )
+    execution, entries_by_target = _execution_entries(
+        artifact,
+        host_materializations,
+        target="OpenGL",
+        variant_name=variant_name,
+        workgroup_size=workgroup_size,
+        expected_source_entry_points=[source_entry],
+    )
+    _require(
+        set(entries_by_target) == {"main"}
+        and entries_by_target["main"].get("sourceEntryPoint") == source_entry,
+        f"OpenGL variant {variant_name} execution target changed for {source_entry}",
     )
     declaration_pattern = (
         rf"layout\s*\(\s*constant_id\s*=\s*{RMS_NORM_FUNCTION_CONSTANT_ID}\s*\)"
@@ -644,7 +1022,7 @@ def _opengl_evidence(
     )
     _require(
         len(re.findall(declaration_pattern, generated)) == 1,
-        "OpenGL RMSNorm artifact did not retain constant_id = 20",
+        f"OpenGL variant {variant_name} entry {source_entry} lost constant_id = 20",
     )
     _require(
         re.search(
@@ -652,27 +1030,56 @@ def _opengl_evidence(
             generated,
         )
         is None,
-        "OpenGL RMSNorm artifact lowered has_w as a uniform",
+        f"OpenGL variant {variant_name} entry {source_entry} lowered has_w as a uniform",
     )
-    return (
-        {
-            "name": RMS_NORM_FUNCTION_CONSTANT_NAME,
-            "id": RMS_NORM_FUNCTION_CONSTANT_ID,
-            "required": True,
-            "deferred": True,
-            "valueProvenance": {"kind": "runtime-override-required"},
-            "specializationMaterialization": dict(
-                artifact["specializationMaterialization"]
-            ),
-            "generatedContract": "layout(constant_id = 20) const bool has_w = false;",
-            "artifact": _relpath(artifact_path, mlx_root),
-        },
-        artifact_path,
+    local_size_pattern = re.compile(
+        r"layout\s*\(\s*local_size_x\s*=\s*(?P<x>\d+)\s*,\s*"
+        r"local_size_y\s*=\s*(?P<y>\d+)\s*,\s*"
+        r"local_size_z\s*=\s*(?P<z>\d+)\s*\)\s*in\s*;"
     )
+    generated_local_sizes = [
+        [int(match.group(component)) for component in ("x", "y", "z")]
+        for match in local_size_pattern.finditer(generated)
+    ]
+    _require(
+        generated_local_sizes == [workgroup_size],
+        f"OpenGL variant {variant_name} local-size contract changed for "
+        f"{source_entry}",
+    )
+    lsize_assignments = re.findall(r"\buint\s+lsize\s*=\s*[^;]+;", generated)
+    consumed_projection_count = len(
+        re.findall(
+            r"\buint\s+lsize\s*=\s*uint\s*\(\s*gl_WorkGroupSize\.x\s*\)\s*;",
+            generated,
+        )
+    )
+    expected_projection_count = 1 if "_looped" in source_entry else 0
+    _require(
+        len(lsize_assignments)
+        == consumed_projection_count
+        == expected_projection_count,
+        f"OpenGL variant {variant_name} consumed workgroup-size projection changed "
+        f"for {source_entry}",
+    )
+    execution_entry = entries_by_target["main"]
+    return {
+        "sourceEntryPoint": source_entry,
+        "targetEntryPoint": "main",
+        "workgroupSize": workgroup_size,
+        "executionIdentity": dict(execution["identity"]),
+        "executionEntryIdentity": dict(execution_entry["identity"]),
+        "generatedLocalSizeContract": (
+            f"layout(local_size_x = {workgroup_size[0]}, "
+            f"local_size_y = {workgroup_size[1]}, "
+            f"local_size_z = {workgroup_size[2]}) in;"
+        ),
+        "consumedWorkgroupProjectionCount": consumed_projection_count,
+        "artifact": _relpath(artifact_path, mlx_root),
+    }
 
 
 def _compile_opengl(
-    artifact_path: Path,
+    artifacts: Sequence[Mapping[str, Any]],
     *,
     mlx_root: Path,
     work_dir: Path,
@@ -687,6 +1094,8 @@ def _compile_opengl(
             "compiler": "glslangValidator",
             "validator": "spirv-val",
             "compiledArtifactCount": 0,
+            "validatedArtifactCount": 0,
+            "runs": [],
         }
     _require(
         sys.platform.startswith("linux"),
@@ -706,43 +1115,87 @@ def _compile_opengl(
         not missing,
         "OpenGL proof requires these Linux tools: " + ", ".join(missing),
     )
-
-    output_path = work_dir / "native" / "opengl" / "rms_norm.spv"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.unlink(missing_ok=True)
-    compile_result = _run_command(
-        "compile-rmsnorm-opengl",
-        [
-            str(glslang),
-            "--target-env",
-            "opengl",
-            "--target-env",
-            "spirv1.3",
-            "-S",
-            "comp",
-            str(artifact_path),
-            "-o",
-            str(output_path),
-        ],
-        log_dir=log_dir,
-    )
     _require(
-        compile_result["returncode"] == 0,
-        "glslangValidator failed for the generated OpenGL RMSNorm artifact",
+        len(artifacts)
+        == len(RMS_NORM_OPENGL_VARIANTS) * RMS_NORM_EXPECTED_ENTRY_POINT_COUNT,
+        "OpenGL native proof must compile all 24 generated artifacts",
     )
-    _require(
-        output_path.is_file() and output_path.stat().st_size > 0,
-        "glslangValidator did not emit RMSNorm SPIR-V",
-    )
-    validation_result = _run_command(
-        "validate-rmsnorm-opengl-spirv",
-        [str(spirv_val), "--target-env", "spv1.3", str(output_path)],
-        log_dir=log_dir,
-    )
-    _require(
-        validation_result["returncode"] == 0,
-        "spirv-val failed for the generated OpenGL RMSNorm artifact",
-    )
+    expected_variants = {
+        str(variant["name"]): variant for variant in RMS_NORM_OPENGL_VARIANTS
+    }
+    seen: set[tuple[str, str]] = set()
+    runs = []
+    for artifact in artifacts:
+        variant_name = artifact.get("variant")
+        entry_point = artifact.get("entryPoint")
+        source_entry = (
+            entry_point.get("source") if isinstance(entry_point, Mapping) else None
+        )
+        identity = (str(variant_name), str(source_entry))
+        _require(
+            isinstance(variant_name, str)
+            and variant_name in expected_variants
+            and isinstance(source_entry, str)
+            and source_entry in RMS_NORM_HOST_ENTRY_POINTS
+            and identity not in seen,
+            "OpenGL native proof artifact identity is missing or duplicated",
+        )
+        seen.add(identity)
+        artifact_path = _artifact_path(artifact, mlx_root)
+        output_path = (
+            work_dir / "native" / "opengl" / variant_name / f"{source_entry}.spv"
+        )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.unlink(missing_ok=True)
+        command_name = f"rmsnorm-opengl-{variant_name}-{source_entry}"
+        compile_result = _run_command(
+            f"compile-{command_name}",
+            [
+                str(glslang),
+                "--target-env",
+                "opengl",
+                "--target-env",
+                "spirv1.3",
+                "-S",
+                "comp",
+                str(artifact_path),
+                "-o",
+                str(output_path),
+            ],
+            log_dir=log_dir,
+        )
+        _require(
+            compile_result["returncode"] == 0,
+            f"glslangValidator failed for {variant_name}/{source_entry}",
+        )
+        _require(
+            output_path.is_file() and output_path.stat().st_size > 0,
+            f"glslangValidator did not emit SPIR-V for {variant_name}/{source_entry}",
+        )
+        validation_result = _run_command(
+            f"validate-{command_name}",
+            [str(spirv_val), "--target-env", "spv1.3", str(output_path)],
+            log_dir=log_dir,
+        )
+        _require(
+            validation_result["returncode"] == 0,
+            f"spirv-val failed for {variant_name}/{source_entry}",
+        )
+        runs.append(
+            {
+                "variant": variant_name,
+                "sourceEntryPoint": source_entry,
+                "targetEntryPoint": "main",
+                "workgroupSize": list(expected_variants[variant_name]["workgroupSize"]),
+                "status": "compiled-and-validated",
+                "artifact": _relpath(artifact_path, mlx_root),
+                "compiledArtifact": _relpath(output_path, mlx_root),
+                "compileStdout": _relpath(compile_result["stdoutPath"], mlx_root),
+                "compileStderr": _relpath(compile_result["stderrPath"], mlx_root),
+                "validationStdout": _relpath(validation_result["stdoutPath"], mlx_root),
+                "validationStderr": _relpath(validation_result["stderrPath"], mlx_root),
+            }
+        )
     return {
         "required": True,
         "status": "compiled-and-validated",
@@ -750,12 +1203,9 @@ def _compile_opengl(
         "compiler": "glslangValidator",
         "validator": "spirv-val",
         "entryPoint": "main",
-        "compiledArtifactCount": 1,
-        "compiledArtifact": _relpath(output_path, mlx_root),
-        "compileStdout": _relpath(compile_result["stdoutPath"], mlx_root),
-        "compileStderr": _relpath(compile_result["stderrPath"], mlx_root),
-        "validationStdout": _relpath(validation_result["stdoutPath"], mlx_root),
-        "validationStderr": _relpath(validation_result["stderrPath"], mlx_root),
+        "compiledArtifactCount": len(runs),
+        "validatedArtifactCount": len(runs),
+        "runs": runs,
     }
 
 
@@ -776,11 +1226,66 @@ def _check_opengl(
     artifacts = _validate_report(
         payload,
         target="opengl",
-        expected_artifact_count=1,
+        expected_artifact_count=(
+            len(RMS_NORM_OPENGL_VARIANTS) * RMS_NORM_EXPECTED_ENTRY_POINT_COUNT
+        ),
     )
-    specialization, artifact_path = _opengl_evidence(artifacts[0], mlx_root=mlx_root)
+    _validate_project_variants(
+        payload,
+        RMS_NORM_OPENGL_VARIANTS,
+        target="opengl",
+    )
+    artifacts_by_identity: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for artifact in artifacts:
+        variant_name = artifact.get("variant")
+        entry_point = artifact.get("entryPoint")
+        source_entry = (
+            entry_point.get("source") if isinstance(entry_point, Mapping) else None
+        )
+        _require(
+            isinstance(variant_name, str)
+            and isinstance(source_entry, str)
+            and (variant_name, source_entry) not in artifacts_by_identity,
+            "OpenGL report artifact variant/entry identity is missing or duplicated",
+        )
+        artifacts_by_identity[(variant_name, source_entry)] = artifact
+    expected_identities = {
+        (str(variant["name"]), source_entry)
+        for variant in RMS_NORM_OPENGL_VARIANTS
+        for source_entry in RMS_NORM_HOST_ENTRY_POINTS
+    }
+    _require(
+        set(artifacts_by_identity) == expected_identities,
+        "OpenGL report did not emit 12 standalone artifacts per workgroup variant",
+    )
+    ordered_artifacts = [
+        artifacts_by_identity[(str(variant["name"]), source_entry)]
+        for variant in RMS_NORM_OPENGL_VARIANTS
+        for source_entry in RMS_NORM_HOST_ENTRY_POINTS
+    ]
+    variant_evidence = []
+    for variant in RMS_NORM_OPENGL_VARIANTS:
+        variant_name = str(variant["name"])
+        entry_evidence = [
+            _opengl_evidence(
+                artifacts_by_identity[(variant_name, source_entry)],
+                variant,
+                mlx_root=mlx_root,
+            )
+            for source_entry in RMS_NORM_HOST_ENTRY_POINTS
+        ]
+        variant_evidence.append(
+            {
+                "name": variant_name,
+                "workgroupSize": list(variant["workgroupSize"]),
+                "artifactCount": len(entry_evidence),
+                "executionEntryCount": len(entry_evidence),
+                "generatedLocalSizeContractCount": len(entry_evidence),
+                "artifacts": entry_evidence,
+            }
+        )
     native_compilation = _compile_opengl(
-        artifact_path,
+        ordered_artifacts,
         mlx_root=mlx_root,
         work_dir=work_dir,
         log_dir=log_dir,
@@ -792,8 +1297,20 @@ def _check_opengl(
         "source": MLX_RMS_NORM_SOURCE,
         "target": "opengl",
         "report": _relpath(report_path, mlx_root),
-        "artifactCount": 1,
-        "specializationConstant": specialization,
+        "artifactCount": len(artifacts),
+        "artifactCountPerVariant": RMS_NORM_EXPECTED_ENTRY_POINT_COUNT,
+        "specializationConstant": {
+            "name": RMS_NORM_FUNCTION_CONSTANT_NAME,
+            "id": RMS_NORM_FUNCTION_CONSTANT_ID,
+            "required": True,
+            "deferred": True,
+            "valueProvenance": {"kind": "runtime-override-required"},
+            "specializationMaterialization": dict(
+                ordered_artifacts[0]["specializationMaterialization"]
+            ),
+            "generatedContract": "layout(constant_id = 20) const bool has_w = false;",
+        },
+        "variants": variant_evidence,
         "nativeCompilation": native_compilation,
         "runtimeParityClaimed": False,
         "numericalExecutionIncluded": False,
