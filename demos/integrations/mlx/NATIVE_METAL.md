@@ -46,10 +46,13 @@ python -m unittest discover python/tests
 ```
 
 Torch is intentionally not installed because the pinned suite does not require
-it. The gate requires a zero exit status, exactly 776 tests with 44 skipped and
-zero failures or errors, and `mlx.core.default_device()` selecting a GPU. The
-report records the Python and MLX versions, selected device, parsed counts, exact
-commands, exit statuses, and logs.
+it. The gate requires a zero exit status, exactly 776 tests, zero failures or
+errors, and `mlx.core.default_device()` selecting a GPU. The pinned suite has 44
+baseline skips. When the `CI` environment is active, two additional upstream
+tests use their explicit CI-only skip decorators, so the required count is 46.
+Any other skip count fails closed. The report records which environment
+contract applied, the Python and MLX versions, selected device, parsed counts,
+exact commands, exit statuses, and logs.
 
 ### Upstream C++ Tests
 

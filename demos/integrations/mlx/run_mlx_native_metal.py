@@ -28,6 +28,8 @@ EXPECTED_STANDARD_SOURCE_COUNT = 33
 EXPECTED_NAX_SOURCE_COUNT = 7
 EXPECTED_UPSTREAM_TEST_COUNT = 776
 EXPECTED_UPSTREAM_SKIP_COUNT = 44
+# The pinned suite has two additional tests guarded by skipIf("CI" in os.environ).
+EXPECTED_UPSTREAM_CI_SKIP_COUNT = 46
 EXPECTED_CPP_TEST_CASE_COUNT = 260
 EXPECTED_CPP_ASSERTION_COUNT = 3490
 REQUIRED_PYTHON_VERSION = (3, 13)
@@ -616,7 +618,11 @@ def _parse_mlx_runtime_identity(output: str) -> dict[str, str]:
     }
 
 
-def _parse_unittest_summary(output: str) -> dict[str, int]:
+def _parse_unittest_summary(
+    output: str,
+    *,
+    ci_environment: bool = False,
+) -> dict[str, int]:
     ran_matches = re.findall(r"^Ran ([0-9]+) tests? in .+$", output, flags=re.MULTILINE)
     _require(
         len(ran_matches) == 1,
@@ -628,12 +634,16 @@ def _parse_unittest_summary(output: str) -> dict[str, int]:
     skipped_match = re.search(r"(?:^|, )skipped=([0-9]+)(?:,|$)", details)
     skipped = int(skipped_match.group(1)) if skipped_match else 0
     total = int(ran_matches[0])
+    expected_skipped = (
+        EXPECTED_UPSTREAM_CI_SKIP_COUNT
+        if ci_environment
+        else EXPECTED_UPSTREAM_SKIP_COUNT
+    )
     _require(
-        total == EXPECTED_UPSTREAM_TEST_COUNT
-        and skipped == EXPECTED_UPSTREAM_SKIP_COUNT,
+        total == EXPECTED_UPSTREAM_TEST_COUNT and skipped == expected_skipped,
         "upstream Python unittest accounting changed: "
         f"expected {EXPECTED_UPSTREAM_TEST_COUNT} total and "
-        f"{EXPECTED_UPSTREAM_SKIP_COUNT} skipped; found {total} total and "
+        f"{expected_skipped} skipped; found {total} total and "
         f"{skipped} skipped",
     )
     return {
@@ -1259,6 +1269,7 @@ def _run_upstream_python_tests(
     output_dir: Path,
     log_dir: Path,
     runner: CommandRunner,
+    ci_environment: bool,
 ) -> dict[str, Any]:
     version_result = _invoke(
         runner,
@@ -1325,7 +1336,10 @@ def _run_upstream_python_tests(
     )
     _require_success(test_result, "upstream MLX Python unittest suite")
     unittest_output = test_result.stdout + "\n" + test_result.stderr
-    counts = _parse_unittest_summary(unittest_output)
+    counts = _parse_unittest_summary(
+        unittest_output,
+        ci_environment=ci_environment,
+    )
     return {
         "python": python_identity,
         **runtime_identity,
@@ -1341,6 +1355,12 @@ def _run_upstream_python_tests(
         },
         "unitTests": {
             "framework": "unittest",
+            "environment": "ci" if ci_environment else "local",
+            "expectedSkipCount": (
+                EXPECTED_UPSTREAM_CI_SKIP_COUNT
+                if ci_environment
+                else EXPECTED_UPSTREAM_SKIP_COUNT
+            ),
             "counts": counts,
             "invocation": _command_evidence(
                 test_result,
@@ -1532,6 +1552,7 @@ def run_proof(
     python_executable: str = sys.executable,
     runner: CommandRunner = _run_command,
     jobs: int = DEFAULT_JOBS,
+    ci_environment: bool = False,
 ) -> dict[str, Any]:
     """Run the complete native baseline and write deterministic JSON evidence."""
 
@@ -1605,6 +1626,7 @@ def run_proof(
         output_dir=output_dir,
         log_dir=log_dir,
         runner=runner,
+        ci_environment=ci_environment,
     )
     upstream_cpp_tests = _run_upstream_cpp_tests(
         python_root=python_root,
@@ -1737,6 +1759,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_dir,
             python_executable=args.python_executable,
             jobs=args.jobs,
+            ci_environment=os.environ.get("CI", "").strip().lower()
+            not in {"", "0", "false", "no", "off"},
         )
     except Exception as exc:  # noqa: BLE001
         output_dir.mkdir(parents=True, exist_ok=True)

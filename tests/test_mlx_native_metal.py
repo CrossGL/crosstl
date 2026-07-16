@@ -211,6 +211,7 @@ def _run_fake_proof(module, tmp_path, monkeypatch, **runner_options):
     metal_root, test_root, output_dir = _prepare_checkouts(
         module, tmp_path, monkeypatch
     )
+    ci_environment = runner_options.pop("ci_environment", False)
     runner = FakeRunner(module, tmp_path, **runner_options)
     payload = module.run_proof(
         metal_root,
@@ -219,6 +220,7 @@ def _run_fake_proof(module, tmp_path, monkeypatch, **runner_options):
         python_executable="/opt/python/3.13/bin/python",
         runner=runner,
         jobs=1,
+        ci_environment=ci_environment,
     )
     return payload, runner, metal_root, test_root, output_dir
 
@@ -278,6 +280,8 @@ def test_fake_native_baseline_emits_complete_deterministic_evidence(
     assert python_evidence["python"]["minor"] == 13
     assert python_evidence["mlxVersion"] == "0.32.1.dev0+4367c73"
     assert python_evidence["defaultDeviceType"] == "gpu"
+    assert python_evidence["unitTests"]["environment"] == "local"
+    assert python_evidence["unitTests"]["expectedSkipCount"] == 44
     assert python_evidence["unitTests"]["counts"] == {
         "total": 776,
         "passed": 732,
@@ -322,6 +326,28 @@ def test_fake_native_baseline_emits_complete_deterministic_evidence(
         == "$MLX_PYTHON_ROOT"
     )
     assert test_root.is_dir()
+
+
+def test_ci_python_skip_accounting_is_explicit(tmp_path, monkeypatch):
+    module = _load_helper()
+    payload, _runner, _metal_root, _test_root, _output_dir = _run_fake_proof(
+        module,
+        tmp_path,
+        monkeypatch,
+        python_skipped=module.EXPECTED_UPSTREAM_CI_SKIP_COUNT,
+        ci_environment=True,
+    )
+
+    unit_tests = payload["upstreamPythonTests"]["unitTests"]
+    assert unit_tests["environment"] == "ci"
+    assert unit_tests["expectedSkipCount"] == 46
+    assert unit_tests["counts"] == {
+        "total": 776,
+        "passed": 730,
+        "skipped": 46,
+        "failures": 0,
+        "errors": 0,
+    }
 
 
 def test_checkout_revision_mismatch_stops_before_compilation(tmp_path, monkeypatch):
@@ -506,6 +532,25 @@ def test_python_test_count_drift_fails_closed(tmp_path, monkeypatch):
         )
 
 
+def test_ci_python_skip_count_drift_fails_closed(tmp_path, monkeypatch):
+    module = _load_helper()
+    metal_root, test_root, output_dir = _prepare_checkouts(
+        module, tmp_path, monkeypatch
+    )
+    runner = FakeRunner(module, tmp_path, python_skipped=45)
+
+    with pytest.raises(module.MlxNativeMetalProofError, match="accounting changed"):
+        module.run_proof(
+            metal_root,
+            test_root,
+            output_dir,
+            python_executable="python3.13",
+            runner=runner,
+            jobs=1,
+            ci_environment=True,
+        )
+
+
 def test_cpp_test_count_drift_fails_closed(tmp_path, monkeypatch):
     module = _load_helper()
     metal_root, test_root, output_dir = _prepare_checkouts(
@@ -543,10 +588,14 @@ def test_workflow_uses_macos_26_arm64_and_uploads_only_report_and_logs():
 
 def test_native_baseline_documentation_keeps_claims_and_results_separate():
     text = DOCUMENTATION_PATH.read_text(encoding="utf-8")
+    normalized_text = " ".join(text.split())
 
     assert "33 standard units" in text
     assert "seven" in text and "_nax.metal" in text
-    assert "exactly 776 tests with 44 skipped" in text
+    assert "exactly 776 tests" in normalized_text
+    assert "44 baseline skips" in normalized_text
+    assert "required count is 46" in normalized_text
+    assert "Any other skip count fails closed" in normalized_text
     assert "260 of 260 cases" in text
     assert "3,490 of 3,490 assertions" in text
     assert "aggregate `tests/tests` doctest" in text
