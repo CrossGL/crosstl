@@ -252,6 +252,65 @@ def test_project_workgroup_size_specialization_support_is_target_scoped():
             )
 
 
+def test_project_subgroup_width_specialization_support_is_target_scoped():
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    features = {feature["id"]: feature for feature in matrix["features"]}
+    feature = features["project.subgroup_width_specialization"]
+    backend_ids = {backend["id"] for backend in matrix["backends"]}
+    rejection_evidence = (
+        "tests/test_translator/test_project_subgroup_width_rules.py::def "
+        "test_subgroup_width_rules_fail_closed_without_target_enforcement"
+    )
+
+    assert feature["category"] == "project"
+    assert feature["name"] == "Per-entry subgroup width specialization"
+    assert set(feature["support"]) == backend_ids
+    assert {
+        backend_id
+        for backend_id, support in feature["support"].items()
+        if support["status"] == "supported"
+    } == {"directx"}
+
+    directx = feature["support"]["directx"]
+    assert "[project.subgroup_width_rules]" in directx["notes"]
+    assert "single-value WaveSize(width)" in directx["notes"]
+    assert "cs_6_6 profile requirement" in directx["notes"]
+    assert "exact widths 4, 8, 16, 32, 64, and 128" in directx["notes"]
+    assert (
+        "tests/test_translator/test_project_subgroup_width_rules.py::def "
+        "test_subgroup_width_rules_emit_exact_directx_contract"
+    ) in directx["evidence"]
+    assert (
+        "tests/test_translator/test_project_subgroup_width_rules.py::def "
+        "test_directx_exact_wave_size_profile_boundary"
+    ) in directx["evidence"]
+
+    opengl = feature["support"]["opengl"]
+    assert opengl["status"] == "validated_rejection"
+    assert "opengl-enforcement-unavailable" in opengl["notes"]
+    assert "no GLSL artifact is emitted" in opengl["notes"]
+
+    for backend_id, support in feature["support"].items():
+        assert "shader/kernel artifact" in support["notes"]
+        assert "runtime execution and numerical parity are not established" in (
+            support["notes"]
+        )
+        if backend_id == "directx":
+            assert support["status"] == "supported"
+        else:
+            assert support["status"] == "validated_rejection"
+            assert rejection_evidence in support["evidence"]
+            assert (
+                "project.translate.subgroup-width-enforcement-unsupported"
+                in support["notes"]
+            )
+            assert "execution.subgroup-width-specialization" in support["notes"]
+
+
 def test_project_report_inspection_is_first_class_support_feature():
     matrix = json.loads(
         (ROOT / "support" / "generated" / "support-matrix.json").read_text(

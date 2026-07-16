@@ -958,6 +958,9 @@ configuration contract is intentionally small:
    [project.workgroup_size_rules]
    "kernels/gemv.metal" = ["32", "BN", "BM"]
 
+   [project.subgroup_width_rules]
+   "kernels/wave.metal" = "WIDTH"
+
    [project.source_options.metal]
    max_template_specializations = 2048
    max_template_materialization_work = 131072
@@ -1112,6 +1115,39 @@ materialization join and hashes, and checks the generated target entry metadata.
 These records describe shader or kernel translation and dispatch requirements;
 they do not rewrite framework runtime code or establish numerical runtime
 parity.
+
+``[project.subgroup_width_rules]`` defines repository-relative,
+source-specific exact subgroup widths for materialized compute entries. Each
+key is a source path pattern and each value is one bounded integral expression.
+Pattern selection, materialization joins, expression syntax, parameter
+provenance, and signed 64-bit evaluation follow the per-entry workgroup rule
+contract. The expression must resolve independently for every host-named
+materialized entry; unknown or non-integral parameters, invalid arithmetic,
+non-positive results, missing materializations, and ambiguous joins fail the
+artifact with a structured ``execution-specialization`` diagnostic.
+
+DirectX currently enforces this contract for exact widths ``4``, ``8``,
+``16``, ``32``, ``64``, and ``128``. Every generated target entry receives one
+single-value ``[WaveSize(width)]`` attribute, and its execution metadata records
+a ``cs_6_6`` profile requirement. Report validation re-evaluates the expression
+against the recorded template materialization, verifies deterministic entry and
+execution identities, and checks the generated ``WaveSize`` and shader-profile
+contract. A subgroup-width rule can accompany a per-entry workgroup-size rule;
+both must resolve to the same materialized entry identities.
+
+OpenGL cannot enforce an exact subgroup width through this project contract, so
+a matching rule fails before GLSL generation with
+``project.translate.subgroup-width-enforcement-unsupported`` and reason
+``opengl-enforcement-unavailable``. Every other target currently fails closed
+with the same diagnostic and reason ``target-not-supported``. These failures
+record the missing ``execution.subgroup-width-specialization`` capability, rule
+provenance, and the supported target set without emitting a misleading target
+artifact.
+
+Subgroup-width specialization establishes a compiler-facing shader contract
+only. It does not dispatch device work, verify hardware support, integrate a
+host runtime, or establish numerical parity. Workgroup dimensions also remain
+independent and do not imply a subgroup width.
 
 For example, the host code at pinned MLX commit
 ``4367c73b60541ddd5a266ce4644fd93d20223b6e`` selects GEMV tile parameters per

@@ -8830,6 +8830,95 @@
     },
     {
       "category": "project",
+      "description": "Evaluate per-source subgroup-width rules for each materialized entry and either enforce the exact target execution contract or fail closed with a structured capability diagnostic.",
+      "id": "project.subgroup_width_specialization",
+      "name": "Per-entry subgroup width specialization",
+      "support": {
+        "cuda": {
+          "evidence": [
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_rules_fail_closed_without_target_enforcement"
+          ],
+          "notes": "A matching [project.subgroup_width_rules] entry fails closed before CUDA code generation with project.translate.subgroup-width-enforcement-unsupported, reason target-not-supported, the execution.subgroup-width-specialization capability, rule provenance, and no generated artifact. This support covers structured shader/kernel artifact rejection only; runtime execution and numerical parity are not established.",
+          "status": "validated_rejection"
+        },
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_rules_emit_exact_directx_contract",
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_rule_join_is_independent_of_record_order",
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_rules_reject_invalid_results",
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_report_rejects_rehashed_materialization_tampering",
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_directx_exact_wave_size_profile_boundary"
+          ],
+          "notes": "Per-source [project.subgroup_width_rules] integral expressions are evaluated against each host-named materialized compute entry and joined by deterministic materialization identity. DirectX accepts exact widths 4, 8, 16, 32, 64, and 128, emits one single-value WaveSize(width) attribute per target entry, and records a cs_6_6 profile requirement for every entry. Report validation re-evaluates materialization provenance and verifies the generated WaveSize and profile contract. This support covers generated shader/kernel artifacts and compiler-facing execution metadata only; runtime execution and numerical parity are not established.",
+          "status": "supported"
+        },
+        "hip": {
+          "evidence": [
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_rules_fail_closed_without_target_enforcement"
+          ],
+          "notes": "A matching [project.subgroup_width_rules] entry fails closed before HIP code generation with project.translate.subgroup-width-enforcement-unsupported, reason target-not-supported, the execution.subgroup-width-specialization capability, rule provenance, and no generated artifact. This support covers structured shader/kernel artifact rejection only; runtime execution and numerical parity are not established.",
+          "status": "validated_rejection"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_rules_fail_closed_without_target_enforcement"
+          ],
+          "notes": "A matching [project.subgroup_width_rules] entry fails closed before Metal code generation with project.translate.subgroup-width-enforcement-unsupported, reason target-not-supported, the execution.subgroup-width-specialization capability, rule provenance, and no generated artifact. This support covers structured shader/kernel artifact rejection only; runtime execution and numerical parity are not established.",
+          "status": "validated_rejection"
+        },
+        "mojo": {
+          "evidence": [
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_rules_fail_closed_without_target_enforcement"
+          ],
+          "notes": "A matching [project.subgroup_width_rules] entry fails closed before Mojo code generation with project.translate.subgroup-width-enforcement-unsupported, reason target-not-supported, the execution.subgroup-width-specialization capability, rule provenance, and no generated artifact. This support covers structured shader/kernel artifact rejection only; runtime execution and numerical parity are not established.",
+          "status": "validated_rejection"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_rules_fail_closed_without_target_enforcement"
+          ],
+          "notes": "A matching [project.subgroup_width_rules] entry fails closed before OpenGL code generation because the target cannot enforce the requested exact subgroup width. The project.translate.subgroup-width-enforcement-unsupported diagnostic reports reason opengl-enforcement-unavailable, the execution.subgroup-width-specialization capability, rule provenance, and the supported target set, and no GLSL artifact is emitted. This support covers structured shader/kernel artifact rejection only; runtime execution and numerical parity are not established.",
+          "status": "validated_rejection"
+        },
+        "rust": {
+          "evidence": [
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_rules_fail_closed_without_target_enforcement"
+          ],
+          "notes": "A matching [project.subgroup_width_rules] entry fails closed before Rust code generation with project.translate.subgroup-width-enforcement-unsupported, reason target-not-supported, the execution.subgroup-width-specialization capability, rule provenance, and no generated artifact. This support covers structured shader/kernel artifact rejection only; runtime execution and numerical parity are not established.",
+          "status": "validated_rejection"
+        },
+        "slang": {
+          "evidence": [
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_rules_fail_closed_without_target_enforcement"
+          ],
+          "notes": "A matching [project.subgroup_width_rules] entry fails closed before Slang code generation with project.translate.subgroup-width-enforcement-unsupported, reason target-not-supported, the execution.subgroup-width-specialization capability, rule provenance, and no generated artifact. This support covers structured shader/kernel artifact rejection only; runtime execution and numerical parity are not established.",
+          "status": "validated_rejection"
+        },
+        "vulkan": {
+          "evidence": [
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_rules_fail_closed_without_target_enforcement"
+          ],
+          "notes": "A matching [project.subgroup_width_rules] entry fails closed before Vulkan code generation with project.translate.subgroup-width-enforcement-unsupported, reason target-not-supported, the execution.subgroup-width-specialization capability, rule provenance, and no generated artifact. This support covers structured shader/kernel artifact rejection only; runtime execution and numerical parity are not established.",
+          "status": "validated_rejection"
+        },
+        "webgl": {
+          "evidence": [
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_rules_fail_closed_without_target_enforcement"
+          ],
+          "notes": "A matching [project.subgroup_width_rules] entry fails closed before WebGL code generation with project.translate.subgroup-width-enforcement-unsupported, reason target-not-supported, the execution.subgroup-width-specialization capability, rule provenance, and no generated artifact. This support covers structured shader/kernel artifact rejection only; runtime execution and numerical parity are not established.",
+          "status": "validated_rejection"
+        },
+        "wgsl": {
+          "evidence": [
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_rules_fail_closed_without_target_enforcement"
+          ],
+          "notes": "A matching [project.subgroup_width_rules] entry fails closed before WGSL code generation with project.translate.subgroup-width-enforcement-unsupported, reason target-not-supported, the execution.subgroup-width-specialization capability, rule provenance, and no generated artifact. This support covers structured shader/kernel artifact rejection only; runtime execution and numerical parity are not established.",
+          "status": "validated_rejection"
+        }
+      }
+    },
+    {
+      "category": "project",
       "description": "Validate report metadata, artifact records, failed artifacts, translated artifact existence, optional external toolchain availability, and opt-in toolchain smoke failures for project outputs.",
       "id": "project.validation_hooks",
       "name": "Optional validation hooks",
@@ -16289,7 +16378,7 @@
   "summary": {
     "backend_count": 11,
     "backlog_count": 0,
-    "feature_count": 74,
+    "feature_count": 75,
     "status_counts": {
       "cuda": {
         "diagnostic": 8,
@@ -16297,12 +16386,12 @@
         "supported": 64,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 2
+        "validated_rejection": 3
       },
       "directx": {
         "diagnostic": 2,
         "partial": 0,
-        "supported": 72,
+        "supported": 73,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -16313,7 +16402,7 @@
         "supported": 64,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 2
+        "validated_rejection": 3
       },
       "metal": {
         "diagnostic": 4,
@@ -16321,7 +16410,7 @@
         "supported": 68,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 2
+        "validated_rejection": 3
       },
       "mojo": {
         "diagnostic": 6,
@@ -16329,7 +16418,7 @@
         "supported": 66,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 2
+        "validated_rejection": 3
       },
       "opengl": {
         "diagnostic": 2,
@@ -16337,7 +16426,7 @@
         "supported": 72,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 0
+        "validated_rejection": 1
       },
       "rust": {
         "diagnostic": 5,
@@ -16345,7 +16434,7 @@
         "supported": 67,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 2
+        "validated_rejection": 3
       },
       "slang": {
         "diagnostic": 4,
@@ -16353,7 +16442,7 @@
         "supported": 68,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 2
+        "validated_rejection": 3
       },
       "vulkan": {
         "diagnostic": 2,
@@ -16361,7 +16450,7 @@
         "supported": 70,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 2
+        "validated_rejection": 3
       },
       "webgl": {
         "diagnostic": 23,
@@ -16369,7 +16458,7 @@
         "supported": 40,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 11
+        "validated_rejection": 12
       },
       "wgsl": {
         "diagnostic": 21,
@@ -16377,7 +16466,7 @@
         "supported": 44,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 9
+        "validated_rejection": 10
       }
     }
   }

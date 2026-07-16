@@ -2415,6 +2415,39 @@
     },
     {
       "category": "project",
+      "description": "Evaluate per-source subgroup-width rules for each materialized entry and either enforce the exact target execution contract or fail closed with a structured capability diagnostic.",
+      "id": "project.subgroup_width_specialization",
+      "name": "Per-entry subgroup width specialization",
+      "support": {
+        "directx": {
+          "evidence": [
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_rules_emit_exact_directx_contract",
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_rule_join_is_independent_of_record_order",
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_rules_reject_invalid_results",
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_report_rejects_rehashed_materialization_tampering",
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_directx_exact_wave_size_profile_boundary"
+          ],
+          "notes": "Per-source [project.subgroup_width_rules] integral expressions are evaluated against each host-named materialized compute entry and joined by deterministic materialization identity. DirectX accepts exact widths 4, 8, 16, 32, 64, and 128, emits one single-value WaveSize(width) attribute per target entry, and records a cs_6_6 profile requirement for every entry. Report validation re-evaluates materialization provenance and verifies the generated WaveSize and profile contract. This support covers generated shader/kernel artifacts and compiler-facing execution metadata only; runtime execution and numerical parity are not established.",
+          "status": "supported"
+        },
+        "metal": {
+          "evidence": [
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_rules_fail_closed_without_target_enforcement"
+          ],
+          "notes": "A matching [project.subgroup_width_rules] entry fails closed before Metal code generation with project.translate.subgroup-width-enforcement-unsupported, reason target-not-supported, the execution.subgroup-width-specialization capability, rule provenance, and no generated artifact. This support covers structured shader/kernel artifact rejection only; runtime execution and numerical parity are not established.",
+          "status": "validated_rejection"
+        },
+        "opengl": {
+          "evidence": [
+            "tests/test_translator/test_project_subgroup_width_rules.py::def test_subgroup_width_rules_fail_closed_without_target_enforcement"
+          ],
+          "notes": "A matching [project.subgroup_width_rules] entry fails closed before OpenGL code generation because the target cannot enforce the requested exact subgroup width. The project.translate.subgroup-width-enforcement-unsupported diagnostic reports reason opengl-enforcement-unavailable, the execution.subgroup-width-specialization capability, rule provenance, and the supported target set, and no GLSL artifact is emitted. This support covers structured shader/kernel artifact rejection only; runtime execution and numerical parity are not established.",
+          "status": "validated_rejection"
+        }
+      }
+    },
+    {
+      "category": "project",
       "description": "Validate report metadata, artifact records, failed artifacts, translated artifact existence, optional external toolchain availability, and opt-in toolchain smoke failures for project outputs.",
       "id": "project.validation_hooks",
       "name": "Optional validation hooks",
@@ -4614,12 +4647,12 @@
         "validated_rejection": 0
       }
     },
-    "feature_count": 74,
+    "feature_count": 75,
     "status_counts": {
       "directx": {
         "diagnostic": 2,
         "partial": 0,
-        "supported": 72,
+        "supported": 73,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -4630,7 +4663,7 @@
         "supported": 68,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 2
+        "validated_rejection": 3
       },
       "opengl": {
         "diagnostic": 2,
@@ -4638,7 +4671,7 @@
         "supported": 72,
         "unknown": 0,
         "unsupported": 0,
-        "validated_rejection": 0
+        "validated_rejection": 1
       }
     }
   },
