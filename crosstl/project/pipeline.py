@@ -1716,6 +1716,12 @@ REPORT_ARTIFACT_EXECUTION_RULE_FIELDS = frozenset(
 REPORT_ARTIFACT_EXECUTION_SUBGROUP_WIDTH_RULE_FIELDS = frozenset(
     ("expression", "sourcePattern", "path")
 )
+REPORT_ARTIFACT_EXECUTION_SUBGROUP_WIDTH_ENFORCEMENT_FIELDS = frozenset(
+    ("mechanism", "minimumShaderModel", "entryProfiles")
+)
+REPORT_ARTIFACT_EXECUTION_SUBGROUP_WIDTH_PROFILE_FIELDS = frozenset(
+    ("entryPoint", "profile")
+)
 REPORT_ARTIFACT_EXECUTION_MATERIALIZATION_FIELDS = frozenset(
     ("name", "hostName", "materializedName")
 )
@@ -8703,6 +8709,29 @@ def _workgroup_size_rule_diagnostics(
     ]
 
 
+def _subgroup_width_rule_diagnostics(
+    config: ProjectConfig,
+    units: Sequence[ProjectTranslationUnit],
+) -> list[ProjectDiagnostic]:
+    unit_paths = [unit.relative_path for unit in units]
+    return [
+        ProjectDiagnostic(
+            severity="error",
+            code="project.config.subgroup-width-rule-pattern-unmatched",
+            message=(
+                f"Configured subgroup-width rule pattern '{pattern}' does not "
+                "match a discovered translation unit."
+            ),
+            location=_config_location(config),
+            missing_capabilities=[SUBGROUP_WIDTH_SPECIALIZATION_CAPABILITY],
+            details={"pattern": pattern, "expression": expression},
+        )
+        for pattern, expression in config.subgroup_width_rules.items()
+        if _is_repository_relative_glob(pattern)
+        and not any(fnmatch.fnmatch(path, pattern) for path in unit_paths)
+    ]
+
+
 def scan_project(
     config_or_root: ProjectConfig | str | os.PathLike[str],
     *,
@@ -8826,6 +8855,7 @@ def scan_project(
     )
     diagnostics.extend(_entry_point_selection_diagnostics(scan_config, units))
     diagnostics.extend(_workgroup_size_rule_diagnostics(scan_config, units))
+    diagnostics.extend(_subgroup_width_rule_diagnostics(scan_config, units))
     if not units:
         diagnostics.append(
             ProjectDiagnostic(
@@ -23923,6 +23953,57 @@ def _missing_generated_placeholder_diagnostics(
     return missing
 
 
+def _subgroup_width_target_validation_diagnostics(
+    artifact: Mapping[str, Any],
+    artifact_path: Path,
+) -> list[ProjectDiagnostic]:
+    execution = artifact.get("execution")
+    if artifact.get("target") != "directx" or not isinstance(execution, Mapping):
+        return []
+    entries = [
+        entry
+        for entry in _record_sequence(execution.get("entryPoints"))
+        if isinstance(entry, Mapping) and "subgroupWidth" in entry
+    ]
+    if not entries:
+        return []
+
+    try:
+        _validate_project_subgroup_width_target_output(
+            artifact_path,
+            execution=execution,
+        )
+    except ProjectSubgroupWidthError as exc:
+        specialization = {
+            "reason": exc.reason,
+            "sourceEntryPoints": list(exc.source_entry_points),
+        }
+        if exc.subgroup_width is not None:
+            specialization["subgroupWidth"] = exc.subgroup_width
+        if exc.source_subgroup_width is not None:
+            specialization["sourceSubgroupWidth"] = exc.source_subgroup_width
+        return [
+            ProjectDiagnostic(
+                severity="error",
+                code="project.validate.subgroup-width-contract-mismatch",
+                message=(
+                    "Generated artifact does not satisfy its recorded "
+                    f"subgroup-width contract: {artifact['path']}: {exc}"
+                ),
+                location=SourceLocation(file=str(artifact["source"])),
+                **_artifact_diagnostic_context(artifact),
+                check_kind=exc.check_kind,
+                missing_capabilities=list(exc.missing_capabilities),
+                details={
+                    "sourcePath": str(artifact["source"]),
+                    "targetArtifact": str(artifact["path"]),
+                    "executionSpecialization": specialization,
+                },
+            )
+        ]
+    return []
+
+
 def _validate_artifacts(
     artifacts: Sequence[Mapping[str, Any]],
     targets: Sequence[str],
@@ -24061,6 +24142,7 @@ def _validate_artifacts(
         generated_size = artifact.get("generatedSizeBytes")
         source_remap_diagnostics: list[ProjectDiagnostic] = []
         source_map_diagnostics: list[ProjectDiagnostic] = []
+        subgroup_width_diagnostics: list[ProjectDiagnostic] = []
         if artifact.get("status") == "translated":
             if not artifact_inside_project:
                 generated_hash_status = "outside-project"
@@ -24120,6 +24202,14 @@ def _validate_artifacts(
                 generated_hash_status=generated_hash_status,
             )
             diagnostics.extend(source_map_diagnostics)
+            if exists and generated_hash_status in {"ok", "not-recorded"}:
+                subgroup_width_diagnostics = (
+                    _subgroup_width_target_validation_diagnostics(
+                        artifact,
+                        artifact_path,
+                    )
+                )
+                diagnostics.extend(subgroup_width_diagnostics)
         source_map_status = _source_map_validation_status(
             artifact,
             source_hash_status=source_hash_status,
@@ -24163,6 +24253,7 @@ def _validate_artifacts(
                 and generated_size_status in {"ok", "not-recorded"}
                 and not source_remap_diagnostics
                 and not source_map_diagnostics
+                and not subgroup_width_diagnostics
                 else "failed"
             ),
             "sourceHashStatus": source_hash_status,
@@ -40382,6 +40473,13 @@ def _artifact_subgroup_rule_execution_contract_reasons(
         if not isinstance(entry, Mapping):
             reasons.append(f"{entry_prefix} must be an object")
             continue
+        reasons.extend(
+            _unsupported_mapping_field_reasons(
+                entry_prefix,
+                entry,
+                REPORT_ARTIFACT_EXECUTION_ENTRY_FIELDS,
+            )
+        )
         subgroup_width = entry.get("subgroupWidth")
         if (
             not isinstance(subgroup_width, int)
@@ -40585,9 +40683,35 @@ def _artifact_subgroup_rule_execution_contract_reasons(
     profiles = (
         enforcement.get("entryProfiles") if isinstance(enforcement, Mapping) else None
     )
-    profile_records = [
-        item for item in _record_sequence(profiles) if isinstance(item, Mapping)
-    ]
+    if isinstance(enforcement, Mapping):
+        reasons.extend(
+            _unsupported_mapping_field_reasons(
+                f"{execution_prefix}.subgroupWidthEnforcement",
+                enforcement,
+                REPORT_ARTIFACT_EXECUTION_SUBGROUP_WIDTH_ENFORCEMENT_FIELDS,
+            )
+        )
+    profile_records = []
+    if not isinstance(profiles, list):
+        reasons.append(
+            f"{execution_prefix}.subgroupWidthEnforcement.entryProfiles must be a list"
+        )
+    else:
+        for index, item in enumerate(profiles):
+            profile_prefix = (
+                f"{execution_prefix}.subgroupWidthEnforcement.entryProfiles[{index}]"
+            )
+            if not isinstance(item, Mapping):
+                reasons.append(f"{profile_prefix} must be an object")
+                continue
+            reasons.extend(
+                _unsupported_mapping_field_reasons(
+                    profile_prefix,
+                    item,
+                    REPORT_ARTIFACT_EXECUTION_SUBGROUP_WIDTH_PROFILE_FIELDS,
+                )
+            )
+            profile_records.append(item)
     profile_entries = [str(item.get("entryPoint", "")) for item in profile_records]
     if (
         not isinstance(enforcement, Mapping)
@@ -40596,14 +40720,13 @@ def _artifact_subgroup_rule_execution_contract_reasons(
         or profile_entries != sorted(set(target_entries))
         or any(
             not _is_non_empty_string(item.get("profile"))
-            or not str(item["profile"]).startswith("cs_")
-            or _directx_dxc_profile_version(str(item["profile"])) < (6, 6)
+            or item.get("profile") != "cs_6_6"
             for item in profile_records
         )
     ):
         reasons.append(
             f"{execution_prefix}.subgroupWidthEnforcement must require WaveSize "
-            "and compute Shader Model 6.6 or newer for every target entry"
+            "and cs_6_6 for every target entry"
         )
     identity_reasons = _hash_contract_reasons(
         f"{execution_prefix}.identity",
