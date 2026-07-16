@@ -1,3 +1,4 @@
+import base64
 import copy
 import json
 import subprocess
@@ -24,12 +25,16 @@ VARIANTS = (
 TARGETS = ("directx", "opengl")
 
 
-def _artifact_source(target, target_entry, dtype, width):
+def _artifact_source(target, target_entry, dtype, width, subgroup_width=None):
     if target == "directx":
+        wave_size = (
+            f"[WaveSize({subgroup_width})]\n" if subgroup_width is not None else ""
+        )
         return f"""
 RWStructuredBuffer<{dtype}> values : register(u0, space1);
 static const uint tileSize = {width}u;
 
+{wave_size}
 [numthreads({width}, 1, 1)]
 void {target_entry}(uint3 tid : SV_DispatchThreadID) {{
     values[tid.x] = ({dtype})tid.x;
@@ -47,7 +52,10 @@ void main() {{
 """.strip()
 
 
-def _declared_host_interface(target, target_entry, width):
+def _declared_host_interface(target, target_entry, width, subgroup_width=None):
+    execution_config = {"numthreads": [width, 1, 1]}
+    if subgroup_width is not None:
+        execution_config["subgroupWidth"] = subgroup_width
     return {
         "status": "ready",
         "source": "synthetic-package-contract",
@@ -61,7 +69,7 @@ def _declared_host_interface(target, target_entry, width):
             {
                 "name": target_entry,
                 "stage": "compute",
-                "executionConfig": {"numthreads": [width, 1, 1]},
+                "executionConfig": execution_config,
             }
         ],
         "resources": [],
@@ -72,13 +80,29 @@ def _declared_host_interface(target, target_entry, width):
     }
 
 
-def _write_runtime_package(package_dir, *, reverse=False):
+def _write_runtime_package(
+    package_dir,
+    *,
+    reverse=False,
+    variants=VARIANTS,
+    targets=TARGETS,
+    execution_identity_only=False,
+    subgroup_widths=None,
+):
     package_dir.mkdir(parents=True)
     artifacts = []
-    for variant, dtype, width, mode in VARIANTS:
-        for target in TARGETS:
+    subgroup_widths = subgroup_widths or {}
+    for variant, dtype, width, mode in variants:
+        for target in targets:
+            subgroup_width = (
+                subgroup_widths.get(variant) if target == "directx" else None
+            )
             target_entry = (
-                f"vector_add_{variant.replace('-', '_')}"
+                (
+                    "vector_add_compiled"
+                    if execution_identity_only
+                    else f"vector_add_{variant.replace('-', '_')}"
+                )
                 if target == "directx"
                 else "main"
             )
@@ -87,7 +111,14 @@ def _write_runtime_package(package_dir, *, reverse=False):
             artifact_path = package_dir / package_path
             artifact_path.parent.mkdir(parents=True, exist_ok=True)
             artifact_path.write_text(
-                _artifact_source(target, target_entry, dtype, width) + "\n",
+                _artifact_source(
+                    target,
+                    target_entry,
+                    dtype,
+                    width,
+                    subgroup_width,
+                )
+                + "\n",
                 encoding="utf-8",
             )
             artifacts.append(
@@ -114,7 +145,10 @@ def _write_runtime_package(package_dir, *, reverse=False):
                                 "name": "vector_add",
                                 "hostName": target_entry,
                                 "materializedName": target_entry,
-                                "parameters": {"N": str(width), "T": dtype},
+                                "parameters": {
+                                    "N": str(1 if execution_identity_only else width),
+                                    "T": dtype,
+                                },
                                 "parameterSources": {
                                     "N": "project.variant",
                                     "T": "project.variant",
@@ -148,7 +182,10 @@ def _write_runtime_package(package_dir, *, reverse=False):
                     "sizeBytes": artifact_path.stat().st_size,
                     "sourceRemap": None,
                     "hostInterface": _declared_host_interface(
-                        target, target_entry, width
+                        target,
+                        target_entry,
+                        width,
+                        subgroup_width,
                     ),
                 }
             )
@@ -159,7 +196,7 @@ def _write_runtime_package(package_dir, *, reverse=False):
         "kind": project_pipeline.RUNTIME_PACKAGE_KIND,
         "success": True,
         "packageRoot": str(package_dir),
-        "project": {"targets": list(TARGETS)},
+        "project": {"targets": list(targets)},
         "artifacts": artifacts,
         "runtimePlan": {"runtimeReferenceCount": 0},
     }
@@ -176,6 +213,13 @@ def _registry_record(registry, *, target, variant):
         for record in registry["variants"].values()
         if record["target"]["backend"] == target and record["variant"] == variant
     )
+
+
+def _raw_runtime_variant_key(prefix, payload):
+    encoded = base64.urlsafe_b64encode(
+        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    ).decode("ascii")
+    return prefix + encoded.rstrip("=")
 
 
 def test_runtime_variant_registry_is_deterministic_and_exact(tmp_path):
@@ -202,6 +246,9 @@ def test_runtime_variant_registry_is_deterministic_and_exact(tmp_path):
         "rejectedCandidateCount": 0,
     }
     assert list(first["variants"]) == sorted(first["variants"])
+    assert first["keySchema"]["version"] == 2
+    assert first["keySchema"]["prefix"] == "crosstl-rvk2:"
+    assert first["keySchema"]["encoding"] == "base64url-canonical-json-v2"
     assert first["lookup"]["mode"] == "exact"
     assert first["lookup"]["defaulting"] == "none"
 
@@ -227,6 +274,10 @@ def test_runtime_variant_registry_is_deterministic_and_exact(tmp_path):
     assert directx["specializationConstants"][0]["runtimeRole"] == (
         "pipeline-specialization"
     )
+    assert directx["execution"] == {
+        "workgroupSize": [4, 1, 1],
+        "subgroupWidth": None,
+    }
     assert directx["bindingInterface"]["source"] == "compiled-artifact"
     assert directx["bindingInterface"]["parser"] == "directx-reflection"
     assert directx["bindingInterface"]["constants"][0]["name"] == "tileSize"
@@ -241,6 +292,7 @@ def test_runtime_variant_registry_is_deterministic_and_exact(tmp_path):
         "sourceEntry": "vector_add",
         "target": "directx",
         "targetProfile": "cs_6_0",
+        "execution": {"workgroupSize": [4, 1, 1], "subgroupWidth": None},
         "typeArguments": {"T": "float"},
         "valueArguments": {"N": 4},
         "specializationConstants": [{"id": 7, "name": "mode", "value": 1}],
@@ -264,6 +316,7 @@ def test_runtime_variant_registry_is_deterministic_and_exact(tmp_path):
         "vector_add",
         "directx",
         target_profile="cs_6_0",
+        execution={"workgroupSize": [4, 1, 1], "subgroupWidth": None},
         type_arguments={"T": "float"},
         value_arguments={"N": 64},
         specialization_constants=[{"id": 7, "name": "mode", "value": 1}],
@@ -279,11 +332,305 @@ def test_runtime_variant_registry_is_deterministic_and_exact(tmp_path):
     )
 
 
+def test_runtime_variant_execution_keys_are_distinct_reorderable_and_exact(tmp_path):
+    variants = (
+        ("wg32", "float", 32, 1),
+        ("wg64", "float", 64, 1),
+    )
+    first = build_runtime_variant_registry(
+        _write_runtime_package(
+            tmp_path / "first",
+            variants=variants,
+            execution_identity_only=True,
+        )
+    )
+    reordered = build_runtime_variant_registry(
+        _write_runtime_package(
+            tmp_path / "reordered",
+            reverse=True,
+            variants=tuple(reversed(variants)),
+            execution_identity_only=True,
+        )
+    )
+
+    assert first == reordered
+    assert first["success"] is True
+    assert first["summary"]["variantCount"] == 4
+    for target in TARGETS:
+        records = {
+            record["variant"]: record
+            for record in first["variants"].values()
+            if record["target"]["backend"] == target
+        }
+        assert set(records) == {"wg32", "wg64"}
+        assert records["wg32"]["key"] != records["wg64"]["key"]
+        assert {
+            variant: record["execution"] for variant, record in records.items()
+        } == {
+            "wg32": {"workgroupSize": [32, 1, 1], "subgroupWidth": None},
+            "wg64": {"workgroupSize": [64, 1, 1], "subgroupWidth": None},
+        }
+
+        selected = lookup_runtime_variant(first, records["wg32"]["key"])
+        assert selected["success"] is True
+        assert selected["record"]["variant"] == "wg32"
+
+        requested_execution = {
+            "workgroupSize": [48, 1, 1],
+            "subgroupWidth": None,
+        }
+        missing_key = encode_runtime_variant_key(
+            "kernels/vector.metal",
+            "vector_add",
+            target,
+            target_profile="cs_6_0" if target == "directx" else None,
+            execution=requested_execution,
+            type_arguments={"T": "float"},
+            value_arguments={"N": 1},
+            specialization_constants=[{"id": 7, "name": "mode", "value": 1}],
+            defines={"USE_FAST_PATH": "1"},
+        )
+        missing = lookup_runtime_variant(first, missing_key)
+        details = missing["diagnostics"][0]["details"]
+        assert missing["status"] == "not-found"
+        assert details["requestedExecution"] == requested_execution
+        assert {
+            tuple(alternative["execution"]["workgroupSize"])
+            for alternative in details["availableExecutionAlternatives"]
+        } == {(32, 1, 1), (64, 1, 1)}
+        assert all(
+            alternative["status"] == "ready"
+            for alternative in details["availableExecutionAlternatives"]
+        )
+
+
+def test_runtime_variant_execution_uses_only_the_selected_entry(tmp_path):
+    variants = (("selected", "float", 32, 1),)
+    registries = []
+    for directory, reverse_entries in (("first", False), ("reordered", True)):
+        package_path = _write_runtime_package(
+            tmp_path / directory,
+            variants=variants,
+            targets=("directx",),
+            execution_identity_only=True,
+        )
+        package = json.loads(package_path.read_text(encoding="utf-8"))
+        artifact = package["artifacts"][0]
+        selected_entry = artifact["hostInterface"]["entryPoints"][0]
+        other_entry = {
+            "name": "aaa_unselected",
+            "stage": "compute",
+            "executionConfig": {"numthreads": [64, 1, 1]},
+        }
+        entries = [selected_entry, other_entry]
+        if reverse_entries:
+            entries.reverse()
+        artifact["hostInterface"]["entryPoints"] = entries
+        artifact["hostInterface"]["entryPointCount"] = 2
+        package["project"]["workgroupSize"] = [128, 1, 1]
+        package_path.write_text(json.dumps(package), encoding="utf-8")
+        registries.append(build_runtime_variant_registry(package_path))
+
+    assert registries[0] == registries[1]
+    record = next(iter(registries[0]["variants"].values()))
+    assert record["target"]["entryPoint"] == "vector_add_compiled"
+    assert record["execution"] == {
+        "workgroupSize": [32, 1, 1],
+        "subgroupWidth": None,
+    }
+
+
+def test_runtime_variant_subgroup_width_distinguishes_exact_variants(tmp_path):
+    variants = (
+        ("wave32", "float", 32, 1),
+        ("wave64", "float", 32, 1),
+    )
+    registry = build_runtime_variant_registry(
+        _write_runtime_package(
+            tmp_path / "package",
+            variants=variants,
+            targets=("directx",),
+            execution_identity_only=True,
+            subgroup_widths={"wave32": 32, "wave64": 64},
+        )
+    )
+
+    assert registry["success"] is True
+    records = {record["variant"]: record for record in registry["variants"].values()}
+    assert records["wave32"]["key"] != records["wave64"]["key"]
+    assert {
+        variant: decode_runtime_variant_key(record["key"])["execution"]
+        for variant, record in records.items()
+    } == {
+        "wave32": {"workgroupSize": [32, 1, 1], "subgroupWidth": 32},
+        "wave64": {"workgroupSize": [32, 1, 1], "subgroupWidth": 64},
+    }
+
+    original_key = records["wave32"]["key"]
+    tampered = copy.deepcopy(registry)
+    tampered_record = tampered["variants"].pop(original_key)
+    tampered_payload = decode_runtime_variant_key(original_key)
+    tampered_payload["execution"]["subgroupWidth"] = 16
+    tampered_key = _raw_runtime_variant_key("crosstl-rvk2:", tampered_payload)
+    tampered_record["key"] = tampered_key
+    tampered_record["execution"] = tampered_payload["execution"]
+    tampered["variants"][tampered_key] = tampered_record
+    tampered["registryHash"] = project_pipeline._runtime_variant_payload_hash(
+        {
+            "schemaVersion": tampered["schemaVersion"],
+            "keySchema": tampered["keySchema"],
+            "variants": tampered["variants"],
+        }
+    )
+
+    lookup = lookup_runtime_variant(tampered, tampered_key)
+    reasons = lookup["diagnostics"][0]["details"]["reasons"]
+    assert lookup["status"] == "invalid"
+    assert any("selected bindingInterface entry point" in reason for reason in reasons)
+
+
+def test_runtime_variant_key_round_trips_absent_execution_and_reordered_inputs():
+    first = encode_runtime_variant_key(
+        "kernels/vector.metal",
+        "vector_add",
+        "directx",
+        target_profile="cs_6_0",
+        type_arguments={"Z": "uint", "A": "float"},
+        value_arguments={"width": 4, "mode": True},
+        specialization_constants=[
+            {"id": None, "name": "beta", "value": 2},
+            {"id": 7, "name": "mode", "value": 1},
+        ],
+        defines={"ZED": "1", "ALPHA": "1"},
+    )
+    reordered = encode_runtime_variant_key(
+        "kernels/vector.metal",
+        "vector_add",
+        "directx",
+        target_profile="cs_6_0",
+        execution={"subgroupWidth": None, "workgroupSize": None},
+        type_arguments={"A": "float", "Z": "uint"},
+        value_arguments={"mode": True, "width": 4},
+        specialization_constants=[
+            {"id": 7, "name": "mode", "value": 1},
+            {"id": None, "name": "beta", "value": 2},
+        ],
+        defines={"ALPHA": "1", "ZED": "1"},
+    )
+
+    assert first == reordered
+    assert first.startswith("crosstl-rvk2:")
+    assert decode_runtime_variant_key(first)["execution"] == {
+        "workgroupSize": None,
+        "subgroupWidth": None,
+    }
+
+
+@pytest.mark.parametrize(
+    ("execution", "expected_reason"),
+    [
+        (
+            {"workgroupSize": [32, 1], "subgroupWidth": None},
+            "three-component list",
+        ),
+        (
+            {"workgroupSize": [32, 0, 1], "subgroupWidth": None},
+            "positive integer",
+        ),
+        (
+            {"workgroupSize": [32, True, 1], "subgroupWidth": None},
+            "positive integer",
+        ),
+        (
+            {"workgroupSize": [32, "1", 1], "subgroupWidth": None},
+            "positive integer",
+        ),
+        (
+            {"workgroupSize": None, "subgroupWidth": 0},
+            "positive integer or null",
+        ),
+        (
+            {"workgroupSize": None, "subgroupWidth": True},
+            "positive integer or null",
+        ),
+        (
+            {
+                "workgroupSize": None,
+                "subgroupWidth": None,
+                "backendPolicy": "directx",
+            },
+            "not allowed",
+        ),
+        ([], "must be an object"),
+    ],
+)
+def test_runtime_variant_key_rejects_malformed_execution(execution, expected_reason):
+    with pytest.raises(ValueError, match=expected_reason):
+        encode_runtime_variant_key(
+            "kernels/vector.metal",
+            "vector_add",
+            "directx",
+            execution=execution,
+        )
+
+
+@pytest.mark.parametrize(
+    ("execution_config", "expected_reason"),
+    [
+        ({"numthreads": ["WIDTH", 1, 1]}, "exact positive integers"),
+        ({"numthreads": [32, 0, 1]}, "exact positive integers"),
+        ({"numthreads": [64, 1, 1]}, "conflicting workgroup sizes"),
+        (
+            {
+                "numthreads": [32, 1, 1],
+                "workgroupSize": [64, 1, 1],
+            },
+            "conflicting workgroup sizes",
+        ),
+        (
+            {"numthreads": [32, 1, 1], "subgroupWidth": "WAVE"},
+            "exact positive integer",
+        ),
+        (
+            {"numthreads": [32, 1, 1], "subgroupWidth": 64},
+            "exact positive integer",
+        ),
+    ],
+)
+def test_runtime_variant_registry_rejects_inexact_selected_execution(
+    tmp_path, execution_config, expected_reason
+):
+    package_path = _write_runtime_package(
+        tmp_path / "package",
+        variants=(("selected", "float", 32, 1),),
+        targets=("directx",),
+        execution_identity_only=True,
+    )
+    package = json.loads(package_path.read_text(encoding="utf-8"))
+    package["artifacts"][0]["hostInterface"]["entryPoints"][0][
+        "executionConfig"
+    ] = execution_config
+    package_path.write_text(json.dumps(package), encoding="utf-8")
+
+    registry = build_runtime_variant_registry(package_path)
+
+    assert registry["success"] is False
+    assert registry["summary"]["readyVariantCount"] == 0
+    reasons = [
+        reason
+        for diagnostic in registry["diagnostics"]
+        for reason in diagnostic.get("details", {}).get("reasons", [])
+    ]
+    assert any(expected_reason in reason for reason in reasons)
+
+
 @pytest.mark.parametrize(
     ("mutation", "expected_reason"),
     [
         ("payload", "registryHash does not match its variants"),
         ("identity", "identity does not match its canonical key"),
+        ("execution", "selected bindingInterface entry point"),
+        ("binding-execution", "selected bindingInterface entry point"),
         ("nested-schema", "cannot reconstruct its canonical identity"),
     ],
 )
@@ -301,6 +648,26 @@ def test_runtime_variant_lookup_rejects_modified_registries(
         modified["variants"][key]["artifact"]["path"] = "artifacts/other.hlsl"
     elif mutation == "identity":
         modified["variants"][key]["arguments"]["values"]["N"] = 64
+        modified["registryHash"] = project_pipeline._runtime_variant_payload_hash(
+            {
+                "schemaVersion": modified["schemaVersion"],
+                "keySchema": modified["keySchema"],
+                "variants": modified["variants"],
+            }
+        )
+    elif mutation == "execution":
+        modified["variants"][key]["execution"]["workgroupSize"] = [64, 1, 1]
+        modified["registryHash"] = project_pipeline._runtime_variant_payload_hash(
+            {
+                "schemaVersion": modified["schemaVersion"],
+                "keySchema": modified["keySchema"],
+                "variants": modified["variants"],
+            }
+        )
+    elif mutation == "binding-execution":
+        modified["variants"][key]["bindingInterface"]["entryPoint"]["executionConfig"][
+            "numthreads"
+        ] = [64, 1, 1]
         modified["registryHash"] = project_pipeline._runtime_variant_payload_hash(
             {
                 "schemaVersion": modified["schemaVersion"],
@@ -329,6 +696,35 @@ def test_runtime_variant_lookup_rejects_modified_registries(
     )
     reasons = lookup["diagnostics"][0]["details"]["reasons"]
     assert any(expected_reason in reason for reason in reasons)
+
+
+def test_runtime_variant_lookup_rejects_reencoded_workgroup_tampering(tmp_path):
+    registry = build_runtime_variant_registry(
+        _write_runtime_package(tmp_path / "package")
+    )
+    record = _registry_record(registry, target="directx", variant="f32-n4")
+    original_key = record["key"]
+    tampered = copy.deepcopy(registry)
+    tampered_record = tampered["variants"].pop(original_key)
+    tampered_payload = decode_runtime_variant_key(original_key)
+    tampered_payload["execution"]["workgroupSize"] = [64, 1, 1]
+    tampered_key = _raw_runtime_variant_key("crosstl-rvk2:", tampered_payload)
+    tampered_record["key"] = tampered_key
+    tampered_record["execution"] = tampered_payload["execution"]
+    tampered["variants"][tampered_key] = tampered_record
+    tampered["registryHash"] = project_pipeline._runtime_variant_payload_hash(
+        {
+            "schemaVersion": tampered["schemaVersion"],
+            "keySchema": tampered["keySchema"],
+            "variants": tampered["variants"],
+        }
+    )
+
+    lookup = lookup_runtime_variant(tampered, tampered_key)
+
+    assert lookup["status"] == "invalid"
+    reasons = lookup["diagnostics"][0]["details"]["reasons"]
+    assert any("selected bindingInterface entry point" in reason for reason in reasons)
 
 
 def test_runtime_variant_registry_accepts_loader_manifest(tmp_path):
@@ -494,7 +890,42 @@ def test_runtime_variant_registry_rejects_malformed_inputs_and_keys(tmp_path):
     assert any("sha256" in reason for reason in reasons)
 
     with pytest.raises(ValueError, match="payload is invalid"):
-        decode_runtime_variant_key("crosstl-rvk1:not-base64!")
+        decode_runtime_variant_key("crosstl-rvk2:not-base64!")
+
+    valid_key = encode_runtime_variant_key(
+        "kernels/vector.metal",
+        "vector_add",
+        "directx",
+        execution={"workgroupSize": [32, 1, 1], "subgroupWidth": 32},
+    )
+    malformed_payload = decode_runtime_variant_key(valid_key)
+    malformed_payload["execution"]["workgroupSize"] = [32, -1, 1]
+    malformed_key = _raw_runtime_variant_key("crosstl-rvk2:", malformed_payload)
+    with pytest.raises(ValueError, match="positive integer"):
+        decode_runtime_variant_key(malformed_key)
+
+
+def test_runtime_variant_key_rejects_legacy_schema_with_migration_error(tmp_path):
+    registry = build_runtime_variant_registry(
+        _write_runtime_package(tmp_path / "package")
+    )
+    current_key = next(iter(registry["variants"]))
+    legacy_payload = decode_runtime_variant_key(current_key)
+    legacy_payload.pop("execution")
+    legacy_key = _raw_runtime_variant_key("crosstl-rvk1:", legacy_payload)
+
+    with pytest.raises(
+        ValueError,
+        match="Legacy runtime variant key schema v1.*regenerate",
+    ):
+        decode_runtime_variant_key(legacy_key)
+
+    lookup = lookup_runtime_variant(registry, legacy_key)
+    assert lookup["status"] == "invalid"
+    assert lookup["diagnostics"][0]["code"] == (
+        "project.runtime-variant-registry.lookup-key-invalid"
+    )
+    assert "regenerate the key and registry" in lookup["diagnostics"][0]["message"]
 
 
 def test_runtime_variant_registry_cli_json_and_text(tmp_path):

@@ -168,14 +168,39 @@ RUNTIME_VARIANT_REGISTRY_NON_GOALS = (
     "target-compilation",
     "deferred-compilation-execution",
 )
-RUNTIME_VARIANT_KEY_PREFIX = "crosstl-rvk1:"
-RUNTIME_VARIANT_KEY_ENCODING = "base64url-canonical-json-v1"
+RUNTIME_VARIANT_KEY_PREFIX = "crosstl-rvk2:"
+RUNTIME_VARIANT_KEY_ENCODING = "base64url-canonical-json-v2"
+_RUNTIME_VARIANT_LEGACY_KEY_PREFIX = "crosstl-rvk1:"
+RUNTIME_VARIANT_KEY_EXECUTION_FIELDS = frozenset(
+    (
+        "workgroupSize",
+        "subgroupWidth",
+    )
+)
+_RUNTIME_VARIANT_WORKGROUP_SIZE_FIELDS = (
+    "numthreads",
+    "workgroup_size",
+    "workgroupSize",
+    "local_size",
+)
+_RUNTIME_VARIANT_LOCAL_SIZE_FIELDS = (
+    "local_size_x",
+    "local_size_y",
+    "local_size_z",
+)
+_RUNTIME_VARIANT_SUBGROUP_WIDTH_FIELDS = (
+    "subgroupWidth",
+    "subgroup_width",
+    "waveSize",
+    "wave_size",
+)
 RUNTIME_VARIANT_KEY_FIELDS = frozenset(
     (
         "sourceUnit",
         "sourceEntry",
         "target",
         "targetProfile",
+        "execution",
         "typeArguments",
         "valueArguments",
         "specializationConstants",
@@ -955,6 +980,7 @@ RUNTIME_VARIANT_REGISTRY_RECORD_FIELDS = frozenset(
         "arguments",
         "defines",
         "specializationConstants",
+        "execution",
         "bindingInterface",
         "artifact",
         "provenance",
@@ -2857,6 +2883,10 @@ DIRECTX_HLSL_NUMTHREADS_VALUES_RE = re.compile(
 )
 DIRECTX_HLSL_EXACT_WAVE_SIZE_RE = re.compile(
     r"\[\s*WaveSize\s*\(\s*(?P<width>[^,\]]+)\s*\)\s*\]",
+    re.IGNORECASE,
+)
+DIRECTX_HLSL_WAVE_SIZE_RE = re.compile(
+    r"\[\s*WaveSize\s*\((?P<arguments>[^\]]*)\)\s*\]",
     re.IGNORECASE,
 )
 DIRECTX_HLSL_SEMANTIC_RE = re.compile(
@@ -21823,7 +21853,8 @@ def _generate_project_target_from_crossgl_ast(
             pass
         else:
             generated = format_shader_code(generated, target, str(output_path))
-    output_path.write_text(generated, encoding="utf-8", newline="")
+    with output_path.open("w", encoding="utf-8", newline="") as output_file:
+        output_file.write(generated)
     return generated
 
 
@@ -25928,15 +25959,27 @@ def _runtime_manifest_execution_host_interface(
             continue
         name = execution_entry.get("targetEntryPoint")
         size = execution_entry.get("workgroupSize")
-        if not _is_non_empty_string(name) or not isinstance(size, list):
+        subgroup_width = execution_entry.get("subgroupWidth")
+        if not _is_non_empty_string(name) or (
+            not isinstance(size, list) and subgroup_width is None
+        ):
             continue
         expected_names.add(str(name))
         entry_point = dict(reflected_by_name.get(str(name), {}))
+        execution_config = (
+            dict(entry_point.get("executionConfig"))
+            if isinstance(entry_point.get("executionConfig"), Mapping)
+            else {}
+        )
+        if isinstance(size, list):
+            execution_config["numthreads"] = list(size)
+        if subgroup_width is not None:
+            execution_config["subgroupWidth"] = subgroup_width
         entry_point.update(
             {
                 "name": str(name),
                 "stage": "compute",
-                "executionConfig": {"numthreads": list(size)},
+                "executionConfig": execution_config,
             }
         )
         entry_points.append(entry_point)
@@ -28845,6 +28888,178 @@ def _runtime_package_artifact_host_interface(
     )
 
 
+def _runtime_package_directx_execution_host_interface(
+    package_root: Path,
+    artifact: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    if artifact.get("target") != "directx":
+        return None
+    package_path = artifact.get("packagePath")
+    if not _is_non_empty_string(package_path):
+        return None
+    artifact_path = (package_root / str(package_path)).resolve()
+    if not _is_relative_to(artifact_path, package_root) or not artifact_path.is_file():
+        return None
+    try:
+        source = artifact_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    source = re.sub(r"/\*.*?\*/", "", source, flags=re.DOTALL)
+    source = re.sub(r"//.*", "", source)
+
+    declared_host_interface = artifact.get("hostInterface")
+    declared_entries = {
+        str(entry["name"]): entry
+        for entry in _record_sequence(
+            declared_host_interface.get("entryPoints")
+            if isinstance(declared_host_interface, Mapping)
+            else None
+        )
+        if isinstance(entry, Mapping) and _is_non_empty_string(entry.get("name"))
+    }
+    entries = []
+    for match in DIRECTX_HLSL_FUNCTION_RE.finditer(source):
+        attributes = match.group("attributes") or ""
+        dimensions = DIRECTX_HLSL_NUMTHREADS_VALUES_RE.search(attributes)
+        if dimensions is None:
+            continue
+        components = []
+        for axis in ("x", "y", "z"):
+            raw_value = dimensions.group(axis).strip()
+            try:
+                value: Any = parse_c_family_integral_literal(raw_value)
+            except CFamilyIntegralLiteralError:
+                value = raw_value
+            components.append(value)
+        execution_config: dict[str, Any] = {"numthreads": components}
+        wave_sizes = list(DIRECTX_HLSL_WAVE_SIZE_RE.finditer(attributes))
+        if wave_sizes:
+            arguments = [
+                wave_size.group("arguments").strip() for wave_size in wave_sizes
+            ]
+            if len(arguments) == 1 and "," not in arguments[0]:
+                try:
+                    subgroup_width: Any = parse_c_family_integral_literal(arguments[0])
+                except CFamilyIntegralLiteralError:
+                    subgroup_width = arguments[0]
+            else:
+                subgroup_width = arguments
+            execution_config["subgroupWidth"] = subgroup_width
+        else:
+            declared_entry = declared_entries.get(str(match.group("name")))
+            declared_config = (
+                declared_entry.get("executionConfig")
+                if isinstance(declared_entry, Mapping)
+                else None
+            )
+            declared_subgroups = [
+                declared_config.get(field_name)
+                for field_name in _RUNTIME_VARIANT_SUBGROUP_WIDTH_FIELDS
+                if isinstance(declared_config, Mapping)
+                and declared_config.get(field_name) is not None
+            ]
+            if declared_subgroups:
+                execution_config["subgroupWidth"] = {
+                    "compiled": None,
+                    "declared": declared_subgroups,
+                }
+        entries.append(
+            {
+                "name": match.group("name"),
+                "stage": "compute",
+                "executionConfig": execution_config,
+            }
+        )
+    if not entries:
+        return None
+    return {
+        "status": "ready",
+        "entryPoints": entries,
+    }
+
+
+def _runtime_merge_host_interface_execution_entries(
+    reflected: Mapping[str, Any],
+    declared: Any,
+) -> dict[str, Any]:
+    if not isinstance(declared, Mapping):
+        return dict(reflected)
+    payload = dict(reflected)
+    reflected_entries = [
+        entry
+        for entry in _record_sequence(reflected.get("entryPoints"))
+        if isinstance(entry, Mapping) and _is_non_empty_string(entry.get("name"))
+    ]
+    declared_entries = [
+        entry
+        for entry in _record_sequence(declared.get("entryPoints"))
+        if isinstance(entry, Mapping) and _is_non_empty_string(entry.get("name"))
+    ]
+    entries_by_name = {str(entry["name"]): dict(entry) for entry in reflected_entries}
+    entry_order = [str(entry["name"]) for entry in reflected_entries]
+    for declared_entry in sorted(
+        declared_entries,
+        key=_runtime_variant_canonical_json,
+    ):
+        name = str(declared_entry["name"])
+        reflected_entry = entries_by_name.get(name)
+        if reflected_entry is None:
+            entries_by_name[name] = dict(declared_entry)
+            entry_order.append(name)
+            continue
+        reflected_config = reflected_entry.get("executionConfig")
+        declared_config = declared_entry.get("executionConfig")
+        combined_config = (
+            dict(reflected_config) if isinstance(reflected_config, Mapping) else {}
+        )
+        if isinstance(declared_config, Mapping):
+            for field_name, value in declared_config.items():
+                if field_name not in combined_config:
+                    combined_config[field_name] = value
+                    continue
+                if combined_config[field_name] == value:
+                    continue
+                if (combined_config[field_name] is None) != (value is None):
+                    combined_config[field_name] = {
+                        "reflected": combined_config[field_name],
+                        "declared": value,
+                    }
+                    continue
+                conflict_fields = (
+                    _RUNTIME_VARIANT_WORKGROUP_SIZE_FIELDS
+                    if field_name in _RUNTIME_VARIANT_WORKGROUP_SIZE_FIELDS
+                    else (
+                        _RUNTIME_VARIANT_SUBGROUP_WIDTH_FIELDS
+                        if field_name in _RUNTIME_VARIANT_SUBGROUP_WIDTH_FIELDS
+                        else ()
+                    )
+                )
+                conflict_field = next(
+                    (
+                        candidate
+                        for candidate in conflict_fields
+                        if candidate != field_name and candidate not in combined_config
+                    ),
+                    None,
+                )
+                if conflict_field is not None:
+                    combined_config[conflict_field] = value
+                elif conflict_fields:
+                    combined_config[field_name] = {
+                        "reflected": combined_config[field_name],
+                        "declared": value,
+                    }
+        reflected_entry["executionConfig"] = combined_config
+        if not _is_non_empty_string(reflected_entry.get("stage")):
+            reflected_entry["stage"] = declared_entry.get("stage")
+        entries_by_name[name] = reflected_entry
+    payload["entryPoints"] = [entries_by_name[name] for name in entry_order]
+    payload["entryPointCount"] = len(entries_by_name)
+    if payload["entryPoints"] and payload.get("status") != "ready":
+        payload["status"] = declared.get("status")
+    return payload
+
+
 def _runtime_package_inspection_host_interface(
     *,
     package_root: Path,
@@ -28961,7 +29176,18 @@ def _runtime_package_inspection_host_interface(
             ),
         )
         if isinstance(reflected_interface, Mapping):
-            return dict(reflected_interface)
+            execution_interface = _runtime_package_directx_execution_host_interface(
+                package_root,
+                artifact,
+            )
+            reflected_with_execution = _runtime_merge_host_interface_execution_entries(
+                reflected_interface,
+                execution_interface,
+            )
+            return _runtime_merge_host_interface_execution_entries(
+                reflected_with_execution,
+                artifact.get("hostInterface"),
+            )
 
     if source_spec is None:
         source_host_interface = _runtime_package_artifact_host_interface(artifact)
@@ -30831,6 +31057,153 @@ def _runtime_variant_mapping_contract_reasons(
     return reasons
 
 
+def _runtime_variant_execution_contract_reasons(
+    prefix: str,
+    value: Any,
+) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{prefix} must be an object"]
+    reasons = _unsupported_mapping_field_reasons(
+        prefix,
+        value,
+        RUNTIME_VARIANT_KEY_EXECUTION_FIELDS,
+    )
+    missing = sorted(RUNTIME_VARIANT_KEY_EXECUTION_FIELDS - set(value))
+    if missing:
+        reasons.append(f"{prefix} is missing fields: {', '.join(missing)}")
+
+    workgroup_size = value.get("workgroupSize")
+    if workgroup_size is not None:
+        if not isinstance(workgroup_size, list) or len(workgroup_size) != 3:
+            reasons.append(
+                f"{prefix}.workgroupSize must be a three-component list or null"
+            )
+        else:
+            for index, component in enumerate(workgroup_size):
+                if (
+                    not isinstance(component, int)
+                    or isinstance(component, bool)
+                    or component <= 0
+                ):
+                    reasons.append(
+                        f"{prefix}.workgroupSize[{index}] must be a positive integer"
+                    )
+
+    subgroup_width = value.get("subgroupWidth")
+    if subgroup_width is not None and (
+        not isinstance(subgroup_width, int)
+        or isinstance(subgroup_width, bool)
+        or subgroup_width <= 0
+    ):
+        reasons.append(f"{prefix}.subgroupWidth must be a positive integer or null")
+    return reasons
+
+
+def _runtime_variant_normalized_execution(value: Any) -> Any:
+    if value is None:
+        return {"workgroupSize": None, "subgroupWidth": None}
+    if not isinstance(value, Mapping):
+        return value
+    normalized = dict(value)
+    workgroup_size = normalized.get("workgroupSize")
+    if isinstance(workgroup_size, Sequence) and not isinstance(
+        workgroup_size, (str, bytes, bytearray)
+    ):
+        normalized["workgroupSize"] = list(workgroup_size)
+    normalized.setdefault("workgroupSize", None)
+    normalized.setdefault("subgroupWidth", None)
+    return _runtime_variant_normalize_json(normalized)
+
+
+def _runtime_variant_selected_entry_execution(
+    prefix: str,
+    entry_point: Any,
+) -> tuple[dict[str, Any], list[str]]:
+    execution = {"workgroupSize": None, "subgroupWidth": None}
+    if entry_point is None:
+        return execution, []
+    if not isinstance(entry_point, Mapping):
+        return execution, [f"{prefix} must be an object or null"]
+    execution_config = entry_point.get("executionConfig")
+    if not isinstance(execution_config, Mapping):
+        return execution, [f"{prefix}.executionConfig must be an object"]
+
+    reasons: list[str] = []
+    workgroup_candidates: list[tuple[str, list[int]]] = []
+    for field_name in _RUNTIME_VARIANT_WORKGROUP_SIZE_FIELDS:
+        if (
+            field_name not in execution_config
+            or execution_config.get(field_name) is None
+        ):
+            continue
+        field_prefix = f"{prefix}.executionConfig.{field_name}"
+        value = execution_config.get(field_name)
+        if not isinstance(value, Sequence) or isinstance(
+            value, (str, bytes, bytearray)
+        ):
+            reasons.append(f"{field_prefix} must be a three-component sequence")
+            continue
+        components = list(value)
+        if len(components) != 3:
+            reasons.append(f"{field_prefix} must contain exactly three components")
+            continue
+        if any(
+            not isinstance(component, int)
+            or isinstance(component, bool)
+            or component <= 0
+            for component in components
+        ):
+            reasons.append(f"{field_prefix} components must be exact positive integers")
+            continue
+        workgroup_candidates.append((field_name, list(components)))
+
+    if any(
+        field_name in execution_config
+        for field_name in _RUNTIME_VARIANT_LOCAL_SIZE_FIELDS
+    ):
+        components = [
+            execution_config.get(field_name, 1)
+            for field_name in _RUNTIME_VARIANT_LOCAL_SIZE_FIELDS
+        ]
+        field_prefix = f"{prefix}.executionConfig.local_size"
+        if any(
+            not isinstance(component, int)
+            or isinstance(component, bool)
+            or component <= 0
+            for component in components
+        ):
+            reasons.append(f"{field_prefix} components must be exact positive integers")
+        else:
+            workgroup_candidates.append(("local_size", list(components)))
+
+    workgroup_values = {tuple(value) for _field, value in workgroup_candidates}
+    if len(workgroup_values) > 1:
+        reasons.append(f"{prefix}.executionConfig contains conflicting workgroup sizes")
+    elif workgroup_values:
+        execution["workgroupSize"] = list(next(iter(workgroup_values)))
+
+    subgroup_candidates: list[tuple[str, int]] = []
+    for field_name in _RUNTIME_VARIANT_SUBGROUP_WIDTH_FIELDS:
+        if (
+            field_name not in execution_config
+            or execution_config.get(field_name) is None
+        ):
+            continue
+        field_prefix = f"{prefix}.executionConfig.{field_name}"
+        value = execution_config.get(field_name)
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            reasons.append(f"{field_prefix} must be an exact positive integer")
+            continue
+        subgroup_candidates.append((field_name, value))
+
+    subgroup_values = {value for _field, value in subgroup_candidates}
+    if len(subgroup_values) > 1:
+        reasons.append(f"{prefix}.executionConfig contains conflicting subgroup widths")
+    elif subgroup_values:
+        execution["subgroupWidth"] = next(iter(subgroup_values))
+    return execution, sorted(set(reasons))
+
+
 def _runtime_variant_key_specialization_contract_reasons(
     prefix: str,
     values: Any,
@@ -30911,6 +31284,12 @@ def _runtime_variant_key_payload_contract_reasons(value: Any) -> list[str]:
             "variant key payload.targetProfile must be a non-empty string or null"
         )
     reasons.extend(
+        _runtime_variant_execution_contract_reasons(
+            "variant key payload.execution",
+            value.get("execution"),
+        )
+    )
+    reasons.extend(
         _runtime_variant_mapping_contract_reasons(
             "variant key payload.typeArguments",
             value.get("typeArguments"),
@@ -30968,6 +31347,7 @@ def encode_runtime_variant_key(
     target: str,
     *,
     target_profile: str | None = None,
+    execution: Mapping[str, Any] | None = None,
     type_arguments: Mapping[str, str] | None = None,
     value_arguments: Mapping[str, Any] | None = None,
     specialization_constants: Sequence[Mapping[str, Any]] = (),
@@ -30983,6 +31363,7 @@ def encode_runtime_variant_key(
         "sourceEntry": source_entry,
         "target": normalized_target,
         "targetProfile": target_profile,
+        "execution": _runtime_variant_normalized_execution(execution),
         "typeArguments": dict(sorted((type_arguments or {}).items())),
         "valueArguments": {
             key: _runtime_variant_normalize_json(value)
@@ -31005,6 +31386,11 @@ def encode_runtime_variant_key(
 def decode_runtime_variant_key(key: str) -> dict[str, Any]:
     """Decode and validate a canonical runtime variant key."""
 
+    if isinstance(key, str) and key.startswith(_RUNTIME_VARIANT_LEGACY_KEY_PREFIX):
+        raise ValueError(
+            "Legacy runtime variant key schema v1 is not accepted by schema v2; "
+            "regenerate the key and registry before lookup"
+        )
     if not isinstance(key, str) or not key.startswith(RUNTIME_VARIANT_KEY_PREFIX):
         raise ValueError(
             f"Runtime variant key must start with {RUNTIME_VARIANT_KEY_PREFIX}"
@@ -31030,6 +31416,7 @@ def decode_runtime_variant_key(key: str) -> dict[str, Any]:
         payload["sourceEntry"],
         payload["target"],
         target_profile=payload["targetProfile"],
+        execution=payload["execution"],
         type_arguments=payload["typeArguments"],
         value_arguments=payload["valueArguments"],
         specialization_constants=payload["specializationConstants"],
@@ -31228,6 +31615,14 @@ def _runtime_variant_host_interface_contract_reasons(
                 reasons.append(f"{entry_prefix}.stage must be a string or null")
             if not isinstance(entry_point.get("executionConfig"), Mapping):
                 reasons.append(f"{entry_prefix}.executionConfig must be an object")
+            else:
+                _execution, execution_reasons = (
+                    _runtime_variant_selected_entry_execution(
+                        entry_prefix,
+                        entry_point,
+                    )
+                )
+                reasons.extend(execution_reasons)
     reasons.extend(
         _runtime_variant_specialization_input_contract_reasons(
             f"{prefix}.specializationConstants",
@@ -31466,7 +31861,7 @@ def _runtime_variant_payload_hash(value: Any) -> dict[str, str]:
 
 def _runtime_variant_key_schema() -> dict[str, Any]:
     return {
-        "version": 1,
+        "version": 2,
         "encoding": RUNTIME_VARIANT_KEY_ENCODING,
         "prefix": RUNTIME_VARIANT_KEY_PREFIX,
         "matching": "exact",
@@ -31477,6 +31872,7 @@ def _runtime_variant_key_schema() -> dict[str, Any]:
             "sourceEntry",
             "target",
             "targetProfile",
+            "execution",
             "typeArguments",
             "valueArguments",
             "specializationConstants",
@@ -31992,10 +32388,22 @@ def _runtime_variant_candidate(
     specialization_constants, key_specializations, specialization_blockers = (
         _runtime_variant_specialization_records(record)
     )
+    execution, execution_reasons = _runtime_variant_selected_entry_execution(
+        "selected host-interface entry",
+        context.get("entryPoint"),
+    )
     blockers = [
         *_runtime_variant_input_blockers(record, stale_codes=stale_codes),
         *specialization_blockers,
     ]
+    if execution_reasons:
+        blockers.append(
+            _runtime_variant_blocker(
+                "project.runtime-variant-registry.execution-metadata-invalid",
+                "Selected entry execution metadata is not exact and canonical.",
+                details={"reasons": execution_reasons},
+            )
+        )
     if not _is_non_empty_string(source_unit):
         blockers.append(
             _runtime_variant_blocker(
@@ -32045,7 +32453,11 @@ def _runtime_variant_candidate(
         }.values(),
         key=_runtime_variant_canonical_json,
     )
-    status = "stale" if stale_codes else "blocked" if blockers else "ready"
+    status = (
+        "stale"
+        if stale_codes or execution_reasons
+        else "blocked" if blockers else "ready"
+    )
     key = encode_runtime_variant_key(
         (
             str(source_unit)
@@ -32059,6 +32471,7 @@ def _runtime_variant_candidate(
         ),
         target,
         target_profile=target_profile,
+        execution=execution,
         type_arguments=type_arguments,
         value_arguments=value_arguments,
         specialization_constants=key_specializations,
@@ -32097,6 +32510,7 @@ def _runtime_variant_candidate(
         },
         "defines": dict(sorted(record.get("defines", {}).items())),
         "specializationConstants": specialization_constants,
+        "execution": execution,
         "bindingInterface": _runtime_variant_binding_interface(
             record, context, specialization_constants
         ),
@@ -32296,6 +32710,38 @@ def _runtime_variant_registry_target(
     }
 
 
+def _runtime_variant_lookup_execution_alternatives(
+    variants: Mapping[str, Any],
+    requested_payload: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    requested_identity = {
+        field: requested_payload.get(field)
+        for field in RUNTIME_VARIANT_KEY_FIELDS
+        if field != "execution"
+    }
+    alternatives = []
+    for key, record in sorted(variants.items()):
+        try:
+            candidate_payload = decode_runtime_variant_key(str(key))
+        except ValueError:
+            continue
+        candidate_identity = {
+            field: candidate_payload.get(field)
+            for field in RUNTIME_VARIANT_KEY_FIELDS
+            if field != "execution"
+        }
+        if candidate_identity != requested_identity:
+            continue
+        alternatives.append(
+            {
+                "key": str(key),
+                "status": record.get("status") if isinstance(record, Mapping) else None,
+                "execution": candidate_payload["execution"],
+            }
+        )
+    return alternatives
+
+
 def _runtime_variant_lookup_registry_contract_reasons(
     registry: Mapping[str, Any],
 ) -> list[str]:
@@ -32335,7 +32781,7 @@ def _runtime_variant_lookup_registry_contract_reasons(
     for key, record in variants.items():
         prefix = f"runtime variant registry.variants[{key!r}]"
         try:
-            decode_runtime_variant_key(key)
+            decoded_key = decode_runtime_variant_key(key)
         except ValueError as exc:
             reasons.append(f"{prefix} uses an invalid canonical key: {exc}")
             continue
@@ -32373,11 +32819,43 @@ def _runtime_variant_lookup_registry_contract_reasons(
         arguments = record.get("arguments")
         defines = record.get("defines")
         constants = record.get("specializationConstants")
+        execution = record.get("execution")
+        binding_interface = record.get("bindingInterface")
         if not all(
-            isinstance(value, Mapping) for value in (source, target, arguments, defines)
+            isinstance(value, Mapping)
+            for value in (
+                source,
+                target,
+                arguments,
+                defines,
+                execution,
+                binding_interface,
+            )
         ) or not isinstance(constants, list):
             reasons.append(f"{prefix} cannot reconstruct its canonical identity")
             continue
+        execution_reasons = _runtime_variant_execution_contract_reasons(
+            f"{prefix}.execution",
+            execution,
+        )
+        reasons.extend(execution_reasons)
+        selected_execution, selected_execution_reasons = (
+            _runtime_variant_selected_entry_execution(
+                f"{prefix}.bindingInterface.entryPoint",
+                binding_interface.get("entryPoint"),
+            )
+        )
+        reasons.extend(selected_execution_reasons)
+        if not execution_reasons and not selected_execution_reasons:
+            if execution != selected_execution:
+                reasons.append(
+                    f"{prefix}.execution must match its selected "
+                    "bindingInterface entry point"
+                )
+            if decoded_key.get("execution") != execution:
+                reasons.append(
+                    f"{prefix}.execution must match its decoded canonical key"
+                )
         type_arguments = arguments.get("types")
         value_arguments = arguments.get("values")
         if (
@@ -32393,6 +32871,7 @@ def _runtime_variant_lookup_registry_contract_reasons(
                 source.get("entry"),
                 target.get("backend"),
                 target_profile=target.get("profile"),
+                execution=execution,
                 type_arguments=type_arguments,
                 value_arguments=value_arguments,
                 specialization_constants=constants,
@@ -32613,6 +33092,7 @@ def lookup_runtime_variant(
     """Perform one exact registry lookup without defaults or best-match logic."""
 
     diagnostics: list[ProjectDiagnostic] = []
+    requested_payload: dict[str, Any] | None = None
     if not isinstance(registry, Mapping):
         diagnostics.append(
             _runtime_variant_diagnostic(
@@ -32649,7 +33129,7 @@ def lookup_runtime_variant(
         else:
             variants = registry["variants"]
             try:
-                decode_runtime_variant_key(requested_key)
+                requested_payload = decode_runtime_variant_key(requested_key)
             except ValueError as exc:
                 diagnostics.append(
                     _runtime_variant_diagnostic(
@@ -32661,12 +33141,26 @@ def lookup_runtime_variant(
     record = variants.get(requested_key) if not diagnostics else None
     available_keys = sorted(str(candidate) for candidate in variants)
     if record is None and not diagnostics:
+        execution_alternatives = (
+            _runtime_variant_lookup_execution_alternatives(
+                variants,
+                requested_payload,
+            )
+            if requested_payload is not None
+            else []
+        )
         diagnostics.append(
             _runtime_variant_diagnostic(
                 "project.runtime-variant-registry.variant-not-found",
                 "No runtime variant exactly matches the requested key.",
                 details={
                     "requestedKey": requested_key,
+                    "requestedExecution": (
+                        requested_payload.get("execution")
+                        if requested_payload is not None
+                        else None
+                    ),
+                    "availableExecutionAlternatives": execution_alternatives,
                     "availableKeys": available_keys,
                 },
             )
