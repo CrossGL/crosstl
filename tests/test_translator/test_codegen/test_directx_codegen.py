@@ -40200,22 +40200,71 @@ def test_hlsl_workgroup_pointer_aliases_compose_offsets_and_forward_writes(tmp_p
 
     assert "groupshared float2 main_storage[64];" in generated
     assert (
-        "void update(inout float2 values[64], int values_offset, uint index)"
-        in generated
+        "void update__crosstl_workgroup_values_main_storage_64("
+        "int values_offset, uint index)" in generated
     )
     assert (
-        "void forward(inout float2 values[64], int values_offset, uint index)"
-        in generated
+        "void forward__crosstl_workgroup_values_main_storage_64("
+        "int values_offset, uint index)" in generated
     )
-    assert "values[uint((values_offset + index))] =" in generated
-    assert "update(values, int((values_offset + 2)), index);" in generated
+    assert "main_storage[uint((values_offset + index))] =" in generated
+    assert (
+        "update__crosstl_workgroup_values_main_storage_64("
+        "int((values_offset + 2)), index);" in generated
+    )
     assert "int first_offset = int(lid);" in generated
     assert "int second_offset = int((first_offset + 5));" in generated
     assert "second_offset = int((first_offset + 7));" in generated
-    assert "forward(main_storage, int(second_offset), lid);" in generated
+    assert (
+        "forward__crosstl_workgroup_values_main_storage_64("
+        "int(second_offset), lid);" in generated
+    )
     assert "main_storage[uint((second_offset + 1))] = main_storage[0];" in generated
+    assert "inout float2 values" not in generated
     assert "groupshared float2*" not in generated
     assert "float2*" not in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_workgroup_pointer_nested_helpers_specialize_by_backing_identity(
+    tmp_path,
+):
+    shader = """
+    shader WorkgroupPointerBackingIdentity {
+        void update(threadgroup float* values) {
+            values[0] += 1.0;
+        }
+
+        void forward(threadgroup float* values) {
+            update(values + 1);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup float left[8];
+                threadgroup float right[8];
+                forward(left + 2);
+                forward(right + 3);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    for root, offset in (("main_left", 2), ("main_right", 3)):
+        update = f"update__crosstl_workgroup_values_{root}_8"
+        forward = f"forward__crosstl_workgroup_values_{root}_8"
+        assert f"void {update}(int values_offset)" in generated
+        assert f"void {forward}(int values_offset)" in generated
+        assert f"{root}[uint(values_offset)] += 1.0;" in generated
+        assert f"{update}(int((values_offset + 1)));" in generated
+        assert f"{forward}(int({offset}));" in generated
+
+    assert "inout float values" not in generated
+    assert "float*" not in generated
     assert_directx_compute_validates_if_available(generated, tmp_path)
 
 
@@ -40245,12 +40294,24 @@ def test_hlsl_workgroup_pointer_variants_preserve_lexical_shadowing(tmp_path):
 
     generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "void update(inout float values[8], int values_offset)" in generated
-    assert "void update(inout float values[16], int values_offset)" in generated
+    assert (
+        "void update__crosstl_workgroup_values_main_left_8(int values_offset)"
+        in generated
+    )
+    assert (
+        "void update__crosstl_workgroup_values_main_right_16(int values_offset)"
+        in generated
+    )
     assert "int selected_offset = int(1);" in generated
     assert "int selected_offset_ = int(2);" in generated
-    assert "update(main_right, int(selected_offset_));" in generated
-    assert "update(main_left, int(selected_offset));" in generated
+    assert (
+        "update__crosstl_workgroup_values_main_right_16(int(selected_offset_));"
+        in generated
+    )
+    assert (
+        "update__crosstl_workgroup_values_main_left_8(int(selected_offset));"
+        in generated
+    )
     assert "float*" not in generated
     assert_directx_compute_validates_if_available(generated, tmp_path)
 
@@ -40359,8 +40420,11 @@ def test_hlsl_workgroup_pointer_keeps_helper_reachable_from_selected_stage(tmp_p
     )
 
     assert "groupshared float main_values[8];" in generated
-    assert "void update(inout float values[8], int values_offset)" in generated
-    assert "update(main_values, int(0));" in generated
+    assert (
+        "void update__crosstl_workgroup_values_main_values_8(int values_offset)"
+        in generated
+    )
+    assert "update__crosstl_workgroup_values_main_values_8(int(0));" in generated
     assert "float*" not in generated
     assert_directx_compute_validates_if_available(generated, tmp_path)
 
@@ -40392,6 +40456,79 @@ def test_hlsl_workgroup_pointer_rejects_dynamic_backing_selection():
     assert diagnostic.missing_capabilities == ("directx.workgroup-pointer-lowering",)
     assert diagnostic.function_name == "main"
     assert diagnostic.reason == "conditional-backing-unresolved"
+
+
+def test_hlsl_workgroup_pointer_rejects_composed_out_of_bounds_view():
+    shader = """
+    shader OutOfBoundsWorkgroupPointerView {
+        void update(threadgroup float* values) {
+            values[1] = 1.0;
+        }
+
+        void forward(threadgroup float* values) {
+            update(values + 2);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main() {
+                threadgroup float storage[8];
+                forward(storage + 5);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        DirectXWorkgroupPointerError,
+        match=(
+            "workgroup pointer view 'forward.values' requires elements 8 "
+            "through 8, but backing array 'main_storage' has extent 8"
+        ),
+    ) as excinfo:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert excinfo.value.function_name == "forward"
+    assert excinfo.value.parameter_name == "values"
+    assert excinfo.value.reason == "view-out-of-bounds"
+
+
+def test_hlsl_workgroup_pointer_rejects_unprovable_composed_offset():
+    shader = """
+    shader UnprovableWorkgroupPointerView {
+        uint select_offset(uint value) {
+            return value;
+        }
+
+        void update(threadgroup float* values) {
+            values[0] = 1.0;
+        }
+
+        void forward(threadgroup float* values) {
+            update(values + 1);
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint lid @ gl_LocalInvocationIndex) {
+                threadgroup float storage[16];
+                forward(storage + select_offset(lid));
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        DirectXWorkgroupPointerError,
+        match="cannot prove the composed workgroup pointer offset",
+    ) as excinfo:
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert excinfo.value.function_name == "forward"
+    assert excinfo.value.parameter_name == "values"
+    assert excinfo.value.reason == "unprovable-view-offset"
 
 
 def test_hlsl_private_scalar_pointer_accepts_proven_zero_loop_index():
