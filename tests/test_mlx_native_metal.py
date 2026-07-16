@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 HELPER_PATH = ROOT / "demos" / "integrations" / "mlx" / "run_mlx_native_metal.py"
 WORKFLOW_PATH = ROOT / ".github" / "workflows" / "mlx-native-metal.yml"
 DOCUMENTATION_PATH = ROOT / "demos" / "integrations" / "mlx" / "NATIVE_METAL.md"
+README_PATH = ROOT / "demos" / "integrations" / "mlx" / "README.md"
 
 
 def _load_helper():
@@ -527,3 +528,16 @@ def test_native_baseline_documentation_keeps_claims_and_results_separate():
     assert "not a skipped test or coverage" in text
     assert "does not establish translated-target correctness" in text
     assert "Torch is intentionally not installed" in text
+
+
+def test_main_readme_discovers_native_baseline_without_overclaiming():
+    text = README_PATH.read_text(encoding="utf-8")
+    link = "[pinned native MLX Metal reference baseline](NATIVE_METAL.md)"
+
+    assert link in text
+    baseline_bullet = text[text.index(link) :].split("\n-", 1)[0]
+    baseline_bullet = " ".join(baseline_bullet.split())
+    assert (
+        "does not establish translated-target correctness, runtime parity, "
+        "or numerical parity" in baseline_bullet
+    )

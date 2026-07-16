@@ -12,6 +12,12 @@ passes a target validator.
 
 The current harness verifies:
 
+- the [pinned native MLX Metal reference baseline](NATIVE_METAL.md) for exact
+  upstream commit `4367c73b60541ddd5a266ce4644fd93d20223b6e`: on `macos-26`
+  CI it compiles all 40 native Metal units (33 Metal 3.2 / 7 Metal 4.0), runs
+  776 Python tests with 44 skips, and passes 260/260 C++ cases and 3,490/3,490
+  assertions. This native upstream reference does not establish
+  translated-target correctness, runtime parity, or numerical parity;
 - discovery of the MLX Metal kernel project surface under
   `mlx/backend/metal/kernels`;
 - Metal-to-CrossGL-to-Metal translation of pinned `fence.metal`, including
