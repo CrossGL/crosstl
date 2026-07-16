@@ -36,6 +36,9 @@ MLX_ARG_REDUCE_SOURCE = "mlx/backend/metal/kernels/arg_reduce.metal"
 MLX_BINARY_TWO_SOURCE = "mlx/backend/metal/kernels/binary_two.metal"
 MLX_FENCE_SOURCE = "mlx/backend/metal/kernels/fence.metal"
 MLX_FENCE_EXPECTED_ATOMIC_FENCE_COUNT = 3
+MLX_FFT_SOURCE = "mlx/backend/metal/kernels/fft.metal"
+MLX_FFT_SHA256 = "3a1fbb38ed64f50a49a20d0c5adb1748d9d06ea20e5931e99aa26be543cb7825"
+MLX_FFT_SOURCE_SIZE_BYTES = 3278
 MLX_GEMV_SOURCE = "mlx/backend/metal/kernels/gemv.metal"
 MLX_LAYER_NORM_SOURCE = "mlx/backend/metal/kernels/layer_norm.metal"
 MLX_LOGSUMEXP_SOURCE = "mlx/backend/metal/kernels/logsumexp.metal"
@@ -197,6 +200,32 @@ GEMV_MAX_TEMPLATE_SPECIALIZATIONS = 4096
 GEMV_MAX_TEMPLATE_MATERIALIZATION_WORK = 2097152
 GEMV_EXPECTED_SPECIALIZATION_COUNT = 225
 GEMV_EXPECTED_ENTRY_POINT_COUNT = 224
+FFT_OPENGL_MAX_TEMPLATE_SPECIALIZATIONS = 4096
+FFT_OPENGL_MAX_TEMPLATE_MATERIALIZATION_WORK = 2097152
+FFT_OPENGL_TRANSLATION_TIMEOUT_SECONDS = 900
+FFT_OPENGL_EXPECTED_SPECIALIZATION_COUNT = 117
+FFT_OPENGL_EXPECTED_FUNCTION_CONSTANT_COUNT = 22
+FFT_OPENGL_WORKGROUP_POINTER_ISSUE = "https://github.com/CrossGL/crosstl/issues/1671"
+FFT_OPENGL_EXPECTED_DIAGNOSTIC_CODE = (
+    "project.translate.opengl-workgroup-pointer-unsupported"
+)
+FFT_OPENGL_EXPECTED_MISSING_CAPABILITY = "opengl.workgroup-pointer-lowering"
+FFT_OPENGL_EXPECTED_MESSAGE = (
+    "OpenGL cannot prove the workgroup pointer access range for "
+    "'ReadWriter_float2_float2__load.crosstl_ptr_buf' into shared backing "
+    "'shared_in'"
+)
+FFT_OPENGL_EXPECTED_POINTER_EVIDENCE = {
+    "backingName": "shared_in",
+    "function": "ReadWriter_float2_float2__load",
+    "materializationName": (
+        "ReadWriter_float2_float2_load__glsl_crosstl_ptr_buf_"
+        "fft_mem_256_float2_float2_shared_in_vec2_256"
+    ),
+    "offsetExpression": "0",
+    "parameter": "crosstl_ptr_buf",
+    "reason": "unprovable-view-access",
+}
 REDUCED_FRONTIER_MODE = "reduced-frontier"
 FULL_CORPUS_MODE = "full-corpus"
 FRONTIER_VALIDATION_TRACKED_ISSUES: tuple[str, ...] = ()
@@ -3224,6 +3253,189 @@ def _check_opengl_frontier(
     }
 
 
+def _check_fft_opengl_workgroup_pointer_frontier(
+    mlx_root: Path,
+    work_dir: Path,
+    config_dir: Path,
+    report_dir: Path,
+    log_dir: Path,
+    python: str,
+) -> dict[str, Any]:
+    config_path = config_dir / "fft-opengl-workgroup-pointer.toml"
+    report_path = report_dir / "fft-opengl-workgroup-pointer.json"
+    output_dir = work_dir / "out-fft-opengl-workgroup-pointer"
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    _write_project_config(
+        config_path,
+        include=MLX_FFT_SOURCE,
+        targets=("opengl",),
+        output_dir=_relpath(output_dir, mlx_root),
+        metal_source_options={
+            "max_template_specializations": FFT_OPENGL_MAX_TEMPLATE_SPECIALIZATIONS,
+            "max_template_materialization_work": (
+                FFT_OPENGL_MAX_TEMPLATE_MATERIALIZATION_WORK
+            ),
+        },
+    )
+    result = _run_command(
+        "translate-fft-opengl-workgroup-pointer",
+        [
+            python,
+            "-m",
+            "crosstl",
+            "translate-project",
+            str(mlx_root),
+            "--config",
+            str(config_path),
+            "--report",
+            str(report_path),
+            "--no-format",
+        ],
+        log_dir=log_dir,
+        check=False,
+        timeout_seconds=FFT_OPENGL_TRANSLATION_TIMEOUT_SECONDS,
+    )
+    _require(
+        result.returncode == 1,
+        "OpenGL FFT translation must remain fail-closed at its tracked "
+        "workgroup-pointer frontier",
+    )
+    _require(
+        report_path.is_file(),
+        "OpenGL FFT translation did not produce a project report",
+    )
+
+    payload = _load_json(report_path)
+    _require(
+        payload.get("kind") == "crosstl-project-portability-report",
+        "OpenGL FFT translation report kind changed",
+    )
+    summary = payload.get("summary", {})
+    _require(
+        isinstance(summary, Mapping)
+        and summary.get("unitCount") == 1
+        and summary.get("artifactCount") == 1
+        and summary.get("translatedCount") == 0
+        and summary.get("failedCount") == 1,
+        "OpenGL FFT translation report did not retain one failed artifact",
+    )
+    _require(
+        summary.get("diagnosticCounts") == {"error": 1, "note": 0, "warning": 0}
+        and summary.get("diagnosticsByCode") == {FFT_OPENGL_EXPECTED_DIAGNOSTIC_CODE: 1}
+        and summary.get("missingCapabilityCounts")
+        == {FFT_OPENGL_EXPECTED_MISSING_CAPABILITY: 1},
+        "OpenGL FFT workgroup-pointer diagnostic summary changed",
+    )
+
+    diagnostics = payload.get("diagnostics", [])
+    _require(
+        isinstance(diagnostics, list) and len(diagnostics) == 1,
+        "OpenGL FFT report must contain one workgroup-pointer diagnostic",
+    )
+    diagnostic = diagnostics[0]
+    _require(
+        isinstance(diagnostic, Mapping)
+        and diagnostic.get("severity") == "error"
+        and diagnostic.get("code") == FFT_OPENGL_EXPECTED_DIAGNOSTIC_CODE
+        and diagnostic.get("message") == FFT_OPENGL_EXPECTED_MESSAGE
+        and diagnostic.get("sourceBackend") == "metal"
+        and diagnostic.get("target") == "opengl"
+        and diagnostic.get("missingCapabilities")
+        == [FFT_OPENGL_EXPECTED_MISSING_CAPABILITY],
+        "OpenGL FFT workgroup-pointer diagnostic contract changed",
+    )
+    location = diagnostic.get("location", {})
+    _require(
+        isinstance(location, Mapping) and location.get("file") == MLX_FFT_SOURCE,
+        "OpenGL FFT diagnostic source changed",
+    )
+    details = diagnostic.get("details", {})
+    _require(
+        isinstance(details, Mapping)
+        and details.get("sourcePath") == MLX_FFT_SOURCE
+        and details.get("workgroupPointer") == FFT_OPENGL_EXPECTED_POINTER_EVIDENCE,
+        "OpenGL FFT diagnostic lost concrete workgroup-pointer provenance",
+    )
+
+    artifacts = payload.get("artifacts", [])
+    _require(
+        isinstance(artifacts, list) and len(artifacts) == 1,
+        "OpenGL FFT report must contain one failed artifact record",
+    )
+    artifact = artifacts[0]
+    artifact_path = artifact.get("path") if isinstance(artifact, Mapping) else None
+    _require(
+        isinstance(artifact, Mapping)
+        and artifact.get("source") == MLX_FFT_SOURCE
+        and artifact.get("sourceBackend") == "metal"
+        and artifact.get("target") == "opengl"
+        and artifact.get("status") == "failed"
+        and artifact.get("error") == FFT_OPENGL_EXPECTED_MESSAGE
+        and isinstance(artifact_path, str),
+        "OpenGL FFT failed artifact contract changed",
+    )
+    _require(
+        details.get("targetArtifact") == artifact_path,
+        "OpenGL FFT diagnostic and artifact paths disagree",
+    )
+    _require(
+        artifact.get("sourceHash") == {"algorithm": "sha256", "value": MLX_FFT_SHA256}
+        and artifact.get("sourceSizeBytes") == MLX_FFT_SOURCE_SIZE_BYTES,
+        "OpenGL FFT source identity changed at the pinned MLX commit",
+    )
+    specialization_constants = artifact.get("specializationConstants", [])
+    materialization = artifact.get("templateMaterialization", {})
+    _require(
+        isinstance(specialization_constants, list)
+        and len(specialization_constants)
+        == FFT_OPENGL_EXPECTED_FUNCTION_CONSTANT_COUNT,
+        "OpenGL FFT function-constant inventory changed",
+    )
+    _require(
+        isinstance(materialization, Mapping)
+        and materialization.get("status") == "materialized"
+        and len(materialization.get("specializations", []))
+        == FFT_OPENGL_EXPECTED_SPECIALIZATION_COUNT
+        and materialization.get("unsupported") == [],
+        "OpenGL FFT template materialization evidence changed",
+    )
+
+    generated_path = (mlx_root / artifact_path).resolve()
+    _require(
+        _is_relative_to(generated_path, output_dir.resolve()),
+        "OpenGL FFT artifact path escaped its output directory",
+    )
+    _require(
+        not generated_path.exists(),
+        "OpenGL FFT emitted GLSL despite its fail-closed project diagnostic",
+    )
+
+    return {
+        "name": "fft-opengl-workgroup-pointer-frontier",
+        "status": "blocked-as-expected",
+        "report": _relpath(report_path, mlx_root),
+        "source": MLX_FFT_SOURCE,
+        "sourceHash": MLX_FFT_SHA256,
+        "target": "opengl",
+        "artifactStatus": "failed",
+        "artifactEmitted": False,
+        "nativeValidationAttempted": False,
+        "nativeValidationStatus": "not-run-no-artifact",
+        "templateMaterializationStatus": "materialized",
+        "templateSpecializationCount": FFT_OPENGL_EXPECTED_SPECIALIZATION_COUNT,
+        "functionConstantCount": FFT_OPENGL_EXPECTED_FUNCTION_CONSTANT_COUNT,
+        "workgroupPointer": dict(FFT_OPENGL_EXPECTED_POINTER_EVIDENCE),
+        "provenanceStatus": "concrete-backing-preserved",
+        "accessRangeStatus": "unprovable",
+        "trackedIssue": FFT_OPENGL_WORKGROUP_POINTER_ISSUE,
+        "maxTemplateSpecializations": FFT_OPENGL_MAX_TEMPLATE_SPECIALIZATIONS,
+        "maxTemplateMaterializationWork": FFT_OPENGL_MAX_TEMPLATE_MATERIALIZATION_WORK,
+        "runtimeIntegrationIncluded": False,
+        "runtimeParityClaimed": False,
+    }
+
+
 def _check_gemv_opengl_toolchain(
     mlx_root: Path,
     work_dir: Path,
@@ -4717,6 +4929,16 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
                 require_toolchain=require_opengl_frontier_toolchain,
             )
         )
+        checks.append(
+            _check_fft_opengl_workgroup_pointer_frontier(
+                mlx_root,
+                work_dir,
+                config_dir,
+                report_dir,
+                log_dir,
+                args.python,
+            )
+        )
         if require_opengl_gemv_toolchain:
             checks.append(
                 _check_gemv_opengl_toolchain(
@@ -4762,6 +4984,7 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
         raise PortingCheckError(f"unsupported MLX porting mode: {args.mode}")
     reference_accessor_included = args.mode == REDUCED_FRONTIER_MODE
     template_member_pointer_included = args.mode == REDUCED_FRONTIER_MODE
+    fft_opengl_pointer_frontier_included = args.mode == REDUCED_FRONTIER_MODE
     return {
         "schema_version": 1,
         "repository": {
@@ -4813,6 +5036,9 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             ),
             "templateMemberBufferPointerNativeValidationIncluded": False,
             "openglFrontierToolchainRequired": require_opengl_frontier_toolchain,
+            "fftOpenGLWorkgroupPointerFrontierIncluded": (
+                fft_opengl_pointer_frontier_included
+            ),
             "openglGemvToolchainRequired": require_opengl_gemv_toolchain,
             "openglNativeRuntimeRequired": require_opengl_native_runtime,
             "vulkanGemvToolchainRequired": require_vulkan_gemv_toolchain,

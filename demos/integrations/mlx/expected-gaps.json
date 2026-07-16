@@ -160,6 +160,48 @@
     "runtime_integration_included": false,
     "runtime_parity_claimed": false
   },
+  "opengl_fft_workgroup_pointer_status": {
+    "status": "blocked-after-provenance",
+    "source": "mlx/backend/metal/kernels/fft.metal",
+    "source_sha256": "3a1fbb38ed64f50a49a20d0c5adb1748d9d06ea20e5931e99aa26be543cb7825",
+    "target": "opengl",
+    "project_translation": {
+      "unit_count": 1,
+      "artifact_count": 1,
+      "translated_count": 0,
+      "failed_count": 1,
+      "max_template_specializations": 4096,
+      "max_template_materialization_work": 2097152
+    },
+    "materialization": {
+      "status": "materialized",
+      "specialization_count": 117,
+      "unsupported_specialization_count": 0,
+      "function_constant_count": 22
+    },
+    "diagnostic": {
+      "code": "project.translate.opengl-workgroup-pointer-unsupported",
+      "missing_capability": "opengl.workgroup-pointer-lowering",
+      "message": "OpenGL cannot prove the workgroup pointer access range for 'ReadWriter_float2_float2__load.crosstl_ptr_buf' into shared backing 'shared_in'",
+      "workgroup_pointer": {
+        "backingName": "shared_in",
+        "function": "ReadWriter_float2_float2__load",
+        "materializationName": "ReadWriter_float2_float2_load__glsl_crosstl_ptr_buf_fft_mem_256_float2_float2_shared_in_vec2_256",
+        "offsetExpression": "0",
+        "parameter": "crosstl_ptr_buf",
+        "reason": "unprovable-view-access"
+      }
+    },
+    "provenance_status": "concrete-backing-preserved",
+    "access_range_status": "unprovable",
+    "artifact_emitted": false,
+    "native_validation_status": "not-run-no-artifact",
+    "blocked_by": [
+      "https://github.com/CrossGL/crosstl/issues/1671"
+    ],
+    "runtime_integration_included": false,
+    "runtime_parity_claimed": false
+  },
   "rms_norm_specialization_status": {
     "status": "translation-and-native-compilation-validated",
     "source": "mlx/backend/metal/kernels/rms_norm.metal",

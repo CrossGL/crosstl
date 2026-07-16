@@ -377,8 +377,19 @@ Direct3D 10 or 11 compatibility; CrossGL/crosstl#1670 tracks explicit target
 profiles, feature gates, and compiler selection. CrossGL/crosstl#1669 tracks
 the fixed arrays of resource aliases introduced by the pinned revision's wide
 quantized matrix-vector helpers. CrossGL/crosstl#1671 tracks workgroup backing
-provenance through nested FFT helper parameters. CrossGL/crosstl#1672 tracks
-owner-dependent `constexpr` helper calls in quantized struct static members.
+provenance through nested FFT helper parameters. A dedicated project replay now
+translates the complete pinned `fft.metal` source for OpenGL with a 4,096
+specialization limit and a 2,097,152-item materialization work budget. All 117
+reachable template specializations materialize without unsupported residue, and
+the diagnostic retains the `shared_in` backing object, zero element offset,
+source parameter, and generated helper specialization for
+`ReadWriter_float2_float2__load`. This advances beyond the earlier missing
+concrete-backing failure. Translation now fails closed because the helper's
+workgroup access range cannot be proven. No GLSL artifact is emitted, so
+`glslangValidator`, runtime execution, and numerical parity do not apply to this
+check yet. [#1671](https://github.com/CrossGL/crosstl/issues/1671) remains open
+for the range-proof contract. CrossGL/crosstl#1672 tracks owner-dependent
+`constexpr` helper calls in quantized struct static members.
 CrossGL/crosstl#1491 tracks remaining qualified-static-constant materialization
 outside the compiler-validated DirectX frontier.
 Built-in overloads are resolved alongside user-defined wrappers by source

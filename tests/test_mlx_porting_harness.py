@@ -2888,6 +2888,177 @@ def test_opengl_frontier_requires_zero_project_diagnostics(tmp_path, monkeypatch
         )
 
 
+def _prepare_fft_opengl_pointer_check(module, tmp_path, *, pointer_overrides=None):
+    mlx_root = tmp_path / "mlx"
+    work_dir = mlx_root / ".crosstl-mlx-porting"
+    config_dir = work_dir / "configs"
+    report_dir = work_dir / "reports"
+    log_dir = work_dir / "logs"
+    for path in (config_dir, report_dir, log_dir):
+        path.mkdir(parents=True, exist_ok=True)
+
+    artifact_path = (
+        work_dir / "out-fft-opengl-workgroup-pointer" / "opengl" / module.MLX_FFT_SOURCE
+    ).with_suffix(".glsl")
+    relative_artifact_path = artifact_path.relative_to(mlx_root).as_posix()
+    pointer_evidence = dict(module.FFT_OPENGL_EXPECTED_POINTER_EVIDENCE)
+    pointer_evidence.update(pointer_overrides or {})
+    report = {
+        "kind": "crosstl-project-portability-report",
+        "summary": {
+            "unitCount": 1,
+            "artifactCount": 1,
+            "translatedCount": 0,
+            "failedCount": 1,
+            "diagnosticCounts": {"error": 1, "note": 0, "warning": 0},
+            "diagnosticsByCode": {module.FFT_OPENGL_EXPECTED_DIAGNOSTIC_CODE: 1},
+            "missingCapabilityCounts": {
+                module.FFT_OPENGL_EXPECTED_MISSING_CAPABILITY: 1
+            },
+        },
+        "diagnostics": [
+            {
+                "severity": "error",
+                "code": module.FFT_OPENGL_EXPECTED_DIAGNOSTIC_CODE,
+                "message": module.FFT_OPENGL_EXPECTED_MESSAGE,
+                "location": {"file": module.MLX_FFT_SOURCE},
+                "target": "opengl",
+                "sourceBackend": "metal",
+                "missingCapabilities": [module.FFT_OPENGL_EXPECTED_MISSING_CAPABILITY],
+                "details": {
+                    "sourcePath": module.MLX_FFT_SOURCE,
+                    "targetArtifact": relative_artifact_path,
+                    "workgroupPointer": pointer_evidence,
+                },
+            }
+        ],
+        "artifacts": [
+            {
+                "source": module.MLX_FFT_SOURCE,
+                "sourceBackend": "metal",
+                "target": "opengl",
+                "path": relative_artifact_path,
+                "status": "failed",
+                "error": module.FFT_OPENGL_EXPECTED_MESSAGE,
+                "sourceHash": {
+                    "algorithm": "sha256",
+                    "value": module.MLX_FFT_SHA256,
+                },
+                "sourceSizeBytes": module.MLX_FFT_SOURCE_SIZE_BYTES,
+                "specializationConstants": [
+                    {"id": index}
+                    for index in range(
+                        module.FFT_OPENGL_EXPECTED_FUNCTION_CONSTANT_COUNT
+                    )
+                ],
+                "templateMaterialization": {
+                    "status": "materialized",
+                    "specializations": [
+                        {"materializedName": f"specialization_{index}"}
+                        for index in range(
+                            module.FFT_OPENGL_EXPECTED_SPECIALIZATION_COUNT
+                        )
+                    ],
+                    "unsupported": [],
+                },
+            }
+        ],
+    }
+    (report_dir / "fft-opengl-workgroup-pointer.json").write_text(
+        json.dumps(report),
+        encoding="utf-8",
+    )
+    return mlx_root, work_dir, config_dir, report_dir, log_dir
+
+
+def test_fft_opengl_pointer_frontier_records_next_fail_closed_root(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_harness()
+    paths = _prepare_fft_opengl_pointer_check(module, tmp_path)
+    commands = []
+
+    def fake_run_command(name, command, *, log_dir, **kwargs):
+        commands.append((name, list(command), kwargs))
+        stdout_path = log_dir / f"{name}.stdout"
+        stderr_path = log_dir / f"{name}.stderr"
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text("", encoding="utf-8")
+        return module.CommandResult(name, list(command), 1, stdout_path, stderr_path)
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+
+    result = module._check_fft_opengl_workgroup_pointer_frontier(
+        *paths,
+        "python",
+    )
+
+    assert result == {
+        "name": "fft-opengl-workgroup-pointer-frontier",
+        "status": "blocked-as-expected",
+        "report": ".crosstl-mlx-porting/reports/fft-opengl-workgroup-pointer.json",
+        "source": module.MLX_FFT_SOURCE,
+        "sourceHash": module.MLX_FFT_SHA256,
+        "target": "opengl",
+        "artifactStatus": "failed",
+        "artifactEmitted": False,
+        "nativeValidationAttempted": False,
+        "nativeValidationStatus": "not-run-no-artifact",
+        "templateMaterializationStatus": "materialized",
+        "templateSpecializationCount": 117,
+        "functionConstantCount": 22,
+        "workgroupPointer": module.FFT_OPENGL_EXPECTED_POINTER_EVIDENCE,
+        "provenanceStatus": "concrete-backing-preserved",
+        "accessRangeStatus": "unprovable",
+        "trackedIssue": "https://github.com/CrossGL/crosstl/issues/1671",
+        "maxTemplateSpecializations": 4096,
+        "maxTemplateMaterializationWork": 2097152,
+        "runtimeIntegrationIncluded": False,
+        "runtimeParityClaimed": False,
+    }
+    assert [name for name, _command, _kwargs in commands] == [
+        "translate-fft-opengl-workgroup-pointer"
+    ]
+    assert commands[0][2]["check"] is False
+    assert commands[0][2]["timeout_seconds"] == 900
+    assert commands[0][1][-1] == "--no-format"
+    config = (paths[2] / "fft-opengl-workgroup-pointer.toml").read_text(
+        encoding="utf-8"
+    )
+    assert f'include = ["{module.MLX_FFT_SOURCE}"]' in config
+    assert 'targets = ["opengl"]' in config
+    assert "max_template_specializations = 4096" in config
+    assert "max_template_materialization_work = 2097152" in config
+
+
+def test_fft_opengl_pointer_frontier_rejects_changed_provenance(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_harness()
+    paths = _prepare_fft_opengl_pointer_check(
+        module,
+        tmp_path,
+        pointer_overrides={"backingName": "unknown_shared_storage"},
+    )
+
+    def fake_run_command(name, command, *, log_dir, **_kwargs):
+        stdout_path = log_dir / f"{name}.stdout"
+        stderr_path = log_dir / f"{name}.stderr"
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text("", encoding="utf-8")
+        return module.CommandResult(name, list(command), 1, stdout_path, stderr_path)
+
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+
+    with pytest.raises(
+        module.PortingCheckError,
+        match="lost concrete workgroup-pointer provenance",
+    ):
+        module._check_fft_opengl_workgroup_pointer_frontier(*paths, "python")
+
+
 def _prepare_gemv_opengl_check(module, tmp_path, generated):
     mlx_root = tmp_path / "mlx"
     work_dir = mlx_root / ".crosstl-mlx-porting"
@@ -4271,6 +4442,54 @@ def test_new_pin_resource_profile_and_workgroup_contracts_are_tracked():
     assert struct_constant_issue in gaps["full_corpus_scout"]["translation_blocked_by"]
 
 
+def test_fft_opengl_evidence_records_provenance_without_artifact_claims():
+    module = _load_harness()
+    gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    status = gaps["opengl_fft_workgroup_pointer_status"]
+    assert status["status"] == "blocked-after-provenance"
+    assert status["source"] == module.MLX_FFT_SOURCE
+    assert status["source_sha256"] == module.MLX_FFT_SHA256
+    assert status["target"] == "opengl"
+    assert status["project_translation"] == {
+        "unit_count": 1,
+        "artifact_count": 1,
+        "translated_count": 0,
+        "failed_count": 1,
+        "max_template_specializations": 4096,
+        "max_template_materialization_work": 2097152,
+    }
+    assert status["materialization"] == {
+        "status": "materialized",
+        "specialization_count": 117,
+        "unsupported_specialization_count": 0,
+        "function_constant_count": 22,
+    }
+    assert status["diagnostic"] == {
+        "code": module.FFT_OPENGL_EXPECTED_DIAGNOSTIC_CODE,
+        "missing_capability": module.FFT_OPENGL_EXPECTED_MISSING_CAPABILITY,
+        "message": module.FFT_OPENGL_EXPECTED_MESSAGE,
+        "workgroup_pointer": module.FFT_OPENGL_EXPECTED_POINTER_EVIDENCE,
+    }
+    assert status["provenance_status"] == "concrete-backing-preserved"
+    assert status["access_range_status"] == "unprovable"
+    assert status["artifact_emitted"] is False
+    assert status["native_validation_status"] == "not-run-no-artifact"
+    assert status["blocked_by"] == [module.FFT_OPENGL_WORKGROUP_POINTER_ISSUE]
+    assert status["runtime_integration_included"] is False
+    assert status["runtime_parity_claimed"] is False
+
+    readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
+    assert "the complete pinned `fft.metal` source for OpenGL" in readme
+    assert "All 117 reachable template specializations materialize" in readme
+    assert "workgroup access range cannot be proven" in readme
+    assert "No GLSL artifact is emitted" in readme
+
+
 def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatch):
     module = _load_harness()
     mlx_root = tmp_path / "mlx"
@@ -4330,6 +4549,11 @@ def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatc
         "_check_opengl_frontier",
         lambda *args, **kwargs: pytest.fail("OpenGL frontier should not run"),
     )
+    monkeypatch.setattr(
+        module,
+        "_check_fft_opengl_workgroup_pointer_frontier",
+        lambda *args: pytest.fail("OpenGL FFT pointer frontier should not run"),
+    )
 
     result = module.run_checks(
         SimpleNamespace(
@@ -4364,6 +4588,7 @@ def test_run_checks_full_corpus_mode_skips_reduced_frontier(tmp_path, monkeypatc
     assert (
         result["scope"]["templateMemberBufferPointerNativeValidationIncluded"] is False
     )
+    assert result["scope"]["fftOpenGLWorkgroupPointerFrontierIncluded"] is False
     assert result["scope"]["runtimeParityClaimed"] is False
 
 
@@ -4449,6 +4674,14 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
     )
     monkeypatch.setattr(
         module,
+        "_check_fft_opengl_workgroup_pointer_frontier",
+        lambda *args: {
+            "name": "fft-opengl-workgroup-pointer-frontier",
+            "status": "blocked-as-expected",
+        },
+    )
+    monkeypatch.setattr(
+        module,
         "_check_gemv_opengl_toolchain",
         lambda *args: {"name": "gemv-opengl-toolchain", "status": "passed"},
     )
@@ -4507,6 +4740,7 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
         "directx-vulkan-frontier",
         "arange-opengl",
         "opengl-frontier",
+        "fft-opengl-workgroup-pointer-frontier",
         "gemv-opengl-toolchain",
         "gemv-vulkan-toolchain",
         "runtime-readiness",
@@ -4520,6 +4754,7 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
         }
     ]
     assert result["scope"]["openglFrontierToolchainRequired"] is True
+    assert result["scope"]["fftOpenGLWorkgroupPointerFrontierIncluded"] is True
     assert result["scope"]["openglGemvToolchainRequired"] is True
     assert result["scope"]["openglNativeRuntimeRequired"] is True
     assert result["scope"]["vulkanGemvToolchainRequired"] is True
