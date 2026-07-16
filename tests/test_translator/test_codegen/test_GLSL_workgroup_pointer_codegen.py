@@ -432,3 +432,35 @@ def test_nested_workgroup_pointer_helper_rejects_out_of_bounds_view():
     assert "8" in error.offset_expression
     assert error.materialization_name is not None
     assert error.reason == "view-out-of-bounds"
+
+
+def test_workgroup_pointer_helper_rejects_unbounded_runtime_offset():
+    shader = """
+    shader UnboundedWorkgroupPointerOffset {
+        void write_value(threadgroup float* values) {
+            values[0] = 1.0;
+        }
+
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+
+            void main(uint3 group @ gl_WorkGroupID) {
+                threadgroup float sharedValues[64];
+                write_value(sharedValues + group.x);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(OpenGLWorkgroupPointerError) as exc_info:
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    error = exc_info.value
+    assert error.function_name == "write_value"
+    assert error.parameter_name == "values"
+    assert error.backing_name is not None and error.backing_name.endswith(
+        "sharedValues"
+    )
+    assert "group.x" in error.offset_expression
+    assert error.materialization_name is not None
+    assert error.reason == "unprovable-view-offset"
