@@ -53749,12 +53749,35 @@ def test_translate_project_accepts_shared_source_workgroup_size_for_multi_entry(
     )
     payload = report.to_json()
 
-    assert payload["summary"]["translatedCount"] == 1
-    artifact = payload["artifacts"][0]
-    assert artifact["status"] == "translated"
-    assert artifact["execution"]["workgroupSize"] == [32, 8, 4]
-    assert artifact["execution"]["sourceEntryPoints"] == ["first", "second"]
-    assert artifact["execution"]["provenance"]["kind"] == "source"
+    expected_count = 1 if target == "directx" else 2
+    assert payload["summary"]["translatedCount"] == expected_count
+    artifacts = payload["artifacts"]
+    assert all(artifact["status"] == "translated" for artifact in artifacts)
+    assert all(
+        artifact["execution"]["workgroupSize"] == [32, 8, 4] for artifact in artifacts
+    )
+    if target == "directx":
+        assert artifacts[0]["execution"]["sourceEntryPoints"] == [
+            "first",
+            "second",
+        ]
+    else:
+        assert {
+            tuple(artifact["execution"]["sourceEntryPoints"]) for artifact in artifacts
+        } == {("first",), ("second",)}
+        assert all(
+            artifact["entryPoint"]
+            == {
+                "source": artifact["execution"]["sourceEntryPoints"][0],
+                "target": "main",
+                "stage": "compute",
+            }
+            for artifact in artifacts
+        )
+    assert all(
+        artifact["execution"]["provenance"]["kind"] == "source"
+        for artifact in artifacts
+    )
     report_path = repo / "shared-source-report.json"
     report.write_json(report_path)
     assert validate_project_report(report_path)["success"] is True

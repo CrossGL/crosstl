@@ -955,6 +955,9 @@ configuration contract is intentionally small:
    [project.defines]
    USE_FAST_PATH = "1"
 
+   [project.workgroup_size_rules]
+   "kernels/gemv.metal" = ["32", "BN", "BM"]
+
    [project.source_options.metal]
    max_template_specializations = 2048
    max_template_materialization_work = 131072
@@ -1039,6 +1042,26 @@ metadata, not preprocessor defines. They therefore do not enter the artifact
 define map, while each named size still produces its own variant path and
 deterministic execution identity.
 
+``[project.workgroup_size_rules]`` defines repository-relative, source-specific
+workgroup sizes for materialized compute entries. Each key is a source path
+pattern and each value contains three integral expressions in X, Y, Z order.
+An exact path takes precedence over a glob; otherwise the most specific matching
+pattern is selected. Expressions may use the concrete parameters recorded for
+each host-named template materialization and the integer operators supported by
+the Metal constant-expression evaluator. They are evaluated with signed 64-bit
+intermediate bounds. Calls, casts, member access, unknown identifiers,
+non-integral parameters or literals, unsigned width-dependent arithmetic,
+overflow, division by zero, and non-positive results fail closed with a
+structured workgroup-rule diagnostic.
+
+Rule evaluation joins emitted compute entries to materialization records by the
+stable ``hostName`` and ``materializedName`` identities. Record order is not
+significant. Every host-named record must be matched exactly once; missing,
+duplicate, conflicting, or unmatched records fail the artifact. Helper
+materializations without ``hostName`` remain provenance records and are not
+reported as runnable entries. The source is materialized and parsed once per
+target, after which a distinct size is applied to each matched compute stage.
+
 For DirectX and OpenGL project translation, a consumed Metal
 ``[[threads_per_threadgroup]]`` parameter requires this concrete configuration
 or equivalent concrete source execution metadata. Translation emits
@@ -1049,13 +1072,21 @@ retains all components. Missing, malformed, non-positive, target-limit-
 exceeding, or conflicting values fail the artifact with an
 ``execution-specialization`` diagnostic instead of using a default local size.
 
-One configured size cannot establish the contract for an aggregate artifact
-containing several runtime-sized compute entries. Such an artifact is accepted
-only when concrete source metadata proves that every emitted entry shares the
-same size. Otherwise translation requires an entry-point selection so each
-standalone artifact can be specialized independently. This prevents a validly
-compiled declaration from applying the wrong host dispatch contract to other
-entries in the same source file.
+DirectX can package several materialized compute entries in one HLSL artifact.
+Each exported entry receives its own ``numthreads`` declaration and retains its
+source, materialized, and target entry identities. Standard OpenGL GLSL exposes
+one runnable ``main`` entry, so project translation emits one independently
+runnable artifact per source entry. Each OpenGL artifact records only its own
+entry in ``execution`` and maps that entry to ``main``. Its source-wide template
+materialization metadata retains the complete host identity set so report
+validation and artifact-matrix inspection reject a missing split artifact.
+Helper wrappers are not presented as runnable OpenGL entries.
+
+The fixed ``project.workgroup_size`` contract remains available for genuinely
+single-entry artifacts and for source metadata proving a shared size. A
+multi-entry OpenGL source is still packaged as separate runnable artifacts even
+when every entry uses the same size. Translation fails closed if the artifact
+model cannot represent that split.
 
 Successful artifact records include an ``execution`` object with the canonical
 ``workgroupSize``, affected ``sourceEntryPoints``, configuration or source
@@ -1064,6 +1095,17 @@ identity, and runtime artifact manifests preserve the execution object alongside
 reflected target dispatch metadata. Workgroup size is independent of subgroup
 width; the project pipeline does not infer or record a subgroup requirement from
 any workgroup dimension.
+
+Rule-based artifacts instead record an ``execution.entryPoints`` array. Each
+entry includes the source, materialized, and target entry names, evaluated
+dimensions, exact expression rule, concrete parameter values and provenance,
+the joined materialization identity, and a deterministic SHA-256 identity. The
+aggregate execution identity covers the complete entry array and rule
+provenance. Report validation re-evaluates every expression, verifies the
+materialization join and hashes, and checks the generated target entry metadata.
+These records describe shader or kernel translation and dispatch requirements;
+they do not rewrite framework runtime code or establish numerical runtime
+parity.
 
 For example, the host code at pinned MLX commit
 ``4367c73b60541ddd5a266ce4644fd93d20223b6e`` selects GEMV tile parameters per
