@@ -50,6 +50,7 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXBooleanCompoundAssignmentError,
     DirectXBooleanOrderedIntrinsicError,
     DirectXCompileTimeGlobalError,
+    DirectXComplexCompoundAssignmentError,
     DirectXCooperativeMatrixUnsupportedError,
     DirectXForInIterableError,
     DirectXMappedOverloadError,
@@ -1886,6 +1887,137 @@ def test_hlsl_codegen_lowers_complex64_binary_operators_to_helpers():
     assert "return -x;" not in generated
     assert "return quiet_NaN();" not in generated
     assert "return infinity();" not in generated
+
+
+def test_hlsl_complex_compound_and_subgroup_operations_validate(tmp_path):
+    source = """
+    shader ComplexSubgroupReduction {
+        struct complex64_t {
+            float real;
+            float imag;
+        };
+
+        StructuredBuffer<complex64_t> bias @ binding(0);
+        RWStructuredBuffer<complex64_t> output @ binding(1);
+
+        complex64_t reduce(complex64_t value, complex64_t fill, uint lane) {
+            value += simd_broadcast(value, lane);
+            value -= simd_shuffle(value, lane);
+            value *= simd_shuffle_down(value, lane);
+            value /= simd_shuffle_up(value, lane);
+            value %= simd_shuffle_and_fill_up(value, fill, lane);
+            return value;
+        }
+
+        complex64_t scaled(complex64_t beta, uint index) {
+            return beta * buffer_load(bias, index);
+        }
+
+        compute {
+            @ numthreads(1, 1, 1)
+            void main(uvec3 tid @ gl_GlobalInvocationID) {
+                complex64_t values[2];
+                values[0].real = 1.0;
+                values[0].imag = 2.0;
+                values[1] = values[0];
+                uint index = tid.x & 1u;
+                values[index] += simd_shuffle_down(values[index], 1u);
+                complex64_t reduced = reduce(values[index], values[0], 1u);
+                buffer_store(output, tid.x, scaled(reduced, tid.x));
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert (
+        "WaveReadLaneAt(value.real, sourceLane),\n"
+        "        WaveReadLaneAt(value.imag, sourceLane)" in generated
+    )
+    assert "WaveReadLaneAt(value, sourceLane)" not in generated
+    assert "__crossgl_complex64_wave_read_lane_at(value, lane)" in generated
+    assert (
+        "__crossgl_complex64_wave_read_lane_at("
+        "value, (WaveGetLaneIndex() + uint(lane)))" in generated
+    )
+    assert (
+        "__crossgl_complex64_wave_read_lane_at("
+        "value, (WaveGetLaneIndex() - uint(lane)))" in generated
+    )
+    assert (
+        "__crossgl_complex64_wave_shuffle_and_fill_up(value, fill, uint(lane))"
+        in generated
+    )
+    for helper_name in ("add", "sub", "mul", "div", "mod"):
+        assert f"value = __crossgl_complex64_{helper_name}(value," in generated
+    assert (
+        "values[index] = __crossgl_complex64_add("
+        "values[index], __crossgl_complex64_wave_read_lane_at(values[index],"
+        in generated
+    )
+    assert "return __crossgl_complex64_mul(beta, bias.Load(index));" in generated
+    assert "__crossgl_complex64_make(bias.Load(index), 0.0)" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("body", "reason"),
+    [
+        (
+            "values[nextIndex(index)] += values[0];",
+            "side-effecting-assignment-target",
+        ),
+        (
+            "values[index] += nextValue(index, values[0]);",
+            "rhs-may-change-assignment-target",
+        ),
+        (
+            "values[index] += "
+            "simd_shuffle_down(nextValue(index, values[0]), 1u);",
+            "rhs-may-change-assignment-target",
+        ),
+    ],
+    ids=[
+        "side-effecting-target",
+        "rhs-may-change-target",
+        "side-effecting-shuffle-argument",
+    ],
+)
+def test_hlsl_complex_compound_assignment_side_effects_fail_closed(body, reason):
+    source = f"""
+    shader ComplexCompoundSideEffects {{
+        struct complex64_t {{
+            float real;
+            float imag;
+        }};
+
+        int nextIndex(inout int index) {{
+            int result = index;
+            index += 1;
+            return result;
+        }}
+
+        complex64_t nextValue(inout int index, complex64_t value) {{
+            index += 1;
+            return value;
+        }}
+
+        void update() {{
+            complex64_t values[2];
+            int index = 0;
+            {body}
+        }}
+    }}
+    """
+
+    with pytest.raises(DirectXComplexCompoundAssignmentError) as exc_info:
+        HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert exc_info.value.reason == reason
+    assert exc_info.value.operator == "+="
+    assert exc_info.value.target_type == "complex64_t"
 
 
 def test_hlsl_codegen_lowers_generic_int64_vector_type_names():

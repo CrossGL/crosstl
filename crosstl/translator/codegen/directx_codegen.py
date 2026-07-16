@@ -628,6 +628,32 @@ class DirectXBooleanCompoundAssignmentError(ValueError):
         self.source_location = source_location
 
 
+class DirectXComplexCompoundAssignmentError(ValueError):
+    """Raised when a complex compound assignment has no faithful HLSL form."""
+
+    project_diagnostic_code = (
+        "project.translate.directx-complex-compound-assignment-unrepresentable"
+    )
+    missing_capabilities = ("directx.complex-compound-assignment-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        operator=None,
+        target_type=None,
+        right_type=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.operator = operator
+        self.target_type = target_type
+        self.right_type = right_type
+        self.reason = reason
+        self.source_location = source_location
+
+
 class DirectXBooleanOrderedIntrinsicError(ValueError):
     """Raised when boolean min/max operands have no faithful HLSL lowering."""
 
@@ -3590,7 +3616,7 @@ uint __crossgl_union_set_u8x4_lane(
     def generate_hlsl_complex64_helpers(self):
         if not getattr(self, "required_hlsl_complex64_helpers", set()):
             return ""
-        return """
+        code = """
 complex64_t __crossgl_complex64_make(float real, float imag) {
     complex64_t result;
     result.real = real;
@@ -3667,6 +3693,39 @@ bool __crossgl_complex64_less_equal(complex64_t left, complex64_t right) {
 }
 
 """
+        if "__crossgl_complex64_wave_read_lane_at" in (
+            self.required_hlsl_complex64_helpers
+        ):
+            code += """
+complex64_t __crossgl_complex64_wave_read_lane_at(
+    complex64_t value,
+    uint sourceLane
+) {
+    return __crossgl_complex64_make(
+        WaveReadLaneAt(value.real, sourceLane),
+        WaveReadLaneAt(value.imag, sourceLane)
+    );
+}
+
+"""
+        if "__crossgl_complex64_wave_shuffle_and_fill_up" in (
+            self.required_hlsl_complex64_helpers
+        ):
+            code += """
+complex64_t __crossgl_complex64_wave_shuffle_and_fill_up(
+    complex64_t value,
+    complex64_t fill,
+    uint delta
+) {
+    uint lane = WaveGetLaneIndex();
+    if (lane < delta) {
+        return fill;
+    }
+    return __crossgl_complex64_wave_read_lane_at(value, lane - delta);
+}
+
+"""
+        return code
 
     def generate_hlsl_fixed_array_return_helpers(self):
         code = ""
@@ -8998,6 +9057,102 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.required_hlsl_complex64_helpers.add("__crossgl_complex64_negate")
         return f"__crossgl_complex64_negate({operand})"
 
+    def hlsl_complex64_compound_assignment_error(
+        self,
+        node,
+        operator,
+        target_type,
+        right_type,
+        *,
+        reason,
+        detail,
+    ):
+        raise DirectXComplexCompoundAssignmentError(
+            "DirectX cannot lower complex compound assignment "
+            f"'{operator}': {detail}",
+            operator=operator,
+            target_type=self.map_type(target_type) if target_type else None,
+            right_type=self.map_type(right_type) if right_type else None,
+            reason=reason,
+            source_location=getattr(node, "source_location", None),
+        )
+
+    def hlsl_complex64_compound_rhs_has_side_effects(self, expression):
+        if isinstance(expression, FunctionCallNode):
+            func_expr = getattr(
+                expression, "function", getattr(expression, "name", None)
+            )
+            func_name = getattr(func_expr, "name", func_expr)
+            if self.hlsl_metal_simd_shuffle_name(func_name) is not None:
+                args = getattr(
+                    expression, "arguments", getattr(expression, "args", [])
+                )
+                return any(
+                    self.hlsl_expression_has_observable_side_effects(argument)
+                    for argument in args
+                )
+        return self.hlsl_expression_has_observable_side_effects(expression)
+
+    def generate_hlsl_complex64_compound_assignment(
+        self,
+        node,
+        target,
+        value,
+        operator,
+        *,
+        target_type=None,
+    ):
+        operator = self.map_operator(operator)
+        helper_name = {
+            "+=": "__crossgl_complex64_add",
+            "-=": "__crossgl_complex64_sub",
+            "*=": "__crossgl_complex64_mul",
+            "/=": "__crossgl_complex64_div",
+            "%=": "__crossgl_complex64_mod",
+        }.get(operator)
+        target_type = target_type or self.expression_result_type(target)
+        if helper_name is None or not self.is_hlsl_complex64_type(target_type):
+            return None
+
+        right_type = self.expression_result_type(value)
+        if self.hlsl_expression_has_observable_side_effects(target):
+            self.hlsl_complex64_compound_assignment_error(
+                node,
+                operator,
+                target_type,
+                right_type,
+                reason="side-effecting-assignment-target",
+                detail=(
+                    "the assignment target would need to be evaluated more than "
+                    "once; materialize its index or pointer before the assignment"
+                ),
+            )
+        if self.hlsl_complex64_compound_rhs_has_side_effects(
+            value
+        ) and not self.hlsl_minimum_precision_compound_target_is_stable(target):
+            self.hlsl_complex64_compound_assignment_error(
+                node,
+                operator,
+                target_type,
+                right_type,
+                reason="rhs-may-change-assignment-target",
+                detail=(
+                    "the side-effecting right operand may change the storage selected "
+                    "by the repeated assignment target; materialize its index or "
+                    "pointer before the assignment"
+                ),
+            )
+
+        lhs = self.generate_expression(target)
+        rhs = self.generate_expression_with_expected(value, None)
+        self.required_hlsl_complex64_helpers.add(helper_name)
+        operation = (
+            f"{helper_name}("
+            f"{self.hlsl_complex64_operand(lhs, target_type)}, "
+            f"{self.hlsl_complex64_operand(rhs, right_type)})"
+        )
+        return f"{lhs} = {operation}"
+
     def hlsl_boolean_expression_result_type(self, *operand_types):
         for operand_type in operand_types:
             mapped_type = self.map_type(operand_type)
@@ -9211,6 +9366,21 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if metal_simd_result_type is not None:
                 return metal_simd_result_type
+            if func_name == "buffer_load" and args:
+                resource_type = self.hlsl_buffer_helper_resource_type(args[0])
+                element_type = self.hlsl_typed_buffer_element_type(
+                    resource_type,
+                    {
+                        "Buffer",
+                        "StructuredBuffer",
+                        "RWBuffer",
+                        "RWStructuredBuffer",
+                        "RasterizerOrderedBuffer",
+                        "RasterizerOrderedStructuredBuffer",
+                    },
+                )
+                if element_type is not None:
+                    return element_type
             if func_name in self.HLSL_NONUNIFORM_RESOURCE_INDEX_NAMES:
                 return self.hlsl_nonuniform_resource_index_return_type(args)
             numeric_result_type = numeric_trait_method_result_type(self, expr)
@@ -11197,6 +11367,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             lift_statements, rhs = lifted_value
             lhs = self.generate_expression(target)
             return "\n".join([*lift_statements, f"{lhs} {op} {rhs}"])
+
+        compound_assignment = (
+            self.generate_hlsl_complex64_compound_assignment(
+                node,
+                target,
+                value,
+                op,
+                target_type=target_type,
+            )
+        )
+        if compound_assignment is not None:
+            return compound_assignment
 
         compound_assignment = (
             self.generate_hlsl_minimum_precision_integer_compound_assignment(
@@ -13431,9 +13613,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if simd_name is None:
             return None
 
+        value_type = self.expression_result_type(args[0]) if args else None
+        complex_value = self.is_hlsl_complex64_type(value_type)
+
+        def complex_wave_read(data, lane):
+            self.required_hlsl_complex64_helpers.add(
+                "__crossgl_complex64_wave_read_lane_at"
+            )
+            return f"__crossgl_complex64_wave_read_lane_at({data}, {lane})"
+
         if simd_name in {"simd_broadcast", "simd_shuffle"} and len(args) == 2:
             data = self.generate_expression_with_expected(args[0], None)
             lane = self.generate_expression_with_expected(args[1], "uint")
+            if complex_value:
+                return complex_wave_read(data, lane)
             return self.hlsl_cast_metal_simd_shuffle_result(
                 f"WaveReadLaneAt({data}, {lane})"
             )
@@ -13441,6 +13634,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if simd_name == "simd_shuffle_down" and len(args) == 2:
             data = self.generate_expression_with_expected(args[0], None)
             delta = self.generate_expression_with_expected(args[1], "uint")
+            if complex_value:
+                return complex_wave_read(
+                    data, f"(WaveGetLaneIndex() + uint({delta}))"
+                )
             return self.hlsl_cast_metal_simd_shuffle_result(
                 f"WaveReadLaneAt({data}, (WaveGetLaneIndex() + uint({delta})))"
             )
@@ -13448,6 +13645,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if simd_name == "simd_shuffle_up" and len(args) == 2:
             data = self.generate_expression_with_expected(args[0], None)
             delta = self.generate_expression_with_expected(args[1], "uint")
+            if complex_value:
+                return complex_wave_read(
+                    data, f"(WaveGetLaneIndex() - uint({delta}))"
+                )
             return self.hlsl_cast_metal_simd_shuffle_result(
                 f"WaveReadLaneAt({data}, (WaveGetLaneIndex() - uint({delta})))"
             )
@@ -13456,6 +13657,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             data = self.generate_expression_with_expected(args[0], None)
             filling = self.generate_expression_with_expected(args[1], None)
             delta = self.generate_expression_with_expected(args[2], "uint")
+            if complex_value:
+                self.required_hlsl_complex64_helpers.update(
+                    {
+                        "__crossgl_complex64_wave_read_lane_at",
+                        "__crossgl_complex64_wave_shuffle_and_fill_up",
+                    }
+                )
+                return (
+                    "__crossgl_complex64_wave_shuffle_and_fill_up("
+                    f"{data}, {filling}, uint({delta}))"
+                )
             return self.hlsl_cast_metal_simd_shuffle_result(
                 "((WaveGetLaneIndex() >= uint({delta})) ? "
                 "WaveReadLaneAt({data}, (WaveGetLaneIndex() - uint({delta}))) : "
