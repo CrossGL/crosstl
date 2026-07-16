@@ -221,7 +221,8 @@
       "status": "materialized",
       "specialization_count": 225,
       "unsupported_specialization_count": 0,
-      "unresolved_residue_count": 0
+      "unresolved_residue_count": 0,
+      "bare_value_discard_count": 0
     },
     "artifact": {
       "status": "translated",
@@ -242,22 +243,19 @@
           "CSMain_85",
           "CSMain_113"
         ],
-        "compiled_binary_count": 3
+        "compiled_binary_count": 3,
+        "diagnostic_count": 0,
+        "unused_value_warning_count": 0
       },
       "library_profile": {
         "profile": "lib_6_6",
         "export_set": "CSMain;CSMain_2;...;CSMain_224",
         "export_count": 224,
         "compiled_library_count": 1,
-        "coverage": "all-exported-functions-code-generated"
+        "coverage": "all-exported-functions-code-generated",
+        "unused_value_warning_count": 0
       },
       "allowed_warnings": {
-        "unused_lid": {
-          "message": "expression result unused [-Wunused-value]",
-          "source_expression": "lid;",
-          "count_per_invocation": 224,
-          "tracked_by": "https://github.com/CrossGL/crosstl/issues/1787"
-        },
         "library_numthreads": {
           "message": "attribute 'numthreads' ignored without accompanying shader attribute [-Wmisplaced-attributes]",
           "source_expression": "[numthreads(1, 1, 1)]",
@@ -282,8 +280,7 @@
     },
     "tracked_issues": [
       "https://github.com/CrossGL/crosstl/issues/1750",
-      "https://github.com/CrossGL/crosstl/issues/1786",
-      "https://github.com/CrossGL/crosstl/issues/1787"
+      "https://github.com/CrossGL/crosstl/issues/1786"
     ],
     "runtime_execution_attempted": false,
     "runtime_integration_included": false,
@@ -859,7 +856,6 @@
     "https://github.com/CrossGL/crosstl/issues/1696",
     "https://github.com/CrossGL/crosstl/issues/1750",
     "https://github.com/CrossGL/crosstl/issues/1786",
-    "https://github.com/CrossGL/crosstl/issues/1787",
     "https://github.com/CrossGL/crosstl/issues/1312",
     "https://github.com/CrossGL/crosstl/issues/1376",
     "https://github.com/CrossGL/crosstl/issues/1676",

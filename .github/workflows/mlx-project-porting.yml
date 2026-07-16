@@ -231,7 +231,6 @@ jobs:
           from demos.integrations.mlx.run_mlx_porting import (
               GEMV_DIRECTX_COMPILER_ENTRY_POINTS,
               GEMV_DIRECTX_EXPECTED_ENTRY_POINTS,
-              GEMV_DIRECTX_UNUSED_LID_WARNING_ISSUE,
               GEMV_OPENGL_SUBGROUP_WIDTH_ISSUE,
               GEMV_OPENGL_WORKGROUP_SIZE_ISSUE,
               MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS,
@@ -410,6 +409,7 @@ jobs:
               raise SystemExit("DirectX GEMV compiler-frontier scope is incorrect")
           if expected_directx_gemv:
               gemv_directx = checks["gemv-directx-compiler-frontier"]
+              library_run = gemv_directx["libraryCompilerRun"]
               if (
                   gemv_directx["status"] != "passed"
                   or gemv_directx["source"] != MLX_GEMV_SOURCE
@@ -420,6 +420,7 @@ jobs:
                   or gemv_directx["templateSpecializationCount"] != 225
                   or gemv_directx["unsupportedSpecializationCount"] != 0
                   or gemv_directx["materializationResidueCount"] != 0
+                  or gemv_directx["bareValueDiscardCount"] != 0
                   or gemv_directx["computeEntryPointCount"] != 224
                   or gemv_directx["artifactProvenance"]
                   != {
@@ -435,30 +436,30 @@ jobs:
                   or gemv_directx["entryProfileCompilerEntryPoints"]
                   != list(GEMV_DIRECTX_COMPILER_ENTRY_POINTS)
                   or gemv_directx["entryProfileCompiledEntryPointCount"] != 3
+                  or gemv_directx["entryProfileDiagnosticCount"] != 0
+                  or gemv_directx["entryProfileUnusedValueWarningCount"] != 0
                   or gemv_directx["libraryProfile"] != "lib_6_6"
                   or gemv_directx["libraryExports"]
                   != list(GEMV_DIRECTX_EXPECTED_ENTRY_POINTS)
                   or gemv_directx["libraryExportCount"] != 224
-                  or gemv_directx["libraryCompilerRun"]["status"] != "compiled"
-                  or gemv_directx["libraryCompilerRun"]["outputSizeBytes"] <= 0
+                  or library_run["status"] != "compiled"
+                  or library_run["outputSizeBytes"] <= 0
+                  or library_run["unusedValueWarningCount"] != 0
+                  or gemv_directx["libraryUnusedValueWarningCount"] != 0
                   or gemv_directx["compilerCoveredEntryPointCount"] != 224
                   or gemv_directx["uncompiledEntryPointCount"] != 0
                   or gemv_directx["compilerCoverageStatus"]
                   != "all-exported-entry-points-compiled"
               ):
                   raise SystemExit("DirectX GEMV compiler coverage is incomplete")
-              entry_warning = gemv_directx["entryProfileAllowedWarning"]
               library_warnings = gemv_directx["libraryAllowedWarnings"]
               if (
-                  entry_warning["countPerRun"] != 224
-                  or entry_warning["trackedIssue"]
-                  != GEMV_DIRECTX_UNUSED_LID_WARNING_ISSUE
+                  len(library_warnings) != 1
                   or library_warnings[0]["count"] != 224
                   or library_warnings[0]["trackedIssue"]
-                  != GEMV_DIRECTX_UNUSED_LID_WARNING_ISSUE
-                  or library_warnings[1]["count"] != 224
-                  or library_warnings[1]["trackedIssue"]
                   != GEMV_OPENGL_WORKGROUP_SIZE_ISSUE
+                  or library_run["allowedWarningCounts"]
+                  != {"libraryNumthreads": 224}
               ):
                   raise SystemExit("DirectX GEMV compiler warning evidence changed")
               if (

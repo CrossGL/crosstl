@@ -2198,8 +2198,11 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "source artifact and compute entry" in mlx_porting
     assert 'checks["gemv-directx-compiler-frontier"]' in mlx_porting
     assert "GEMV_DIRECTX_EXPECTED_ENTRY_POINTS" in mlx_porting
-    assert "GEMV_DIRECTX_UNUSED_LID_WARNING_ISSUE" in mlx_porting
     assert 'gemv_directx["entryProfile"] != "cs_6_0"' in mlx_porting
+    assert 'gemv_directx["bareValueDiscardCount"] != 0' in mlx_porting
+    assert 'gemv_directx["entryProfileDiagnosticCount"] != 0' in mlx_porting
+    assert 'gemv_directx["entryProfileUnusedValueWarningCount"] != 0' in mlx_porting
+    assert 'library_run["unusedValueWarningCount"] != 0' in mlx_porting
     assert 'gemv_directx["libraryProfile"] != "lib_6_6"' in mlx_porting
     assert 'gemv_directx["libraryExportCount"] != 224' in mlx_porting
     assert 'gemv_directx["compilerCoveredEntryPointCount"] != 224' in mlx_porting

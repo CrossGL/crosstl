@@ -3364,7 +3364,11 @@ def test_gemv_opengl_frontier_flag_replaces_toolchain_flag():
         module.parse_args(["--mlx-root", "/tmp/mlx", "--require-opengl-gemv-toolchain"])
 
 
-def _gemv_directx_frontier_source(module, *, replace_entry=None):
+def _gemv_directx_frontier_source(
+    module,
+    *,
+    replace_entry=None,
+):
     entry_points = ["CSMain", *(f"CSMain_{index}" for index in range(2, 225))]
     if replace_entry is not None:
         old_entry, new_entry = replace_entry
@@ -3372,9 +3376,8 @@ def _gemv_directx_frontier_source(module, *, replace_entry=None):
     return "\n".join(
         (
             "[numthreads(1, 1, 1)]\n"
-            f"void {entry_point}(uint3 lid : SV_GroupThreadID) {{\n"
-            "    lid;\n"
-            "}\n"
+            + f"void {entry_point}(uint3 lid : SV_GroupThreadID) {{\n"
+            + "}\n"
         )
         for entry_point in entry_points
     )
@@ -3526,23 +3529,18 @@ def _stub_gemv_directx_frontier(
                 output_path.write_bytes(b"DXIL:all-entries")
             if not library_failure:
                 warnings = []
-                for line_number in range(
-                    1, module.GEMV_DIRECTX_EXPECTED_WARNING_COUNT_PER_CLASS + 1
-                ):
-                    warnings.extend(
-                        (
-                            "C:/generated/gemv.hlsl:"
-                            f"{line_number}:5: warning: "
-                            f"{module.GEMV_DIRECTX_UNUSED_LID_WARNING_MESSAGE}",
-                            f"    {module.GEMV_DIRECTX_UNUSED_LID_WARNING_SOURCE}",
-                            "    ^~~",
-                        )
-                    )
                 numthreads_message = (
                     module.GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_MESSAGE
                 )
                 if unexpected_library_warning:
-                    numthreads_message = "library export changed [-Wlibrary-export]"
+                    warnings.extend(
+                        (
+                            "C:/generated/gemv.hlsl:1:5: warning: "
+                            "expression result unused [-Wunused-value]",
+                            "    lid;",
+                            "    ^~~",
+                        )
+                    )
                 for line_number in range(
                     1, module.GEMV_DIRECTX_EXPECTED_WARNING_COUNT_PER_CLASS + 1
                 ):
@@ -3570,22 +3568,21 @@ def _stub_gemv_directx_frontier(
             output_path.parent.mkdir(parents=True, exist_ok=True)
             output_path.write_bytes(f"DXIL:{entry_point}".encode())
         if returncode == 0:
-            warning_message = module.GEMV_DIRECTX_UNUSED_LID_WARNING_MESSAGE
             if entry_point == unexpected_warning_entry:
-                warning_message = "wave width was selected implicitly [-Wwave-size]"
-            warnings = []
-            for line_number in range(
-                1, module.GEMV_DIRECTX_EXPECTED_WARNING_COUNT_PER_CLASS + 1
-            ):
-                warnings.extend(
-                    (
-                        "C:/generated/gemv.hlsl:"
-                        f"{line_number}:5: warning: {warning_message}",
-                        f"    {module.GEMV_DIRECTX_UNUSED_LID_WARNING_SOURCE}",
-                        "    ^~~",
+                stderr_path.write_text(
+                    "\n".join(
+                        (
+                            "C:/generated/gemv.hlsl:1:5: warning: "
+                            "expression result unused [-Wunused-value]",
+                            "    lid;",
+                            "    ^~~",
+                        )
                     )
+                    + "\n",
+                    encoding="utf-8",
                 )
-            stderr_path.write_text("\n".join(warnings) + "\n", encoding="utf-8")
+            else:
+                stderr_path.write_text("", encoding="utf-8")
         return module.CommandResult(
             name, list(command), returncode, stdout_path, stderr_path
         )
@@ -3629,6 +3626,7 @@ def test_gemv_directx_compiler_frontier_accepts_exact_pinned_artifact(
     assert result["templateSpecializationCount"] == 225
     assert result["unsupportedSpecializationCount"] == 0
     assert result["materializationResidueCount"] == 0
+    assert result["bareValueDiscardCount"] == 0
     assert result["computeEntryPointCount"] == 224
     assert result["entryProfileCompilerEntryPoints"] == [
         "CSMain",
@@ -3636,29 +3634,18 @@ def test_gemv_directx_compiler_frontier_accepts_exact_pinned_artifact(
         "CSMain_113",
     ]
     assert result["entryProfileCompiledEntryPointCount"] == 3
-    assert result["entryProfileAllowedWarning"] == {
-        "message": "expression result unused [-Wunused-value]",
-        "sourceExpression": "lid;",
-        "countPerRun": 224,
-        "totalCount": 672,
-        "trackedIssue": "https://github.com/CrossGL/crosstl/issues/1787",
-    }
+    assert result["entryProfileDiagnosticCount"] == 0
+    assert result["entryProfileUnusedValueWarningCount"] == 0
     assert result["libraryProfile"] == "lib_6_6"
     assert result["libraryExports"] == list(module.GEMV_DIRECTX_EXPECTED_ENTRY_POINTS)
     assert result["libraryExportCount"] == 224
     assert result["libraryCompilerRun"]["status"] == "compiled"
     assert result["libraryCompilerRun"]["outputSizeBytes"] > 0
     assert result["libraryCompilerRun"]["allowedWarningCounts"] == {
-        "unusedLid": 224,
         "libraryNumthreads": 224,
     }
+    assert result["libraryCompilerRun"]["unusedValueWarningCount"] == 0
     assert result["libraryAllowedWarnings"] == [
-        {
-            "message": "expression result unused [-Wunused-value]",
-            "sourceExpression": "lid;",
-            "count": 224,
-            "trackedIssue": "https://github.com/CrossGL/crosstl/issues/1787",
-        },
         {
             "message": (
                 "attribute 'numthreads' ignored without accompanying shader "
@@ -3669,6 +3656,7 @@ def test_gemv_directx_compiler_frontier_accepts_exact_pinned_artifact(
             "trackedIssue": "https://github.com/CrossGL/crosstl/issues/1750",
         },
     ]
+    assert result["libraryUnusedValueWarningCount"] == 0
     assert result["compilerCoveredEntryPointCount"] == 224
     assert result["uncompiledEntryPointCount"] == 0
     assert result["compilerCoverageStatus"] == "all-exported-entry-points-compiled"
@@ -3693,6 +3681,10 @@ def test_gemv_directx_compiler_frontier_accepts_exact_pinned_artifact(
         "CSMain_113",
     ]
     assert all(run["outputSizeBytes"] > 0 for run in result["entryProfileCompilerRuns"])
+    assert all(
+        run["diagnosticCount"] == 0 and run["unusedValueWarningCount"] == 0
+        for run in result["entryProfileCompilerRuns"]
+    )
     assert [name for name, _command, _kwargs in commands] == [
         "translate-gemv-directx-compiler-frontier",
         "compile-gemv-directx-csmain",
@@ -3847,7 +3839,35 @@ def test_gemv_directx_compiler_frontier_rejects_missing_compiler_binary(
         module._check_gemv_directx_compiler_frontier(*paths, "python")
 
 
-def test_gemv_directx_compiler_frontier_rejects_unexpected_warning(
+@pytest.mark.parametrize("statement", ["lid;", "42;", "probe.value;", "probe[0];"])
+def test_gemv_directx_compiler_frontier_rejects_bare_value_discard(
+    tmp_path,
+    monkeypatch,
+    statement,
+):
+    module = _load_harness()
+    generated = _gemv_directx_frontier_source(module)
+    generated = generated.replace(
+        "void CSMain_85(uint3 lid : SV_GroupThreadID) {\n}\n",
+        "void CSMain_85(uint3 lid : SV_GroupThreadID) {\n" f"    {statement}\n" "}\n",
+    )
+    paths, report_path, artifact_path, generated = _prepare_gemv_directx_frontier_check(
+        module, tmp_path, monkeypatch, generated=generated
+    )
+    commands = []
+    _stub_gemv_directx_frontier(
+        module, monkeypatch, commands, report_path, artifact_path, generated
+    )
+
+    with pytest.raises(module.PortingCheckError, match="bare value-discard statement"):
+        module._check_gemv_directx_compiler_frontier(*paths, "python")
+
+    assert [name for name, _command, _kwargs in commands] == [
+        "translate-gemv-directx-compiler-frontier"
+    ]
+
+
+def test_gemv_directx_compiler_frontier_rejects_entry_unused_value_warning(
     tmp_path,
     monkeypatch,
 ):
@@ -3913,7 +3933,7 @@ def test_gemv_directx_compiler_frontier_rejects_missing_library(
         module._check_gemv_directx_compiler_frontier(*paths, "python")
 
 
-def test_gemv_directx_compiler_frontier_rejects_library_warning_drift(
+def test_gemv_directx_compiler_frontier_rejects_library_unused_value_warning(
     tmp_path,
     monkeypatch,
 ):
@@ -5268,6 +5288,7 @@ def test_gemv_directx_gap_records_full_compiler_coverage_without_runtime_claims(
         "specialization_count": 225,
         "unsupported_specialization_count": 0,
         "unresolved_residue_count": 0,
+        "bare_value_discard_count": 0,
     }
     assert status["artifact"]["compute_entry_count"] == 224
     assert status["artifact"]["provenance"] == {
@@ -5279,6 +5300,8 @@ def test_gemv_directx_gap_records_full_compiler_coverage_without_runtime_claims(
         "profile": "cs_6_0",
         "entry_points": ["CSMain", "CSMain_85", "CSMain_113"],
         "compiled_binary_count": 3,
+        "diagnostic_count": 0,
+        "unused_value_warning_count": 0,
     }
     assert compiler["library_profile"] == {
         "profile": "lib_6_6",
@@ -5286,17 +5309,12 @@ def test_gemv_directx_gap_records_full_compiler_coverage_without_runtime_claims(
         "export_count": 224,
         "compiled_library_count": 1,
         "coverage": "all-exported-functions-code-generated",
+        "unused_value_warning_count": 0,
     }
-    assert compiler["allowed_warnings"]["unused_lid"]["count_per_invocation"] == 224
-    assert (
-        compiler["allowed_warnings"]["unused_lid"]["tracked_by"]
-        == module.GEMV_DIRECTX_UNUSED_LID_WARNING_ISSUE
-    )
-    assert compiler["allowed_warnings"]["library_numthreads"]["count"] == 224
-    assert (
-        compiler["allowed_warnings"]["library_numthreads"]["tracked_by"]
-        == module.GEMV_OPENGL_WORKGROUP_SIZE_ISSUE
-    )
+    assert set(compiler["allowed_warnings"]) == {"library_numthreads"}
+    library_warning = compiler["allowed_warnings"]["library_numthreads"]
+    assert library_warning["count"] == 224
+    assert library_warning["tracked_by"] == module.GEMV_OPENGL_WORKGROUP_SIZE_ISSUE
     assert compiler["whole_artifact_semantic_validity_claimed"] is False
     assert status["execution_contracts"] == {
         "observed_numthreads_directive": "[numthreads(1, 1, 1)]",
@@ -5307,20 +5325,17 @@ def test_gemv_directx_gap_records_full_compiler_coverage_without_runtime_claims(
         "library_execution_semantics_established": False,
         "blocked_by": list(module.GEMV_DIRECTX_EXECUTION_TRACKED_ISSUES),
     }
-    assert status["tracked_issues"] == [
-        *module.GEMV_DIRECTX_EXECUTION_TRACKED_ISSUES,
-        module.GEMV_DIRECTX_UNUSED_LID_WARNING_ISSUE,
-    ]
+    assert status["tracked_issues"] == list(
+        module.GEMV_DIRECTX_EXECUTION_TRACKED_ISSUES
+    )
     assert status["runtime_execution_attempted"] is False
     assert status["runtime_integration_included"] is False
     assert status["numerical_parity_claimed"] is False
     assert status["runtime_parity_claimed"] is False
-    assert module.GEMV_DIRECTX_UNUSED_LID_WARNING_ISSUE in gaps["tracked_issues"]
-
     readme = " ".join(MLX_README_PATH.read_text(encoding="utf-8").split())
     assert "--require-directx-gemv-compiler-frontier" in readme
     assert "A second `lib_6_6` invocation exports and code-generates all 224" in readme
-    assert "Any other diagnostic fails the gate" in readme
+    assert "Any unused-value warning or other diagnostic fails the gate" in readme
     assert "It does not establish workgroup or wave semantics" in readme
 
 

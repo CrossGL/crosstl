@@ -211,15 +211,12 @@ GEMV_DIRECTX_EXPECTED_ENTRY_POINTS = (
 )
 GEMV_DIRECTX_COMPILER_ENTRY_POINTS = ("CSMain", "CSMain_85", "CSMain_113")
 GEMV_DIRECTX_EXPECTED_NUMTHREADS = (1, 1, 1)
-GEMV_DIRECTX_UNUSED_LID_WARNING_MESSAGE = "expression result unused [-Wunused-value]"
-GEMV_DIRECTX_UNUSED_LID_WARNING_SOURCE = "lid;"
 GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_MESSAGE = (
     "attribute 'numthreads' ignored without accompanying shader attribute "
     "[-Wmisplaced-attributes]"
 )
 GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_SOURCE = "[numthreads(1, 1, 1)]"
 GEMV_DIRECTX_EXPECTED_WARNING_COUNT_PER_CLASS = GEMV_EXPECTED_ENTRY_POINT_COUNT
-GEMV_DIRECTX_UNUSED_LID_WARNING_ISSUE = "https://github.com/CrossGL/crosstl/issues/1787"
 GEMV_OPENGL_TRANSLATION_TIMEOUT_SECONDS = 900
 GEMV_OPENGL_EXPECTED_DIAGNOSTIC_CODE = (
     "project.translate.opengl-workgroup-pointer-unsupported"
@@ -369,7 +366,6 @@ FULL_CORPUS_TRACKED_ISSUES = (
     *OPENGL_ARANGE_VALIDATION_TRACKED_ISSUES,
     *OPENGL_SCALED_DOT_PRODUCT_ATTENTION_TRACKED_ISSUES,
     *GEMV_OPENGL_EXECUTION_TRACKED_ISSUES,
-    GEMV_DIRECTX_UNUSED_LID_WARNING_ISSUE,
     *RUNTIME_READINESS_TRACKED_ISSUES,
     *FENCE_CONTRACT_TRACKED_ISSUES,
     *VULKAN_GEMV_SEMANTIC_TRACKED_ISSUES,
@@ -3537,6 +3533,22 @@ def _dxc_diagnostics(result: CommandResult) -> list[dict[str, Any]]:
     return diagnostics
 
 
+def _bare_value_discard_statements(source: str) -> list[str]:
+    pattern = re.compile(
+        r"(?m)^[ \t]*(?P<expression>"
+        r"(?:[A-Za-z_]\w*(?:\s*(?:\.\s*[A-Za-z_]\w*|\[[^\]\r\n]+\]))*)"
+        r"|(?:true|false)|(?:\d+(?:\.\d+)?[fFuUlL]*))"
+        r"[ \t]*;[ \t]*(?://[^\r\n]*)?$"
+    )
+    control_flow_statements = {"break", "continue", "discard", "return"}
+    return [
+        expression
+        for match in pattern.finditer(source)
+        if (expression := match.group("expression").replace(" ", ""))
+        not in control_flow_statements
+    ]
+
+
 def _check_gemv_directx_compiler_frontier(
     mlx_root: Path,
     work_dir: Path,
@@ -3746,6 +3758,12 @@ def _check_gemv_directx_compiler_frontier(
         "DirectX GEMV artifact retained unresolved materialization text: "
         f"{residue.group(0) if residue else ''}",
     )
+    bare_value_discards = _bare_value_discard_statements(generated)
+    _require(
+        not bare_value_discards,
+        "DirectX GEMV artifact retained a bare value-discard statement: "
+        f"{bare_value_discards[0] if bare_value_discards else ''};",
+    )
 
     compile_dir = work_dir / "validation" / "gemv-directx"
     compile_dir.mkdir(parents=True, exist_ok=True)
@@ -3778,25 +3796,8 @@ def _check_gemv_directx_compiler_frontier(
             f"DXC did not emit a binary for DirectX GEMV entry {entry_point}",
         )
         diagnostics = _dxc_diagnostics(compile_result)
-        diagnostic_counts = Counter(
-            (
-                diagnostic.get("severity"),
-                diagnostic.get("message"),
-                diagnostic.get("sourceLine"),
-            )
-            for diagnostic in diagnostics
-        )
         _require(
-            diagnostic_counts
-            == Counter(
-                {
-                    (
-                        "warning",
-                        GEMV_DIRECTX_UNUSED_LID_WARNING_MESSAGE,
-                        GEMV_DIRECTX_UNUSED_LID_WARNING_SOURCE,
-                    ): GEMV_DIRECTX_EXPECTED_WARNING_COUNT_PER_CLASS
-                }
-            ),
+            not diagnostics,
             f"DXC diagnostics changed for DirectX GEMV entry {entry_point}",
         )
         entry_profile_runs.append(
@@ -3810,7 +3811,8 @@ def _check_gemv_directx_compiler_frontier(
                     "value": _sha256(output_path),
                 },
                 "outputSizeBytes": output_path.stat().st_size,
-                "allowedWarningCount": len(diagnostics),
+                "diagnosticCount": 0,
+                "unusedValueWarningCount": 0,
                 "stdout": _relpath(compile_result.stdout_path, mlx_root),
                 "stderr": _relpath(compile_result.stderr_path, mlx_root),
             }
@@ -3855,11 +3857,6 @@ def _check_gemv_directx_compiler_frontier(
         {
             (
                 "warning",
-                GEMV_DIRECTX_UNUSED_LID_WARNING_MESSAGE,
-                GEMV_DIRECTX_UNUSED_LID_WARNING_SOURCE,
-            ): GEMV_DIRECTX_EXPECTED_WARNING_COUNT_PER_CLASS,
-            (
-                "warning",
                 GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_MESSAGE,
                 GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_SOURCE,
             ): GEMV_DIRECTX_EXPECTED_WARNING_COUNT_PER_CLASS,
@@ -3893,19 +3890,15 @@ def _check_gemv_directx_compiler_frontier(
         "templateSpecializationCount": GEMV_EXPECTED_SPECIALIZATION_COUNT,
         "unsupportedSpecializationCount": 0,
         "materializationResidueCount": 0,
+        "bareValueDiscardCount": 0,
         "computeEntryPointCount": GEMV_EXPECTED_ENTRY_POINT_COUNT,
         "compiler": "dxc",
         "entryProfile": GEMV_DIRECTX_ENTRY_PROFILE,
         "entryProfileCompilerEntryPoints": list(GEMV_DIRECTX_COMPILER_ENTRY_POINTS),
         "entryProfileCompiledEntryPointCount": len(entry_profile_runs),
         "entryProfileCompilerRuns": entry_profile_runs,
-        "entryProfileAllowedWarning": {
-            "message": GEMV_DIRECTX_UNUSED_LID_WARNING_MESSAGE,
-            "sourceExpression": GEMV_DIRECTX_UNUSED_LID_WARNING_SOURCE,
-            "countPerRun": GEMV_DIRECTX_EXPECTED_WARNING_COUNT_PER_CLASS,
-            "totalCount": sum(run["allowedWarningCount"] for run in entry_profile_runs),
-            "trackedIssue": GEMV_DIRECTX_UNUSED_LID_WARNING_ISSUE,
-        },
+        "entryProfileDiagnosticCount": 0,
+        "entryProfileUnusedValueWarningCount": 0,
         "libraryProfile": GEMV_DIRECTX_LIBRARY_PROFILE,
         "libraryExports": list(GEMV_DIRECTX_EXPECTED_ENTRY_POINTS),
         "libraryExportCount": len(GEMV_DIRECTX_EXPECTED_ENTRY_POINTS),
@@ -3920,19 +3913,13 @@ def _check_gemv_directx_compiler_frontier(
             "outputHash": {"algorithm": "sha256", "value": library_output_hash},
             "outputSizeBytes": library_output_size,
             "allowedWarningCounts": {
-                "unusedLid": GEMV_DIRECTX_EXPECTED_WARNING_COUNT_PER_CLASS,
                 "libraryNumthreads": GEMV_DIRECTX_EXPECTED_WARNING_COUNT_PER_CLASS,
             },
+            "unusedValueWarningCount": 0,
             "stdout": _relpath(library_result.stdout_path, mlx_root),
             "stderr": _relpath(library_result.stderr_path, mlx_root),
         },
         "libraryAllowedWarnings": [
-            {
-                "message": GEMV_DIRECTX_UNUSED_LID_WARNING_MESSAGE,
-                "sourceExpression": GEMV_DIRECTX_UNUSED_LID_WARNING_SOURCE,
-                "count": GEMV_DIRECTX_EXPECTED_WARNING_COUNT_PER_CLASS,
-                "trackedIssue": GEMV_DIRECTX_UNUSED_LID_WARNING_ISSUE,
-            },
             {
                 "message": GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_MESSAGE,
                 "sourceExpression": GEMV_DIRECTX_LIBRARY_NUMTHREADS_WARNING_SOURCE,
@@ -3940,6 +3927,7 @@ def _check_gemv_directx_compiler_frontier(
                 "trackedIssue": GEMV_OPENGL_WORKGROUP_SIZE_ISSUE,
             },
         ],
+        "libraryUnusedValueWarningCount": 0,
         "compilerCoveredEntryPointCount": GEMV_EXPECTED_ENTRY_POINT_COUNT,
         "uncompiledEntryPointCount": 0,
         "compilerCoverageStatus": "all-exported-entry-points-compiled",
