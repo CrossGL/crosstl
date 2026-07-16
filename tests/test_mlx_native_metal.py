@@ -499,10 +499,11 @@ def test_cpp_test_count_drift_fails_closed(tmp_path, monkeypatch):
         )
 
 
-def test_workflow_uses_macos_26_and_uploads_only_report_and_logs():
+def test_workflow_uses_macos_26_arm64_and_uploads_only_report_and_logs():
     text = WORKFLOW_PATH.read_text(encoding="utf-8")
 
     assert "runs-on: macos-26" in text
+    assert "runs-on: macos-26-intel" not in text
     assert "macos-latest" not in text.lower()
     assert 'python-version: "3.13"' in text
     assert "sparse-checkout set /mlx/backend/metal/kernels/" in text

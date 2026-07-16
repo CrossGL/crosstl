@@ -1,7 +1,8 @@
 # Pinned MLX Native Metal Reference Baseline
 
 The `MLX Native Metal Reference Baseline` workflow validates upstream MLX commit
-`4367c73b60541ddd5a266ce4644fd93d20223b6e` on the GitHub `macos-26` runner.
+`4367c73b60541ddd5a266ce4644fd93d20223b6e` on GitHub's Arm64
+`macos-26` runner.
 It is a native upstream reference only. It does not compile or execute a
 CrossTL-translated target and does not establish translated-target correctness,
 runtime parity, or numerical parity.
