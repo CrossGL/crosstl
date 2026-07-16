@@ -112,7 +112,7 @@ MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES = tuple(
     if source not in MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
 )
 MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES = MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES
-MLX_CLEAN_REDUCED_FRONTIER_SOURCES = tuple(
+MLX_NON_FENCE_REDUCED_FRONTIER_SOURCES = tuple(
     dict.fromkeys(
         (
             *MLX_DIRECTX_VULKAN_FRONTIER_SOURCES,
@@ -125,7 +125,7 @@ MLX_REDUCED_FRONTIER_SOURCES = tuple(
     dict.fromkeys(
         sorted(
             (
-                *MLX_CLEAN_REDUCED_FRONTIER_SOURCES,
+                *MLX_NON_FENCE_REDUCED_FRONTIER_SOURCES,
                 *MLX_BLOCKED_REDUCED_FRONTIER_SOURCES,
             )
         )
@@ -170,6 +170,7 @@ MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_MESSAGE = (
 MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE = "https://github.com/CrossGL/crosstl/issues/1750"
 MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE = {
     MLX_ARG_REDUCE_SOURCE: {
+        "specializationCount": 51,
         "hostSource": "mlx/backend/metal/primitives.cpp",
         "hostLines": "117-132",
         "dispatchFormulas": [
@@ -181,6 +182,7 @@ MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE = {
         "materializationParameters": ["N_READS", "Op", "T"],
     },
     MLX_LAYER_NORM_SOURCE: {
+        "specializationCount": 16,
         "hostSource": "mlx/backend/metal/normalization.cpp",
         "hostLines": "248-297,346-422",
         "dispatchFormulas": [
@@ -201,6 +203,7 @@ MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE = {
         "materializationParameters": ["N_READS", "T"],
     },
     MLX_LOGSUMEXP_SOURCE: {
+        "specializationCount": 7,
         "hostSource": "mlx/backend/metal/logsumexp.cpp",
         "hostLines": "58-91",
         "dispatchFormulas": [
@@ -214,6 +217,7 @@ MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE = {
         "materializationParameters": ["AccT", "N_READS", "T"],
     },
     MLX_RMS_NORM_SOURCE: {
+        "specializationCount": 12,
         "hostSource": "mlx/backend/metal/normalization.cpp",
         "hostLines": "52-91,137-197",
         "dispatchFormulas": [
@@ -227,6 +231,7 @@ MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE = {
         "materializationParameters": ["N_READS", "T"],
     },
     MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE: {
+        "specializationCount": 42,
         "hostSource": "mlx/backend/metal/scaled_dot_product_attention.cpp",
         "hostLines": (
             "31-32,160-163,194-195,323-326,350-415,440-484,561-586," "613-640,685-753"
@@ -255,6 +260,7 @@ MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE = {
         "materializationParameters": ["D", "T", "V"],
     },
     MLX_SOFTMAX_SOURCE: {
+        "specializationCount": 17,
         "hostSource": "mlx/backend/metal/softmax.cpp",
         "hostLines": "46-83",
         "dispatchFormulas": [
@@ -2870,16 +2876,24 @@ def _require_dynamic_workgroup_blocker_report(
     }
     if validated:
         expected_diagnostics["project.validate.failed-artifact"] = len(sources)
+    expected_error_count = sum(expected_diagnostics.values())
     _require(
         isinstance(summary, Mapping)
         and summary.get("unitCount") == len(sources)
         and summary.get("artifactCount") == len(sources)
         and summary.get("translatedCount") == 0
         and summary.get("failedCount") == len(sources)
-        and all(
-            summary.get("diagnosticsByCode", {}).get(code) == count
-            for code, count in expected_diagnostics.items()
-        ),
+        and summary.get("diagnosticCounts")
+        == {"error": expected_error_count, "note": 0, "warning": 0}
+        and summary.get("diagnosticsByCode") == expected_diagnostics
+        and summary.get("artifactsByTarget")
+        == {
+            target: {
+                "artifactCount": len(sources),
+                "translatedCount": 0,
+                "failedCount": len(sources),
+            }
+        },
         f"{target.title()} dynamic-workgroup frontier accounting changed",
     )
     error_diagnostics = [
@@ -2888,12 +2902,13 @@ def _require_dynamic_workgroup_blocker_report(
         if isinstance(diagnostic, Mapping) and diagnostic.get("severity") == "error"
     ]
     _require(
-        len(error_diagnostics) == sum(expected_diagnostics.values())
+        len(error_diagnostics) == expected_error_count
         and Counter(str(diagnostic.get("code")) for diagnostic in error_diagnostics)
         == Counter(expected_diagnostics),
         f"{target.title()} dynamic-workgroup diagnostics changed",
     )
     diagnostics_by_source: dict[str, Mapping[str, Any]] = {}
+    source_entries_by_source: dict[str, set[str]] = {}
     for diagnostic in error_diagnostics:
         if diagnostic.get("code") != MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_CODE:
             continue
@@ -2920,10 +2935,12 @@ def _require_dynamic_workgroup_blocker_report(
             isinstance(source_entries, list)
             and execution.get("reason") == "aggregate-entry-size-unproven"
             and len(source_entries) == MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS[source]
+            and all(isinstance(entry, str) and entry for entry in source_entries)
             and len(set(source_entries)) == len(source_entries),
             f"{target.title()} dynamic-workgroup entry evidence changed for {source}",
         )
         diagnostics_by_source[source] = diagnostic
+        source_entries_by_source[source] = set(source_entries)
     _require(
         set(diagnostics_by_source) == expected_sources,
         f"{target.title()} dynamic-workgroup diagnostics do not cover the config",
@@ -2970,17 +2987,29 @@ def _require_dynamic_workgroup_blocker_report(
             if isinstance(materialization, Mapping)
             else None
         )
+        host_names = [
+            record.get("hostName")
+            for record in specializations or []
+            if isinstance(record, Mapping) and record.get("hostName") is not None
+        ]
+        expected_specialization_count = MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE[source][
+            "specializationCount"
+        ]
         _require(
             isinstance(materialization, Mapping)
             and materialization.get("status") == "materialized"
             and isinstance(specializations, list)
-            and materialization.get("specializationCount") == len(specializations)
+            and materialization.get("specializationCount")
+            == expected_specialization_count
+            and len(specializations) == expected_specialization_count
+            and all(isinstance(record, Mapping) for record in specializations)
             and materialization.get("unsupported") == []
-            and sum(
-                isinstance(record, Mapping) and isinstance(record.get("hostName"), str)
-                for record in specializations
+            and len(host_names) == MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS[source]
+            and all(
+                isinstance(host_name, str) and host_name for host_name in host_names
             )
-            == MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS[source],
+            and len(set(host_names)) == len(host_names)
+            and set(host_names) == source_entries_by_source[source],
             f"{target.title()} dynamic-workgroup materialization changed for {source}",
         )
         artifacts_by_source[source] = artifact
@@ -3003,6 +3032,7 @@ def _require_dynamic_workgroup_blocker_report(
             "diagnosticCode": MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_CODE,
             "artifactStatus": "failed",
             "artifactEmitted": False,
+            "sourceEntryPointIdentityStatus": "matched-materialized-host-names",
         }
         for source in sources
     }
@@ -6287,7 +6317,7 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
             "metalRoundTripIncluded": True,
             "metalToolchainRequired": require_metal_toolchain,
             "frontierSources": list(MLX_REDUCED_FRONTIER_SOURCES),
-            "cleanFrontierSources": list(MLX_CLEAN_REDUCED_FRONTIER_SOURCES),
+            "nonFenceFrontierSources": list(MLX_NON_FENCE_REDUCED_FRONTIER_SOURCES),
             "blockedFrontierSources": list(MLX_BLOCKED_REDUCED_FRONTIER_SOURCES),
             "blockedFrontierIssues": list(FENCE_CONTRACT_TRACKED_ISSUES),
             "directxTranslatedFrontierSources": list(

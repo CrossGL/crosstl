@@ -780,6 +780,7 @@
     "workgroup_blocked_by": "https://github.com/CrossGL/crosstl/issues/1750",
     "dispatch_evidence": {
       "mlx/backend/metal/kernels/arg_reduce.metal": {
+        "specializationCount": 51,
         "hostSource": "mlx/backend/metal/primitives.cpp",
         "hostLines": "117-132",
         "dispatchFormulas": [
@@ -799,6 +800,7 @@
         ]
       },
       "mlx/backend/metal/kernels/layer_norm.metal": {
+        "specializationCount": 16,
         "hostSource": "mlx/backend/metal/normalization.cpp",
         "hostLines": "248-297,346-422",
         "dispatchFormulas": [
@@ -822,6 +824,7 @@
         ]
       },
       "mlx/backend/metal/kernels/logsumexp.metal": {
+        "specializationCount": 7,
         "hostSource": "mlx/backend/metal/logsumexp.cpp",
         "hostLines": "58-91",
         "dispatchFormulas": [
@@ -842,6 +845,7 @@
         ]
       },
       "mlx/backend/metal/kernels/rms_norm.metal": {
+        "specializationCount": 12,
         "hostSource": "mlx/backend/metal/normalization.cpp",
         "hostLines": "52-91,137-197",
         "dispatchFormulas": [
@@ -861,6 +865,7 @@
         ]
       },
       "mlx/backend/metal/kernels/scaled_dot_product_attention.metal": {
+        "specializationCount": 42,
         "hostSource": "mlx/backend/metal/scaled_dot_product_attention.cpp",
         "hostLines": "31-32,160-163,194-195,323-326,350-415,440-484,561-586,613-640,685-753",
         "dispatchFormulas": [
@@ -889,6 +894,7 @@
         ]
       },
       "mlx/backend/metal/kernels/softmax.metal": {
+        "specializationCount": 17,
         "hostSource": "mlx/backend/metal/softmax.cpp",
         "hostLines": "46-83",
         "dispatchFormulas": [

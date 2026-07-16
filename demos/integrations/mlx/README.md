@@ -67,8 +67,11 @@ The current harness verifies:
   `ternary.metal`. Vulkan must translate and structurally validate all 11.
   DirectX emits the five sources whose aggregate entries do not require a
   runtime-selected workgroup size and records exact expected failures for the
-  other six. Separate configs prevent DirectX workgroup contracts from being
-  silently ignored by Vulkan, where project workgroup rules are unsupported.
+  other six. Each blocked report must retain the pinned total specialization
+  count and exactly match its diagnostic entry names to the materialized host
+  names, with no additional diagnostics. Separate configs prevent DirectX
+  workgroup contracts from being silently ignored by Vulkan, where project
+  workgroup rules are unsupported.
   This establishes target-specific structural and toolchain coverage, not
   semantic readiness or runtime parity;
 - a separate project-level expected-failure check for pinned `fence.metal`

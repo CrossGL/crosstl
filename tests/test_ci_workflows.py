@@ -2183,7 +2183,12 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert '"tests/test_translator/test_codegen/test_directx_codegen.py"' in mlx_porting
     assert '"tests/test_translator/test_project_translation.py"' in mlx_porting
     assert "Verify MLX frontier accounting" in mlx_porting
-    assert "expected 11 non-fence MLX frontier sources" in mlx_porting
+    assert "expected the exact 11-source non-fence MLX frontier" in mlx_porting
+    assert 'scope["nonFenceFrontierSources"]' in mlx_porting
+    assert "cleanFrontierSources" not in mlx_porting
+    assert "MLX summary identity or status is incorrect" in mlx_porting
+    assert "MLX summary check names must be unique" in mlx_porting
+    assert "MLX checkout proof does not match the pinned revision" in mlx_porting
     assert "fence contract accounting must be 3 failed, 0 emitted" in mlx_porting
     assert "MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES" in mlx_porting
     assert "MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS" in mlx_porting
@@ -2199,6 +2204,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "DirectX frontier accounting is incomplete" in mlx_porting
     assert "DirectX workgroup blocker evidence changed" in mlx_porting
     assert "expected 106 fail-closed DirectX compute entries" in mlx_porting
+    assert "matched-materialized-host-names" in mlx_porting
     assert "DirectX frontier toolchain must validate every configured" in mlx_porting
     assert "source artifact and compute entry" in mlx_porting
     assert "Vulkan frontier accounting is incomplete" in mlx_porting
@@ -2357,6 +2363,8 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES" in harness
     assert "MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_CODE" in harness
     assert "MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE" in harness
+    assert '"specializationCount": 51' in harness
+    assert '"sourceEntryPointIdentityStatus"' in harness
     assert "MLX_BLOCKED_REDUCED_FRONTIER_SOURCES" in harness
     assert "_check_atomic_fence_contract" in harness
     assert "project.translate.directx-atomic-fence-unsupported" in harness

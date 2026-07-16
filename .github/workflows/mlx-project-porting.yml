@@ -303,9 +303,20 @@ jobs:
                   encoding="utf-8"
               )
           )
+          expected_repository = {
+              "name": "ml-explore/mlx",
+              "url": "https://github.com/ml-explore/mlx",
+              "commit": os.environ["MLX_COMMIT"],
+          }
+          if (
+              payload.get("schema_version") != 1
+              or payload.get("repository") != expected_repository
+              or payload.get("status") != "passed"
+          ):
+              raise SystemExit("MLX summary identity or status is incorrect")
           scope = payload["scope"]
-          if len(scope["cleanFrontierSources"]) != 11:
-              raise SystemExit("expected 11 non-fence MLX frontier sources")
+          if set(scope["nonFenceFrontierSources"]) != vulkan_frontier_sources:
+              raise SystemExit("expected the exact 11-source non-fence MLX frontier")
           if scope["blockedFrontierSources"] != [fence_source]:
               raise SystemExit("fence.metal must be the sole blocked frontier source")
           if scope["blockedFrontierIssues"] != [fence_issue]:
@@ -325,7 +336,23 @@ jobs:
               != MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE
           ):
               raise SystemExit("target-split frontier scope accounting is incomplete")
-          checks = {check["name"]: check for check in payload["checks"]}
+          check_records = payload.get("checks")
+          if not isinstance(check_records, list) or not all(
+              isinstance(check, dict) and isinstance(check.get("name"), str)
+              for check in check_records
+          ):
+              raise SystemExit("MLX summary checks are malformed")
+          checks = {check["name"]: check for check in check_records}
+          if len(checks) != len(check_records):
+              raise SystemExit("MLX summary check names must be unique")
+          checkout = checks.get("mlx-checkout")
+          if (
+              not isinstance(checkout, dict)
+              or checkout.get("status") != "passed"
+              or checkout.get("repository") != expected_repository["url"]
+              or checkout.get("commit") != expected_repository["commit"]
+          ):
+              raise SystemExit("MLX checkout proof does not match the pinned revision")
           fence = checks["atomic-fence-contract"]
           if fence["failedArtifactCount"] != 3 or fence["emittedArtifactCount"] != 0:
               raise SystemExit("fence contract accounting must be 3 failed, 0 emitted")
@@ -461,6 +488,8 @@ jobs:
                   != MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_CODE
                   or observed_evidence["artifactStatus"] != "failed"
                   or observed_evidence["artifactEmitted"] is not False
+                  or observed_evidence["sourceEntryPointIdentityStatus"]
+                  != "matched-materialized-host-names"
               ):
                   raise SystemExit(
                       f"DirectX workgroup blocker evidence changed for {source}"
@@ -703,6 +732,9 @@ jobs:
               if any(
                   observed_evidence.get(key) != value
                   for key, value in expected_evidence.items()
+              ) or (
+                  observed_evidence["sourceEntryPointIdentityStatus"]
+                  != "matched-materialized-host-names"
               ):
                   raise SystemExit(
                       f"OpenGL workgroup blocker evidence changed for {source}"

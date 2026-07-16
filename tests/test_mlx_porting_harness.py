@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+PINNED_MLX_COMMIT = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
 HARNESS_PATH = ROOT / "demos" / "integrations" / "mlx" / "run_mlx_porting.py"
 RMS_NORM_HARNESS_PATH = (
     ROOT / "demos" / "integrations" / "mlx" / "prove_rms_norm_specialization.py"
@@ -37,6 +38,18 @@ def _load_rms_norm_harness():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def test_mlx_porting_contract_uses_exact_pinned_revision():
+    module = _load_harness()
+    expected_gaps = json.loads(
+        (ROOT / "demos" / "integrations" / "mlx" / "expected-gaps.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert module.MLX_COMMIT == PINNED_MLX_COMMIT
+    assert expected_gaps["commit"] == PINNED_MLX_COMMIT
 
 
 def _prepare_reduced_rms_norm_checkout(module, tmp_path, monkeypatch):
@@ -2153,7 +2166,7 @@ def test_arg_reduce_remains_in_frontiers_but_fail_closes_native_targets():
     assert module.MLX_REDUCED_FRONTIER_SOURCES == tuple(
         sorted(
             (
-                *module.MLX_CLEAN_REDUCED_FRONTIER_SOURCES,
+                *module.MLX_NON_FENCE_REDUCED_FRONTIER_SOURCES,
                 *module.MLX_BLOCKED_REDUCED_FRONTIER_SOURCES,
             )
         )
@@ -2176,10 +2189,12 @@ def test_binary_two_advances_into_opengl_toolchain_frontier_without_source_growt
     assert module.MLX_BINARY_TWO_SOURCE in (
         module.MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES
     )
-    assert len(module.MLX_CLEAN_REDUCED_FRONTIER_SOURCES) == 11
+    assert len(module.MLX_NON_FENCE_REDUCED_FRONTIER_SOURCES) == 11
     assert len(module.MLX_REDUCED_FRONTIER_SOURCES) == 12
     assert (
-        module.MLX_CLEAN_REDUCED_FRONTIER_SOURCES.count(module.MLX_BINARY_TWO_SOURCE)
+        module.MLX_NON_FENCE_REDUCED_FRONTIER_SOURCES.count(
+            module.MLX_BINARY_TWO_SOURCE
+        )
         == 1
     )
     assert issue in module.RESOLVED_FRONTIER_ISSUES
@@ -2239,11 +2254,11 @@ def test_opengl_toolchain_frontier_matches_pinned_validator_inventory():
     assert "expected 3 OpenGL toolchain frontier sources" in workflow
 
 
-def test_fence_is_blocked_outside_clean_and_directx_toolchain_frontiers():
+def test_fence_is_blocked_outside_non_fence_and_directx_toolchain_frontiers():
     module = _load_harness()
 
     assert module.MLX_FENCE_SOURCE not in module.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
-    assert module.MLX_FENCE_SOURCE not in module.MLX_CLEAN_REDUCED_FRONTIER_SOURCES
+    assert module.MLX_FENCE_SOURCE not in module.MLX_NON_FENCE_REDUCED_FRONTIER_SOURCES
     assert module.MLX_FENCE_SOURCE not in module.MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES
     assert module.MLX_BLOCKED_REDUCED_FRONTIER_SOURCES == (module.MLX_FENCE_SOURCE,)
     assert module.MLX_FENCE_SOURCE in module.MLX_REDUCED_FRONTIER_SOURCES
@@ -2767,7 +2782,16 @@ def _dynamic_workgroup_report(
     artifacts = []
     for source in sources:
         entry_count = module.MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS[source]
+        specialization_count = module.MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE[source][
+            "specializationCount"
+        ]
         entry_points = [f"entry_{index}" for index in range(entry_count)]
+        specializations = [
+            {"hostName": entry_point} for entry_point in entry_points
+        ] + [
+            {"materializedName": f"helper_{index}"}
+            for index in range(specialization_count - entry_count)
+        ]
         artifact_path = (output_dir / target / Path(source)).with_suffix(
             extensions[target]
         )
@@ -2800,10 +2824,8 @@ def _dynamic_workgroup_report(
                 "error": module.MLX_DYNAMIC_WORKGROUP_DIAGNOSTIC_MESSAGE,
                 "templateMaterialization": {
                     "status": "materialized",
-                    "specializationCount": entry_count,
-                    "specializations": [
-                        {"hostName": entry_point} for entry_point in entry_points
-                    ],
+                    "specializationCount": specialization_count,
+                    "specializations": specializations,
                     "unsupported": [],
                 },
             }
@@ -2837,7 +2859,11 @@ def _dynamic_workgroup_report(
             "artifactCount": source_count,
             "translatedCount": 0,
             "failedCount": source_count,
-            "diagnosticCounts": {"error": len(diagnostics)},
+            "diagnosticCounts": {
+                "error": len(diagnostics),
+                "note": 0,
+                "warning": 0,
+            },
             "diagnosticsByCode": expected_diagnostics,
             "artifactsByTarget": {
                 target: {
@@ -2985,6 +3011,106 @@ def test_dynamic_workgroup_config_report_join_rejects_artifact_mismatch(tmp_path
         )
 
 
+def test_dynamic_workgroup_report_rejects_entry_identity_mismatch(tmp_path):
+    module = _load_harness()
+    mlx_root = tmp_path / "mlx"
+    output_dir = mlx_root / "out-directx-workgroup-frontier"
+    sources = module.MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+    payload = _dynamic_workgroup_report(
+        module,
+        mlx_root,
+        output_dir,
+        target="directx",
+        sources=sources,
+        validated=True,
+    )
+    source_entries = payload["diagnostics"][0]["details"]["executionSpecialization"][
+        "sourceEntryPoints"
+    ]
+    source_entries[0] = "different_entry"
+
+    with pytest.raises(
+        module.PortingCheckError,
+        match="dynamic-workgroup materialization changed",
+    ):
+        module._require_dynamic_workgroup_blocker_report(
+            mlx_root,
+            output_dir,
+            payload,
+            target="directx",
+            sources=sources,
+            validated=True,
+        )
+
+
+def test_dynamic_workgroup_report_rejects_specialization_count_drift(tmp_path):
+    module = _load_harness()
+    mlx_root = tmp_path / "mlx"
+    output_dir = mlx_root / "out-directx-workgroup-frontier"
+    sources = module.MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+    payload = _dynamic_workgroup_report(
+        module,
+        mlx_root,
+        output_dir,
+        target="directx",
+        sources=sources,
+        validated=True,
+    )
+    materialization = payload["artifacts"][0]["templateMaterialization"]
+    materialization["specializations"].pop()
+    materialization["specializationCount"] -= 1
+
+    with pytest.raises(
+        module.PortingCheckError,
+        match="dynamic-workgroup materialization changed",
+    ):
+        module._require_dynamic_workgroup_blocker_report(
+            mlx_root,
+            output_dir,
+            payload,
+            target="directx",
+            sources=sources,
+            validated=True,
+        )
+
+
+def test_dynamic_workgroup_report_rejects_unexpected_warning(tmp_path):
+    module = _load_harness()
+    mlx_root = tmp_path / "mlx"
+    output_dir = mlx_root / "out-opengl-workgroup-frontier"
+    sources = module.MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+    payload = _dynamic_workgroup_report(
+        module,
+        mlx_root,
+        output_dir,
+        target="opengl",
+        sources=sources,
+        validated=False,
+    )
+    payload["summary"]["diagnosticCounts"]["warning"] = 1
+    payload["summary"]["diagnosticsByCode"]["project.translate.test-warning"] = 1
+    payload["diagnostics"].append(
+        {
+            "severity": "warning",
+            "code": "project.translate.test-warning",
+            "target": "opengl",
+        }
+    )
+
+    with pytest.raises(
+        module.PortingCheckError,
+        match="dynamic-workgroup frontier accounting changed",
+    ):
+        module._require_dynamic_workgroup_blocker_report(
+            mlx_root,
+            output_dir,
+            payload,
+            target="opengl",
+            sources=sources,
+            validated=False,
+        )
+
+
 def _prepare_opengl_frontier_check(module, tmp_path):
     mlx_root = tmp_path / "mlx"
     work_dir = mlx_root / ".crosstl-mlx-porting"
@@ -3065,6 +3191,10 @@ def test_opengl_frontier_required_toolchain_compiles_and_validates_artifacts(
     )
     assert result["workgroupBlockedSources"] == list(
         module.MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+    )
+    assert all(
+        evidence["sourceEntryPointIdentityStatus"] == "matched-materialized-host-names"
+        for evidence in result["dynamicWorkgroupDispatchEvidence"].values()
     )
     assert result["projectDiagnosticCount"] == 0
     assert result["toolchainRequired"] is True
@@ -5632,6 +5762,10 @@ def test_reduced_frontier_requires_all_directx_entries_per_artifact(
     assert result["workgroupBlockedSources"] == list(
         module.MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
     )
+    assert all(
+        evidence["sourceEntryPointIdentityStatus"] == "matched-materialized-host-names"
+        for evidence in result["dynamicWorkgroupDispatchEvidence"].values()
+    )
     assert commands[1][0] == "directx-workgroup-frontier"
     assert commands[2][0] == "validate-directx-frontier-toolchain"
     assert "--run-toolchains" in commands[2][1]
@@ -5701,6 +5835,17 @@ def test_directx_toolchain_frontier_matches_pinned_dxc_inventory():
     )
     assert module.MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNT == 468
     assert sum(module.MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS.values()) == 106
+    assert {
+        source: evidence["specializationCount"]
+        for source, evidence in module.MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE.items()
+    } == {
+        module.MLX_ARG_REDUCE_SOURCE: 51,
+        module.MLX_LAYER_NORM_SOURCE: 16,
+        module.MLX_LOGSUMEXP_SOURCE: 7,
+        module.MLX_RMS_NORM_SOURCE: 12,
+        module.MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE: 42,
+        module.MLX_SOFTMAX_SOURCE: 17,
+    }
     directx_status = gaps["directx_toolchain_status"]
     assert directx_status["specialization_constants"] == (
         module.MLX_FRONTIER_SPECIALIZATION_CONSTANTS
@@ -6350,9 +6495,10 @@ def test_run_checks_reduced_frontier_includes_runtime_readiness(tmp_path, monkey
         result["scope"]["templateMemberBufferPointerNativeValidationIncluded"] is False
     )
     assert result["scope"]["runtimeParityClaimed"] is False
-    assert result["scope"]["cleanFrontierSources"] == list(
-        module.MLX_CLEAN_REDUCED_FRONTIER_SOURCES
+    assert result["scope"]["nonFenceFrontierSources"] == list(
+        module.MLX_NON_FENCE_REDUCED_FRONTIER_SOURCES
     )
+    assert "cleanFrontierSources" not in result["scope"]
     assert result["scope"]["blockedFrontierSources"] == [module.MLX_FENCE_SOURCE]
     assert result["scope"]["blockedFrontierIssues"] == [
         "https://github.com/CrossGL/crosstl/issues/1537"
