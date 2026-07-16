@@ -41391,8 +41391,8 @@ def test_hlsl_boolean_min_max_preserve_ordered_semantics(tmp_path):
 
     assert "return ((left) && (right));" in generated
     assert "return ((left) || (right));" in generated
-    assert "return and(left, right);" in generated
-    assert "return or(left, right);" in generated
+    assert "return ((left) & (right));" in generated
+    assert "return ((left) | (right));" in generated
     assert "return min(left, right);" in generated
     HLSLParser(HLSLLexer(generated).tokenize()).parse()
     assert_directx_compute_validates_if_available(generated, tmp_path)
