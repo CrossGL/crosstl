@@ -5649,6 +5649,107 @@ def test_hlsl_metal_constant_array_helpers_preserve_resource_parameters(tmp_path
         assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_hlsl_metal_constant_pointer_helpers_forward_alias_offsets(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    int64_t add_pair(
+        const constant int64_t* left,
+        const constant int64_t* right) {
+      return left[1] + right[1];
+    }
+
+    int64_t add_pair(
+        const constant int64_t* left,
+        const constant int64_t* right,
+        const constant int64_t* third) {
+      return left[0] + right[0] + third[0];
+    }
+
+    kernel void forward_offsets(
+        const constant int64_t* values [[buffer(0)]],
+        device int64_t* output [[buffer(1)]]) {
+      const constant auto* left = values;
+      const constant auto* right = values + 2;
+      const constant auto* third = values + 4;
+      output[0] = add_pair(left, right);
+      output[1] = add_pair(left, right, third);
+    }
+    """
+    shader_path = tmp_path / "constant_pointer_offsets.metal"
+    shader_path.write_text(shader)
+
+    generated = crosstl.translate(
+        str(shader_path),
+        backend="directx",
+        format_output=False,
+        source_backend="metal",
+    )
+
+    two_pointer_overload = re.search(
+        r"int64_t (add_pair_[A-Za-z0-9_]+)\("
+        r"StructuredBuffer<int64_t> left, int64_t left_offset, "
+        r"StructuredBuffer<int64_t> right, int64_t right_offset\)",
+        generated,
+    )
+    three_pointer_overload = re.search(
+        r"int64_t (add_pair_[A-Za-z0-9_]+)\("
+        r"StructuredBuffer<int64_t> left, int64_t left_offset, "
+        r"StructuredBuffer<int64_t> right, int64_t right_offset, "
+        r"StructuredBuffer<int64_t> third, int64_t third_offset\)",
+        generated,
+    )
+    assert two_pointer_overload is not None
+    assert three_pointer_overload is not None
+    assert two_pointer_overload.group(1) != three_pointer_overload.group(1)
+    assert "left[uint((left_offset + 1))]" in generated
+    assert "right[uint((right_offset + 1))]" in generated
+    assert (
+        f"{two_pointer_overload.group(1)}(values, int64_t(left_offset), "
+        "values, int64_t(right_offset))"
+        in generated
+    )
+    assert (
+        f"{three_pointer_overload.group(1)}(values, int64_t(left_offset), "
+        "values, int64_t(right_offset), values, int64_t(third_offset))"
+        in generated
+    )
+    assert "int64_t* left" not in generated
+    assert "int64_t* right" not in generated
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_metal_constant_pointer_helper_rejects_unbacked_argument(tmp_path):
+    shader = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    int64_t read_one(const constant int64_t* value) {
+      return value[0];
+    }
+
+    kernel void unbacked(device int64_t* output [[buffer(0)]]) {
+      output[0] = read_one(nullptr);
+    }
+    """
+    shader_path = tmp_path / "constant_pointer_unbacked.metal"
+    shader_path.write_text(shader)
+
+    with pytest.raises(DirectXResourcePointerParameterError) as exc_info:
+        crosstl.translate(
+            str(shader_path),
+            backend="directx",
+            format_output=False,
+            source_backend="metal",
+        )
+
+    assert exc_info.value.reason == "call-backing-unresolved"
+    assert exc_info.value.address_space == "constant"
+    assert exc_info.value.parameter_name == "value"
+
+
 def test_hlsl_metal_scalar_constant_kernel_params_promote_to_cbuffers(tmp_path):
     shader = """
     #include <metal_stdlib>

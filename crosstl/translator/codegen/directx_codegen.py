@@ -9953,6 +9953,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def hlsl_resource_pointer_parameter(self, parameter):
         return self.hlsl_resource_pointer_parameter_address_space(parameter) in {
+            "constant",
             "device",
             "global",
             "storage",
@@ -10034,7 +10035,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         parameters_by_function = {}
         indices_by_function = {}
         for function in functions or []:
-            function_name = getattr(function, "name", None)
+            function_name = self.hlsl_function_declaration_name(function)
             if not function_name:
                 continue
             parameters = getattr(
@@ -22993,7 +22994,51 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         used_names.update(self.hlsl_function_name_aliases.values())
         used_names.update(reserved_names)
 
+        def assign_target_names(function_name, source_groups):
+            self.hlsl_mapped_overload_names.add(function_name)
+            for source_key, declarations in sorted(
+                source_groups.items(), key=lambda item: repr(item[0])
+            ):
+                signature_key = (function_name, source_key)
+                target_name = self.hlsl_function_target_names_by_signature.get(
+                    signature_key
+                )
+                if target_name is None:
+                    suffix = self.hlsl_function_overload_suffix(source_key)
+                    base_name = self.hlsl_sanitized_identifier(
+                        f"{function_name}_{suffix}"
+                    )
+                    target_name = base_name
+                    suffix_index = 2
+                    while (
+                        target_name in used_names
+                        or target_name in self.HLSL_RESERVED_LOCAL_IDENTIFIER_NAMES
+                    ):
+                        target_name = f"{base_name}_{suffix_index}"
+                        suffix_index += 1
+                    used_names.add(target_name)
+                    self.hlsl_function_target_names_by_signature[signature_key] = (
+                        target_name
+                    )
+                for declaration in declarations:
+                    self.hlsl_function_target_names[id(declaration)] = target_name
+                representative = next(
+                    (
+                        declaration
+                        for declaration in declarations
+                        if getattr(declaration, "body", None) is not None
+                    ),
+                    declarations[0],
+                )
+                self.register_hlsl_function_target_metadata(
+                    target_name, representative
+                )
+
         for function_name, overloads in groups.items():
+            all_source_groups = {}
+            for function in overloads:
+                source_key = self.hlsl_source_function_signature(function)
+                all_source_groups.setdefault(source_key, []).append(function)
             mapped_groups = {}
             for function in overloads:
                 target_key = self.hlsl_mapped_function_signature_key(function)
@@ -23026,40 +23071,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                         reason="resource-parameter-collision",
                     )
 
-                self.hlsl_mapped_overload_names.add(function_name)
-                for source_key, declarations in sorted(
-                    source_groups.items(), key=lambda item: repr(item[0])
-                ):
-                    suffix = self.hlsl_function_overload_suffix(source_key)
-                    base_name = self.hlsl_sanitized_identifier(
-                        f"{function_name}_{suffix}"
+                assign_target_names(function_name, source_groups)
+
+            has_pointer_overload = len(all_source_groups) > 1 and any(
+                self.hlsl_resource_pointer_parameter(parameter)
+                for function in overloads
+                for parameter in (
+                    getattr(
+                        function, "parameters", getattr(function, "params", [])
                     )
-                    target_name = base_name
-                    suffix_index = 2
-                    while (
-                        target_name in used_names
-                        or target_name in self.HLSL_RESERVED_LOCAL_IDENTIFIER_NAMES
-                    ):
-                        target_name = f"{base_name}_{suffix_index}"
-                        suffix_index += 1
-                    used_names.add(target_name)
-                    signature_key = (function_name, source_key)
-                    self.hlsl_function_target_names_by_signature[signature_key] = (
-                        target_name
-                    )
-                    for declaration in declarations:
-                        self.hlsl_function_target_names[id(declaration)] = target_name
-                    representative = next(
-                        (
-                            declaration
-                            for declaration in declarations
-                            if getattr(declaration, "body", None) is not None
-                        ),
-                        declarations[0],
-                    )
-                    self.register_hlsl_function_target_metadata(
-                        target_name, representative
-                    )
+                    or []
+                )
+            )
+            if has_pointer_overload:
+                assign_target_names(function_name, all_source_groups)
 
     def hlsl_source_function_signature(self, function):
         return tuple(
