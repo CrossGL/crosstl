@@ -7250,6 +7250,197 @@ class MetalToCrossGLConverter:
             return ""
         return f"        layout({', '.join(layouts)}) in;\n"
 
+    def discarded_expression_is_proven_side_effect_free(self, expression):
+        if expression is None:
+            return True
+        if self.discarded_expression_may_read_volatile(expression):
+            return False
+        if isinstance(expression, (bool, int, float, str)):
+            return True
+        if isinstance(expression, VariableNode):
+            return (
+                not bool(getattr(expression, "vtype", None))
+                and self.discarded_expression_metal_type(expression) is not None
+            )
+        if isinstance(expression, MemberAccessNode):
+            return self.discarded_member_access_is_proven_data_member(
+                expression
+            ) and self.discarded_expression_is_proven_side_effect_free(
+                expression.object
+            )
+        if isinstance(expression, ArrayAccessNode):
+            return self.discarded_subscript_is_builtin(expression) and all(
+                self.discarded_expression_is_proven_side_effect_free(part)
+                for part in (expression.array, expression.index)
+            )
+        if isinstance(expression, CastNode):
+            return (
+                self.discarded_expression_is_proven_side_effect_free(
+                    expression.expression
+                )
+                and self.metal_type_is_proven_builtin_value(expression.target_type)
+                and self.discarded_expression_has_proven_builtin_value_type(
+                    expression.expression
+                )
+            )
+        if isinstance(expression, BinaryOpNode):
+            return expression.op in {
+                ",",
+                "||",
+                "&&",
+                "|",
+                "^",
+                "&",
+                "==",
+                "!=",
+                "<",
+                "<=",
+                ">",
+                ">=",
+                "<<",
+                ">>",
+                "+",
+                "-",
+                "*",
+                "/",
+                "%",
+            } and all(
+                self.discarded_expression_is_proven_side_effect_free(part)
+                and self.discarded_expression_has_proven_builtin_value_type(part)
+                for part in (expression.left, expression.right)
+            )
+        if isinstance(expression, UnaryOpNode):
+            if expression.op not in {"+", "-", "!", "~", "&", "*"}:
+                return False
+            if not self.discarded_expression_is_proven_side_effect_free(
+                expression.operand
+            ):
+                return False
+            operand_type = self.discarded_expression_metal_type(expression.operand)
+            if expression.op == "*":
+                return self.metal_pointer_pointee_type_once(operand_type) is not None
+            return self.metal_type_is_proven_builtin_value(operand_type)
+        if isinstance(expression, TernaryOpNode):
+            return all(
+                self.discarded_expression_is_proven_side_effect_free(part)
+                and self.discarded_expression_has_proven_builtin_value_type(part)
+                for part in (
+                    expression.condition,
+                    expression.true_expr,
+                    expression.false_expr,
+                )
+            )
+        if isinstance(expression, VectorConstructorNode):
+            return self.metal_type_is_proven_builtin_value(
+                expression.type_name
+            ) and all(
+                self.discarded_expression_is_proven_side_effect_free(argument)
+                for argument in expression.args
+            )
+        return False
+
+    def discarded_expression_may_read_volatile(self, expression):
+        try:
+            qualifiers = self.expression_metal_type_qualifiers(expression)
+        except (TypeError, ValueError):
+            return True
+        if "volatile" in set(qualifiers or ()):
+            return True
+        if isinstance(expression, MemberAccessNode):
+            member = self.discarded_member_declaration(expression)
+            return member is not None and "volatile" in set(
+                self.metal_declaration_type_qualifiers(member)
+            )
+        return False
+
+    def discarded_expression_metal_type(self, expression):
+        try:
+            return self.expression_metal_type(expression)
+        except ValueError:
+            return None
+
+    def discarded_expression_has_proven_builtin_value_type(self, expression):
+        return self.metal_type_is_proven_builtin_value(
+            self.discarded_expression_metal_type(expression)
+        )
+
+    def metal_type_is_proven_builtin_value(self, metal_type):
+        if metal_type is None:
+            return False
+        try:
+            value_type = self.metal_source_overload_value_type(metal_type)
+            if value_type is None:
+                return False
+            if self.metal_pointer_pointee_type_once(value_type) is not None:
+                return True
+            normalized = self.normalized_metal_type(self.resolve_type_alias(value_type))
+            if normalized in self.metal_scalar_arithmetic_types:
+                return True
+            vector = self.metal_vector_component_parts(value_type)
+            if vector is not None:
+                element_type, width, _width_text = vector
+                return width is not None and self.metal_type_is_proven_builtin_value(
+                    element_type
+                )
+            matrix = self.metal_matrix_type_parts(value_type)
+            if matrix is not None:
+                element_type, columns, rows, _columns_text, _rows_text = matrix
+                return (
+                    columns is not None
+                    and rows is not None
+                    and self.metal_type_is_proven_builtin_value(element_type)
+                )
+        except (TypeError, ValueError):
+            return False
+        return False
+
+    def discarded_subscript_is_builtin(self, expression):
+        try:
+            selection = self.metal_indexed_type_selection(expression)
+        except (TypeError, ValueError):
+            return False
+        return selection["kind"] in {"array", "pointer", "vector", "matrix"}
+
+    def discarded_member_declaration(self, expression):
+        object_type = self.discarded_expression_metal_type(expression.object)
+        if object_type is None:
+            return None
+        try:
+            value_type = self.metal_source_overload_value_type(object_type)
+            if getattr(expression, "is_pointer", False):
+                value_type = self.metal_pointer_pointee_type_once(value_type)
+            if value_type is None:
+                return None
+            owner = self.normalized_metal_type(self.resolve_type_alias(value_type))
+        except (TypeError, ValueError):
+            return None
+        declaration = self.struct_declarations.get(owner)
+        if declaration is None:
+            return None
+        return next(
+            (
+                member
+                for member in getattr(declaration, "members", []) or []
+                if isinstance(member, VariableNode)
+                and getattr(member, "name", None) == str(expression.member)
+            ),
+            None,
+        )
+
+    def discarded_member_access_is_proven_data_member(self, expression):
+        if self.discarded_member_declaration(expression) is not None:
+            return True
+        object_type = self.discarded_expression_metal_type(expression.object)
+        if object_type is None or getattr(expression, "is_pointer", False):
+            return False
+        try:
+            return (
+                self.metal_vector_component_parts(object_type) is not None
+                and self.discarded_expression_metal_type(expression) is not None
+            )
+        except (TypeError, ValueError):
+            return False
+
     def generate_function_body(self, body, indent=0, is_main=False):
         code = ""
         for stmt in body:
@@ -7370,7 +7561,12 @@ class MetalToCrossGLConverter:
             elif (
                 isinstance(stmt, CastNode) and self.map_type(stmt.target_type) == "void"
             ):
-                code += f"{self.generate_expression(stmt.expression, is_main)};\n"
+                if self.discarded_expression_is_proven_side_effect_free(
+                    stmt.expression
+                ):
+                    code = code[: len(code) - 4 * indent]
+                else:
+                    code += f"{self.generate_expression(stmt.expression, is_main)};\n"
             elif isinstance(stmt, BlockNode):
                 code += "{\n"
                 code += self.generate_scoped_function_body(
