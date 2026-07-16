@@ -1138,6 +1138,64 @@ def test_project_runtime_loader_manifest_is_first_class_support_feature():
         ) in backend_support["evidence"]
 
 
+def test_project_runtime_variant_registry_documents_execution_key_schema_v2():
+    catalog = json.loads(
+        (ROOT / "support" / "features.json").read_text(encoding="utf-8")
+    )
+    features = {feature["id"]: feature for feature in catalog["features"]}
+    feature = features["project.runtime_variant_registry"]
+    execution_evidence = {
+        (
+            "tests/test_translator/test_runtime_variant_registry.py::def "
+            "test_runtime_variant_execution_keys_are_distinct_reorderable_and_exact"
+        ),
+        (
+            "tests/test_translator/test_runtime_variant_registry.py::def "
+            "test_runtime_variant_execution_uses_only_the_selected_entry"
+        ),
+        (
+            "tests/test_translator/test_runtime_variant_registry.py::def "
+            "test_runtime_variant_subgroup_width_distinguishes_exact_variants"
+        ),
+        (
+            "tests/test_translator/test_runtime_variant_registry.py::def "
+            "test_runtime_variant_key_round_trips_absent_execution_and_reordered_inputs"
+        ),
+        (
+            "tests/test_translator/test_runtime_variant_registry.py::def "
+            "test_runtime_variant_key_rejects_legacy_schema_with_migration_error"
+        ),
+    }
+
+    assert feature["category"] == "project"
+    assert feature["name"] == "Runtime variant registry"
+    for backend_support in feature["support"].values():
+        notes = backend_support["notes"]
+        assert backend_support["status"] == "supported"
+        assert "canonical crosstl-rvk2 exact keys" in notes
+        assert "selected binding-interface entry point" in notes
+        assert "workgroupSize and subgroupWidth" in notes
+        assert "unavailable values remain null" in notes
+        assert "exact available execution alternatives" in notes
+        assert "legacy crosstl-rvk1 keys" in notes
+        assert "regenerate both the key and registry" in notes
+        assert "selection and packaging metadata" in notes
+        assert "runtime execution and numerical parity are not established" in notes
+        assert execution_evidence <= set(backend_support["evidence"])
+
+    docs = (ROOT / "docs" / "source" / "project-porting.rst").read_text(
+        encoding="utf-8"
+    )
+    normalized_docs = " ".join(docs.split())
+    assert "runtime variant key schema is version 2" in normalized_docs
+    assert "selected binding-interface entry point's execution identity" in (
+        normalized_docs
+    )
+    assert "availableExecutionAlternatives" in normalized_docs
+    assert "regenerate both the key and registry" in normalized_docs
+    assert "numerical parity are not established by the registry" in normalized_docs
+
+
 def test_project_runtime_test_manifest_is_first_class_support_feature():
     matrix = json.loads(
         (ROOT / "support" / "generated" / "support-matrix.json").read_text(

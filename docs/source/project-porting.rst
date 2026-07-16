@@ -747,14 +747,19 @@ package or loader manifest:
      --output runtime-variant-registry.json
 
 Runtime variant registries emit a schema-v1
-``crosstl-runtime-variant-registry`` JSON document. Each ``variants`` entry is
-indexed by a canonical ``crosstl-rvk1:`` key: URL-safe base64 without padding
-over canonical JSON containing the source unit and source entry, target and
-target profile, type and value template arguments, specialization constant
-IDs and values, and defines. Key fields are sorted before encoding, registry
-records and target summaries are ordered by key, and ``registryHash`` covers
-the key schema and records. Equivalent input records therefore produce the
-same registry regardless of package or loader record order.
+``crosstl-runtime-variant-registry`` JSON document whose runtime variant key
+schema is version 2. Each ``variants`` entry is indexed by a canonical
+``crosstl-rvk2:`` key: URL-safe base64 without padding over canonical JSON
+containing the source unit and source entry, target and target profile, the
+selected binding-interface entry point's execution identity, type and value
+template arguments, specialization constant IDs and values, and defines. The
+``execution`` identity contains ``workgroupSize`` and ``subgroupWidth``; each
+field remains ``null`` when the selected entry does not provide an exact value.
+Unselected entry points and project-level aggregate metadata do not affect the
+key. Key fields are sorted before encoding, registry records and target
+summaries are ordered by key, and ``registryHash`` covers the key schema and
+records. Equivalent input records therefore produce the same registry
+regardless of package or loader record order.
 
 Each registry record preserves source and target names separately and maps the
 exact key to the target artifact path, format, hash and byte size, target entry
@@ -772,10 +777,15 @@ key contract, and ``lookup_runtime_variant`` performs exact lookup with the
 available keys included in not-found diagnostics. Lookup validates the closed
 registry schema, ``registryHash``, canonical key-to-record identity, and record
 eligibility before returning a ready artifact. Modified or malformed registry
-records fail as invalid rather than participating in selection. This slice has
-no implicit defaults or best-match behavior. Target compilation, deferred
-compilation, host runtime dispatch, and device execution remain host-runtime
-work for later slices; the registry does not simulate them.
+records fail as invalid rather than participating in selection. When the
+non-execution identity matches but the requested execution identity does not,
+the diagnostic reports ``requestedExecution`` and the exact
+``availableExecutionAlternatives`` with their keys, status, workgroup size,
+and subgroup width. There is no fallback to one of those alternatives. Legacy
+``crosstl-rvk1:`` keys are rejected with guidance to regenerate both the key
+and registry. This remains deterministic selection and packaging metadata;
+target compilation, deferred compilation, host runtime dispatch, device
+execution, and numerical parity are not established by the registry.
 
 Build deterministic host loader scaffold metadata from a runtime loader
 manifest:
