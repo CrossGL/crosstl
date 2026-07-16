@@ -288,13 +288,17 @@ def test_project_workgroup_rule_reuses_one_materialized_ast_per_target(
     assert ast_calls == [("directx", True), ("opengl", True)]
 
 
-def test_project_workgroup_rule_rejects_unsupported_target(tmp_path):
+@pytest.mark.parametrize(
+    "target",
+    ("metal", "vulkan", "cuda", "hip", "mojo", "rust", "slang", "webgl", "wgsl"),
+)
+def test_project_workgroup_rule_rejects_unsupported_target(tmp_path, target):
     repo = tmp_path / "repo"
     repo.mkdir()
     _write_two_entry_fixture(repo)
 
     report = project_api.translate_project(
-        _rule_config(repo, targets=("directx", "vulkan")),
+        _rule_config(repo, targets=("directx", target)),
         format_output=False,
     )
     payload = report.to_json()
@@ -304,12 +308,12 @@ def test_project_workgroup_rule_rejects_unsupported_target(tmp_path):
     directx = next(
         artifact for artifact in payload["artifacts"] if artifact["target"] == "directx"
     )
-    vulkan = next(
-        artifact for artifact in payload["artifacts"] if artifact["target"] == "vulkan"
+    unsupported = next(
+        artifact for artifact in payload["artifacts"] if artifact["target"] == target
     )
     assert directx["status"] == "translated"
-    assert vulkan["status"] == "failed"
-    assert not (repo / vulkan["path"]).exists()
+    assert unsupported["status"] == "failed"
+    assert not (repo / unsupported["path"]).exists()
 
     diagnostic = _diagnostic(
         payload,
@@ -324,12 +328,12 @@ def test_project_workgroup_rule_rejects_unsupported_target(tmp_path):
                 "path": 'project.workgroup_size_rules["shaders/tiled.metal"]',
                 "sourcePattern": "shaders/tiled.metal",
                 "supportedTargets": ["directx", "opengl"],
-                "target": "vulkan",
+                "target": target,
             },
             "sourceEntryPoints": [],
         },
         "sourcePath": "shaders/tiled.metal",
-        "targetArtifact": vulkan["path"],
+        "targetArtifact": unsupported["path"],
     }
 
     report_path = repo / "report.json"
