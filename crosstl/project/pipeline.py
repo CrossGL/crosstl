@@ -7687,11 +7687,17 @@ def _project_config_hash(config: ProjectConfig) -> dict[str, str] | None:
 
 def _dispatch_contract_report_records(config: ProjectConfig) -> list[dict[str, Any]]:
     records = []
+    record_counts = {
+        len(config.dispatch_contracts),
+        len(config.dispatch_contract_manifests),
+        len(config.dispatch_contract_evaluations),
+    }
+    if len(record_counts) != 1:
+        raise RuntimeError("Dispatch contract configuration records are inconsistent")
     for configured_path, manifest, evaluation in zip(
         config.dispatch_contracts,
         config.dispatch_contract_manifests,
         config.dispatch_contract_evaluations,
-        strict=True,
     ):
         records.append(
             {
