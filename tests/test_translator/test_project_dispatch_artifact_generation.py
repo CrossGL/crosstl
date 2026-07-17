@@ -303,8 +303,7 @@ def test_dispatch_artifact_materializes_only_selected_metal_entry_graph(tmp_path
 
             instantiate_kernel("selected_float", launch, float)
             instantiate_kernel("unselected_uint", launch, uint)
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
     manifest = _dispatch_manifest()
@@ -322,8 +321,7 @@ def test_dispatch_artifact_materializes_only_selected_metal_entry_graph(tmp_path
             targets = ["directx"]
             output_dir = "generated"
             dispatch_contracts = ["contracts/multi.json"]
-            """).strip()
-        + "\n",
+            """).strip() + "\n",
         encoding="utf-8",
     )
 
@@ -345,9 +343,10 @@ def test_dispatch_artifact_materializes_only_selected_metal_entry_graph(tmp_path
         for record in specializations
         if record["source"] == "source-instantiation"
     } == {"selected_float"}
-    assert {
-        record["materializedName"] for record in specializations
-    } == {"selected_float", "adjust_float"}
+    assert {record["materializedName"] for record in specializations} == {
+        "selected_float",
+        "adjust_float",
+    }
 
     generated = (root / artifact["path"]).read_text(encoding="utf-8")
     assert "void CSMain(" in generated

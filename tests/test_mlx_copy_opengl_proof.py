@@ -206,9 +206,7 @@ def test_copy_opengl_project_configs_select_one_entry_with_finite_limits(tmp_pat
 
     assert tuple(config.targets) == ("opengl",)
     assert tuple(config.include_patterns) == (module.MLX_COPY_SOURCE,)
-    assert config.entry_points == {
-        module.MLX_COPY_SOURCE: module.MLX_COPY_ENTRY_POINT
-    }
+    assert config.entry_points == {module.MLX_COPY_SOURCE: module.MLX_COPY_ENTRY_POINT}
     assert tuple(config.include_dirs) == (".",)
     assert config.source_overrides == {module.MLX_COPY_SOURCE: "metal"}
     assert config.source_options == {

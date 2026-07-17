@@ -569,9 +569,7 @@ def run_proof(
             "realCopyMetalTranslated": True,
             "fallbackUsed": False,
             "copyMetalDeclaredEntryCount": MLX_COPY_DECLARED_ENTRY_COUNT,
-            "preprocessedInstantiationCount": (
-                MLX_COPY_PREPROCESSED_INSTANTIATION_COUNT
-            ),
+            "preprocessedInstantiationCount": MLX_COPY_PREPROCESSED_INSTANTIATION_COUNT,
             "materializationLimits": {
                 "maxTemplateSpecializations": TEMPLATE_SPECIALIZATION_LIMIT,
                 "maxTemplateMaterializationWork": MATERIALIZATION_WORK_LIMIT,
