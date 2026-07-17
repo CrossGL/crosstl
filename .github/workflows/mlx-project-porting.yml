@@ -15,6 +15,7 @@ on:
       - "pyproject.toml"
       - "requirements.txt"
       - "tests/test_ci_workflows.py"
+      - "tests/test_mlx_copy_opengl_proof.py"
       - "tests/test_mlx_layer_norm_directx_proof.py"
       - "tests/test_mlx_porting_harness.py"
       - "tests/test_translator/test_codegen/test_GLSL_codegen.py"
@@ -35,6 +36,7 @@ on:
       - "pyproject.toml"
       - "requirements.txt"
       - "tests/test_ci_workflows.py"
+      - "tests/test_mlx_copy_opengl_proof.py"
       - "tests/test_mlx_layer_norm_directx_proof.py"
       - "tests/test_mlx_porting_harness.py"
       - "tests/test_translator/test_codegen/test_GLSL_codegen.py"
@@ -206,6 +208,15 @@ jobs:
             --mlx-root mlx-upstream \
             --work-dir .crosstl-mlx-porting/layer-norm-directx \
             --require-directx-toolchain
+
+      - name: Prove pinned MLX complex copy OpenGL lowering
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python demos/integrations/mlx/prove_copy_opengl.py \
+            --mlx-root mlx-upstream \
+            --work-dir .crosstl-mlx-porting/copy-opengl
 
       - name: Prove Direct3D immutable lookup numerical execution
         if: runner.os == 'Windows'
