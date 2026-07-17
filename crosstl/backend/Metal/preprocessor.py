@@ -298,6 +298,28 @@ class _MetalStaticAssertion:
 
 
 @dataclass(frozen=True)
+class _MetalConstexprCall:
+    name: str
+    qualified_name: str
+    template_arguments: Optional[List[str]]
+    arguments: List[str]
+    span: Tuple[int, int]
+
+
+@dataclass
+class _MetalConstexprFunction:
+    name: str
+    span: Tuple[int, int]
+    source: str
+    namespace: str = ""
+    is_template: bool = False
+    template_parameters: List[str] = field(default_factory=list)
+    variadic_template_parameters: Set[str] = field(default_factory=set)
+    template_parameter_defaults: Dict[str, str] = field(default_factory=dict)
+    template_parameter_types: Dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class _MetalSubscriptableType:
     """Element type plus a proven address-space-qualified pointer type."""
 
@@ -619,6 +641,8 @@ class MetalPreprocessor(HLSLPreprocessor):
         self._const_for_loop_contract_verified = False
         self._const_for_loop_expansion_work = 0
         self._fail_closed_static_assertions = False
+        self._static_constexpr_helper_values = {}
+        self._static_constexpr_helper_resolution_stack = []
         self._source_analysis_cache: Dict[str, _MetalSourceAnalysis] = {}
         # The materialization scan alternates between multiple span lists at
         # nearly every source position. Cache their sorted lookup indexes, but
@@ -657,6 +681,8 @@ class MetalPreprocessor(HLSLPreprocessor):
         self._const_for_loop_contract_verified = False
         self._const_for_loop_expansion_work = 0
         self._fail_closed_static_assertions = False
+        self._static_constexpr_helper_values = {}
+        self._static_constexpr_helper_resolution_stack = []
         code = self._strip_leading_compiler_diagnostics(code)
         processed = super().preprocess(code, file_path=file_path)
         self._configure_integral_constant_contracts(processed)
@@ -3021,6 +3047,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         code: str,
         owner_spans: List[Tuple[int, int]],
         type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]] = None,
+        constexpr_functions: Optional[Dict[str, List[_MetalConstexprFunction]]] = None,
     ) -> Dict[str, List[_MetalIntegralConstantBinding]]:
         raw_declarations: List[Tuple[int, str, _MetalDataMember]] = []
         seen_declarations: Set[Tuple[int, str]] = set()
@@ -3108,6 +3135,14 @@ class MetalPreprocessor(HLSLPreprocessor):
                     )
                 else:
                     initializer = self._replace_concrete_sizeof_expressions(initializer)
+                if constexpr_functions:
+                    _resolved_initializer, initializer, _unresolved = (
+                        self._resolve_static_constexpr_calls(
+                            initializer,
+                            constexpr_functions,
+                            declaration_position,
+                        )
+                    )
                 value = self._proven_integral_constant_value(
                     value_type_tokens[0], initializer
                 )
@@ -4857,6 +4892,9 @@ class MetalPreprocessor(HLSLPreprocessor):
         if not assertions:
             return code
 
+        constexpr_functions = self._static_constexpr_function_index(code)
+        self._static_constexpr_helper_values = {}
+        self._static_constexpr_helper_resolution_stack = []
         owner_spans = [(0, len(code))]
         type_aliases = self._collect_local_type_alias_bindings(
             code,
@@ -4867,6 +4905,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             code,
             owner_spans,
             type_aliases,
+            constexpr_functions,
         )
         structs = self._find_concrete_struct_definitions(code)
         replacements: List[Tuple[int, int, str]] = []
@@ -4885,6 +4924,13 @@ class MetalPreprocessor(HLSLPreprocessor):
                 assertion.condition,
                 visible_constants,
             )
+            resolved_condition, evaluation_condition, _unresolved_calls = (
+                self._resolve_static_constexpr_calls(
+                    resolved_condition,
+                    constexpr_functions,
+                    condition_position,
+                )
+            )
             resolved_condition = self._replace_concrete_sizeof_expressions(
                 resolved_condition,
                 lambda type_text: self._resolve_type_aliases_at(
@@ -4899,8 +4945,22 @@ class MetalPreprocessor(HLSLPreprocessor):
                     condition_position,
                 ),
             )
+            evaluation_condition = self._replace_concrete_sizeof_expressions(
+                evaluation_condition,
+                lambda type_text: self._resolve_type_aliases_at(
+                    type_text,
+                    type_aliases,
+                    condition_position,
+                ),
+                lambda type_text: self._concrete_aggregate_type_layout(
+                    type_text,
+                    structs,
+                    type_aliases,
+                    condition_position,
+                ),
+            )
             folded, value = self._evaluate_static_integral_expression(
-                resolved_condition
+                evaluation_condition
             )
             if folded and value:
                 replacements.append((*assertion.span, ""))
@@ -5124,6 +5184,548 @@ class MetalPreprocessor(HLSLPreprocessor):
             and re.search(rf"\b{re.escape(name)}\b", masked) is not None
         )
         return tuple(sorted(dependencies))
+
+    def _static_constexpr_function_index(
+        self, code: str
+    ) -> Dict[str, List[_MetalConstexprFunction]]:
+        functions: Dict[str, List[_MetalConstexprFunction]] = {}
+        template_functions = self._find_template_functions(code)
+        for function in template_functions:
+            body_start = self._find_next_top_level_char(function.source, 0, "{")
+            if body_start is None:
+                continue
+            header = function.source[:body_start]
+            if re.search(r"\b(?:constexpr|consteval)\b", header) is None:
+                continue
+            functions.setdefault(function.name, []).append(
+                _MetalConstexprFunction(
+                    name=function.name,
+                    span=function.span,
+                    source=function.source,
+                    namespace=function.namespace,
+                    is_template=True,
+                    template_parameters=list(function.template_parameters),
+                    variadic_template_parameters=set(
+                        function.variadic_template_parameters
+                    ),
+                    template_parameter_defaults=dict(
+                        function.template_parameter_defaults
+                    ),
+                    template_parameter_types=dict(function.template_parameter_types),
+                )
+            )
+
+        template_spans = self._find_template_declaration_spans(code)
+        namespace_spans = self._find_namespace_spans(code)
+        # Helper materialization appends concrete specializations after their
+        # callers, so assertion evaluation must index those generated definitions.
+        for definition in self._find_non_template_function_definitions(
+            code,
+            template_spans,
+        ):
+            source = code[definition.span[0] : definition.span[1]]
+            body_start = self._find_next_top_level_char(source, 0, "{")
+            if body_start is None:
+                continue
+            header = source[:body_start]
+            if re.search(r"\b(?:constexpr|consteval)\b", header) is None:
+                continue
+            functions.setdefault(definition.name, []).append(
+                _MetalConstexprFunction(
+                    name=definition.name,
+                    span=definition.span,
+                    source=source,
+                    namespace=self._namespace_at(
+                        namespace_spans,
+                        definition.span[0],
+                    ),
+                )
+            )
+        return functions
+
+    def _resolve_static_constexpr_calls(
+        self,
+        expression: str,
+        functions: Dict[str, List[_MetalConstexprFunction]],
+        position: int,
+    ) -> Tuple[str, str, Tuple[str, ...]]:
+        if not functions:
+            return expression, expression, ()
+        calls = self._find_static_constexpr_calls(expression, set(functions))
+        if not calls:
+            return expression, expression, ()
+
+        resolved_replacements: List[Tuple[int, int, str]] = []
+        evaluation_replacements: List[Tuple[int, int, str]] = []
+        unresolved: Set[str] = set()
+        for index, call in enumerate(calls):
+            value = self._evaluate_static_constexpr_call(
+                call,
+                functions,
+                position,
+            )
+            if value is not None:
+                resolved_replacements.append((*call.span, value))
+                evaluation_replacements.append((*call.span, value))
+                continue
+            unresolved.add(call.name)
+            placeholder = f"__crosstl_unresolved_constexpr_{index}_{call.name}"
+            while placeholder in expression:
+                placeholder += "_"
+            evaluation_replacements.append((*call.span, placeholder))
+
+        resolved = self._apply_text_replacements(expression, resolved_replacements)
+        evaluation = self._apply_text_replacements(
+            expression,
+            evaluation_replacements,
+        )
+        return resolved, evaluation, tuple(sorted(unresolved))
+
+    def _find_static_constexpr_calls(
+        self,
+        expression: str,
+        function_names: Set[str],
+    ) -> List[_MetalConstexprCall]:
+        calls: List[_MetalConstexprCall] = []
+        i = 0
+        while i < len(expression):
+            if expression[i] in "\"'":
+                _literal, consumed = self._read_string(expression, i)
+                i += consumed
+                continue
+            if expression.startswith("//", i):
+                end = expression.find("\n", i)
+                i = len(expression) if end == -1 else end + 1
+                continue
+            if expression.startswith("/*", i):
+                end = expression.find("*/", i + 2)
+                i = len(expression) if end == -1 else end + 2
+                continue
+            if not (expression[i].isalpha() or expression[i] == "_"):
+                i += 1
+                continue
+
+            name, consumed = self._read_identifier(expression, i)
+            if name not in function_names:
+                i += consumed
+                continue
+            name_end = i + consumed
+            cursor = name_end
+            while cursor < len(expression) and expression[cursor].isspace():
+                cursor += 1
+            template_arguments: Optional[List[str]] = None
+            if cursor < len(expression) and expression[cursor] == "<":
+                angle_end = self._find_matching_angle(expression, cursor)
+                if angle_end is None:
+                    i += consumed
+                    continue
+                template_arguments = self._split_top_level_commas(
+                    expression[cursor + 1 : angle_end]
+                )
+                cursor = angle_end + 1
+                while cursor < len(expression) and expression[cursor].isspace():
+                    cursor += 1
+            if cursor >= len(expression) or expression[cursor] != "(":
+                i += consumed
+                continue
+            arguments_end = self._find_matching_delimiter(
+                expression,
+                cursor,
+                "(",
+                ")",
+            )
+            if arguments_end is None:
+                i += consumed
+                continue
+            argument_text = expression[cursor + 1 : arguments_end]
+            arguments = (
+                self._split_top_level_commas(argument_text)
+                if argument_text.strip()
+                else []
+            )
+            call_start = self._scoped_identifier_start(expression, i)
+            qualified_name = re.sub(
+                r"\s*::\s*",
+                "::",
+                expression[call_start:name_end].strip(),
+            )
+            calls.append(
+                _MetalConstexprCall(
+                    name=name,
+                    qualified_name=qualified_name,
+                    template_arguments=template_arguments,
+                    arguments=arguments,
+                    span=(call_start, arguments_end + 1),
+                )
+            )
+            i = arguments_end + 1
+        return calls
+
+    def _evaluate_static_constexpr_call(
+        self,
+        call: _MetalConstexprCall,
+        functions: Dict[str, List[_MetalConstexprFunction]],
+        position: int,
+    ) -> Optional[str]:
+        candidates = [
+            function
+            for function in functions.get(call.name, [])
+            if (not function.is_template or function.span[0] <= position)
+            and self._static_constexpr_namespace_matches(function, call)
+            and self._static_constexpr_candidate_accepts_call(function, call)
+        ]
+        if len(candidates) != 1:
+            return None
+        function = candidates[0]
+        template_bindings = self._bind_static_constexpr_template_arguments(
+            function,
+            list(call.template_arguments or []),
+            functions,
+            position,
+        )
+        if template_bindings is None:
+            return None
+        runtime_bindings = self._bind_static_constexpr_call_arguments(
+            function,
+            call.arguments,
+            template_bindings,
+            functions,
+            position,
+        )
+        if runtime_bindings is None:
+            return None
+
+        cache_key = (
+            function.span,
+            tuple(template_bindings[name] for name in function.template_parameters),
+            tuple(runtime_bindings.values()),
+        )
+        if cache_key in self._static_constexpr_helper_values:
+            return self._static_constexpr_helper_values[cache_key]
+        if cache_key in self._static_constexpr_helper_resolution_stack:
+            return None
+
+        self._static_constexpr_helper_resolution_stack.append(cache_key)
+        try:
+            bindings = dict(template_bindings)
+            bindings.update(runtime_bindings)
+            value = self._evaluate_static_constexpr_function_body(
+                function,
+                bindings,
+                functions,
+            )
+        finally:
+            self._static_constexpr_helper_resolution_stack.pop()
+        self._static_constexpr_helper_values[cache_key] = value
+        return value
+
+    @staticmethod
+    def _static_constexpr_namespace_matches(
+        function: _MetalConstexprFunction,
+        call: _MetalConstexprCall,
+    ) -> bool:
+        if "::" not in call.qualified_name:
+            return True
+        requested_namespace = call.qualified_name.rsplit("::", 1)[0].lstrip(":")
+        function_namespace = function.namespace.lstrip(":")
+        return function_namespace == requested_namespace or function_namespace.endswith(
+            f"::{requested_namespace}"
+        )
+
+    def _static_constexpr_candidate_accepts_call(
+        self,
+        function: _MetalConstexprFunction,
+        call: _MetalConstexprCall,
+    ) -> bool:
+        if function.variadic_template_parameters:
+            return False
+        template_arguments = list(call.template_arguments or [])
+        if len(template_arguments) > len(function.template_parameters):
+            return False
+        if any(
+            name not in function.template_parameter_types
+            or self._static_constexpr_integral_type(
+                function.template_parameter_types[name]
+            )
+            is None
+            for name in function.template_parameters
+        ):
+            return False
+        if not self._template_arguments_satisfy_parameters(
+            function,
+            template_arguments,
+        ):
+            return False
+        parameters = self._static_constexpr_function_parameters(function)
+        if parameters is None:
+            return False
+        required_parameters = sum(
+            default is None for _name, _type, default in parameters
+        )
+        return required_parameters <= len(call.arguments) <= len(parameters)
+
+    def _bind_static_constexpr_template_arguments(
+        self,
+        function: _MetalConstexprFunction,
+        arguments: List[str],
+        functions: Dict[str, List[_MetalConstexprFunction]],
+        position: int,
+    ) -> Optional[Dict[str, str]]:
+        bindings: Dict[str, str] = {}
+        defaults = function.template_parameter_defaults
+        for index, name in enumerate(function.template_parameters):
+            expression = (
+                arguments[index] if index < len(arguments) else defaults.get(name)
+            )
+            if expression is None:
+                return None
+            expression = self._substitute_template_argument_static_constants(
+                expression,
+                bindings,
+            )
+            value_type = self._static_constexpr_integral_type(
+                function.template_parameter_types.get(name, "")
+            )
+            value = self._evaluate_static_constexpr_integral_value(
+                expression,
+                value_type,
+                functions,
+                position,
+            )
+            if value is None:
+                return None
+            bindings[name] = value
+        return bindings
+
+    def _bind_static_constexpr_call_arguments(
+        self,
+        function: _MetalConstexprFunction,
+        arguments: List[str],
+        template_bindings: Dict[str, str],
+        functions: Dict[str, List[_MetalConstexprFunction]],
+        position: int,
+    ) -> Optional[Dict[str, str]]:
+        parameters = self._static_constexpr_function_parameters(function)
+        if parameters is None:
+            return None
+        bindings: Dict[str, str] = {}
+        visible = dict(template_bindings)
+        for index, (name, value_type, default) in enumerate(parameters):
+            expression = arguments[index] if index < len(arguments) else default
+            if expression is None:
+                return None
+            expression = self._substitute_template_argument_static_constants(
+                expression,
+                visible,
+            )
+            value = self._evaluate_static_constexpr_integral_value(
+                expression,
+                value_type,
+                functions,
+                position,
+            )
+            if value is None:
+                return None
+            bindings[name] = value
+            visible[name] = value
+        return bindings
+
+    def _static_constexpr_function_parameters(
+        self,
+        function: _MetalConstexprFunction,
+    ) -> Optional[List[Tuple[str, str, Optional[str]]]]:
+        body_start = self._find_next_top_level_char(function.source, 0, "{")
+        if body_start is None:
+            return None
+        header = function.source[:body_start]
+        open_paren = self._function_parameter_start(header)
+        if open_paren is None:
+            return None
+        close_paren = self._find_matching_delimiter(header, open_paren, "(", ")")
+        if close_paren is None:
+            return None
+        parameter_text = header[open_paren + 1 : close_paren]
+        if not parameter_text.strip() or parameter_text.strip() == "void":
+            return []
+
+        parameters: List[Tuple[str, str, Optional[str]]] = []
+        for parameter in self._split_top_level_commas(parameter_text):
+            declaration, default = self._split_top_level_assignment(parameter)
+            name = self._declared_local_name(declaration)
+            if name is None:
+                return None
+            value_type = self._static_constexpr_integral_type(
+                self._declared_local_type(declaration, name) or ""
+            )
+            if value_type is None:
+                return None
+            parameters.append((name, value_type, default))
+        return parameters
+
+    def _evaluate_static_constexpr_function_body(
+        self,
+        function: _MetalConstexprFunction,
+        bindings: Dict[str, str],
+        functions: Dict[str, List[_MetalConstexprFunction]],
+    ) -> Optional[str]:
+        body_start = self._find_next_top_level_char(function.source, 0, "{")
+        if body_start is None:
+            return None
+        body_end = self._find_matching_brace(function.source, body_start)
+        if body_end is None:
+            return None
+        statements = self._split_static_constexpr_body_statements(
+            function.source[body_start + 1 : body_end - 1]
+        )
+        if not statements:
+            return None
+        return_type = self._static_constexpr_function_return_type(function)
+        if return_type is None:
+            return None
+
+        active_bindings = dict(bindings)
+        for index, statement in enumerate(statements):
+            stripped = self._strip_template_argument_comments(statement).strip()
+            return_match = re.fullmatch(r"return\s+(.+)", stripped, re.DOTALL)
+            if return_match is not None:
+                if index != len(statements) - 1:
+                    return None
+                expression = self._substitute_template_argument_static_constants(
+                    return_match.group(1),
+                    active_bindings,
+                )
+                return self._evaluate_static_constexpr_integral_value(
+                    expression,
+                    return_type,
+                    functions,
+                    function.span[0],
+                )
+
+            name = self._declared_local_name(stripped)
+            member = (
+                self._parse_ordered_data_member(name, stripped)
+                if name is not None
+                else None
+            )
+            if member is None or member.default is None:
+                return None
+            qualifiers = set(IDENTIFIER_RE.findall(member.type_text))
+            value_type = self._static_constexpr_integral_type(member.type_text)
+            if (
+                "constexpr" not in qualifiers
+                or value_type is None
+                or member.array_suffix
+            ):
+                return None
+            initializer_bindings = dict(active_bindings)
+            initializer_bindings.pop(name, None)
+            initializer = self._substitute_template_argument_static_constants(
+                member.default,
+                initializer_bindings,
+            )
+            value = self._evaluate_static_constexpr_integral_value(
+                initializer,
+                value_type,
+                functions,
+                function.span[0],
+            )
+            if value is None:
+                return None
+            active_bindings[name] = value
+        return None
+
+    def _split_static_constexpr_body_statements(
+        self,
+        body: str,
+    ) -> Optional[List[str]]:
+        statements: List[str] = []
+        start = 0
+        paren_depth = 0
+        bracket_depth = 0
+        i = 0
+        while i < len(body):
+            if body[i] in "\"'":
+                _literal, consumed = self._read_string(body, i)
+                i += consumed
+                continue
+            if body.startswith("//", i):
+                end = body.find("\n", i)
+                i = len(body) if end == -1 else end + 1
+                continue
+            if body.startswith("/*", i):
+                end = body.find("*/", i + 2)
+                if end == -1:
+                    return None
+                i = end + 2
+                continue
+            token = body[i]
+            if token == "(":
+                paren_depth += 1
+            elif token == ")":
+                paren_depth = max(0, paren_depth - 1)
+            elif token == "[":
+                bracket_depth += 1
+            elif token == "]":
+                bracket_depth = max(0, bracket_depth - 1)
+            elif token in "{}":
+                return None
+            elif token == ";" and paren_depth == bracket_depth == 0:
+                statement = body[start:i].strip()
+                if statement:
+                    statements.append(statement)
+                start = i + 1
+            i += 1
+        if self._strip_template_argument_comments(body[start:]).strip():
+            return None
+        return statements
+
+    def _static_constexpr_function_return_type(
+        self,
+        function: _MetalConstexprFunction,
+    ) -> Optional[str]:
+        body_start = self._find_next_top_level_char(function.source, 0, "{")
+        if body_start is None:
+            return None
+        header = function.source[:body_start]
+        open_paren = self._function_parameter_start(header)
+        if open_paren is None:
+            return None
+        name_match = re.search(
+            rf"\b{re.escape(function.name)}\s*$",
+            header[:open_paren],
+        )
+        if name_match is None:
+            return None
+        return self._static_constexpr_integral_type(header[: name_match.start()])
+
+    def _evaluate_static_constexpr_integral_value(
+        self,
+        expression: str,
+        value_type: Optional[str],
+        functions: Dict[str, List[_MetalConstexprFunction]],
+        position: int,
+    ) -> Optional[str]:
+        if value_type is None:
+            return None
+        _resolved, evaluation, _unresolved = self._resolve_static_constexpr_calls(
+            expression,
+            functions,
+            position,
+        )
+        return self._proven_integral_constant_value(value_type, evaluation)
+
+    def _static_constexpr_integral_type(self, type_text: str) -> Optional[str]:
+        if any(token in type_text for token in ("*", "&", "[", "]")):
+            return None
+        normalized = self._normalize_template_argument_text(type_text)
+        normalized = re.sub(
+            r"\b(?:const|constant|constexpr|consteval|device|inline|static|thread|threadgroup)\b",
+            " ",
+            normalized,
+        )
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        normalized = re.sub(r"^(?:::)?metal::", "", normalized)
+        return normalized if normalized in self._METAL_INTEGRAL_SCALAR_TYPES else None
 
     def _substitute_struct_scoped_alias_owners(
         self,

@@ -6416,6 +6416,47 @@ def test_codegen_alignas_and_static_assert():
     assert "static_assert(1 == 1" in result
 
 
+def test_codegen_elides_specialized_constexpr_assertions_from_targets(tmp_path):
+    source = """
+    template <int Word, int Bits>
+    constexpr int get_pack_factor() {
+        constexpr int factor = Word / Bits;
+        return factor;
+    }
+
+    template <int GroupSize, int Bits>
+    [[kernel]] void checked_pack(
+        device int* out [[buffer(0)]]) {
+        constexpr int reads =
+            GroupSize / (get_pack_factor<8, Bits>() * 4);
+        static_assert(
+            reads * get_pack_factor<8, Bits>() <= GroupSize,
+            "Pack reads must fit the group.");
+        out[0] = reads;
+    }
+
+    template [[host_name("checked_pack_16_4")]] [[kernel]]
+    decltype(checked_pack<16, 4>) checked_pack<16, 4>;
+    """
+    source_path = tmp_path / "checked-pack.metal"
+    source_path.write_text(source, encoding="utf-8")
+
+    outputs = {
+        target: crosstl.translate(str(source_path), backend=target, format_output=False)
+        for target in ("directx", "opengl")
+    }
+
+    for generated in outputs.values():
+        assert "static_assert" not in generated
+        assert "reads" in generated
+    HLSLParser(HLSLLexer(outputs["directx"]).tokenize()).parse()
+    assert_opengl_compute_validates_if_available(
+        outputs["opengl"],
+        tmp_path,
+        "checked-pack-constexpr-assertion",
+    )
+
+
 def test_codegen_using_alias():
     code = """
     using Index = uint;
