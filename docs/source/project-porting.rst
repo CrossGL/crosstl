@@ -234,6 +234,82 @@ implement standalone entry generation also fail explicitly instead of pruning
 an aggregate artifact. When ``project.entry_points`` is absent, project
 translation keeps the existing aggregate output path and behavior.
 
+Project Index-Range Assertions
+------------------------------
+
+Some source index types cannot be represented directly by a target's legal
+scalar index types. When the application already constrains an index at the
+host or runtime boundary, record that precondition in ``crosstl.toml``:
+
+.. code-block:: toml
+
+   [[project.index_range_assertions]]
+   source = "kernels/*.metal"
+   function = "gather_values"
+   expression = "element_index"
+   minimum = 0
+   maximum = 1023
+
+Each assertion table has these fields:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 76
+
+   * - Field
+     - Meaning
+   * - ``source``
+     - Repository-relative source glob. The assertion is considered only for
+       matching translation units; omitting it defaults to ``*``.
+   * - ``function``
+     - Optional exact source function name. When omitted, the assertion can
+       apply in any function containing the matching expression.
+   * - ``expression``
+     - Source index expression covered by the assertion. Matching ignores
+       whitespace but otherwise preserves the expression identity.
+   * - ``minimum``
+     - Inclusive integer lower bound for the expression.
+   * - ``maximum``
+     - Inclusive integer upper bound for the expression. It must not be less
+       than ``minimum``.
+
+Index-range assertions are explicit host/runtime portability preconditions.
+CrossGL does not infer, emit, or enforce them at runtime. It uses an assertion
+only to justify a semantics-preserving target index conversion when the full
+asserted range is legal for the target representation and indexed extent. An
+assertion does not clamp, wrap, or otherwise redefine out-of-range source
+values; the application remains responsible for satisfying the precondition on
+every execution.
+
+The portability report records the configured tables under
+``project.indexRangeAssertions`` and their count under
+``project.indexRangeAssertionCount``. Report consumers can therefore audit the
+host/runtime assumptions used during translation alongside the generated
+artifacts.
+
+Exact DirectX bfloat16 Contract
+-------------------------------
+
+Exact DirectX bfloat16 lowering preserves bfloat16 storage and conversion
+semantics instead of substituting IEEE half precision. When generated HLSL uses
+native 16-bit storage, its artifact and runtime metadata advertise DirectX 12,
+a minimum Shader Model of 6.2, and entry profiles such as ``cs_6_2``. DXC
+validation and runtime loader commands for that HLSL require
+``-enable-16bit-types``; application-specific compiler wrappers and build
+commands must preserve the same option.
+
+If an operation cannot be lowered with exact bfloat16 semantics, translation
+fails closed with a structured
+``project.translate.directx-bfloat16-unsupported`` diagnostic. Its
+``details.bfloat16Lowering`` record identifies available context such as the
+target profile, operation, source type, and reason instead of silently changing
+precision or behavior.
+
+These compiler requirements and diagnostics define an artifact contract only.
+They do not imply automatic host runtime or backend integration: CrossGL does
+not modify application loader code, configure a DirectX backend, bind
+resources, or wire generated artifacts into a framework.
+
 Fail-Closed Pointer Provenance
 ------------------------------
 
