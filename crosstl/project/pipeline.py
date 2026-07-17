@@ -31,6 +31,14 @@ from crosstl.project.directx_toolchain import (
     dxc_profile_for_source,
     hlsl_requires_native_16bit_types,
 )
+from crosstl.project.dispatch_contracts import (
+    DISPATCH_CONTRACT_EVALUATION_KIND,
+    DISPATCH_CONTRACT_SCHEMA_VERSION,
+    DispatchContractEvaluation,
+    DispatchContractManifest,
+    load_dispatch_contract,
+    parse_dispatch_contract,
+)
 from crosstl.project.host_reflection import (
     empty_host_interface_record,
     host_interface_record,
@@ -1454,6 +1462,10 @@ REPORT_PROJECT_FIELDS = frozenset(
         "subgroupWidthRules",
         "subgroupWidthRuleCount",
         "selectedVariants",
+        "dispatchContractFiles",
+        "dispatchContractCount",
+        "dispatchVariantCount",
+        "dispatchContracts",
         "externalCorpusManifest",
     )
 )
@@ -7355,8 +7367,15 @@ class ProjectConfig:
     )
     subgroup_width_rules: Mapping[str, str | int] = field(default_factory=dict)
     selected_variants: Sequence[str] | str = ()
+    dispatch_contracts: Sequence[str] | str = ()
     external_corpus_manifest: str | os.PathLike[str] | None = None
     index_range_assertions: Sequence[Any] = ()
+    _dispatch_contract_manifests: tuple[DispatchContractManifest, ...] = field(
+        default=(), init=False, repr=False, compare=False
+    )
+    _dispatch_contract_evaluations: tuple[DispatchContractEvaluation, ...] = field(
+        default=(), init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         root_path = _filesystem_path_arg(self.root, field_name="ProjectConfig.root")
@@ -7377,6 +7396,7 @@ class ProjectConfig:
             "include_patterns",
             "exclude_patterns",
             "include_dirs",
+            "dispatch_contracts",
         ):
             object.__setattr__(
                 self,
@@ -7613,6 +7633,21 @@ class ProjectConfig:
                 field_name="ProjectConfig.subgroup_width_rules",
             ),
         )
+        normalized_contracts = tuple(self.dispatch_contracts)
+        if len(set(normalized_contracts)) != len(normalized_contracts):
+            raise ValueError(
+                "ProjectConfig.dispatch_contracts must not contain duplicate paths"
+            )
+        manifests = tuple(
+            load_dispatch_contract(_project_config_path(self.root, path).resolve())
+            for path in normalized_contracts
+        )
+        object.__setattr__(self, "_dispatch_contract_manifests", manifests)
+        object.__setattr__(
+            self,
+            "_dispatch_contract_evaluations",
+            tuple(manifest.evaluate() for manifest in manifests),
+        )
         if self.external_corpus_manifest is not None:
             external_corpus_manifest = _path_string_arg(
                 self.external_corpus_manifest,
@@ -7635,11 +7670,39 @@ class ProjectConfig:
     def output_path(self) -> Path:
         return _project_output_path(self.root, self.output_dir)
 
+    @property
+    def dispatch_contract_manifests(self) -> tuple[DispatchContractManifest, ...]:
+        return self._dispatch_contract_manifests
+
+    @property
+    def dispatch_contract_evaluations(self) -> tuple[DispatchContractEvaluation, ...]:
+        return self._dispatch_contract_evaluations
+
 
 def _project_config_hash(config: ProjectConfig) -> dict[str, str] | None:
     if config.config_path is None or not config.config_path.is_file():
         return None
     return _source_hash(config.config_path)
+
+
+def _dispatch_contract_report_records(config: ProjectConfig) -> list[dict[str, Any]]:
+    records = []
+    for configured_path, manifest, evaluation in zip(
+        config.dispatch_contracts,
+        config.dispatch_contract_manifests,
+        config.dispatch_contract_evaluations,
+        strict=True,
+    ):
+        records.append(
+            {
+                "path": configured_path,
+                "schemaVersion": manifest.schema_version,
+                "contentIdentity": manifest.content_identity.to_json(),
+                "manifest": manifest.to_json(),
+                "evaluation": evaluation.to_json(),
+            }
+        )
+    return sorted(records, key=lambda record: record["path"])
 
 
 @dataclass(frozen=True)
@@ -8326,6 +8389,7 @@ class ProjectPortabilityReport:
         external_corpus = _external_corpus_report(
             self.config, self.units, self.artifacts, self.targets
         )
+        dispatch_contracts = _dispatch_contract_report_records(self.config)
         payload = {
             "schemaVersion": REPORT_SCHEMA_VERSION,
             "kind": REPORT_KIND,
@@ -8421,6 +8485,13 @@ class ProjectPortabilityReport:
                 ),
                 "subgroupWidthRuleCount": len(self.config.subgroup_width_rules),
                 "selectedVariants": list(self.config.selected_variants),
+                "dispatchContractFiles": list(self.config.dispatch_contracts),
+                "dispatchContractCount": len(dispatch_contracts),
+                "dispatchVariantCount": sum(
+                    record["evaluation"]["variantCount"]
+                    for record in dispatch_contracts
+                ),
+                "dispatchContracts": dispatch_contracts,
                 "externalCorpusManifest": self.config.external_corpus_manifest,
             },
             "summary": {
@@ -8582,6 +8653,13 @@ def load_project_config(
         project.get(SUBGROUP_WIDTH_RULES_CONFIG_KEY),
         field_name=f"crosstl.toml [project.{SUBGROUP_WIDTH_RULES_CONFIG_KEY}]",
     )
+    dispatch_contracts = _normalize_project_relative_paths(
+        _as_str_list(
+            project.get("dispatch_contracts"),
+            field_name="project.dispatch_contracts",
+            allow_pathlike=True,
+        )
+    )
     output_dir = _as_optional_non_empty_str(
         project.get("output_dir"),
         field_name="crosstl.toml project.output_dir",
@@ -8634,6 +8712,7 @@ def load_project_config(
             project.get("selected_variants"),
             field_name="project.selected_variants",
         ),
+        dispatch_contracts=dispatch_contracts,
         external_corpus_manifest=external_corpus_manifest,
         index_range_assertions=index_range_assertions,
     )
@@ -38554,6 +38633,8 @@ def _inspection_project_summary(project: Any) -> dict[str, Any]:
         "defineCount",
         "variantCount",
         "variantDefineCounts",
+        "dispatchContractCount",
+        "dispatchVariantCount",
         "externalCorpusManifest",
     ):
         if field_name in project:
@@ -38593,6 +38674,11 @@ def _inspection_project_summary(project: Any) -> dict[str, Any]:
     if isinstance(selected_variants, list):
         summary["selectedVariants"] = [
             name for name in selected_variants if isinstance(name, str) and name
+        ]
+    dispatch_contract_files = project.get("dispatchContractFiles")
+    if isinstance(dispatch_contract_files, list):
+        summary["dispatchContractFiles"] = [
+            path for path in dispatch_contract_files if isinstance(path, str) and path
         ]
     return summary
 
@@ -44944,6 +45030,130 @@ def _optional_project_field(
     return required or key in project
 
 
+def _dispatch_contract_metadata_reasons(
+    project: Mapping[str, Any], *, require_full_metadata: bool
+) -> list[str]:
+    field_names = (
+        "dispatchContractFiles",
+        "dispatchContractCount",
+        "dispatchVariantCount",
+        "dispatchContracts",
+    )
+    if not require_full_metadata and not any(name in project for name in field_names):
+        return []
+
+    reasons: list[str] = []
+    files = project.get("dispatchContractFiles")
+    records = project.get("dispatchContracts")
+    if not isinstance(files, list) or any(
+        not _is_non_empty_string(path) for path in files
+    ):
+        reasons.append("project.dispatchContractFiles must be an array of strings")
+        files = []
+    elif len(set(files)) != len(files):
+        reasons.append("project.dispatchContractFiles must not contain duplicates")
+
+    if not isinstance(records, list):
+        reasons.append("project.dispatchContracts must be an array")
+        records = []
+
+    count = project.get("dispatchContractCount")
+    if not _is_non_negative_int(count):
+        reasons.append("project.dispatchContractCount must be a non-negative integer")
+    elif count != len(records):
+        reasons.append(
+            "project.dispatchContractCount must match project.dispatchContracts"
+        )
+
+    expected_paths: list[str] = []
+    evaluated_variant_count = 0
+    for index, value in enumerate(records):
+        prefix = f"project.dispatchContracts[{index}]"
+        if not isinstance(value, Mapping):
+            reasons.append(f"{prefix} must be an object")
+            continue
+        reasons.extend(
+            _unsupported_mapping_field_reasons(
+                prefix,
+                value,
+                frozenset(
+                    (
+                        "path",
+                        "schemaVersion",
+                        "contentIdentity",
+                        "manifest",
+                        "evaluation",
+                    )
+                ),
+            )
+        )
+        path = value.get("path")
+        if not _is_non_empty_string(path):
+            reasons.append(f"{prefix}.path must be a string")
+        else:
+            expected_paths.append(path)
+        if value.get("schemaVersion") != DISPATCH_CONTRACT_SCHEMA_VERSION:
+            reasons.append(
+                f"{prefix}.schemaVersion must be {DISPATCH_CONTRACT_SCHEMA_VERSION}"
+            )
+
+        identity = value.get("contentIdentity")
+        identity_reasons = _hash_contract_reasons(
+            f"{prefix}.contentIdentity",
+            identity,
+            require_closed_fields=True,
+        )
+        reasons.extend(identity_reasons)
+        manifest_payload = value.get("manifest")
+        evaluation_payload = value.get("evaluation")
+        if not isinstance(manifest_payload, Mapping):
+            reasons.append(f"{prefix}.manifest must be an object")
+            continue
+        if not isinstance(evaluation_payload, Mapping):
+            reasons.append(f"{prefix}.evaluation must be an object")
+            continue
+        if evaluation_payload.get("kind") != DISPATCH_CONTRACT_EVALUATION_KIND:
+            reasons.append(
+                f"{prefix}.evaluation.kind must be "
+                f"{DISPATCH_CONTRACT_EVALUATION_KIND}"
+            )
+        manifest_source = evaluation_payload.get("manifestSource")
+        if manifest_source is not None and not _is_non_empty_string(manifest_source):
+            reasons.append(f"{prefix}.evaluation.manifestSource must be a string")
+            continue
+        try:
+            manifest = parse_dispatch_contract(
+                manifest_payload,
+                source=manifest_source,
+            )
+            replay = manifest.evaluate().to_json()
+        except (TypeError, ValueError) as exc:
+            reasons.append(f"{prefix}.manifest is not replayable: {exc}")
+            continue
+        if not identity_reasons and identity != manifest.content_identity.to_json():
+            reasons.append(f"{prefix}.contentIdentity must match the embedded manifest")
+        if value.get("schemaVersion") != manifest.schema_version:
+            reasons.append(f"{prefix}.schemaVersion must match the embedded manifest")
+        if evaluation_payload != replay:
+            reasons.append(
+                f"{prefix}.evaluation must match deterministic manifest replay"
+            )
+        evaluated_variant_count += len(replay["variants"])
+
+    if sorted(expected_paths) != sorted(files):
+        reasons.append(
+            "project.dispatchContracts paths must match project.dispatchContractFiles"
+        )
+    variant_count = project.get("dispatchVariantCount")
+    if not _is_non_negative_int(variant_count):
+        reasons.append("project.dispatchVariantCount must be a non-negative integer")
+    elif variant_count != evaluated_variant_count:
+        reasons.append(
+            "project.dispatchVariantCount must match evaluated dispatch variants"
+        )
+    return reasons
+
+
 def _project_metadata_contract_reasons(
     project: Mapping[str, Any], *, require_full_metadata: bool
 ) -> list[str]:
@@ -45433,6 +45643,13 @@ def _project_metadata_contract_reasons(
             reasons.append(
                 "project.externalCorpusManifest must be a non-empty string or null"
             )
+
+    reasons.extend(
+        _dispatch_contract_metadata_reasons(
+            project,
+            require_full_metadata=require_full_metadata,
+        )
+    )
 
     return reasons
 
