@@ -339,7 +339,8 @@ python demos/integrations/mlx/prove_rms_norm_specialization.py \
 
 On Windows, install DXC to require DirectX HLSL validation for the reduced
 frontier, the pinned GEMV compiler frontier, all three reference-accessor
-artifact proofs, and the selected LayerNorm entries:
+artifact proofs, the selected LayerNorm entries, and the selected complex-copy
+entry:
 
 ```bash
 python demos/integrations/mlx/run_mlx_porting.py \
@@ -351,6 +352,11 @@ python demos/integrations/mlx/prove_layer_norm_directx.py \
   --mlx-root C:/path/to/mlx \
   --work-dir .crosstl-mlx-porting/layer-norm-directx \
   --require-directx-toolchain
+
+python demos/integrations/mlx/prove_copy_directx.py \
+  --mlx-root C:/path/to/mlx \
+  --work-dir .crosstl-mlx-porting/copy-directx \
+  --require-toolchain
 
 python demos/integrations/mlx/prove_rms_norm_specialization.py \
   --mlx-root C:/path/to/mlx \
@@ -626,6 +632,16 @@ module with `spirv-val`. This bounded lowering follows the pinned
 remain tracked by [#1744](https://github.com/CrossGL/crosstl/issues/1744). This
 proof does not claim shader execution, numerical parity, runtime integration,
 or passage of the MLX test suite.
+
+The companion `prove_copy_directx.py` gate selects
+`s_copycomplex64bfloat16` from the same full pinned `copy.metal` source. It
+requires exactly one reachable specialization, verifies that each generated
+store evaluates the complex source once and projects `.real`, and requires the
+exact round-to-nearest-ties-to-even bfloat16 helper. Windows CI compiles the
+standalone HLSL entry with DXC using `cs_6_2`, `-enable-16bit-types`, and
+warnings as errors. This proves selected-entry translation and native compiler
+acceptance; it does not execute the shader, establish numerical parity, port
+the MLX runtime dispatch path, or run the MLX test suite.
 
 The focused `prove_layer_norm_directx.py` gate translates two host-selected
 single-row entries from the pinned `layer_norm.metal` source: forward float32
