@@ -2,12 +2,28 @@
   "schemaVersion": 1,
   "name": "ROCm Examples add kernel",
   "description": "Pinned HIP kernel slice used by the open-source project porting demo.",
+  "adjustments": [
+    {
+      "kind": "fixture-reduction",
+      "summary": "Sliced the upstream sample to the [sphinx-kernel-start]..[sphinx-kernel-end] HIP kernel section.",
+      "detail": "Only the documented kernel section is kept; the surrounding sample host code is excluded from the translated fixture."
+    }
+  ],
+  "outOfScope": [
+    "Sample host main(), HIP runtime calls, and launch configuration"
+  ],
   "entries": [
     {
       "id": "rocm-examples-add-kernel",
       "path": "main.hip",
       "sourceBackend": "hip",
-      "targets": ["cgl", "opengl", "metal", "directx", "vulkan"],
+      "targets": [
+        "cgl",
+        "opengl",
+        "metal",
+        "directx",
+        "vulkan"
+      ],
       "repository": "https://github.com/ROCm/rocm-examples",
       "commit": "cf369da68f209c315074204bd0eb61d1a5c015d1",
       "sourceUrl": "https://github.com/ROCm/rocm-examples/blob/cf369da68f209c315074204bd0eb61d1a5c015d1/HIP-Doc/Programming-Guide/Introduction-to-the-HIP-Programming-Model/add_kernel/main.hip"

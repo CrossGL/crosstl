@@ -20,6 +20,7 @@
     },
     {
       "id": "metal-performance-testing-shader-params",
+      "role": "support_file",
       "path": "ShaderParams.h",
       "sourceBackend": "metal",
       "targets": [
