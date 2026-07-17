@@ -151,7 +151,12 @@ def test_single_file_translate_does_not_accept_dispatch_contracts(capsys):
 
 def test_scan_command_imports_dispatch_contract_into_report(tmp_path, capsys):
     repository = tmp_path / "repository"
-    repository.mkdir()
+    kernel_root = repository / "kernels"
+    kernel_root.mkdir(parents=True)
+    (kernel_root / "copy.metal").write_text(
+        "kernel void copy_float32() {}\n",
+        encoding="utf-8",
+    )
     contract_path = tmp_path / "copy.dispatch.json"
     _write_dispatch_contract(contract_path)
 

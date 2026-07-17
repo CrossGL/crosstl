@@ -39,6 +39,12 @@ from crosstl.project.dispatch_contracts import (
     load_dispatch_contract,
     parse_dispatch_contract,
 )
+from crosstl.project.dispatch_planning import (
+    DISPATCH_ARTIFACT_PLAN_KIND,
+    DISPATCH_ARTIFACT_PLAN_SCHEMA_VERSION,
+    DispatchArtifactPlan,
+    plan_dispatch_artifacts,
+)
 from crosstl.project.host_reflection import (
     empty_host_interface_record,
     host_interface_record,
@@ -1466,6 +1472,8 @@ REPORT_PROJECT_FIELDS = frozenset(
         "dispatchContractCount",
         "dispatchVariantCount",
         "dispatchContracts",
+        "dispatchArtifactCount",
+        "dispatchArtifactPlan",
         "externalCorpusManifest",
     )
 )
@@ -7711,6 +7719,16 @@ def _dispatch_contract_report_records(config: ProjectConfig) -> list[dict[str, A
     return sorted(records, key=lambda record: record["path"])
 
 
+def _dispatch_artifact_plan(
+    config: ProjectConfig,
+    units: Sequence[ProjectTranslationUnit],
+) -> DispatchArtifactPlan:
+    return plan_dispatch_artifacts(
+        config.dispatch_contract_evaluations,
+        source_units=(unit.relative_path for unit in units),
+    )
+
+
 @dataclass(frozen=True)
 class SourceLocation:
     """Compiler-compatible source span used by project diagnostics."""
@@ -8328,6 +8346,7 @@ class ProjectScan:
     skipped: Sequence[dict[str, Any]] = ()
     native_directives: Sequence[ProjectNativeDirective] = ()
     diagnostics: Sequence[ProjectDiagnostic] = ()
+    dispatch_artifact_plan: DispatchArtifactPlan | None = None
 
     def to_report(
         self, targets: Sequence[str] | str | None = None
@@ -8354,6 +8373,7 @@ class ProjectScan:
             artifact_matrix=_artifact_matrix_report(
                 self.config, self.units, report_targets, self.config.variants, []
             ),
+            dispatch_artifact_plan=self.dispatch_artifact_plan,
         )
 
 
@@ -8371,6 +8391,7 @@ class ProjectPortabilityReport:
     validation: Mapping[str, Any]
     migration_actions: Sequence[dict[str, Any]]
     artifact_matrix: Mapping[str, Any] | None = None
+    dispatch_artifact_plan: DispatchArtifactPlan | None = None
     generated_at: int = field(default_factory=lambda: int(time.time()))
 
     def to_json(self) -> dict[str, Any]:
@@ -8396,6 +8417,10 @@ class ProjectPortabilityReport:
             self.config, self.units, self.artifacts, self.targets
         )
         dispatch_contracts = _dispatch_contract_report_records(self.config)
+        dispatch_artifact_plan = self.dispatch_artifact_plan or _dispatch_artifact_plan(
+            self.config,
+            self.units,
+        )
         payload = {
             "schemaVersion": REPORT_SCHEMA_VERSION,
             "kind": REPORT_KIND,
@@ -8498,6 +8523,8 @@ class ProjectPortabilityReport:
                     for record in dispatch_contracts
                 ),
                 "dispatchContracts": dispatch_contracts,
+                "dispatchArtifactCount": len(dispatch_artifact_plan.artifacts),
+                "dispatchArtifactPlan": dispatch_artifact_plan.to_json(),
                 "externalCorpusManifest": self.config.external_corpus_manifest,
             },
             "summary": {
@@ -9033,12 +9060,14 @@ def scan_project(
                 missing_capabilities=["repo.scan"],
             )
         )
+    dispatch_artifact_plan = _dispatch_artifact_plan(scan_config, units)
     return ProjectScan(
         config=scan_config,
         units=units,
         skipped=skipped,
         native_directives=native_directives,
         diagnostics=diagnostics,
+        dispatch_artifact_plan=dispatch_artifact_plan,
     )
 
 
@@ -22588,6 +22617,7 @@ def translate_project(
             workgroup_size_rules=config.workgroup_size_rules,
             subgroup_width_rules=config.subgroup_width_rules,
             selected_variants=config.selected_variants,
+            dispatch_contracts=config.dispatch_contracts,
             external_corpus_manifest=config.external_corpus_manifest,
             index_range_assertions=config.index_range_assertions,
         )
@@ -23270,6 +23300,7 @@ def translate_project(
         artifact_matrix=_artifact_matrix_report(
             config, scan.units, selected_targets, config.variants, artifacts
         ),
+        dispatch_artifact_plan=scan.dispatch_artifact_plan,
     )
 
 
@@ -38641,6 +38672,7 @@ def _inspection_project_summary(project: Any) -> dict[str, Any]:
         "variantDefineCounts",
         "dispatchContractCount",
         "dispatchVariantCount",
+        "dispatchArtifactCount",
         "externalCorpusManifest",
     ):
         if field_name in project:
@@ -45160,6 +45192,110 @@ def _dispatch_contract_metadata_reasons(
     return reasons
 
 
+def _dispatch_artifact_plan_metadata_reasons(
+    project: Mapping[str, Any],
+    units: Any,
+    *,
+    require_full_metadata: bool,
+) -> list[str]:
+    field_names = ("dispatchArtifactCount", "dispatchArtifactPlan")
+    if not require_full_metadata and not any(name in project for name in field_names):
+        return []
+
+    reasons: list[str] = []
+    count = project.get("dispatchArtifactCount")
+    if not _is_non_negative_int(count):
+        reasons.append("project.dispatchArtifactCount must be a non-negative integer")
+
+    plan = project.get("dispatchArtifactPlan")
+    if not isinstance(plan, Mapping):
+        reasons.append("project.dispatchArtifactPlan must be an object")
+        return reasons
+    if plan.get("kind") != DISPATCH_ARTIFACT_PLAN_KIND:
+        reasons.append(
+            f"project.dispatchArtifactPlan.kind must be {DISPATCH_ARTIFACT_PLAN_KIND}"
+        )
+    if plan.get("schemaVersion") != DISPATCH_ARTIFACT_PLAN_SCHEMA_VERSION:
+        reasons.append(
+            "project.dispatchArtifactPlan.schemaVersion must be "
+            f"{DISPATCH_ARTIFACT_PLAN_SCHEMA_VERSION}"
+        )
+
+    if not isinstance(units, list):
+        reasons.append("project.dispatchArtifactPlan requires report units")
+        return reasons
+    source_units = []
+    for unit in units:
+        path = unit.get("path") if isinstance(unit, Mapping) else None
+        if not _is_non_empty_string(path):
+            reasons.append(
+                "project.dispatchArtifactPlan requires normalized report unit paths"
+            )
+            return reasons
+        source_units.append(str(path))
+
+    records = project.get("dispatchContracts")
+    if not isinstance(records, list):
+        reasons.append(
+            "project.dispatchArtifactPlan requires project.dispatchContracts"
+        )
+        return reasons
+    evaluations = []
+    for index, record in enumerate(records):
+        if not isinstance(record, Mapping):
+            reasons.append(
+                "project.dispatchArtifactPlan cannot replay a non-object dispatch "
+                f"contract at index {index}"
+            )
+            return reasons
+        manifest_payload = record.get("manifest")
+        evaluation_payload = record.get("evaluation")
+        if not isinstance(manifest_payload, Mapping) or not isinstance(
+            evaluation_payload, Mapping
+        ):
+            reasons.append(
+                "project.dispatchArtifactPlan requires replayable dispatch contract "
+                f"metadata at index {index}"
+            )
+            return reasons
+        manifest_source = evaluation_payload.get("manifestSource")
+        try:
+            manifest = parse_dispatch_contract(
+                manifest_payload,
+                source=(
+                    str(manifest_source)
+                    if _is_non_empty_string(manifest_source)
+                    else None
+                ),
+            )
+            evaluations.append(manifest.evaluate())
+        except (TypeError, ValueError) as exc:
+            reasons.append(
+                "project.dispatchArtifactPlan dispatch contract replay failed at "
+                f"index {index}: {exc}"
+            )
+            return reasons
+
+    try:
+        expected = plan_dispatch_artifacts(
+            tuple(evaluations),
+            source_units=source_units,
+        ).to_json()
+    except (TypeError, ValueError) as exc:
+        reasons.append(f"project.dispatchArtifactPlan replay failed: {exc}")
+        return reasons
+    if plan != expected:
+        reasons.append(
+            "project.dispatchArtifactPlan must match deterministic contract replay"
+        )
+    if _is_non_negative_int(count) and count != expected["artifactCount"]:
+        reasons.append(
+            "project.dispatchArtifactCount must match "
+            "project.dispatchArtifactPlan.artifactCount"
+        )
+    return reasons
+
+
 def _project_metadata_contract_reasons(
     project: Mapping[str, Any], *, require_full_metadata: bool
 ) -> list[str]:
@@ -48329,6 +48465,15 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                     )
                 )
             reasons.extend(_duplicate_path_contract_reasons("units", units))
+
+    if isinstance(project, Mapping):
+        reasons.extend(
+            _dispatch_artifact_plan_metadata_reasons(
+                project,
+                units,
+                require_full_metadata=has_summary,
+            )
+        )
 
     skipped = report.get("skipped", [])
     if has_summary and "skipped" not in report:

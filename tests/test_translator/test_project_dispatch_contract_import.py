@@ -44,8 +44,8 @@ def _dispatch_manifest():
         "contracts": [
             {
                 "id": "copy-dispatch",
-                "source": "kernels/copy.metal",
-                "entryPoint": "copy_float32",
+                "source": "simple.cgl",
+                "entryPoint": "main",
                 "branches": [
                     {
                         "id": "default",
@@ -98,7 +98,7 @@ def test_project_config_loads_and_evaluates_dispatch_contracts(tmp_path):
     assert config.dispatch_contract_manifests[0].source == str(contract_path.resolve())
     assert len(config.dispatch_contract_evaluations) == 1
     variant = config.dispatch_contract_evaluations[0][0]
-    assert variant.entry_point == "copy_float32"
+    assert variant.entry_point == "main"
     assert variant.workgroup_size == (64, 1, 1)
     assert variant.specialization_constants == {"0": 64}
 
