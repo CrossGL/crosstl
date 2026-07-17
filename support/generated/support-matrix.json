@@ -22,7 +22,7 @@
         "path": "crosstl/backend/DirectX"
       },
       "signals": {
-        "unsupported_marker_count": 402,
+        "unsupported_marker_count": 413,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/directx_codegen.py",
@@ -123,7 +123,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 1307
+        "test_count": 1332
       },
       "translator_codegen": {
         "exists": true,
@@ -152,7 +152,7 @@
         "path": "crosstl/backend/GLSL"
       },
       "signals": {
-        "unsupported_marker_count": 253,
+        "unsupported_marker_count": 255,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
@@ -248,7 +248,7 @@
           "tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 1459
+        "test_count": 1473
       },
       "translator_codegen": {
         "exists": true,
@@ -526,7 +526,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 551,
+        "unsupported_marker_count": 552,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
@@ -619,7 +619,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 1486
+        "test_count": 1528
       },
       "translator_codegen": {
         "exists": true,
@@ -6082,7 +6082,7 @@
         "directx": {
           "evidence": [
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_vector_constructor_scalar_splats_expand_for_dxc",
-            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_float16_matrix_ir_aliases_map_to_half_matrices"
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_float16_matrix_ir_aliases_map_to_native_matrices"
           ],
           "notes": "",
           "status": "supported"

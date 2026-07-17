@@ -4650,7 +4650,7 @@
           "status": "supported",
           "evidence": [
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_vector_constructor_scalar_splats_expand_for_dxc",
-            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_float16_matrix_ir_aliases_map_to_half_matrices"
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_float16_matrix_ir_aliases_map_to_native_matrices"
           ]
         },
         "opengl": {
