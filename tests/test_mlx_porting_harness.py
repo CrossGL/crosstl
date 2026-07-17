@@ -2312,9 +2312,7 @@ def test_fp_quantized_contextual_materialization_evidence_tracks_current_boundar
             ),
         },
         "current_boundary": {
-            "diagnostic_code": (
-                "project.translate.template-materialization-unsupported"
-            ),
+            "diagnostic_code": "project.translate.template-materialization-unsupported",
             "source_location": {
                 "line": 1727,
                 "column": 1,
