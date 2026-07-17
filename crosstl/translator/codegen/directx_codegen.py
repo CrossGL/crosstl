@@ -377,6 +377,30 @@ class DirectXBFloat16UnsupportedError(ValueError):
         self.source_location = source_location
 
 
+class DirectXNative16BitUnsupportedError(ValueError):
+    """Raised when a DirectX profile cannot preserve exact 16-bit types."""
+
+    project_diagnostic_code = "project.translate.directx-native-16bit-unsupported"
+    missing_capabilities = ("directx.native-16bit-types",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        target_profile,
+        source_type,
+        mapped_type,
+        reason,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.target_profile = target_profile
+        self.source_type = source_type
+        self.mapped_type = mapped_type
+        self.reason = reason
+        self.source_location = source_location
+
+
 class DirectXWorkgroupSizeError(ValueError):
     """Raised when an HLSL compute workgroup size is not representable."""
 
@@ -1384,6 +1408,7 @@ class HLSLCodeGen:
     )
     HLSL_WAVE_NUMERIC_COMPONENT_TYPES = {
         "float",
+        "float16_t",
         "half",
         "min16float",
         "min10float",
@@ -5787,13 +5812,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if not var_name:
             return False
         type_name = self.type_name_string(vtype)
+        type_key = str(type_name or "").rsplit("::", 1)[-1]
+        if var_name == "float16_t" and type_key in {"f16", "float16", "half"}:
+            return True
+        if var_name == "bfloat16_t" and type_key in {
+            "bfloat",
+            "bfloat16",
+            "f16",
+            "half",
+        }:
+            return True
         mapped_type = self.map_type(type_name)
         if var_name in self.METAL_TYPE_ALIAS_GLOBALS and (
-            mapped_type == self.type_mapping.get(var_name)
+            mapped_type == self.map_type(var_name)
             or (var_name == "bfloat16_t" and mapped_type == self.map_type("half"))
         ):
             return True
-        type_key = str(type_name or "").rsplit("::", 1)[-1]
         return type_key == "thread_scope" and str(var_name).startswith("thread_scope")
 
     def directx_specialization_constant_attributes(self, node):
@@ -8762,6 +8796,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return False
         return self.map_type(vtype) in {
             "float",
+            "float16_t",
             "half",
             "min16float",
             "min10float",
@@ -8786,6 +8821,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "float2",
             "float3",
             "float4",
+            "float16_t2",
+            "float16_t3",
+            "float16_t4",
             "half2",
             "half3",
             "half4",
@@ -8832,6 +8870,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def vector_component_type(self, vtype):
         mapped_type = self.map_type(vtype)
+        if mapped_type.startswith("float16_t"):
+            return "float16_t"
         if mapped_type.startswith("float"):
             return "float"
         if mapped_type.startswith("half"):
@@ -8876,6 +8916,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "int64_t",
             "uint16_t",
             "int16_t",
+            "float16_t",
             "double",
             "float",
             "half",
@@ -8957,6 +8998,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return component_type in {
             "double",
             "float",
+            "float16_t",
             "half",
             "min10float",
             "min16float",
@@ -9292,6 +9334,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if base_type not in {
             "double",
             "float",
+            "float16_t",
             "half",
             "min16float",
             "min10float",
@@ -30170,6 +30213,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self.vector_component_type,
             scalar_types={
                 "float",
+                "float16_t",
                 "half",
                 "min16float",
                 "min10float",
@@ -30197,6 +30241,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             self.vector_component_type,
             scalar_types={
                 "float",
+                "float16_t",
                 "half",
                 "min16float",
                 "min10float",
@@ -36868,17 +36913,35 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return self.map_type(vtype)
 
     def hlsl_native_16_bit_source_type(self, source_type, mapped_type):
-        if not getattr(self, "requires_hlsl_bfloat16_storage", False):
-            return mapped_type
         source_name = str(self.type_name_string(source_type) or "").strip()
-        if source_name.startswith(("min16int", "min16uint")):
+        if source_name.startswith(
+            ("min10float", "min12int", "min16float", "min16int", "min16uint")
+        ):
             return mapped_type
         for minimum_type, native_type in (
+            ("half", "float16_t"),
             ("min16int", "int16_t"),
             ("min16uint", "uint16_t"),
         ):
-            if str(mapped_type).startswith(minimum_type):
-                return native_type + str(mapped_type)[len(minimum_type) :]
+            type_match = re.fullmatch(
+                rf"{re.escape(minimum_type)}(?P<shape>[234](?:x[234])?)?",
+                str(mapped_type),
+            )
+            if type_match is not None:
+                native_mapped_type = native_type + (type_match.group("shape") or "")
+                if self.target_profile == "dx11":
+                    raise DirectXNative16BitUnsupportedError(
+                        "DirectX profile dx11 cannot preserve exact 16-bit source "
+                        f"type '{source_name}'; use directx-12 with Shader Model "
+                        "6.2 and dxc -enable-16bit-types, or declare an explicit "
+                        "minimum-precision min16 type",
+                        target_profile=self.target_profile,
+                        source_type=source_name,
+                        mapped_type=native_mapped_type,
+                        reason="target-profile-lacks-native-16bit-types",
+                        source_location=getattr(source_type, "source_location", None),
+                    )
+                return native_mapped_type
         return mapped_type
 
     @staticmethod

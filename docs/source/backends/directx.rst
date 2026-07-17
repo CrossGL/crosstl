@@ -43,6 +43,20 @@ The backend is the primary path for DirectX shader integration:
 * HLSL-specific resource validation for duplicate constant-buffer names and
   resource/member shadowing
 
+16-bit Type Semantics
+---------------------
+
+Exact source ``half``, ``short``, and ``ushort`` types map to the native HLSL
+types ``float16_t``, ``int16_t``, and ``uint16_t``, respectively. Generated
+target metadata restricts artifacts that use these types to DirectX 12 and
+shader model 6.2, and enables native 16-bit types with
+``-enable-16bit-types``.
+
+Explicit DirectX 11 materialization of an exact 16-bit type fails with an
+actionable diagnostic instead of silently substituting a minimum-precision
+type. Explicit ``min16float``, ``min16int``, and ``min16uint`` types retain
+their HLSL minimum-precision semantics.
+
 Implementation Notes
 --------------------
 

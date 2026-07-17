@@ -10,6 +10,11 @@ import pytest
 import crosstl.translator
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
+from crosstl.project.directx_toolchain import (
+    directx_target_profiles_for_source,
+    dxc_compiler_arguments_for_source,
+    dxc_profile_for_source,
+)
 from crosstl.translator.ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
@@ -55,6 +60,7 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXEntryPointSelectionError,
     DirectXForInIterableError,
     DirectXMinimumPrecisionIntegerArithmeticError,
+    DirectXNative16BitUnsupportedError,
     DirectXPrivatePointerParameterError,
     DirectXResourcePointerArrayError,
     DirectXResourcePointerParameterError,
@@ -105,6 +111,34 @@ def generate_code(ast_node):
     """
     codegen = HLSLCodeGen()
     return codegen.generate(ast_node)
+
+
+def assert_directx_native_16_bit_compute_validates_if_available(hlsl_code, tmp_path):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        return
+
+    shader_path = tmp_path / "native-16-bit-shader.hlsl"
+    output_path = tmp_path / "native-16-bit-shader.dxil"
+    shader_path.write_text(hlsl_code, encoding="utf-8")
+    compile_result = subprocess.run(
+        [
+            dxc,
+            "-WX",
+            "-T",
+            "cs_6_2",
+            "-enable-16bit-types",
+            "-E",
+            "CSMain",
+            str(shader_path),
+            "-Fo",
+            str(output_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compile_result.returncode == 0, compile_result.stdout + compile_result.stderr
 
 
 HLSL_M_PI_F_LITERAL = "3.14159265358979323846264338327950288f"
@@ -1002,9 +1036,9 @@ def test_hlsl_codegen_lowers_mlx_half_aliases_and_metal_as_type():
     assert "half bfloat16_t;" not in generated
     assert "half float16_t;" not in generated
     assert "thread_scope_system" not in generated
-    assert "uint from_bits(min16uint bits)" in generated
-    assert "__crossgl_bfloat16_from_uint16(min16uint(bits))" in generated
-    assert "min16uint to_bits(uint x)" in generated
+    assert "uint from_bits(uint16_t bits)" in generated
+    assert "__crossgl_bfloat16_from_uint16(uint16_t(bits))" in generated
+    assert "uint16_t to_bits(uint x)" in generated
     assert "__crossgl_bfloat16_to_uint16(uint(x))" in generated
     assert "half from_bits" not in generated
     assert "to_bits(half" not in generated
@@ -1879,7 +1913,7 @@ def test_hlsl_codegen_lowers_complex64_binary_operators_to_helpers():
         "return __crossgl_complex64_div(" "__crossgl_complex64_make(x, 0.0), y);"
     )
     assert generated.count(real_divide) == 2
-    assert "complex64_t short_divide_complex(min16int x, complex64_t y)" in generated
+    assert "complex64_t short_divide_complex(int16_t x, complex64_t y)" in generated
     assert "return __crossgl_complex64_greater(x, y);" in generated
     assert "return __crossgl_complex64_negate(x);" in generated
     assert "return __crossgl_complex64_make(asfloat(0x7fc00000), 0.0);" in generated
@@ -1943,10 +1977,10 @@ def test_hlsl_complex_to_scalar_conversions_use_real_component(tmp_path):
 
     assert "return __crossgl_bfloat16_from_float(float((value).real));" in generated
     assert generated.count("return float((value).real);") == 2
-    assert "return min16int((value).real);" in generated
+    assert "return int16_t((value).real);" in generated
     assert "return ((value).real != 0.0);" in generated
     assert "uint result = convert(value);" in generated
-    assert_directx_compute_validates_if_available(generated, tmp_path)
+    assert_directx_native_16_bit_compute_validates_if_available(generated, tmp_path)
 
 
 def test_hlsl_complex_compound_and_subgroup_operations_validate(tmp_path):
@@ -3968,7 +4002,7 @@ def test_directx_derivative_builtins_reject_transitive_non_fragment_stage_calls(
         generate_code(parse_code(tokenize_code(shader)))
 
 
-def test_hlsl_float16_ir_aliases_map_to_half_and_min_precision_names():
+def test_hlsl_exact_16_bit_ir_aliases_map_to_native_names():
     shader = """
     shader Float16IRSmoke {
         float16 tone(float16 input) {
@@ -3995,19 +4029,236 @@ def test_hlsl_float16_ir_aliases_map_to_half_and_min_precision_names():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "half tone(half input)" in generated_code
-    assert "half bias = half(0.5);" in generated_code
-    assert "half2 pair(half2 input)" in generated_code
-    assert "half2 scale = half2(1.0, 2.0);" in generated_code
-    assert "min16int2 signedPair(min16int2 input)" in generated_code
-    assert "min16int2 inc = min16int2(1, 2);" in generated_code
-    assert "min16uint2 unsignedPair(min16uint2 input)" in generated_code
-    assert "min16uint2 inc = min16uint2(1u, 2u);" in generated_code
-    for invalid_token in ("float16", "f16vec2", "i16vec2", "u16vec2"):
+    assert "float16_t tone(float16_t input)" in generated_code
+    assert "float16_t bias = float16_t(0.5);" in generated_code
+    assert "float16_t2 pair(float16_t2 input)" in generated_code
+    assert "float16_t2 scale = float16_t2(1.0, 2.0);" in generated_code
+    assert "int16_t2 signedPair(int16_t2 input)" in generated_code
+    assert "int16_t2 inc = int16_t2(1, 2);" in generated_code
+    assert "uint16_t2 unsignedPair(uint16_t2 input)" in generated_code
+    assert "uint16_t2 inc = uint16_t2(1u, 2u);" in generated_code
+    for invalid_token in ("float16 tone", "f16vec2", "i16vec2", "u16vec2"):
         assert invalid_token not in generated_code
 
 
-def test_hlsl_float16_matrix_ir_aliases_map_to_half_matrices():
+def test_hlsl_dx12_exact_16_bit_aliases_use_native_types():
+    shader = """
+    shader Native16BitAliases {
+        float16_t narrowFloat(float16_t value) {
+            return float16_t(value + float16_t(1.0));
+        }
+
+        int16_t narrowSigned(int16_t value) {
+            return int16_t(value + int16_t(1));
+        }
+
+        uint16_t narrowUnsigned(uint16_t value) {
+            return uint16_t(value + uint16_t(1u));
+        }
+
+        f16vec2 narrowFloatPair(f16vec2 value) {
+            return value + f16vec2(1.0, 2.0);
+        }
+
+        i16vec2 narrowSignedPair(i16vec2 value) {
+            return value + i16vec2(1, 2);
+        }
+
+        u16vec2 narrowUnsignedPair(u16vec2 value) {
+            return value + u16vec2(1u, 2u);
+        }
+
+        min16float minimumFloat(min16float value) {
+            return value;
+        }
+
+        min16int minimumSigned(min16int value) {
+            return value;
+        }
+
+        min16uint minimumUnsigned(min16uint value) {
+            return value;
+        }
+    }
+    """
+
+    generated = HLSLCodeGen(target_profile="dx12").generate(
+        parse_code(tokenize_code(shader))
+    )
+
+    assert "float16_t narrowFloat(float16_t value)" in generated
+    assert "int16_t narrowSigned(int16_t value)" in generated
+    assert "uint16_t narrowUnsigned(uint16_t value)" in generated
+    assert "float16_t2 narrowFloatPair(float16_t2 value)" in generated
+    assert "int16_t2 narrowSignedPair(int16_t2 value)" in generated
+    assert "uint16_t2 narrowUnsignedPair(uint16_t2 value)" in generated
+    assert "min16float minimumFloat(min16float value)" in generated
+    assert "min16int minimumSigned(min16int value)" in generated
+    assert "min16uint minimumUnsigned(min16uint value)" in generated
+    assert "half narrowFloat" not in generated
+    assert "min16int narrowSigned" not in generated
+    assert "min16uint narrowUnsigned" not in generated
+
+
+@pytest.mark.parametrize(
+    ("source_type", "native_type"),
+    (
+        ("float16_t", "float16_t"),
+        ("int16_t", "int16_t"),
+        ("uint16_t", "uint16_t"),
+    ),
+)
+def test_hlsl_dx11_rejects_exact_16_bit_aliases(source_type, native_type):
+    shader = f"""
+    shader Exact16BitDx11 {{
+        {source_type} preserve({source_type} value) {{
+            return value;
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        DirectXNative16BitUnsupportedError,
+        match=(
+            rf"DirectX profile dx11 cannot preserve exact 16-bit source type "
+            rf"'{re.escape(source_type)}'.*directx-12.*Shader Model 6.2.*"
+            rf"-enable-16bit-types"
+        ),
+    ) as exc_info:
+        HLSLCodeGen(target_profile="dx11").generate(parse_code(tokenize_code(shader)))
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.directx-native-16bit-unsupported"
+    )
+    assert diagnostic.missing_capabilities == ("directx.native-16bit-types",)
+    assert diagnostic.target_profile == "dx11"
+    assert diagnostic.source_type == source_type
+    assert diagnostic.mapped_type == native_type
+    assert diagnostic.reason == "target-profile-lacks-native-16bit-types"
+
+
+def test_hlsl_dx11_preserves_explicit_minimum_precision_types():
+    shader = """
+    shader MinimumPrecisionDx11 {
+        min16float preserveFloat(min16float value) {
+            return value;
+        }
+
+        min16int preserveSigned(min16int value) {
+            return value;
+        }
+
+        min16uint preserveUnsigned(min16uint value) {
+            return value;
+        }
+    }
+    """
+
+    generated = HLSLCodeGen(target_profile="dx11").generate(
+        parse_code(tokenize_code(shader))
+    )
+
+    assert "min16float preserveFloat(min16float value)" in generated
+    assert "min16int preserveSigned(min16int value)" in generated
+    assert "min16uint preserveUnsigned(min16uint value)" in generated
+
+
+def test_hlsl_default_exact_16_bit_types_narrow_toolchain_to_directx12():
+    shader = """
+    shader Native16BitContract {
+        float16_t preserveFloat(float16_t value) {
+            return value;
+        }
+
+        int16_t preserveSigned(int16_t value) {
+            return value;
+        }
+
+        uint16_t preserveUnsigned(uint16_t value) {
+            return value;
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(parse_code(tokenize_code(shader)))
+
+    assert "float16_t preserveFloat(float16_t value)" in generated
+    assert "int16_t preserveSigned(int16_t value)" in generated
+    assert "uint16_t preserveUnsigned(uint16_t value)" in generated
+    assert directx_target_profiles_for_source(generated) == ("directx-12",)
+    assert dxc_profile_for_source("cs_6_0", generated) == "cs_6_2"
+    assert dxc_compiler_arguments_for_source(generated) == ("-enable-16bit-types",)
+
+
+@pytest.mark.parametrize("type_name", ("halfEdge", "min16integer", "min16uintPayload"))
+def test_hlsl_native_16_bit_mapping_preserves_user_type_prefixes(type_name):
+    assert HLSLCodeGen().map_type(type_name) == type_name
+
+
+def test_hlsl_dx12_native_16_bit_aliases_compile_with_dxc(tmp_path):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not available")
+
+    shader = """
+    shader Native16BitCompile {
+        RWStructuredBuffer<uint> output;
+
+        int16_t narrowSigned(int value) {
+            return int16_t(value);
+        }
+
+        uint16_t narrowUnsigned(uint value) {
+            return uint16_t(value);
+        }
+
+        float16_t narrowFloat(float value) {
+            return float16_t(value);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main(uvec3 index @ gl_GlobalInvocationID) {
+                output[index.x] = uint(
+                    int(narrowSigned(int(index.x)))
+                    + int(narrowUnsigned(index.x))
+                    + int(narrowFloat(float(index.x)))
+                );
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen(target_profile="dx12").generate(
+        parse_code(tokenize_code(shader))
+    )
+    source_path = tmp_path / "native-16-bit.hlsl"
+    output_path = tmp_path / "native-16-bit.dxil"
+    source_path.write_text(generated, encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            dxc,
+            "-WX",
+            "-T",
+            "cs_6_2",
+            "-enable-16bit-types",
+            "-E",
+            "CSMain",
+            str(source_path),
+            "-Fo",
+            str(output_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert output_path.is_file()
+
+
+def test_hlsl_float16_matrix_ir_aliases_map_to_native_matrices():
     shader = """
     shader Float16MatrixIRSmoke {
         f16mat3x2 passMatrix(f16mat3x2 input) {
@@ -4024,10 +4275,12 @@ def test_hlsl_float16_matrix_ir_aliases_map_to_half_matrices():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "half2x3 passMatrix(half2x3 input)" in generated_code
-    assert "half2x3 m = half2x3(1.0, 0.0, 0.0, 1.0, 2.0, 3.0);" in generated_code
-    assert "half3x3 passSquare(half3x3 input)" in generated_code
-    assert "half3x3 m = half3x3(1.0);" in generated_code
+    assert "float16_t2x3 passMatrix(float16_t2x3 input)" in generated_code
+    assert (
+        "float16_t2x3 m = float16_t2x3(1.0, 0.0, 0.0, 1.0, 2.0, 3.0);" in generated_code
+    )
+    assert "float16_t3x3 passSquare(float16_t3x3 input)" in generated_code
+    assert "float16_t3x3 m = float16_t3x3(1.0);" in generated_code
     assert "return mul(input, m);" in generated_code
     assert "f16mat3x2" not in generated_code
     assert "f16mat3" not in generated_code
@@ -4043,6 +4296,7 @@ def test_hlsl_vector_constructor_scalar_splats_expand_for_dxc():
                 ivec3 cell = ivec3(1);
                 uvec4 mask = uvec4(2u);
                 bvec2 flags = bvec2(true);
+                half3 exact = half3(half(0));
             }
         }
     }
@@ -4055,6 +4309,10 @@ def test_hlsl_vector_constructor_scalar_splats_expand_for_dxc():
     assert "int3 cell = int3(1, 1, 1);" in generated_code
     assert "uint4 mask = uint4(2u, 2u, 2u, 2u);" in generated_code
     assert "bool2 flags = bool2(true, true);" in generated_code
+    assert (
+        "float16_t3 exact = float16_t3("
+        "float16_t(0), float16_t(0), float16_t(0));" in generated_code
+    )
 
 
 def test_hlsl_diagnostic_scalar_vector_zero_scanner_flags_single_arg_fallbacks():
@@ -4189,10 +4447,10 @@ def test_hlsl_narrow_integer_aliases_map_to_valid_hlsl_integer_types():
     assert "int2 inc = int2(1, 2);" in generated_code
     assert "uint3 unsignedTriple(uint3 input)" in generated_code
     assert "uint3 inc = uint3(1u, 2u, 3u);" in generated_code
-    assert "min16int2 signedShort(min16int2 input)" in generated_code
-    assert "min16int2 inc = min16int2(1, 2);" in generated_code
-    assert "min16uint3 unsignedShort(min16uint3 input)" in generated_code
-    assert "min16uint3 inc = min16uint3(1u, 2u, 3u);" in generated_code
+    assert "int16_t2 signedShort(int16_t2 input)" in generated_code
+    assert "int16_t2 inc = int16_t2(1, 2);" in generated_code
+    assert "uint16_t3 unsignedShort(uint16_t3 input)" in generated_code
+    assert "uint16_t3 inc = uint16_t3(1u, 2u, 3u);" in generated_code
     assert "int4 signedChar(int4 input)" in generated_code
     assert "int4 inc = int4(1, 2, 3, 4);" in generated_code
     assert "uint2 unsignedChar(uint2 input)" in generated_code
@@ -4262,18 +4520,18 @@ def test_hlsl_generic_vector_constructors_emit_hlsl_names():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "half2 halfPair(half2 input)" in generated_code
-    assert "half2 inc = half2(1.0, 2.0);" in generated_code
+    assert "float16_t2 halfPair(float16_t2 input)" in generated_code
+    assert "float16_t2 inc = float16_t2(1.0, 2.0);" in generated_code
     assert "double2 precisePair(double2 input)" in generated_code
     assert "double2 inc = double2(1.0, 2.0);" in generated_code
     assert "int2 signedBytes(int2 input)" in generated_code
     assert "int2 inc = int2(1, 2);" in generated_code
     assert "uint4 unsignedBytes(uint4 input)" in generated_code
     assert "uint4 inc = uint4(1u, 2u, 3u, 4u);" in generated_code
-    assert "min16int3 signedShorts(min16int3 input)" in generated_code
-    assert "min16int3 inc = min16int3(1, 2, 3);" in generated_code
-    assert "min16uint2 unsignedShorts(min16uint2 input)" in generated_code
-    assert "min16uint2 inc = min16uint2(1u, 2u);" in generated_code
+    assert "int16_t3 signedShorts(int16_t3 input)" in generated_code
+    assert "int16_t3 inc = int16_t3(1, 2, 3);" in generated_code
+    assert "uint16_t2 unsignedShorts(uint16_t2 input)" in generated_code
+    assert "uint16_t2 inc = uint16_t2(1u, 2u);" in generated_code
     assert "int3 signedInts(int3 input)" in generated_code
     assert "int3 inc = int3(1, 2, 3);" in generated_code
     assert "uint4 unsignedInts(uint4 input)" in generated_code
@@ -4325,8 +4583,8 @@ def test_hlsl_packed_vector_aliases_map_to_standard_hlsl_vectors():
 
     assert "float4 color(float4 input)" in generated_code
     assert "float4 bias = float4(1.0, 2.0, 3.0, 4.0);" in generated_code
-    assert "half2 halfPair(half2 input)" in generated_code
-    assert "half2 scale = half2(1.0, 2.0);" in generated_code
+    assert "float16_t2 halfPair(float16_t2 input)" in generated_code
+    assert "float16_t2 scale = float16_t2(1.0, 2.0);" in generated_code
     assert "int3 signedTriple(int3 input)" in generated_code
     assert "int3 inc = int3(1, 2, 3);" in generated_code
     assert "uint4 unsignedQuad(uint4 input)" in generated_code
@@ -4516,8 +4774,8 @@ def test_hlsl_fixed_width_scalar_aliases_map_to_valid_hlsl_scalars():
 
     assert "int signedByte(int input)" in generated_code
     assert "uint unsignedByte(uint input)" in generated_code
-    assert "min16int signedShortScalar(min16int input)" in generated_code
-    assert "min16uint unsignedShortScalar(min16uint input)" in generated_code
+    assert "int16_t signedShortScalar(int16_t input)" in generated_code
+    assert "uint16_t unsignedShortScalar(uint16_t input)" in generated_code
     assert "int signedWord(int input)" in generated_code
     assert "uint unsignedWord(uint input)" in generated_code
     assert "int64_t signedLong(int64_t input)" in generated_code
@@ -4530,15 +4788,13 @@ def test_hlsl_fixed_width_scalar_aliases_map_to_valid_hlsl_scalars():
     assert "uint64_t ulongValue(uint64_t input)" in generated_code
     assert "int one = int(1);" in generated_code
     assert "uint one = uint(1u);" in generated_code
-    assert "min16int one = min16int(1);" in generated_code
-    assert "min16uint one = min16uint(1u);" in generated_code
+    assert "int16_t one = int16_t(1);" in generated_code
+    assert "uint16_t one = uint16_t(1u);" in generated_code
     assert "int64_t one = int64_t(1);" in generated_code
     assert "uint64_t one = uint64_t(1u);" in generated_code
     for invalid_token in (
         "int8_t",
         "uint8_t",
-        "int16_t",
-        "uint16_t",
         "int32_t",
         "uint32_t",
         "int64 ",
@@ -4554,27 +4810,27 @@ def test_hlsl_fixed_width_scalar_aliases_map_to_valid_hlsl_scalars():
 def test_hlsl_minimum_precision_integer_division_and_remainder_widen_operands():
     shader = """
     shader MinimumPrecisionIntegerArithmetic {
-        short signedDivide(short lhs, short rhs) {
+        min16int signedDivide(min16int lhs, min16int rhs) {
             return lhs / rhs;
         }
 
-        short signedRemainder(short lhs, short rhs) {
+        min16int signedRemainder(min16int lhs, min16int rhs) {
             return lhs % rhs;
         }
 
-        ushort unsignedDivide(ushort lhs, ushort rhs) {
+        min16uint unsignedDivide(min16uint lhs, min16uint rhs) {
             return lhs / rhs;
         }
 
-        ushort unsignedRemainder(ushort lhs, ushort rhs) {
+        min16uint unsignedRemainder(min16uint lhs, min16uint rhs) {
             return lhs % rhs;
         }
 
-        int promotedRemainder(short lhs, short rhs) {
+        int promotedRemainder(min16int lhs, min16int rhs) {
             return lhs % rhs;
         }
 
-        int inferredQuotient(short lhs, short rhs) {
+        int inferredQuotient(min16int lhs, min16int rhs) {
             auto quotient = lhs / rhs;
             return quotient;
         }
@@ -4595,27 +4851,27 @@ def test_hlsl_minimum_precision_integer_division_and_remainder_widen_operands():
 def test_hlsl_minimum_precision_integer_vector_and_nested_operations():
     shader = """
     shader MinimumPrecisionIntegerVectorArithmetic {
-        short2 dividePair(short2 lhs, short2 rhs) {
+        min16int2 dividePair(min16int2 lhs, min16int2 rhs) {
             return lhs / rhs;
         }
 
-        ushort3 remainderTriple(ushort3 lhs, ushort3 rhs) {
+        min16uint3 remainderTriple(min16uint3 lhs, min16uint3 rhs) {
             return lhs % rhs;
         }
 
-        short2 dividePairByScalar(short2 lhs, short rhs) {
+        min16int2 dividePairByScalar(min16int2 lhs, min16int rhs) {
             return lhs / rhs;
         }
 
-        short2 constructPair(short lhs, short rhs) {
-            return short2(lhs / rhs, lhs % rhs);
+        min16int2 constructPair(min16int lhs, min16int rhs) {
+            return min16int2(lhs / rhs, lhs % rhs);
         }
 
-        int nested(short lhs, short rhs) {
+        int nested(min16int lhs, min16int rhs) {
             return (lhs / rhs) * 2 + (lhs % rhs);
         }
 
-        short nestedNarrow(short lhs, short rhs) {
+        min16int nestedNarrow(min16int lhs, min16int rhs) {
             return (lhs / rhs) + 1;
         }
     }
@@ -4639,19 +4895,19 @@ def test_hlsl_minimum_precision_integer_vector_and_nested_operations():
 def test_hlsl_minimum_precision_integer_compound_assignments_preserve_evaluation():
     shader = """
     shader MinimumPrecisionIntegerCompoundArithmetic {
-        short nextDivisor(short value) {
+        min16int nextDivisor(min16int value) {
             return value;
         }
 
-        short divideCalls(short lhs, short rhs) {
+        min16int divideCalls(min16int lhs, min16int rhs) {
             return nextDivisor(lhs) / nextDivisor(rhs);
         }
 
         void update(
-            short signedValue,
-            short signedDivisor,
-            ushort unsignedValue,
-            ushort unsignedDivisor
+            min16int signedValue,
+            min16int signedDivisor,
+            min16uint unsignedValue,
+            min16uint unsignedDivisor
         ) {
             signedValue /= nextDivisor(signedDivisor);
             signedValue %= signedDivisor;
@@ -4697,11 +4953,11 @@ def test_hlsl_minimum_precision_integer_lowering_leaves_legal_operations_unchang
             return lhs % rhs;
         }
 
-        float floatingDivide(short lhs, float rhs) {
+        float floatingDivide(min16int lhs, float rhs) {
             return lhs / rhs;
         }
 
-        short signedAdd(short lhs, short rhs) {
+        min16int signedAdd(min16int lhs, min16int rhs) {
             return lhs + rhs;
         }
 
@@ -4731,12 +4987,12 @@ def test_hlsl_minimum_precision_integer_compute_validates_if_available(tmp_path)
             layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
             void main(RWStructuredBuffer<int> output @ binding(0)) {
-                short signedValue = short(-123);
-                short signedDivisor = short(7);
-                ushort unsignedValue = ushort(65000u);
-                ushort unsignedDivisor = ushort(31u);
-                short2 signedPair = short2(-123, 456);
-                short2 pairDivisor = short2(7, 11);
+                min16int signedValue = min16int(-123);
+                min16int signedDivisor = min16int(7);
+                min16uint unsignedValue = min16uint(65000u);
+                min16uint unsignedDivisor = min16uint(31u);
+                min16int2 signedPair = min16int2(-123, 456);
+                min16int2 pairDivisor = min16int2(7, 11);
 
                 signedValue /= signedDivisor;
                 signedValue %= signedDivisor;
@@ -4769,7 +5025,7 @@ def test_hlsl_minimum_precision_integer_compute_validates_if_available(tmp_path)
 def test_hlsl_minimum_precision_integer_vector_width_mismatch_is_diagnostic():
     shader = """
     shader MinimumPrecisionIntegerWidthMismatch {
-        short2 divide(short2 lhs, short3 rhs) {
+        min16int2 divide(min16int2 lhs, min16int3 rhs) {
             return lhs / rhs;
         }
     }
@@ -4794,13 +5050,13 @@ def test_hlsl_minimum_precision_integer_vector_width_mismatch_is_diagnostic():
 def test_hlsl_minimum_precision_compound_side_effecting_target_is_diagnostic():
     shader = """
     shader MinimumPrecisionIntegerCompoundTarget {
-        short values[4];
+        min16int values[4];
 
         int nextIndex() {
             return 0;
         }
 
-        void update(short divisor) {
+        void update(min16int divisor) {
             values[nextIndex()] /= divisor;
         }
     }
@@ -4822,14 +5078,14 @@ def test_hlsl_minimum_precision_compound_side_effecting_target_is_diagnostic():
 def test_hlsl_minimum_precision_compound_rejects_rhs_that_can_change_target():
     shader = """
     shader MinimumPrecisionIntegerCompoundRhsTarget {
-        short values[4];
+        min16int values[4];
 
-        short advanceIndex(inout int index, short divisor) {
+        min16int advanceIndex(inout int index, min16int divisor) {
             index += 1;
             return divisor;
         }
 
-        void update(int index, short divisor) {
+        void update(int index, min16int divisor) {
             values[index] /= advanceIndex(index, divisor);
         }
     }
@@ -4880,12 +5136,12 @@ def test_hlsl_fixed_width_scalar_array_aliases_map_in_aggregate_declarations():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert "int bytes[2];" in generated_code
-    assert "min16uint words[3];" in generated_code
+    assert "uint16_t words[3];" in generated_code
     assert "int64_t signedValue;" in generated_code
     assert "uint64_t offsets[2];" in generated_code
     assert "int globalBytes[2];" in generated_code
     assert "uint64_t globalCounters[2];" in generated_code
-    assert "min16int smalls[2];" in generated_code
+    assert "int16_t smalls[2];" in generated_code
     assert "uint count;" in generated_code
     assert "int64_t delta;" in generated_code
     assert "uint64_t bump(uint64_t counters[2], AliasPayload payload)" in generated_code
@@ -4893,8 +5149,6 @@ def test_hlsl_fixed_width_scalar_array_aliases_map_in_aggregate_declarations():
     assert "uint64_t one = uint64_t(1u);" in generated_code
     for invalid_token in (
         "int8_t",
-        "uint16_t",
-        "int16_t",
         "uint32_t",
         "int64 ",
         "uint64 ",
@@ -4930,11 +5184,10 @@ def test_hlsl_fixed_width_nested_array_aliases_map_to_valid_hlsl_types():
     assert "int bytes[2][3];" in generated_code
     assert "uint64_t offsets[2][3];" in generated_code
     assert (
-        "min16uint bumpNested(min16uint values[2][3], int row, int col)"
-        in generated_code
+        "uint16_t bumpNested(uint16_t values[2][3], int row, int col)" in generated_code
     )
-    assert "min16uint grid[2][3];" in generated_code
-    assert "min16uint(1u)" in generated_code
+    assert "uint16_t grid[2][3];" in generated_code
+    assert "uint16_t(1u)" in generated_code
     assert (
         "int64_t readPayload(AliasGridPayload payload, int row, int col)"
         in generated_code
@@ -4945,7 +5198,6 @@ def test_hlsl_fixed_width_nested_array_aliases_map_to_valid_hlsl_types():
     assert "uint64_t[2] offsets[3]" not in generated_code
     for invalid_token in (
         "int8_t",
-        "uint16_t",
         "uint64 ",
         "size_t",
         "ptrdiff_t",
@@ -4990,15 +5242,14 @@ def test_hlsl_fixed_width_nested_cbuffer_array_aliases_map_to_valid_types():
 
     assert "cbuffer AliasNestedConstants : register(b2)" in generated_code
     assert "int64_t signedGrid[2][3];" in generated_code
-    assert "min16uint unsignedGrid[2][3];" in generated_code
+    assert "uint16_t unsignedGrid[2][3];" in generated_code
     assert "uint64_t offsets[2][3];" in generated_code
     assert "uint64_t readConstant(int row, int col)" in generated_code
     assert "uint64_t(offsets[row][col])" in generated_code
     assert "uint64_t(unsignedGrid[row][col])" in generated_code
     assert "int64_t[2] signedGrid[3]" not in generated_code
-    assert "min16uint[2] unsignedGrid[3]" not in generated_code
+    assert "uint16_t[2] unsignedGrid[3]" not in generated_code
     for invalid_token in (
-        "uint16_t",
         "uint64 ",
         "size_t",
     ):
@@ -6966,13 +7217,12 @@ def test_hlsl_structured_buffer_fixed_width_aliases_map_resource_generics():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "RWStructuredBuffer<min16uint> counts : register(u3);" in generated_code
+    assert "RWStructuredBuffer<uint16_t> counts : register(u3);" in generated_code
     assert "StructuredBuffer<int64_t> signedValues : register(t4);" in generated_code
     assert "RWStructuredBuffer<uint64_t> offsets : register(u5);" in generated_code
-    assert "min16uint count = counts.Load(index);" in generated_code
-    assert "counts[index] = (count + min16uint(1u));" in generated_code
+    assert "uint16_t count = counts.Load(index);" in generated_code
+    assert "counts[index] = (count + uint16_t(1u));" in generated_code
     assert "counts.Store(" not in generated_code
-    assert "RWStructuredBuffer<uint16_t>" not in generated_code
     assert "RWStructuredBuffer<size_t>" not in generated_code
     assert "size_t" not in generated_code
 
@@ -7002,10 +7252,10 @@ def test_hlsl_structured_buffer_alias_arrays_infer_helper_parameter_sizes():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "RWStructuredBuffer<min16uint> counts[2] : register(u3);" in generated_code
+    assert "RWStructuredBuffer<uint16_t> counts[2] : register(u3);" in generated_code
     assert "StructuredBuffer<uint64_t> offsets[2] : register(t5);" in generated_code
     assert (
-        "min16uint readCount(RWStructuredBuffer<min16uint> localCounts[2], uint which, uint index)"
+        "uint16_t readCount(RWStructuredBuffer<uint16_t> localCounts[2], uint which, uint index)"
         in generated_code
     )
     assert (
@@ -7013,10 +7263,9 @@ def test_hlsl_structured_buffer_alias_arrays_infer_helper_parameter_sizes():
         in generated_code
     )
     assert "return localCounts[which].Load(index);" in generated_code
-    assert "counts[which][index] = (count + min16uint(1u));" in generated_code
+    assert "counts[which][index] = (count + uint16_t(1u));" in generated_code
     assert "counts[which].Store(" not in generated_code
     assert "localCounts[]" not in generated_code
-    assert "uint16_t" not in generated_code
     assert "size_t" not in generated_code
 
 
@@ -7098,14 +7347,14 @@ def test_hlsl_structured_buffer_array_helpers_propagate_nested_fixed_sizes():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "RWStructuredBuffer<min16uint> counts[] : register(u3);" in generated_code
-    assert "RWStructuredBuffer<min16uint> afterCounts : register(u4);" in generated_code
+    assert "RWStructuredBuffer<uint16_t> counts[] : register(u3);" in generated_code
+    assert "RWStructuredBuffer<uint16_t> afterCounts : register(u4);" in generated_code
     assert (
-        "min16uint readLeaf(RWStructuredBuffer<min16uint> leafCounts[3], uint index)"
+        "uint16_t readLeaf(RWStructuredBuffer<uint16_t> leafCounts[3], uint index)"
         in generated_code
     )
     assert (
-        "min16uint readMid(RWStructuredBuffer<min16uint> midCounts[3], uint index)"
+        "uint16_t readMid(RWStructuredBuffer<uint16_t> midCounts[3], uint index)"
         in generated_code
     )
     assert "return leafCounts[2].Load(index);" in generated_code
@@ -7113,7 +7362,6 @@ def test_hlsl_structured_buffer_array_helpers_propagate_nested_fixed_sizes():
     assert (
         "return (readMid(counts, index) + afterCounts.Load(index));" in generated_code
     )
-    assert "RWStructuredBuffer<uint16_t>" not in generated_code
 
 
 def test_hlsl_structured_buffer_array_nested_helpers_reject_mixed_fixed_sizes():
@@ -7168,19 +7416,18 @@ def test_hlsl_glsl_buffer_block_fixed_width_aliases_lower_to_byteaddressbuffer()
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert "RWByteAddressBuffer aliasBlock : register(u7);" in generated_code
-    assert "min16uint word = aliasBlock.Load(4);" in generated_code
+    assert "uint16_t word = aliasBlock.Load(4);" in generated_code
     assert "uint64_t(aliasBlock.Load((8 + index * 4)))" in generated_code
     assert (
-        "void writeAlias(uint index, min16uint word, uint64_t offset)" in generated_code
+        "void writeAlias(uint index, uint16_t word, uint64_t offset)" in generated_code
     )
     assert "aliasBlock.Store(4, uint(word));" in generated_code
     assert "aliasBlock.Store((8 + index * 4), uint(offset));" in generated_code
     assert (
-        "aliasBlock.Store(0, uint((aliasBlock.Load(0) + min16uint(1u))));"
+        "aliasBlock.Store(0, uint((aliasBlock.Load(0) + uint16_t(1u))));"
         in generated_code
     )
     assert "unsupported HLSL GLSL buffer block" not in generated_code
-    assert "uint16_t" not in generated_code
     assert "size_t" not in generated_code
 
 
@@ -12137,14 +12384,16 @@ def test_hlsl_preserves_distinct_bfloat_payload_overloads_and_rewrites_nested_ca
 
     generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "half adjust(half value)" in generated_code
+    assert "float16_t adjust(float16_t value)" in generated_code
     assert "uint adjust(uint value)" in generated_code
     assert "return adjust(adjust(value));" in generated_code
     assert "return adjust(__crossgl_bfloat16_from_float(float(3.0)));" in generated_code
     assert "return adjust(values[index]);" in generated_code
     assert "uint value = __crossgl_bfloat16_from_float(float(6.0));" in generated_code
     assert "adjust_bfloat16_t" not in generated_code
-    assert_directx_compute_validates_if_available(generated_code, tmp_path)
+    assert_directx_native_16_bit_compute_validates_if_available(
+        generated_code, tmp_path
+    )
 
 
 def test_hlsl_renames_collapsed_fixed_width_integer_overloads(tmp_path):
@@ -12252,11 +12501,16 @@ def test_hlsl_mapped_overload_names_avoid_existing_declarations(tmp_path):
     generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "static const int adjust_bfloat16_t = 7;" in generated_code
-    assert "half adjust(half value)" in generated_code
+    assert "float16_t adjust(float16_t value)" in generated_code
     assert "uint adjust(uint value)" in generated_code
-    assert "half value = adjust(half(1.0));" in generated_code
-    assert "half narrowValue = half(__crossgl_bfloat16_to_float" in generated_code
-    assert_directx_compute_validates_if_available(generated_code, tmp_path)
+    assert "float16_t value = adjust(float16_t(1.0));" in generated_code
+    assert (
+        "float16_t narrowValue = float16_t(__crossgl_bfloat16_to_float"
+        in generated_code
+    )
+    assert_directx_native_16_bit_compute_validates_if_available(
+        generated_code, tmp_path
+    )
 
 
 def test_hlsl_preserves_resource_overloads_with_distinct_bfloat_payloads():
@@ -12277,8 +12531,13 @@ def test_hlsl_preserves_resource_overloads_with_distinct_bfloat_payloads():
 
     generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "half readValue(StructuredBuffer<half> values, half fallback)" in generated
-    assert "uint readValue(StructuredBuffer<half> values, uint fallback)" in generated
+    assert (
+        "float16_t readValue(StructuredBuffer<float16_t> values, float16_t fallback)"
+        in generated
+    )
+    assert (
+        "uint readValue(StructuredBuffer<float16_t> values, uint fallback)" in generated
+    )
     assert "__crossgl_bfloat16_from_float" in generated
     assert "__crossgl_bfloat16_to_float" in generated
 
@@ -12302,9 +12561,11 @@ def test_hlsl_resolves_call_after_bfloat_payload_types_remain_distinct():
 
     generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "half select(half value)" in generated
+    assert "float16_t select(float16_t value)" in generated
     assert "uint select(uint value)" in generated
-    assert "return half(__crossgl_bfloat16_to_float(uint(select(1))));" in generated
+    assert (
+        "return float16_t(__crossgl_bfloat16_to_float(uint(select(1))));" in generated
+    )
 
 
 def test_hlsl_distinct_bfloat_payload_overload_reaches_project_artifact(tmp_path):
@@ -12335,9 +12596,11 @@ def test_hlsl_distinct_bfloat_payload_overload_reaches_project_artifact(tmp_path
     assert payload["diagnostics"] == []
     artifact = payload["artifacts"][0]
     generated = (tmp_path / artifact["path"]).read_text(encoding="utf-8")
-    assert "half select(half value)" in generated
+    assert "float16_t select(float16_t value)" in generated
     assert "uint select(uint value)" in generated
-    assert "return half(__crossgl_bfloat16_to_float(uint(select(1))));" in generated
+    assert (
+        "return float16_t(__crossgl_bfloat16_to_float(uint(select(1))));" in generated
+    )
 
 
 def test_hlsl_orders_late_array_helper_overloads_before_caller(tmp_path):
