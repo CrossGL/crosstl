@@ -1895,6 +1895,60 @@ def test_hlsl_codegen_lowers_complex64_binary_operators_to_helpers():
     assert "return infinity();" not in generated
 
 
+def test_hlsl_complex_to_scalar_conversions_use_real_component(tmp_path):
+    source = """
+    shader ComplexToScalar {
+        struct complex64_t {
+            float real;
+            float imag;
+        };
+
+        bfloat16_t convert(complex64_t value) {
+            return bfloat16_t(value);
+        }
+
+        float convert_float(complex64_t value) {
+            return float(value);
+        }
+
+        float convert_float_implicitly(complex64_t value) {
+            return value;
+        }
+
+        int16_t convert_int16(complex64_t value) {
+            return int16_t(value);
+        }
+
+        bool convert_bool(complex64_t value) {
+            return bool(value);
+        }
+
+        compute {
+            @ numthreads(1, 1, 1)
+            void main() {
+                complex64_t value;
+                value.real = 1.0;
+                value.imag = 2.0;
+                bfloat16_t result = convert(value);
+                float float_result = convert_float(value);
+                float implicit_float_result = convert_float_implicitly(value);
+                int16_t int_result = convert_int16(value);
+                bool bool_result = convert_bool(value);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(source))
+
+    assert "return __crossgl_bfloat16_from_float(float((value).real));" in generated
+    assert generated.count("return float((value).real);") == 2
+    assert "return min16int((value).real);" in generated
+    assert "return ((value).real != 0.0);" in generated
+    assert "uint result = convert(value);" in generated
+    assert_directx_compute_validates_if_available(generated, tmp_path)
+
+
 def test_hlsl_complex_compound_and_subgroup_operations_validate(tmp_path):
     source = """
     shader ComplexSubgroupReduction {

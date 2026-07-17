@@ -8640,6 +8640,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def hlsl_bfloat16_conversion_expression(
         self, rendered, expected_type, source_type, *, source_location=None
     ):
+        complex_conversion = self.hlsl_complex64_scalar_conversion_expression(
+            rendered,
+            expected_type,
+            source_type,
+        )
+        if complex_conversion is not None:
+            return complex_conversion
+
         expected_is_bfloat = self.is_hlsl_bfloat16_type(expected_type)
         source_is_bfloat = self.is_hlsl_bfloat16_type(source_type)
         if not expected_is_bfloat and not source_is_bfloat:
@@ -8684,6 +8692,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         source_name = self.type_name_string(source_type)
         if not rendered or not expected_name or not source_name:
             return rendered
+
+        complex_conversion = self.hlsl_complex64_scalar_conversion_expression(
+            rendered,
+            expected_name,
+            source_name,
+        )
+        if complex_conversion is not None:
+            return complex_conversion
 
         bfloat_conversion = self.hlsl_bfloat16_conversion_expression(
             rendered,
@@ -9694,6 +9710,41 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
     def is_hlsl_complex64_type(self, type_text):
         return self.map_type(type_text) == "complex64_t"
+
+    def hlsl_complex64_scalar_conversion_expression(
+        self, rendered, expected_type, source_type
+    ):
+        if not self.is_hlsl_complex64_type(source_type):
+            return None
+
+        real_component = f"({rendered}).real"
+        if self.is_hlsl_bfloat16_type(expected_type):
+            return self.hlsl_float_to_bfloat16_expression(real_component)
+
+        mapped_target = self.map_type(expected_type)
+        if not self.is_scalar_value_type(mapped_target):
+            return None
+        if mapped_target == "bool":
+            return f"({real_component} != 0.0)"
+        return f"{mapped_target}({real_component})"
+
+    def hlsl_complex64_scalar_constructor_call(self, func_name, args):
+        if (
+            not isinstance(func_name, str)
+            or func_name in getattr(self, "function_return_types", {})
+            or len(args) != 1
+        ):
+            return None
+
+        source_type = self.hlsl_source_expression_type(args[0])
+        if not self.is_hlsl_complex64_type(source_type):
+            return None
+        rendered = self.generate_expression_with_expected(args[0], None)
+        return self.hlsl_complex64_scalar_conversion_expression(
+            rendered,
+            func_name,
+            source_type,
+        )
 
     def hlsl_complex64_operand(self, rendered, type_text):
         if self.is_hlsl_complex64_type(type_text):
@@ -13459,6 +13510,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if complex64_constructor is not None:
                 return complex64_constructor
+
+            complex64_scalar_constructor = self.hlsl_complex64_scalar_constructor_call(
+                func_name, args
+            )
+            if complex64_scalar_constructor is not None:
+                return complex64_scalar_constructor
 
             struct_constructor = self.generate_hlsl_struct_constructor_call(
                 func_name,
