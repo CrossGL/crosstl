@@ -907,7 +907,7 @@ def test_hlsl_codegen_ignores_metal_address_space_struct_metadata():
 
     generated = generate_code(ast)
 
-    assert "half max;" in generated
+    assert "uint max;" in generated
     assert ": constant" not in generated
 
 
@@ -1003,10 +1003,12 @@ def test_hlsl_codegen_lowers_mlx_half_aliases_and_metal_as_type():
     assert "half bfloat16_t;" not in generated
     assert "half float16_t;" not in generated
     assert "thread_scope_system" not in generated
-    assert "half from_bits(min16uint bits)" in generated
-    assert "return half(bits);" in generated
-    assert "min16uint to_bits(half x)" in generated
-    assert "return min16uint(uint(x));" in generated
+    assert "uint from_bits(min16uint bits)" in generated
+    assert "__crossgl_bfloat16_from_uint16(min16uint(bits))" in generated
+    assert "min16uint to_bits(uint x)" in generated
+    assert "__crossgl_bfloat16_to_uint16(uint(x))" in generated
+    assert "half from_bits" not in generated
+    assert "to_bits(half" not in generated
 
 
 def test_hlsl_codegen_does_not_guess_unknown_limit_constants():
@@ -1079,8 +1081,11 @@ def test_hlsl_codegen_does_not_guess_unknown_limit_constants():
     assert "return Limits_u3cbfloat16_t_u3e_u3a_u3amax;" in generated
     assert "bfloat16_t(" not in generated
     assert "bfloat16(" not in generated
-    assert "return half(x);" in generated
-    assert "return half(asfloat(2139095040u));" in generated
+    assert "return __crossgl_bfloat16_from_float(float(x));" in generated
+    assert (
+        "return __crossgl_bfloat16_from_float(float(asfloat(2139095040u)));"
+        in generated
+    )
     assert "0x7f7fffff" not in generated
     assert "65504.0" not in generated
 
@@ -11989,7 +11994,7 @@ def test_hlsl_forward_declares_helper_overloads_before_definitions():
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
 
 
-def test_hlsl_renames_collapsed_bfloat_overloads_and_rewrites_nested_calls(
+def test_hlsl_preserves_distinct_bfloat_payload_overloads_and_rewrites_nested_calls(
     tmp_path,
 ):
     shader = """
@@ -12043,15 +12048,13 @@ def test_hlsl_renames_collapsed_bfloat_overloads_and_rewrites_nested_calls(
 
     generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "half adjust_float16(half value)" in generated_code
-    assert "half adjust_bfloat16_t(half value)" in generated_code
-    assert "return adjust_float16(adjust_float16(value));" in generated_code
-    assert "return adjust_bfloat16_t(adjust_bfloat16_t(value));" in generated_code
-    assert "return adjust_bfloat16_t(half(3.0));" in generated_code
-    assert "return adjust_bfloat16_t((left + right));" in generated_code
-    assert "return adjust_bfloat16_t(values[index]);" in generated_code
-    assert "return adjust_bfloat16_t(value);" in generated_code
-    assert "half adjust(half value)" not in generated_code
+    assert "half adjust(half value)" in generated_code
+    assert "uint adjust(uint value)" in generated_code
+    assert "return adjust(adjust(value));" in generated_code
+    assert "return adjust(__crossgl_bfloat16_from_float(float(3.0)));" in generated_code
+    assert "return adjust(values[index]);" in generated_code
+    assert "uint value = __crossgl_bfloat16_from_float(float(6.0));" in generated_code
+    assert "adjust_bfloat16_t" not in generated_code
     assert_directx_compute_validates_if_available(generated_code, tmp_path)
 
 
@@ -12160,14 +12163,14 @@ def test_hlsl_mapped_overload_names_avoid_existing_declarations(tmp_path):
     generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "static const int adjust_bfloat16_t = 7;" in generated_code
-    assert "half adjust_float16(half value)" in generated_code
-    assert "half adjust_bfloat16_t_2(half value)" in generated_code
-    assert "half value = adjust_float16(half(1.0));" in generated_code
-    assert "half narrowValue = adjust_bfloat16_t_2(half(2.0));" in generated_code
+    assert "half adjust(half value)" in generated_code
+    assert "uint adjust(uint value)" in generated_code
+    assert "half value = adjust(half(1.0));" in generated_code
+    assert "half narrowValue = half(__crossgl_bfloat16_to_float" in generated_code
     assert_directx_compute_validates_if_available(generated_code, tmp_path)
 
 
-def test_hlsl_reports_resource_overloads_with_collapsed_emitted_signatures():
+def test_hlsl_preserves_resource_overloads_with_distinct_bfloat_payloads():
     shader = """
     shader ResourceMappedOverloads {
         float16 readValue(StructuredBuffer<float16> values, float16 fallback) {
@@ -12183,20 +12186,15 @@ def test_hlsl_reports_resource_overloads_with_collapsed_emitted_signatures():
     }
     """
 
-    with pytest.raises(DirectXMappedOverloadError) as exc_info:
-        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    diagnostic = exc_info.value
-    assert diagnostic.function_name == "readValue"
-    assert diagnostic.reason == "resource-parameter-collision"
-    assert diagnostic.argument_types == ()
-    assert diagnostic.candidates == (
-        "readValue(StructuredBuffer<float16>, bfloat16_t) -> bfloat16_t",
-        "readValue(StructuredBuffer<float16>, float16) -> float16",
-    )
+    assert "half readValue(StructuredBuffer<half> values, half fallback)" in generated
+    assert "uint readValue(StructuredBuffer<half> values, uint fallback)" in generated
+    assert "__crossgl_bfloat16_from_float" in generated
+    assert "__crossgl_bfloat16_to_float" in generated
 
 
-def test_hlsl_reports_ambiguous_call_after_overload_type_mapping():
+def test_hlsl_resolves_call_after_bfloat_payload_types_remain_distinct():
     shader = """
     shader AmbiguousMappedOverloads {
         float16 select(float16 value) {
@@ -12213,23 +12211,14 @@ def test_hlsl_reports_ambiguous_call_after_overload_type_mapping():
     }
     """
 
-    with pytest.raises(DirectXMappedOverloadError) as exc_info:
-        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    diagnostic = exc_info.value
-    assert diagnostic.project_diagnostic_code == (
-        "project.translate.directx-mapped-overload-ambiguous"
-    )
-    assert diagnostic.function_name == "select"
-    assert diagnostic.argument_types == ("int",)
-    assert diagnostic.reason == "call-binding-ambiguous"
-    assert diagnostic.candidates == (
-        "select(float16) -> float16",
-        "select(bfloat16_t) -> bfloat16_t",
-    )
+    assert "half select(half value)" in generated
+    assert "uint select(uint value)" in generated
+    assert "return half(__crossgl_bfloat16_to_float(uint(select(1))));" in generated
 
 
-def test_hlsl_mapped_overload_ambiguity_reaches_project_report(tmp_path):
+def test_hlsl_distinct_bfloat_payload_overload_reaches_project_artifact(tmp_path):
     from crosstl.project import translate_project
 
     source = """
@@ -12252,13 +12241,14 @@ def test_hlsl_mapped_overload_ambiguity_reaches_project_report(tmp_path):
 
     payload = translate_project(tmp_path, targets=["directx"]).to_json()
 
-    assert payload["summary"]["translatedCount"] == 0
-    assert payload["summary"]["failedCount"] == 1
-    assert len(payload["diagnostics"]) == 1
-    diagnostic = payload["diagnostics"][0]
-    assert diagnostic["code"] == ("project.translate.directx-mapped-overload-ambiguous")
-    assert diagnostic["missingCapabilities"] == ["directx.mapped-overload-resolution"]
-    assert "select(int)" in diagnostic["message"]
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+    artifact = payload["artifacts"][0]
+    generated = (tmp_path / artifact["path"]).read_text(encoding="utf-8")
+    assert "half select(half value)" in generated
+    assert "uint select(uint value)" in generated
+    assert "return half(__crossgl_bfloat16_to_float(uint(select(1))));" in generated
 
 
 def test_hlsl_orders_late_array_helper_overloads_before_caller(tmp_path):

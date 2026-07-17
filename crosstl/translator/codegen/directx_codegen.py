@@ -1,6 +1,7 @@
 """CrossGL-to-HLSL code generator."""
 
 import re
+import struct
 from copy import deepcopy
 from hashlib import sha1
 
@@ -350,6 +351,30 @@ class DirectXUnresolvedSourceTypeError(ValueError):
 
     def __init__(self, message):
         super().__init__(message)
+
+
+class DirectXBFloat16UnsupportedError(ValueError):
+    """Raised when HLSL cannot preserve source bfloat16 semantics exactly."""
+
+    project_diagnostic_code = "project.translate.directx-bfloat16-unsupported"
+    missing_capabilities = ("directx.exact-bfloat16-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        target_profile=None,
+        operation=None,
+        source_type=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.target_profile = target_profile
+        self.operation = operation
+        self.source_type = source_type
+        self.reason = reason
+        self.source_location = source_location
 
 
 class DirectXWorkgroupSizeError(ValueError):
@@ -1061,6 +1086,21 @@ class HLSLCodeGen:
         {"constant", "device", "thread", "threadgroup"}
     )
     METAL_TYPE_ALIAS_GLOBALS = frozenset({"bfloat16_t", "float16_t"})
+    HLSL_SOURCE_BFLOAT16_TYPES = frozenset(
+        {"bfloat", "bfloat16", "bfloat16_t"}
+    )
+    HLSL_NATIVE_16_BIT_STORAGE_RESOURCES = frozenset(
+        {
+            "AppendStructuredBuffer",
+            "Buffer",
+            "ConsumeStructuredBuffer",
+            "RasterizerOrderedBuffer",
+            "RasterizerOrderedStructuredBuffer",
+            "RWBuffer",
+            "RWStructuredBuffer",
+            "StructuredBuffer",
+        }
+    )
     HLSL_CANONICAL_NARROW_FLOAT_CONSTRUCTORS = frozenset({"bfloat", "bfloat16"})
     HLSL_CANONICAL_64_BIT_VECTOR_CONSTRUCTORS = frozenset(
         {
@@ -1559,6 +1599,9 @@ class HLSLCodeGen:
         self.hlsl_fixed_array_return_struct_metadata = {}
         self.required_hlsl_fixed_array_read_helpers = set()
         self.required_hlsl_complex64_helpers = set()
+        self.required_hlsl_bfloat16_helpers = set()
+        self.hlsl_bfloat16_storage_resource_source_types = {}
+        self.requires_hlsl_bfloat16_storage = False
         self.required_hlsl_explicit_bitcast_helpers = set()
         self.required_hlsl_trailing_zero_helpers = set()
         self.hlsl_trailing_zero_helper_names = {}
@@ -1648,9 +1691,11 @@ class HLSLCodeGen:
             "packed_half2": "half2",
             "packed_half3": "half3",
             "packed_half4": "half4",
-            "bfloat": "half",
-            "bfloat16": "half",
-            "bfloat16_t": "half",
+            # Source bfloat values are carried in the low 16 bits of a uint.
+            # Numeric conversion and storage use dedicated lowering paths below.
+            "bfloat": "uint",
+            "bfloat16": "uint",
+            "bfloat16_t": "uint",
             "float16": "half",
             "float16_t": "half",
             "f16vec2": "half2",
@@ -2434,6 +2479,9 @@ class HLSLCodeGen:
         self.hlsl_fixed_array_return_struct_metadata = {}
         self.required_hlsl_fixed_array_read_helpers = set()
         self.required_hlsl_complex64_helpers = set()
+        self.required_hlsl_bfloat16_helpers = set()
+        self.hlsl_bfloat16_storage_resource_source_types = {}
+        self.requires_hlsl_bfloat16_storage = False
         self.required_hlsl_explicit_bitcast_helpers = set()
         self.required_hlsl_trailing_zero_helpers = set()
         self.hlsl_trailing_zero_helper_names = {}
@@ -3694,6 +3742,7 @@ class HLSLCodeGen:
         code += self.generate_hlsl_wave_shuffle_and_fill_up_helpers()
         code += self.generate_hlsl_trailing_zero_helpers()
         code += self.generate_hlsl_complex64_helpers()
+        code += self.generate_hlsl_bfloat16_helpers()
         code += self.generate_hlsl_explicit_bitcast_helpers()
         code += self.generate_hlsl_union_storage_helpers()
         code += self.generate_hlsl_fixed_array_return_helpers()
@@ -3831,6 +3880,53 @@ class HLSLCodeGen:
             code += "    return (lane >= delta) ? shuffled : fill;\n}\n\n"
 
         return code
+
+    def generate_hlsl_bfloat16_helpers(self):
+        required = getattr(self, "required_hlsl_bfloat16_helpers", set())
+        requires_storage = getattr(self, "requires_hlsl_bfloat16_storage", False)
+        if not required and not requires_storage:
+            return ""
+
+        code = [
+            "// CrossGL exact bfloat16 lowering: register payloads use uint low bits.\n"
+        ]
+        if requires_storage:
+            code.append(
+                "// Native 16-bit storage requires Shader Model 6.2 and "
+                "dxc -enable-16bit-types.\n"
+            )
+
+        helper_sources = {
+            "from_float": """
+uint __crossgl_bfloat16_from_float(float value) {
+    uint bits = asuint(value);
+    uint upperBits = bits >> 16u;
+    uint absoluteBits = bits & 0x7fffffffu;
+    if (absoluteBits > 0x7f800000u) {
+        return (upperBits | 0x40u) & 0xffffu;
+    }
+    uint roundingBias = 0x7fffu + (upperBits & 1u);
+    return ((bits + roundingBias) >> 16u) & 0xffffu;
+}
+""",
+            "to_float": """
+float __crossgl_bfloat16_to_float(uint value) {
+    return asfloat((value & 0xffffu) << 16u);
+}
+""",
+            "from_uint16": """
+uint __crossgl_bfloat16_from_uint16(min16uint value) {
+    return uint(value) & 0xffffu;
+}
+""",
+            "to_uint16": """
+min16uint __crossgl_bfloat16_to_uint16(uint value) {
+    return min16uint(value & 0xffffu);
+}
+""",
+        }
+        code.extend(helper_sources[name] for name in sorted(required))
+        return "".join(code) + "\n"
 
     def generate_hlsl_explicit_bitcast_helpers(self):
         helper_sources = {
@@ -5668,7 +5764,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         mapped_type = self.map_type(type_name)
         if (
             var_name in self.METAL_TYPE_ALIAS_GLOBALS
-            and mapped_type == self.type_mapping.get(var_name)
+            and (
+                mapped_type == self.type_mapping.get(var_name)
+                or (
+                    var_name == "bfloat16_t"
+                    and mapped_type == self.map_type("half")
+                )
+            )
         ):
             return True
         type_key = str(type_name or "").rsplit("::", 1)[-1]
@@ -6342,6 +6444,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         expression,
         expected_type,
     ):
+        if self.is_hlsl_bfloat16_type(expected_type):
+            numeric_value = self.hlsl_bfloat16_constant_numeric_value(expression)
+            if numeric_value is not None:
+                return f"0x{self.bfloat16_bits_for_float(numeric_value):04x}u"
         mapped_type = self.map_type(expected_type)
         array_type = self.hlsl_outer_array_type(mapped_type)
         if array_type is not None:
@@ -6484,8 +6590,66 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             declarations.append(f"static const int {name} = {value};")
         return "\n".join(declarations) + "\n\n" if declarations else ""
 
+    def hlsl_bfloat16_constant_numeric_value(self, expr):
+        if isinstance(expr, bool):
+            return 1.0 if expr else 0.0
+        if isinstance(expr, (int, float)):
+            return float(expr)
+        if isinstance(expr, LiteralNode):
+            value = getattr(expr, "value", None)
+            if isinstance(value, bool):
+                return 1.0 if value else 0.0
+            if isinstance(value, (int, float)):
+                return float(value)
+            return None
+        if isinstance(expr, UnaryOpNode) and expr.op in {"+", "-"}:
+            value = self.hlsl_bfloat16_constant_numeric_value(expr.operand)
+            if value is None:
+                return None
+            return value if expr.op == "+" else -value
+        if isinstance(expr, ConstructorNode) and self.is_hlsl_bfloat16_type(
+            getattr(expr, "constructor_type", None)
+        ):
+            arguments = list(getattr(expr, "arguments", []) or [])
+            if len(arguments) == 0:
+                return 0.0
+            if len(arguments) == 1:
+                return self.hlsl_bfloat16_constant_numeric_value(arguments[0])
+            return None
+        if isinstance(expr, FunctionCallNode):
+            func_name = self.function_call_name(expr)
+            if self.is_hlsl_bfloat16_type(func_name):
+                arguments = list(
+                    getattr(expr, "arguments", getattr(expr, "args", [])) or []
+                )
+                if len(arguments) == 0:
+                    return 0.0
+                if len(arguments) == 1:
+                    return self.hlsl_bfloat16_constant_numeric_value(arguments[0])
+        return None
+
     def generate_constant_expression(self, expr, expected_type=None):
+        if self.is_hlsl_bfloat16_type(expected_type):
+            numeric_value = self.hlsl_bfloat16_constant_numeric_value(expr)
+            if numeric_value is not None:
+                bits = self.bfloat16_bits_for_float(numeric_value)
+                return f"0x{bits:04x}u"
         value_code = self.generate_expression_with_expected(expr, expected_type)
+        if self.is_hlsl_bfloat16_type(expected_type) and any(
+            helper in value_code
+            for helper in (
+                "__crossgl_bfloat16_from_float",
+                "__crossgl_bfloat16_to_float",
+            )
+        ):
+            raise self.directx_bfloat16_unsupported(
+                "DirectX compile-time bfloat16 values require a constant-foldable "
+                "scalar initializer",
+                operation="compile-time bfloat16 initializer",
+                source_type=expected_type,
+                reason="non-constant-bfloat16-initializer",
+                source_location=getattr(expr, "source_location", None),
+            )
         if value_code == "True":
             return "true"
         if value_code == "False":
@@ -6648,15 +6812,24 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             element_type = getattr(
                 member, "element_type", getattr(member, "vtype", "float")
             )
-            member_type = self.map_type(element_type)
+            member_type = self.hlsl_bfloat16_storage_type(
+                element_type,
+                operation=f"cbuffer member '{member.name}'",
+                source_location=getattr(member, "source_location", None),
+            )
             size = getattr(member, "size", None)
             size_text = self.expression_to_string(size) if size is not None else "1"
             declaration = f"{member_type} {member.name}[{size_text}]"
         else:
             if hasattr(member, "member_type"):
-                member_type = self.map_type(member.member_type)
+                source_member_type = member.member_type
             else:
-                member_type = self.map_type(getattr(member, "vtype", "float"))
+                source_member_type = getattr(member, "vtype", "float")
+            member_type = self.hlsl_bfloat16_storage_type(
+                source_member_type,
+                operation=f"cbuffer member '{member.name}'",
+                source_location=getattr(member, "source_location", None),
+            )
             declaration = format_c_style_array_declaration(member_type, member.name)
 
         layout_qualifier = self.hlsl_cbuffer_member_layout_qualifier(member)
@@ -8376,11 +8549,72 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         finally:
             self.current_expression_expected_type = previous_expected_type
 
+    def require_hlsl_bfloat16_helper(self, helper_name):
+        self.required_hlsl_bfloat16_helpers.add(helper_name)
+
+    def hlsl_bfloat16_to_float_expression(self, rendered):
+        self.require_hlsl_bfloat16_helper("to_float")
+        return f"__crossgl_bfloat16_to_float(uint({rendered}))"
+
+    def hlsl_float_to_bfloat16_expression(self, rendered):
+        self.require_hlsl_bfloat16_helper("from_float")
+        return f"__crossgl_bfloat16_from_float(float({rendered}))"
+
+    def hlsl_bfloat16_conversion_expression(
+        self, rendered, expected_type, source_type, *, source_location=None
+    ):
+        expected_is_bfloat = self.is_hlsl_bfloat16_type(expected_type)
+        source_is_bfloat = self.is_hlsl_bfloat16_type(source_type)
+        if not expected_is_bfloat and not source_is_bfloat:
+            return None
+        if expected_is_bfloat and source_is_bfloat:
+            return rendered
+
+        if expected_is_bfloat:
+            mapped_source = self.map_type(source_type)
+            if not self.is_scalar_value_type(mapped_source):
+                raise self.directx_bfloat16_unsupported(
+                    "DirectX exact bfloat16 conversion requires a scalar numeric "
+                    f"source, got '{self.type_name_string(source_type)}'",
+                    operation="numeric conversion to bfloat16",
+                    source_type=source_type,
+                    reason="unsupported-conversion-source",
+                    source_location=source_location,
+                )
+            if mapped_source == "bool":
+                rendered = f"(({rendered}) ? 1.0 : 0.0)"
+            return self.hlsl_float_to_bfloat16_expression(rendered)
+
+        decoded = self.hlsl_bfloat16_to_float_expression(rendered)
+        mapped_expected = self.map_type(expected_type)
+        if mapped_expected == "float":
+            return decoded
+        if mapped_expected == "bool":
+            return f"({decoded} != 0.0)"
+        if self.is_scalar_value_type(mapped_expected):
+            return f"{mapped_expected}({decoded})"
+        raise self.directx_bfloat16_unsupported(
+            "DirectX exact bfloat16 conversion requires a scalar numeric target, "
+            f"got '{self.type_name_string(expected_type)}'",
+            operation="numeric conversion from bfloat16",
+            source_type=source_type,
+            reason="unsupported-conversion-target",
+            source_location=source_location,
+        )
+
     def hlsl_narrowing_cast_expression(self, rendered, expected_type, source_type):
         expected_name = self.type_name_string(expected_type)
         source_name = self.type_name_string(source_type)
         if not rendered or not expected_name or not source_name:
             return rendered
+
+        bfloat_conversion = self.hlsl_bfloat16_conversion_expression(
+            rendered,
+            expected_name,
+            source_name,
+        )
+        if bfloat_conversion is not None:
+            return bfloat_conversion
 
         expected = self.map_type(expected_name)
         source = self.map_type(source_name)
@@ -9308,12 +9542,68 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         right_uint = f"(({right}) ? 1u : 0u)"
         return f"(({left_uint} {op} {right_uint}) != 0u)"
 
+    def hlsl_bfloat16_constructor_call(self, func_name, args, *, source_location=None):
+        if not isinstance(func_name, str) or func_name in getattr(
+            self, "function_return_types", {}
+        ):
+            return None
+
+        target_is_bfloat = self.is_hlsl_bfloat16_type(func_name)
+        source_type = (
+            self.hlsl_source_expression_type(args[0]) if len(args) == 1 else None
+        )
+        source_is_bfloat = self.is_hlsl_bfloat16_type(source_type)
+        if not target_is_bfloat and not source_is_bfloat:
+            return None
+
+        if target_is_bfloat:
+            if not args:
+                return "0u"
+            if len(args) != 1:
+                raise self.directx_bfloat16_unsupported(
+                    "DirectX bfloat16 construction requires zero or one scalar "
+                    f"argument, got {len(args)}",
+                    operation="bfloat16 constructor",
+                    source_type=func_name,
+                    reason="invalid-constructor-arity",
+                    source_location=source_location,
+                )
+            rendered = self.generate_expression_with_expected(args[0], None)
+            return self.hlsl_bfloat16_conversion_expression(
+                rendered,
+                func_name,
+                source_type,
+                source_location=source_location,
+            )
+
+        mapped_target = self.map_type(func_name)
+        if not self.is_scalar_value_type(mapped_target):
+            return None
+        if len(args) != 1:
+            raise self.directx_bfloat16_unsupported(
+                "DirectX exact bfloat16 conversion requires a one-argument scalar "
+                f"constructor, got '{func_name}'",
+                operation="numeric conversion from bfloat16",
+                source_type=source_type,
+                reason="unsupported-conversion-target",
+                source_location=source_location,
+            )
+        rendered = self.generate_expression_with_expected(args[0], None)
+        return self.hlsl_bfloat16_conversion_expression(
+            rendered,
+            func_name,
+            source_type,
+            source_location=source_location,
+        )
+
     def is_hlsl_complex64_type(self, type_text):
         return self.map_type(type_text) == "complex64_t"
 
     def hlsl_complex64_operand(self, rendered, type_text):
         if self.is_hlsl_complex64_type(type_text):
             return rendered
+        if self.is_hlsl_bfloat16_type(type_text):
+            rendered = self.hlsl_bfloat16_to_float_expression(rendered)
         # Promote a real scalar to complex through the make helper; HLSL has no
         # struct constructor syntax, so `complex64_t(rendered, 0.0)` would fail
         # to compile.
@@ -9375,6 +9665,43 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             f"{self.hlsl_complex64_operand(right, right_type)})"
         )
 
+    def hlsl_bfloat16_binary_expression(self, expr, left, right, op):
+        left_type = self.hlsl_source_expression_type(getattr(expr, "left", None))
+        right_type = self.hlsl_source_expression_type(getattr(expr, "right", None))
+        left_is_bfloat = self.is_hlsl_bfloat16_type(left_type)
+        right_is_bfloat = self.is_hlsl_bfloat16_type(right_type)
+        if not left_is_bfloat and not right_is_bfloat:
+            return None
+
+        supported = {"+", "-", "*", "/", "==", "!=", "<", "<=", ">", ">=", "&&", "||"}
+        if op not in supported:
+            raise self.directx_bfloat16_unsupported(
+                "DirectX exact bfloat16 lowering does not support operator "
+                f"'{op}' on bfloat16 payloads",
+                operation=op,
+                source_type=left_type if left_is_bfloat else right_type,
+                reason="unsupported-bfloat16-operator",
+                source_location=getattr(expr, "source_location", None),
+            )
+
+        if left_is_bfloat:
+            left = self.hlsl_bfloat16_to_float_expression(left)
+        if right_is_bfloat:
+            right = self.hlsl_bfloat16_to_float_expression(right)
+        if op in {"&&", "||"}:
+            if left_is_bfloat:
+                left = f"({left} != 0.0)"
+            if right_is_bfloat:
+                right = f"({right} != 0.0)"
+        operation = f"({left} {op} {right})"
+        if op in {"==", "!=", "<", "<=", ">", ">=", "&&", "||"}:
+            return operation
+
+        result_type = self.expression_result_type(expr)
+        if self.is_hlsl_bfloat16_type(result_type):
+            return self.hlsl_float_to_bfloat16_expression(operation)
+        return operation
+
     def hlsl_complex64_unary_expression(self, expr, operand, op):
         if op != "-":
             return None
@@ -9383,6 +9710,53 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return None
         self.required_hlsl_complex64_helpers.add("__crossgl_complex64_negate")
         return f"__crossgl_complex64_negate({operand})"
+
+    def hlsl_bfloat16_unary_expression(self, expr, operand, op):
+        operand_type = self.hlsl_source_expression_type(
+            getattr(expr, "operand", None)
+        )
+        if not self.is_hlsl_bfloat16_type(operand_type):
+            return None
+        if op == "+":
+            return f"(uint({operand}) & 0xffffu)"
+        if op == "-":
+            return f"((uint({operand}) ^ 0x8000u) & 0xffffu)"
+        if op == "!":
+            decoded = self.hlsl_bfloat16_to_float_expression(operand)
+            return f"!({decoded} != 0.0)"
+        if op in {"++", "--"}:
+            if getattr(expr, "is_postfix", False):
+                raise self.directx_bfloat16_unsupported(
+                    "DirectX exact bfloat16 lowering cannot preserve postfix "
+                    f"'{op}' without a statement temporary",
+                    operation=op,
+                    source_type=operand_type,
+                    reason="postfix-temporary-required",
+                    source_location=getattr(expr, "source_location", None),
+                )
+            operand_node = getattr(expr, "operand", None)
+            if not self.hlsl_expression_is_repeatable(operand_node):
+                raise self.directx_bfloat16_unsupported(
+                    "DirectX exact bfloat16 increment requires a stable lvalue",
+                    operation=op,
+                    source_type=operand_type,
+                    reason="side-effecting-increment-target",
+                    source_location=getattr(expr, "source_location", None),
+                )
+            decoded = self.hlsl_bfloat16_to_float_expression(operand)
+            delta = "+ 1.0" if op == "++" else "- 1.0"
+            rounded = self.hlsl_float_to_bfloat16_expression(
+                f"({decoded} {delta})"
+            )
+            return f"({operand} = {rounded})"
+        raise self.directx_bfloat16_unsupported(
+            "DirectX exact bfloat16 lowering does not support unary operator "
+            f"'{op}'",
+            operation=op,
+            source_type=operand_type,
+            reason="unsupported-bfloat16-operator",
+            source_location=getattr(expr, "source_location", None),
+        )
 
     def hlsl_complex64_compound_assignment_error(
         self,
@@ -9518,6 +9892,22 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 right_type
             ):
                 return "complex64_t"
+            left_is_bfloat = self.is_hlsl_bfloat16_type(left_type)
+            right_is_bfloat = self.is_hlsl_bfloat16_type(right_type)
+            if left_is_bfloat or right_is_bfloat:
+                if left_is_bfloat and right_is_bfloat:
+                    return left_type or right_type
+                other_type = right_type if left_is_bfloat else left_type
+                mapped_other = self.map_type(other_type)
+                if mapped_other in {
+                    "double",
+                    "float",
+                    "half",
+                    "min10float",
+                    "min16float",
+                }:
+                    return other_type
+                return "float"
             mapped_operator = self.map_operator(operator)
             if mapped_operator in {"/", "%"}:
                 integer_contract = (
@@ -9590,7 +9980,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if array_type and "[" in array_type and "]" in array_type:
                 base_type, _ = split_array_type_suffix(array_type)
                 return base_type
-            buffer_element_type = self.hlsl_typed_buffer_element_type(array_type)
+            buffer_element_type = self.hlsl_typed_buffer_element_type(
+                array_type,
+                {"Buffer", "RWBuffer", "StructuredBuffer", "RWStructuredBuffer"},
+            )
             if buffer_element_type is not None:
                 return buffer_element_type
             pointer_element_type = self.hlsl_pointer_element_type(array_type)
@@ -9743,6 +10136,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return trailing_zero_result_type
             explicit_bitcast_type = self.hlsl_metal_as_type_target_type(func_name)
             if explicit_bitcast_type is not None:
+                source_target_type = self.hlsl_metal_as_type_source_target_type(
+                    func_name
+                )
+                if self.is_hlsl_bfloat16_type(source_target_type):
+                    return source_target_type
                 return explicit_bitcast_type
             bitcast_result_type = self.hlsl_bitcast_result_type(func_name, args)
             if bitcast_result_type is not None:
@@ -9758,6 +10156,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return firstbit_result_type
             if func_name in {"normalize", "reflect"} and args:
                 return self.expression_result_type(args[0])
+            if self.is_hlsl_bfloat16_type(func_name):
+                return self.hlsl_bfloat16_scalar_type_name(func_name)
             constructor_type = self.hlsl_type_constructor_name(func_name)
             if constructor_type is not None:
                 return constructor_type
@@ -10332,7 +10732,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
 
         element_type = self.type_name_string(pointee_type)
-        mapped_element_type = self.map_type(element_type)
+        mapped_element_type = self.hlsl_bfloat16_storage_type(
+            element_type,
+            operation=(
+                f"storage pointer parameter '{function_name}.{parameter_name}'"
+            ),
+            source_location=getattr(parameter, "source_location", None),
+        )
         if not mapped_element_type or any(
             marker in str(mapped_element_type) for marker in ("*", "&", "[")
         ):
@@ -11574,6 +11980,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if lhs is None:
             return None
         binding = self.hlsl_resource_pointer_binding(target.operand)
+        compound_assignment = self.generate_hlsl_bfloat16_compound_assignment(
+            target,
+            target,
+            value,
+            op,
+            lhs=lhs,
+            target_type=binding.get("element_type") if binding else None,
+        )
+        if compound_assignment is not None:
+            return compound_assignment
         compound_assignment = (
             self.generate_hlsl_minimum_precision_integer_compound_assignment(
                 target,
@@ -11590,6 +12006,54 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             value, binding.get("element_type") if binding else None
         )
         return f"{lhs} {op} {rhs}"
+
+    def generate_hlsl_bfloat16_compound_assignment(
+        self, node, target, value, operator, *, target_type=None, lhs=None
+    ):
+        target_type = target_type or self.hlsl_source_expression_type(target)
+        if not self.is_hlsl_bfloat16_type(target_type):
+            return None
+        mapped_operator = self.map_operator(operator)
+        if mapped_operator not in {"+=", "-=", "*=", "/="}:
+            if mapped_operator == "=":
+                return None
+            raise self.directx_bfloat16_unsupported(
+                "DirectX exact bfloat16 compound assignment does not support "
+                f"'{mapped_operator}'",
+                operation=mapped_operator,
+                source_type=target_type,
+                reason="unsupported-bfloat16-compound-assignment",
+                source_location=getattr(node, "source_location", None),
+            )
+        if lhs is None and not self.hlsl_expression_is_repeatable(target):
+            raise self.directx_bfloat16_unsupported(
+                "DirectX exact bfloat16 compound assignment requires a stable lvalue",
+                operation=mapped_operator,
+                source_type=target_type,
+                reason="side-effecting-assignment-target",
+                source_location=getattr(node, "source_location", None),
+            )
+
+        lhs = lhs or self.generate_expression(target)
+        rhs = self.generate_expression_with_expected(value, None)
+        rhs_type = self.hlsl_source_expression_type(value)
+        if self.is_hlsl_bfloat16_type(rhs_type):
+            rhs = self.hlsl_bfloat16_to_float_expression(rhs)
+        elif not self.is_scalar_value_type(self.map_type(rhs_type)):
+            raise self.directx_bfloat16_unsupported(
+                "DirectX exact bfloat16 compound assignment requires a scalar "
+                f"right operand, got '{self.type_name_string(rhs_type)}'",
+                operation=mapped_operator,
+                source_type=rhs_type,
+                reason="unsupported-compound-assignment-source",
+                source_location=getattr(node, "source_location", None),
+            )
+        left = self.hlsl_bfloat16_to_float_expression(lhs)
+        arithmetic_operator = mapped_operator[0]
+        rounded = self.hlsl_float_to_bfloat16_expression(
+            f"({left} {arithmetic_operator} {rhs})"
+        )
+        return f"{lhs} = {rounded}"
 
     def generate_assignment(self, node, *, statement_context=False):
         if hasattr(node, "target") and hasattr(node, "value"):
@@ -11659,6 +12123,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 target.array, target.index, require_write=True
             )
             binding = self.hlsl_resource_pointer_binding(target.array)
+            compound_assignment = self.generate_hlsl_bfloat16_compound_assignment(
+                node,
+                target,
+                value,
+                op,
+                lhs=lhs,
+                target_type=binding.get("element_type") if binding else None,
+            )
+            if compound_assignment is not None:
+                return compound_assignment
             compound_assignment = (
                 self.generate_hlsl_minimum_precision_integer_compound_assignment(
                     node,
@@ -11698,6 +12172,16 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return "\n".join([*lift_statements, f"{lhs} {op} {rhs}"])
 
         compound_assignment = self.generate_hlsl_complex64_compound_assignment(
+            node,
+            target,
+            value,
+            op,
+            target_type=target_type,
+        )
+        if compound_assignment is not None:
+            return compound_assignment
+
+        compound_assignment = self.generate_hlsl_bfloat16_compound_assignment(
             node,
             target,
             value,
@@ -12600,6 +13084,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if complex_binary is not None:
                 return complex_binary
+            bfloat_binary = self.hlsl_bfloat16_binary_expression(
+                expr,
+                left,
+                right,
+                mapped_op,
+            )
+            if bfloat_binary is not None:
+                return bfloat_binary
             bool_arithmetic = self.hlsl_bool_arithmetic_expression(
                 expr,
                 left,
@@ -12655,6 +13147,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if complex_unary is not None:
                 return complex_unary
+            bfloat_unary = self.hlsl_bfloat16_unary_expression(
+                expr,
+                operand,
+                mapped_op,
+            )
+            if bfloat_unary is not None:
+                return bfloat_unary
             return f"{mapped_op}{operand}"
         elif isinstance(expr, WaveOpNode):
             return self.generate_wave_op_expression(expr)
@@ -12791,6 +13290,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             enum_constructor = generate_enum_constructor_call(self, func_name, args)
             if enum_constructor is not None:
                 return enum_constructor
+
+            bfloat_constructor = self.hlsl_bfloat16_constructor_call(
+                func_name,
+                args,
+                source_location=getattr(expr, "source_location", None),
+            )
+            if bfloat_constructor is not None:
+                return bfloat_constructor
 
             complex64_constructor = self.hlsl_complex64_constructor_call(
                 func_name, args
@@ -13316,6 +13823,26 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
     def hlsl_builtin_function_call(self, func_name, args, *, source_location=None):
         if not func_name or func_name in getattr(self, "function_return_types", {}):
             return None
+        bfloat_argument_types = [
+            self.hlsl_source_expression_type(argument) for argument in args
+        ]
+        if any(
+            self.is_hlsl_bfloat16_type(argument_type)
+            for argument_type in bfloat_argument_types
+        ):
+            source_type = next(
+                argument_type
+                for argument_type in bfloat_argument_types
+                if self.is_hlsl_bfloat16_type(argument_type)
+            )
+            raise self.directx_bfloat16_unsupported(
+                "DirectX exact bfloat16 lowering cannot route bfloat16 payloads "
+                f"through builtin '{func_name}' without a proven source contract",
+                operation=func_name,
+                source_type=source_type,
+                reason="unsupported-bfloat16-builtin",
+                source_location=source_location,
+            )
         boolean_order_call = self.hlsl_ordered_boolean_minmax_call(
             func_name,
             args,
@@ -14045,13 +14572,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     return f"{target_component}{suffix}"
         return target_component
 
-    def hlsl_metal_as_type_target_type(self, func_name):
+    def hlsl_metal_as_type_source_target_type(self, func_name):
         if not func_name or func_name in getattr(self, "function_return_types", {}):
             return None
         match = re.fullmatch(r"(?:metal::)?as_type<(.+)>", str(func_name).strip())
         if match is None:
             return None
-        return self.map_type(match.group(1).strip())
+        return match.group(1).strip()
+
+    def hlsl_metal_as_type_target_type(self, func_name):
+        target_type = self.hlsl_metal_as_type_source_target_type(func_name)
+        return self.map_type(target_type) if target_type is not None else None
 
     def hlsl_explicit_bitcast_type_info(self, type_name):
         if not type_name:
@@ -14167,14 +14698,67 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "32-bit scalar/vector shape or a 64-bit scalar and 2-lane payload"
         )
 
+    def hlsl_bfloat16_bitcast_expression(
+        self,
+        target_type,
+        source_type,
+        argument_code,
+        *,
+        operation,
+        source_location=None,
+    ):
+        target_is_bfloat = self.is_hlsl_bfloat16_type(target_type)
+        source_is_bfloat = self.is_hlsl_bfloat16_type(source_type)
+        target_name = str(self.type_name_string(target_type) or "").strip()
+        source_name = str(self.type_name_string(source_type) or "").strip()
+        unsigned_16_bit_names = {
+            "min16uint",
+            "u16",
+            "uint16",
+            "uint16_t",
+            "unsigned short",
+            "ushort",
+        }
+        target_is_uint16 = target_name in unsigned_16_bit_names
+        source_is_uint16 = source_name in unsigned_16_bit_names
+        if not (target_is_bfloat or source_is_bfloat):
+            return None
+        if target_is_bfloat and source_is_bfloat:
+            return argument_code
+        if target_is_bfloat and source_is_uint16:
+            self.require_hlsl_bfloat16_helper("from_uint16")
+            return f"__crossgl_bfloat16_from_uint16(min16uint({argument_code}))"
+        if target_is_uint16 and source_is_bfloat:
+            self.require_hlsl_bfloat16_helper("to_uint16")
+            return f"__crossgl_bfloat16_to_uint16(uint({argument_code}))"
+
+        raise self.directx_bfloat16_unsupported(
+            "DirectX exact bfloat16 bitcasts require matching bfloat16 and "
+            f"16-bit unsigned payloads, got '{source_name}' to '{target_name}'",
+            operation=operation,
+            source_type=source_type,
+            reason="bitcast-width-or-type-mismatch",
+            source_location=source_location,
+        )
+
     def generate_hlsl_metal_as_type_call(self, func_name, args):
-        target_type = self.hlsl_metal_as_type_target_type(func_name)
-        if target_type is None or len(args) != 1:
+        source_target_type = self.hlsl_metal_as_type_source_target_type(func_name)
+        if source_target_type is None or len(args) != 1:
             return None
 
         argument = args[0]
         argument_code = self.generate_expression_with_expected(argument, None)
         source_type = self.expression_result_type(argument)
+        bfloat_bitcast = self.hlsl_bfloat16_bitcast_expression(
+            source_target_type,
+            source_type,
+            argument_code,
+            operation=str(func_name),
+            source_location=getattr(argument, "source_location", None),
+        )
+        if bfloat_bitcast is not None:
+            return bfloat_bitcast
+        target_type = self.map_type(source_target_type)
         explicit_bitcast = self.hlsl_explicit_bitcast_expression(
             target_type, source_type, argument_code
         )
@@ -14200,11 +14784,24 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return None
         argument = args[0]
         argument_code = self.generate_expression_with_expected(argument, None)
+        source_type = self.expression_result_type(argument)
+        if func_name == "asuint" and self.is_hlsl_bfloat16_type(source_type):
+            self.require_hlsl_bfloat16_helper("to_uint16")
+            return f"uint(__crossgl_bfloat16_to_uint16(uint({argument_code})))"
+        if self.is_hlsl_bfloat16_type(source_type):
+            raise self.directx_bfloat16_unsupported(
+                "DirectX cannot apply 32-bit HLSL bitcast intrinsic "
+                f"'{func_name}' to a 16-bit bfloat16 payload",
+                operation=func_name,
+                source_type=source_type,
+                reason="bitcast-width-mismatch",
+                source_location=getattr(argument, "source_location", None),
+            )
         intrinsic = self.function_map.get(func_name, func_name)
         return self.hlsl_bitcast_or_cast_expression(
             target_type,
             argument_code,
-            self.expression_result_type(argument),
+            source_type,
             intrinsic=intrinsic,
         )
 
@@ -15692,9 +16289,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             vtype = getattr(node, "var_type", getattr(node, "vtype", None))
             if vtype is None:
                 vtype = getattr(node, "param_type", None)
-            type_name = self.hlsl_struct_buffer_resource_types.get(
-                name
-            ) or self.type_name_string(vtype)
+            type_name = (
+                self.hlsl_struct_buffer_source_resource_type(node, vtype)
+                or self.hlsl_struct_buffer_resource_types.get(name)
+                or self.type_name_string(vtype)
+            )
             if not type_name:
                 continue
 
@@ -15715,9 +16314,48 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 resources[name] = resource_type
         return resources
 
+    def hlsl_struct_buffer_source_resource_type(self, node, vtype=None):
+        """Retain source element semantics for physically lowered buffers."""
+        if node is None:
+            return None
+        annotated_source_type = self.hlsl_bfloat16_storage_resource_source_type(node)
+        if annotated_source_type:
+            type_name = self.type_name_string(vtype)
+            generic_base, generic_args = generic_type_parts(type_name)
+            if len(generic_args) == 1:
+                return f"{generic_base}<{annotated_source_type}>"
+
+        qualifiers = {str(value).lower() for value in getattr(node, "qualifiers", [])}
+        if (
+            "buffer" not in qualifiers
+            or self.glsl_buffer_block_attribute(node) is not None
+        ):
+            return None
+
+        if vtype is None:
+            vtype = getattr(node, "var_type", getattr(node, "vtype", None))
+            if vtype is None:
+                vtype = getattr(node, "param_type", None)
+        pointee_type = self.hlsl_buffer_pointer_pointee_type(vtype)
+        source_element_type = self.hlsl_bfloat16_scalar_type_name(pointee_type)
+        if source_element_type is None:
+            return None
+
+        resource_name = (
+            "StructuredBuffer" if "readonly" in qualifiers else "RWStructuredBuffer"
+        )
+        return f"{resource_name}<{source_element_type}>"
+
     def hlsl_struct_buffer_resource_type(self, node, vtype=None):
         if node is None:
             return None
+        annotated_source_type = self.hlsl_bfloat16_storage_resource_source_type(node)
+        if annotated_source_type:
+            type_name = self.type_name_string(vtype)
+            generic_base, generic_args = generic_type_parts(type_name)
+            if len(generic_args) == 1 and generic_args[0] == "uint16_t":
+                return type_name
+
         qualifiers = {str(value).lower() for value in getattr(node, "qualifiers", [])}
         if "buffer" not in qualifiers:
             return None
@@ -15734,7 +16372,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             resource_name = (
                 "StructuredBuffer" if "readonly" in qualifiers else "RWStructuredBuffer"
             )
-            return f"{resource_name}<{self.map_type(pointee_type)}>"
+            storage_type = self.hlsl_bfloat16_storage_type(
+                pointee_type,
+                operation=f"buffer '{getattr(node, 'name', '<anonymous>')}' element",
+                source_location=getattr(node, "source_location", None),
+            )
+            return f"{resource_name}<{storage_type}>"
 
         type_name = self.type_name_string(vtype)
         if not type_name:
@@ -15749,6 +16392,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "StructuredBuffer" if "readonly" in qualifiers else "RWStructuredBuffer"
         )
         return f"{resource_name}<{base_type}>"
+
+    def hlsl_bfloat16_storage_resource_source_type(self, node):
+        annotated_source_type = (getattr(node, "annotations", {}) or {}).get(
+            "directx.bfloat16_storage_source_type"
+        )
+        if annotated_source_type:
+            return annotated_source_type
+        name = getattr(node, "name", getattr(node, "variable_name", None))
+        return self.hlsl_bfloat16_storage_resource_source_types.get(name)
 
     def hlsl_buffer_pointer_pointee_type(self, vtype):
         if isinstance(vtype, PointerType):
@@ -16018,6 +16670,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         element_type = self.hlsl_constant_reference_element_type(raw_type)
         if element_type is None:
             return None
+        if self.is_hlsl_bfloat16_type(element_type):
+            return self.hlsl_bfloat16_scalar_type_name(element_type)
 
         mapped_type = self.map_type(element_type)
         if mapped_type in {
@@ -16133,6 +16787,23 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             qualifiers=list(getattr(parameter, "qualifiers", []) or []),
             annotations=annotations,
         )
+        raw_type = self.hlsl_parameter_raw_type(parameter)
+        source_element_type = self.hlsl_typed_buffer_element_type(
+            raw_type,
+            {"Buffer", "RWBuffer", "StructuredBuffer", "RWStructuredBuffer"},
+        )
+        if source_element_type is None:
+            source_element_type = self.hlsl_pointer_element_type(raw_type)
+        if source_element_type is None:
+            source_element_type = self.hlsl_array_element_type_name(raw_type)
+        source_bfloat_type = self.hlsl_bfloat16_scalar_type_name(source_element_type)
+        if source_bfloat_type is not None:
+            proxy.add_annotation(
+                "directx.bfloat16_storage_source_type", source_bfloat_type
+            )
+            self.hlsl_bfloat16_storage_resource_source_types[proxy.name] = (
+                source_bfloat_type
+            )
         if self.directx_stage_entry_parameter_binding_allows_register_relocation(
             parameter
         ):
@@ -16217,7 +16888,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if qualifiers.intersection({"const", "read", "readonly", "read_only"})
             else "RWStructuredBuffer"
         )
-        return f"{resource_name}<{self.map_type(element_type)}>"
+        storage_type = self.hlsl_bfloat16_storage_type(
+            element_type,
+            operation=(
+                f"storage parameter '{getattr(parameter, 'name', '<anonymous>')}' element"
+            ),
+            source_location=getattr(parameter, "source_location", None),
+        )
+        return f"{resource_name}<{storage_type}>"
 
     def is_hlsl_global_resource_type(self, mapped_type):
         mapped_type = str(mapped_type)
@@ -21484,7 +22162,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         pointee_type = self.hlsl_workgroup_pointer_pointee_type(node)
         if pointee_type is None:
             return None
-        return self.map_type(self.type_name_string(pointee_type))
+        pointee_type_name = self.type_name_string(pointee_type)
+        if self.is_hlsl_bfloat16_type(pointee_type_name):
+            return self.hlsl_bfloat16_scalar_type_name(pointee_type_name)
+        return self.map_type(pointee_type_name)
 
     def hlsl_workgroup_pointer_declaration(self, node, aliases=None):
         if self.hlsl_workgroup_pointer_pointee_type(node) is not None:
@@ -21530,14 +22211,19 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         ):
             array_size = None
 
+        binding_element_type = (
+            self.hlsl_bfloat16_scalar_type_name(element_type)
+            if self.is_hlsl_bfloat16_type(element_type)
+            else self.map_type(element_type)
+        )
         return {
             "kind": "workgroup-pointer",
             "root": root_name,
             "root_kind": "concrete",
             "offset": "0",
             "array_size": array_size,
-            "element_type": self.map_type(element_type),
-            "source_element_type": self.map_type(element_type),
+            "element_type": binding_element_type,
+            "source_element_type": element_type,
             "resource_type": "groupshared",
             "access": "read_write",
         }
@@ -21821,7 +22507,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
         vtype = self.hlsl_groupshared_declaration_type(node)
         name = alias or getattr(node, "name", None)
-        declaration = format_c_style_array_declaration(self.map_type(vtype), name)
+        if self.hlsl_type_contains_bfloat16(vtype):
+            mapped_type = self.hlsl_bfloat16_storage_type(
+                vtype,
+                operation=f"groupshared variable '{name}'",
+                source_location=getattr(node, "source_location", None),
+            )
+        else:
+            mapped_type = self.map_type(vtype)
+        declaration = format_c_style_array_declaration(mapped_type, name)
         declaration = f"{self.local_variable_qualifier(node)}{declaration}"
         return f"{declaration};\n"
 
@@ -33706,7 +34400,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             if qualifiers.intersection({"constant", "const"})
             else "RWStructuredBuffer"
         )
-        return f"{buffer_type}<{self.map_type(element_type)}>"
+        storage_type = self.hlsl_bfloat16_storage_type(
+            element_type,
+            operation=f"Metal buffer '{getattr(node, 'name', '<anonymous>')}' element",
+            source_location=getattr(node, "source_location", None),
+        )
+        return f"{buffer_type}<{storage_type}>"
 
     def hlsl_pointer_element_type(self, vtype):
         if isinstance(vtype, PointerType):
@@ -35740,6 +36439,122 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         else:
             return self.generate_expression(expr)
 
+    def hlsl_bfloat16_scalar_type_name(self, vtype):
+        type_name = self.type_name_string(vtype)
+        if not type_name:
+            return None
+        normalized = str(type_name).strip()
+        normalized = re.sub(
+            r"^(?:(?:const|constant|device|thread|threadgroup|volatile)\s+)+",
+            "",
+            normalized,
+        )
+        normalized = normalized.rsplit("::", 1)[-1]
+        return normalized if normalized in self.HLSL_SOURCE_BFLOAT16_TYPES else None
+
+    def is_hlsl_bfloat16_type(self, vtype):
+        return self.hlsl_bfloat16_scalar_type_name(vtype) is not None
+
+    def hlsl_type_contains_bfloat16(self, vtype, seen=None):
+        type_name = self.type_name_string(vtype)
+        if not type_name:
+            return False
+        if self.is_hlsl_bfloat16_type(type_name):
+            return True
+
+        base_type, array_suffix = split_array_type_suffix(str(type_name))
+        if array_suffix:
+            return self.hlsl_type_contains_bfloat16(base_type, seen=seen)
+
+        generic_base, generic_args = generic_type_parts(base_type)
+        if generic_args:
+            return any(
+                self.hlsl_type_contains_bfloat16(argument, seen=seen)
+                for argument in generic_args
+            )
+
+        if re.search(r"(?:^|::)(?:bfloat|bfloat16|bfloat16_t)(?:[2-9]|\d)", base_type):
+            return True
+
+        seen = set(seen or ())
+        if base_type in seen:
+            return False
+        members = self.struct_member_types.get(base_type)
+        if not members:
+            return False
+        seen.add(base_type)
+        return any(
+            self.hlsl_type_contains_bfloat16(member_type, seen=seen)
+            for member_type in members.values()
+        )
+
+    def directx_bfloat16_unsupported(
+        self,
+        message,
+        *,
+        operation,
+        source_type=None,
+        reason,
+        source_location=None,
+    ):
+        return DirectXBFloat16UnsupportedError(
+            message,
+            target_profile=self.target_profile,
+            operation=operation,
+            source_type=self.type_name_string(source_type),
+            reason=reason,
+            source_location=source_location,
+        )
+
+    def validate_hlsl_bfloat16_storage_profile(
+        self, *, operation, source_type, source_location=None
+    ):
+        if self.target_profile != "dx11":
+            return
+        raise self.directx_bfloat16_unsupported(
+            "DirectX profile dx11 cannot represent exact 16-bit bfloat16 "
+            f"storage for {operation}; use dx12 with Shader Model 6.2 and "
+            "dxc -enable-16bit-types",
+            operation=operation,
+            source_type=source_type,
+            reason="target-profile-lacks-native-16bit-storage",
+            source_location=source_location,
+        )
+
+    def hlsl_bfloat16_storage_type(
+        self, vtype, *, operation="storage declaration", source_location=None
+    ):
+        type_name = self.type_name_string(vtype)
+        base_type, array_suffix = split_array_type_suffix(str(type_name or ""))
+        scalar_type = base_type if array_suffix else vtype
+        if self.is_hlsl_bfloat16_type(scalar_type):
+            self.validate_hlsl_bfloat16_storage_profile(
+                operation=operation,
+                source_type=scalar_type,
+                source_location=source_location,
+            )
+            self.requires_hlsl_bfloat16_storage = True
+            return f"uint16_t{array_suffix}"
+        if self.hlsl_type_contains_bfloat16(vtype):
+            raise self.directx_bfloat16_unsupported(
+                "DirectX exact bfloat16 storage currently supports scalar payload "
+                f"elements, not aggregate or vector type '{self.type_name_string(vtype)}'",
+                operation=operation,
+                source_type=vtype,
+                reason="unsupported-storage-shape",
+                source_location=source_location,
+            )
+        return self.map_type(vtype)
+
+    @staticmethod
+    def bfloat16_bits_for_float(value):
+        """Round binary32 to bfloat16 using round-to-nearest, ties-to-even."""
+        bits = struct.unpack("<I", struct.pack("<f", float(value)))[0]
+        absolute_bits = bits & 0x7FFFFFFF
+        if absolute_bits > 0x7F800000:
+            return ((bits >> 16) | 0x40) & 0xFFFF
+        return ((bits + 0x7FFF + ((bits >> 16) & 1)) >> 16) & 0xFFFF
+
     def map_type(self, vtype):
         """Map types to DirectX equivalents, handling both strings and TypeNode objects."""
         if vtype is None:
@@ -35804,6 +36619,18 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
 
             base_type, generic_args = vtype_str.split("<", 1)
             generic_args = generic_args[:-1].strip()
+            resource_base = base_type.rsplit("::", 1)[-1]
+            if (
+                resource_base in self.HLSL_NATIVE_16_BIT_STORAGE_RESOURCES
+                and "," not in generic_args
+                and self.hlsl_type_contains_bfloat16(generic_args)
+            ):
+                storage_type = self.hlsl_bfloat16_storage_type(
+                    generic_args,
+                    operation=f"{resource_base} element",
+                    source_location=getattr(vtype, "source_location", None),
+                )
+                return f"{base_type}<{storage_type}>"
             feedback_texture_types = {
                 "feedbackTexture2D": "FeedbackTexture2D",
                 "feedbackTexture2DArray": "FeedbackTexture2DArray",
