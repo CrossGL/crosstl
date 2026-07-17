@@ -203,3 +203,189 @@ def test_mlx_gemv_materialized_helper_preserves_bfloat_storage_boundary(tmp_path
     )
     assert "StructuredBuffer<half>" not in generated
     assert "__crossgl_bfloat16_to_float(half(" not in generated
+
+
+def test_materialized_struct_helper_narrows_bfloat_resource_writes(tmp_path):
+    (tmp_path / "writer.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+            typedef bfloat bfloat16_t;
+
+            template <typename T>
+            struct Writer {
+              static void run(device T* output) {
+                output[0] = static_cast<T>(1.0f);
+              }
+            };
+
+            template <typename T>
+            [[kernel]] void write_value(device T* output [[buffer(0)]]) {
+              Writer<T>::run(output);
+            }
+
+            instantiate_kernel("write_bfloat", write_value, bfloat16_t)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        tmp_path,
+        targets=["directx"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["diagnostics"] == []
+    generated = (tmp_path / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+    assert "RWStructuredBuffer<uint16_t> output" in generated
+    assert (
+        "output[uint(output_offset)] = "
+        "uint16_t(__crossgl_bfloat16_from_float(float(1.0)));" in generated
+    )
+
+
+def test_directx_bfloat_storage_native_uint16_mode_narrows_buffer_writes():
+    shader = """
+    shader ExactBFloatStorage {
+        StructuredBuffer<bfloat16_t> input;
+        RWStructuredBuffer<bfloat16_t> output;
+
+        uint16_t preserve_bits(uint16_t bits) {
+            uint16_t copy = bits;
+            return copy;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                bfloat16_t value = input[0];
+                output[0] = value;
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen(target_profile="dx12").generate(
+        crosstl.translator.parse(shader)
+    )
+
+    assert "StructuredBuffer<uint16_t> input : register(t0);" in generated
+    assert "RWStructuredBuffer<uint16_t> output : register(u0);" in generated
+    assert "uint16_t preserve_bits(uint16_t bits)" in generated
+    assert "uint16_t copy = bits;" in generated
+    assert "output[0] = uint16_t(value);" in generated
+    assert "min16uint" not in generated
+    assert "output[0] = value;" not in generated
+
+
+def test_directx_bfloat_storage_preserves_explicit_minimum_precision_types():
+    shader = """
+    shader ExactBFloatStorageMinimumPrecision {
+        StructuredBuffer<bfloat16_t> input;
+        RWStructuredBuffer<bfloat16_t> output;
+
+        min16uint preserve_unsigned(min16uint value) {
+            min16uint copy = value;
+            return copy;
+        }
+
+        min16int preserve_signed(min16int value) {
+            min16int copy = value;
+            return copy;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                output[0] = input[0];
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen(target_profile="dx12").generate(
+        crosstl.translator.parse(shader)
+    )
+
+    assert "StructuredBuffer<uint16_t> input : register(t0);" in generated
+    assert "RWStructuredBuffer<uint16_t> output : register(u0);" in generated
+    assert "min16uint preserve_unsigned(min16uint value)" in generated
+    assert "min16uint copy = value;" in generated
+    assert "min16int preserve_signed(min16int value)" in generated
+    assert "min16int copy = value;" in generated
+    assert "uint16_t preserve_unsigned" not in generated
+    assert "int16_t preserve_signed" not in generated
+
+
+def test_directx_bfloat_storage_narrows_writes_through_resource_parameters():
+    shader = """
+    shader ExactBFloatResourceParameter {
+        StructuredBuffer<bfloat16_t> input;
+        RWStructuredBuffer<bfloat16_t> output;
+
+        void store_value(
+            RWStructuredBuffer<bfloat16_t> destination,
+            bfloat16_t value
+        ) {
+            destination[0] = value;
+        }
+
+        void store_physical_value(
+            RWStructuredBuffer<uint16_t> destination,
+            bfloat16_t value
+        ) {
+            destination[0] = value;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                store_value(output, input[0]);
+                store_physical_value(output, input[0]);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen(target_profile="dx12").generate(
+        crosstl.translator.parse(shader)
+    )
+
+    assert (
+        "void store_value(RWStructuredBuffer<uint16_t> destination, uint value)"
+        in generated
+    )
+    assert "destination[0] = uint16_t(value);" in generated
+    assert "destination[0] = value;" not in generated
+    assert (
+        "void store_physical_value("
+        "RWStructuredBuffer<uint16_t> destination, uint value)" in generated
+    )
+
+
+def test_directx_bfloat_storage_narrows_canonical_buffer_store_values():
+    shader = """
+    shader ExactBFloatCanonicalStore {
+        RWStructuredBuffer<bfloat16_t> output;
+
+        void store_value(bfloat16_t value) {
+            buffer_store(output, 0u, value);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                store_value(bfloat16_t(1.0));
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen(target_profile="dx12").generate(
+        crosstl.translator.parse(shader)
+    )
+
+    assert "RWStructuredBuffer<uint16_t> output : register(u0);" in generated
+    assert " = uint16_t(value);" in generated
+    assert " = value;" not in generated

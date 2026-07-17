@@ -2396,6 +2396,42 @@ def test_hlsl_codegen_lowers_canonical_shuffle_and_fill_up_wave_op(tmp_path):
         assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_hlsl_codegen_widens_native_uint16_shuffle_and_fill_up_delta():
+    code = """
+    shader HLSLShuffleAndFillUpNativeUint16Delta {
+        StructuredBuffer<bfloat16_t> input;
+        RWStructuredBuffer<bfloat16_t> output;
+
+        uint shuffleWithDelta(uint value, uint fill, uint16_t delta) {
+            return WaveShuffleAndFillUp(value, fill, delta);
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uint16_t delta = uint16_t(1u);
+                uint shuffled = shuffleWithDelta(4u, 7u, delta);
+                output[0] = input[shuffled];
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen(target_profile="dx12").generate(
+        parse_code(tokenize_code(code))
+    )
+
+    assert "StructuredBuffer<uint16_t> input : register(t0);" in generated
+    assert "RWStructuredBuffer<uint16_t> output : register(u0);" in generated
+    assert "uint shuffleWithDelta(uint value, uint fill, uint16_t delta)" in generated
+    assert "uint16_t delta = uint16_t(1u);" in generated
+    assert (
+        "return __crossgl_wave_shuffle_and_fill_up_uint("
+        "value, fill, uint(delta));" in generated
+    )
+    assert "min16uint" not in generated
+
+
 @pytest.mark.parametrize(
     ("expression", "match"),
     (

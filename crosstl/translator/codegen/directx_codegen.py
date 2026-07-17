@@ -1063,6 +1063,8 @@ class HLSLCodeGen:
     HLSL_INTEGER_ARITHMETIC_BASE_TYPES = (
         "uint64_t",
         "int64_t",
+        "uint16_t",
+        "int16_t",
         "min16uint",
         "min16int",
         "min12int",
@@ -1390,7 +1392,9 @@ class HLSLCodeGen:
         "min16int",
         "min12int",
         "int64_t",
+        "int16_t",
         "uint",
+        "uint16_t",
         "min16uint",
         "uint64_t",
     }
@@ -1399,7 +1403,9 @@ class HLSLCodeGen:
         "min16int",
         "min12int",
         "int64_t",
+        "int16_t",
         "uint",
+        "uint16_t",
         "min16uint",
         "uint64_t",
     }
@@ -3895,6 +3901,7 @@ class HLSLCodeGen:
         requires_storage = getattr(self, "requires_hlsl_bfloat16_storage", False)
         if not required and not requires_storage:
             return ""
+        uint16_type = "uint16_t" if requires_storage else "min16uint"
 
         code = [
             "// CrossGL exact bfloat16 lowering: register payloads use uint low bits.\n"
@@ -3928,17 +3935,17 @@ float __crossgl_bfloat16_to_float(uint value) {
 """
             ),
             "from_uint16": (
-                """
-uint __crossgl_bfloat16_from_uint16(min16uint value) {
+                f"""
+uint __crossgl_bfloat16_from_uint16({uint16_type} value) {{
     return uint(value) & 0xffffu;
-}
+}}
 """
             ),
             "to_uint16": (
-                """
-min16uint __crossgl_bfloat16_to_uint16(uint value) {
-    return min16uint(value & 0xffffu);
-}
+                f"""
+{uint16_type} __crossgl_bfloat16_to_uint16(uint value) {{
+    return {uint16_type}(value & 0xffffu);
+}}
 """
             ),
         }
@@ -8571,6 +8578,65 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         self.require_hlsl_bfloat16_helper("from_float")
         return f"__crossgl_bfloat16_from_float(float({rendered}))"
 
+    def hlsl_bfloat16_storage_assignment_expression(
+        self, target, rendered, target_type, *, source_type=None
+    ):
+        storage_expression = None
+        if isinstance(target, ArrayAccessNode):
+            storage_expression = target.array
+        elif (
+            isinstance(target, UnaryOpNode)
+            and not getattr(target, "is_postfix", False)
+            and target.op == "*"
+        ):
+            storage_expression = target.operand
+        if storage_expression is None:
+            return rendered
+
+        binding = self.hlsl_resource_pointer_binding(storage_expression)
+        if binding is None or binding.get("access") not in {"write", "read_write"}:
+            return rendered
+        source_element_type = binding.get("source_element_type")
+        logical_target_type = (
+            target_type
+            if self.is_hlsl_bfloat16_type(target_type)
+            else source_element_type
+        )
+        physical_element_type = binding.get("element_type")
+        physical_bfloat_store = (
+            self.is_hlsl_bfloat16_type(source_type)
+            and getattr(self, "requires_hlsl_bfloat16_storage", False)
+            and self.map_type(physical_element_type) == "uint16_t"
+        )
+        if (
+            not self.is_hlsl_bfloat16_type(logical_target_type)
+            and not physical_bfloat_store
+        ):
+            return rendered
+        resource_name = self.hlsl_resource_type_name(binding.get("resource_type"))
+        if (
+            resource_name
+            not in {
+                "RWBuffer",
+                "RWStructuredBuffer",
+                "RasterizerOrderedBuffer",
+                "RasterizerOrderedStructuredBuffer",
+            }
+            and binding.get("kind") != "workgroup-pointer"
+        ):
+            return rendered
+
+        storage_type = self.hlsl_bfloat16_storage_type(
+            (
+                logical_target_type
+                if self.is_hlsl_bfloat16_type(logical_target_type)
+                else source_type
+            ),
+            operation="storage assignment",
+            source_location=getattr(target, "source_location", None),
+        )
+        return f"{storage_type}({rendered})"
+
     def hlsl_bfloat16_conversion_expression(
         self, rendered, expected_type, source_type, *, source_location=None
     ):
@@ -8654,12 +8720,17 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         signed_narrowing = {
             ("int", "int64_t"),
             ("int", "uint64_t"),
+            ("int16_t", "int"),
+            ("int16_t", "int64_t"),
+            ("int16_t", "uint64_t"),
             ("min16int", "int"),
             ("min16int", "int64_t"),
             ("min16int", "uint64_t"),
         }
         unsigned_narrowing = {
             ("uint", "uint64_t"),
+            ("uint16_t", "uint"),
+            ("uint16_t", "uint64_t"),
             ("min16uint", "uint"),
             ("min16uint", "uint64_t"),
         }
@@ -8679,6 +8750,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "double",
             "int64_t",
             "uint64_t",
+            "int16_t",
+            "uint16_t",
             "int",
             "min16int",
             "min12int",
@@ -8707,9 +8780,15 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "int64_t2",
             "int64_t3",
             "int64_t4",
+            "int16_t2",
+            "int16_t3",
+            "int16_t4",
             "uint64_t2",
             "uint64_t3",
             "uint64_t4",
+            "uint16_t2",
+            "uint16_t3",
+            "uint16_t4",
             "double2",
             "double3",
             "double4",
@@ -8749,6 +8828,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return "uint64_t"
         if mapped_type.startswith("int64_t"):
             return "int64_t"
+        if mapped_type.startswith("uint16_t"):
+            return "uint16_t"
+        if mapped_type.startswith("int16_t"):
+            return "int16_t"
         if mapped_type.startswith("uint"):
             return "uint"
         if mapped_type.startswith("min16uint"):
@@ -8773,6 +8856,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "min12int",
             "uint64_t",
             "int64_t",
+            "uint16_t",
+            "int16_t",
             "double",
             "float",
             "half",
@@ -11469,6 +11554,24 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 if resource_name.startswith(("RW", "RasterizerOrdered"))
                 else "read"
             )
+            source_resource_type = self.local_variable_source_types.get(
+                raw_name
+            ) or self.local_variable_types.get(raw_name)
+            source_element_type = self.hlsl_typed_buffer_element_type(
+                source_resource_type,
+                {
+                    "Buffer",
+                    "StructuredBuffer",
+                    "RWBuffer",
+                    "RWStructuredBuffer",
+                    "RasterizerOrderedBuffer",
+                    "RasterizerOrderedStructuredBuffer",
+                },
+            ) or self.hlsl_pointer_element_type(source_resource_type)
+            source_element_type = (
+                self.hlsl_bfloat16_scalar_type_name(source_element_type)
+                or source_element_type
+            )
             rendered_root = self.hlsl_identifier_name(raw_name)
             return {
                 "root": rendered_root,
@@ -11477,8 +11580,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 ),
                 "resource_type": resource_type,
                 "element_type": self.hlsl_resource_pointer_element_type(resource_type),
-                "source_element_type": self.hlsl_resource_pointer_element_type(
-                    resource_type
+                "source_element_type": (
+                    source_element_type
+                    or self.hlsl_resource_pointer_element_type(resource_type)
                 ),
                 "access": access,
             }
@@ -12034,8 +12138,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         if compound_assignment is not None:
             return compound_assignment
-        rhs = self.generate_expression_with_expected(
-            value, binding.get("element_type") if binding else None
+        target_type = binding.get("element_type") if binding else None
+        rhs = self.generate_expression_with_expected(value, target_type)
+        rhs = self.hlsl_bfloat16_storage_assignment_expression(
+            target,
+            rhs,
+            target_type,
+            source_type=self.hlsl_source_expression_type(value),
         )
         return f"{lhs} {op} {rhs}"
 
@@ -12084,6 +12193,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         arithmetic_operator = mapped_operator[0]
         rounded = self.hlsl_float_to_bfloat16_expression(
             f"({left} {arithmetic_operator} {rhs})"
+        )
+        rounded = self.hlsl_bfloat16_storage_assignment_expression(
+            target, rounded, target_type, source_type=target_type
         )
         return f"{lhs} = {rounded}"
 
@@ -12177,8 +12289,13 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if compound_assignment is not None:
                 return compound_assignment
-            rhs = self.generate_expression_with_expected(
-                value, binding.get("element_type") if binding else None
+            target_type = binding.get("element_type") if binding else None
+            rhs = self.generate_expression_with_expected(value, target_type)
+            rhs = self.hlsl_bfloat16_storage_assignment_expression(
+                target,
+                rhs,
+                target_type,
+                source_type=self.hlsl_source_expression_type(value),
             )
             return f"{lhs} {op} {rhs}"
 
@@ -12238,6 +12355,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         lhs = self.generate_expression(target)
         rhs = self.generate_expression_with_expected(
             value, self.expression_result_type(target)
+        )
+        rhs = self.hlsl_bfloat16_storage_assignment_expression(
+            target,
+            rhs,
+            target_type,
+            source_type=self.hlsl_source_expression_type(value),
         )
         return f"{lhs} {op} {rhs}"
 
@@ -14151,7 +14274,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             elif (
                 source_type in self.HLSL_NARROW_INTEGER_TYPE_NAMES
                 or self.hlsl_scalar_or_vector_component_type(mapped_type)
-                in {"min12int", "min16int", "min16uint"}
+                in {"int16_t", "min12int", "min16int", "min16uint", "uint16_t"}
             ):
                 reason = "unsupported-integer-width"
             else:
@@ -14805,7 +14928,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             return argument_code
         if target_is_bfloat and source_is_uint16:
             self.require_hlsl_bfloat16_helper("from_uint16")
-            return f"__crossgl_bfloat16_from_uint16(min16uint({argument_code}))"
+            uint16_type = self.map_type("uint16_t")
+            return f"__crossgl_bfloat16_from_uint16({uint16_type}({argument_code}))"
         if target_is_uint16 and source_is_bfloat:
             self.require_hlsl_bfloat16_helper("to_uint16")
             return f"__crossgl_bfloat16_to_uint16(uint({argument_code}))"
@@ -14905,6 +15029,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         if intrinsic in {"asuint", "asint"} and source_base in {
             "int",
             "uint",
+            "int16_t",
+            "uint16_t",
             "min16int",
             "min16uint",
             "min12int",
@@ -14934,6 +15060,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         for component in (
             "min16float",
             "min10float",
+            "uint16_t",
+            "int16_t",
             "min16uint",
             "min16int",
             "min12int",
@@ -15091,6 +15219,9 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         value = self.generate_expression_with_expected(args[0], mapped_value_type)
         fill = self.generate_expression_with_expected(args[1], mapped_value_type)
         delta = self.generate_expression_with_expected(args[2], "uint")
+        delta_type = self.map_type(self.expression_result_type(args[2]))
+        if delta_type in {"int16_t", "uint16_t", "min16int", "min16uint"}:
+            delta = f"uint({delta})"
         result = f"{helper_name}({value}, {fill}, {delta})"
         return self.hlsl_wave_shuffle_result_conversion(operation, args, result)
 
@@ -15151,9 +15282,11 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
         return expected_type == "bool" and actual_type in {
             "int",
+            "int16_t",
             "min16int",
             "min12int",
             "uint",
+            "uint16_t",
             "min16uint",
             "int64_t",
             "uint64_t",
@@ -15808,6 +15941,48 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             index = self.hlsl_resource_pointer_offset_index(buffer, index)
             value = self.generate_expression(args[2])
             resource_type = self.hlsl_buffer_helper_resource_type(args[0])
+            source_element_type = self.hlsl_typed_buffer_element_type(
+                resource_type,
+                {
+                    "RWBuffer",
+                    "RWStructuredBuffer",
+                    "RasterizerOrderedBuffer",
+                    "RasterizerOrderedStructuredBuffer",
+                },
+            )
+            binding = self.hlsl_resource_pointer_binding(args[0])
+            if binding is not None and self.is_hlsl_bfloat16_type(
+                binding.get("source_element_type")
+            ):
+                source_element_type = binding["source_element_type"]
+            value_source_type = self.hlsl_source_expression_type(args[2])
+            logical_bfloat_type = next(
+                (
+                    value_type
+                    for value_type in (source_element_type, value_source_type)
+                    if self.is_hlsl_bfloat16_type(value_type)
+                ),
+                None,
+            )
+            physical_resource_type = self.map_type(
+                self.directx_resource_declaration_type(resource_type)
+            )
+            physical_element_type = self.hlsl_typed_buffer_element_type(
+                physical_resource_type,
+                {
+                    "RWBuffer",
+                    "RWStructuredBuffer",
+                    "RasterizerOrderedBuffer",
+                    "RasterizerOrderedStructuredBuffer",
+                },
+            )
+            if logical_bfloat_type is not None and physical_element_type == "uint16_t":
+                storage_type = self.hlsl_bfloat16_storage_type(
+                    logical_bfloat_type,
+                    operation="buffer store",
+                    source_location=getattr(args[2], "source_location", None),
+                )
+                value = f"{storage_type}({value})"
             index = self.hlsl_resource_index_expression(
                 args[0],
                 args[1],
@@ -16758,6 +16933,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "half",
             "int",
             "int64_t",
+            "int16_t",
             "min10float",
             "min12int",
             "min16float",
@@ -16765,6 +16941,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "min16uint",
             "uint",
             "uint64_t",
+            "uint16_t",
         }:
             return mapped_type
         return None
@@ -18272,6 +18449,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "min16int",
             "min12int",
             "min16uint",
+            "int16_t",
+            "uint16_t",
             "float",
             "half",
             "double",
@@ -20006,6 +20185,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             "min16float",
             "min16uint",
             "min16int",
+            "uint16_t",
+            "int16_t",
             "float",
             "double",
             "half",
@@ -29936,6 +30117,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "double",
                 "int64_t",
                 "uint64_t",
+                "int16_t",
+                "uint16_t",
                 "int",
                 "min16int",
                 "min12int",
@@ -29961,6 +30144,8 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "double",
                 "int64_t",
                 "uint64_t",
+                "int16_t",
+                "uint16_t",
                 "int",
                 "min16int",
                 "min12int",
@@ -35633,7 +35818,7 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 "min10float",
             }:
                 zero_value = "0.0"
-            elif component_type in {"uint", "min16uint"}:
+            elif component_type in {"uint", "uint16_t", "min16uint"}:
                 zero_value = "0u"
             elif component_type == "bool":
                 zero_value = "false"
@@ -36623,6 +36808,20 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
         return self.map_type(vtype)
 
+    def hlsl_native_16_bit_source_type(self, source_type, mapped_type):
+        if not getattr(self, "requires_hlsl_bfloat16_storage", False):
+            return mapped_type
+        source_name = str(self.type_name_string(source_type) or "").strip()
+        if source_name.startswith(("min16int", "min16uint")):
+            return mapped_type
+        for minimum_type, native_type in (
+            ("min16int", "int16_t"),
+            ("min16uint", "uint16_t"),
+        ):
+            if str(mapped_type).startswith(minimum_type):
+                return native_type + str(mapped_type)[len(minimum_type) :]
+        return mapped_type
+
     @staticmethod
     def bfloat16_bits_for_float(value):
         """Round binary32 to bfloat16 using round-to-nearest, ties-to-even."""
@@ -36717,11 +36916,12 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                 return f"{feedback_texture_type}<{generic_args}>"
             mapped_type = self.type_mapping.get(vtype_str)
             if mapped_type is not None:
-                return mapped_type
+                return self.hlsl_native_16_bit_source_type(vtype_str, mapped_type)
             if "," not in generic_args:
                 return f"{base_type}<{self.map_type(generic_args)}>"
 
-        return self.type_mapping.get(vtype_str, vtype_str)
+        mapped_type = self.type_mapping.get(vtype_str, vtype_str)
+        return self.hlsl_native_16_bit_source_type(vtype_str, mapped_type)
 
     def map_struct_member_type(self, struct_name, member_name, vtype):
         mapped_type = self.map_type(vtype)
