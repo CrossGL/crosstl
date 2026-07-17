@@ -152,7 +152,8 @@ template <int TAG>
     uint simd_lane_id [[thread_index_in_simdgroup]],
     uint simd_group_id [[simdgroup_index_in_threadgroup]]) {
   constexpr int SIMD_SIZE = 32;
-  float value = float(TAG + SIMD_SIZE + simd_lane_id + simd_group_id);
+  float value =
+      (has_w ? 1.0f : 0.0f) + float(TAG + SIMD_SIZE + simd_lane_id + simd_group_id);
   value = simd_sum(value);
   value = simd_sum(value);
   value = simd_sum(value);
@@ -168,7 +169,8 @@ template <int TAG>
     uint simd_lane_id [[thread_index_in_simdgroup]],
     uint simd_group_id [[simdgroup_index_in_threadgroup]]) {
   constexpr int SIMD_SIZE = 32;
-  float value = float(TAG + SIMD_SIZE + lsize + simd_lane_id + simd_group_id);
+  float value = (has_w ? 1.0f : 0.0f) +
+      float(TAG + SIMD_SIZE + lsize + simd_lane_id + simd_group_id);
   value = simd_sum(value);
   value = simd_sum(value);
   value = simd_sum(value);
