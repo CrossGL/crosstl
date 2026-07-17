@@ -13082,6 +13082,207 @@ def _collect_metal_template_type_bindings(
     return True
 
 
+def _fold_concrete_metal_struct_template_arguments(
+    preprocessor: Any,
+    source: str,
+) -> str:
+    """Fold proven integral arguments before concrete struct materialization.
+
+    Function-template materialization can expose a struct specialization whose
+    non-type argument is still a compound expression. Folding that expression
+    while its lexical constants and grouping are intact prevents textual
+    parameter substitution from changing the meaning of constexpr data-member
+    initializers in the specialized owner.
+    """
+    working = source
+    for _ in range(preprocessor.max_template_specializations + 1):
+        templates = preprocessor._find_template_structs(working)
+        primary_templates = [
+            template
+            for template in templates
+            if preprocessor._template_struct_specialization_arguments(template) is None
+        ]
+        templates_by_name = {template.name: template for template in primary_templates}
+        if not templates_by_name:
+            return working
+
+        template_spans = preprocessor._find_template_declaration_spans(working)
+        explicit_specialization_keys = (
+            preprocessor._find_explicit_struct_specialization_keys(
+                working,
+                templates_by_name,
+            )
+        )
+        partial_specializations: dict[str, list[tuple[Any, list[str]]]] = {}
+        for template in templates:
+            specialization_arguments = (
+                preprocessor._template_struct_specialization_arguments(template)
+            )
+            if specialization_arguments is not None:
+                partial_specializations.setdefault(template.name, []).append(
+                    (template, specialization_arguments)
+                )
+
+        instantiations, _selected_partials = (
+            preprocessor._find_explicit_template_struct_instantiations(
+                working,
+                templates_by_name,
+                template_spans,
+                explicit_specialization_keys,
+                partial_specializations,
+            )
+        )
+        if not instantiations:
+            return working
+
+        owner_spans = [(0, len(working))]
+        type_aliases = preprocessor._collect_local_type_alias_bindings(
+            working,
+            owner_spans,
+            skip_spans=template_spans,
+        )
+        constexpr_functions = preprocessor._static_constexpr_function_index(working)
+        preprocessor._static_constexpr_helper_values = {}
+        preprocessor._static_constexpr_helper_resolution_stack = []
+        integral_constants = preprocessor._collect_local_integral_constant_bindings(
+            working,
+            owner_spans,
+            type_aliases,
+            constexpr_functions,
+        )
+
+        candidates: list[tuple[int, int, str]] = []
+        for struct_name, _scanner_arguments, span in instantiations:
+            template = templates_by_name.get(struct_name)
+            if template is None:
+                continue
+            parameter_angle_start = working.find("<", template.span[0])
+            if parameter_angle_start == -1:
+                continue
+            parameter_angle_end = preprocessor._find_matching_template_param_angle(
+                working,
+                parameter_angle_start,
+            )
+            if parameter_angle_end is None:
+                continue
+            parameters = preprocessor._parse_template_parameter_list(
+                working[parameter_angle_start + 1 : parameter_angle_end]
+            )
+            if not parameters:
+                continue
+
+            angle_start = working.find("<", span[0], span[1])
+            if angle_start == -1:
+                continue
+            angle_end = preprocessor._find_matching_angle(working, angle_start)
+            if angle_end is None or angle_end >= span[1]:
+                continue
+            arguments = preprocessor._split_top_level_commas(
+                working[angle_start + 1 : angle_end]
+            )
+
+            visible_constants = preprocessor._local_integral_constants_at(
+                integral_constants,
+                span[0],
+            )
+            bindings: dict[str, str] = {}
+            normalized_arguments = list(arguments)
+            folded_argument = False
+            for index, (parameter, argument) in enumerate(
+                zip(parameters, normalized_arguments)
+            ):
+                normalized_argument = argument
+                if not parameter.is_type_parameter and parameter.declared_type:
+                    declared_type = preprocessor._replace_identifiers(
+                        parameter.declared_type,
+                        bindings,
+                    )
+                    value_type = preprocessor._static_constexpr_integral_type(
+                        declared_type
+                    )
+                    if value_type is not None:
+                        resolved_argument = (
+                            preprocessor._substitute_template_argument_static_constants(
+                                argument,
+                                visible_constants,
+                            )
+                        )
+                        resolved_argument = (
+                            preprocessor._replace_concrete_sizeof_expressions(
+                                resolved_argument,
+                                lambda type_text: (
+                                    preprocessor._resolve_type_aliases_at(
+                                        type_text,
+                                        type_aliases,
+                                        span[0],
+                                    )
+                                ),
+                            )
+                        )
+                        resolved_argument, evaluation, _unresolved = (
+                            preprocessor._resolve_static_constexpr_calls(
+                                resolved_argument,
+                                constexpr_functions,
+                                span[0],
+                            )
+                        )
+                        value = preprocessor._proven_integral_constant_value(
+                            value_type,
+                            evaluation,
+                        )
+                        if value is not None:
+                            argument_text = argument.strip()
+                            already_grouped = (
+                                argument_text.startswith("(")
+                                and preprocessor._find_matching_delimiter(
+                                    argument_text,
+                                    0,
+                                    "(",
+                                    ")",
+                                )
+                                == len(argument_text) - 1
+                            )
+                            normalized_argument = (
+                                argument
+                                if already_grouped
+                                else preprocessor._static_initializer_reference(
+                                    resolved_argument
+                                )
+                            )
+                            normalized_arguments[index] = normalized_argument
+                            folded_argument = (
+                                folded_argument or normalized_argument != argument
+                            )
+                if parameter.name is not None:
+                    bindings[parameter.name] = normalized_argument
+
+            if not folded_argument:
+                continue
+            replacement = (
+                working[span[0] : angle_start + 1]
+                + ", ".join(normalized_arguments)
+                + working[angle_end : span[1]]
+            )
+            if replacement != working[span[0] : span[1]]:
+                candidates.append((span[0], span[1], replacement))
+
+        if not candidates:
+            return working
+
+        # Apply innermost references first; a subsequent pass can then fold an
+        # enclosing template argument without overlapping textual replacements.
+        replacements: list[tuple[int, int, str]] = []
+        for candidate in sorted(candidates, key=lambda item: (item[1] - item[0])):
+            if any(
+                candidate[0] < selected[1] and selected[0] < candidate[1]
+                for selected in replacements
+            ):
+                continue
+            replacements.append(candidate)
+        working = preprocessor._apply_text_replacements(working, replacements)
+    return working
+
+
 def _metal_expand_materialized_struct_type(
     preprocessor: Any,
     type_text: str,
@@ -18753,6 +18954,10 @@ def _project_template_materialization_for_artifact(
     specializations.extend(inferred_plain_specializations)
     materialized = preprocessor._lower_concrete_const_for_loop_callbacks(materialized)
 
+    materialized = _fold_concrete_metal_struct_template_arguments(
+        preprocessor,
+        materialized,
+    )
     existing_struct_specializations = set(
         preprocessor._materialized_struct_specializations
     )
@@ -18760,6 +18965,7 @@ def _project_template_materialization_for_artifact(
         materialized,
         work_budget=explicit_work_budget,
     )
+    materialized = preprocessor._evaluate_static_assertions(materialized)
     materialized = preprocessor._elide_stateless_compile_time_globals(materialized)
     discovered_struct_specializations = (
         set(preprocessor._materialized_struct_specializations)

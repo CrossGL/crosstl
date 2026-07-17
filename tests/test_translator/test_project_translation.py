@@ -46930,6 +46930,198 @@ def test_translate_project_reports_unresolved_metal_static_constant_cycle(tmp_pa
     assert "initializer dependency chain is cyclic" in diagnostic["message"]
 
 
+def test_metal_static_assertions_respect_nested_owner_scope():
+    from crosstl.backend.Metal.preprocessor import MetalPreprocessor
+
+    source = textwrap.dedent("""
+        struct Outer {
+            static constexpr int reads = 4;
+            static_assert(reads == 4, "Unexpected outer read count.");
+
+            struct Inner {
+                static constexpr int reads = 2;
+                static_assert(reads == 2, "Unexpected inner read count.");
+            };
+        };
+        """).strip()
+
+    evaluated = MetalPreprocessor()._evaluate_static_assertions(source)
+
+    assert "static_assert" not in evaluated
+    assert "static constexpr int reads = 4" in evaluated
+    assert "static constexpr int reads = 2" in evaluated
+
+
+def test_translate_project_evaluates_specialized_struct_member_assertions(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "loader.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            #define PROJECT_CONST static constant constexpr const
+            PROJECT_CONST int SIMD_SIZE = 32;
+
+            template <int Width = 8, int Bits = 4>
+            inline constexpr short get_pack_factor() {
+                return Width / Bits;
+            }
+
+            template <
+                short Rows,
+                short Columns,
+                short Threads,
+                short GroupSize,
+                short Bits>
+            struct Loader {
+                PROJECT_CONST short pack_factor =
+                    get_pack_factor<8, Bits>();
+                PROJECT_CONST short packed_columns = Columns / pack_factor;
+                PROJECT_CONST short reads =
+                    (packed_columns * Rows < Threads)
+                        ? 1
+                        : (packed_columns * Rows) / Threads;
+                static_assert(
+                    (reads * pack_factor) <= GroupSize,
+                    "Unsupported read count.");
+                int value;
+            };
+
+            template <
+                typename T,
+                short Blocks,
+                short Warps,
+                short GroupSize>
+            [[kernel]] void launch(device T* out [[buffer(0)]]) {
+                Loader<
+                    32,
+                    32,
+                    Blocks * Warps * SIMD_SIZE,
+                    GroupSize,
+                    4> loader;
+                loader.value = int(Blocks + Warps);
+                out[0] = T(loader.value);
+            }
+
+            instantiate_kernel("launch_one", launch, int, 1, 2, 16)
+            instantiate_kernel("launch_two", launch, int, 2, 2, 8)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx", "opengl"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 2
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+    artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
+    outputs = {
+        target: (repo / artifact["path"]).read_text(encoding="utf-8")
+        for target, artifact in artifacts.items()
+    }
+    for output in outputs.values():
+        assert "static_assert" not in output
+        assert "Loader_32_32_1_2_32_16_4" in output
+        assert "Loader_32_32_2_2_32_8_4" in output
+    assert_directx_compute_validates_if_available(outputs["directx"], tmp_path)
+    assert_compute_glsl_validates_if_available(outputs["opengl"], tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("owner_body", "unresolved_dependency"),
+    [
+        (
+            """
+            const short reads = Value;
+            static_assert(reads <= 16, "Unsupported read count.");
+            """,
+            "reads",
+        ),
+        (
+            """
+            static_assert(reads <= 16, "Unsupported read count.");
+            static constant constexpr const short reads = Value;
+            """,
+            "reads",
+        ),
+        (
+            """
+            static constant constexpr const short reads = other;
+            static constant constexpr const short other = reads;
+            static_assert(reads <= 16, "Unsupported read count.");
+            """,
+            "reads",
+        ),
+        (
+            """
+            short runtime_width;
+            static constant constexpr const short reads = Value + runtime_width;
+            static_assert(reads <= 16, "Unsupported read count.");
+            """,
+            "runtime_width",
+        ),
+    ],
+    ids=["ordinary-const", "declared-after-use", "cycle", "runtime-dependent"],
+)
+def test_translate_project_rejects_unproven_struct_member_assertions(
+    tmp_path,
+    owner_body,
+    unresolved_dependency,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "unresolved.metal").write_text(
+        textwrap.dedent(f"""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            template <short Value>
+            struct Limits {{
+                {textwrap.dedent(owner_body).strip()}
+                int value;
+            }};
+
+            template <typename T>
+            [[kernel]] void launch(device T* out [[buffer(0)]]) {{
+                Limits<8> limits;
+                limits.value = 1;
+                out[0] = T(limits.value);
+            }}
+
+            instantiate_kernel("launch_int", launch, int)
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=["directx"],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    diagnostic = next(
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == "project.translate.metal-static-assertion"
+    )
+    assert diagnostic["details"]["staticAssertion"]["reason"] == (
+        "condition-unresolved"
+    )
+    assert diagnostic["details"]["staticAssertion"]["unresolvedDependencies"] == [
+        unresolved_dependency
+    ]
+    assert not (repo / payload["artifacts"][0]["path"]).exists()
+
+
 @pytest.mark.parametrize("target", ["directx", "opengl"])
 def test_translate_project_removes_proven_metal_static_assertions(tmp_path, target):
     repo = tmp_path / "repo"
