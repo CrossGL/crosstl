@@ -1688,8 +1688,18 @@ REPORT_ARTIFACT_FIELDS = frozenset(
         "specializationMaterialization",
         "templateMaterialization",
         "requiredCapabilities",
+        "bfloat16Lowering",
         "entryPoint",
         "execution",
+    )
+)
+REPORT_ARTIFACT_BFLOAT16_LOWERING_FIELDS = frozenset(
+    (
+        "status",
+        "approximationUsed",
+        "registerRepresentation",
+        "storageRepresentation",
+        "roundingMode",
     )
 )
 WEBGL_PROJECT_STAGE_LABEL_BY_GLSLANG = {
@@ -19440,7 +19450,10 @@ def _directx_bfloat16_failure_details(
         "sourcePath": unit.relative_path,
         "targetArtifact": artifact_path or "",
     }
-    contract = {}
+    contract = {
+        "approximationUsed": False,
+        "status": "unsupported",
+    }
     fields = {
         "targetProfile": getattr(exc, "target_profile", None),
         "operation": getattr(exc, "operation", None),
@@ -22417,10 +22430,22 @@ def _finalize_project_generated_artifact(
             "target": reflected_entry.get("name"),
             "stage": reflected_entry.get("stage"),
         }
-    if target == "directx" and hlsl_requires_native_16bit_types(generated_source):
-        required_capabilities = set(artifact.get("requiredCapabilities", ()))
-        required_capabilities.add("directx.native-16bit-types")
-        artifact["requiredCapabilities"] = sorted(required_capabilities)
+    if target == "directx":
+        uses_native_16bit_storage = hlsl_requires_native_16bit_types(generated_source)
+        if "// CrossGL exact bfloat16 lowering:" in generated_source:
+            artifact["bfloat16Lowering"] = {
+                "status": "exact",
+                "approximationUsed": False,
+                "registerRepresentation": "uint-low-16-bits",
+                "storageRepresentation": (
+                    "native-uint16" if uses_native_16bit_storage else "not-required"
+                ),
+                "roundingMode": "round-to-nearest-ties-to-even",
+            }
+        if uses_native_16bit_storage:
+            required_capabilities = set(artifact.get("requiredCapabilities", ()))
+            required_capabilities.add("directx.native-16bit-types")
+            artifact["requiredCapabilities"] = sorted(required_capabilities)
     artifact["generatedHash"] = _source_hash(output_path)
     artifact["generatedSizeBytes"] = output_path.stat().st_size
     artifact["sourceMap"] = _artifact_source_map(config, unit, target, output_path)
@@ -47958,6 +47983,47 @@ def _artifact_template_materialization_contract_reasons(
     return reasons
 
 
+def _artifact_bfloat16_lowering_contract_reasons(
+    index: int,
+    artifact: Mapping[str, Any],
+) -> list[str]:
+    if "bfloat16Lowering" not in artifact:
+        return []
+
+    prefix = f"artifacts[{index}].bfloat16Lowering"
+    contract = artifact.get("bfloat16Lowering")
+    if not isinstance(contract, Mapping):
+        return [f"{prefix} must be an object"]
+
+    reasons = _unsupported_mapping_field_reasons(
+        prefix,
+        contract,
+        REPORT_ARTIFACT_BFLOAT16_LOWERING_FIELDS,
+    )
+    target = artifact.get("target")
+    if (
+        not _is_non_empty_string(target)
+        or _normalized_targets([target])[0] != "directx"
+    ):
+        reasons.append(f"{prefix} is only supported for DirectX artifacts")
+    if contract.get("status") != "exact":
+        reasons.append(f"{prefix}.status must be exact")
+    if contract.get("approximationUsed") is not False:
+        reasons.append(f"{prefix}.approximationUsed must be false")
+    if contract.get("registerRepresentation") != "uint-low-16-bits":
+        reasons.append(f"{prefix}.registerRepresentation must be uint-low-16-bits")
+    if contract.get("storageRepresentation") not in {
+        "native-uint16",
+        "not-required",
+    }:
+        reasons.append(
+            f"{prefix}.storageRepresentation must be native-uint16 or not-required"
+        )
+    if contract.get("roundingMode") != "round-to-nearest-ties-to-even":
+        reasons.append(f"{prefix}.roundingMode must be round-to-nearest-ties-to-even")
+    return reasons
+
+
 def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnostic]:
     if not isinstance(report, Mapping):
         return [_invalid_report_diagnostic(path, ["expected a JSON object"])]
@@ -48344,6 +48410,9 @@ def _report_contract_diagnostics(path: Path, report: Any) -> list[ProjectDiagnos
                         artifact.get("requiredCapabilities"),
                     )
                 )
+            reasons.extend(
+                _artifact_bfloat16_lowering_contract_reasons(index, artifact)
+            )
             if isinstance(project, Mapping):
                 reasons.extend(
                     _artifact_defines_contract_reasons(

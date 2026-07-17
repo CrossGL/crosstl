@@ -13,6 +13,7 @@ from crosstl.project import (
     build_runtime_package,
     load_project_config,
     translate_project,
+    validate_project_report,
 )
 from crosstl.translator.codegen.directx_codegen import (
     DirectXBFloat16UnsupportedError,
@@ -178,6 +179,13 @@ def test_mlx_style_metal_bfloat16_project_lowers_exactly_to_directx(tmp_path):
     assert payload["summary"]["failedCount"] == 0
     artifact = payload["artifacts"][0]
     assert artifact["requiredCapabilities"] == ["directx.native-16bit-types"]
+    assert artifact["bfloat16Lowering"] == {
+        "status": "exact",
+        "approximationUsed": False,
+        "registerRepresentation": "uint-low-16-bits",
+        "storageRepresentation": "native-uint16",
+        "roundingMode": "round-to-nearest-ties-to-even",
+    }
     generated = (repo / artifact["path"]).read_text(encoding="utf-8")
     assert "StructuredBuffer<uint16_t> input" in generated
     assert "RWStructuredBuffer<uint16_t> output" in generated
@@ -189,6 +197,11 @@ def test_mlx_style_metal_bfloat16_project_lowers_exactly_to_directx(tmp_path):
 
     report_path = repo / "portability-report.json"
     report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    assert validation["success"] is True
+    assert "project.validate.invalid-report" not in {
+        diagnostic["code"] for diagnostic in validation["diagnostics"]
+    }
     manifest = build_runtime_artifact_manifest(report_path)
     manifest_path = repo / "runtime-artifact-manifest.json"
     manifest_path.write_text(
@@ -253,9 +266,11 @@ def test_project_bfloat16_failure_reports_actionable_lowering_contract(tmp_path)
     )
     assert diagnostic["details"] == {
         "bfloat16Lowering": {
+            "approximationUsed": False,
             "operation": "sin",
             "reason": "unsupported-bfloat16-builtin",
             "sourceType": "bfloat16_t",
+            "status": "unsupported",
         },
         "sourcePath": "kernels/unsupported.cgl",
         "targetArtifact": "translated/directx/kernels/unsupported.hlsl",

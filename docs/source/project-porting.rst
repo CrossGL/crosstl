@@ -298,6 +298,12 @@ validation and runtime loader commands for that HLSL require
 ``-enable-16bit-types``; application-specific compiler wrappers and build
 commands must preserve the same option.
 
+Successful artifacts that use this path record a ``bfloat16Lowering`` object
+with ``status`` set to ``exact``, ``approximationUsed`` set to ``false``, and
+the register, storage, and rounding representations used by the generated
+HLSL. This keeps exact lowering distinct from a compile-only half-precision
+substitution in machine-readable reports.
+
 If an operation cannot be lowered with exact bfloat16 semantics, translation
 fails closed with a structured
 ``project.translate.directx-bfloat16-unsupported`` diagnostic. Its
