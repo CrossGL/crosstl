@@ -38588,6 +38588,267 @@ def test_metal_project_function_constant_values_reach_directx_codegen(tmp_path):
     HLSLParser(HLSLLexer(generated).tokenize()).parse()
 
 
+ENTRY_SCOPED_METAL_SPECIALIZATION_SOURCE = textwrap.dedent("""
+    #include <metal_stdlib>
+    using namespace metal;
+
+    constant bool use_bias [[function_constant(20)]];
+
+    float apply_bias(float value) {
+        return use_bias ? value + 1.0f : value;
+    }
+
+    template <typename T>
+    [[kernel]] void copy_values(
+        const device T* input [[buffer(0)]],
+        device T* output [[buffer(1)]],
+        uint index [[thread_position_in_grid]]) {
+        output[index] = input[index];
+    }
+
+    template <typename T>
+    [[kernel]] void biased_values(
+        const device T* input [[buffer(0)]],
+        device T* output [[buffer(1)]],
+        uint index [[thread_position_in_grid]]) {
+        output[index] = T(apply_bias(float(input[index])));
+    }
+
+    template [[host_name("copy_float")]] [[kernel]]
+    decltype(copy_values<float>) copy_values<float>;
+
+    template [[host_name("biased_float")]] [[kernel]]
+    decltype(biased_values<float>) biased_values<float>;
+    """).strip()
+
+
+def _translate_entry_scoped_metal_specialization(
+    tmp_path,
+    *,
+    target,
+    entry_point,
+    specialization_constants=None,
+):
+    repo = tmp_path / f"{target}-{entry_point}"
+    repo.mkdir(exist_ok=True)
+    source_path = repo / "entry_scoped.metal"
+    source_path.write_text(
+        ENTRY_SCOPED_METAL_SPECIALIZATION_SOURCE + "\n",
+        encoding="utf-8",
+    )
+    config = project_pipeline.ProjectConfig(
+        root=repo,
+        include_patterns=(source_path.name,),
+        targets=(target,),
+        output_dir="out",
+        entry_points={source_path.name: entry_point},
+        specialization_constants=specialization_constants or {},
+    )
+    return repo, translate_project(config, format_output=False).to_json()
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_metal_entry_scope_omits_unreachable_required_function_constant(
+    tmp_path, target
+):
+    repo, payload = _translate_entry_scoped_metal_specialization(
+        tmp_path,
+        target=target,
+        entry_point="copy_float",
+    )
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "translated"
+    assert artifact.get("specializationConstants", []) == []
+    assert "specializationMaterialization" not in artifact
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "use_bias" not in generated
+    assert "apply_bias" not in generated
+    assert "function_constant" not in generated
+    assert "constant_id = 20" not in generated
+
+
+def test_metal_directx_entry_scope_requires_reachable_function_constant(tmp_path):
+    _repo, missing_payload = _translate_entry_scoped_metal_specialization(
+        tmp_path,
+        target="directx",
+        entry_point="biased_float",
+    )
+
+    assert missing_payload["summary"]["translatedCount"] == 0
+    assert missing_payload["summary"]["failedCount"] == 1
+    missing_artifact = missing_payload["artifacts"][0]
+    assert missing_artifact["status"] == "failed"
+    diagnostic = next(
+        diagnostic
+        for diagnostic in missing_payload["diagnostics"]
+        if diagnostic["code"] == "project.translate.specialization-value-required"
+    )
+    assert diagnostic["details"] == {
+        "name": "use_bias",
+        "id": 20,
+        "sourceType": "bool",
+    }
+
+    repo, configured_payload = _translate_entry_scoped_metal_specialization(
+        tmp_path,
+        target="directx",
+        entry_point="biased_float",
+        specialization_constants={"20": True},
+    )
+    configured_artifact = configured_payload["artifacts"][0]
+    assert configured_artifact["status"] == "translated"
+    assert configured_artifact["specializationMaterialization"] == {
+        "status": "concrete",
+        "mode": "concrete-crossgl-variant",
+        "targetSupportsDeferredSpecialization": False,
+        "constantCount": 1,
+        "requiredCount": 1,
+        "overriddenCount": 1,
+        "concreteCount": 1,
+        "source": "shared-crossgl-specialization",
+    }
+    constant = configured_artifact["specializationConstants"][0]
+    assert constant["name"] == "use_bias"
+    assert constant["id"] == 20
+    assert constant["required"] is True
+    assert constant["concreteValue"] is True
+    generated = (repo / configured_artifact["path"]).read_text(encoding="utf-8")
+    assert "static const bool use_bias = true;" in generated
+    assert "apply_bias" in generated
+
+
+def test_metal_opengl_entry_scope_retains_reachable_function_constant(tmp_path):
+    repo, payload = _translate_entry_scoped_metal_specialization(
+        tmp_path,
+        target="opengl",
+        entry_point="biased_float",
+    )
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    artifact = payload["artifacts"][0]
+    assert artifact["specializationMaterialization"] == {
+        "status": "deferred",
+        "mode": "deferred",
+        "targetSupportsDeferredSpecialization": True,
+        "constantCount": 1,
+        "requiredCount": 1,
+        "overriddenCount": 0,
+        "concreteCount": 0,
+        "source": "shared-crossgl-specialization",
+    }
+    constant = artifact["specializationConstants"][0]
+    assert constant["name"] == "use_bias"
+    assert constant["id"] == 20
+    assert constant["required"] is True
+    assert constant["status"] == "required"
+    assert constant["valueProvenance"] == {"kind": "runtime-override-required"}
+    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert "layout(constant_id = 20) const bool use_bias = false;" in generated
+    assert "apply_bias" in generated
+
+
+def test_metal_opengl_workgroup_split_scopes_function_constant_metadata(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source_path = repo / "entry_scoped.metal"
+    source_path.write_text(
+        ENTRY_SCOPED_METAL_SPECIALIZATION_SOURCE + "\n",
+        encoding="utf-8",
+    )
+    config = project_pipeline.ProjectConfig(
+        root=repo,
+        include_patterns=(source_path.name,),
+        targets=("opengl",),
+        output_dir="out",
+        variants={"tile": {"workgroup_size": [8, 1, 1]}},
+    )
+
+    payload = translate_project(config, format_output=False).to_json()
+
+    assert payload["summary"]["translatedCount"] == 2
+    assert payload["summary"]["failedCount"] == 0
+    artifacts = {
+        artifact["entryPoint"]["source"]: artifact for artifact in payload["artifacts"]
+    }
+    assert set(artifacts) == {"copy_float", "biased_float"}
+
+    copy_artifact = artifacts["copy_float"]
+    assert copy_artifact.get("specializationConstants", []) == []
+    assert "specializationMaterialization" not in copy_artifact
+    copy_source = (repo / copy_artifact["path"]).read_text(encoding="utf-8")
+    assert "use_bias" not in copy_source
+    assert "apply_bias" not in copy_source
+    assert "constant_id = 20" not in copy_source
+
+    biased_artifact = artifacts["biased_float"]
+    assert biased_artifact["specializationMaterialization"] == {
+        "status": "deferred",
+        "mode": "deferred",
+        "targetSupportsDeferredSpecialization": True,
+        "constantCount": 1,
+        "requiredCount": 1,
+        "overriddenCount": 0,
+        "concreteCount": 0,
+        "source": "shared-crossgl-specialization",
+    }
+    constants = biased_artifact["specializationConstants"]
+    assert len(constants) == 1
+    assert constants[0]["name"] == "use_bias"
+    assert constants[0]["id"] == 20
+    assert constants[0]["required"] is True
+    assert constants[0]["status"] == "required"
+    biased_source = (repo / biased_artifact["path"]).read_text(encoding="utf-8")
+    assert "layout(constant_id = 20) const bool use_bias = false;" in biased_source
+    assert "apply_bias" in biased_source
+
+
+def test_metal_opengl_workgroup_split_fails_closed_without_reachability(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    source_path = repo / "entry_scoped.metal"
+    source_path.write_text(
+        ENTRY_SCOPED_METAL_SPECIALIZATION_SOURCE + "\n",
+        encoding="utf-8",
+    )
+    config = project_pipeline.ProjectConfig(
+        root=repo,
+        include_patterns=(source_path.name,),
+        targets=("opengl",),
+        output_dir="out",
+        variants={"tile": {"workgroup_size": [8, 1, 1]}},
+    )
+    monkeypatch.setattr(
+        project_pipeline,
+        "_entry_scoped_specialization_names_from_crossgl_ast",
+        lambda _ast, _entry_point, _target: None,
+    )
+
+    payload = translate_project(config, format_output=False).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    diagnostic = next(
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"]
+        == "project.translate.specialization-reachability-unproven"
+    )
+    assert diagnostic["missingCapabilities"] == ["specialization.constant.reachability"]
+    assert diagnostic["details"]["entryPoint"] in {
+        "copy_float",
+        "biased_float",
+    }
+    assert not list((repo / "out").rglob("*.glsl"))
+
+
 @pytest.mark.parametrize("target", ["directx", "opengl"])
 def test_metal_project_canonicalizes_leading_zero_function_constant_ids(
     tmp_path, target

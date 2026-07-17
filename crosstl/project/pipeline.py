@@ -22095,6 +22095,19 @@ def _entry_scoped_specialization_names(
                     "strict_function_bodies": unit.source_backend != "mojo"
                 },
             )
+        return _entry_scoped_specialization_names_from_crossgl_ast(
+            crossgl_ast, entry_point, target
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _entry_scoped_specialization_names_from_crossgl_ast(
+    crossgl_ast: Any,
+    entry_point: str,
+    target: str,
+) -> set[str] | None:
+    try:
         entry_scoped_ast = getattr(get_codegen(target), "entry_scoped_ast", None)
         if not callable(entry_scoped_ast):
             return None
@@ -22108,6 +22121,29 @@ def _entry_scoped_specialization_names(
         }
     except Exception:  # noqa: BLE001
         return None
+
+
+def _specialization_reachability_diagnostic(
+    unit: ProjectTranslationUnit,
+    *,
+    target: str,
+    variant: str | None,
+    entry_point: str,
+) -> ProjectDiagnostic:
+    return ProjectDiagnostic(
+        severity="error",
+        code="project.translate.specialization-reachability-unproven",
+        message=(
+            "Specialization-constant reachability could not be proven for "
+            f"entry point '{entry_point}'; entry-scoped metadata was not emitted."
+        ),
+        location=SourceLocation(file=unit.relative_path),
+        target=target,
+        source_backend=unit.source_backend,
+        variant=variant,
+        missing_capabilities=["specialization.constant.reachability"],
+        details={"entryPoint": entry_point},
+    )
 
 
 def _specialization_diagnostic_reaches_entry(
@@ -22159,7 +22195,17 @@ def _project_specialization_metadata_for_input(
         reachable_names = _entry_scoped_specialization_names(
             unit, ast, entry_point, target
         )
-        if reachable_names is not None:
+        if reachable_names is None and declarations:
+            declarations = []
+            declaration_diagnostics.append(
+                _specialization_reachability_diagnostic(
+                    unit,
+                    target=target,
+                    variant=variant,
+                    entry_point=entry_point,
+                )
+            )
+        elif reachable_names is not None:
             declarations = [
                 declaration
                 for declaration in declarations
@@ -22190,6 +22236,85 @@ def _project_specialization_metadata_for_input(
     if any(diagnostic.severity == "error" for diagnostic in diagnostics):
         metadata["status"] = "failed"
     return records, metadata, diagnostics
+
+
+def _scope_artifact_specialization_metadata_for_entry(
+    artifact: dict[str, Any],
+    *,
+    crossgl_ast: Any,
+    entry_point: str,
+    unit: ProjectTranslationUnit,
+    target: str,
+    variant: str | None,
+) -> None:
+    constants = artifact.get("specializationConstants")
+    if not constants:
+        artifact.pop("specializationConstants", None)
+        artifact.pop("specializationMaterialization", None)
+        return
+    if not isinstance(constants, list) or any(
+        not isinstance(constant, Mapping)
+        or not _is_non_empty_string(constant.get("name"))
+        for constant in constants
+    ):
+        reachable_names = None
+    else:
+        reachable_names = _entry_scoped_specialization_names_from_crossgl_ast(
+            crossgl_ast,
+            entry_point,
+            target,
+        )
+    if reachable_names is None:
+        diagnostic = _specialization_reachability_diagnostic(
+            unit,
+            target=target,
+            variant=variant,
+            entry_point=entry_point,
+        )
+        raise ProjectSpecializationError(
+            diagnostic.message,
+            diagnostics=(diagnostic,),
+        )
+
+    scoped_constants = [
+        dict(constant)
+        for constant in constants
+        if constant.get("name") in reachable_names
+    ]
+    if not scoped_constants:
+        artifact.pop("specializationConstants", None)
+        artifact.pop("specializationMaterialization", None)
+        return
+
+    materialization = artifact.get("specializationMaterialization")
+    if not isinstance(materialization, Mapping):
+        diagnostic = _specialization_reachability_diagnostic(
+            unit,
+            target=target,
+            variant=variant,
+            entry_point=entry_point,
+        )
+        raise ProjectSpecializationError(
+            diagnostic.message,
+            diagnostics=(diagnostic,),
+        )
+    scoped_materialization = dict(materialization)
+    scoped_materialization.update(
+        {
+            "constantCount": len(scoped_constants),
+            "requiredCount": sum(
+                bool(constant.get("required")) for constant in scoped_constants
+            ),
+            "overriddenCount": sum(
+                bool(constant.get("overridden")) for constant in scoped_constants
+            ),
+            "concreteCount": sum(
+                "concreteValue" in constant for constant in scoped_constants
+            ),
+        }
+    )
+    artifact["specializationConstants"] = scoped_constants
+    artifact["specializationMaterialization"] = scoped_materialization
 
 
 def _crossgl_parameter_has_semantic(parameter: Any, semantic: str) -> bool:
@@ -23574,6 +23699,14 @@ def translate_project(
                                                 ),
                                             )
                                         )
+                                    _scope_artifact_specialization_metadata_for_entry(
+                                        split_artifact,
+                                        crossgl_ast=crossgl_ast,
+                                        entry_point=materialized_entry,
+                                        unit=unit,
+                                        target=target,
+                                        variant=variant,
+                                    )
                                     split_artifact["execution"] = split_execution
                                     try:
                                         split_source = (
