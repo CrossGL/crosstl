@@ -8,7 +8,6 @@ from crosstl.project import (
     translate_project,
 )
 
-
 SECOND_ENTRY_SPECIALIZATION_SOURCE = textwrap.dedent("""
     shader EntryScopedSpecialization {
         bool second_only @function_constant(20);
