@@ -65,6 +65,7 @@ from crosstl.translator.codegen.directx_codegen import (
     DirectXForInIterableError,
     DirectXInverseHyperbolicError,
     DirectXMinimumPrecisionIntegerArithmeticError,
+    DirectXNative16BitArithmeticError,
     DirectXNative16BitUnsupportedError,
     DirectXPrivatePointerParameterError,
     DirectXResourcePointerArrayError,
@@ -4920,6 +4921,9 @@ def test_hlsl_dx12_exact_16_bit_aliases_use_native_types():
         ("float16_t", "float16_t"),
         ("int16_t", "int16_t"),
         ("uint16_t", "uint16_t"),
+        ("float16_t2", "float16_t2"),
+        ("int16_t2", "int16_t2"),
+        ("uint16_t2", "uint16_t2"),
     ),
 )
 def test_hlsl_dx11_rejects_exact_16_bit_aliases(source_type, native_type):
@@ -5070,6 +5074,169 @@ def test_hlsl_dx12_native_16_bit_aliases_compile_with_dxc(tmp_path):
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert output_path.is_file()
+
+
+def test_hlsl_native_16_bit_arithmetic_applies_metal_promotions(tmp_path):
+    shader = """
+    shader Native16BitArithmetic {
+        float16_t mixedHalf(uint index, float16_t start, float16_t step) {
+            return start + index * step;
+        }
+
+        float16_t mixedHalfReverse(
+            uint index,
+            float16_t start,
+            float16_t step
+        ) {
+            return start + step * index;
+        }
+
+        int promoteSigned(int16_t lhs, int16_t rhs) {
+            return lhs + rhs;
+        }
+
+        int promoteUnsigned(uint16_t lhs, uint16_t rhs) {
+            return lhs + rhs;
+        }
+
+        uint promoteWithUint(int16_t lhs, uint rhs) {
+            return lhs + rhs;
+        }
+
+        int promoteUnsignedWithInt(uint16_t lhs, int rhs) {
+            return lhs + rhs;
+        }
+
+        float16_t2 mixedHalfVector(uint index, float16_t2 step) {
+            return index * step;
+        }
+
+        int16_t2 retainSignedVector(int16_t2 lhs, int rhs) {
+            return lhs + rhs;
+        }
+
+        uint16_t2 retainUnsignedVector(uint16_t2 lhs, int rhs) {
+            return lhs + rhs;
+        }
+
+        uint nextIndex(inout uint calls) {
+            calls += 1u;
+            return calls;
+        }
+
+        float16_t mixedHalfSideEffect(float16_t step, inout uint calls) {
+            return nextIndex(calls) * step;
+        }
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+            void main(RWStructuredBuffer<uint> output @ binding(0)) {
+                uint index = 3u;
+                float16_t start = float16_t(1.0);
+                float16_t step = float16_t(0.5);
+                uint calls = 0u;
+                output[0] = uint(mixedHalf(index, start, step));
+                output[1] = uint(mixedHalfReverse(index, start, step));
+                output[2] = uint(promoteSigned(int16_t(2), int16_t(3)));
+                output[3] = uint(promoteUnsigned(uint16_t(2u), uint16_t(3u)));
+                output[4] = promoteWithUint(int16_t(2), 3u);
+                output[5] = uint(promoteUnsignedWithInt(uint16_t(2u), 3));
+                output[6] = uint(mixedHalfVector(index, step.xx).x);
+                output[7] = uint(mixedHalfSideEffect(step, calls));
+                output[8] = uint(retainSignedVector(int16_t2(2, 3), 4).x);
+                output[9] = uint(retainUnsignedVector(uint16_t2(2u, 3u), 4).x);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen(target_profile="dx12").generate(
+        parse_code(tokenize_code(shader))
+    )
+
+    assert "return (start + (float16_t(index) * step));" in generated
+    assert "return (start + (step * float16_t(index)));" in generated
+    assert generated.count("return (int(lhs) + int(rhs));") == 2
+    assert "return (uint(lhs) + rhs);" in generated
+    assert "return (int(lhs) + rhs);" in generated
+    assert "return (float16_t(index) * step);" in generated
+    assert "return (lhs + int16_t(rhs));" in generated
+    assert "return (lhs + uint16_t(rhs));" in generated
+    assert "return (float16_t(nextIndex(calls)) * step);" in generated
+    assert generated.count("nextIndex(calls)") == 1
+    HLSLParser(HLSLLexer(generated).tokenize()).parse()
+    assert_directx_native_16_bit_compute_validates_if_available(generated, tmp_path)
+
+
+def test_hlsl_native_16_bit_arithmetic_vector_width_mismatch_is_diagnostic():
+    shader = """
+    shader Native16BitWidthMismatch {
+        float16_t2 combine(float16_t2 lhs, uint3 rhs) {
+            return lhs + rhs;
+        }
+    }
+    """
+
+    with pytest.raises(
+        DirectXNative16BitArithmeticError,
+        match="vector widths 2 and 3",
+    ) as exc_info:
+        HLSLCodeGen(target_profile="dx12").generate(parse_code(tokenize_code(shader)))
+
+    diagnostic = exc_info.value
+    assert diagnostic.project_diagnostic_code == (
+        "project.translate.directx-native-16bit-arithmetic-unrepresentable"
+    )
+    assert diagnostic.missing_capabilities == (
+        "directx.native-16bit-arithmetic-lowering",
+    )
+    assert diagnostic.operator == "+"
+    assert diagnostic.left_type == "float16_t2"
+    assert diagnostic.right_type == "uint3"
+    assert diagnostic.reason == "incompatible-vector-widths"
+
+
+def test_hlsl_native_16_bit_arithmetic_vector_element_mismatch_is_diagnostic():
+    shader = """
+    shader Native16BitElementMismatch {
+        float16_t2 combine(float16_t2 lhs, uint2 rhs) {
+            return lhs + rhs;
+        }
+    }
+    """
+
+    with pytest.raises(
+        DirectXNative16BitArithmeticError,
+        match="does not implicitly convert between vector element types",
+    ) as exc_info:
+        HLSLCodeGen(target_profile="dx12").generate(parse_code(tokenize_code(shader)))
+
+    diagnostic = exc_info.value
+    assert diagnostic.left_type == "float16_t2"
+    assert diagnostic.right_type == "uint2"
+    assert diagnostic.reason == "incompatible-vector-element-types"
+
+
+def test_hlsl_native_16_bit_arithmetic_rejects_float_to_integer_vector():
+    shader = """
+    shader Native16BitFloatScalarMismatch {
+        uint2 combine(uint2 lhs, float16_t rhs) {
+            return lhs + rhs;
+        }
+    }
+    """
+
+    with pytest.raises(
+        DirectXNative16BitArithmeticError,
+        match="does not implicitly convert a floating scalar",
+    ) as exc_info:
+        HLSLCodeGen(target_profile="dx12").generate(parse_code(tokenize_code(shader)))
+
+    diagnostic = exc_info.value
+    assert diagnostic.left_type == "uint2"
+    assert diagnostic.right_type == "float16_t"
+    assert diagnostic.reason == "floating-to-integer-vector-conversion"
 
 
 def test_hlsl_float16_matrix_ir_aliases_map_to_native_matrices():
@@ -8074,7 +8241,9 @@ def test_hlsl_structured_buffer_fixed_width_aliases_map_resource_generics():
     assert "StructuredBuffer<int64_t> signedValues : register(t4);" in generated_code
     assert "RWStructuredBuffer<uint64_t> offsets : register(u5);" in generated_code
     assert "uint16_t count = counts.Load(index);" in generated_code
-    assert "counts[index] = (count + uint16_t(1u));" in generated_code
+    assert (
+        "counts[index] = uint16_t((int(count) + int(uint16_t(1u))));" in generated_code
+    )
     assert "counts.Store(" not in generated_code
     assert "RWStructuredBuffer<size_t>" not in generated_code
     assert "size_t" not in generated_code
@@ -8199,7 +8368,10 @@ def test_hlsl_structured_buffer_alias_arrays_infer_helper_parameter_sizes():
         in generated_code
     )
     assert "return localCounts[which].Load(index);" in generated_code
-    assert "counts[which][index] = (count + uint16_t(1u));" in generated_code
+    assert (
+        "counts[which][index] = uint16_t((int(count) + int(uint16_t(1u))));"
+        in generated_code
+    )
     assert "counts[which].Store(" not in generated_code
     assert "localCounts[]" not in generated_code
     assert "size_t" not in generated_code
@@ -8296,7 +8468,8 @@ def test_hlsl_structured_buffer_array_helpers_propagate_nested_fixed_sizes():
     assert "return leafCounts[2].Load(index);" in generated_code
     assert "return readLeaf(midCounts, index);" in generated_code
     assert (
-        "return (readMid(counts, index) + afterCounts.Load(index));" in generated_code
+        "return uint16_t((int(readMid(counts, index)) + "
+        "int(afterCounts.Load(index))));" in generated_code
     )
 
 

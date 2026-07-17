@@ -715,6 +715,34 @@ class DirectXMinimumPrecisionIntegerArithmeticError(ValueError):
         self.source_location = source_location
 
 
+class DirectXNative16BitArithmeticError(ValueError):
+    """Raised when native 16-bit arithmetic cannot be represented in HLSL."""
+
+    project_diagnostic_code = (
+        "project.translate.directx-native-16bit-arithmetic-unrepresentable"
+    )
+    missing_capabilities = ("directx.native-16bit-arithmetic-lowering",)
+
+    def __init__(
+        self,
+        message,
+        *,
+        operator=None,
+        left_type=None,
+        right_type=None,
+        operation_type=None,
+        reason=None,
+        source_location=None,
+    ):
+        super().__init__(message)
+        self.operator = operator
+        self.left_type = left_type
+        self.right_type = right_type
+        self.operation_type = operation_type
+        self.reason = reason
+        self.source_location = source_location
+
+
 class DirectXBooleanCompoundAssignmentError(ValueError):
     """Raised when a boolean compound assignment has no faithful HLSL form."""
 
@@ -1167,6 +1195,9 @@ class HLSLCodeGen:
     )
     HLSL_MINIMUM_PRECISION_INTEGER_BASE_TYPES = frozenset(
         {"min12int", "min16int", "min16uint"}
+    )
+    HLSL_NATIVE_16_BIT_ARITHMETIC_BASE_TYPES = frozenset(
+        {"float16_t", "int16_t", "uint16_t"}
     )
     HLSL_INTEGER_ARITHMETIC_BASE_TYPES = (
         "uint64_t",
@@ -9493,23 +9524,223 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         return None
 
     def hlsl_floating_arithmetic_type(self, vtype):
+        return self.hlsl_floating_arithmetic_type_info(vtype) is not None
+
+    def hlsl_floating_arithmetic_type_info(self, vtype):
         type_name = self.type_name_string(vtype)
         if not type_name:
-            return False
+            return None
         mapped_type = self.map_type(type_name)
-        component_type = (
-            self.vector_component_type(mapped_type)
-            if self.is_vector_value_type(mapped_type)
-            else mapped_type
-        )
-        return component_type in {
+        for base_type in (
+            "float16_t",
+            "min16float",
+            "min10float",
             "double",
             "float",
-            "float16_t",
             "half",
-            "min10float",
-            "min16float",
+        ):
+            if mapped_type == base_type:
+                width = 1
+            elif mapped_type in {f"{base_type}2", f"{base_type}3", f"{base_type}4"}:
+                width = int(mapped_type[-1])
+            else:
+                continue
+            return {
+                "mapped_type": mapped_type,
+                "base_type": base_type,
+                "width": width,
+                "native_16_bit": base_type == "float16_t",
+            }
+        return None
+
+    def hlsl_native_16_bit_arithmetic_error(
+        self,
+        node,
+        operator,
+        left_type,
+        right_type,
+        *,
+        operation_type=None,
+        reason,
+        detail,
+    ):
+        mapped_left = self.map_type(left_type) if left_type else None
+        mapped_right = self.map_type(right_type) if right_type else None
+        raise DirectXNative16BitArithmeticError(
+            "DirectX cannot preserve native 16-bit arithmetic for "
+            f"'{operator}': {detail}",
+            operator=operator,
+            left_type=mapped_left,
+            right_type=mapped_right,
+            operation_type=operation_type,
+            reason=reason,
+            source_location=getattr(node, "source_location", None),
+        )
+
+    def hlsl_native_16_bit_arithmetic_contract(
+        self,
+        node,
+        operator,
+        left_type,
+        right_type,
+    ):
+        if not getattr(self, "requires_hlsl_native_16_bit_types", False):
+            return None
+        if operator not in {
+            "+",
+            "-",
+            "*",
+            "/",
+            "%",
+            "&",
+            "|",
+            "^",
+            "==",
+            "!=",
+            "<",
+            "<=",
+            ">",
+            ">=",
+        }:
+            return None
+
+        left_integer = self.hlsl_integer_arithmetic_type_info(left_type)
+        right_integer = self.hlsl_integer_arithmetic_type_info(right_type)
+        left_floating = self.hlsl_floating_arithmetic_type_info(left_type)
+        right_floating = self.hlsl_floating_arithmetic_type_info(right_type)
+        left_info = left_integer or left_floating
+        right_info = right_integer or right_floating
+        if left_info is None or right_info is None:
+            return None
+        if not any(
+            info["base_type"] in self.HLSL_NATIVE_16_BIT_ARITHMETIC_BASE_TYPES
+            for info in (left_info, right_info)
+        ):
+            return None
+
+        left_width = left_info["width"]
+        right_width = right_info["width"]
+        if left_width > 1 and right_width > 1 and left_width != right_width:
+            self.hlsl_native_16_bit_arithmetic_error(
+                node,
+                operator,
+                left_type,
+                right_type,
+                reason="incompatible-vector-widths",
+                detail=(
+                    f"vector widths {left_width} and {right_width} cannot be "
+                    "combined without changing the source operation"
+                ),
+            )
+
+        if left_width > 1 and right_width > 1:
+            if left_info["mapped_type"] != right_info["mapped_type"]:
+                self.hlsl_native_16_bit_arithmetic_error(
+                    node,
+                    operator,
+                    left_type,
+                    right_type,
+                    reason="incompatible-vector-element-types",
+                    detail=(
+                        "Metal does not implicitly convert between vector element "
+                        f"types '{left_info['mapped_type']}' and "
+                        f"'{right_info['mapped_type']}'"
+                    ),
+                )
+            operation_base = left_info["base_type"]
+        elif left_width > 1 or right_width > 1:
+            vector_info = left_info if left_width > 1 else right_info
+            scalar_floating = right_floating if left_width > 1 else left_floating
+            vector_is_integer = (
+                left_integer is not None
+                if left_width > 1
+                else right_integer is not None
+            )
+            if vector_is_integer and scalar_floating is not None:
+                self.hlsl_native_16_bit_arithmetic_error(
+                    node,
+                    operator,
+                    left_type,
+                    right_type,
+                    reason="floating-to-integer-vector-conversion",
+                    detail=(
+                        "Metal does not implicitly convert a floating scalar to an "
+                        f"integer vector '{vector_info['mapped_type']}'"
+                    ),
+                )
+            operation_base = vector_info["base_type"]
+        else:
+            floating_infos = [
+                info for info in (left_floating, right_floating) if info is not None
+            ]
+            if floating_infos:
+                if operator in {"%", "&", "|", "^"}:
+                    return None
+                floating_bases = {info["base_type"] for info in floating_infos}
+                if "double" in floating_bases:
+                    operation_base = "double"
+                elif "float" in floating_bases:
+                    operation_base = "float"
+                elif "float16_t" in floating_bases:
+                    operation_base = "float16_t"
+                else:
+                    return None
+            else:
+                operation_base = self.hlsl_common_integer_arithmetic_base_type(
+                    left_integer,
+                    right_integer,
+                )
+
+        result_width = max(left_width, right_width)
+        operation_type = operation_base + (
+            "" if result_width == 1 else str(result_width)
+        )
+        return {
+            "left": left_info,
+            "right": right_info,
+            "operation_base": operation_base,
+            "operation_type": operation_type,
+            "result_width": result_width,
         }
+
+    def hlsl_native_16_bit_arithmetic_operand(
+        self,
+        rendered,
+        type_info,
+        operation_base,
+    ):
+        width = type_info["width"]
+        target_type = operation_base if width == 1 else f"{operation_base}{width}"
+        if type_info["mapped_type"] == target_type:
+            return rendered
+        return f"{target_type}({rendered})"
+
+    def hlsl_native_16_bit_binary_expression(
+        self,
+        expr,
+        left,
+        right,
+        operator,
+    ):
+        contract = self.hlsl_native_16_bit_arithmetic_contract(
+            expr,
+            operator,
+            self.expression_result_type(getattr(expr, "left", None)),
+            self.expression_result_type(getattr(expr, "right", None)),
+        )
+        if contract is None:
+            return None
+        left = self.hlsl_native_16_bit_arithmetic_operand(
+            left,
+            contract["left"],
+            contract["operation_base"],
+        )
+        right = self.hlsl_native_16_bit_arithmetic_operand(
+            right,
+            contract["right"],
+            contract["operation_base"],
+        )
+        return f"({left} {operator} {right})"
 
     def hlsl_minimum_precision_integer_arithmetic_error(
         self,
@@ -9539,7 +9770,10 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
         )
 
     def hlsl_promoted_integer_arithmetic_base_type(self, type_info):
-        if type_info["minimum_precision"]:
+        if type_info["minimum_precision"] or type_info["base_type"] in {
+            "int16_t",
+            "uint16_t",
+        }:
             return "int"
         return type_info["base_type"]
 
@@ -10623,6 +10857,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
                     return other_type
                 return "float"
             mapped_operator = self.map_operator(operator)
+            native_16_bit_contract = self.hlsl_native_16_bit_arithmetic_contract(
+                expr,
+                mapped_operator,
+                left_type,
+                right_type,
+            )
+            if native_16_bit_contract is not None:
+                return native_16_bit_contract["operation_type"]
             if mapped_operator in {"/", "%"}:
                 integer_contract = (
                     self.hlsl_minimum_precision_integer_operation_contract(
@@ -13932,6 +14174,14 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             )
             if bfloat_binary is not None:
                 return bfloat_binary
+            native_16_bit_binary = self.hlsl_native_16_bit_binary_expression(
+                expr,
+                left,
+                right,
+                mapped_op,
+            )
+            if native_16_bit_binary is not None:
+                return native_16_bit_binary
             bool_arithmetic = self.hlsl_bool_arithmetic_expression(
                 expr,
                 left,
@@ -37775,6 +38025,26 @@ float4x4 __crossgl_inverse_float4_4(float4x4 m) {
             ("min10float", "min12int", "min16float", "min16int", "min16uint")
         ):
             return mapped_type
+        native_source_match = re.fullmatch(
+            r"(?:float16_t|int16_t|uint16_t)(?P<shape>[234](?:x[234])?)?",
+            source_name,
+        )
+        if native_source_match is not None:
+            native_mapped_type = source_name
+            if self.target_profile == "dx11":
+                raise DirectXNative16BitUnsupportedError(
+                    "DirectX profile dx11 cannot preserve exact 16-bit source "
+                    f"type '{source_name}'; use directx-12 with Shader Model "
+                    "6.2 and dxc -enable-16bit-types, or declare an explicit "
+                    "minimum-precision min16 type",
+                    target_profile=self.target_profile,
+                    source_type=source_name,
+                    mapped_type=native_mapped_type,
+                    reason="target-profile-lacks-native-16bit-types",
+                    source_location=getattr(source_type, "source_location", None),
+                )
+            self.requires_hlsl_native_16_bit_types = True
+            return native_mapped_type
         for minimum_type, native_type in (
             ("half", "float16_t"),
             ("min16int", "int16_t"),
