@@ -252,6 +252,10 @@ jobs:
               MLX_GEMV_SOURCE_SIZE_BYTES,
               MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
               MLX_OPENGL_FRONTIER_SOURCES,
+              MLX_OPENGL_INDEX_RANGE_ASSERTION_EXPRESSIONS,
+              MLX_OPENGL_INDEX_RANGE_ASSERTION_MAXIMUM,
+              MLX_OPENGL_INDEX_RANGE_ASSERTION_MINIMUM,
+              MLX_OPENGL_INDEX_RANGE_ASSERTIONS,
               MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES,
               MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES,
           )
@@ -732,9 +736,34 @@ jobs:
               != opengl_toolchain_frontier_sources
               or opengl["trackedIssues"]
               != [MLX_DYNAMIC_WORKGROUP_TRACKED_ISSUE]
+              or opengl["runtimeIntegrationIncluded"] is not False
           ):
               raise SystemExit(
                   "OpenGL target-split frontier accounting is incomplete"
+              )
+          opengl_index_evidence = opengl["indexRangeAssertionEvidence"]
+          if (
+              opengl_index_evidence["assertionCount"]
+              != len(MLX_OPENGL_INDEX_RANGE_ASSERTIONS)
+              or opengl_index_evidence["inclusiveBounds"]
+              != {
+                  "minimum": MLX_OPENGL_INDEX_RANGE_ASSERTION_MINIMUM,
+                  "maximum": MLX_OPENGL_INDEX_RANGE_ASSERTION_MAXIMUM,
+              }
+              or opengl_index_evidence["expressionsBySource"]
+              != {
+                  source: list(expressions)
+                  for source, expressions in (
+                      MLX_OPENGL_INDEX_RANGE_ASSERTION_EXPRESSIONS.items()
+                  )
+              }
+              or opengl_index_evidence["contractKind"]
+              != "explicit-host-runtime-portability-preconditions"
+              or opengl_index_evidence["inferred"] is not False
+              or opengl_index_evidence["runtimeEnforced"] is not False
+          ):
+              raise SystemExit(
+                  "OpenGL index-range portability evidence is incomplete"
               )
           opengl_dispatch_evidence = opengl["dynamicWorkgroupDispatchEvidence"]
           if set(opengl_dispatch_evidence) != opengl_blocked_sources:

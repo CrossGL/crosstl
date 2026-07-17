@@ -2259,6 +2259,10 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     )
     assert "reference accessor {target} native validation must be" in mlx_porting
     assert "MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES" in mlx_porting
+    assert "MLX_OPENGL_INDEX_RANGE_ASSERTIONS" in mlx_porting
+    assert "MLX_OPENGL_INDEX_RANGE_ASSERTION_EXPRESSIONS" in mlx_porting
+    assert "MLX_OPENGL_INDEX_RANGE_ASSERTION_MINIMUM" in mlx_porting
+    assert "MLX_OPENGL_INDEX_RANGE_ASSERTION_MAXIMUM" in mlx_porting
     assert "MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES" in mlx_porting
     assert "expected 8 OpenGL attempted frontier sources" in mlx_porting
     assert "expected 3 OpenGL toolchain frontier sources" in mlx_porting
@@ -2267,6 +2271,9 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "OpenGL frontier toolchain must validate every emitted source" in (
         mlx_porting
     )
+    assert 'opengl["indexRangeAssertionEvidence"]' in mlx_porting
+    assert "OpenGL index-range portability evidence is incomplete" in mlx_porting
+    assert 'opengl["runtimeIntegrationIncluded"] is not False' in mlx_porting
     assert "mlx/backend/metal/kernels/binary_two.metal" in mlx_porting
     assert "mesa-vulkan-drivers" in mlx_porting
     assert "vulkan==1.3.275.1" in mlx_porting
