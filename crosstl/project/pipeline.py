@@ -18201,7 +18201,11 @@ def _project_template_materialization_for_artifact(
             if fail_closed:
                 raise
             return None
-    if "template" not in source and "#include" not in source:
+    if (
+        "template" not in source
+        and "static_assert" not in source
+        and "#include" not in source
+    ):
         return None
 
     from crosstl.backend.Metal.preprocessor import (
@@ -18267,7 +18271,36 @@ def _project_template_materialization_for_artifact(
         *unmaterialized_functor_records,
     ]
     if not source_template_parameters and not unsupported_type_records:
-        return None
+        if "static_assert" not in discovery_source:
+            return None
+        assertion_preprocessor = MetalPreprocessor(
+            **base_preprocessor_kwargs,
+            defines=dict(defines),
+        )
+        assertion_source = _metal_preprocess_without_template_materialization(
+            assertion_preprocessor,
+            source,
+            file_path=str(unit.path),
+        )
+        assertion_preprocessor._configure_integral_constant_contracts(assertion_source)
+        assertion_preprocessor._fail_closed_static_assertions = True
+        assertion_source = assertion_preprocessor._elide_stateless_compile_time_globals(
+            assertion_source
+        )
+        assertion_source = assertion_preprocessor._lower_struct_member_functions(
+            assertion_source
+        )
+        if not assertion_source.endswith("\n"):
+            assertion_source += "\n"
+        return ProjectTemplateMaterializedSource(
+            text=assertion_source,
+            metadata={},
+            defines={},
+            source_options={
+                **_frontend_source_options(source_options),
+                "preprocess": False,
+            },
+        )
 
     configured_parameters = {
         name: str(defines[name])
@@ -19425,6 +19458,44 @@ def _metal_static_constant_failure_details(
     return dict(sorted(details.items()))
 
 
+def _metal_static_assertion_failure_details(
+    exc: Exception,
+    unit: ProjectTranslationUnit,
+    artifact_path: str | None,
+) -> dict[str, Any]:
+    if _translation_failure_diagnostic_code(exc) != (
+        "project.translate.metal-static-assertion"
+    ):
+        return {}
+
+    assertion = {}
+    fields = {
+        "reason": getattr(exc, "reason", None),
+        "expression": getattr(exc, "expression", None),
+        "resolvedExpression": getattr(exc, "resolved_expression", None),
+        "assertionMessage": getattr(exc, "assertion_message", None),
+        "suggestedAction": getattr(exc, "suggested_action", None),
+    }
+    for name, value in fields.items():
+        if _is_non_empty_string(value):
+            assertion[name] = value
+    unresolved_dependencies = getattr(exc, "unresolved_dependencies", None)
+    if unresolved_dependencies:
+        assertion["unresolvedDependencies"] = [
+            str(dependency)
+            for dependency in unresolved_dependencies
+            if _is_non_empty_string(dependency)
+        ]
+
+    details: dict[str, Any] = {
+        "sourcePath": unit.relative_path,
+        "targetArtifact": artifact_path or "",
+    }
+    if assertion:
+        details["staticAssertion"] = dict(sorted(assertion.items()))
+    return dict(sorted(details.items()))
+
+
 def _metal_sizeof_failure_details(
     exc: Exception,
     unit: ProjectTranslationUnit,
@@ -20483,6 +20554,7 @@ def _translation_failure_details(
         **_metal_struct_method_call_failure_details(exc, unit, artifact_path),
         **_metal_constructor_failure_details(exc, unit, artifact_path),
         **_metal_stateless_global_failure_details(exc, unit, artifact_path),
+        **_metal_static_assertion_failure_details(exc, unit, artifact_path),
         **_metal_static_constant_failure_details(exc, unit, artifact_path),
         **_metal_sizeof_failure_details(exc, unit, artifact_path),
         **_metal_template_argument_failure_details(exc, unit, artifact_path),
@@ -23368,9 +23440,10 @@ def translate_project(
                     artifacts.append(artifact)
                     continue
                 if template_materialization is not None:
-                    artifact["templateMaterialization"] = dict(
-                        template_materialization.metadata
-                    )
+                    if template_materialization.metadata:
+                        artifact["templateMaterialization"] = dict(
+                            template_materialization.metadata
+                        )
                     diagnostics.extend(template_materialization.diagnostics)
                     if template_materialization.blocked:
                         artifact["status"] = "failed"

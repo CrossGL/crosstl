@@ -46805,6 +46805,123 @@ def test_translate_project_reports_unresolved_metal_static_constant_cycle(tmp_pa
     assert "initializer dependency chain is cyclic" in diagnostic["message"]
 
 
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+def test_translate_project_removes_proven_metal_static_assertions(tmp_path, target):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "valid.metal").write_text(
+        textwrap.dedent("""
+            #include <metal_stdlib>
+            using namespace metal;
+
+            kernel void valid_assertion(device float* out [[buffer(0)]]) {
+                constexpr int group_size = 8;
+                static_assert(
+                    group_size == 2 || group_size == 4 || group_size == 8,
+                    "Unsupported group size.");
+                out[0] = 1.0f;
+            }
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=[target],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 1
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["diagnostics"] == []
+    assert "templateMaterialization" not in payload["artifacts"][0]
+    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
+    assert "static_assert" not in output
+
+
+@pytest.mark.parametrize("target", ["directx", "opengl"])
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (
+            """
+            kernel void invalid_assertion(device float* out [[buffer(0)]]) {
+                constexpr int group_size = 7;
+                static_assert(
+                    group_size == 2 || group_size == 4 || group_size == 8,
+                    "Unsupported group size.");
+                out[0] = 0.0f;
+            }
+            """,
+            {
+                "assertionMessage": "Unsupported group size.",
+                "expression": "group_size == 2 || group_size == 4 || group_size == 8",
+                "reason": "assertion-failed",
+                "resolvedExpression": "7 == 2 || 7 == 4 || 7 == 8",
+            },
+        ),
+        (
+            """
+            kernel void unresolved_assertion(
+                device float* out [[buffer(0)]],
+                uint runtime_width [[threads_per_grid]]) {
+                static_assert(
+                    runtime_width == 32,
+                    "Runtime width must be specialized.");
+                out[0] = 0.0f;
+            }
+            """,
+            {
+                "assertionMessage": "Runtime width must be specialized.",
+                "expression": "runtime_width == 32",
+                "reason": "condition-unresolved",
+                "resolvedExpression": "runtime_width == 32",
+                "unresolvedDependencies": ["runtime_width"],
+            },
+        ),
+    ],
+)
+def test_translate_project_reports_failed_metal_static_assertions(
+    tmp_path,
+    target,
+    source,
+    expected,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "invalid.metal").write_text(
+        textwrap.dedent(source).strip(),
+        encoding="utf-8",
+    )
+
+    payload = translate_project(
+        repo,
+        targets=[target],
+        output_dir="out",
+        format_output=False,
+    ).to_json()
+
+    assert payload["summary"]["translatedCount"] == 0
+    assert payload["summary"]["failedCount"] == 1
+    artifact = payload["artifacts"][0]
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+
+    diagnostic = next(
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == "project.translate.metal-static-assertion"
+    )
+    assert diagnostic["severity"] == "error"
+    assert diagnostic["location"]["file"] == "invalid.metal"
+    assert diagnostic["missingCapabilities"] == ["compile-time.static-assertion"]
+    assert diagnostic["details"]["sourcePath"] == "invalid.metal"
+    assertion = diagnostic["details"]["staticAssertion"]
+    assert assertion.items() >= expected.items()
+    assert "suggestedAction" in assertion
+
+
 def test_translate_project_reports_ambiguous_metal_static_constant_owner(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
