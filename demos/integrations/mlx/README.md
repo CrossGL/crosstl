@@ -272,17 +272,25 @@ sources require native `uint16` storage declarations and report the
 and fails closed if either field is missing or changes. Native-profile bfloat
 helpers now use exact `uint16_t` boundaries, and the two selected
 `random.metal` entries compile without the promotion warnings tracked by
-[#1799](https://github.com/CrossGL/crosstl/issues/1799). DXC currently reports
-three pinned warning contracts across `arange.metal` and `rope.metal`.
-Whole-artifact compilation repeats those warnings for each selected entry: 22
-warnings across 11 arange runs and 108 across 18 rope runs. Native `int16_t`
-and `uint64_t` destination conversions remain tracked by
-[#1801](https://github.com/CrossGL/crosstl/issues/1801); and mixed-width
-native-half arithmetic remains tracked by
-[#1802](https://github.com/CrossGL/crosstl/issues/1802). The harness requires the
-exact messages, generated source expressions, and multiplicities, and rejects
-missing, additional, or changed warnings. The aggregate five-source frontier
-therefore has compiler acceptance, but not a clean `-WX` contract. This is
+[#1799](https://github.com/CrossGL/crosstl/issues/1799). DXC reports zero
+warnings across all 468 entry-point runs in the five-source emitted frontier.
+The harness records this as a warning-clean contract and rejects any newly
+observed warning. Contextual destination conversion under
+[#1801](https://github.com/CrossGL/crosstl/issues/1801) is resolved for the
+pinned frontier. The arange assignment is emitted as
+`arangeint16_out[index] = int16_t((uint(arangeint16_start) +
+(index * uint(arangeint16_step))));`. The rope assignments are emitted as
+`index_1 = uint(((2 * pos.x) + (pos.y * stride)));` and
+`index_1 = uint((pos.x + (pos.y * stride)));`. All 18 rope entries compile with
+DXC profile `cs_6_2`, `-enable-16bit-types`, and `-WX`. Native 16-bit arithmetic
+conversion under [#1802](https://github.com/CrossGL/crosstl/issues/1802) is also
+resolved for the pinned frontier. The float16 assignment is emitted as
+`arangefloat16_out[index] = (arangefloat16_start + (float16_t(index) *
+arangefloat16_step));`. All 11 arange entries compile without the
+destination-conversion warning previously tracked by #1801 and with DXC profile
+`cs_6_2`, `-enable-16bit-types`, and `-WX`. This preserves the resolved int16
+destination-conversion evidence. The aggregate five-source frontier therefore
+has compiler acceptance and a warning-clean diagnostic contract. This is
 storage, conversion, report, and compiler evidence only; it does not execute a
 bfloat16 workload or establish runtime or numerical parity. On macOS CI, the
 generated `fence.metal` round-trip artifact must compile to AIR with the native
@@ -441,9 +449,9 @@ emission under
 [#1800](https://github.com/CrossGL/crosstl/issues/1800) are resolved for this
 selected entry. The native-profile helper contract under #1799 is also resolved
 across the pinned bfloat frontier. Contextual narrowing under
-[#1801](https://github.com/CrossGL/crosstl/issues/1801) is also resolved for this
-selected entry; the general destination-conversion contract remains open. The
-artifact requires the
+[#1801](https://github.com/CrossGL/crosstl/issues/1801) remains recorded as
+historical resolved evidence for this selected entry, while the pinned frontier
+destination-conversion contract is resolved. The artifact requires the
 `directx.native-16bit-types` capability and contains no remaining
 `static_assert`. Official DXC validation with profile `cs_6_2`,
 `-enable-16bit-types`, and `-WX` passes. The typed resource store is emitted as

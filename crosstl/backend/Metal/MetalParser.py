@@ -3616,6 +3616,8 @@ class MetalParser:
             qualifiers=[qualifier] if qualifier else [],
             attributes=attributes,
             qualifier=qualifier,  # Also store as single qualifier for backward compatibility
+            return_qualifiers=return_qualifiers,
+            method_qualifiers=method_qualifiers,
         )
         self.annotate_declaration_scope(function)
         function.declaration_qualifiers = list(return_qualifiers)
@@ -3647,7 +3649,17 @@ class MetalParser:
 
     def parse_function_method_qualifiers(self):
         qualifiers = []
-        while self.current_token[0] in {"CONST", "VOLATILE", "BITWISE_AND", "AND"}:
+        while self.current_token[0] in {
+            "CONST",
+            "VOLATILE",
+            "BITWISE_AND",
+            "AND",
+            "CONSTANT",
+            "DEVICE",
+            "THREAD",
+            "THREADGROUP",
+            "THREADGROUP_IMAGEBLOCK",
+        }:
             qualifiers.append(self.current_token[1])
             self.eat(self.current_token[0])
 
@@ -3655,10 +3667,12 @@ class MetalParser:
             qualifiers.append(self.current_token[1])
             self.eat("IDENTIFIER")
             if self.current_token[0] == "LPAREN":
-                self.parse_balanced_token_text(
-                    "LPAREN",
-                    "RPAREN",
-                    error_message="Unterminated noexcept qualifier",
+                qualifiers.append(
+                    self.parse_balanced_token_text(
+                        "LPAREN",
+                        "RPAREN",
+                        error_message="Unterminated noexcept qualifier",
+                    )
                 )
 
         while self.current_token == (

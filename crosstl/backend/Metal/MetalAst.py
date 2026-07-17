@@ -19,7 +19,9 @@ from ..common_ast import (
     EnumNode,
     ForNode,
     FunctionCallNode,
-    FunctionNode,
+)
+from ..common_ast import FunctionNode as CommonFunctionNode
+from ..common_ast import (
     IfNode,
     InitializerListNode,
     MemberAccessNode,
@@ -168,6 +170,39 @@ class ConstructorNode(ASTNode):
             f"owner_name={self.owner_name!r}, params={self.params}, "
             f"initializers={self.initializers}, body={self.body})"
         )
+
+
+class FunctionNode(CommonFunctionNode):
+    """Metal function declaration with retained source qualifier contracts."""
+
+    def __init__(
+        self,
+        return_type,
+        name,
+        params,
+        body,
+        qualifiers=None,
+        attributes=None,
+        *,
+        return_qualifiers=None,
+        method_qualifiers=None,
+        **kwargs,
+    ):
+        super().__init__(
+            return_type,
+            name,
+            params,
+            body,
+            qualifiers=qualifiers,
+            attributes=attributes,
+            **kwargs,
+        )
+        self.return_qualifiers = list(return_qualifiers or [])
+        self.method_qualifiers = list(method_qualifiers or [])
+        # Receiver qualifiers is the terminology used by member-overload
+        # resolution; keep the alias so consumers do not have to reinterpret
+        # ordinary function declaration qualifiers as implicit-object state.
+        self.receiver_qualifiers = list(self.method_qualifiers)
 
 
 _COMMON_NODES = (

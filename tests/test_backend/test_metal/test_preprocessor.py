@@ -770,6 +770,297 @@ def test_preprocessor_removes_proven_static_assertion_after_specialization():
     assert "constexpr int simd_size = 32;" in output
 
 
+def test_preprocessor_skips_constexpr_index_for_concrete_static_assertion(
+    monkeypatch,
+):
+    code = """
+    kernel void checked_width(device int* out [[buffer(0)]]) {
+        constexpr int width = 32;
+        static_assert(width == 32);
+        out[0] = width;
+    }
+    """
+    preprocessor = MetalPreprocessor()
+
+    def unexpected_index(_code):
+        pytest.fail("concrete static assertions must not build the constexpr index")
+
+    monkeypatch.setattr(
+        preprocessor,
+        "_static_constexpr_function_index",
+        unexpected_index,
+    )
+    output = preprocessor._evaluate_static_assertions(code)
+
+    assert "static_assert" not in output
+    assert "constexpr int width = 32;" in output
+
+
+def test_preprocessor_builds_constexpr_index_for_helper_static_assertion(
+    monkeypatch,
+):
+    code = """
+    template <int Word, int Bits>
+    constexpr int get_pack_factor() {
+        return Word / Bits;
+    }
+
+    kernel void checked_pack(device int* out [[buffer(0)]]) {
+        constexpr int reads = get_pack_factor<8, 4>();
+        static_assert(reads * get_pack_factor<8, 4>() == 4);
+        out[0] = reads;
+    }
+    """
+    preprocessor = MetalPreprocessor()
+    original_index = preprocessor._static_constexpr_function_index
+    indexed_sources = []
+
+    def tracked_index(source):
+        indexed_sources.append(source)
+        return original_index(source)
+
+    monkeypatch.setattr(
+        preprocessor,
+        "_static_constexpr_function_index",
+        tracked_index,
+    )
+    output = preprocessor._evaluate_static_assertions(code)
+
+    assert "static_assert" not in output
+    assert indexed_sources == [code]
+
+
+def test_preprocessor_resolves_specialized_constexpr_static_assert_dependencies():
+    code = """
+    template <int Word, int Bits>
+    constexpr int get_pack_factor() {
+        constexpr int factor = Word / Bits;
+        return factor;
+    }
+
+    template <int GroupSize, int Bits>
+    [[kernel]] void checked_pack(
+        device int* out [[buffer(0)]]) {
+        constexpr int reads =
+            GroupSize / (get_pack_factor<8, Bits>() * 4);
+        static_assert(
+            reads * get_pack_factor<8, Bits>() <= GroupSize,
+            "Pack reads must fit the group.");
+        out[0] = reads;
+    }
+
+    template [[host_name("checked_pack_16_4")]] [[kernel]]
+    decltype(checked_pack<16, 4>) checked_pack<16, 4>;
+    """
+
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+    )
+    output = preprocessor._lower_struct_member_functions(materialized)
+
+    assert "void checked_pack_16_4(" in output
+    assert "static_assert" not in output
+    assert "constexpr int reads" in output
+
+
+def test_preprocessor_caches_nested_constexpr_assert_helpers_per_specialization():
+    code = """
+    template <int Bits>
+    constexpr int pack_factor() {
+        return 32 / Bits;
+    }
+
+    template <int Bits>
+    constexpr int doubled_pack_factor() {
+        constexpr int factor = pack_factor<Bits>();
+        return factor * 2;
+    }
+
+    template <int Bits>
+    [[kernel]] void checked_nested_helper(
+        device int* out [[buffer(0)]]) {
+        constexpr int expected = Bits == 4 ? 16 : 8;
+        static_assert(doubled_pack_factor<Bits>() == expected);
+        static_assert(doubled_pack_factor<Bits>() == expected);
+        out[0] = expected;
+    }
+
+    template [[host_name("checked_nested_helper_4")]] [[kernel]]
+    decltype(checked_nested_helper<4>) checked_nested_helper<4>;
+    template [[host_name("checked_nested_helper_8")]] [[kernel]]
+    decltype(checked_nested_helper<8>) checked_nested_helper<8>;
+    """
+
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+    )
+    output = preprocessor._lower_struct_member_functions(materialized)
+
+    assert "void checked_nested_helper_4(" in output
+    assert "void checked_nested_helper_8(" in output
+    assert "static_assert" not in output
+    assert set(preprocessor._static_constexpr_helper_values.values()) == {
+        "4",
+        "8",
+        "16",
+    }
+    assert len(preprocessor._static_constexpr_helper_values) == 4
+
+
+def test_preprocessor_constexpr_assert_helper_respects_local_shadowing():
+    code = """
+    template <int Bits>
+    constexpr int pack_factor() {
+        return 32 / Bits;
+    }
+
+    kernel void shadowed_assertion(
+        device int* out [[buffer(0)]],
+        int runtime_bits [[threads_per_grid]]) {
+        constexpr int Bits = 4;
+        {
+            int Bits = runtime_bits;
+            static_assert(pack_factor<Bits>() == 8);
+            out[0] = Bits;
+        }
+    }
+    """
+
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+    )
+    with pytest.raises(MetalStaticAssertionError) as exc_info:
+        preprocessor._lower_struct_member_functions(materialized)
+
+    error = exc_info.value
+    assert error.reason == "condition-unresolved"
+    assert error.unresolved_dependencies == ("Bits", "pack_factor")
+
+
+def test_preprocessor_rejects_false_specialized_constexpr_helper_assertion():
+    code = """
+    template <int Word, int Bits>
+    constexpr int pack_factor() {
+        return Word / Bits;
+    }
+
+    template <int Reads>
+    [[kernel]] void rejected_pack(
+        device int* out [[buffer(0)]]) {
+        static_assert(Reads * pack_factor<8, 4>() <= 16);
+        out[0] = Reads;
+    }
+
+    template [[host_name("rejected_pack_9")]] [[kernel]]
+    decltype(rejected_pack<9>) rejected_pack<9>;
+    """
+
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+    )
+    with pytest.raises(MetalStaticAssertionError) as exc_info:
+        preprocessor._lower_struct_member_functions(materialized)
+
+    error = exc_info.value
+    assert error.reason == "assertion-failed"
+    assert error.resolved_expression == "9 * 2 <= 16"
+    assert error.unresolved_dependencies == ()
+
+
+@pytest.mark.parametrize(
+    ("helper", "helper_name"),
+    (
+        (
+            """
+            template <int Value>
+            constexpr int recursive_value() {
+                return recursive_value<Value>();
+            }
+            """,
+            "recursive_value",
+        ),
+        (
+            """
+            template <int Value>
+            constexpr int runtime_local_value() {
+                int local = Value;
+                return local;
+            }
+            """,
+            "runtime_local_value",
+        ),
+    ),
+)
+def test_preprocessor_keeps_unresolved_constexpr_assert_helpers_fail_closed(
+    helper,
+    helper_name,
+):
+    code = helper + f"""
+    kernel void unresolved_helper(device int* out [[buffer(0)]]) {{
+        static_assert({helper_name}<4>() == 4);
+        out[0] = 4;
+    }}
+    """
+
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+    )
+    with pytest.raises(MetalStaticAssertionError) as exc_info:
+        preprocessor._lower_struct_member_functions(materialized)
+
+    error = exc_info.value
+    assert error.reason == "condition-unresolved"
+    assert error.unresolved_dependencies == (helper_name,)
+
+
+def test_preprocessor_short_circuits_unsupported_constexpr_assert_helper():
+    code = """
+    template <int Value>
+    constexpr int unsupported_value() {
+        int local = Value;
+        return local;
+    }
+
+    kernel void short_circuited_helper(device int* out [[buffer(0)]]) {
+        static_assert(true || unsupported_value<4>() == 4);
+        static_assert(false && unsupported_value<4>() == 4 || true);
+        out[0] = 4;
+    }
+    """
+
+    preprocessor = MetalPreprocessor()
+    materialized = preprocessor._materialize_project_template_instantiations(
+        code,
+        enforce_specialization_limit=False,
+    )
+    output = preprocessor._lower_struct_member_functions(materialized)
+
+    assert "static_assert" not in output
+    assert "kernel void short_circuited_helper" in output
+
+
+@pytest.mark.parametrize(
+    "type_text",
+    (
+        "Wrapper<int>",
+        "const Wrapper<uint>",
+        "metal::vec<int, 1>",
+    ),
+)
+def test_preprocessor_constexpr_helpers_reject_integral_wrapper_types(type_text):
+    assert MetalPreprocessor()._static_constexpr_integral_type(type_text) is None
+
+
 def test_preprocessor_removes_proven_static_assertion_with_logical_chain():
     code = """
     kernel void supported_group_size(device float* out [[buffer(0)]]) {
@@ -5987,6 +6278,98 @@ def test_preprocessor_rejects_ambiguous_temporary_operator_overload_structured()
     assert error.reason == "concrete-overload-ambiguous"
     assert error.requested_signature == "Convert::operator()(values[0])"
     assert error.source_location["length"] == len("(values[0])")
+
+
+def test_preprocessor_selects_concrete_static_overload_by_callable_arity():
+    code = """
+    struct TransformNone_float_float {
+      static float apply(float value) { return value; }
+      static float apply(float value, float residual) {
+        return value + residual;
+      }
+    };
+
+    kernel void k(device float* values [[buffer(0)]]) {
+      values[0] = TransformNone_float_float::apply(unresolved()[0]);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "TransformNone_float_float__apply(unresolved()[0])" in output
+    assert "TransformNone_float_float::apply" not in output
+
+
+def test_preprocessor_counts_defaulted_parameters_as_callable_for_overload_selection():
+    code = """
+    struct Transform {
+      static float apply(float value, float bias = 1.0f) {
+        return value + bias;
+      }
+      static float apply(float value, float bias, float scale) {
+        return value * scale + bias;
+      }
+    };
+
+    kernel void k(device float* values [[buffer(0)]]) {
+      values[0] = Transform::apply(unresolved()[0]);
+    }
+    """
+
+    output = MetalPreprocessor().preprocess(code)
+
+    assert "Transform__apply(unresolved()[0])" in output
+    assert "Transform::apply" not in output
+
+
+def test_preprocessor_keeps_defaulted_overload_viable_for_supplied_prefix():
+    code = """
+    struct Convert {
+      static float apply(float value) { return value; }
+      static float apply(float value, int bias = 0) {
+        return value + float(bias);
+      }
+    };
+
+    kernel void k(device float* values [[buffer(0)]]) {
+      float value = values[0];
+      values[0] = Convert::apply(value);
+    }
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.reason == "concrete-overload-ambiguous"
+    assert error.candidate_signatures == (
+        "float apply(float value)",
+        "float apply(float value, int bias = 0)",
+    )
+
+
+def test_preprocessor_rejects_same_arity_concrete_overloads_for_unknown_argument():
+    code = """
+    struct Convert {
+      static float apply(short value) { return float(value); }
+      static float apply(long value) { return float(value); }
+    };
+
+    kernel void k(device float* values [[buffer(0)]]) {
+      values[0] = Convert::apply(unresolved()[0]);
+    }
+    """
+
+    with pytest.raises(MetalStructMethodError) as excinfo:
+        MetalPreprocessor().preprocess(code)
+
+    error = excinfo.value
+    assert error.reason == "concrete-overload-ambiguous"
+    assert error.requested_signature == "Convert::apply(unresolved()[0])"
+    assert error.candidate_signatures == (
+        "float apply(short value)",
+        "float apply(long value)",
+    )
 
 
 def test_preprocessor_skips_calls_inside_residual_template_declarations():

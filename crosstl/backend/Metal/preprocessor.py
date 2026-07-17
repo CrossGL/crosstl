@@ -56,6 +56,18 @@ MLX_HOST_NAME_DECL_RE = re.compile(
 DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT = 512
 SOURCE_ANALYSIS_CACHE_LIMIT = 8
 CONTAINING_SPAN_CACHE_LIMIT = 64
+METAL_RECEIVER_DECLARATION_RE = re.compile(
+    r"(?<![A-Za-z0-9_:])"
+    r"(?P<leading>(?:(?:const|volatile|thread|threadgroup|"
+    r"threadgroup_imageblock|device|constant)\s+)*)"
+    r"(?P<type>[A-Za-z_]\w*)"
+    r"(?P<trailing>(?:\s+(?:const|volatile|thread|threadgroup|"
+    r"threadgroup_imageblock|device|constant))*)\s*"
+    r"(?P<indirection>\*+|&&|&)?"
+    r"(?P<indirection_qualifiers>"
+    r"(?:\s+(?:const|volatile|restrict|__restrict|__restrict__))*)"
+    r"\s*\b(?P<name>[A-Za-z_]\w*)\b\s*(?=[,;)=\[\{(])"
+)
 
 
 class MetalStructMethodError(ValueError):
@@ -83,6 +95,9 @@ class MetalStructMethodError(ValueError):
         missing_capabilities: Optional[Tuple[str, ...]] = None,
         reason: Optional[str] = None,
         return_type: Optional[str] = None,
+        receiver_type: Optional[str] = None,
+        candidate_signatures: Optional[Tuple[str, ...]] = None,
+        candidate_mismatches: Optional[Tuple[Dict[str, object], ...]] = None,
     ):
         super().__init__(message)
         self.struct_name = struct_name
@@ -92,6 +107,9 @@ class MetalStructMethodError(ValueError):
         self.source_location = source_location
         self.reason = reason
         self.return_type = return_type
+        self.receiver_type = receiver_type
+        self.candidate_signatures = candidate_signatures or ()
+        self.candidate_mismatches = candidate_mismatches or ()
         if missing_capabilities is not None:
             self.missing_capabilities = missing_capabilities
 
@@ -275,12 +293,25 @@ class _MetalIntegralConstantBinding:
     value: Optional[str]
 
 
+@dataclass(frozen=True)
+class _MetalReceiverDeclaration:
+    name: str
+    declaration_position: int
+    declaration_end: int
+    type_position: int
+    scope_start: int
+    scope_end: int
+    declared_type: str
+    raw_type_text: str
+
+
 @dataclass
 class _MetalSourceAnalysis:
     comment_and_literal_spans: Optional[List[Tuple[int, int]]] = None
     lexical_brace_scopes: Optional[List[Tuple[int, int]]] = None
     template_declaration_spans: Optional[List[Tuple[int, int]]] = None
     namespace_spans: Optional[List[Tuple[int, int, str]]] = None
+    receiver_declarations: Optional[Dict[str, List[_MetalReceiverDeclaration]]] = None
 
 
 @dataclass(frozen=True)
@@ -289,6 +320,28 @@ class _MetalStaticAssertion:
     condition_span: Tuple[int, int]
     condition: str
     message: Optional[str]
+
+
+@dataclass(frozen=True)
+class _MetalConstexprCall:
+    name: str
+    qualified_name: str
+    template_arguments: Optional[List[str]]
+    arguments: List[str]
+    span: Tuple[int, int]
+
+
+@dataclass
+class _MetalConstexprFunction:
+    name: str
+    span: Tuple[int, int]
+    source: str
+    namespace: str = ""
+    is_template: bool = False
+    template_parameters: List[str] = field(default_factory=list)
+    variadic_template_parameters: Set[str] = field(default_factory=set)
+    template_parameter_defaults: Dict[str, str] = field(default_factory=dict)
+    template_parameter_types: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -351,7 +404,10 @@ class _MetalStructMethod:
     body: str
     span: Tuple[int, int]
     is_const: bool = False
+    is_volatile: bool = False
+    ref_qualifier: str = ""
     receiver_address_spaces: Tuple[str, ...] = ()
+    trailing_qualifiers: Tuple[str, ...] = ()
     # Template member methods carry their template parameter names; an empty list
     # marks an ordinary (non-template) member function. The raw `RetType` /
     # `parameters` text still contains the template parameter identifiers; they
@@ -374,6 +430,23 @@ class _MetalStructMethod:
     @property
     def is_template(self) -> bool:
         return bool(self.template_parameters)
+
+
+@dataclass(frozen=True)
+class _MetalReceiverContract:
+    """Source implicit-object state retained until member overload binding."""
+
+    struct_name: str
+    is_const: bool = False
+    is_volatile: bool = False
+    address_spaces: Tuple[str, ...] = ("thread",)
+    indirection: str = ""
+    value_category: str = "lvalue"
+    source_type: str = ""
+
+    @property
+    def is_readonly(self) -> bool:
+        return self.is_const or "constant" in self.address_spaces
 
 
 @dataclass
@@ -593,6 +666,8 @@ class MetalPreprocessor(HLSLPreprocessor):
         self._const_for_loop_contract_verified = False
         self._const_for_loop_expansion_work = 0
         self._fail_closed_static_assertions = False
+        self._static_constexpr_helper_values = {}
+        self._static_constexpr_helper_resolution_stack = []
         self._source_analysis_cache: Dict[str, _MetalSourceAnalysis] = {}
         # The materialization scan alternates between multiple span lists at
         # nearly every source position. Cache their sorted lookup indexes, but
@@ -631,6 +706,8 @@ class MetalPreprocessor(HLSLPreprocessor):
         self._const_for_loop_contract_verified = False
         self._const_for_loop_expansion_work = 0
         self._fail_closed_static_assertions = False
+        self._static_constexpr_helper_values = {}
+        self._static_constexpr_helper_resolution_stack = []
         code = self._strip_leading_compiler_diagnostics(code)
         processed = super().preprocess(code, file_path=file_path)
         self._configure_integral_constant_contracts(processed)
@@ -2995,6 +3072,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         code: str,
         owner_spans: List[Tuple[int, int]],
         type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]] = None,
+        constexpr_functions: Optional[Dict[str, List[_MetalConstexprFunction]]] = None,
     ) -> Dict[str, List[_MetalIntegralConstantBinding]]:
         raw_declarations: List[Tuple[int, str, _MetalDataMember]] = []
         seen_declarations: Set[Tuple[int, str]] = set()
@@ -3082,6 +3160,14 @@ class MetalPreprocessor(HLSLPreprocessor):
                     )
                 else:
                     initializer = self._replace_concrete_sizeof_expressions(initializer)
+                if constexpr_functions:
+                    _resolved_initializer, initializer, _unresolved = (
+                        self._resolve_static_constexpr_calls(
+                            initializer,
+                            constexpr_functions,
+                            declaration_position,
+                        )
+                    )
                 value = self._proven_integral_constant_value(
                     value_type_tokens[0], initializer
                 )
@@ -3526,6 +3612,7 @@ class MetalPreprocessor(HLSLPreprocessor):
                         ordered_members,
                     )
             i = semicolon + 1
+        self._assign_receiver_overload_free_names(struct_name, methods)
         return (
             data_member_names,
             data_member_types,
@@ -4318,9 +4405,15 @@ class MetalPreprocessor(HLSLPreprocessor):
         return_type = self._strip_function_qualifier_macros(return_type)
         if not return_type:
             return None
-        receiver_qualifiers = header[paren_end + 1 :]
-        is_const = bool(re.search(r"\bconst\b", receiver_qualifiers))
-        receiver_address_spaces = self._receiver_address_spaces(receiver_qualifiers)
+        receiver_qualifier_text = header[paren_end + 1 :]
+        trailing_qualifiers = self._member_trailing_qualifiers(receiver_qualifier_text)
+        is_const = "const" in trailing_qualifiers
+        is_volatile = "volatile" in trailing_qualifiers
+        ref_qualifiers = [
+            qualifier for qualifier in trailing_qualifiers if qualifier in {"&", "&&"}
+        ]
+        ref_qualifier = ref_qualifiers[0] if len(ref_qualifiers) == 1 else ""
+        receiver_address_spaces = self._receiver_address_spaces(receiver_qualifier_text)
 
         method_body_end = self._find_matching_brace(body, brace)
         if method_body_end is None:
@@ -4342,8 +4435,46 @@ class MetalPreprocessor(HLSLPreprocessor):
             body=method_body,
             span=(decl_start, method_body_end),
             is_const=is_const,
+            is_volatile=is_volatile,
+            ref_qualifier=ref_qualifier,
             receiver_address_spaces=receiver_address_spaces,
+            trailing_qualifiers=trailing_qualifiers,
         )
+
+    def _member_trailing_qualifiers(self, text: str) -> Tuple[str, ...]:
+        qualifiers: List[str] = []
+        i = 0
+        while i < len(text):
+            if text[i].isspace():
+                i += 1
+                continue
+            if text.startswith("[[", i):
+                end = text.find("]]", i + 2)
+                if end == -1:
+                    break
+                i = end + 2
+                continue
+            if text[i].isalpha() or text[i] == "_":
+                word, consumed = self._read_identifier(text, i)
+                qualifiers.append(word)
+                i += consumed
+                if word == "noexcept":
+                    while i < len(text) and text[i].isspace():
+                        i += 1
+                    if i < len(text) and text[i] == "(":
+                        end = self._find_matching_delimiter(text, i, "(", ")")
+                        if end is None:
+                            break
+                        i = end
+                continue
+            if text.startswith("&&", i):
+                qualifiers.append("&&")
+                i += 2
+                continue
+            if text[i] == "&":
+                qualifiers.append("&")
+            i += 1
+        return tuple(qualifiers)
 
     def _strip_function_qualifier_macros(self, prefix: str) -> str:
         # Remove Metal function-qualifier MACROS (`METAL_FUNC`, `STEEL_CONST`,
@@ -4363,6 +4494,90 @@ class MetalPreprocessor(HLSLPreprocessor):
         if is_operator_call:
             return f"{struct_name}__operator_call"
         return f"{struct_name}__{method_name}"
+
+    def _assign_receiver_overload_free_names(
+        self,
+        struct_name: str,
+        methods: List[_MetalStructMethod],
+    ) -> None:
+        groups: Dict[Tuple[str, bool, Tuple[str, ...]], List[_MetalStructMethod]] = {}
+        for method in methods:
+            parameter_contract = tuple(
+                self._normalize_template_argument_text(
+                    self._normalize_function_parameter_type_text(parameter)
+                )
+                for parameter in self._split_top_level_commas(method.parameters)
+                if parameter.strip()
+            )
+            groups.setdefault(
+                (method.name, method.is_static, parameter_contract), []
+            ).append(method)
+
+        for overloads in groups.values():
+            if len(overloads) < 2 or overloads[0].is_static:
+                continue
+            receiver_contracts = {
+                self._method_receiver_contract_key(method) for method in overloads
+            }
+            if len(receiver_contracts) < 2:
+                continue
+            for method in overloads:
+                method.free_name = (
+                    f"{self._struct_member_free_name(struct_name, method.name, method.is_operator_call)}"
+                    f"__metal_receiver_{self._method_receiver_name_suffix(method)}"
+                )
+
+    @staticmethod
+    def _method_receiver_contract_key(method: _MetalStructMethod) -> Tuple[object, ...]:
+        return (
+            method.is_const,
+            method.is_volatile,
+            method.ref_qualifier,
+            method.receiver_address_spaces or ("thread",),
+        )
+
+    @staticmethod
+    def _method_body_receiver_contract(
+        struct: _MetalStructDefinition,
+        method: _MetalStructMethod,
+    ) -> Optional[_MetalReceiverContract]:
+        if method.is_static:
+            return None
+        address_spaces = method.receiver_address_spaces or ("thread",)
+        qualifiers = []
+        if method.is_const:
+            qualifiers.append("const")
+        if method.is_volatile:
+            qualifiers.append("volatile")
+        qualifiers.extend(address_spaces)
+        qualifiers.append(f"{struct.name}&")
+        return _MetalReceiverContract(
+            struct_name=struct.name,
+            is_const=method.is_const,
+            is_volatile=method.is_volatile,
+            address_spaces=address_spaces,
+            indirection="&",
+            value_category="lvalue",
+            source_type=" ".join(qualifiers),
+        )
+
+    @staticmethod
+    def _method_receiver_name_suffix(method: _MetalStructMethod) -> str:
+        if method.is_const and method.is_volatile:
+            cv = "const_volatile"
+        elif method.is_const:
+            cv = "const"
+        elif method.is_volatile:
+            cv = "volatile"
+        else:
+            cv = "mutable"
+        address = "_".join(method.receiver_address_spaces or ("thread",))
+        reference = {
+            "": "unqualified",
+            "&": "lvalue",
+            "&&": "rvalue",
+        }.get(method.ref_qualifier, "unknown_ref")
+        return f"{cv}_{address}_{reference}"
 
     def _brace_construct_is_method_definition(self, header: str) -> bool:
         # Decide whether the text preceding a `{` body is a function declarator
@@ -4580,8 +4795,29 @@ class MetalPreprocessor(HLSLPreprocessor):
         struct: _MetalStructDefinition,
         method: _MetalStructMethod,
     ) -> str:
-        const_qualifier = "const " if method.is_const else ""
-        return f"thread {const_qualifier}{struct.name}& self"
+        address_spaces = method.receiver_address_spaces or ("thread",)
+        if len(address_spaces) != 1:
+            raise MetalStructMethodError(
+                "Cannot lower member function with an unrepresentable receiver "
+                f"address-space contract: {struct.name}::{method.name}.",
+                struct_name=struct.name,
+                method_name=method.name,
+                requested_signature=f"{struct.name}::{method.name}({method.parameters})",
+                suggested_action=(
+                    "use exactly one Metal receiver address-space qualifier"
+                ),
+                reason="receiver-address-space-unrepresentable",
+                receiver_type=" ".join(address_spaces),
+                missing_capabilities=("metal.member-receiver-qualifiers",),
+            )
+        cv_qualifiers = []
+        if method.is_const:
+            cv_qualifiers.append("const")
+        if method.is_volatile:
+            cv_qualifiers.append("volatile")
+        cv_text = f"{' '.join(cv_qualifiers)} " if cv_qualifiers else ""
+        reference = "&&" if method.ref_qualifier == "&&" else "&"
+        return f"{address_spaces[0]} {cv_text}{struct.name}{reference} self"
 
     def _resolved_static_data_member_initializers(
         self, struct: _MetalStructDefinition
@@ -4681,6 +4917,8 @@ class MetalPreprocessor(HLSLPreprocessor):
         if not assertions:
             return code
 
+        self._static_constexpr_helper_values = {}
+        self._static_constexpr_helper_resolution_stack = []
         owner_spans = [(0, len(code))]
         type_aliases = self._collect_local_type_alias_bindings(
             code,
@@ -4693,8 +4931,12 @@ class MetalPreprocessor(HLSLPreprocessor):
             type_aliases,
         )
         structs = self._find_concrete_struct_definitions(code)
+        constexpr_functions: Dict[str, List[_MetalConstexprFunction]] = {}
+        constexpr_index_built = False
         replacements: List[Tuple[int, int, str]] = []
-        for assertion in assertions:
+        assertion_index = 0
+        while assertion_index < len(assertions):
+            assertion = assertions[assertion_index]
             condition_position = assertion.condition_span[0]
             visible_bindings = self._local_integral_constant_bindings_at(
                 constants,
@@ -4708,6 +4950,13 @@ class MetalPreprocessor(HLSLPreprocessor):
             resolved_condition = self._substitute_template_argument_static_constants(
                 assertion.condition,
                 visible_constants,
+            )
+            resolved_condition, evaluation_condition, _unresolved_calls = (
+                self._resolve_static_constexpr_calls(
+                    resolved_condition,
+                    constexpr_functions,
+                    condition_position,
+                )
             )
             resolved_condition = self._replace_concrete_sizeof_expressions(
                 resolved_condition,
@@ -4723,11 +4972,40 @@ class MetalPreprocessor(HLSLPreprocessor):
                     condition_position,
                 ),
             )
+            evaluation_condition = self._replace_concrete_sizeof_expressions(
+                evaluation_condition,
+                lambda type_text: self._resolve_type_aliases_at(
+                    type_text,
+                    type_aliases,
+                    condition_position,
+                ),
+                lambda type_text: self._concrete_aggregate_type_layout(
+                    type_text,
+                    structs,
+                    type_aliases,
+                    condition_position,
+                ),
+            )
             folded, value = self._evaluate_static_integral_expression(
-                resolved_condition
+                evaluation_condition
             )
             if folded and value:
                 replacements.append((*assertion.span, ""))
+                assertion_index += 1
+                continue
+            if not folded and not constexpr_index_built:
+                constexpr_functions = self._static_constexpr_function_index(code)
+                self._static_constexpr_helper_values = {}
+                self._static_constexpr_helper_resolution_stack = []
+                constants = self._collect_local_integral_constant_bindings(
+                    code,
+                    owner_spans,
+                    type_aliases,
+                    constexpr_functions,
+                )
+                replacements = []
+                assertion_index = 0
+                constexpr_index_built = True
                 continue
 
             source_message = (
@@ -4948,6 +5226,548 @@ class MetalPreprocessor(HLSLPreprocessor):
             and re.search(rf"\b{re.escape(name)}\b", masked) is not None
         )
         return tuple(sorted(dependencies))
+
+    def _static_constexpr_function_index(
+        self, code: str
+    ) -> Dict[str, List[_MetalConstexprFunction]]:
+        functions: Dict[str, List[_MetalConstexprFunction]] = {}
+        template_functions = self._find_template_functions(code)
+        for function in template_functions:
+            body_start = self._find_next_top_level_char(function.source, 0, "{")
+            if body_start is None:
+                continue
+            header = function.source[:body_start]
+            if re.search(r"\b(?:constexpr|consteval)\b", header) is None:
+                continue
+            functions.setdefault(function.name, []).append(
+                _MetalConstexprFunction(
+                    name=function.name,
+                    span=function.span,
+                    source=function.source,
+                    namespace=function.namespace,
+                    is_template=True,
+                    template_parameters=list(function.template_parameters),
+                    variadic_template_parameters=set(
+                        function.variadic_template_parameters
+                    ),
+                    template_parameter_defaults=dict(
+                        function.template_parameter_defaults
+                    ),
+                    template_parameter_types=dict(function.template_parameter_types),
+                )
+            )
+
+        template_spans = self._find_template_declaration_spans(code)
+        namespace_spans = self._find_namespace_spans(code)
+        # Helper materialization appends concrete specializations after their
+        # callers, so assertion evaluation must index those generated definitions.
+        for definition in self._find_non_template_function_definitions(
+            code,
+            template_spans,
+        ):
+            source = code[definition.span[0] : definition.span[1]]
+            body_start = self._find_next_top_level_char(source, 0, "{")
+            if body_start is None:
+                continue
+            header = source[:body_start]
+            if re.search(r"\b(?:constexpr|consteval)\b", header) is None:
+                continue
+            functions.setdefault(definition.name, []).append(
+                _MetalConstexprFunction(
+                    name=definition.name,
+                    span=definition.span,
+                    source=source,
+                    namespace=self._namespace_at(
+                        namespace_spans,
+                        definition.span[0],
+                    ),
+                )
+            )
+        return functions
+
+    def _resolve_static_constexpr_calls(
+        self,
+        expression: str,
+        functions: Dict[str, List[_MetalConstexprFunction]],
+        position: int,
+    ) -> Tuple[str, str, Tuple[str, ...]]:
+        if not functions:
+            return expression, expression, ()
+        calls = self._find_static_constexpr_calls(expression, set(functions))
+        if not calls:
+            return expression, expression, ()
+
+        resolved_replacements: List[Tuple[int, int, str]] = []
+        evaluation_replacements: List[Tuple[int, int, str]] = []
+        unresolved: Set[str] = set()
+        for index, call in enumerate(calls):
+            value = self._evaluate_static_constexpr_call(
+                call,
+                functions,
+                position,
+            )
+            if value is not None:
+                resolved_replacements.append((*call.span, value))
+                evaluation_replacements.append((*call.span, value))
+                continue
+            unresolved.add(call.name)
+            placeholder = f"__crosstl_unresolved_constexpr_{index}_{call.name}"
+            while placeholder in expression:
+                placeholder += "_"
+            evaluation_replacements.append((*call.span, placeholder))
+
+        resolved = self._apply_text_replacements(expression, resolved_replacements)
+        evaluation = self._apply_text_replacements(
+            expression,
+            evaluation_replacements,
+        )
+        return resolved, evaluation, tuple(sorted(unresolved))
+
+    def _find_static_constexpr_calls(
+        self,
+        expression: str,
+        function_names: Set[str],
+    ) -> List[_MetalConstexprCall]:
+        calls: List[_MetalConstexprCall] = []
+        i = 0
+        while i < len(expression):
+            if expression[i] in "\"'":
+                _literal, consumed = self._read_string(expression, i)
+                i += consumed
+                continue
+            if expression.startswith("//", i):
+                end = expression.find("\n", i)
+                i = len(expression) if end == -1 else end + 1
+                continue
+            if expression.startswith("/*", i):
+                end = expression.find("*/", i + 2)
+                i = len(expression) if end == -1 else end + 2
+                continue
+            if not (expression[i].isalpha() or expression[i] == "_"):
+                i += 1
+                continue
+
+            name, consumed = self._read_identifier(expression, i)
+            if name not in function_names:
+                i += consumed
+                continue
+            name_end = i + consumed
+            cursor = name_end
+            while cursor < len(expression) and expression[cursor].isspace():
+                cursor += 1
+            template_arguments: Optional[List[str]] = None
+            if cursor < len(expression) and expression[cursor] == "<":
+                angle_end = self._find_matching_angle(expression, cursor)
+                if angle_end is None:
+                    i += consumed
+                    continue
+                template_arguments = self._split_top_level_commas(
+                    expression[cursor + 1 : angle_end]
+                )
+                cursor = angle_end + 1
+                while cursor < len(expression) and expression[cursor].isspace():
+                    cursor += 1
+            if cursor >= len(expression) or expression[cursor] != "(":
+                i += consumed
+                continue
+            arguments_end = self._find_matching_delimiter(
+                expression,
+                cursor,
+                "(",
+                ")",
+            )
+            if arguments_end is None:
+                i += consumed
+                continue
+            argument_text = expression[cursor + 1 : arguments_end]
+            arguments = (
+                self._split_top_level_commas(argument_text)
+                if argument_text.strip()
+                else []
+            )
+            call_start = self._scoped_identifier_start(expression, i)
+            qualified_name = re.sub(
+                r"\s*::\s*",
+                "::",
+                expression[call_start:name_end].strip(),
+            )
+            calls.append(
+                _MetalConstexprCall(
+                    name=name,
+                    qualified_name=qualified_name,
+                    template_arguments=template_arguments,
+                    arguments=arguments,
+                    span=(call_start, arguments_end + 1),
+                )
+            )
+            i = arguments_end + 1
+        return calls
+
+    def _evaluate_static_constexpr_call(
+        self,
+        call: _MetalConstexprCall,
+        functions: Dict[str, List[_MetalConstexprFunction]],
+        position: int,
+    ) -> Optional[str]:
+        candidates = [
+            function
+            for function in functions.get(call.name, [])
+            if (not function.is_template or function.span[0] <= position)
+            and self._static_constexpr_namespace_matches(function, call)
+            and self._static_constexpr_candidate_accepts_call(function, call)
+        ]
+        if len(candidates) != 1:
+            return None
+        function = candidates[0]
+        template_bindings = self._bind_static_constexpr_template_arguments(
+            function,
+            list(call.template_arguments or []),
+            functions,
+            position,
+        )
+        if template_bindings is None:
+            return None
+        runtime_bindings = self._bind_static_constexpr_call_arguments(
+            function,
+            call.arguments,
+            template_bindings,
+            functions,
+            position,
+        )
+        if runtime_bindings is None:
+            return None
+
+        cache_key = (
+            function.span,
+            tuple(template_bindings[name] for name in function.template_parameters),
+            tuple(runtime_bindings.values()),
+        )
+        if cache_key in self._static_constexpr_helper_values:
+            return self._static_constexpr_helper_values[cache_key]
+        if cache_key in self._static_constexpr_helper_resolution_stack:
+            return None
+
+        self._static_constexpr_helper_resolution_stack.append(cache_key)
+        try:
+            bindings = dict(template_bindings)
+            bindings.update(runtime_bindings)
+            value = self._evaluate_static_constexpr_function_body(
+                function,
+                bindings,
+                functions,
+            )
+        finally:
+            self._static_constexpr_helper_resolution_stack.pop()
+        self._static_constexpr_helper_values[cache_key] = value
+        return value
+
+    @staticmethod
+    def _static_constexpr_namespace_matches(
+        function: _MetalConstexprFunction,
+        call: _MetalConstexprCall,
+    ) -> bool:
+        if "::" not in call.qualified_name:
+            return True
+        requested_namespace = call.qualified_name.rsplit("::", 1)[0].lstrip(":")
+        function_namespace = function.namespace.lstrip(":")
+        return function_namespace == requested_namespace or function_namespace.endswith(
+            f"::{requested_namespace}"
+        )
+
+    def _static_constexpr_candidate_accepts_call(
+        self,
+        function: _MetalConstexprFunction,
+        call: _MetalConstexprCall,
+    ) -> bool:
+        if function.variadic_template_parameters:
+            return False
+        template_arguments = list(call.template_arguments or [])
+        if len(template_arguments) > len(function.template_parameters):
+            return False
+        if any(
+            name not in function.template_parameter_types
+            or self._static_constexpr_integral_type(
+                function.template_parameter_types[name]
+            )
+            is None
+            for name in function.template_parameters
+        ):
+            return False
+        if not self._template_arguments_satisfy_parameters(
+            function,
+            template_arguments,
+        ):
+            return False
+        parameters = self._static_constexpr_function_parameters(function)
+        if parameters is None:
+            return False
+        required_parameters = sum(
+            default is None for _name, _type, default in parameters
+        )
+        return required_parameters <= len(call.arguments) <= len(parameters)
+
+    def _bind_static_constexpr_template_arguments(
+        self,
+        function: _MetalConstexprFunction,
+        arguments: List[str],
+        functions: Dict[str, List[_MetalConstexprFunction]],
+        position: int,
+    ) -> Optional[Dict[str, str]]:
+        bindings: Dict[str, str] = {}
+        defaults = function.template_parameter_defaults
+        for index, name in enumerate(function.template_parameters):
+            expression = (
+                arguments[index] if index < len(arguments) else defaults.get(name)
+            )
+            if expression is None:
+                return None
+            expression = self._substitute_template_argument_static_constants(
+                expression,
+                bindings,
+            )
+            value_type = self._static_constexpr_integral_type(
+                function.template_parameter_types.get(name, "")
+            )
+            value = self._evaluate_static_constexpr_integral_value(
+                expression,
+                value_type,
+                functions,
+                position,
+            )
+            if value is None:
+                return None
+            bindings[name] = value
+        return bindings
+
+    def _bind_static_constexpr_call_arguments(
+        self,
+        function: _MetalConstexprFunction,
+        arguments: List[str],
+        template_bindings: Dict[str, str],
+        functions: Dict[str, List[_MetalConstexprFunction]],
+        position: int,
+    ) -> Optional[Dict[str, str]]:
+        parameters = self._static_constexpr_function_parameters(function)
+        if parameters is None:
+            return None
+        bindings: Dict[str, str] = {}
+        visible = dict(template_bindings)
+        for index, (name, value_type, default) in enumerate(parameters):
+            expression = arguments[index] if index < len(arguments) else default
+            if expression is None:
+                return None
+            expression = self._substitute_template_argument_static_constants(
+                expression,
+                visible,
+            )
+            value = self._evaluate_static_constexpr_integral_value(
+                expression,
+                value_type,
+                functions,
+                position,
+            )
+            if value is None:
+                return None
+            bindings[name] = value
+            visible[name] = value
+        return bindings
+
+    def _static_constexpr_function_parameters(
+        self,
+        function: _MetalConstexprFunction,
+    ) -> Optional[List[Tuple[str, str, Optional[str]]]]:
+        body_start = self._find_next_top_level_char(function.source, 0, "{")
+        if body_start is None:
+            return None
+        header = function.source[:body_start]
+        open_paren = self._function_parameter_start(header)
+        if open_paren is None:
+            return None
+        close_paren = self._find_matching_delimiter(header, open_paren, "(", ")")
+        if close_paren is None:
+            return None
+        parameter_text = header[open_paren + 1 : close_paren]
+        if not parameter_text.strip() or parameter_text.strip() == "void":
+            return []
+
+        parameters: List[Tuple[str, str, Optional[str]]] = []
+        for parameter in self._split_top_level_commas(parameter_text):
+            declaration, default = self._split_top_level_assignment(parameter)
+            name = self._declared_local_name(declaration)
+            if name is None:
+                return None
+            value_type = self._static_constexpr_integral_type(
+                self._declared_local_type(declaration, name) or ""
+            )
+            if value_type is None:
+                return None
+            parameters.append((name, value_type, default))
+        return parameters
+
+    def _evaluate_static_constexpr_function_body(
+        self,
+        function: _MetalConstexprFunction,
+        bindings: Dict[str, str],
+        functions: Dict[str, List[_MetalConstexprFunction]],
+    ) -> Optional[str]:
+        body_start = self._find_next_top_level_char(function.source, 0, "{")
+        if body_start is None:
+            return None
+        body_end = self._find_matching_brace(function.source, body_start)
+        if body_end is None:
+            return None
+        statements = self._split_static_constexpr_body_statements(
+            function.source[body_start + 1 : body_end - 1]
+        )
+        if not statements:
+            return None
+        return_type = self._static_constexpr_function_return_type(function)
+        if return_type is None:
+            return None
+
+        active_bindings = dict(bindings)
+        for index, statement in enumerate(statements):
+            stripped = self._strip_template_argument_comments(statement).strip()
+            return_match = re.fullmatch(r"return\s+(.+)", stripped, re.DOTALL)
+            if return_match is not None:
+                if index != len(statements) - 1:
+                    return None
+                expression = self._substitute_template_argument_static_constants(
+                    return_match.group(1),
+                    active_bindings,
+                )
+                return self._evaluate_static_constexpr_integral_value(
+                    expression,
+                    return_type,
+                    functions,
+                    function.span[0],
+                )
+
+            name = self._declared_local_name(stripped)
+            member = (
+                self._parse_ordered_data_member(name, stripped)
+                if name is not None
+                else None
+            )
+            if member is None or member.default is None:
+                return None
+            qualifiers = set(IDENTIFIER_RE.findall(member.type_text))
+            value_type = self._static_constexpr_integral_type(member.type_text)
+            if (
+                "constexpr" not in qualifiers
+                or value_type is None
+                or member.array_suffix
+            ):
+                return None
+            initializer_bindings = dict(active_bindings)
+            initializer_bindings.pop(name, None)
+            initializer = self._substitute_template_argument_static_constants(
+                member.default,
+                initializer_bindings,
+            )
+            value = self._evaluate_static_constexpr_integral_value(
+                initializer,
+                value_type,
+                functions,
+                function.span[0],
+            )
+            if value is None:
+                return None
+            active_bindings[name] = value
+        return None
+
+    def _split_static_constexpr_body_statements(
+        self,
+        body: str,
+    ) -> Optional[List[str]]:
+        statements: List[str] = []
+        start = 0
+        paren_depth = 0
+        bracket_depth = 0
+        i = 0
+        while i < len(body):
+            if body[i] in "\"'":
+                _literal, consumed = self._read_string(body, i)
+                i += consumed
+                continue
+            if body.startswith("//", i):
+                end = body.find("\n", i)
+                i = len(body) if end == -1 else end + 1
+                continue
+            if body.startswith("/*", i):
+                end = body.find("*/", i + 2)
+                if end == -1:
+                    return None
+                i = end + 2
+                continue
+            token = body[i]
+            if token == "(":
+                paren_depth += 1
+            elif token == ")":
+                paren_depth = max(0, paren_depth - 1)
+            elif token == "[":
+                bracket_depth += 1
+            elif token == "]":
+                bracket_depth = max(0, bracket_depth - 1)
+            elif token in "{}":
+                return None
+            elif token == ";" and paren_depth == bracket_depth == 0:
+                statement = body[start:i].strip()
+                if statement:
+                    statements.append(statement)
+                start = i + 1
+            i += 1
+        if self._strip_template_argument_comments(body[start:]).strip():
+            return None
+        return statements
+
+    def _static_constexpr_function_return_type(
+        self,
+        function: _MetalConstexprFunction,
+    ) -> Optional[str]:
+        body_start = self._find_next_top_level_char(function.source, 0, "{")
+        if body_start is None:
+            return None
+        header = function.source[:body_start]
+        open_paren = self._function_parameter_start(header)
+        if open_paren is None:
+            return None
+        name_match = re.search(
+            rf"\b{re.escape(function.name)}\s*$",
+            header[:open_paren],
+        )
+        if name_match is None:
+            return None
+        return self._static_constexpr_integral_type(header[: name_match.start()])
+
+    def _evaluate_static_constexpr_integral_value(
+        self,
+        expression: str,
+        value_type: Optional[str],
+        functions: Dict[str, List[_MetalConstexprFunction]],
+        position: int,
+    ) -> Optional[str]:
+        if value_type is None:
+            return None
+        _resolved, evaluation, _unresolved = self._resolve_static_constexpr_calls(
+            expression,
+            functions,
+            position,
+        )
+        return self._proven_integral_constant_value(value_type, evaluation)
+
+    def _static_constexpr_integral_type(self, type_text: str) -> Optional[str]:
+        if any(token in type_text for token in ("*", "&", "[", "]")):
+            return None
+        normalized = self._normalize_template_argument_text(type_text)
+        normalized = re.sub(
+            r"\b(?:const|constant|constexpr|consteval|device|inline|static|thread|threadgroup)\b",
+            " ",
+            normalized,
+        )
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        normalized = re.sub(r"^(?:::)?metal::", "", normalized)
+        return normalized if normalized in self._METAL_INTEGRAL_SCALAR_TYPES else None
 
     def _substitute_struct_scoped_alias_owners(
         self,
@@ -6418,6 +7238,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         ] = None,
         type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]] = None,
         type_alias_fallback_position: Optional[int] = None,
+        implicit_receiver_contract: Optional[_MetalReceiverContract] = None,
     ) -> Optional[Tuple[int, str]]:
         # `field_variable_types` / `field_structs_by_name` cover EVERY struct/union
         # type (including method-less data carriers) and are used only to resolve
@@ -6446,6 +7267,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             struct_type_aliases,
             type_aliases,
             type_alias_fallback_position,
+            implicit_receiver_contract,
         )
         if nested_member_rewrite is not None:
             return nested_member_rewrite
@@ -6611,6 +7433,12 @@ class MetalPreprocessor(HLSLPreprocessor):
                 allow_template_fallback=bool(template_overloads),
                 require_static=False,
                 type_alias_fallback_position=type_alias_fallback_position,
+                receiver_contract=_MetalReceiverContract(
+                    struct_name=ident,
+                    value_category="rvalue",
+                    source_type=f"thread {ident}",
+                ),
+                call_start=ident_start,
             )
             if method is not None:
                 return self._build_temporary_operator_call_rewrite(
@@ -6656,6 +7484,17 @@ class MetalPreprocessor(HLSLPreprocessor):
         struct_type = self._resolve_declared_type_at(variable_types, ident, ident_start)
         if struct_type is None:
             return None
+        receiver_contract = (
+            implicit_receiver_contract
+            if ident == "self" and implicit_receiver_contract is not None
+            else self._receiver_contract_for_named_value(
+                code,
+                struct_type,
+                ident,
+                ident_start,
+                type_aliases=struct_type_aliases,
+            )
+        )
 
         # Instance method call: `var.m(args)` -> `S__m(var, args)`.
         if code[j] == ".":
@@ -6685,12 +7524,21 @@ class MetalPreprocessor(HLSLPreprocessor):
                 else []
             )
             if reference_methods and explicit_template_arguments is None:
-                receiver_is_const = self._simple_receiver_constness(
-                    code,
-                    struct_type,
-                    ident,
-                    ident_start,
-                    type_aliases=struct_type_aliases,
+                receiver_is_const = (
+                    None
+                    if receiver_contract is not None
+                    and "constant" in receiver_contract.address_spaces
+                    else (
+                        receiver_contract.is_readonly
+                        if receiver_contract is not None
+                        else self._simple_receiver_constness(
+                            code,
+                            struct_type,
+                            ident,
+                            ident_start,
+                            type_aliases=struct_type_aliases,
+                        )
+                    )
                 )
                 method = self._select_direct_reference_method(
                     code,
@@ -6724,6 +7572,8 @@ class MetalPreprocessor(HLSLPreprocessor):
                     allow_template_fallback=bool(template_overloads),
                     require_static=False,
                     type_alias_fallback_position=type_alias_fallback_position,
+                    receiver_contract=receiver_contract,
+                    call_start=ident_start,
                 )
             if method is not None and explicit_template_arguments is None:
                 return self._build_instance_call_rewrite(
@@ -6776,6 +7626,8 @@ class MetalPreprocessor(HLSLPreprocessor):
                     allow_template_fallback=bool(template_overloads),
                     require_static=False,
                     type_alias_fallback_position=type_alias_fallback_position,
+                    receiver_contract=receiver_contract,
+                    call_start=ident_start,
                 )
                 if owner_struct is not None
                 else None
@@ -6834,6 +7686,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         struct_type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]],
         type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]],
         type_alias_fallback_position: Optional[int],
+        implicit_receiver_contract: Optional[_MetalReceiverContract],
     ) -> Optional[Tuple[int, str]]:
         """Rewrite a method call whose receiver is a nested struct field."""
         if self._is_member_identifier_context(code, ident_start):
@@ -6848,6 +7701,17 @@ class MetalPreprocessor(HLSLPreprocessor):
         if receiver_info is None:
             return None
         current_struct_name, required_access = receiver_info
+        current_receiver_contract = (
+            implicit_receiver_contract
+            if ident == "self" and implicit_receiver_contract is not None
+            else self._receiver_contract_for_named_value(
+                code,
+                current_struct_name,
+                ident,
+                ident_start,
+                type_aliases=struct_type_aliases,
+            )
+        )
 
         receiver_end = ident_end
         cursor = ident_end
@@ -6903,12 +7767,21 @@ class MetalPreprocessor(HLSLPreprocessor):
                         owner_struct,
                         reference_methods,
                         arg_open,
-                        receiver_is_const=self._simple_receiver_constness(
-                            code,
-                            current_struct_name,
-                            ident,
-                            ident_start,
-                            type_aliases=struct_type_aliases,
+                        receiver_is_const=(
+                            None
+                            if current_receiver_contract is not None
+                            and "constant" in current_receiver_contract.address_spaces
+                            else (
+                                current_receiver_contract.is_readonly
+                                if current_receiver_contract is not None
+                                else self._simple_receiver_constness(
+                                    code,
+                                    current_struct_name,
+                                    ident,
+                                    ident_start,
+                                    type_aliases=struct_type_aliases,
+                                )
+                            )
                         ),
                     )
                     return self._build_direct_reference_accessor_rewrite(
@@ -6936,6 +7809,8 @@ class MetalPreprocessor(HLSLPreprocessor):
                         allow_template_fallback=bool(template_overloads),
                         require_static=False,
                         type_alias_fallback_position=type_alias_fallback_position,
+                        receiver_contract=current_receiver_contract,
+                        call_start=ident_start,
                     )
                 if method is not None and explicit_template_arguments is None:
                     return self._build_instance_call_rewrite(
@@ -6985,7 +7860,14 @@ class MetalPreprocessor(HLSLPreprocessor):
             )
             if receiver_info is None:
                 return None
-            current_struct_name, required_access = receiver_info
+            next_struct_name, required_access = receiver_info
+            current_receiver_contract = self._member_receiver_contract(
+                current_receiver_contract,
+                current_struct,
+                member,
+                next_struct_name,
+            )
+            current_struct_name = next_struct_name
             receiver_end = cursor
 
     def _nested_member_receiver_info(
@@ -7003,7 +7885,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             if indirection_match is not None
             else ""
         )
-        if indirection not in {"", "*", "&"}:
+        if indirection not in {"", "*", "&", "&&"}:
             return None
         struct_name = (
             normalized[: indirection_match.start()].strip()
@@ -7013,6 +7895,130 @@ class MetalPreprocessor(HLSLPreprocessor):
         if struct_name not in structs_by_name:
             return None
         return struct_name, "->" if indirection == "*" else "."
+
+    def _receiver_contract_for_named_value(
+        self,
+        code: str,
+        struct_name: str,
+        receiver: str,
+        call_start: int,
+        *,
+        type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]] = None,
+    ) -> Optional[_MetalReceiverContract]:
+        if re.fullmatch(r"[A-Za-z_]\w*", receiver) is None:
+            return None
+        declaration = None
+        declarations = self._find_receiver_declarations(code).get(receiver, ())
+        for candidate in declarations:
+            if candidate.declaration_end > call_start:
+                break
+            if not (candidate.scope_start <= call_start < candidate.scope_end):
+                continue
+            resolved_type = candidate.declared_type
+            if resolved_type != struct_name and type_aliases is not None:
+                resolved_type = self._resolve_struct_type_alias_at(
+                    type_aliases,
+                    candidate.declared_type,
+                    candidate.type_position,
+                )
+            if resolved_type != struct_name:
+                continue
+            declaration = candidate
+        if declaration is None:
+            return None
+
+        return self._receiver_contract_from_type_text(
+            declaration.raw_type_text,
+            struct_name,
+        )
+
+    def _receiver_contract_from_type_text(
+        self,
+        type_text: str,
+        struct_name: str,
+        *,
+        inherited_address_spaces: Optional[Tuple[str, ...]] = None,
+        value_category: str = "lvalue",
+    ) -> _MetalReceiverContract:
+        normalized = self._normalize_template_argument_text(type_text or struct_name)
+        indirection_match = re.search(
+            r"(?P<indirection>\*+|&&|&)\s*"
+            r"(?:(?:const|volatile|restrict|__restrict|__restrict__)\s*)*$",
+            normalized,
+        )
+        indirection = (
+            indirection_match.group("indirection")
+            if indirection_match is not None
+            else ""
+        )
+        object_qualifier_text = (
+            normalized[: indirection_match.start()]
+            if indirection_match is not None
+            else normalized
+        )
+        qualifier_words = set(IDENTIFIER_RE.findall(object_qualifier_text))
+        address_spaces = self._receiver_address_spaces(object_qualifier_text)
+        if not address_spaces:
+            address_spaces = inherited_address_spaces or ("thread",)
+        is_const = "const" in qualifier_words
+        is_volatile = "volatile" in qualifier_words
+        display_qualifiers = []
+        if is_const:
+            display_qualifiers.append("const")
+        if is_volatile:
+            display_qualifiers.append("volatile")
+        display_qualifiers.extend(address_spaces)
+        display_qualifiers.append(f"{struct_name}{indirection}")
+        return _MetalReceiverContract(
+            struct_name=struct_name,
+            is_const=is_const,
+            is_volatile=is_volatile,
+            address_spaces=address_spaces,
+            indirection=indirection,
+            value_category=value_category,
+            source_type=" ".join(display_qualifiers),
+        )
+
+    def _member_receiver_contract(
+        self,
+        parent: Optional[_MetalReceiverContract],
+        owner: _MetalStructDefinition,
+        member_name: str,
+        member_struct_name: str,
+    ) -> Optional[_MetalReceiverContract]:
+        member = next(
+            (item for item in owner.data_members if item.name == member_name),
+            None,
+        )
+        if member is None:
+            return None
+        inherited_spaces = parent.address_spaces if parent is not None else None
+        contract = self._receiver_contract_from_type_text(
+            member.type_text,
+            member_struct_name,
+            inherited_address_spaces=inherited_spaces,
+        )
+        is_indirect = bool(contract.indirection)
+        member_words = set(IDENTIFIER_RE.findall(member.type_text))
+        if parent is not None and not is_indirect:
+            inherited_const = parent.is_const and "mutable" not in member_words
+            contract = replace(
+                contract,
+                is_const=contract.is_const or inherited_const,
+                is_volatile=contract.is_volatile or parent.is_volatile,
+            )
+            display_qualifiers = []
+            if contract.is_const:
+                display_qualifiers.append("const")
+            if contract.is_volatile:
+                display_qualifiers.append("volatile")
+            display_qualifiers.extend(contract.address_spaces)
+            display_qualifiers.append(f"{contract.struct_name}{contract.indirection}")
+            contract = replace(
+                contract,
+                source_type=" ".join(display_qualifiers),
+            )
+        return contract
 
     def _concrete_method_matches_call(
         self,
@@ -7034,12 +8040,25 @@ class MetalPreprocessor(HLSLPreprocessor):
             for argument in self._split_top_level_commas(raw_args)
             if argument.strip()
         ]
+        declared_parameters = [
+            parameter
+            for parameter in self._split_top_level_commas(method.parameters)
+            if parameter.strip() and parameter.strip() != "void"
+        ]
+        if not self._callable_accepts_argument_count(
+            method.parameters, len(call_arguments)
+        ):
+            return False
+        fixed_parameters = [
+            parameter for parameter in declared_parameters if "..." not in parameter
+        ]
+        if len(call_arguments) > len(fixed_parameters):
+            return False
         declared_types = [
             self._normalize_inferred_type(
                 self._normalize_function_parameter_type_text(parameter)
             )
-            for parameter in self._split_top_level_commas(method.parameters)
-            if parameter.strip()
+            for parameter in fixed_parameters[: len(call_arguments)]
         ]
         if self._source_type_alias_bindings:
             declared_types = [
@@ -7051,9 +8070,6 @@ class MetalPreprocessor(HLSLPreprocessor):
                 or declared_type
                 for declared_type in declared_types
             ]
-        if len(declared_types) != len(call_arguments):
-            return False
-
         buffer_view = self._flatten_types_at(buffer_element_types, arg_open)
         local_view = self._flatten_types_at(local_variable_types, arg_open)
         struct_field_types = self._struct_field_types_at(
@@ -7111,34 +8127,31 @@ class MetalPreprocessor(HLSLPreprocessor):
         allow_template_fallback: bool,
         require_static: Optional[bool] = None,
         type_alias_fallback_position: Optional[int] = None,
+        receiver_contract: Optional[_MetalReceiverContract] = None,
+        call_start: Optional[int] = None,
     ) -> Optional[_MetalStructMethod]:
+        arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
+        if arg_close is None:
+            return None
+        raw_args = code[arg_open + 1 : arg_close].strip()
+        argument_count = len(
+            [
+                argument
+                for argument in self._split_top_level_commas(raw_args)
+                if argument.strip()
+            ]
+        )
         candidates = [
             method
             for method in struct.methods
             if method.name == method_name
             and (require_static is None or method.is_static is require_static)
+            and self._callable_accepts_argument_count(method.parameters, argument_count)
         ]
         if not candidates:
             return None
-        if len(candidates) == 1:
-            candidate = candidates[0]
-            if not allow_template_fallback or self._concrete_method_matches_call(
-                candidate,
-                code,
-                arg_open,
-                buffer_element_types,
-                local_variable_types,
-                variable_types,
-                structs_by_name,
-                type_alias_fallback_position,
-            ):
-                return candidate
-            return None
-
-        matches = [
-            method
-            for method in candidates
-            if self._concrete_method_matches_call(
+        exact_argument_match = {
+            id(method): self._concrete_method_matches_call(
                 method,
                 code,
                 arg_open,
@@ -7148,42 +8161,207 @@ class MetalPreprocessor(HLSLPreprocessor):
                 structs_by_name,
                 type_alias_fallback_position,
             )
-        ]
-        if len(matches) == 1:
-            return matches[0]
-        if not matches and allow_template_fallback:
-            return None
-        if any(self._method_returns_lvalue_reference(method) for method in candidates):
-            # Reference-return lowering owns the fail-closed diagnostic and its
-            # lvalue-identity analysis. Preserve that path when ordinary value
-            # overload ranking cannot identify one candidate first.
-            return candidates[-1]
+            for method in candidates
+        }
+        require_exact_arguments = len(candidates) > 1 or allow_template_fallback
+        receiver_contract_required = any(not method.is_static for method in candidates)
 
-        arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
-        raw_args = (
-            code[arg_open + 1 : arg_close].strip() if arg_close is not None else "..."
-        )
-        reason = "no exact concrete overload matches"
-        if len(matches) > 1:
-            reason = "multiple exact concrete overloads match"
+        mismatch_records = []
+        receiver_viable = []
+        viable = []
+        for method in candidates:
+            receiver_mismatches = []
+            if not method.is_static:
+                if receiver_contract is None and receiver_contract_required:
+                    receiver_mismatches.append(
+                        "receiver cv/reference/address-space state is unavailable"
+                    )
+                elif receiver_contract is not None:
+                    receiver_mismatches.extend(
+                        self._receiver_candidate_mismatches(
+                            method,
+                            receiver_contract,
+                        )
+                    )
+            if not receiver_mismatches:
+                receiver_viable.append(method)
+            mismatches = []
+            if require_exact_arguments and not exact_argument_match[id(method)]:
+                mismatches.append("explicit argument types are not an exact match")
+            mismatches.extend(receiver_mismatches)
+            record = {
+                "candidate": self._concrete_method_candidate_signature(method),
+                "receiver_qualifiers": self._method_receiver_qualifier_details(method),
+                "mismatches": tuple(mismatches),
+                "viable": not mismatches,
+            }
+            mismatch_records.append(record)
+            if not mismatches:
+                viable.append(method)
+
+        if (
+            not viable
+            and allow_template_fallback
+            and not any(exact_argument_match.values())
+        ):
+            return None
+        if len(viable) > 1 and receiver_contract is not None:
+            ranked = [
+                (
+                    self._receiver_candidate_preference_rank(
+                        method,
+                        receiver_contract,
+                    ),
+                    method,
+                )
+                for method in viable
+            ]
+            best_rank = min(rank for rank, _method in ranked)
+            viable = [method for rank, method in ranked if rank == best_rank]
+        if len(viable) == 1:
+            return viable[0]
+
+        reason = "no source-viable concrete overload matches"
+        diagnostic_reason = "concrete-overload-no-viable"
+        ambiguous_conversions = False
+        if len(viable) > 1:
+            reason = "multiple equally preferred concrete overloads match"
+            diagnostic_reason = "concrete-overload-ambiguous"
+        elif (
+            not viable
+            and len(receiver_viable) > 1
+            and not any(exact_argument_match.values())
+        ):
+            reason = "multiple receiver-compatible conversion candidates remain"
+            diagnostic_reason = "concrete-overload-ambiguous"
+            ambiguous_conversions = True
         requested_signature = f"{struct.name}::{method_name}({raw_args})"
+        receiver_type = (
+            receiver_contract.source_type
+            if receiver_contract is not None
+            else "<unknown>"
+        )
+        candidate_signatures = tuple(
+            self._concrete_method_candidate_signature(method) for method in candidates
+        )
+        location_start = (
+            arg_open if ambiguous_conversions or call_start is None else call_start
+        )
         raise MetalStructMethodError(
             "Cannot lower concrete member overload "
-            f"'{struct.name}::{method_name}': {reason}. Requested call: "
-            f"{requested_signature}.",
+            f"'{struct.name}::{method_name}' for receiver '{receiver_type}': "
+            f"{reason}. Requested call: {requested_signature}.",
             struct_name=struct.name,
             method_name=method_name,
             requested_signature=requested_signature,
             suggested_action=(
-                "cast each call argument to the intended source overload type"
+                "preserve the receiver declaration qualifiers and make the "
+                "source overload contract unique"
             ),
-            source_location=(
-                self._source_location_for_offsets(code, arg_open, arg_close + 1)
-                if arg_close is not None
-                else None
+            source_location=self._source_location_for_offsets(
+                code,
+                location_start,
+                arg_close + 1,
             ),
-            reason="concrete-overload-ambiguous",
+            reason=diagnostic_reason,
+            receiver_type=receiver_type,
+            candidate_signatures=candidate_signatures,
+            candidate_mismatches=tuple(mismatch_records),
+            missing_capabilities=("metal.member-overload-resolution",),
         )
+
+    @staticmethod
+    def _method_receiver_qualifier_details(
+        method: _MetalStructMethod,
+    ) -> Dict[str, object]:
+        return {
+            "const": method.is_const,
+            "volatile": method.is_volatile,
+            "reference": method.ref_qualifier or None,
+            "address_spaces": method.receiver_address_spaces or ("thread",),
+        }
+
+    def _concrete_method_candidate_signature(
+        self,
+        method: _MetalStructMethod,
+    ) -> str:
+        trailing = " ".join(method.trailing_qualifiers)
+        suffix = f" {trailing}" if trailing else ""
+        return f"{method.return_type} {method.name}({method.parameters}){suffix}"
+
+    def _receiver_candidate_mismatches(
+        self,
+        method: _MetalStructMethod,
+        receiver: _MetalReceiverContract,
+    ) -> Tuple[str, ...]:
+        mismatches = []
+        method_spaces = method.receiver_address_spaces or ("thread",)
+        if len(receiver.address_spaces) != 1:
+            mismatches.append(
+                "receiver has multiple or unprovable Metal address spaces"
+            )
+        if len(method_spaces) != 1:
+            mismatches.append(
+                "candidate has multiple or unprovable Metal address spaces"
+            )
+        if (
+            len(receiver.address_spaces) == 1
+            and len(method_spaces) == 1
+            and receiver.address_spaces[0] != method_spaces[0]
+        ):
+            mismatches.append(
+                "receiver address space "
+                f"'{receiver.address_spaces[0]}' does not match candidate "
+                f"'{method_spaces[0]}'"
+            )
+        if receiver.is_readonly and not method.is_const:
+            mismatches.append("read-only receiver cannot call a mutating candidate")
+        if receiver.is_volatile and not method.is_volatile:
+            mismatches.append("volatile receiver cannot call a non-volatile candidate")
+        if method.ref_qualifier == "&" and receiver.value_category != "lvalue":
+            mismatches.append("lvalue-qualified candidate requires an lvalue receiver")
+        if method.ref_qualifier == "&&" and receiver.value_category != "rvalue":
+            mismatches.append("rvalue-qualified candidate requires an rvalue receiver")
+
+        semantic_qualifiers = {
+            "const",
+            "volatile",
+            "constant",
+            "device",
+            "thread",
+            "threadgroup",
+            "threadgroup_imageblock",
+            "&",
+            "&&",
+            "noexcept",
+            "override",
+            "final",
+        }
+        unknown = tuple(
+            qualifier
+            for qualifier in method.trailing_qualifiers
+            if qualifier not in semantic_qualifiers
+        )
+        if unknown:
+            mismatches.append(
+                "candidate has unsupported trailing qualifiers: " + ", ".join(unknown)
+            )
+        return tuple(mismatches)
+
+    @staticmethod
+    def _receiver_candidate_preference_rank(
+        method: _MetalStructMethod,
+        receiver: _MetalReceiverContract,
+    ) -> Tuple[int, int]:
+        cv_additions = int(method.is_const and not receiver.is_const)
+        cv_additions += int(method.is_volatile and not receiver.is_volatile)
+        expected_reference = "&" if receiver.value_category == "lvalue" else "&&"
+        reference_penalty = int(
+            bool(method.ref_qualifier) and method.ref_qualifier != expected_reference
+        )
+        if not method.ref_qualifier:
+            reference_penalty = 1
+        return cv_additions, reference_penalty
 
     @staticmethod
     def _concrete_method_overload_ordinal(
@@ -8245,6 +9423,10 @@ class MetalPreprocessor(HLSLPreprocessor):
             body=instantiated_body,
             span=method.span,
             is_const=method.is_const,
+            is_volatile=method.is_volatile,
+            ref_qualifier=method.ref_qualifier,
+            receiver_address_spaces=method.receiver_address_spaces,
+            trailing_qualifiers=method.trailing_qualifiers,
         )
         return self._emit_free_function(
             struct, concrete_method, structs_by_name=rewrite_structs_by_name
@@ -9455,6 +10637,10 @@ class MetalPreprocessor(HLSLPreprocessor):
                     local_integral_constants=local_integral_constants,
                     type_aliases=local_constant_type_aliases,
                     type_alias_fallback_position=method.span[0],
+                    implicit_receiver_contract=self._method_body_receiver_contract(
+                        struct,
+                        method,
+                    ),
                 )
                 if rewrite is not None:
                     end, replacement = rewrite
@@ -9627,6 +10813,10 @@ class MetalPreprocessor(HLSLPreprocessor):
                 body=selected.body,
                 span=selected.span,
                 is_const=selected.is_const,
+                is_volatile=selected.is_volatile,
+                ref_qualifier=selected.ref_qualifier,
+                receiver_address_spaces=selected.receiver_address_spaces,
+                trailing_qualifiers=selected.trailing_qualifiers,
             )
             instantiated_template_functions[free_name] = self._emit_free_function(
                 struct,
@@ -10209,47 +11399,16 @@ class MetalPreprocessor(HLSLPreprocessor):
         *,
         type_aliases: Optional[Dict[str, List[_MetalTypeAliasBinding]]] = None,
     ) -> Optional[bool]:
-        if re.fullmatch(r"[A-Za-z_]\w*", receiver) is None:
-            return None
-        ignored = self._find_comment_and_literal_spans(code)
-        lexical_scopes = self._find_lexical_brace_scopes(code)
-        pattern = re.compile(
-            rf"(?P<leading>(?:(?:const|constant|device|thread|threadgroup|volatile)\s+)*)"
-            rf"\b(?P<type>[A-Za-z_]\w*)\b"
-            rf"(?P<trailing>\s+const\b)?\s*(?:[&*]\s*)*"
-            rf"\b{re.escape(receiver)}\b\s*(?=[,;)=\[{{(])"
+        contract = self._receiver_contract_for_named_value(
+            code,
+            struct_name,
+            receiver,
+            call_start,
+            type_aliases=type_aliases,
         )
-        matches = []
-        for match in pattern.finditer(code, 0, call_start):
-            if self._containing_span(match.start(), ignored) is not None:
-                continue
-            scope = self._innermost_lexical_scope(
-                lexical_scopes,
-                match.start(),
-                len(code),
-            )
-            if scope[0] <= call_start < scope[1]:
-                matches.append(match)
-        if not matches:
+        if contract is None or "constant" in contract.address_spaces:
             return None
-        declaration = matches[-1]
-        declared_type = declaration.group("type")
-        if declared_type != struct_name:
-            declared_type = (
-                self._resolve_struct_type_alias_at(
-                    type_aliases,
-                    declared_type,
-                    declaration.start("type"),
-                )
-                if type_aliases is not None
-                else None
-            )
-        if declared_type != struct_name:
-            return None
-        leading = declaration.group("leading") or ""
-        if re.search(r"\bconstant\b", leading):
-            return None
-        return bool(re.search(r"\bconst\b", leading) or declaration.group("trailing"))
+        return contract.is_readonly
 
     def _rewrite_const_reference_alias_bindings(
         self,
@@ -10833,6 +11992,13 @@ class MetalPreprocessor(HLSLPreprocessor):
         arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
         if arg_close is None:
             return None
+        self._reject_readonly_pointer_result_write(
+            code,
+            struct_name,
+            method,
+            arg_open,
+            arg_close,
+        )
         self._reject_reference_returning_method_call(
             code,
             struct_name,
@@ -10846,6 +12012,98 @@ class MetalPreprocessor(HLSLPreprocessor):
         else:
             replacement = f"{method.free_name}({receiver})"
         return arg_close + 1, replacement
+
+    def _reject_readonly_pointer_result_write(
+        self,
+        code: str,
+        struct_name: Optional[object],
+        method: _MetalStructMethod,
+        arg_open: int,
+        arg_close: int,
+    ) -> None:
+        struct = struct_name or method.free_name.split("__", 1)[0]
+        owner = getattr(struct, "name", None) or str(struct)
+        return_type = method.return_type
+        if isinstance(struct, _MetalStructDefinition):
+            return_type = self._canonicalize_struct_scoped_type(
+                return_type,
+                struct,
+                None,
+            )
+        normalized_return = self._normalize_template_argument_text(return_type)
+        if "*" not in normalized_return:
+            return
+        pointee_contract = normalized_return.split("*", 1)[0]
+        if re.search(r"\bconst\b", pointee_contract) is None:
+            return
+
+        cursor = arg_close + 1
+        while True:
+            while cursor < len(code) and code[cursor].isspace():
+                cursor += 1
+            if cursor < len(code) and code[cursor] == "[":
+                close = self._find_matching_delimiter(code, cursor, "[", "]")
+                if close is None:
+                    return
+                cursor = close + 1
+                continue
+            if code.startswith("->", cursor):
+                cursor += 2
+            elif cursor < len(code) and code[cursor] == ".":
+                cursor += 1
+            else:
+                break
+            while cursor < len(code) and code[cursor].isspace():
+                cursor += 1
+            _member, consumed = self._read_identifier(code, cursor)
+            if not consumed:
+                return
+            cursor += consumed
+
+        suffix = code[cursor:].lstrip()
+        call_start = code.rfind(method.name, 0, arg_open)
+        if call_start < 0:
+            call_start = arg_open
+        prefix = code[:call_start].rstrip()
+        writes_result = suffix.startswith(("++", "--")) or bool(
+            re.match(r"^(?:(?:<<|>>|[+\-*/%&|^])?=)(?!=)", suffix)
+        )
+        writes_result = writes_result or prefix.endswith(("++", "--"))
+        if not writes_result:
+            return
+
+        arguments = code[arg_open + 1 : arg_close].strip()
+        signature = f"{owner}::{method.name}({arguments})"
+        receiver_spaces = method.receiver_address_spaces or ("thread",)
+        receiver_parts = []
+        if method.is_const:
+            receiver_parts.append("const")
+        if method.is_volatile:
+            receiver_parts.append("volatile")
+        receiver_parts.extend(receiver_spaces)
+        receiver_parts.append(f"{owner}&")
+        receiver_type = " ".join(receiver_parts)
+        raise MetalStructMethodError(
+            "Cannot write through read-only pointer result from member "
+            f"'{owner}::{method.name}'. Requested call: {signature}.",
+            struct_name=owner,
+            method_name=method.name,
+            requested_signature=signature,
+            suggested_action=(
+                "call a source overload returning a writable pointer or keep the "
+                "operation read-only"
+            ),
+            source_location=self._source_location_for_offsets(
+                code,
+                call_start,
+                cursor,
+            ),
+            missing_capabilities=("metal.readonly-member-pointer",),
+            reason="readonly-member-pointer-write",
+            return_type=normalized_return,
+            receiver_type=receiver_type,
+            candidate_signatures=(self._concrete_method_candidate_signature(method),),
+        )
 
     def _reject_reference_returning_method_call(
         self,
@@ -11002,6 +12260,73 @@ class MetalPreprocessor(HLSLPreprocessor):
                 )
             )
         return aliases
+
+    def _find_receiver_declarations(
+        self, code: str
+    ) -> Dict[str, List[_MetalReceiverDeclaration]]:
+        analysis = self._source_analysis(code)
+        if analysis.receiver_declarations is None:
+            analysis.receiver_declarations = self._scan_receiver_declarations(code)
+        return analysis.receiver_declarations
+
+    def _scan_receiver_declarations(
+        self, code: str
+    ) -> Dict[str, List[_MetalReceiverDeclaration]]:
+        ignored_spans = self._find_comment_and_literal_spans(code)
+        ordered_scopes = sorted(
+            self._find_lexical_brace_scopes(code),
+            key=lambda scope: (scope[0], -scope[1]),
+        )
+        declarations: Dict[str, List[_MetalReceiverDeclaration]] = {}
+        active_scopes: List[Tuple[int, int]] = []
+        scope_index = 0
+
+        for match in METAL_RECEIVER_DECLARATION_RE.finditer(code):
+            position = match.start()
+            while (
+                scope_index < len(ordered_scopes)
+                and ordered_scopes[scope_index][0] <= position
+            ):
+                scope = ordered_scopes[scope_index]
+                while active_scopes and not (
+                    active_scopes[-1][0] <= scope[0] < active_scopes[-1][1]
+                ):
+                    active_scopes.pop()
+                active_scopes.append(scope)
+                scope_index += 1
+            while active_scopes and not (
+                active_scopes[-1][0] <= position < active_scopes[-1][1]
+            ):
+                active_scopes.pop()
+            if self._containing_span(position, ignored_spans) is not None:
+                continue
+
+            scope_start, scope_end = (
+                active_scopes[-1] if active_scopes else (0, len(code))
+            )
+            raw_type_text = "".join(
+                (
+                    match.group("leading") or "",
+                    match.group("type"),
+                    match.group("trailing") or "",
+                    match.group("indirection") or "",
+                    match.group("indirection_qualifiers") or "",
+                )
+            )
+            name = match.group("name")
+            declarations.setdefault(name, []).append(
+                _MetalReceiverDeclaration(
+                    name=name,
+                    declaration_position=position,
+                    declaration_end=match.end(),
+                    type_position=match.start("type"),
+                    scope_start=scope_start,
+                    scope_end=scope_end,
+                    declared_type=match.group("type"),
+                    raw_type_text=raw_type_text,
+                )
+            )
+        return declarations
 
     def _find_comment_and_literal_spans(self, code: str) -> List[Tuple[int, int]]:
         analysis = self._source_analysis(code)
@@ -11483,7 +12808,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         for struct_name in sorted(struct_names):
             pattern = re.compile(
                 rf"\b{re.escape(struct_name)}\b"
-                r"(?:\s+(?:const|volatile))*\s*"
+                r"(?:\s+(?:const|volatile)\b)*\s*"
                 r"(?P<indirection>[*&]+)?\s*"
                 r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*"
                 r"(?=[;,)=\[{(])"
@@ -11518,7 +12843,7 @@ class MetalPreprocessor(HLSLPreprocessor):
         for alias in sorted(type_aliases):
             pattern = re.compile(
                 rf"\b{re.escape(alias)}\b"
-                r"(?:\s+(?:const|volatile))*\s*"
+                r"(?:\s+(?:const|volatile)\b)*\s*"
                 r"(?P<indirection>[*&]+)?\s*"
                 r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*"
                 r"(?=[;,)=\[{(])"
@@ -11981,6 +13306,7 @@ class MetalPreprocessor(HLSLPreprocessor):
             "thread",
             "threadgroup",
             "volatile",
+            "mutable",
         }
         kept = [token for token in tokens if token not in dropped]
         return " ".join(kept).strip()

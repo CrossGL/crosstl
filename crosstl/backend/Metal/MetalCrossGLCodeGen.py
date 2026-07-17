@@ -7090,7 +7090,13 @@ class MetalToCrossGLConverter:
                 **active_value_bindings,
             }
             self.current_function_specialization_key = specialization_key
-            return_type = self.map_function_return_type(func.return_type)
+            return_type = self.map_function_return_type(
+                func.return_type,
+                qualifiers=(
+                    getattr(func, "return_qualifiers", None)
+                    or getattr(func, "declaration_qualifiers", None)
+                ),
+            )
             generic_prefix = (
                 ""
                 if getattr(func, "qualifier", None)
@@ -7224,8 +7230,10 @@ class MetalToCrossGLConverter:
         for child in self.iter_ast_children(node):
             self.collect_identifier_references(child, found)
 
-    def map_function_return_type(self, return_type):
-        pointer_buffer_type = self.map_pointer_return_buffer_type(return_type)
+    def map_function_return_type(self, return_type, qualifiers=None):
+        pointer_buffer_type = self.map_pointer_return_buffer_type(
+            return_type, qualifiers=qualifiers
+        )
         if pointer_buffer_type:
             return pointer_buffer_type
         mapped_type = self.map_type(return_type)
@@ -7233,18 +7241,31 @@ class MetalToCrossGLConverter:
             return str(mapped_type).rstrip()[:-1].rstrip()
         return mapped_type
 
-    def map_pointer_return_buffer_type(self, return_type):
+    def map_pointer_return_buffer_type(self, return_type, qualifiers=None):
         element_type = self.pointer_element_type(return_type)
         if not element_type:
             return None
 
+        # Metal parsing keeps leading pointer-return qualifiers beside the type.
+        # Recombine them before choosing the target's read-only resource form.
+        qualifier_names = {str(qualifier).lower() for qualifier in qualifiers or []}
+        pointee_contract = str(return_type).split("*", 1)[0]
+        qualifier_names.update(
+            str(qualifier).lower()
+            for qualifier in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", pointee_contract)
+        )
         element_type = re.sub(
             r"^(?:(?:const|device|thread|threadgroup|constant|volatile|restrict)\s+)+",
             "",
             str(element_type).strip(),
         )
         element_type = self.resolve_type_alias(element_type)
-        return f"RWStructuredBuffer<{self.map_type(element_type)}>"
+        buffer_type = (
+            "StructuredBuffer"
+            if qualifier_names & {"const", "constant", "readonly"}
+            else "RWStructuredBuffer"
+        )
+        return f"{buffer_type}<{self.map_type(element_type)}>"
 
     def function_output_name(self, func):
         host_name = self.function_host_name(func)
